@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import {
   Dialog,
   DialogContent,
@@ -40,7 +40,7 @@ export function RecordFormDialog({
   isSubmitting = false,
   uploadProgress = null,
 }: RecordFormDialogProps) {
-  const [formData, setFormData] = useState(initialData || {
+  const getDefaultFormData = () => ({
     inputString: "",
     label: "",
     type: "address",
@@ -53,9 +53,19 @@ export function RecordFormDialog({
     privateKeyStatus: "",
   });
 
+  const [formData, setFormData] = useState(initialData || getDefaultFormData());
   const [newTag, setNewTag] = useState("");
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Reset form data when dialog opens or initialData changes
+  useEffect(() => {
+    if (open) {
+      setFormData(initialData || getDefaultFormData());
+      setSelectedFiles([]);
+      setNewTag("");
+    }
+  }, [open, initialData]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -87,19 +97,6 @@ export function RecordFormDialog({
 
   const handleClose = () => {
     if (!isSubmitting) {
-      setSelectedFiles([]);
-      setFormData(initialData || {
-        inputString: "",
-        label: "",
-        type: "address",
-        notes: "",
-        tags: [],
-        categories: [],
-        seedName: "",
-        walletSoftware: "",
-        counterparty: "",
-        privateKeyStatus: "",
-      });
       onClose();
     }
   };
