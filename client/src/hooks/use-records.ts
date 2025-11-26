@@ -1,5 +1,6 @@
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db, type Record } from '@/lib/database';
+import { uploadAttachment, deleteAttachment } from '@/lib/attachments';
 
 export function useRecords() {
   const records = useLiveQuery(() => db.records.orderBy('updatedAt').reverse().toArray());
@@ -30,6 +31,76 @@ export async function createRecord(data: Omit<Record, 'id' | 'createdAt' | 'upda
     updatedAt: now,
   });
   return id;
+}
+
+export async function createRecordWithAttachments(
+  data: Omit<Record, 'id' | 'createdAt' | 'updatedAt'>,
+  files: File[],
+  onProgress?: (current: number, total: number) => void
+): Promise<{ recordId: number; uploadedCount: number; failedCount: number }> {
+  const now = Date.now();
+  
+  // First create the record to get an ID
+  const recordId = await db.records.add({
+    ...data,
+    createdAt: now,
+    updatedAt: now,
+  }) as number;
+
+  if (files.length === 0) {
+    return { recordId, uploadedCount: 0, failedCount: 0 };
+  }
+
+  const uploadedAttachmentIds: number[] = [];
+  let failedCount = 0;
+
+  try {
+    for (let i = 0; i < files.length; i++) {
+      onProgress?.(i + 1, files.length);
+      
+      try {
+        const result = await uploadAttachment(recordId, files[i]);
+        uploadedAttachmentIds.push(result.id);
+      } catch (error) {
+        console.error(`Failed to upload file ${files[i].name}:`, error);
+        failedCount++;
+      }
+    }
+
+    // If all uploads failed, rollback
+    if (failedCount === files.length && files.length > 0) {
+      // Delete any successfully uploaded attachments
+      for (const attachmentId of uploadedAttachmentIds) {
+        try {
+          await deleteAttachment(attachmentId);
+        } catch (e) {
+          console.error('Rollback attachment delete failed:', e);
+        }
+      }
+      // Delete the record
+      await db.records.delete(recordId);
+      throw new Error('All file uploads failed. Record was not created.');
+    }
+
+    return { 
+      recordId, 
+      uploadedCount: uploadedAttachmentIds.length, 
+      failedCount 
+    };
+  } catch (error) {
+    // If something unexpected happened, try to rollback
+    if (uploadedAttachmentIds.length > 0) {
+      for (const attachmentId of uploadedAttachmentIds) {
+        try {
+          await deleteAttachment(attachmentId);
+        } catch (e) {
+          console.error('Rollback attachment delete failed:', e);
+        }
+      }
+    }
+    await db.records.delete(recordId);
+    throw error;
+  }
 }
 
 export async function updateRecord(id: number, data: Partial<Record>) {

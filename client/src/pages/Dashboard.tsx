@@ -8,7 +8,7 @@ import { RecordTable } from "@/components/RecordTable";
 import { RecordDetailPanel } from "@/components/RecordDetailPanel";
 import { RecordFormDialog } from "@/components/RecordFormDialog";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { useRecords, createRecord, updateRecord, deleteRecord, searchRecords, filterRecords } from "@/hooks/use-records";
+import { useRecords, createRecord, createRecordWithAttachments, updateRecord, deleteRecord, searchRecords, filterRecords } from "@/hooks/use-records";
 import { useTags } from "@/hooks/use-tags";
 import { useCategories } from "@/hooks/use-categories";
 import { useToast } from "@/hooks/use-toast";
@@ -35,6 +35,8 @@ export default function Dashboard() {
   const [showDetail, setShowDetail] = useState(false);
   const [showForm, setShowForm] = useState(false);
   const [editingRecord, setEditingRecord] = useState<Record | undefined>();
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<{ current: number; total: number } | null>(null);
 
   const { records, isLoading } = useRecords();
   const { tags } = useTags();
@@ -107,7 +109,7 @@ export default function Dashboard() {
     setShowDetail(true);
   };
 
-  const handleCreateRecord = async (data: any) => {
+  const handleCreateRecord = async (data: any, files: File[] = []) => {
     try {
       // Validate Bitcoin input
       const validation = validateBitcoinInput(data.inputString);
@@ -123,7 +125,9 @@ export default function Dashboard() {
       // Auto-detect type if not specified
       const recordType = validation.type || data.type;
 
-      await createRecord({
+      setIsSubmitting(true);
+
+      const recordData = {
         type: recordType,
         inputString: data.inputString,
         label: data.label,
@@ -135,12 +139,35 @@ export default function Dashboard() {
         seedName: data.seedName || "",
         walletSoftware: data.walletSoftware || "",
         counterparty: data.counterparty || "",
-      });
+      };
 
-      toast({
-        title: "Record Created",
-        description: `${data.label} has been saved successfully`,
-      });
+      if (files.length > 0) {
+        setUploadProgress({ current: 0, total: files.length });
+        
+        const result = await createRecordWithAttachments(
+          recordData,
+          files,
+          (current, total) => setUploadProgress({ current, total })
+        );
+
+        if (result.failedCount > 0) {
+          toast({
+            title: "Record Created",
+            description: `${data.label} saved with ${result.uploadedCount} of ${files.length} files uploaded`,
+          });
+        } else {
+          toast({
+            title: "Record Created",
+            description: `${data.label} saved with ${result.uploadedCount} file(s)`,
+          });
+        }
+      } else {
+        await createRecord(recordData);
+        toast({
+          title: "Record Created",
+          description: `${data.label} has been saved successfully`,
+        });
+      }
 
       setShowForm(false);
     } catch (error) {
@@ -149,10 +176,13 @@ export default function Dashboard() {
         title: "Error",
         description: error instanceof Error ? error.message : "Failed to create record",
       });
+    } finally {
+      setIsSubmitting(false);
+      setUploadProgress(null);
     }
   };
 
-  const handleUpdateRecord = async (data: any) => {
+  const handleUpdateRecord = async (data: any, files: File[] = []) => {
     if (!editingRecord?.id) return;
 
     try {
@@ -167,6 +197,8 @@ export default function Dashboard() {
         return;
       }
 
+      setIsSubmitting(true);
+
       await updateRecord(editingRecord.id, {
         inputString: data.inputString,
         label: data.label,
@@ -180,10 +212,32 @@ export default function Dashboard() {
         counterparty: data.counterparty || "",
       });
 
-      toast({
-        title: "Record Updated",
-        description: `${data.label} has been updated successfully`,
-      });
+      // Upload any new files for existing record
+      if (files.length > 0) {
+        setUploadProgress({ current: 0, total: files.length });
+        const { uploadAttachment } = await import("@/lib/attachments");
+        
+        let uploadedCount = 0;
+        for (let i = 0; i < files.length; i++) {
+          try {
+            await uploadAttachment(editingRecord.id, files[i]);
+            uploadedCount++;
+          } catch (error) {
+            console.error(`Failed to upload ${files[i].name}:`, error);
+          }
+          setUploadProgress({ current: i + 1, total: files.length });
+        }
+
+        toast({
+          title: "Record Updated",
+          description: `${data.label} updated with ${uploadedCount} new file(s)`,
+        });
+      } else {
+        toast({
+          title: "Record Updated",
+          description: `${data.label} has been updated successfully`,
+        });
+      }
 
       setShowForm(false);
       setEditingRecord(undefined);
@@ -193,6 +247,9 @@ export default function Dashboard() {
         title: "Error",
         description: error instanceof Error ? error.message : "Failed to update record",
       });
+    } finally {
+      setIsSubmitting(false);
+      setUploadProgress(null);
     }
   };
 
@@ -332,6 +389,8 @@ export default function Dashboard() {
           ...editingRecord,
           amount: editingRecord.amount?.toString() || "",
         } : undefined}
+        isSubmitting={isSubmitting}
+        uploadProgress={uploadProgress}
       />
     </div>
   );
