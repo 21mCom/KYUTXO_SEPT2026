@@ -13,7 +13,9 @@ import { useTags } from "@/hooks/use-tags";
 import { useCategories } from "@/hooks/use-categories";
 import { useToast } from "@/hooks/use-toast";
 import { validateBitcoinInput } from "@/lib/bitcoin";
+import { getRecordAttachments } from "@/lib/attachments";
 import type { Record } from "@/lib/database";
+import type { Attachment } from "@/lib/database";
 
 export default function Dashboard() {
   const [search, setSearch] = useState("");
@@ -29,6 +31,7 @@ export default function Dashboard() {
   });
   const [filteredRecords, setFilteredRecords] = useState<Record[]>([]);
   const [selectedRecordId, setSelectedRecordId] = useState<number | undefined>();
+  const [selectedRecordAttachments, setSelectedRecordAttachments] = useState<Attachment[]>([]);
   const [showDetail, setShowDetail] = useState(false);
   const [showForm, setShowForm] = useState(false);
   const [editingRecord, setEditingRecord] = useState<Record | undefined>();
@@ -37,6 +40,20 @@ export default function Dashboard() {
   const { tags } = useTags();
   const { categories } = useCategories();
   const { toast } = useToast();
+
+  // Load attachments when selected record changes
+  useEffect(() => {
+    const loadAttachments = async () => {
+      if (selectedRecordId !== undefined) {
+        const attachments = await getRecordAttachments(selectedRecordId);
+        setSelectedRecordAttachments(attachments);
+      } else {
+        setSelectedRecordAttachments([]);
+      }
+    };
+
+    loadAttachments();
+  }, [selectedRecordId]);
 
   // Apply search and filters
   useEffect(() => {
@@ -285,13 +302,23 @@ export default function Dashboard() {
 
       <RecordDetailPanel
         open={showDetail}
-        onClose={() => setShowDetail(false)}
+        onClose={() => {
+          setShowDetail(false);
+          setSelectedRecordId(undefined);
+        }}
         onEdit={() => {
           if (selectedRecordId) {
             handleEditRecord(selectedRecordId);
           }
         }}
         record={selectedRecord ? { ...selectedRecord, id: String(selectedRecord.id) } : undefined}
+        attachments={selectedRecordAttachments}
+        onAttachmentsChange={async () => {
+          if (selectedRecordId !== undefined) {
+            const attachments = await getRecordAttachments(selectedRecordId);
+            setSelectedRecordAttachments(attachments);
+          }
+        }}
       />
 
       <RecordFormDialog

@@ -40,8 +40,25 @@ export async function updateRecord(id: number, data: Partial<Record>) {
 }
 
 export async function deleteRecord(id: number) {
-  // Delete associated attachments first
+  // Delete associated attachments first - from both object storage and DB
   const attachments = await db.attachments.where('recordId').equals(id).toArray();
+  
+  for (const attachment of attachments) {
+    try {
+      // Delete from object storage
+      const response = await fetch(`/api/attachments/${attachment.objectStoragePath}`, {
+        method: 'DELETE',
+      });
+      
+      if (!response.ok) {
+        console.error(`Failed to delete attachment ${attachment.id} from object storage`);
+      }
+    } catch (error) {
+      console.error(`Error deleting attachment ${attachment.id}:`, error);
+    }
+  }
+  
+  // Delete attachment metadata from IndexedDB
   await db.attachments.where('recordId').equals(id).delete();
   
   // Then delete the record

@@ -1,16 +1,20 @@
-import { X, Edit, Paperclip, Calendar, Wallet as WalletIcon, User } from "lucide-react";
+import { X, Edit, Paperclip, Calendar, Wallet as WalletIcon, User, Upload } from "lucide-react";
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { BitcoinAddressDisplay } from "./BitcoinAddressDisplay";
 import { RecordTypeBadge } from "./RecordTypeBadge";
+import { AttachmentList } from "./AttachmentList";
+import { AttachmentUpload } from "./AttachmentUpload";
 import {
   Sheet,
   SheetContent,
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
+import type { Attachment } from "@/lib/database";
 
 interface RecordDetailPanelProps {
   open: boolean;
@@ -29,12 +33,20 @@ interface RecordDetailPanelProps {
     seedName?: string;
     walletSoftware?: string;
     counterparty?: string;
-    attachments?: Array<{ id: string; filename: string; size: number }>;
   };
+  attachments?: Attachment[];
+  onAttachmentsChange?: () => void;
 }
 
-export function RecordDetailPanel({ open, onClose, onEdit, record }: RecordDetailPanelProps) {
+export function RecordDetailPanel({ open, onClose, onEdit, record, attachments = [], onAttachmentsChange }: RecordDetailPanelProps) {
+  const [showUpload, setShowUpload] = useState(false);
+
   if (!record) return null;
+
+  const handleUploadComplete = () => {
+    setShowUpload(false);
+    onAttachmentsChange?.();
+  };
 
   return (
     <Sheet open={open} onOpenChange={onClose}>
@@ -148,33 +160,50 @@ export function RecordDetailPanel({ open, onClose, onEdit, record }: RecordDetai
               </div>
             )}
 
-            {record.attachments && record.attachments.length > 0 && (
-              <div>
-                <h4 className="text-sm font-medium mb-2 flex items-center gap-2">
+            <Separator />
+
+            <div>
+              <div className="flex items-center justify-between mb-4">
+                <h4 className="text-sm font-medium flex items-center gap-2">
                   <Paperclip className="h-4 w-4" />
-                  Attachments ({record.attachments.length})
+                  Attachments ({attachments.length})
                 </h4>
-                <div className="space-y-2">
-                  {record.attachments.map((attachment) => (
-                    <div
-                      key={attachment.id}
-                      className="flex items-center justify-between p-2 border rounded hover-elevate"
-                      data-testid={`attachment-${attachment.id}`}
-                    >
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium truncate">{attachment.filename}</p>
-                        <p className="text-xs text-muted-foreground">
-                          {(attachment.size / 1024).toFixed(1)} KB
-                        </p>
-                      </div>
-                      <Button size="sm" variant="ghost">
-                        View
-                      </Button>
-                    </div>
-                  ))}
-                </div>
+                {!showUpload && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setShowUpload(true)}
+                    data-testid="button-show-upload"
+                  >
+                    <Upload className="h-4 w-4 mr-2" />
+                    Upload
+                  </Button>
+                )}
               </div>
-            )}
+
+              {showUpload && (
+                <div className="mb-4">
+                  <AttachmentUpload
+                    recordId={Number(record.id)}
+                    onUploadComplete={handleUploadComplete}
+                  />
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => setShowUpload(false)}
+                    className="mt-2"
+                    data-testid="button-cancel-upload"
+                  >
+                    Cancel
+                  </Button>
+                </div>
+              )}
+
+              <AttachmentList
+                attachments={attachments}
+                onDelete={onAttachmentsChange}
+              />
+            </div>
           </div>
         </ScrollArea>
       </SheetContent>
