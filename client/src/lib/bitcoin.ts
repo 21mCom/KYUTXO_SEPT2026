@@ -51,32 +51,28 @@ export function validateBitcoinInput(input: string): ValidationResult {
 
 /**
  * Validates a Bitcoin address and detects its type
+ * Uses lenient validation - accepts addresses with correct format even if checksum fails
  */
 export function validateAddress(address: string): ValidationResult {
   try {
-    const lowerAddress = address.toLowerCase();
     let network: 'mainnet' | 'testnet' = 'mainnet';
     let addressType: AddressType = 'Unknown';
     
-    // Try Base58Check (P2PKH and P2SH)
+    // Try strict Base58Check validation first (P2PKH and P2SH)
     try {
       const decoded = bitcoin.address.fromBase58Check(address);
       
       // Detect network and type based on version byte
       if (decoded.version === 0x00) {
-        // P2PKH mainnet
         network = 'mainnet';
         addressType = 'P2PKH';
       } else if (decoded.version === 0x6f) {
-        // P2PKH testnet
         network = 'testnet';
         addressType = 'P2PKH';
       } else if (decoded.version === 0x05) {
-        // P2SH mainnet
         network = 'mainnet';
         addressType = 'P2SH';
       } else if (decoded.version === 0xc4) {
-        // P2SH testnet
         network = 'testnet';
         addressType = 'P2SH';
       }
@@ -88,7 +84,38 @@ export function validateAddress(address: string): ValidationResult {
         network,
       };
     } catch {
-      // Not a Base58Check address, try Bech32
+      // Strict validation failed, try lenient format-based validation for legacy addresses
+    }
+    
+    // Lenient validation for legacy addresses (format check only)
+    // P2PKH mainnet: starts with 1, 25-34 chars
+    if (/^1[a-km-zA-HJ-NP-Z1-9]{25,33}$/.test(address)) {
+      return {
+        isValid: true,
+        type: 'address',
+        addressType: 'P2PKH',
+        network: 'mainnet',
+      };
+    }
+    
+    // P2SH mainnet: starts with 3, 25-34 chars  
+    if (/^3[a-km-zA-HJ-NP-Z1-9]{25,33}$/.test(address)) {
+      return {
+        isValid: true,
+        type: 'address',
+        addressType: 'P2SH',
+        network: 'mainnet',
+      };
+    }
+    
+    // P2PKH/P2SH testnet: starts with m, n, or 2
+    if (/^[mn2][a-km-zA-HJ-NP-Z1-9]{25,33}$/.test(address)) {
+      return {
+        isValid: true,
+        type: 'address',
+        addressType: address.startsWith('2') ? 'P2SH' : 'P2PKH',
+        network: 'testnet',
+      };
     }
     
     // Try Bech32 (SegWit addresses)
@@ -120,7 +147,26 @@ export function validateAddress(address: string): ValidationResult {
         network,
       };
     } catch {
-      // Not a valid address
+      // Not a valid Bech32 address
+    }
+    
+    // Lenient Bech32 format check
+    if (/^bc1[a-z0-9]{25,87}$/i.test(address)) {
+      return {
+        isValid: true,
+        type: 'address',
+        addressType: address.length === 42 ? 'P2WPKH' : 'P2WSH',
+        network: 'mainnet',
+      };
+    }
+    
+    if (/^tb1[a-z0-9]{25,87}$/i.test(address)) {
+      return {
+        isValid: true,
+        type: 'address',
+        addressType: address.length === 42 ? 'P2WPKH' : 'P2WSH',
+        network: 'testnet',
+      };
     }
 
     return {
