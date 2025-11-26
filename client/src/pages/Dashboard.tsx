@@ -21,7 +21,7 @@ export default function Dashboard() {
   const [search, setSearch] = useState("");
   const [view, setView] = useState<"grid" | "table">("table");
   const [filter, setFilter] = useState<{
-    type?: "address" | "transaction" | "all";
+    type?: "address" | "transaction" | "other" | "all";
     tags: string[];
     categories: string[];
   }>({
@@ -104,6 +104,10 @@ export default function Dashboard() {
 
   const selectedRecord = records.find(r => r.id === selectedRecordId);
 
+  // Compute unique values for dropdowns
+  const uniqueSeedNames = Array.from(new Set(records.map(r => r.seedName).filter((s): s is string => !!s)));
+  const uniqueWalletSoftware = Array.from(new Set(records.map(r => r.walletSoftware).filter((s): s is string => !!s)));
+
   const handleRecordClick = (id: number) => {
     setSelectedRecordId(id);
     setShowDetail(true);
@@ -111,19 +115,22 @@ export default function Dashboard() {
 
   const handleCreateRecord = async (data: any, files: File[] = []) => {
     try {
-      // Validate Bitcoin input
-      const validation = validateBitcoinInput(data.inputString);
-      if (!validation.isValid) {
-        toast({
-          variant: "destructive",
-          title: "Invalid Input",
-          description: validation.error || "Please enter a valid Bitcoin address or transaction ID",
-        });
-        return;
-      }
+      let recordType = data.type;
 
-      // Auto-detect type if not specified
-      const recordType = validation.type || data.type;
+      // For Bitcoin types, validate the input; for "other" type, skip validation
+      if (data.type !== "other") {
+        const validation = validateBitcoinInput(data.inputString);
+        if (!validation.isValid) {
+          toast({
+            variant: "destructive",
+            title: "Invalid Input",
+            description: validation.error || "Please enter a valid Bitcoin address or transaction ID",
+          });
+          return;
+        }
+        // Auto-detect type if not specified
+        recordType = validation.type || data.type;
+      }
 
       setIsSubmitting(true);
 
@@ -187,15 +194,17 @@ export default function Dashboard() {
     if (!editingRecord?.id) return;
 
     try {
-      // Validate Bitcoin input
-      const validation = validateBitcoinInput(data.inputString);
-      if (!validation.isValid) {
-        toast({
-          variant: "destructive",
-          title: "Invalid Input",
-          description: validation.error || "Please enter a valid Bitcoin address or transaction ID",
-        });
-        return;
+      // For Bitcoin types, validate the input; for "other" type, skip validation
+      if (data.type !== "other") {
+        const validation = validateBitcoinInput(data.inputString);
+        if (!validation.isValid) {
+          toast({
+            variant: "destructive",
+            title: "Invalid Input",
+            description: validation.error || "Please enter a valid Bitcoin address or transaction ID",
+          });
+          return;
+        }
       }
 
       setIsSubmitting(true);
@@ -393,6 +402,10 @@ export default function Dashboard() {
         } : undefined}
         isSubmitting={isSubmitting}
         uploadProgress={uploadProgress}
+        availableSeedNames={uniqueSeedNames}
+        availableWalletSoftware={uniqueWalletSoftware}
+        availableTags={tags.map(t => t.name)}
+        availableCategories={categories.map(c => c.name)}
       />
     </div>
   );

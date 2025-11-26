@@ -13,7 +13,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
-import { X, Upload, File as FileIcon, Loader2 } from "lucide-react";
+import { X, Upload, File as FileIcon, Loader2, Plus, Check, ChevronsUpDown } from "lucide-react";
 import {
   Select,
   SelectContent,
@@ -21,6 +21,20 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
+import { cn } from "@/lib/utils";
 import { formatFileSize } from "@/lib/attachments";
 
 interface RecordFormDialogProps {
@@ -30,6 +44,10 @@ interface RecordFormDialogProps {
   initialData?: any;
   isSubmitting?: boolean;
   uploadProgress?: { current: number; total: number } | null;
+  availableSeedNames?: string[];
+  availableWalletSoftware?: string[];
+  availableTags?: string[];
+  availableCategories?: string[];
 }
 
 export function RecordFormDialog({ 
@@ -39,14 +57,18 @@ export function RecordFormDialog({
   initialData,
   isSubmitting = false,
   uploadProgress = null,
+  availableSeedNames = [],
+  availableWalletSoftware = [],
+  availableTags = [],
+  availableCategories = [],
 }: RecordFormDialogProps) {
   const getDefaultFormData = () => ({
     inputString: "",
     label: "",
     type: "address",
     notes: "",
-    tags: [],
-    categories: [],
+    tags: [] as string[],
+    categories: [] as string[],
     seedName: "",
     walletSoftware: "",
     counterparty: "",
@@ -54,33 +76,50 @@ export function RecordFormDialog({
   });
 
   const [formData, setFormData] = useState(initialData || getDefaultFormData());
-  const [newTag, setNewTag] = useState("");
+  const [tagInput, setTagInput] = useState("");
+  const [categoryInput, setCategoryInput] = useState("");
+  const [counterpartyInput, setCounterpartyInput] = useState("");
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [seedOpen, setSeedOpen] = useState(false);
+  const [walletOpen, setWalletOpen] = useState(false);
+  const [newSeedName, setNewSeedName] = useState("");
+  const [newWalletSoftware, setNewWalletSoftware] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Reset form data when dialog opens or initialData changes
   useEffect(() => {
     if (open) {
-      setFormData(initialData || getDefaultFormData());
+      const data = initialData || getDefaultFormData();
+      setFormData(data);
       setSelectedFiles([]);
-      setNewTag("");
+      setTagInput(data.tags?.join(", ") || "");
+      setCategoryInput(data.categories?.join(", ") || "");
+      setCounterpartyInput(data.counterparty || "");
+      setNewSeedName("");
+      setNewWalletSoftware("");
     }
   }, [open, initialData]);
 
+  // Parse comma-separated values into array
+  const parseCommaSeparated = (value: string): string[] => {
+    return value
+      .split(",")
+      .map(s => s.trim())
+      .filter(s => s.length > 0);
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    await onSave(formData, selectedFiles);
-  };
-
-  const addTag = () => {
-    if (newTag && !formData.tags.includes(newTag)) {
-      setFormData({ ...formData, tags: [...formData.tags, newTag] });
-      setNewTag("");
-    }
-  };
-
-  const removeTag = (tag: string) => {
-    setFormData({ ...formData, tags: formData.tags.filter((t: string) => t !== tag) });
+    // Parse tags and categories from comma-separated input
+    const parsedTags = parseCommaSeparated(tagInput);
+    const parsedCategories = parseCommaSeparated(categoryInput);
+    
+    await onSave({
+      ...formData,
+      tags: parsedTags,
+      categories: parsedCategories,
+      counterparty: counterpartyInput,
+    }, selectedFiles);
   };
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -101,13 +140,51 @@ export function RecordFormDialog({
     }
   };
 
+  const addNewSeedName = () => {
+    if (newSeedName.trim()) {
+      setFormData({ ...formData, seedName: newSeedName.trim() });
+      setNewSeedName("");
+      setSeedOpen(false);
+    }
+  };
+
+  const addNewWalletSoftware = () => {
+    if (newWalletSoftware.trim()) {
+      setFormData({ ...formData, walletSoftware: newWalletSoftware.trim() });
+      setNewWalletSoftware("");
+      setWalletOpen(false);
+    }
+  };
+
+  // Combine available values with any new value that's been set
+  const allSeedNames = Array.from(new Set([...availableSeedNames, formData.seedName].filter(Boolean)));
+  const allWalletSoftware = Array.from(new Set([...availableWalletSoftware, formData.walletSoftware].filter(Boolean)));
+
+  const getInputLabel = () => {
+    switch (formData.type) {
+      case "address": return "Bitcoin Address";
+      case "transaction": return "Transaction ID";
+      case "other": return "Identifier";
+      default: return "Input";
+    }
+  };
+
+  const getInputPlaceholder = () => {
+    switch (formData.type) {
+      case "address": return "bc1q...";
+      case "transaction": return "Transaction hash";
+      case "other": return "Any coin address or identifier";
+      default: return "";
+    }
+  };
+
   return (
     <Dialog open={open} onOpenChange={handleClose}>
       <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>{initialData ? "Edit Record" : "Create New Record"}</DialogTitle>
           <DialogDescription>
-            {initialData ? "Update record details below." : "Fill in the details to create a new Bitcoin record."}
+            {initialData ? "Update record details below." : "Fill in the details to create a new record."}
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4">
@@ -123,8 +200,9 @@ export function RecordFormDialog({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="address">Address</SelectItem>
+                  <SelectItem value="address">Bitcoin Address</SelectItem>
                   <SelectItem value="transaction">Transaction</SelectItem>
+                  <SelectItem value="other">Other Coin</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -145,13 +223,13 @@ export function RecordFormDialog({
 
           <div className="space-y-2">
             <Label htmlFor="inputString">
-              {formData.type === "address" ? "Bitcoin Address" : "Transaction ID"} *
+              {getInputLabel()} *
             </Label>
             <Input
               id="inputString"
               value={formData.inputString}
               onChange={(e) => setFormData({ ...formData, inputString: e.target.value })}
-              placeholder={formData.type === "address" ? "bc1q..." : "Transaction hash"}
+              placeholder={getInputPlaceholder()}
               required
               disabled={isSubmitting}
               className="font-mono"
@@ -173,33 +251,63 @@ export function RecordFormDialog({
           </div>
 
           <div className="space-y-2">
-            <Label>Tags</Label>
-            <div className="flex gap-2">
-              <Input
-                value={newTag}
-                onChange={(e) => setNewTag(e.target.value)}
-                placeholder="Add tag"
-                disabled={isSubmitting}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    addTag();
-                  }
-                }}
-                data-testid="input-new-tag"
-              />
-              <Button type="button" onClick={addTag} disabled={isSubmitting} data-testid="button-add-tag">
-                Add
-              </Button>
-            </div>
-            {formData.tags.length > 0 && (
-              <div className="flex flex-wrap gap-2 mt-2">
-                {formData.tags.map((tag: string) => (
-                  <Badge key={tag} variant="secondary" className="gap-1">
-                    {tag}
-                    {!isSubmitting && (
-                      <X className="h-3 w-3 cursor-pointer" onClick={() => removeTag(tag)} />
-                    )}
+            <Label htmlFor="tags">Tags (comma-separated)</Label>
+            <Input
+              id="tags"
+              value={tagInput}
+              onChange={(e) => setTagInput(e.target.value)}
+              placeholder="cold storage, hardware wallet, savings"
+              disabled={isSubmitting}
+              data-testid="input-tags"
+            />
+            {availableTags.length > 0 && (
+              <div className="flex flex-wrap gap-1 mt-1">
+                {availableTags.slice(0, 8).map((tag) => (
+                  <Badge
+                    key={tag}
+                    variant="outline"
+                    className="cursor-pointer text-xs"
+                    onClick={() => {
+                      const current = parseCommaSeparated(tagInput);
+                      if (!current.includes(tag)) {
+                        setTagInput(current.length > 0 ? `${tagInput}, ${tag}` : tag);
+                      }
+                    }}
+                    data-testid={`badge-tag-${tag}`}
+                  >
+                    + {tag}
+                  </Badge>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="categories">Categories (comma-separated)</Label>
+            <Input
+              id="categories"
+              value={categoryInput}
+              onChange={(e) => setCategoryInput(e.target.value)}
+              placeholder="Personal, Business, Investment"
+              disabled={isSubmitting}
+              data-testid="input-categories"
+            />
+            {availableCategories.length > 0 && (
+              <div className="flex flex-wrap gap-1 mt-1">
+                {availableCategories.slice(0, 8).map((cat) => (
+                  <Badge
+                    key={cat}
+                    variant="outline"
+                    className="cursor-pointer text-xs"
+                    onClick={() => {
+                      const current = parseCommaSeparated(categoryInput);
+                      if (!current.includes(cat)) {
+                        setCategoryInput(current.length > 0 ? `${categoryInput}, ${cat}` : cat);
+                      }
+                    }}
+                    data-testid={`badge-category-${cat}`}
+                  >
+                    + {cat}
                   </Badge>
                 ))}
               </div>
@@ -208,38 +316,156 @@ export function RecordFormDialog({
 
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label htmlFor="seedName">Seed Name</Label>
-              <Input
-                id="seedName"
-                value={formData.seedName}
-                onChange={(e) => setFormData({ ...formData, seedName: e.target.value })}
-                placeholder="Seed #1"
-                disabled={isSubmitting}
-                data-testid="input-seed"
-              />
+              <Label>Seed Name</Label>
+              <Popover open={seedOpen} onOpenChange={setSeedOpen}>
+                <PopoverTrigger asChild>
+                  <Button
+                    variant="outline"
+                    role="combobox"
+                    aria-expanded={seedOpen}
+                    className="w-full justify-between font-normal"
+                    disabled={isSubmitting}
+                    data-testid="select-seed"
+                  >
+                    {formData.seedName || "Select or add..."}
+                    <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-full p-0" align="start">
+                  <Command>
+                    <CommandInput 
+                      placeholder="Search or add new..." 
+                      value={newSeedName}
+                      onValueChange={setNewSeedName}
+                    />
+                    <CommandList>
+                      <CommandEmpty>
+                        {newSeedName && (
+                          <Button
+                            variant="ghost"
+                            className="w-full justify-start"
+                            onClick={addNewSeedName}
+                          >
+                            <Plus className="mr-2 h-4 w-4" />
+                            Add "{newSeedName}"
+                          </Button>
+                        )}
+                      </CommandEmpty>
+                      <CommandGroup>
+                        {allSeedNames.map((name) => (
+                          <CommandItem
+                            key={name}
+                            value={name}
+                            onSelect={() => {
+                              setFormData({ ...formData, seedName: name });
+                              setSeedOpen(false);
+                            }}
+                          >
+                            <Check
+                              className={cn(
+                                "mr-2 h-4 w-4",
+                                formData.seedName === name ? "opacity-100" : "opacity-0"
+                              )}
+                            />
+                            {name}
+                          </CommandItem>
+                        ))}
+                        {newSeedName && !allSeedNames.some(n => n.toLowerCase() === newSeedName.toLowerCase()) && (
+                          <CommandItem
+                            value={`create-${newSeedName}`}
+                            onSelect={addNewSeedName}
+                          >
+                            <Plus className="mr-2 h-4 w-4" />
+                            Add "{newSeedName}"
+                          </CommandItem>
+                        )}
+                      </CommandGroup>
+                    </CommandList>
+                  </Command>
+                </PopoverContent>
+              </Popover>
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="walletSoftware">Wallet Software</Label>
-              <Input
-                id="walletSoftware"
-                value={formData.walletSoftware}
-                onChange={(e) => setFormData({ ...formData, walletSoftware: e.target.value })}
-                placeholder="Electrum"
-                disabled={isSubmitting}
-                data-testid="input-wallet"
-              />
+              <Label>Wallet Software</Label>
+              <Popover open={walletOpen} onOpenChange={setWalletOpen}>
+                <PopoverTrigger asChild>
+                  <Button
+                    variant="outline"
+                    role="combobox"
+                    aria-expanded={walletOpen}
+                    className="w-full justify-between font-normal"
+                    disabled={isSubmitting}
+                    data-testid="select-wallet"
+                  >
+                    {formData.walletSoftware || "Select or add..."}
+                    <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-full p-0" align="start">
+                  <Command>
+                    <CommandInput 
+                      placeholder="Search or add new..." 
+                      value={newWalletSoftware}
+                      onValueChange={setNewWalletSoftware}
+                    />
+                    <CommandList>
+                      <CommandEmpty>
+                        {newWalletSoftware && (
+                          <Button
+                            variant="ghost"
+                            className="w-full justify-start"
+                            onClick={addNewWalletSoftware}
+                          >
+                            <Plus className="mr-2 h-4 w-4" />
+                            Add "{newWalletSoftware}"
+                          </Button>
+                        )}
+                      </CommandEmpty>
+                      <CommandGroup>
+                        {allWalletSoftware.map((name) => (
+                          <CommandItem
+                            key={name}
+                            value={name}
+                            onSelect={() => {
+                              setFormData({ ...formData, walletSoftware: name });
+                              setWalletOpen(false);
+                            }}
+                          >
+                            <Check
+                              className={cn(
+                                "mr-2 h-4 w-4",
+                                formData.walletSoftware === name ? "opacity-100" : "opacity-0"
+                              )}
+                            />
+                            {name}
+                          </CommandItem>
+                        ))}
+                        {newWalletSoftware && !allWalletSoftware.some(n => n.toLowerCase() === newWalletSoftware.toLowerCase()) && (
+                          <CommandItem
+                            value={`create-${newWalletSoftware}`}
+                            onSelect={addNewWalletSoftware}
+                          >
+                            <Plus className="mr-2 h-4 w-4" />
+                            Add "{newWalletSoftware}"
+                          </CommandItem>
+                        )}
+                      </CommandGroup>
+                    </CommandList>
+                  </Command>
+                </PopoverContent>
+              </Popover>
             </div>
           </div>
 
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label htmlFor="counterparty">Counterparty</Label>
+              <Label htmlFor="counterparty">Counterparty (comma-separated)</Label>
               <Input
                 id="counterparty"
-                value={formData.counterparty}
-                onChange={(e) => setFormData({ ...formData, counterparty: e.target.value })}
-                placeholder="Coinbase"
+                value={counterpartyInput}
+                onChange={(e) => setCounterpartyInput(e.target.value)}
+                placeholder="Coinbase, Kraken"
                 disabled={isSubmitting}
                 data-testid="input-counterparty"
               />

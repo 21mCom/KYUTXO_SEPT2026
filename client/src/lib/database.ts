@@ -2,7 +2,7 @@ import Dexie, { type Table } from 'dexie';
 
 export interface Record {
   id?: number;
-  type: 'address' | 'transaction';
+  type: 'address' | 'transaction' | 'other';
   inputString: string;
   label: string;
   notes?: string;

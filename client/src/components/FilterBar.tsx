@@ -10,7 +10,7 @@ import {
 } from "@/components/ui/select";
 
 interface Filter {
-  type?: "address" | "transaction" | "all";
+  type?: "address" | "transaction" | "other" | "all";
   tags: string[];
   categories: string[];
 }
@@ -49,8 +49,9 @@ export function FilterBar({ filter, onChange, availableTags = [], availableCateg
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="all">All Types</SelectItem>
-            <SelectItem value="address">Addresses</SelectItem>
+            <SelectItem value="address">Bitcoin Addresses</SelectItem>
             <SelectItem value="transaction">Transactions</SelectItem>
+            <SelectItem value="other">Other Coins</SelectItem>
           </SelectContent>
         </Select>
 

@@ -32,7 +32,7 @@ import { db } from "@/lib/database";
 
 interface Record {
   id: string;
-  type: "address" | "transaction";
+  type: "address" | "transaction" | "other";
   inputString: string;
   label: string;
   tags: string[];

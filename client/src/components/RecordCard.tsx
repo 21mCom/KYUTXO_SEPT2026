@@ -13,7 +13,7 @@ import {
 
 interface RecordCardProps {
   id: string;
-  type: "address" | "transaction";
+  type: "address" | "transaction" | "other";
   inputString: string;
   label: string;
   amount?: number;

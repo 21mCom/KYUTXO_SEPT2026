@@ -1,4 +1,4 @@
-import { X, Edit, Paperclip, Wallet as WalletIcon, User, Upload } from "lucide-react";
+import { Edit, Paperclip, Wallet as WalletIcon, User, Upload } from "lucide-react";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -22,7 +22,7 @@ interface RecordDetailPanelProps {
   onEdit?: () => void;
   record?: {
     id: string;
-    type: "address" | "transaction";
+    type: "address" | "transaction" | "other";
     inputString: string;
     label: string;
     notes?: string;
@@ -58,9 +58,6 @@ export function RecordDetailPanel({ open, onClose, onEdit, record, attachments =
             <div className="flex gap-1">
               <Button size="icon" variant="ghost" onClick={onEdit} data-testid="button-edit-panel">
                 <Edit className="h-4 w-4" />
-              </Button>
-              <Button size="icon" variant="ghost" onClick={onClose} data-testid="button-close-panel">
-                <X className="h-4 w-4" />
               </Button>
             </div>
           </div>
