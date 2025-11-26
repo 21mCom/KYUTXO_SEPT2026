@@ -1,3 +1,4 @@
+import { useState, useEffect } from "react";
 import {
   Table,
   TableBody,
@@ -8,7 +9,8 @@ import {
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { MoreVertical, ArrowUpDown } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
+import { MoreVertical, ArrowUpDown, Settings2, Paperclip, Key } from "lucide-react";
 import { BitcoinAddressDisplay } from "./BitcoinAddressDisplay";
 import { RecordTypeBadge } from "./RecordTypeBadge";
 import {
@@ -16,7 +18,17 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
+  DropdownMenuSeparator,
+  DropdownMenuLabel,
+  DropdownMenuCheckboxItem,
 } from "@/components/ui/dropdown-menu";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import { useSettings, toggleTableColumn } from "@/hooks/use-settings";
+import { db } from "@/lib/database";
 
 interface Record {
   id: string;
@@ -24,6 +36,10 @@ interface Record {
   inputString: string;
   label: string;
   tags: string[];
+  categories?: string[];
+  walletSoftware?: string;
+  seedName?: string;
+  privateKeyStatus?: string;
 }
 
 interface RecordTableProps {
@@ -34,8 +50,105 @@ interface RecordTableProps {
 }
 
 export function RecordTable({ records, onEdit, onDelete, onRowClick }: RecordTableProps) {
+  const { tableColumns } = useSettings();
+  const [attachmentCounts, setAttachmentCounts] = useState<Map<string, number>>(new Map());
+
+  useEffect(() => {
+    const loadAttachmentCounts = async () => {
+      const counts = new Map<string, number>();
+      for (const record of records) {
+        const count = await db.attachments.where('recordId').equals(Number(record.id)).count();
+        counts.set(record.id, count);
+      }
+      setAttachmentCounts(counts);
+    };
+    
+    if (records.length > 0) {
+      loadAttachmentCounts();
+    }
+  }, [records]);
+
+  const getPrivateKeyBadge = (status?: string) => {
+    if (!status) return null;
+    switch (status.toLowerCase()) {
+      case 'yes':
+        return <Badge variant="default" className="text-xs bg-green-600">Yes</Badge>;
+      case 'no':
+        return <Badge variant="secondary" className="text-xs">No</Badge>;
+      case 'unsure':
+        return <Badge variant="outline" className="text-xs">Unsure</Badge>;
+      default:
+        return <Badge variant="outline" className="text-xs">{status}</Badge>;
+    }
+  };
+
   return (
     <div className="border rounded-lg">
+      <div className="flex items-center justify-end p-2 border-b">
+        <Popover>
+          <PopoverTrigger asChild>
+            <Button variant="outline" size="sm" className="gap-2" data-testid="button-column-settings">
+              <Settings2 className="h-4 w-4" />
+              Columns
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent align="end" className="w-56">
+            <div className="space-y-2">
+              <p className="text-sm font-medium mb-3">Visible Columns</p>
+              <div className="space-y-2">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <Checkbox
+                    checked={tableColumns.tags}
+                    onCheckedChange={() => toggleTableColumn('tags')}
+                    data-testid="checkbox-col-tags"
+                  />
+                  <span className="text-sm">Tags</span>
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <Checkbox
+                    checked={tableColumns.categories}
+                    onCheckedChange={() => toggleTableColumn('categories')}
+                    data-testid="checkbox-col-categories"
+                  />
+                  <span className="text-sm">Categories</span>
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <Checkbox
+                    checked={tableColumns.walletSoftware}
+                    onCheckedChange={() => toggleTableColumn('walletSoftware')}
+                    data-testid="checkbox-col-wallet"
+                  />
+                  <span className="text-sm">Wallet Software</span>
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <Checkbox
+                    checked={tableColumns.seedName}
+                    onCheckedChange={() => toggleTableColumn('seedName')}
+                    data-testid="checkbox-col-seed"
+                  />
+                  <span className="text-sm">Seed Name</span>
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <Checkbox
+                    checked={tableColumns.privateKeyStatus}
+                    onCheckedChange={() => toggleTableColumn('privateKeyStatus')}
+                    data-testid="checkbox-col-privatekey"
+                  />
+                  <span className="text-sm">Private Key</span>
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <Checkbox
+                    checked={tableColumns.hasAttachments}
+                    onCheckedChange={() => toggleTableColumn('hasAttachments')}
+                    data-testid="checkbox-col-attachments"
+                  />
+                  <span className="text-sm">Attachments</span>
+                </label>
+              </div>
+            </div>
+          </PopoverContent>
+        </Popover>
+      </div>
       <Table>
         <TableHeader>
           <TableRow>
@@ -47,14 +160,29 @@ export function RecordTable({ records, onEdit, onDelete, onRowClick }: RecordTab
             </TableHead>
             <TableHead>Label</TableHead>
             <TableHead>Address / TXID</TableHead>
-            <TableHead>Tags</TableHead>
+            {tableColumns.tags && <TableHead>Tags</TableHead>}
+            {tableColumns.categories && <TableHead>Categories</TableHead>}
+            {tableColumns.walletSoftware && <TableHead>Wallet</TableHead>}
+            {tableColumns.seedName && <TableHead>Seed</TableHead>}
+            {tableColumns.privateKeyStatus && <TableHead>Private Key</TableHead>}
+            {tableColumns.hasAttachments && <TableHead className="w-[50px]">Files</TableHead>}
             <TableHead className="w-[50px]"></TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
           {records.length === 0 ? (
             <TableRow>
-              <TableCell colSpan={5} className="h-24 text-center text-muted-foreground">
+              <TableCell 
+                colSpan={5 + 
+                  (tableColumns.tags ? 1 : 0) + 
+                  (tableColumns.categories ? 1 : 0) + 
+                  (tableColumns.walletSoftware ? 1 : 0) + 
+                  (tableColumns.seedName ? 1 : 0) + 
+                  (tableColumns.privateKeyStatus ? 1 : 0) + 
+                  (tableColumns.hasAttachments ? 1 : 0)
+                } 
+                className="h-24 text-center text-muted-foreground"
+              >
                 No records found. Create your first record to get started.
               </TableCell>
             </TableRow>
@@ -75,20 +203,63 @@ export function RecordTable({ records, onEdit, onDelete, onRowClick }: RecordTab
                 <TableCell>
                   <BitcoinAddressDisplay address={record.inputString} />
                 </TableCell>
-                <TableCell>
-                  <div className="flex flex-wrap gap-1">
-                    {record.tags.slice(0, 2).map((tag) => (
-                      <Badge key={tag} variant="outline" className="text-xs">
-                        {tag}
-                      </Badge>
-                    ))}
-                    {record.tags.length > 2 && (
-                      <Badge variant="outline" className="text-xs">
-                        +{record.tags.length - 2}
-                      </Badge>
+                {tableColumns.tags && (
+                  <TableCell>
+                    <div className="flex flex-wrap gap-1">
+                      {record.tags.slice(0, 2).map((tag) => (
+                        <Badge key={tag} variant="outline" className="text-xs">
+                          {tag}
+                        </Badge>
+                      ))}
+                      {record.tags.length > 2 && (
+                        <Badge variant="outline" className="text-xs">
+                          +{record.tags.length - 2}
+                        </Badge>
+                      )}
+                    </div>
+                  </TableCell>
+                )}
+                {tableColumns.categories && (
+                  <TableCell>
+                    <div className="flex flex-wrap gap-1">
+                      {(record.categories || []).slice(0, 2).map((cat) => (
+                        <Badge key={cat} variant="secondary" className="text-xs">
+                          {cat}
+                        </Badge>
+                      ))}
+                      {(record.categories || []).length > 2 && (
+                        <Badge variant="secondary" className="text-xs">
+                          +{(record.categories || []).length - 2}
+                        </Badge>
+                      )}
+                    </div>
+                  </TableCell>
+                )}
+                {tableColumns.walletSoftware && (
+                  <TableCell className="text-sm text-muted-foreground">
+                    {record.walletSoftware || "-"}
+                  </TableCell>
+                )}
+                {tableColumns.seedName && (
+                  <TableCell className="text-sm text-muted-foreground">
+                    {record.seedName || "-"}
+                  </TableCell>
+                )}
+                {tableColumns.privateKeyStatus && (
+                  <TableCell>
+                    {getPrivateKeyBadge(record.privateKeyStatus)}
+                  </TableCell>
+                )}
+                {tableColumns.hasAttachments && (
+                  <TableCell>
+                    {(attachmentCounts.get(record.id) || 0) > 0 && (
+                      <div className="flex items-center gap-1 text-muted-foreground">
+                        <Paperclip className="h-3 w-3" />
+                        <span className="text-xs">{attachmentCounts.get(record.id)}</span>
+                      </div>
                     )}
-                  </div>
-                </TableCell>
+                  </TableCell>
+                )}
                 <TableCell>
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>

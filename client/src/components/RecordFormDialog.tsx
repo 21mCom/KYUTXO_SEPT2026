@@ -50,6 +50,7 @@ export function RecordFormDialog({
     seedName: "",
     walletSoftware: "",
     counterparty: "",
+    privateKeyStatus: "",
   });
 
   const [newTag, setNewTag] = useState("");
@@ -97,6 +98,7 @@ export function RecordFormDialog({
         seedName: "",
         walletSoftware: "",
         counterparty: "",
+        privateKeyStatus: "",
       });
       onClose();
     }
@@ -233,16 +235,36 @@ export function RecordFormDialog({
             </div>
           </div>
 
-          <div className="space-y-2">
-            <Label htmlFor="counterparty">Counterparty</Label>
-            <Input
-              id="counterparty"
-              value={formData.counterparty}
-              onChange={(e) => setFormData({ ...formData, counterparty: e.target.value })}
-              placeholder="Coinbase"
-              disabled={isSubmitting}
-              data-testid="input-counterparty"
-            />
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label htmlFor="counterparty">Counterparty</Label>
+              <Input
+                id="counterparty"
+                value={formData.counterparty}
+                onChange={(e) => setFormData({ ...formData, counterparty: e.target.value })}
+                placeholder="Coinbase"
+                disabled={isSubmitting}
+                data-testid="input-counterparty"
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="privateKeyStatus">Private Key Available</Label>
+              <Select
+                value={formData.privateKeyStatus || ""}
+                onValueChange={(value) => setFormData({ ...formData, privateKeyStatus: value })}
+                disabled={isSubmitting}
+              >
+                <SelectTrigger id="privateKeyStatus" data-testid="select-private-key">
+                  <SelectValue placeholder="Select status..." />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="yes">Yes</SelectItem>
+                  <SelectItem value="no">No</SelectItem>
+                  <SelectItem value="unsure">Unsure</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
           </div>
 
           <div className="space-y-2">

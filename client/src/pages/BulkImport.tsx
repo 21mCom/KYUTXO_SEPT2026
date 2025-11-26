@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
-import { Key, ChevronRight, ChevronLeft, Check, Loader2 } from "lucide-react";
+import { useLocation } from "wouter";
+import { Key, ChevronRight, ChevronLeft, Check, Loader2, Plus, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -15,12 +16,13 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
-import { useTags } from "@/hooks/use-tags";
-import { useCategories } from "@/hooks/use-categories";
+import { useTags, createTag } from "@/hooks/use-tags";
+import { useCategories, createCategory } from "@/hooks/use-categories";
 import { createRecord } from "@/hooks/use-records";
 import { deriveAddressesFromXpub, type DerivedAddress } from "@/lib/xpub";
 
 export default function BulkImport() {
+  const [, navigate] = useLocation();
   const [step, setStep] = useState(1);
   const [xpub, setXpub] = useState("");
   const [xpubLabel, setXpubLabel] = useState("");
@@ -34,8 +36,11 @@ export default function BulkImport() {
   const [seedName, setSeedName] = useState("");
   const [walletSoftware, setWalletSoftware] = useState("");
   const [notes, setNotes] = useState("");
+  const [privateKeyStatus, setPrivateKeyStatus] = useState<string>("");
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
+  const [newTagInput, setNewTagInput] = useState("");
+  const [newCategoryInput, setNewCategoryInput] = useState("");
 
   const { tags } = useTags();
   const { categories } = useCategories();
@@ -83,6 +88,54 @@ export default function BulkImport() {
     }
   };
 
+  const handleAddTag = async () => {
+    const trimmed = newTagInput.trim();
+    if (!trimmed) return;
+    
+    const existingTag = tags.find(t => t.name.toLowerCase() === trimmed.toLowerCase());
+    if (existingTag) {
+      if (!selectedTags.includes(existingTag.name)) {
+        setSelectedTags(prev => [...prev, existingTag.name]);
+      }
+    } else {
+      try {
+        await createTag(trimmed);
+        setSelectedTags(prev => [...prev, trimmed]);
+      } catch (error) {
+        toast({
+          variant: "destructive",
+          title: "Error",
+          description: "Failed to create tag",
+        });
+      }
+    }
+    setNewTagInput("");
+  };
+
+  const handleAddCategory = async () => {
+    const trimmed = newCategoryInput.trim();
+    if (!trimmed) return;
+    
+    const existingCategory = categories.find(c => c.name.toLowerCase() === trimmed.toLowerCase());
+    if (existingCategory) {
+      if (!selectedCategories.includes(existingCategory.name)) {
+        setSelectedCategories(prev => [...prev, existingCategory.name]);
+      }
+    } else {
+      try {
+        await createCategory(trimmed);
+        setSelectedCategories(prev => [...prev, trimmed]);
+      } catch (error) {
+        toast({
+          variant: "destructive",
+          title: "Error",
+          description: "Failed to create category",
+        });
+      }
+    }
+    setNewCategoryInput("");
+  };
+
   const handleSaveAddresses = async () => {
     if (selectedAddresses.size === 0) {
       toast({
@@ -108,6 +161,7 @@ export default function BulkImport() {
           categories: selectedCategories,
           seedName: seedName || undefined,
           walletSoftware: walletSoftware || undefined,
+          privateKeyStatus: privateKeyStatus || undefined,
           source: `${xpub.substring(0, 20)}... (${derivationPath}/${addr.index})`,
         });
       }
@@ -117,16 +171,7 @@ export default function BulkImport() {
         description: `${addressesToSave.length} addresses saved successfully`,
       });
 
-      setStep(1);
-      setXpub("");
-      setXpubLabel("");
-      setDerivedAddresses([]);
-      setSelectedAddresses(new Set());
-      setSeedName("");
-      setWalletSoftware("");
-      setNotes("");
-      setSelectedTags([]);
-      setSelectedCategories([]);
+      navigate("/");
     } catch (error) {
       toast({
         variant: "destructive",
@@ -284,6 +329,21 @@ export default function BulkImport() {
                     />
                   </div>
                 </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="private-key-status">Private Key Available</Label>
+                  <Select value={privateKeyStatus} onValueChange={setPrivateKeyStatus}>
+                    <SelectTrigger id="private-key-status" data-testid="select-private-key">
+                      <SelectValue placeholder="Select status..." />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="yes">Yes</SelectItem>
+                      <SelectItem value="no">No</SelectItem>
+                      <SelectItem value="unsure">Unsure</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
                 <div className="space-y-2">
                   <Label htmlFor="notes">Notes</Label>
                   <Textarea
@@ -296,10 +356,27 @@ export default function BulkImport() {
                   />
                 </div>
                 
-                {tags.length > 0 && (
-                  <div className="space-y-2">
-                    <Label>Tags</Label>
-                    <div className="flex flex-wrap gap-2">
+                <div className="space-y-2">
+                  <Label>Tags</Label>
+                  <div className="flex gap-2">
+                    <Input
+                      value={newTagInput}
+                      onChange={(e) => setNewTagInput(e.target.value)}
+                      placeholder="Add or create tag..."
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          handleAddTag();
+                        }
+                      }}
+                      data-testid="input-new-tag"
+                    />
+                    <Button type="button" size="icon" onClick={handleAddTag} data-testid="button-add-tag">
+                      <Plus className="h-4 w-4" />
+                    </Button>
+                  </div>
+                  {tags.length > 0 && (
+                    <div className="flex flex-wrap gap-2 mt-2">
                       {tags.map((tag) => (
                         <Badge
                           key={tag.id}
@@ -315,16 +392,41 @@ export default function BulkImport() {
                           data-testid={`tag-${tag.name}`}
                         >
                           {tag.name}
+                          {selectedTags.includes(tag.name) && (
+                            <X className="h-3 w-3 ml-1" />
+                          )}
                         </Badge>
                       ))}
                     </div>
-                  </div>
-                )}
+                  )}
+                  {selectedTags.length > 0 && (
+                    <p className="text-xs text-muted-foreground">
+                      Selected: {selectedTags.join(", ")}
+                    </p>
+                  )}
+                </div>
 
-                {categories.length > 0 && (
-                  <div className="space-y-2">
-                    <Label>Categories</Label>
-                    <div className="flex flex-wrap gap-2">
+                <div className="space-y-2">
+                  <Label>Categories</Label>
+                  <div className="flex gap-2">
+                    <Input
+                      value={newCategoryInput}
+                      onChange={(e) => setNewCategoryInput(e.target.value)}
+                      placeholder="Add or create category..."
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          handleAddCategory();
+                        }
+                      }}
+                      data-testid="input-new-category"
+                    />
+                    <Button type="button" size="icon" onClick={handleAddCategory} data-testid="button-add-category">
+                      <Plus className="h-4 w-4" />
+                    </Button>
+                  </div>
+                  {categories.length > 0 && (
+                    <div className="flex flex-wrap gap-2 mt-2">
                       {categories.map((cat) => (
                         <Badge
                           key={cat.id}
@@ -340,11 +442,19 @@ export default function BulkImport() {
                           data-testid={`category-${cat.name}`}
                         >
                           {cat.name}
+                          {selectedCategories.includes(cat.name) && (
+                            <X className="h-3 w-3 ml-1" />
+                          )}
                         </Badge>
                       ))}
                     </div>
-                  </div>
-                )}
+                  )}
+                  {selectedCategories.length > 0 && (
+                    <p className="text-xs text-muted-foreground">
+                      Selected: {selectedCategories.join(", ")}
+                    </p>
+                  )}
+                </div>
               </div>
 
               <div className="flex gap-2">
@@ -417,13 +527,14 @@ export default function BulkImport() {
                     ))}
                   </div>
 
-                  {(seedName || walletSoftware || notes || selectedTags.length > 0 || selectedCategories.length > 0) && (
+                  {(seedName || walletSoftware || notes || privateKeyStatus || selectedTags.length > 0 || selectedCategories.length > 0) && (
                     <div className="p-3 bg-muted rounded-md">
                       <p className="text-sm font-medium mb-2">Applied Metadata:</p>
                       <div className="text-sm text-muted-foreground space-y-1">
                         {seedName && <p>Seed Name: {seedName}</p>}
                         {walletSoftware && <p>Wallet: {walletSoftware}</p>}
-                        {notes && <p>Notes: {notes.substring(0, 50)}...</p>}
+                        {privateKeyStatus && <p>Private Key: {privateKeyStatus}</p>}
+                        {notes && <p>Notes: {notes.substring(0, 50)}{notes.length > 50 ? "..." : ""}</p>}
                         {selectedTags.length > 0 && (
                           <div className="flex items-center gap-1 flex-wrap">
                             Tags: {selectedTags.map(t => <Badge key={t} variant="secondary" className="text-xs">{t}</Badge>)}

@@ -139,6 +139,7 @@ export default function Dashboard() {
         seedName: data.seedName || "",
         walletSoftware: data.walletSoftware || "",
         counterparty: data.counterparty || "",
+        privateKeyStatus: data.privateKeyStatus || "",
       };
 
       if (files.length > 0) {
@@ -210,6 +211,7 @@ export default function Dashboard() {
         seedName: data.seedName || "",
         walletSoftware: data.walletSoftware || "",
         counterparty: data.counterparty || "",
+        privateKeyStatus: data.privateKeyStatus || "",
       });
 
       // Upload any new files for existing record

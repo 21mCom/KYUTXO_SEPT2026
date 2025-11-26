@@ -51,6 +51,14 @@ export interface Settings {
     counterparty: boolean;
     source: boolean;
   };
+  tableColumns: {
+    tags: boolean;
+    categories: boolean;
+    walletSoftware: boolean;
+    seedName: boolean;
+    privateKeyStatus: boolean;
+    hasAttachments: boolean;
+  };
   theme: 'light' | 'dark';
   defaultView: 'table' | 'grid';
 }
@@ -79,8 +87,8 @@ export const db = new KYBTCDatabase();
 
 // Initialize default settings
 db.on('ready', async () => {
-  const settingsCount = await db.settings.count();
-  if (settingsCount === 0) {
+  const settings = await db.settings.get('default');
+  if (!settings) {
     await db.settings.add({
       id: 'default',
       fieldVisibility: {
@@ -90,8 +98,28 @@ db.on('ready', async () => {
         counterparty: true,
         source: true,
       },
+      tableColumns: {
+        tags: true,
+        categories: false,
+        walletSoftware: false,
+        seedName: false,
+        privateKeyStatus: false,
+        hasAttachments: true,
+      },
       theme: 'light',
       defaultView: 'table',
+    });
+  } else if (!settings.tableColumns) {
+    // Migration: add tableColumns if missing
+    await db.settings.update('default', {
+      tableColumns: {
+        tags: true,
+        categories: false,
+        walletSoftware: false,
+        seedName: false,
+        privateKeyStatus: false,
+        hasAttachments: true,
+      },
     });
   }
 });
