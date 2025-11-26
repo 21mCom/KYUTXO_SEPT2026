@@ -1,34 +1,79 @@
 import { Router, type Request } from 'express';
 import multer from 'multer';
-import { Client } from '@replit/object-storage';
+import * as fs from 'fs/promises';
+import * as path from 'path';
 
 const router = Router();
-const bucketId = process.env.DEFAULT_OBJECT_STORAGE_BUCKET_ID;
-if (!bucketId) {
-  throw new Error('DEFAULT_OBJECT_STORAGE_BUCKET_ID environment variable is not set');
-}
-const storage = new Client({ bucketId });
 const upload = multer({ storage: multer.memoryStorage() });
 
+// Data directory for local file storage
+const DATA_DIR = process.env.KYBTC_DATA_DIR || path.join(process.cwd(), 'data');
+const ATTACHMENTS_DIR = path.join(DATA_DIR, 'attachments');
+
+// Ensure attachments directory exists
+async function ensureDir(dirPath: string): Promise<void> {
+  try {
+    await fs.mkdir(dirPath, { recursive: true });
+  } catch (error) {
+    // Directory already exists
+  }
+}
+
+// Sanitize identifier for use as directory name
+function sanitizeIdentifier(identifier: string): string {
+  if (!identifier) return 'unknown';
+  
+  // Replace unsafe characters with underscores
+  // Keep alphanumeric, hyphens, and some safe chars
+  let sanitized = identifier
+    .replace(/[<>:"/\\|?*]/g, '_')  // Windows unsafe chars
+    .replace(/\s+/g, '_')           // Whitespace
+    .replace(/\.+/g, '_')           // Multiple dots
+    .replace(/_+/g, '_')            // Multiple underscores
+    .replace(/^_|_$/g, '');         // Leading/trailing underscores
+  
+  // Limit length to avoid filesystem issues (max 200 chars for directory name)
+  if (sanitized.length > 200) {
+    sanitized = sanitized.substring(0, 200);
+  }
+  
+  // Fallback if completely empty after sanitization
+  return sanitized || 'unknown';
+}
+
 // Upload attachment
-router.post('/upload/:recordId', upload.single('file'), async (req: Request, res) => {
+router.post('/upload', upload.single('file'), async (req: Request, res) => {
   try {
     const file = (req as any).file;
     if (!file) {
       return res.status(400).json({ error: 'No file provided' });
     }
 
-    const { recordId } = req.params;
-    const objectPath = `attachments/${recordId}/${Date.now()}-${file.originalname}`;
-
-    const result = await storage.uploadFromBytes(objectPath, file.buffer);
-
-    if (!result.ok) {
-      return res.status(500).json({ error: result.error?.message || 'Upload failed' });
+    const { identifier, recordId } = req.body;
+    
+    if (!identifier) {
+      return res.status(400).json({ error: 'Identifier (address/txid) is required' });
     }
 
+    // Create directory based on sanitized identifier
+    const sanitizedId = sanitizeIdentifier(identifier);
+    const attachmentDir = path.join(ATTACHMENTS_DIR, sanitizedId);
+    await ensureDir(attachmentDir);
+
+    // Create unique filename with timestamp
+    const timestamp = Date.now();
+    const safeFilename = file.originalname.replace(/[<>:"/\\|?*]/g, '_');
+    const filename = `${timestamp}-${safeFilename}`;
+    const filePath = path.join(attachmentDir, filename);
+    
+    // Write file to local filesystem
+    await fs.writeFile(filePath, file.buffer);
+
+    // Return relative path for storage in database
+    const relativePath = path.join('attachments', sanitizedId, filename);
+
     res.json({
-      objectStoragePath: objectPath,
+      objectStoragePath: relativePath,
       filename: file.originalname,
       mimeType: file.mimetype,
       size: file.size,
@@ -42,17 +87,27 @@ router.post('/upload/:recordId', upload.single('file'), async (req: Request, res
 // Download attachment
 router.get('/download/:path(*)', async (req, res) => {
   try {
-    const objectPath = req.params.path;
+    const relativePath = req.params.path;
+    const filePath = path.join(DATA_DIR, relativePath);
 
-    const result = await storage.downloadAsBytes(objectPath);
+    // Security check: ensure path is within DATA_DIR
+    const resolvedPath = path.resolve(filePath);
+    if (!resolvedPath.startsWith(path.resolve(DATA_DIR))) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
 
-    if (!result.ok) {
+    // Check file exists
+    try {
+      await fs.access(filePath);
+    } catch {
       return res.status(404).json({ error: 'File not found' });
     }
 
-    const buffer = result.value;
+    const buffer = await fs.readFile(filePath);
+    const filename = path.basename(filePath);
+    
     res.set('Content-Type', 'application/octet-stream');
-    res.set('Content-Disposition', `attachment; filename="${objectPath.split('/').pop()}"`);
+    res.set('Content-Disposition', `attachment; filename="${filename}"`);
     res.send(buffer);
   } catch (error) {
     console.error('Download error:', error);
@@ -63,26 +118,28 @@ router.get('/download/:path(*)', async (req, res) => {
 // Delete attachment
 router.delete('/:path(*)', async (req, res) => {
   try {
-    const objectPath = req.params.path;
+    const relativePath = req.params.path;
+    const filePath = path.join(DATA_DIR, relativePath);
 
-    const result = await storage.delete(objectPath);
-
-    // Treat "not found" as success for idempotent deletes
-    if (!result.ok && result.error?.message?.includes('not found')) {
-      return res.json({ success: true, alreadyDeleted: true });
+    // Security check: ensure path is within DATA_DIR
+    const resolvedPath = path.resolve(filePath);
+    if (!resolvedPath.startsWith(path.resolve(DATA_DIR))) {
+      return res.status(403).json({ error: 'Access denied' });
     }
 
-    if (!result.ok) {
-      return res.status(500).json({ error: result.error?.message || 'Delete failed' });
+    try {
+      await fs.unlink(filePath);
+    } catch (error) {
+      // File doesn't exist - treat as success for idempotent deletes
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        return res.json({ success: true, alreadyDeleted: true });
+      }
+      throw error;
     }
 
     res.json({ success: true });
   } catch (error) {
     console.error('Delete error:', error);
-    // Treat not found errors as success
-    if (error instanceof Error && error.message.includes('not found')) {
-      return res.json({ success: true, alreadyDeleted: true });
-    }
     res.status(500).json({ error: error instanceof Error ? error.message : 'Delete failed' });
   }
 });

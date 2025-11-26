@@ -1,5 +1,6 @@
 import Dexie, { type Table } from 'dexie';
 
+// Plaintext record structure (for type safety and querying)
 export interface Record {
   id?: number;
   type: 'address' | 'transaction' | 'other';
@@ -17,6 +18,10 @@ export interface Record {
   source?: string;
   createdAt: number;
   updatedAt: number;
+  // Encrypted payload - contains the sensitive data when encryption is enabled
+  encryptedPayload?: string;
+  // Flag to indicate if this record is encrypted
+  isEncrypted?: boolean;
 }
 
 export interface Attachment {
@@ -27,6 +32,9 @@ export interface Attachment {
   size: number;
   objectStoragePath: string;
   createdAt: number;
+  // Encrypted fields
+  encryptedPayload?: string;
+  isEncrypted?: boolean;
 }
 
 export interface Tag {
@@ -34,12 +42,16 @@ export interface Tag {
   name: string;
   color?: string;
   createdAt: number;
+  encryptedPayload?: string;
+  isEncrypted?: boolean;
 }
 
 export interface Category {
   id?: number;
   name: string;
   createdAt: number;
+  encryptedPayload?: string;
+  isEncrypted?: boolean;
 }
 
 export interface Settings {
@@ -73,6 +85,21 @@ export class KYBTCDatabase extends Dexie {
   constructor() {
     super('KYBTCDatabase');
     
+    // Version 2 adds encryption support
+    this.version(2).stores({
+      records: '++id, type, inputString, label, *tags, *categories, createdAt, updatedAt, isEncrypted',
+      attachments: '++id, recordId, createdAt, isEncrypted',
+      tags: '++id, name, createdAt, isEncrypted',
+      categories: '++id, name, createdAt, isEncrypted',
+      settings: 'id'
+    }).upgrade(tx => {
+      // Migration: add isEncrypted flag to existing records
+      return tx.table('records').toCollection().modify(record => {
+        record.isEncrypted = false;
+      });
+    });
+
+    // Keep version 1 for compatibility
     this.version(1).stores({
       records: '++id, type, inputString, label, *tags, *categories, createdAt, updatedAt',
       attachments: '++id, recordId, createdAt',

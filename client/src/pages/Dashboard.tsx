@@ -231,7 +231,7 @@ export default function Dashboard() {
         let uploadedCount = 0;
         for (let i = 0; i < files.length; i++) {
           try {
-            await uploadAttachment(editingRecord.id, files[i]);
+            await uploadAttachment(editingRecord.id, files[i], data.inputString);
             uploadedCount++;
           } catch (error) {
             console.error(`Failed to upload ${files[i].name}:`, error);

@@ -161,6 +161,7 @@ export function RecordDetailPanel({ open, onClose, onEdit, record, attachments =
                 <div className="mb-4">
                   <AttachmentUpload
                     recordId={Number(record.id)}
+                    identifier={record.inputString}
                     onUploadComplete={handleUploadComplete}
                   />
                   <Button

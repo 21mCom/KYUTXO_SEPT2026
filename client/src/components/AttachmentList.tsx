@@ -13,7 +13,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { formatFileSize, downloadAttachment, deleteAttachment } from "@/lib/attachments";
+import { formatFileSize, downloadAttachmentById, deleteAttachment } from "@/lib/attachments";
 import type { Attachment } from "@/lib/database";
 import { useToast } from "@/hooks/use-toast";
 
@@ -37,12 +37,12 @@ export function AttachmentList({ attachments, onDelete }: AttachmentListProps) {
 
   const handleDownload = async (attachment: Attachment) => {
     try {
-      const blob = await downloadAttachment(attachment.objectStoragePath);
-      const url = URL.createObjectURL(blob);
+      const result = await downloadAttachmentById(attachment.id!);
+      const url = URL.createObjectURL(result.blob);
       
       const a = document.createElement('a');
       a.href = url;
-      a.download = attachment.filename;
+      a.download = result.filename;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -50,7 +50,7 @@ export function AttachmentList({ attachments, onDelete }: AttachmentListProps) {
 
       toast({
         title: "Download Started",
-        description: `Downloading ${attachment.filename}`,
+        description: `Downloading ${result.filename}`,
       });
     } catch (error) {
       toast({

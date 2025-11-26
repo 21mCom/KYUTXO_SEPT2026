@@ -8,10 +8,11 @@ import { uploadAttachment } from "@/lib/attachments";
 
 interface AttachmentUploadProps {
   recordId: number;
+  identifier: string;
   onUploadComplete?: () => void;
 }
 
-export function AttachmentUpload({ recordId, onUploadComplete }: AttachmentUploadProps) {
+export function AttachmentUpload({ recordId, identifier, onUploadComplete }: AttachmentUploadProps) {
   const [files, setFiles] = useState<File[]>([]);
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
@@ -36,7 +37,7 @@ export function AttachmentUpload({ recordId, onUploadComplete }: AttachmentUploa
       const totalFiles = files.length;
       
       for (let i = 0; i < files.length; i++) {
-        await uploadAttachment(recordId, files[i]);
+        await uploadAttachment(recordId, files[i], identifier);
         setUploadProgress(((i + 1) / totalFiles) * 100);
       }
 
