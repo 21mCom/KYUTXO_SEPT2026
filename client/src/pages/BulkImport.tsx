@@ -1,11 +1,12 @@
-import { useState } from "react";
-import { Key, ChevronRight, ChevronLeft, Check } from "lucide-react";
+import { useState, useEffect } from "react";
+import { Key, ChevronRight, ChevronLeft, Check, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Select,
   SelectContent,
@@ -13,18 +14,129 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { useToast } from "@/hooks/use-toast";
+import { useTags } from "@/hooks/use-tags";
+import { useCategories } from "@/hooks/use-categories";
+import { createRecord } from "@/hooks/use-records";
+import { deriveAddressesFromXpub, type DerivedAddress } from "@/lib/xpub";
 
 export default function BulkImport() {
   const [step, setStep] = useState(1);
   const [xpub, setXpub] = useState("");
+  const [xpubLabel, setXpubLabel] = useState("");
   const [derivationPath, setDerivationPath] = useState("m/84'/0'/0'/0");
   const [addressCount, setAddressCount] = useState(20);
+  const [derivedAddresses, setDerivedAddresses] = useState<DerivedAddress[]>([]);
+  const [selectedAddresses, setSelectedAddresses] = useState<Set<number>>(new Set());
+  const [isDerivingAddresses, setIsDerivingAddresses] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
 
-  const mockAddresses = Array.from({ length: 5 }, (_, i) => ({
-    index: i,
-    address: `bc1q${Math.random().toString(36).substring(2, 15)}${Math.random().toString(36).substring(2, 15)}`,
-    path: `${derivationPath}/${i}`,
-  }));
+  const [seedName, setSeedName] = useState("");
+  const [walletSoftware, setWalletSoftware] = useState("");
+  const [notes, setNotes] = useState("");
+  const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
+
+  const { tags } = useTags();
+  const { categories } = useCategories();
+  const { toast } = useToast();
+
+  useEffect(() => {
+    if (step === 3 && xpub) {
+      deriveAddresses();
+    }
+  }, [step, xpub, derivationPath, addressCount]);
+
+  const deriveAddresses = async () => {
+    setIsDerivingAddresses(true);
+    try {
+      const addresses = await deriveAddressesFromXpub(xpub, derivationPath, addressCount);
+      setDerivedAddresses(addresses);
+      setSelectedAddresses(new Set(addresses.map((_: DerivedAddress, i: number) => i)));
+    } catch (error) {
+      toast({
+        variant: "destructive",
+        title: "Derivation Failed",
+        description: error instanceof Error ? error.message : "Failed to derive addresses",
+      });
+      setStep(1);
+    } finally {
+      setIsDerivingAddresses(false);
+    }
+  };
+
+  const toggleAddressSelection = (index: number) => {
+    const newSelected = new Set(selectedAddresses);
+    if (newSelected.has(index)) {
+      newSelected.delete(index);
+    } else {
+      newSelected.add(index);
+    }
+    setSelectedAddresses(newSelected);
+  };
+
+  const toggleAllAddresses = () => {
+    if (selectedAddresses.size === derivedAddresses.length) {
+      setSelectedAddresses(new Set());
+    } else {
+      setSelectedAddresses(new Set(derivedAddresses.map((_, i) => i)));
+    }
+  };
+
+  const handleSaveAddresses = async () => {
+    if (selectedAddresses.size === 0) {
+      toast({
+        variant: "destructive",
+        title: "No Addresses Selected",
+        description: "Please select at least one address to save",
+      });
+      return;
+    }
+
+    setIsSaving(true);
+    try {
+      const addressesToSave = derivedAddresses.filter((_, i) => selectedAddresses.has(i));
+      
+      for (const addr of addressesToSave) {
+        const labelPrefix = xpubLabel || seedName || "Derived";
+        await createRecord({
+          type: "address",
+          inputString: addr.address,
+          label: `${labelPrefix} #${addr.index}`,
+          notes: notes || undefined,
+          tags: selectedTags,
+          categories: selectedCategories,
+          seedName: seedName || undefined,
+          walletSoftware: walletSoftware || undefined,
+          source: `${xpub.substring(0, 20)}... (${derivationPath}/${addr.index})`,
+        });
+      }
+
+      toast({
+        title: "Addresses Saved",
+        description: `${addressesToSave.length} addresses saved successfully`,
+      });
+
+      setStep(1);
+      setXpub("");
+      setXpubLabel("");
+      setDerivedAddresses([]);
+      setSelectedAddresses(new Set());
+      setSeedName("");
+      setWalletSoftware("");
+      setNotes("");
+      setSelectedTags([]);
+      setSelectedCategories([]);
+    } catch (error) {
+      toast({
+        variant: "destructive",
+        title: "Save Failed",
+        description: error instanceof Error ? error.message : "Failed to save addresses",
+      });
+    } finally {
+      setIsSaving(false);
+    }
+  };
 
   return (
     <div className="flex-1 overflow-auto p-6">
@@ -72,13 +184,23 @@ export default function BulkImport() {
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="space-y-2">
-                <Label htmlFor="xpub">Extended Public Key</Label>
+                <Label htmlFor="xpub-label">Label (optional)</Label>
                 <Input
+                  id="xpub-label"
+                  value={xpubLabel}
+                  onChange={(e) => setXpubLabel(e.target.value)}
+                  placeholder="e.g., Savings Wallet"
+                  data-testid="input-xpub-label"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="xpub">Extended Public Key</Label>
+                <Textarea
                   id="xpub"
                   value={xpub}
                   onChange={(e) => setXpub(e.target.value)}
-                  placeholder="xpub6D..."
-                  className="font-mono text-sm"
+                  placeholder="xpub6D... / ypub6D... / zpub6D..."
+                  className="font-mono text-sm min-h-[80px]"
                   data-testid="input-xpub"
                 />
                 <p className="text-xs text-muted-foreground">
@@ -88,7 +210,7 @@ export default function BulkImport() {
               <Button
                 className="w-full"
                 onClick={() => setStep(2)}
-                disabled={!xpub}
+                disabled={!xpub.trim()}
                 data-testid="button-next-step1"
               >
                 Continue
@@ -101,38 +223,130 @@ export default function BulkImport() {
         {step === 2 && (
           <Card>
             <CardHeader>
-              <CardTitle>Derivation Options</CardTitle>
+              <CardTitle>Derivation & Metadata Options</CardTitle>
               <CardDescription>
-                Configure how addresses should be derived
+                Configure address derivation and add metadata to all imported addresses
               </CardDescription>
             </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="path">Derivation Path</Label>
-                <Select value={derivationPath} onValueChange={setDerivationPath}>
-                  <SelectTrigger id="path" data-testid="select-path">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="m/84'/0'/0'/0">m/84'/0'/0'/0 (Native SegWit - External)</SelectItem>
-                    <SelectItem value="m/84'/0'/0'/1">m/84'/0'/0'/1 (Native SegWit - Change)</SelectItem>
-                    <SelectItem value="m/49'/0'/0'/0">m/49'/0'/0'/0 (SegWit - External)</SelectItem>
-                    <SelectItem value="m/44'/0'/0'/0">m/44'/0'/0'/0 (Legacy - External)</SelectItem>
-                  </SelectContent>
-                </Select>
+            <CardContent className="space-y-6">
+              <div className="space-y-4">
+                <h4 className="font-medium">Derivation Settings</h4>
+                <div className="space-y-2">
+                  <Label htmlFor="path">Derivation Path</Label>
+                  <Select value={derivationPath} onValueChange={setDerivationPath}>
+                    <SelectTrigger id="path" data-testid="select-path">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="m/84'/0'/0'/0">m/84'/0'/0'/0 (Native SegWit - External)</SelectItem>
+                      <SelectItem value="m/84'/0'/0'/1">m/84'/0'/0'/1 (Native SegWit - Change)</SelectItem>
+                      <SelectItem value="m/49'/0'/0'/0">m/49'/0'/0'/0 (SegWit - External)</SelectItem>
+                      <SelectItem value="m/44'/0'/0'/0">m/44'/0'/0'/0 (Legacy - External)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="count">Number of Addresses</Label>
+                  <Input
+                    id="count"
+                    type="number"
+                    value={addressCount}
+                    onChange={(e) => setAddressCount(Math.min(100, Math.max(1, Number(e.target.value))))}
+                    min={1}
+                    max={100}
+                    data-testid="input-count"
+                  />
+                  <p className="text-xs text-muted-foreground">Maximum 100 addresses at a time</p>
+                </div>
               </div>
-              <div className="space-y-2">
-                <Label htmlFor="count">Number of Addresses</Label>
-                <Input
-                  id="count"
-                  type="number"
-                  value={addressCount}
-                  onChange={(e) => setAddressCount(Number(e.target.value))}
-                  min={1}
-                  max={100}
-                  data-testid="input-count"
-                />
+
+              <div className="space-y-4">
+                <h4 className="font-medium">Metadata (applied to all addresses)</h4>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="seed-name">Seed Name</Label>
+                    <Input
+                      id="seed-name"
+                      value={seedName}
+                      onChange={(e) => setSeedName(e.target.value)}
+                      placeholder="e.g., Hardware Wallet #1"
+                      data-testid="input-seed-name"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="wallet-software">Wallet Software</Label>
+                    <Input
+                      id="wallet-software"
+                      value={walletSoftware}
+                      onChange={(e) => setWalletSoftware(e.target.value)}
+                      placeholder="e.g., Sparrow, Electrum"
+                      data-testid="input-wallet-software"
+                    />
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="notes">Notes</Label>
+                  <Textarea
+                    id="notes"
+                    value={notes}
+                    onChange={(e) => setNotes(e.target.value)}
+                    placeholder="Optional notes for all imported addresses..."
+                    className="min-h-[60px]"
+                    data-testid="input-notes"
+                  />
+                </div>
+                
+                {tags.length > 0 && (
+                  <div className="space-y-2">
+                    <Label>Tags</Label>
+                    <div className="flex flex-wrap gap-2">
+                      {tags.map((tag) => (
+                        <Badge
+                          key={tag.id}
+                          variant={selectedTags.includes(tag.name) ? "default" : "outline"}
+                          className="cursor-pointer"
+                          onClick={() => {
+                            setSelectedTags(prev =>
+                              prev.includes(tag.name)
+                                ? prev.filter(t => t !== tag.name)
+                                : [...prev, tag.name]
+                            );
+                          }}
+                          data-testid={`tag-${tag.name}`}
+                        >
+                          {tag.name}
+                        </Badge>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {categories.length > 0 && (
+                  <div className="space-y-2">
+                    <Label>Categories</Label>
+                    <div className="flex flex-wrap gap-2">
+                      {categories.map((cat) => (
+                        <Badge
+                          key={cat.id}
+                          variant={selectedCategories.includes(cat.name) ? "default" : "outline"}
+                          className="cursor-pointer"
+                          onClick={() => {
+                            setSelectedCategories(prev =>
+                              prev.includes(cat.name)
+                                ? prev.filter(c => c !== cat.name)
+                                : [...prev, cat.name]
+                            );
+                          }}
+                          data-testid={`category-${cat.name}`}
+                        >
+                          {cat.name}
+                        </Badge>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
+
               <div className="flex gap-2">
                 <Button variant="outline" onClick={() => setStep(1)} data-testid="button-back">
                   <ChevronLeft className="h-4 w-4 mr-2" />
@@ -152,49 +366,104 @@ export default function BulkImport() {
             <CardHeader>
               <CardTitle>Preview Addresses</CardTitle>
               <CardDescription>
-                Review the generated addresses before saving
+                Review the generated addresses and select which ones to save
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="space-y-2">
-                {mockAddresses.map((addr) => (
-                  <div
-                    key={addr.index}
-                    className="flex items-center justify-between p-3 border rounded hover-elevate"
-                    data-testid={`address-preview-${addr.index}`}
-                  >
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 mb-1">
-                        <Badge variant="outline" className="text-xs">
-                          #{addr.index}
-                        </Badge>
-                        <code className="text-xs text-muted-foreground">{addr.path}</code>
-                      </div>
-                      <code className="text-sm font-mono break-all">{addr.address}</code>
+              {isDerivingAddresses ? (
+                <div className="flex flex-col items-center justify-center py-12">
+                  <Loader2 className="h-8 w-8 animate-spin text-primary mb-4" />
+                  <p className="text-muted-foreground">Deriving addresses...</p>
+                </div>
+              ) : (
+                <>
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-2">
+                      <Checkbox
+                        checked={selectedAddresses.size === derivedAddresses.length}
+                        onCheckedChange={toggleAllAddresses}
+                        data-testid="checkbox-select-all"
+                      />
+                      <Label className="cursor-pointer" onClick={toggleAllAddresses}>
+                        Select All ({selectedAddresses.size}/{derivedAddresses.length})
+                      </Label>
                     </div>
                   </div>
-                ))}
-                <p className="text-sm text-muted-foreground text-center py-2">
-                  Showing 5 of {addressCount} addresses
-                </p>
-              </div>
-              <div className="flex gap-2">
-                <Button variant="outline" onClick={() => setStep(2)} data-testid="button-back-step3">
-                  <ChevronLeft className="h-4 w-4 mr-2" />
-                  Back
-                </Button>
-                <Button
-                  className="flex-1"
-                  onClick={() => {
-                    console.log("Save addresses");
-                    alert("Addresses saved successfully!");
-                  }}
-                  data-testid="button-save-addresses"
-                >
-                  <Check className="h-4 w-4 mr-2" />
-                  Save {addressCount} Addresses
-                </Button>
-              </div>
+
+                  <div className="space-y-2 max-h-[400px] overflow-y-auto">
+                    {derivedAddresses.map((addr, index) => (
+                      <div
+                        key={index}
+                        className={`flex items-center gap-3 p-3 border rounded hover-elevate ${
+                          selectedAddresses.has(index) ? "bg-primary/5 border-primary/30" : ""
+                        }`}
+                        data-testid={`address-preview-${index}`}
+                      >
+                        <Checkbox
+                          checked={selectedAddresses.has(index)}
+                          onCheckedChange={() => toggleAddressSelection(index)}
+                          data-testid={`checkbox-address-${index}`}
+                        />
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 mb-1">
+                            <Badge variant="outline" className="text-xs">
+                              #{addr.index}
+                            </Badge>
+                            <code className="text-xs text-muted-foreground">{addr.path}</code>
+                          </div>
+                          <code className="text-sm font-mono break-all">{addr.address}</code>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {(seedName || walletSoftware || notes || selectedTags.length > 0 || selectedCategories.length > 0) && (
+                    <div className="p-3 bg-muted rounded-md">
+                      <p className="text-sm font-medium mb-2">Applied Metadata:</p>
+                      <div className="text-sm text-muted-foreground space-y-1">
+                        {seedName && <p>Seed Name: {seedName}</p>}
+                        {walletSoftware && <p>Wallet: {walletSoftware}</p>}
+                        {notes && <p>Notes: {notes.substring(0, 50)}...</p>}
+                        {selectedTags.length > 0 && (
+                          <div className="flex items-center gap-1 flex-wrap">
+                            Tags: {selectedTags.map(t => <Badge key={t} variant="secondary" className="text-xs">{t}</Badge>)}
+                          </div>
+                        )}
+                        {selectedCategories.length > 0 && (
+                          <div className="flex items-center gap-1 flex-wrap">
+                            Categories: {selectedCategories.map(c => <Badge key={c} variant="outline" className="text-xs">{c}</Badge>)}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="flex gap-2">
+                    <Button variant="outline" onClick={() => setStep(2)} data-testid="button-back-step3">
+                      <ChevronLeft className="h-4 w-4 mr-2" />
+                      Back
+                    </Button>
+                    <Button
+                      className="flex-1"
+                      onClick={handleSaveAddresses}
+                      disabled={isSaving || selectedAddresses.size === 0}
+                      data-testid="button-save-addresses"
+                    >
+                      {isSaving ? (
+                        <>
+                          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                          Saving...
+                        </>
+                      ) : (
+                        <>
+                          <Check className="h-4 w-4 mr-2" />
+                          Save {selectedAddresses.size} Addresses
+                        </>
+                      )}
+                    </Button>
+                  </div>
+                </>
+              )}
             </CardContent>
           </Card>
         )}
