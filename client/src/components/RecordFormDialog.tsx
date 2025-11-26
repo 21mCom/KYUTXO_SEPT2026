@@ -11,7 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
-import { X, Upload } from "lucide-react";
+import { X, Paperclip } from "lucide-react";
 import {
   Select,
   SelectContent,
@@ -189,12 +189,9 @@ export function RecordFormDialog({ open, onClose, onSave, initialData }: RecordF
             />
           </div>
 
-          <div className="space-y-2">
-            <Label>Attachments</Label>
-            <Button type="button" variant="outline" className="w-full" data-testid="button-upload">
-              <Upload className="h-4 w-4 mr-2" />
-              Upload Files
-            </Button>
+          <div className="flex items-center gap-2 p-3 bg-muted rounded-md text-sm text-muted-foreground">
+            <Paperclip className="h-4 w-4 flex-shrink-0" />
+            <span>Files can be attached after saving the record.</span>
           </div>
 
           <DialogFooter>
