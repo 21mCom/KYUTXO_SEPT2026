@@ -2,10 +2,10 @@
 
 ## Overview
 
-KYBTC is a secure, offline-first Progressive Web App for managing Bitcoin metadata. It allows users to record and organize information about Bitcoin addresses and transactions, attach files, and manage custom vocabularies (tags, categories). The application emphasizes data privacy with local-first storage, optional encrypted backups, and full functionality without internet connectivity.
+KYBTC is a secure, offline-first Progressive Web App for managing cryptocurrency metadata. It allows users to record and organize information about Bitcoin addresses and transactions, attach files, and manage custom vocabularies (tags, categories). The application emphasizes data privacy with local-first storage, optional encrypted backups, and full functionality without internet connectivity.
 
 **Key Features:**
-- Record management for Bitcoin addresses and transaction IDs
+- Record management for Bitcoin addresses, transaction IDs, and other cryptocurrencies
 - File attachments with camera capture support
 - Custom tagging and categorization system
 - QR code scanning for quick data entry
@@ -76,7 +76,7 @@ Preferred communication style: Simple, everyday language.
 **Data Model:**
 ```typescript
 Record: {
-  id, type (address|transaction), inputString, label, notes,
+  id, type (address|transaction|other), inputString, label, notes,
   amount, date, tags[], categories[],
   seedName, walletSoftware, privateKeyStatus, counterparty, source,
   createdAt, updatedAt
