@@ -1,4 +1,4 @@
-import { X, Edit, Paperclip, Calendar, Wallet as WalletIcon, User, Upload } from "lucide-react";
+import { X, Edit, Paperclip, Wallet as WalletIcon, User, Upload } from "lucide-react";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -26,8 +26,6 @@ interface RecordDetailPanelProps {
     inputString: string;
     label: string;
     notes?: string;
-    amount?: number;
-    date?: string;
     tags: string[];
     categories: string[];
     seedName?: string;
@@ -76,25 +74,6 @@ export function RecordDetailPanel({ open, onClose, onEdit, record, attachments =
               </h4>
               <BitcoinAddressDisplay address={record.inputString} truncate={false} />
             </div>
-
-            {record.amount !== undefined && (
-              <div>
-                <h4 className="text-sm font-medium mb-2">Amount</h4>
-                <p className="text-2xl font-mono font-semibold" data-testid="text-amount-detail">
-                  {record.amount} BTC
-                </p>
-              </div>
-            )}
-
-            {record.date && (
-              <div>
-                <h4 className="text-sm font-medium mb-2 flex items-center gap-2">
-                  <Calendar className="h-4 w-4" />
-                  Date
-                </h4>
-                <p className="text-sm" data-testid="text-date-detail">{record.date}</p>
-              </div>
-            )}
 
             {record.notes && (
               <div>

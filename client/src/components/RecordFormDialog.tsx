@@ -32,8 +32,6 @@ export function RecordFormDialog({ open, onClose, onSave, initialData }: RecordF
     inputString: "",
     label: "",
     type: "address",
-    amount: "",
-    date: "",
     notes: "",
     tags: [],
     categories: [],
@@ -111,33 +109,6 @@ export function RecordFormDialog({ open, onClose, onSave, initialData }: RecordF
               className="font-mono"
               data-testid="input-address"
             />
-          </div>
-
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <Label htmlFor="amount">Amount (BTC)</Label>
-              <Input
-                id="amount"
-                type="number"
-                step="0.00000001"
-                value={formData.amount}
-                onChange={(e) => setFormData({ ...formData, amount: e.target.value })}
-                placeholder="0.00"
-                className="font-mono"
-                data-testid="input-amount"
-              />
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="date">Date</Label>
-              <Input
-                id="date"
-                type="date"
-                value={formData.date}
-                onChange={(e) => setFormData({ ...formData, date: e.target.value })}
-                data-testid="input-date"
-              />
-            </div>
           </div>
 
           <div className="space-y-2">

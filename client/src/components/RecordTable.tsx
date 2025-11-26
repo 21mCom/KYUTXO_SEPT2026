@@ -23,8 +23,6 @@ interface Record {
   type: "address" | "transaction";
   inputString: string;
   label: string;
-  amount?: number;
-  date?: string;
   tags: string[];
 }
 
@@ -49,8 +47,6 @@ export function RecordTable({ records, onEdit, onDelete, onRowClick }: RecordTab
             </TableHead>
             <TableHead>Label</TableHead>
             <TableHead>Address / TXID</TableHead>
-            <TableHead className="text-right">Amount</TableHead>
-            <TableHead>Date</TableHead>
             <TableHead>Tags</TableHead>
             <TableHead className="w-[50px]"></TableHead>
           </TableRow>
@@ -58,7 +54,7 @@ export function RecordTable({ records, onEdit, onDelete, onRowClick }: RecordTab
         <TableBody>
           {records.length === 0 ? (
             <TableRow>
-              <TableCell colSpan={7} className="h-24 text-center text-muted-foreground">
+              <TableCell colSpan={5} className="h-24 text-center text-muted-foreground">
                 No records found. Create your first record to get started.
               </TableCell>
             </TableRow>
@@ -78,12 +74,6 @@ export function RecordTable({ records, onEdit, onDelete, onRowClick }: RecordTab
                 </TableCell>
                 <TableCell>
                   <BitcoinAddressDisplay address={record.inputString} />
-                </TableCell>
-                <TableCell className="text-right font-mono" data-testid={`text-amount-${record.id}`}>
-                  {record.amount !== undefined ? `${record.amount} BTC` : "-"}
-                </TableCell>
-                <TableCell className="text-sm text-muted-foreground" data-testid={`text-date-${record.id}`}>
-                  {record.date || "-"}
                 </TableCell>
                 <TableCell>
                   <div className="flex flex-wrap gap-1">
