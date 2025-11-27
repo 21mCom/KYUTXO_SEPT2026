@@ -27,7 +27,7 @@ export function RecordTypeBadge({ type, className }: RecordTypeBadgeProps) {
         return (
           <>
             <Coins className="h-3 w-3 mr-1" />
-            Other Coin
+            Other
           </>
         );
       default:

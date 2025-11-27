@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import {
   Dialog,
   DialogContent,
@@ -13,7 +13,8 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
-import { X, Upload, File as FileIcon, Loader2, Plus, Check, ChevronsUpDown } from "lucide-react";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { X, Upload, File as FileIcon, Loader2, Plus, Check, ChevronsUpDown, AlertTriangle } from "lucide-react";
 import {
   Select,
   SelectContent,
@@ -37,6 +38,20 @@ import {
 import { cn } from "@/lib/utils";
 import { formatFileSize } from "@/lib/attachments";
 
+interface ExistingRecord {
+  id?: number;
+  type: string;
+  inputString: string;
+  label: string;
+  notes?: string;
+  tags: string[];
+  categories: string[];
+  seedName?: string;
+  walletSoftware?: string;
+  counterparty?: string;
+  privateKeyStatus?: string;
+}
+
 interface RecordFormDialogProps {
   open: boolean;
   onClose: () => void;
@@ -48,6 +63,7 @@ interface RecordFormDialogProps {
   availableWalletSoftware?: string[];
   availableTags?: string[];
   availableCategories?: string[];
+  onCheckDuplicate?: (inputString: string) => Promise<ExistingRecord | undefined>;
 }
 
 export function RecordFormDialog({ 
@@ -61,6 +77,7 @@ export function RecordFormDialog({
   availableWalletSoftware = [],
   availableTags = [],
   availableCategories = [],
+  onCheckDuplicate,
 }: RecordFormDialogProps) {
   const getDefaultFormData = () => ({
     inputString: "",
@@ -85,6 +102,11 @@ export function RecordFormDialog({
   const [newSeedName, setNewSeedName] = useState("");
   const [newWalletSoftware, setNewWalletSoftware] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
+  
+  // Duplicate detection state
+  const [duplicateRecord, setDuplicateRecord] = useState<ExistingRecord | undefined>();
+  const [isCheckingDuplicate, setIsCheckingDuplicate] = useState(false);
+  const duplicateCheckTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   // Reset form data when dialog opens or initialData changes
   useEffect(() => {
@@ -97,8 +119,66 @@ export function RecordFormDialog({
       setCounterpartyInput(data.counterparty || "");
       setNewSeedName("");
       setNewWalletSoftware("");
+      setDuplicateRecord(undefined);
+      setIsCheckingDuplicate(false);
     }
   }, [open, initialData]);
+
+  // Check for duplicate when inputString changes (debounced)
+  const checkForDuplicate = useCallback(async (inputString: string) => {
+    if (!onCheckDuplicate || !inputString.trim() || initialData) {
+      setDuplicateRecord(undefined);
+      return;
+    }
+    
+    setIsCheckingDuplicate(true);
+    try {
+      const existing = await onCheckDuplicate(inputString.trim());
+      setDuplicateRecord(existing);
+      
+      // If duplicate found, auto-populate the form
+      if (existing) {
+        setFormData({
+          ...existing,
+          type: existing.type,
+        });
+        setTagInput(existing.tags?.join(", ") || "");
+        setCategoryInput(existing.categories?.join(", ") || "");
+        setCounterpartyInput(existing.counterparty || "");
+      }
+    } catch (error) {
+      console.error("Error checking for duplicate:", error);
+    } finally {
+      setIsCheckingDuplicate(false);
+    }
+  }, [onCheckDuplicate, initialData]);
+
+  // Debounced duplicate check on inputString change
+  const handleInputStringChange = useCallback((value: string) => {
+    setFormData((prev: any) => ({ ...prev, inputString: value }));
+    
+    // Clear previous timeout
+    if (duplicateCheckTimeoutRef.current) {
+      clearTimeout(duplicateCheckTimeoutRef.current);
+    }
+    
+    // Don't check for duplicates when editing an existing record
+    if (initialData) return;
+    
+    // Debounce the duplicate check
+    duplicateCheckTimeoutRef.current = setTimeout(() => {
+      checkForDuplicate(value);
+    }, 500);
+  }, [checkForDuplicate, initialData]);
+
+  // Cleanup timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (duplicateCheckTimeoutRef.current) {
+        clearTimeout(duplicateCheckTimeoutRef.current);
+      }
+    };
+  }, []);
 
   // Parse comma-separated values into array
   const parseCommaSeparated = (value: string): string[] => {
@@ -202,7 +282,7 @@ export function RecordFormDialog({
                 <SelectContent>
                   <SelectItem value="address">Bitcoin Address</SelectItem>
                   <SelectItem value="transaction">Transaction</SelectItem>
-                  <SelectItem value="other">Other Coin</SelectItem>
+                  <SelectItem value="other">Other</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -225,16 +305,34 @@ export function RecordFormDialog({
             <Label htmlFor="inputString">
               {getInputLabel()} *
             </Label>
-            <Input
-              id="inputString"
-              value={formData.inputString}
-              onChange={(e) => setFormData({ ...formData, inputString: e.target.value })}
-              placeholder={getInputPlaceholder()}
-              required
-              disabled={isSubmitting}
-              className="font-mono"
-              data-testid="input-address"
-            />
+            <div className="relative">
+              <Input
+                id="inputString"
+                value={formData.inputString}
+                onChange={(e) => handleInputStringChange(e.target.value)}
+                placeholder={getInputPlaceholder()}
+                required
+                disabled={isSubmitting}
+                className="font-mono"
+                data-testid="input-address"
+              />
+              {isCheckingDuplicate && (
+                <Loader2 className="absolute right-3 top-1/2 transform -translate-y-1/2 h-4 w-4 animate-spin text-muted-foreground" />
+              )}
+            </div>
+            
+            {duplicateRecord && !initialData && (
+              <Alert className="mt-2">
+                <AlertTriangle className="h-4 w-4" />
+                <AlertDescription>
+                  <span className="font-medium">This record already exists.</span>
+                  <span className="block text-sm mt-1">
+                    The form has been filled with the existing data for "{duplicateRecord.label}". 
+                    You can modify the fields and save to update the existing record.
+                  </span>
+                </AlertDescription>
+              </Alert>
+            )}
           </div>
 
           <div className="space-y-2">

@@ -2,7 +2,7 @@
 // Provides encryption-aware CRUD operations while maintaining compatibility
 // with existing Dexie live queries
 
-import { db, type Record, type Attachment, type Tag, type Category } from './database';
+import { db, type Record, type Attachment, type Tag, type Category, type RecordOrigin, type RecordOriginType } from './database';
 import { 
   encryptRecord, 
   decryptRecord, 
@@ -12,6 +12,8 @@ import {
   decryptTag,
   encryptCategory,
   decryptCategory,
+  encryptRecordOrigin,
+  decryptRecordOrigin,
 } from './dbEncryption';
 
 let _encryptionKey: CryptoKey | null = null;
@@ -300,6 +302,135 @@ export async function updateCategory(id: number, data: Partial<Category>): Promi
 // Delete a category
 export async function deleteCategory(id: number): Promise<void> {
   await db.categories.delete(id);
+}
+
+// ============ DUPLICATE DETECTION ============
+
+// Find an existing record by inputString (for duplicate detection)
+// This requires decrypting all records to compare inputStrings
+export async function findRecordByInputString(inputString: string): Promise<Record | undefined> {
+  if (!inputString) return undefined;
+  
+  const key = getKey();
+  const normalizedInput = inputString.trim().toLowerCase();
+  
+  // Get all records
+  const allRecords = await db.records.toArray();
+  
+  // Decrypt and search
+  for (const record of allRecords) {
+    let decryptedInputString: string;
+    
+    if (record.isEncrypted) {
+      try {
+        const decrypted = await decryptRecord(record, key);
+        decryptedInputString = decrypted.inputString;
+      } catch {
+        continue; // Skip records that can't be decrypted
+      }
+    } else {
+      decryptedInputString = record.inputString;
+    }
+    
+    if (decryptedInputString.trim().toLowerCase() === normalizedInput) {
+      // Return the fully decrypted record
+      if (record.isEncrypted) {
+        return await decryptRecord(record, key);
+      }
+      return record;
+    }
+  }
+  
+  return undefined;
+}
+
+// ============ RECORD ORIGIN OPERATIONS ============
+
+// Create a record origin entry (for tracking metadata sources)
+export async function createRecordOrigin(
+  data: Omit<RecordOrigin, 'id' | 'createdAt'>
+): Promise<number> {
+  const key = getKey();
+  
+  const origin: RecordOrigin = {
+    ...data,
+    createdAt: Date.now(),
+  };
+
+  const encrypted = await encryptRecordOrigin(origin, key);
+  const id = await db.recordOrigins.add(encrypted);
+  return id as number;
+}
+
+// Get all decrypted origins for a record
+export async function getDecryptedRecordOrigins(recordId: number): Promise<RecordOrigin[]> {
+  const key = getKey();
+  const origins = await db.recordOrigins.where('recordId').equals(recordId).toArray();
+  
+  return Promise.all(
+    origins.map(async (origin) => {
+      if (origin.isEncrypted) {
+        return await decryptRecordOrigin(origin, key);
+      }
+      return origin;
+    })
+  );
+}
+
+// Merge metadata from multiple origins into a single record view
+// Priority: manual > xpub-derived > bulk-import
+// Tags and categories are unioned (combined)
+export function mergeRecordWithOrigins(
+  record: Record, 
+  origins: RecordOrigin[]
+): Record {
+  if (origins.length === 0) return record;
+  
+  // Sort by priority: manual first, then xpub-derived, then bulk-import
+  const priorityOrder: { [key in RecordOriginType]: number } = {
+    'manual': 0,
+    'xpub-derived': 1,
+    'bulk-import': 2,
+  };
+  
+  const sortedOrigins = [...origins].sort(
+    (a, b) => priorityOrder[a.originType] - priorityOrder[b.originType]
+  );
+  
+  // Start with the record's current values
+  const merged = { ...record };
+  
+  // Union all tags and categories from all origins
+  const allTags = new Set(record.tags || []);
+  const allCategories = new Set(record.categories || []);
+  
+  for (const origin of sortedOrigins) {
+    if (origin.tags) {
+      origin.tags.forEach(t => allTags.add(t));
+    }
+    if (origin.categories) {
+      origin.categories.forEach(c => allCategories.add(c));
+    }
+  }
+  
+  // Apply values from highest priority origin that has them
+  for (const origin of sortedOrigins) {
+    if (!merged.label && origin.label) merged.label = origin.label;
+    if (!merged.notes && origin.notes) merged.notes = origin.notes;
+    if (!merged.seedName && origin.seedName) merged.seedName = origin.seedName;
+    if (!merged.walletSoftware && origin.walletSoftware) merged.walletSoftware = origin.walletSoftware;
+    if (!merged.privateKeyStatus && origin.privateKeyStatus) merged.privateKeyStatus = origin.privateKeyStatus;
+    if (!merged.counterparty && origin.counterparty) merged.counterparty = origin.counterparty;
+    if (!merged.source && origin.source) merged.source = origin.source;
+    if (!merged.xpub && origin.xpub) merged.xpub = origin.xpub;
+    if (!merged.derivationPath && origin.derivationPath) merged.derivationPath = origin.derivationPath;
+    if (!merged.chainType && origin.chainType) merged.chainType = origin.chainType;
+  }
+  
+  merged.tags = Array.from(allTags);
+  merged.categories = Array.from(allCategories);
+  
+  return merged;
 }
 
 // ============ SYNC HELPERS ============

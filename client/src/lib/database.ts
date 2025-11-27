@@ -63,6 +63,33 @@ export interface Category {
   isEncrypted?: boolean;
 }
 
+// Origin type for tracking how a record was added
+export type RecordOriginType = 'manual' | 'xpub-derived' | 'bulk-import';
+
+// Record origin tracks where metadata came from (manual entry vs xpub import etc)
+export interface RecordOrigin {
+  id?: number;
+  recordId: number;
+  originType: RecordOriginType;
+  // Metadata specific to this origin source
+  label?: string;
+  notes?: string;
+  tags?: string[];
+  categories?: string[];
+  seedName?: string;
+  walletSoftware?: string;
+  privateKeyStatus?: string;
+  counterparty?: string;
+  source?: string;
+  // For xpub-derived origins
+  xpub?: string;
+  derivationPath?: string;
+  chainType?: ChainType;
+  createdAt: number;
+  encryptedPayload?: string;
+  isEncrypted?: boolean;
+}
+
 export interface Settings {
   id: string;
   fieldVisibility: {
@@ -89,10 +116,21 @@ export class KYBTCDatabase extends Dexie {
   attachments!: Table<Attachment>;
   tags!: Table<Tag>;
   categories!: Table<Category>;
+  recordOrigins!: Table<RecordOrigin>;
   settings!: Table<Settings>;
 
   constructor() {
     super('KYBTCDatabase');
+    
+    // Version 4 adds recordOrigins table and unique constraint on inputString
+    this.version(4).stores({
+      records: '++id, type, &inputString, label, *tags, *categories, createdAt, updatedAt, isEncrypted, chainType',
+      attachments: '++id, recordId, createdAt, isEncrypted',
+      tags: '++id, name, createdAt, isEncrypted',
+      categories: '++id, name, createdAt, isEncrypted',
+      recordOrigins: '++id, recordId, originType, createdAt, isEncrypted',
+      settings: 'id'
+    });
     
     // Version 3 adds chainType, derivationPath, xpub fields for bulk import
     this.version(3).stores({

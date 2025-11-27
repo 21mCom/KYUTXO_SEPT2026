@@ -10,7 +10,7 @@ import { RecordFormDialog } from "@/components/RecordFormDialog";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useRecords, createRecord, createRecordWithAttachments, updateRecord, deleteRecord, searchRecords, filterRecords } from "@/hooks/use-records";
 import { useEncryptedTags, useEncryptedCategories } from "@/hooks/use-encrypted-records";
-import { syncTagsToMaster, syncCategoriesToMaster, isEncryptionReady } from "@/lib/encryptionFacade";
+import { syncTagsToMaster, syncCategoriesToMaster, isEncryptionReady, findRecordByInputString } from "@/lib/encryptionFacade";
 import { useToast } from "@/hooks/use-toast";
 import { validateBitcoinInput } from "@/lib/bitcoin";
 import { getRecordAttachments } from "@/lib/attachments";
@@ -113,6 +113,17 @@ export default function Dashboard() {
     setShowDetail(true);
   };
 
+  // Check for duplicate record by inputString
+  const handleCheckDuplicate = async (inputString: string) => {
+    if (!isEncryptionReady()) return undefined;
+    try {
+      return await findRecordByInputString(inputString);
+    } catch (error) {
+      console.error("Error checking for duplicate:", error);
+      return undefined;
+    }
+  };
+
   const handleCreateRecord = async (data: any, files: File[] = []) => {
     try {
       let recordType = data.type;
@@ -134,6 +145,16 @@ export default function Dashboard() {
 
       setIsSubmitting(true);
 
+      // Check if this is actually an update (duplicate was detected and user is editing)
+      let existingRecord: Record | undefined;
+      if (isEncryptionReady()) {
+        try {
+          existingRecord = await findRecordByInputString(data.inputString);
+        } catch (error) {
+          console.error("Error checking for duplicate:", error);
+        }
+      }
+
       const recordData = {
         type: recordType,
         inputString: data.inputString,
@@ -149,32 +170,65 @@ export default function Dashboard() {
         privateKeyStatus: data.privateKeyStatus || "",
       };
 
-      if (files.length > 0) {
-        setUploadProgress({ current: 0, total: files.length });
+      // If record exists, update it instead of creating
+      if (existingRecord?.id) {
+        await updateRecord(existingRecord.id, recordData);
         
-        const result = await createRecordWithAttachments(
-          recordData,
-          files,
-          (current, total) => setUploadProgress({ current, total })
-        );
-
-        if (result.failedCount > 0) {
+        // Upload any new files for existing record
+        if (files.length > 0) {
+          setUploadProgress({ current: 0, total: files.length });
+          const { uploadAttachment } = await import("@/lib/attachments");
+          
+          let uploadedCount = 0;
+          for (let i = 0; i < files.length; i++) {
+            try {
+              await uploadAttachment(existingRecord.id, files[i], data.inputString);
+              uploadedCount++;
+            } catch (error) {
+              console.error(`Failed to upload ${files[i].name}:`, error);
+            }
+            setUploadProgress({ current: i + 1, total: files.length });
+          }
+          
           toast({
-            title: "Record Created",
-            description: `${data.label} saved with ${result.uploadedCount} of ${files.length} files uploaded`,
+            title: "Record Updated",
+            description: `${data.label} updated with ${uploadedCount} new file(s)`,
           });
         } else {
           toast({
-            title: "Record Created",
-            description: `${data.label} saved with ${result.uploadedCount} file(s)`,
+            title: "Record Updated",
+            description: `${data.label} has been updated successfully`,
           });
         }
       } else {
-        await createRecord(recordData);
-        toast({
-          title: "Record Created",
-          description: `${data.label} has been saved successfully`,
-        });
+        // Create new record
+        if (files.length > 0) {
+          setUploadProgress({ current: 0, total: files.length });
+          
+          const result = await createRecordWithAttachments(
+            recordData,
+            files,
+            (current, total) => setUploadProgress({ current, total })
+          );
+
+          if (result.failedCount > 0) {
+            toast({
+              title: "Record Created",
+              description: `${data.label} saved with ${result.uploadedCount} of ${files.length} files uploaded`,
+            });
+          } else {
+            toast({
+              title: "Record Created",
+              description: `${data.label} saved with ${result.uploadedCount} file(s)`,
+            });
+          }
+        } else {
+          await createRecord(recordData);
+          toast({
+            title: "Record Created",
+            description: `${data.label} has been saved successfully`,
+          });
+        }
       }
 
       // Sync tags and categories to master tables for autosuggest
@@ -197,7 +251,7 @@ export default function Dashboard() {
       toast({
         variant: "destructive",
         title: "Error",
-        description: error instanceof Error ? error.message : "Failed to create record",
+        description: error instanceof Error ? error.message : "Failed to save record",
       });
     } finally {
       setIsSubmitting(false);
@@ -438,6 +492,7 @@ export default function Dashboard() {
         availableWalletSoftware={uniqueWalletSoftware}
         availableTags={tags.map(t => t.name).filter(n => n && n !== '[encrypted]')}
         availableCategories={categories.map(c => c.name).filter(n => n && n !== '[encrypted]')}
+        onCheckDuplicate={handleCheckDuplicate}
       />
     </div>
   );

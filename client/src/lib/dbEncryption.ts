@@ -2,7 +2,7 @@
 // Handles encryption/decryption of record data in IndexedDB
 
 import { encrypt, decrypt } from './crypto';
-import { db, type Record, type Attachment, type Tag, type Category } from './database';
+import { db, type Record, type Attachment, type Tag, type Category, type RecordOrigin } from './database';
 
 // Fields to encrypt for each record type
 const RECORD_SENSITIVE_FIELDS: (keyof Record)[] = [
@@ -22,6 +22,17 @@ const ATTACHMENT_SENSITIVE_FIELDS: (keyof Attachment)[] = [
 
 const TAG_SENSITIVE_FIELDS: (keyof Tag)[] = ['name'];
 const CATEGORY_SENSITIVE_FIELDS: (keyof Category)[] = ['name'];
+
+const RECORD_ORIGIN_SENSITIVE_FIELDS: (keyof RecordOrigin)[] = [
+  'label',
+  'notes',
+  'seedName',
+  'walletSoftware',
+  'counterparty',
+  'source',
+  'xpub',
+  'derivationPath',
+];
 
 // Encrypt a record's sensitive fields
 export async function encryptRecord(record: Record, key: CryptoKey): Promise<Record> {
@@ -267,4 +278,59 @@ export async function hasPlaintextData(): Promise<boolean> {
   if (plaintextCategories > 0) return true;
 
   return false;
+}
+
+// Encrypt a record origin's sensitive fields
+export async function encryptRecordOrigin(origin: RecordOrigin, key: CryptoKey): Promise<RecordOrigin> {
+  const sensitiveData: Partial<RecordOrigin> = {};
+  
+  for (const field of RECORD_ORIGIN_SENSITIVE_FIELDS) {
+    if (origin[field] !== undefined) {
+      sensitiveData[field] = origin[field] as any;
+    }
+  }
+  
+  // Also include arrays
+  if (origin.tags) sensitiveData.tags = origin.tags;
+  if (origin.categories) sensitiveData.categories = origin.categories;
+
+  const encryptedPayload = await encrypt(JSON.stringify(sensitiveData), key);
+
+  return {
+    ...origin,
+    label: undefined,
+    notes: undefined,
+    seedName: undefined,
+    walletSoftware: undefined,
+    counterparty: undefined,
+    source: undefined,
+    xpub: undefined,
+    derivationPath: undefined,
+    tags: undefined,
+    categories: undefined,
+    encryptedPayload,
+    isEncrypted: true,
+  };
+}
+
+// Decrypt a record origin's sensitive fields
+export async function decryptRecordOrigin(origin: RecordOrigin, key: CryptoKey): Promise<RecordOrigin> {
+  if (!origin.isEncrypted || !origin.encryptedPayload) {
+    return origin;
+  }
+
+  try {
+    const decryptedJson = await decrypt(origin.encryptedPayload, key);
+    const sensitiveData = JSON.parse(decryptedJson);
+
+    return {
+      ...origin,
+      ...sensitiveData,
+      encryptedPayload: undefined,
+      isEncrypted: false,
+    };
+  } catch (error) {
+    console.error('Failed to decrypt record origin:', error);
+    throw new Error('Failed to decrypt record origin.');
+  }
 }

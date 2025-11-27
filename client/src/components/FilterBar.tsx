@@ -51,7 +51,7 @@ export function FilterBar({ filter, onChange, availableTags = [], availableCateg
             <SelectItem value="all">All Types</SelectItem>
             <SelectItem value="address">Bitcoin Addresses</SelectItem>
             <SelectItem value="transaction">Transactions</SelectItem>
-            <SelectItem value="other">Other Coins</SelectItem>
+            <SelectItem value="other">Other</SelectItem>
           </SelectContent>
         </Select>
 

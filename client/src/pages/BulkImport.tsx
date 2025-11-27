@@ -44,7 +44,8 @@ import { useToast } from "@/hooks/use-toast";
 import { useEncryptedTags, useEncryptedCategories, createEncryptedTag, createEncryptedCategory } from "@/hooks/use-encrypted-records";
 import { useAuth } from "@/contexts/AuthContext";
 import { useRecords, createRecord } from "@/hooks/use-records";
-import { syncTagsToMaster, syncCategoriesToMaster, isEncryptionReady } from "@/lib/encryptionFacade";
+import { syncTagsToMaster, syncCategoriesToMaster, isEncryptionReady, findRecordByInputString, createRecordOrigin } from "@/lib/encryptionFacade";
+import { updateRecord } from "@/hooks/use-records";
 import { 
   deriveDualChainAddresses,
   deriveDualChainAdvanced,
@@ -326,26 +327,98 @@ export default function BulkImport() {
       const parsedTags = parseCommaSeparated(tagInput);
       const parsedCategories = parseCommaSeparated(categoryInput);
 
+      let createdCount = 0;
+      let mergedCount = 0;
+      let errorCount = 0;
+
       for (const addr of allAddresses) {
         const labelPrefix = xpubLabel || seedName || "Derived";
         const chainSuffix = addr.chainType === 'receive' ? ' (Receive)' : ' (Change)';
         
-        await createRecord({
-          type: "address",
-          inputString: addr.address,
-          label: `${labelPrefix} #${addr.index}${chainSuffix}`,
-          notes: notes || undefined,
-          tags: parsedTags,
-          categories: parsedCategories,
-          seedName: seedName || undefined,
-          walletSoftware: walletSoftware || undefined,
-          privateKeyStatus: privateKeyStatus || undefined,
-          counterparty: counterpartyInput || undefined,
-          source: `${xpub.substring(0, 20)}... (${addr.path})`,
-          chainType: addr.chainType,
-          derivationPath: addr.path,
-          xpub: xpub,
-        });
+        try {
+          // Check if this address already exists
+          let existingRecord = null;
+          if (isEncryptionReady()) {
+            try {
+              existingRecord = await findRecordByInputString(addr.address);
+            } catch (e) {
+              console.error("Error checking for duplicate:", e);
+            }
+          }
+
+          if (existingRecord?.id) {
+            // Address exists - merge metadata
+            // Union tags and categories
+            const existingTags = existingRecord.tags || [];
+            const existingCategories = existingRecord.categories || [];
+            const mergedTags = Array.from(new Set([...existingTags, ...parsedTags]));
+            const mergedCategories = Array.from(new Set([...existingCategories, ...parsedCategories]));
+
+            // Update the record with merged metadata
+            // Keep existing values if they exist, otherwise use new values
+            await updateRecord(existingRecord.id, {
+              tags: mergedTags,
+              categories: mergedCategories,
+              // Only update empty fields with new xpub-derived data
+              seedName: existingRecord.seedName || seedName || undefined,
+              walletSoftware: existingRecord.walletSoftware || walletSoftware || undefined,
+              privateKeyStatus: existingRecord.privateKeyStatus || privateKeyStatus || undefined,
+              notes: existingRecord.notes || notes || undefined,
+              // Always update xpub-related metadata (more specific info)
+              chainType: addr.chainType,
+              derivationPath: addr.path,
+              xpub: xpub,
+              source: `${xpub.substring(0, 20)}... (${addr.path})`,
+            });
+
+            // Create a record origin entry to track xpub metadata
+            if (isEncryptionReady()) {
+              try {
+                await createRecordOrigin({
+                  recordId: existingRecord.id,
+                  originType: 'xpub-derived',
+                  label: `${labelPrefix} #${addr.index}${chainSuffix}`,
+                  notes: notes || undefined,
+                  tags: parsedTags,
+                  categories: parsedCategories,
+                  seedName: seedName || undefined,
+                  walletSoftware: walletSoftware || undefined,
+                  privateKeyStatus: privateKeyStatus || undefined,
+                  counterparty: counterpartyInput || undefined,
+                  xpub: xpub,
+                  derivationPath: addr.path,
+                  chainType: addr.chainType,
+                });
+              } catch (originError) {
+                console.error("Failed to create record origin:", originError);
+              }
+            }
+
+            mergedCount++;
+          } else {
+            // New address - create record
+            await createRecord({
+              type: "address",
+              inputString: addr.address,
+              label: `${labelPrefix} #${addr.index}${chainSuffix}`,
+              notes: notes || undefined,
+              tags: parsedTags,
+              categories: parsedCategories,
+              seedName: seedName || undefined,
+              walletSoftware: walletSoftware || undefined,
+              privateKeyStatus: privateKeyStatus || undefined,
+              counterparty: counterpartyInput || undefined,
+              source: `${xpub.substring(0, 20)}... (${addr.path})`,
+              chainType: addr.chainType,
+              derivationPath: addr.path,
+              xpub: xpub,
+            });
+            createdCount++;
+          }
+        } catch (error) {
+          console.error(`Failed to save address ${addr.address}:`, error);
+          errorCount++;
+        }
       }
 
       // Sync tags and categories to master tables for autosuggest
@@ -363,9 +436,17 @@ export default function BulkImport() {
         console.error("Failed to sync tags/categories to master tables:", syncError);
       }
 
+      // Build result message
+      const messages = [];
+      if (createdCount > 0) messages.push(`${createdCount} new`);
+      if (mergedCount > 0) messages.push(`${mergedCount} merged`);
+      if (errorCount > 0) messages.push(`${errorCount} failed`);
+
       toast({
-        title: "Addresses Saved",
-        description: `${allAddresses.length} addresses saved (${receiveToSave.length} receive, ${changeToSave.length} change)`,
+        title: "Import Complete",
+        description: messages.length > 0 
+          ? `Addresses: ${messages.join(", ")} (${receiveToSave.length} receive, ${changeToSave.length} change)`
+          : `${allAddresses.length} addresses processed`,
       });
 
       navigate("/");
