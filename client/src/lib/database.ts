@@ -122,9 +122,12 @@ export class KYBTCDatabase extends Dexie {
   constructor() {
     super('KYBTCDatabase');
     
-    // Version 4 adds recordOrigins table and unique constraint on inputString
+    // Version 4 adds recordOrigins table for tracking metadata sources
+    // Note: Unique constraint on inputString is NOT enforced at DB level because
+    // existing databases may have duplicates. Duplicate detection is handled at
+    // the application level in RecordFormDialog and BulkImport.
     this.version(4).stores({
-      records: '++id, type, &inputString, label, *tags, *categories, createdAt, updatedAt, isEncrypted, chainType',
+      records: '++id, type, inputString, label, *tags, *categories, createdAt, updatedAt, isEncrypted, chainType',
       attachments: '++id, recordId, createdAt, isEncrypted',
       tags: '++id, name, createdAt, isEncrypted',
       categories: '++id, name, createdAt, isEncrypted',
