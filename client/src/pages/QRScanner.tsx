@@ -69,22 +69,33 @@ export default function QRScanner() {
   const startScan = async () => {
     setCameraError(null);
     setScannedData(null);
+    setScanning(true);
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "environment" }
+        video: { 
+          facingMode: "environment",
+          width: { ideal: 640 },
+          height: { ideal: 480 }
+        }
       });
 
       streamRef.current = stream;
       
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
-        videoRef.current.setAttribute("playsinline", "true");
-        await videoRef.current.play();
-        setScanning(true);
+        
+        videoRef.current.onloadedmetadata = () => {
+          if (videoRef.current) {
+            videoRef.current.play().catch(err => {
+              console.error("Video play error:", err);
+            });
+          }
+        };
       }
     } catch (err) {
       console.error("Camera access error:", err);
+      setScanning(false);
       if (err instanceof Error) {
         if (err.name === "NotAllowedError") {
           setCameraError("Camera access was denied. Please allow camera permissions and try again.");
@@ -187,10 +198,11 @@ export default function QRScanner() {
 
             {scanning && (
               <div className="flex flex-col items-center justify-center space-y-4">
-                <div className="relative w-full max-w-sm aspect-square rounded-lg overflow-hidden border-4 border-primary">
+                <div className="relative w-full max-w-sm aspect-square rounded-lg overflow-hidden border-4 border-primary bg-black">
                   <video
                     ref={videoRef}
                     className="w-full h-full object-cover"
+                    autoPlay
                     playsInline
                     muted
                   />
