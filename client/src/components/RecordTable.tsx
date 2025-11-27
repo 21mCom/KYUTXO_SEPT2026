@@ -27,8 +27,9 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import { useSettings, toggleTableColumn } from "@/hooks/use-settings";
-import { db } from "@/lib/database";
+import { useSettings, useCustomFields, toggleTableColumn, toggleCustomFieldColumn } from "@/hooks/use-settings";
+import { db, type CustomField } from "@/lib/database";
+import { Separator } from "@/components/ui/separator";
 
 interface Record {
   id: string;
@@ -40,6 +41,8 @@ interface Record {
   walletSoftware?: string;
   seedName?: string;
   privateKeyStatus?: string;
+  source?: string;
+  customFields?: { [key: string]: string };
 }
 
 interface RecordTableProps {
@@ -50,7 +53,8 @@ interface RecordTableProps {
 }
 
 export function RecordTable({ records, onEdit, onDelete, onRowClick }: RecordTableProps) {
-  const { tableColumns } = useSettings();
+  const { tableColumns, customFieldColumns } = useSettings();
+  const { enabledCustomFields } = useCustomFields();
   const [attachmentCounts, setAttachmentCounts] = useState<Map<string, number>>(new Map());
 
   useEffect(() => {
@@ -144,7 +148,33 @@ export function RecordTable({ records, onEdit, onDelete, onRowClick }: RecordTab
                   />
                   <span className="text-sm">Attachments</span>
                 </label>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <Checkbox
+                    checked={tableColumns.source}
+                    onCheckedChange={() => toggleTableColumn('source')}
+                    data-testid="checkbox-col-source"
+                  />
+                  <span className="text-sm">Source</span>
+                </label>
               </div>
+              {enabledCustomFields.length > 0 && (
+                <>
+                  <Separator className="my-2" />
+                  <p className="text-sm font-medium mb-2 text-muted-foreground">Custom Fields</p>
+                  <div className="space-y-2">
+                    {enabledCustomFields.map((field) => (
+                      <label key={field.slug} className="flex items-center gap-2 cursor-pointer">
+                        <Checkbox
+                          checked={customFieldColumns[field.slug] || false}
+                          onCheckedChange={() => toggleCustomFieldColumn(field.slug)}
+                          data-testid={`checkbox-col-custom-${field.slug}`}
+                        />
+                        <span className="text-sm">{field.name}</span>
+                      </label>
+                    ))}
+                  </div>
+                </>
+              )}
             </div>
           </PopoverContent>
         </Popover>
@@ -166,6 +196,10 @@ export function RecordTable({ records, onEdit, onDelete, onRowClick }: RecordTab
             {tableColumns.seedName && <TableHead>Seed</TableHead>}
             {tableColumns.privateKeyStatus && <TableHead>Private Key</TableHead>}
             {tableColumns.hasAttachments && <TableHead className="w-[50px]">Files</TableHead>}
+            {tableColumns.source && <TableHead>Source</TableHead>}
+            {enabledCustomFields.filter(f => customFieldColumns[f.slug]).map((field) => (
+              <TableHead key={field.slug}>{field.name}</TableHead>
+            ))}
             <TableHead className="w-[50px]"></TableHead>
           </TableRow>
         </TableHeader>
@@ -179,7 +213,9 @@ export function RecordTable({ records, onEdit, onDelete, onRowClick }: RecordTab
                   (tableColumns.walletSoftware ? 1 : 0) + 
                   (tableColumns.seedName ? 1 : 0) + 
                   (tableColumns.privateKeyStatus ? 1 : 0) + 
-                  (tableColumns.hasAttachments ? 1 : 0)
+                  (tableColumns.hasAttachments ? 1 : 0) +
+                  (tableColumns.source ? 1 : 0) +
+                  enabledCustomFields.filter(f => customFieldColumns[f.slug]).length
                 } 
                 className="h-24 text-center text-muted-foreground"
               >
@@ -260,6 +296,16 @@ export function RecordTable({ records, onEdit, onDelete, onRowClick }: RecordTab
                     )}
                   </TableCell>
                 )}
+                {tableColumns.source && (
+                  <TableCell className="text-sm text-muted-foreground">
+                    {record.source || "-"}
+                  </TableCell>
+                )}
+                {enabledCustomFields.filter(f => customFieldColumns[f.slug]).map((field) => (
+                  <TableCell key={field.slug} className="text-sm text-muted-foreground">
+                    {record.customFields?.[field.slug] || "-"}
+                  </TableCell>
+                ))}
                 <TableCell>
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
