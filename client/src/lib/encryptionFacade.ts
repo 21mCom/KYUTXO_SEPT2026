@@ -213,6 +213,30 @@ export async function getDecryptedTags(): Promise<Tag[]> {
   );
 }
 
+// Update a tag (encrypted)
+export async function updateTag(id: number, data: Partial<Tag>): Promise<void> {
+  const key = getKey();
+  
+  const existing = await db.tags.get(id);
+  if (!existing) throw new Error('Tag not found');
+  
+  // Decrypt if encrypted
+  const decrypted = existing.isEncrypted
+    ? await decryptTag(existing, key)
+    : existing;
+  
+  // Merge updates
+  const updated: Tag = {
+    ...decrypted,
+    ...data,
+    id,
+  };
+  
+  // Encrypt and save
+  const encrypted = await encryptTag(updated, key);
+  await db.tags.put(encrypted);
+}
+
 // Delete a tag
 export async function deleteTag(id: number): Promise<void> {
   await db.tags.delete(id);
@@ -249,7 +273,112 @@ export async function getDecryptedCategories(): Promise<Category[]> {
   );
 }
 
+// Update a category (encrypted)
+export async function updateCategory(id: number, data: Partial<Category>): Promise<void> {
+  const key = getKey();
+  
+  const existing = await db.categories.get(id);
+  if (!existing) throw new Error('Category not found');
+  
+  // Decrypt if encrypted
+  const decrypted = existing.isEncrypted
+    ? await decryptCategory(existing, key)
+    : existing;
+  
+  // Merge updates
+  const updated: Category = {
+    ...decrypted,
+    ...data,
+    id,
+  };
+  
+  // Encrypt and save
+  const encrypted = await encryptCategory(updated, key);
+  await db.categories.put(encrypted);
+}
+
 // Delete a category
 export async function deleteCategory(id: number): Promise<void> {
   await db.categories.delete(id);
+}
+
+// ============ SYNC HELPERS ============
+// These helpers ensure tags/categories used in records are added to the master tables
+
+// Sync tags from a record to the master tags table
+// Creates any tags that don't already exist (case-insensitive check)
+export async function syncTagsToMaster(tagNames: string[]): Promise<void> {
+  if (!tagNames || tagNames.length === 0) return;
+  
+  const key = getKey();
+  
+  // Get all existing tags and decrypt them
+  const existingTags = await db.tags.toArray();
+  const decryptedTags = await Promise.all(
+    existingTags.map(async (tag) => {
+      if (tag.isEncrypted) {
+        return await decryptTag(tag, key);
+      }
+      return tag;
+    })
+  );
+  
+  // Create a set of existing tag names (lowercase for case-insensitive comparison)
+  const existingNames = new Set(
+    decryptedTags.map(t => t.name.toLowerCase())
+  );
+  
+  // Add any tags that don't exist
+  for (const name of tagNames) {
+    const trimmedName = name.trim();
+    if (trimmedName && !existingNames.has(trimmedName.toLowerCase())) {
+      const tag: Tag = {
+        name: trimmedName,
+        createdAt: Date.now(),
+      };
+      const encrypted = await encryptTag(tag, key);
+      await db.tags.add(encrypted);
+      // Add to set so we don't create duplicates within the same batch
+      existingNames.add(trimmedName.toLowerCase());
+    }
+  }
+}
+
+// Sync categories from a record to the master categories table
+// Creates any categories that don't already exist (case-insensitive check)
+export async function syncCategoriesToMaster(categoryNames: string[]): Promise<void> {
+  if (!categoryNames || categoryNames.length === 0) return;
+  
+  const key = getKey();
+  
+  // Get all existing categories and decrypt them
+  const existingCategories = await db.categories.toArray();
+  const decryptedCategories = await Promise.all(
+    existingCategories.map(async (cat) => {
+      if (cat.isEncrypted) {
+        return await decryptCategory(cat, key);
+      }
+      return cat;
+    })
+  );
+  
+  // Create a set of existing category names (lowercase for case-insensitive comparison)
+  const existingNames = new Set(
+    decryptedCategories.map(c => c.name.toLowerCase())
+  );
+  
+  // Add any categories that don't exist
+  for (const name of categoryNames) {
+    const trimmedName = name.trim();
+    if (trimmedName && !existingNames.has(trimmedName.toLowerCase())) {
+      const category: Category = {
+        name: trimmedName,
+        createdAt: Date.now(),
+      };
+      const encrypted = await encryptCategory(category, key);
+      await db.categories.add(encrypted);
+      // Add to set so we don't create duplicates within the same batch
+      existingNames.add(trimmedName.toLowerCase());
+    }
+  }
 }

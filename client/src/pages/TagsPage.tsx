@@ -5,8 +5,10 @@ import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { useTags, createTag, updateTag, deleteTag, getTagUsageCount } from "@/hooks/use-tags";
-import { useCategories, createCategory, updateCategory, deleteCategory, getCategoryUsageCount } from "@/hooks/use-categories";
+import { getTagUsageCount } from "@/hooks/use-tags";
+import { getCategoryUsageCount } from "@/hooks/use-categories";
+import { useEncryptedTags, useEncryptedCategories } from "@/hooks/use-encrypted-records";
+import { createTag, updateTag, deleteTag, createCategory, updateCategory, deleteCategory } from "@/lib/encryptionFacade";
 import { useToast } from "@/hooks/use-toast";
 import {
   AlertDialog,
@@ -31,8 +33,8 @@ export default function TagsPage() {
   const [tagCounts, setTagCounts] = useState<Record<string, number>>({});
   const [categoryCounts, setCategoryCounts] = useState<Record<string, number>>({});
 
-  const { tags, isLoading: tagsLoading } = useTags();
-  const { categories, isLoading: categoriesLoading } = useCategories();
+  const { tags, isLoading: tagsLoading } = useEncryptedTags();
+  const { categories, isLoading: categoriesLoading } = useEncryptedCategories();
   const { toast } = useToast();
 
   // Load usage counts

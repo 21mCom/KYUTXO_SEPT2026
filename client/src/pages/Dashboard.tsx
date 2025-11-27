@@ -9,8 +9,8 @@ import { RecordDetailPanel } from "@/components/RecordDetailPanel";
 import { RecordFormDialog } from "@/components/RecordFormDialog";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useRecords, createRecord, createRecordWithAttachments, updateRecord, deleteRecord, searchRecords, filterRecords } from "@/hooks/use-records";
-import { useTags } from "@/hooks/use-tags";
-import { useCategories } from "@/hooks/use-categories";
+import { useEncryptedTags, useEncryptedCategories } from "@/hooks/use-encrypted-records";
+import { syncTagsToMaster, syncCategoriesToMaster, isEncryptionReady } from "@/lib/encryptionFacade";
 import { useToast } from "@/hooks/use-toast";
 import { validateBitcoinInput } from "@/lib/bitcoin";
 import { getRecordAttachments } from "@/lib/attachments";
@@ -39,8 +39,8 @@ export default function Dashboard() {
   const [uploadProgress, setUploadProgress] = useState<{ current: number; total: number } | null>(null);
 
   const { records, isLoading } = useRecords();
-  const { tags } = useTags();
-  const { categories } = useCategories();
+  const { tags } = useEncryptedTags();
+  const { categories } = useEncryptedCategories();
   const { toast } = useToast();
 
   // Load attachments when selected record changes
@@ -177,6 +177,21 @@ export default function Dashboard() {
         });
       }
 
+      // Sync tags and categories to master tables for autosuggest
+      // Wrapped in try/catch to ensure record save succeeds even if sync fails
+      try {
+        if (isEncryptionReady()) {
+          if (recordData.tags.length > 0) {
+            await syncTagsToMaster(recordData.tags);
+          }
+          if (recordData.categories.length > 0) {
+            await syncCategoriesToMaster(recordData.categories);
+          }
+        }
+      } catch (syncError) {
+        console.error("Failed to sync tags/categories to master tables:", syncError);
+      }
+
       setShowForm(false);
     } catch (error) {
       toast({
@@ -250,6 +265,23 @@ export default function Dashboard() {
         });
       }
 
+      // Sync tags and categories to master tables for autosuggest
+      // Wrapped in try/catch to ensure record save succeeds even if sync fails
+      try {
+        if (isEncryptionReady()) {
+          const updatedTags = data.tags || [];
+          const updatedCategories = data.categories || [];
+          if (updatedTags.length > 0) {
+            await syncTagsToMaster(updatedTags);
+          }
+          if (updatedCategories.length > 0) {
+            await syncCategoriesToMaster(updatedCategories);
+          }
+        }
+      } catch (syncError) {
+        console.error("Failed to sync tags/categories to master tables:", syncError);
+      }
+
       setShowForm(false);
       setEditingRecord(undefined);
     } catch (error) {
@@ -320,8 +352,8 @@ export default function Dashboard() {
         <FilterBar
           filter={filter}
           onChange={setFilter}
-          availableTags={tags.map(t => t.name)}
-          availableCategories={categories.map(c => c.name)}
+          availableTags={tags.map(t => t.name).filter(n => n && n !== '[encrypted]')}
+          availableCategories={categories.map(c => c.name).filter(n => n && n !== '[encrypted]')}
         />
       </div>
 
@@ -404,8 +436,8 @@ export default function Dashboard() {
         uploadProgress={uploadProgress}
         availableSeedNames={uniqueSeedNames}
         availableWalletSoftware={uniqueWalletSoftware}
-        availableTags={tags.map(t => t.name)}
-        availableCategories={categories.map(c => c.name)}
+        availableTags={tags.map(t => t.name).filter(n => n && n !== '[encrypted]')}
+        availableCategories={categories.map(c => c.name).filter(n => n && n !== '[encrypted]')}
       />
     </div>
   );

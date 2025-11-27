@@ -44,6 +44,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useEncryptedTags, useEncryptedCategories, createEncryptedTag, createEncryptedCategory } from "@/hooks/use-encrypted-records";
 import { useAuth } from "@/contexts/AuthContext";
 import { useRecords, createRecord } from "@/hooks/use-records";
+import { syncTagsToMaster, syncCategoriesToMaster, isEncryptionReady } from "@/lib/encryptionFacade";
 import { 
   deriveDualChainAddresses,
   deriveDualChainAdvanced,
@@ -322,11 +323,12 @@ export default function BulkImport() {
       const changeToSave = dualChainResult.change.filter((_, i) => selectedChangeAddresses.has(i));
       const allAddresses = [...receiveToSave, ...changeToSave];
       
+      const parsedTags = parseCommaSeparated(tagInput);
+      const parsedCategories = parseCommaSeparated(categoryInput);
+
       for (const addr of allAddresses) {
         const labelPrefix = xpubLabel || seedName || "Derived";
         const chainSuffix = addr.chainType === 'receive' ? ' (Receive)' : ' (Change)';
-        const parsedTags = parseCommaSeparated(tagInput);
-        const parsedCategories = parseCommaSeparated(categoryInput);
         
         await createRecord({
           type: "address",
@@ -344,6 +346,21 @@ export default function BulkImport() {
           derivationPath: addr.path,
           xpub: xpub,
         });
+      }
+
+      // Sync tags and categories to master tables for autosuggest
+      // Wrapped in try/catch to ensure import succeeds even if sync fails
+      try {
+        if (isEncryptionReady()) {
+          if (parsedTags.length > 0) {
+            await syncTagsToMaster(parsedTags);
+          }
+          if (parsedCategories.length > 0) {
+            await syncCategoriesToMaster(parsedCategories);
+          }
+        }
+      } catch (syncError) {
+        console.error("Failed to sync tags/categories to master tables:", syncError);
       }
 
       toast({
