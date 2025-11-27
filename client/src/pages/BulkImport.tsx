@@ -41,8 +41,8 @@ import {
 } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
-import { useTags, createTag } from "@/hooks/use-tags";
-import { useCategories, createCategory } from "@/hooks/use-categories";
+import { useEncryptedTags, useEncryptedCategories, createEncryptedTag, createEncryptedCategory } from "@/hooks/use-encrypted-records";
+import { useAuth } from "@/contexts/AuthContext";
 import { useRecords, createRecord } from "@/hooks/use-records";
 import { 
   deriveDualChainAddresses,
@@ -92,9 +92,10 @@ export default function BulkImport() {
   const [newSeedName, setNewSeedName] = useState("");
   const [newWalletSoftware, setNewWalletSoftware] = useState("");
 
-  const { tags } = useTags();
-  const { categories } = useCategories();
+  const { tags } = useEncryptedTags();
+  const { categories } = useEncryptedCategories();
   const { records } = useRecords();
+  const { encryptionKey } = useAuth();
   const { toast } = useToast();
 
   const parseCommaSeparated = (value: string): string[] => {
@@ -108,8 +109,29 @@ export default function BulkImport() {
   const uniqueWalletSoftware = Array.from(new Set(records.map(r => r.walletSoftware).filter((s): s is string => !!s)));
   const allSeedNames = Array.from(new Set([...uniqueSeedNames, seedName].filter(Boolean)));
   const allWalletSoftware = Array.from(new Set([...uniqueWalletSoftware, walletSoftware].filter(Boolean)));
-  const availableTags = tags.map(t => t.name);
-  const availableCategories = categories.map(c => c.name);
+
+  const getCurrentToken = (input: string): string => {
+    const parts = input.split(",");
+    return (parts[parts.length - 1] || "").trim().toLowerCase();
+  };
+
+  const currentTagToken = getCurrentToken(tagInput);
+  const selectedTagNames = parseCommaSeparated(tagInput).map(t => t.toLowerCase());
+  const filteredTags = tags
+    .map(t => t.name)
+    .filter(name => name && name !== "[encrypted]")
+    .filter(name => !selectedTagNames.includes(name.toLowerCase()))
+    .filter(name => currentTagToken === "" || name.toLowerCase().includes(currentTagToken))
+    .slice(0, 8);
+
+  const currentCategoryToken = getCurrentToken(categoryInput);
+  const selectedCategoryNames = parseCommaSeparated(categoryInput).map(c => c.toLowerCase());
+  const filteredCategories = categories
+    .map(c => c.name)
+    .filter(name => name && name !== "[encrypted]")
+    .filter(name => !selectedCategoryNames.includes(name.toLowerCase()))
+    .filter(name => currentCategoryToken === "" || name.toLowerCase().includes(currentCategoryToken))
+    .slice(0, 8);
 
   const addNewSeedName = () => {
     if (newSeedName.trim()) {
@@ -821,22 +843,21 @@ export default function BulkImport() {
                     placeholder="cold storage, hardware wallet, savings"
                     data-testid="input-tags"
                   />
-                  {availableTags.length > 0 && (
+                  {filteredTags.length > 0 && (
                     <div className="flex flex-wrap gap-1 mt-1">
-                      {availableTags.slice(0, 8).map((tag) => (
+                      {filteredTags.map((tag) => (
                         <Badge
                           key={tag}
                           variant="outline"
                           className="cursor-pointer text-xs"
                           onClick={() => {
-                            const current = parseCommaSeparated(tagInput);
-                            if (!current.includes(tag)) {
-                              setTagInput(current.length > 0 ? `${tagInput}, ${tag}` : tag);
-                            }
+                            const parts = tagInput.split(",");
+                            parts[parts.length - 1] = parts.length > 1 ? ` ${tag}` : tag;
+                            setTagInput(parts.join(",") + ", ");
                           }}
                           data-testid={`badge-tag-${tag}`}
                         >
-                          + {tag}
+                          {tag}
                         </Badge>
                       ))}
                     </div>
@@ -852,22 +873,21 @@ export default function BulkImport() {
                     placeholder="Personal, Business, Investment"
                     data-testid="input-categories"
                   />
-                  {availableCategories.length > 0 && (
+                  {filteredCategories.length > 0 && (
                     <div className="flex flex-wrap gap-1 mt-1">
-                      {availableCategories.slice(0, 8).map((cat) => (
+                      {filteredCategories.map((cat) => (
                         <Badge
                           key={cat}
                           variant="outline"
                           className="cursor-pointer text-xs"
                           onClick={() => {
-                            const current = parseCommaSeparated(categoryInput);
-                            if (!current.includes(cat)) {
-                              setCategoryInput(current.length > 0 ? `${categoryInput}, ${cat}` : cat);
-                            }
+                            const parts = categoryInput.split(",");
+                            parts[parts.length - 1] = parts.length > 1 ? ` ${cat}` : cat;
+                            setCategoryInput(parts.join(",") + ", ");
                           }}
                           data-testid={`badge-category-${cat}`}
                         >
-                          + {cat}
+                          {cat}
                         </Badge>
                       ))}
                     </div>
