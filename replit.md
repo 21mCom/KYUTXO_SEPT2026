@@ -224,6 +224,15 @@ RecordOrigin: {
 
 ## Recent Changes
 
+**November 2024 - Dynamic Column Visibility:**
+- Added Source field as toggleable column in records table
+- Custom fields now appear as toggleable columns in the column selector
+- Column selector shows "Custom Fields" section with individual field toggles when custom fields are defined
+- Filter dropdowns (Tags, Categories) automatically hide when their corresponding columns are hidden
+- Active tag/category filters are automatically cleared when their columns are hidden (prevents hidden filter confusion)
+- Source and custom field columns properly handle encrypted values by showing "-" instead of placeholders
+- Settings schema extended with `source` in tableColumns and `customFieldColumns: Record<string, boolean>` map
+
 **November 2024 - Duplicate Detection & Record Types:**
 - Renamed "Other Coin" to "Other" for simpler record type naming
 - Added unique constraint on inputString to prevent duplicates at database level
