@@ -3,6 +3,15 @@ import Dexie, { type Table } from 'dexie';
 // Chain type for addresses derived from XPUB
 export type ChainType = 'receive' | 'change';
 
+// Vault metadata for multisig XPUB-derived addresses
+export interface VaultMetadata {
+  isVaultXpub: boolean;
+  vaultName?: string | null;
+  m?: number | null; // Required signatures
+  n?: number | null; // Total keys
+  vaultNotes?: string | null;
+}
+
 // Plaintext record structure (for type safety and querying)
 export interface Record {
   id?: number;
@@ -25,6 +34,8 @@ export interface Record {
   derivationPath?: string;
   // XPUB key used to derive this address
   xpub?: string;
+  // Vault metadata for multisig XPUB-derived addresses
+  vault?: VaultMetadata;
   createdAt: number;
   updatedAt: number;
   // Encrypted payload - contains the sensitive data when encryption is enabled

@@ -1,0 +1,76 @@
+REQUIREMENTS PROMPT — Add Multisig Vault XPUB Labeling
+Add support for optional multisig vault metadata when importing XPUBs.
+This feature is for labeling/organization only, not for constructing multisig wallets.
+Understand and Implement the following:
+________________________________________
+1. No automatic detection
+Do not attempt to infer whether an XPUB is multisig.
+This must be explicitly user-selected.
+________________________________________
+2. Add a new user prompt after XPUB entry
+After the user pastes an XPUB, show:
+Is this XPUB a multisig vault XPUB?
+( ) No      (default)
+( ) Yes – add vault metadata
+When “No” is selected → normal behavior.
+When “Yes” is selected → display additional fields below.
+________________________________________
+3. Vault metadata fields
+Only show these when “Yes” is selected:
+A. Vault Name (optional)
+Free-text field (e.g., “Family Cold Vault”).
+B. M-of-N (optional)
+Two dropdowns:
+•	Required signatures (M)
+•	Total keys (N)
+C. Notes (optional)
+A text field for user-defined notes about this vault XPUB.
+No other fields.
+Do not ask for cosigner names, key numbers, script type, or roles.
+________________________________________
+4. Save vault metadata along with the XPUB as you do the usual metadata
+When storing the XPUB, include:
+isVaultXpub: true/false
+vaultName: <string or null>
+m: <integer or null>
+n: <integer or null>
+notes: <string or null>
+Defaults when “No” is selected:
+isVaultXpub: false
+vaultName: null
+m: null
+n: null
+notes: null
+________________________________________
+5. Apply metadata to ALL derived addresses
+Every derived address (receive + change) from this XPUB must include the vault metadata in its stored metadata object in addition to the already other metadata already collected on the form.
+Example metadata structure:
+metadata: {
+  vault: {
+    isVaultXpub: true/false,
+    vaultName: <string|null>,
+    m: <integer|null>,
+    n: <integer|null>,
+    notes: <string|null>
+  },
+  ...existingFields
+}
+If the XPUB is not a vault XPUB → these fields remain null.
+________________________________________
+6. UI behavior
+•	In Easy Mode and Advanced Mode, show the same “Is this a multisig vault XPUB?” option.
+•	Only display the vault fields when “Yes” is selected.
+•	No other UI changes required.
+________________________________________
+7. No changes to derivation logic
+•	Keep address derivation exactly as-is.
+•	This feature adds metadata only.
+•	Do not change paths, scripts, or XPUB parsing.
+________________________________________
+🎯 Goal
+When users import the XPUB of a multisig vault (not individual keys), they can optionally attach:
+•	Vault name
+•	M-of-N 
+•	Notes
+And this metadata becomes part of every derived address, improving search, labeling, and long-term organization.
+
