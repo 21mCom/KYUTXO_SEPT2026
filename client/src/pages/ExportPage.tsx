@@ -37,7 +37,7 @@ function escapeCSVField(value: any): string {
   return str;
 }
 
-function generateRecordsCSV(records: any[]): string {
+function generateRecordsCSV(records: any[], attachments: any[]): string {
   const headers = [
     "id",
     "type",
@@ -48,6 +48,7 @@ function generateRecordsCSV(records: any[]): string {
     "date",
     "tags",
     "categories",
+    "attachments",
     "seedName",
     "walletSoftware",
     "privateKeyStatus",
@@ -65,7 +66,18 @@ function generateRecordsCSV(records: any[]): string {
     "updatedAt",
   ];
 
+  // Build a map of recordId -> attachment filenames for quick lookup
+  const attachmentsByRecord = new Map<number, string[]>();
+  for (const att of attachments) {
+    if (att.recordId) {
+      const existing = attachmentsByRecord.get(att.recordId) || [];
+      existing.push(att.filename);
+      attachmentsByRecord.set(att.recordId, existing);
+    }
+  }
+
   const rows = records.map((record) => {
+    const recordAttachments = attachmentsByRecord.get(record.id) || [];
     return [
       escapeCSVField(record.id),
       escapeCSVField(record.type),
@@ -76,6 +88,7 @@ function generateRecordsCSV(records: any[]): string {
       escapeCSVField(record.date),
       escapeCSVField(record.tags?.join(";") || ""),
       escapeCSVField(record.categories?.join(";") || ""),
+      escapeCSVField(recordAttachments.join(";") || ""),
       escapeCSVField(record.seedName),
       escapeCSVField(record.walletSoftware),
       escapeCSVField(record.privateKeyStatus),
@@ -239,7 +252,7 @@ export default function ExportPage() {
       const cleanAttachments = attachments.map(({ encryptedPayload, isEncrypted, ...a }) => a);
       const cleanOrigins = recordOrigins.map(({ encryptedPayload, isEncrypted, ...o }) => o);
 
-      const recordsCSV = generateRecordsCSV(cleanRecords);
+      const recordsCSV = generateRecordsCSV(cleanRecords, cleanAttachments);
       const tagsCSV = generateTagsCSV(cleanTags);
       const categoriesCSV = generateCategoriesCSV(cleanCategories);
       const attachmentsCSV = generateAttachmentsCSV(cleanAttachments);
