@@ -74,8 +74,8 @@ export function LoginScreen() {
           <form onSubmit={isInitialized ? handleLogin : handleSetup} className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="password">Password</Label>
-              <div className="relative">
-                <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <div className="relative flex items-center">
+                <Lock className="absolute left-3 h-4 w-4 text-muted-foreground pointer-events-none" />
                 <Input
                   id="password"
                   type={showPassword ? 'text' : 'password'}
@@ -86,24 +86,22 @@ export function LoginScreen() {
                   disabled={isLoading}
                   data-testid="input-password"
                 />
-                <Button
+                <button
                   type="button"
-                  size="icon"
-                  variant="ghost"
-                  className="absolute right-0 top-0 h-full px-3"
+                  className="absolute right-3 text-muted-foreground hover:text-foreground"
                   onClick={() => setShowPassword(!showPassword)}
                   data-testid="button-toggle-password"
                 >
                   {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                </Button>
+                </button>
               </div>
             </div>
 
             {!isInitialized && (
               <div className="space-y-2">
                 <Label htmlFor="confirmPassword">Confirm Password</Label>
-                <div className="relative">
-                  <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <div className="relative flex items-center">
+                  <Lock className="absolute left-3 h-4 w-4 text-muted-foreground pointer-events-none" />
                   <Input
                     id="confirmPassword"
                     type={showPassword ? 'text' : 'password'}
