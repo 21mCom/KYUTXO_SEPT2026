@@ -239,6 +239,16 @@ RecordOrigin: {
 - Added QR code generation feature in record detail panel for addresses and transaction IDs
 - Clicking the QR icon shows a dialog with the scannable QR code
 
+**November 2024 - Data Management Features:**
+- Added "Clear Database" feature in Settings with double confirmation:
+  - Requires entering vault password AND typing "DELETE ALL DATA" phrase
+  - Permanently wipes all records, tags, categories, attachments, and custom fields
+- Added "Restore from Backup" feature in Settings:
+  - Upload previously exported ZIP backup files
+  - Supports both encrypted and unencrypted backups
+  - Two restore modes: "Replace all data" (wipes existing) or "Merge with existing" (skips duplicates)
+  - Progress indicator shows restore status
+
 **November 2024 - Dynamic Column Visibility:**
 - Added Source field as toggleable column in records table
 - Custom fields now appear as toggleable columns in the column selector

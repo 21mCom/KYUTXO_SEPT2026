@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { Moon, Eye, Database, Plus, Trash2, Pencil } from "lucide-react";
+import { useState, useRef } from "react";
+import { Moon, Eye, Database, Plus, Trash2, Pencil, AlertTriangle, Upload, RefreshCw, Loader2 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
@@ -9,6 +9,8 @@ import { ThemeToggle } from "@/components/ThemeToggle";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/hooks/use-toast";
+import { Progress } from "@/components/ui/progress";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import {
   useSettings,
   useCustomFields,
@@ -35,16 +37,50 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { useAuth } from "@/contexts/AuthContext";
+import { db } from "@/lib/database";
+import { deriveKey, decrypt, base64ToBuffer, verifyPassword } from "@/lib/crypto";
+import { getVaultSettings } from "@/lib/vault";
+import { getEncryptionKey } from "@/lib/encryptionFacade";
+import { 
+  encryptRecord, 
+  encryptTag, 
+  encryptCategory, 
+  encryptAttachment,
+  decryptTag,
+  decryptCategory,
+} from "@/lib/dbEncryption";
+import JSZip from "jszip";
+
+const DELETE_CONFIRMATION_PHRASE = "DELETE ALL DATA";
 
 export default function SettingsPage() {
   const { fieldVisibility, isLoading: settingsLoading } = useSettings();
   const { customFields, isLoading: customFieldsLoading } = useCustomFields();
   const { toast } = useToast();
+  const { encryptionKey } = useAuth();
   
   const [newFieldName, setNewFieldName] = useState("");
   const [isAddingField, setIsAddingField] = useState(false);
   const [editingField, setEditingField] = useState<{ id: number; name: string } | null>(null);
   const [deletingFieldId, setDeletingFieldId] = useState<number | null>(null);
+  
+  // Clear database state
+  const [clearDialogOpen, setClearDialogOpen] = useState(false);
+  const [clearPassword, setClearPassword] = useState("");
+  const [clearPhrase, setClearPhrase] = useState("");
+  const [isClearing, setIsClearing] = useState(false);
+  
+  // Restore state
+  const [restoreDialogOpen, setRestoreDialogOpen] = useState(false);
+  const [restoreFile, setRestoreFile] = useState<File | null>(null);
+  const [restorePassword, setRestorePassword] = useState("");
+  const [restoreMode, setRestoreMode] = useState<"replace" | "merge">("replace");
+  const [isRestoring, setIsRestoring] = useState(false);
+  const [restoreProgress, setRestoreProgress] = useState(0);
+  const [restoreMessage, setRestoreMessage] = useState("");
+  const [backupInfo, setBackupInfo] = useState<{ encrypted: boolean; date: string; recordCount: number } | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleToggleBuiltInField = async (field: keyof typeof fieldVisibility) => {
     try {
@@ -143,6 +179,440 @@ export default function SettingsPage() {
         description: "Failed to delete custom field",
         variant: "destructive",
       });
+    }
+  };
+
+  // Clear database handler
+  const handleClearDatabase = async () => {
+    if (clearPhrase !== DELETE_CONFIRMATION_PHRASE) {
+      toast({
+        variant: "destructive",
+        title: "Incorrect Phrase",
+        description: `Please type "${DELETE_CONFIRMATION_PHRASE}" exactly to confirm.`,
+      });
+      return;
+    }
+
+    setIsClearing(true);
+    try {
+      // Verify password
+      const settings = await getVaultSettings();
+      if (!settings) {
+        throw new Error("Vault not initialized");
+      }
+
+      const salt = base64ToBuffer(settings.salt);
+      const isValid = await verifyPassword(clearPassword, salt, settings.passwordHash);
+
+      if (!isValid) {
+        toast({
+          variant: "destructive",
+          title: "Invalid Password",
+          description: "The password you entered is incorrect.",
+        });
+        setIsClearing(false);
+        return;
+      }
+
+      // Clear all tables
+      await db.records.clear();
+      await db.tags.clear();
+      await db.categories.clear();
+      await db.attachments.clear();
+      await db.recordOrigins.clear();
+      await db.customFields.clear();
+
+      // Reset settings to defaults (but keep them)
+      await db.settings.update('default', {
+        fieldVisibility: {
+          seedName: true,
+          walletSoftware: true,
+          privateKeyStatus: false,
+          counterparty: true,
+          source: true,
+        },
+        tableColumns: {
+          tags: true,
+          categories: false,
+          walletSoftware: false,
+          seedName: false,
+          privateKeyStatus: false,
+          hasAttachments: true,
+          source: false,
+        },
+        customFieldColumns: {},
+      });
+
+      setClearDialogOpen(false);
+      setClearPassword("");
+      setClearPhrase("");
+      
+      toast({
+        title: "Database Cleared",
+        description: "All records, tags, categories, and attachments have been deleted.",
+      });
+
+      // Reload the page to reset all state
+      window.location.reload();
+    } catch (error) {
+      console.error("Failed to clear database:", error);
+      toast({
+        variant: "destructive",
+        title: "Clear Failed",
+        description: error instanceof Error ? error.message : "Failed to clear database",
+      });
+    } finally {
+      setIsClearing(false);
+    }
+  };
+
+  // Handle file selection for restore
+  const handleFileSelect = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    setRestoreFile(file);
+    setBackupInfo(null);
+
+    try {
+      const zip = await JSZip.loadAsync(file);
+      const backupFile = zip.file("backup.json");
+      
+      if (!backupFile) {
+        throw new Error("Invalid backup file - missing backup.json");
+      }
+
+      const content = await backupFile.async("text");
+      const backup = JSON.parse(content);
+      
+      setBackupInfo({
+        encrypted: backup.encrypted || false,
+        date: backup.exportDate || "Unknown",
+        recordCount: backup.encrypted ? -1 : (backup.data?.records?.length || 0),
+      });
+    } catch (error) {
+      console.error("Failed to read backup file:", error);
+      toast({
+        variant: "destructive",
+        title: "Invalid Backup",
+        description: "Could not read the backup file. Make sure it's a valid KYBTC backup.",
+      });
+      setRestoreFile(null);
+    }
+  };
+
+  // Restore from backup handler
+  const handleRestore = async () => {
+    // Get the current encryption key from the facade
+    const currentKey = getEncryptionKey();
+    if (!restoreFile || !currentKey) {
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: "Please log in first to restore data.",
+      });
+      return;
+    }
+
+    setIsRestoring(true);
+    setRestoreProgress(0);
+    setRestoreMessage("Reading backup file...");
+
+    try {
+      const zip = await JSZip.loadAsync(restoreFile);
+      const backupFile = zip.file("backup.json");
+      
+      if (!backupFile) {
+        throw new Error("Invalid backup file");
+      }
+
+      setRestoreProgress(10);
+      const content = await backupFile.async("text");
+      const backup = JSON.parse(content);
+
+      let data = backup.data;
+
+      // If backup is encrypted, decrypt it
+      if (backup.encrypted) {
+        setRestoreMessage("Decrypting backup...");
+        setRestoreProgress(20);
+
+        if (!restorePassword) {
+          throw new Error("Password required for encrypted backup");
+        }
+
+        // Properly decode the salt from base64
+        const salt = base64ToBuffer(backup.salt);
+        const backupKey = await deriveKey(restorePassword, salt);
+
+        try {
+          const decrypted = await decrypt(backup.data, backupKey);
+          data = JSON.parse(decrypted);
+        } catch {
+          throw new Error("Invalid password or corrupted backup");
+        }
+      }
+
+      setRestoreProgress(30);
+      setRestoreMessage("Processing data...");
+
+      const { records, tags, categories, attachments, recordOrigins, customFields: backupCustomFields } = data;
+
+      // If replace mode, clear existing data first
+      if (restoreMode === "replace") {
+        setRestoreMessage("Clearing existing data...");
+        setRestoreProgress(40);
+        
+        await db.records.clear();
+        await db.tags.clear();
+        await db.categories.clear();
+        await db.attachments.clear();
+        await db.recordOrigins.clear();
+        await db.customFields.clear();
+      }
+
+      setRestoreProgress(50);
+      setRestoreMessage("Restoring records...");
+
+      // Track statistics
+      let recordsAdded = 0;
+      let recordsSkipped = 0;
+
+      // Restore records
+      if (records && records.length > 0) {
+        // Build set of existing inputStrings for merge mode (need to decrypt them first)
+        let existingInputStrings = new Set<string>();
+        if (restoreMode === "merge") {
+          const existingRecords = await db.records.toArray();
+          existingInputStrings = new Set(existingRecords.map(r => r.inputString));
+        }
+        
+        for (let i = 0; i < records.length; i++) {
+          const record = records[i];
+          const { id, encryptedPayload, isEncrypted, ...recordData } = record;
+          
+          // Skip duplicates in merge mode
+          if (restoreMode === "merge" && existingInputStrings.has(recordData.inputString)) {
+            recordsSkipped++;
+            setRestoreProgress(50 + Math.floor((i / records.length) * 20));
+            continue;
+          }
+
+          // Create a new record object with required fields
+          const newRecord = {
+            type: recordData.type || "address",
+            inputString: recordData.inputString || "",
+            label: recordData.label || "Restored Record",
+            notes: recordData.notes,
+            amount: recordData.amount,
+            date: recordData.date,
+            tags: recordData.tags || [],
+            categories: recordData.categories || [],
+            chainType: recordData.chainType,
+            seedName: recordData.seedName,
+            walletSoftware: recordData.walletSoftware,
+            privateKeyStatus: recordData.privateKeyStatus,
+            counterparty: recordData.counterparty,
+            source: recordData.source,
+            customFields: recordData.customFields,
+            createdAt: recordData.createdAt || Date.now(),
+            updatedAt: recordData.updatedAt || Date.now(),
+          };
+
+          // Encrypt using proper encryption utility
+          const encrypted = await encryptRecord(newRecord as any, currentKey);
+          await db.records.add(encrypted);
+          recordsAdded++;
+          setRestoreProgress(50 + Math.floor((i / records.length) * 20));
+        }
+      }
+
+      setRestoreProgress(70);
+      setRestoreMessage("Restoring tags and categories...");
+
+      // Track existing tag/category names for merge mode
+      let existingTagNames = new Set<string>();
+      let existingCategoryNames = new Set<string>();
+      
+      if (restoreMode === "merge") {
+        // Decrypt existing tags to get their names
+        const existingTags = await db.tags.toArray();
+        for (const tag of existingTags) {
+          if (tag.isEncrypted && tag.encryptedPayload) {
+            try {
+              const decrypted = await decryptTag(tag, currentKey);
+              existingTagNames.add(decrypted.name);
+            } catch {
+              // Keep the placeholder if decryption fails
+              existingTagNames.add(tag.name);
+            }
+          } else {
+            existingTagNames.add(tag.name);
+          }
+        }
+        
+        // Decrypt existing categories to get their names
+        const existingCategories = await db.categories.toArray();
+        for (const cat of existingCategories) {
+          if (cat.isEncrypted && cat.encryptedPayload) {
+            try {
+              const decrypted = await decryptCategory(cat, currentKey);
+              existingCategoryNames.add(decrypted.name);
+            } catch {
+              existingCategoryNames.add(cat.name);
+            }
+          } else {
+            existingCategoryNames.add(cat.name);
+          }
+        }
+      }
+
+      let tagsAdded = 0;
+      let categoriesAdded = 0;
+
+      // Restore tags
+      if (tags && tags.length > 0) {
+        for (const tag of tags) {
+          const { id, encryptedPayload, isEncrypted, ...tagData } = tag;
+          const tagName = tagData.name || "";
+          
+          // Skip duplicates in merge mode
+          if (restoreMode === "merge" && existingTagNames.has(tagName)) {
+            continue;
+          }
+          
+          const newTag = {
+            name: tagName,
+            color: tagData.color || "#888888",
+            createdAt: tagData.createdAt || Date.now(),
+          };
+          
+          const encrypted = await encryptTag(newTag as any, currentKey);
+          await db.tags.add(encrypted);
+          tagsAdded++;
+        }
+      }
+
+      // Restore categories
+      if (categories && categories.length > 0) {
+        for (const category of categories) {
+          const { id, encryptedPayload, isEncrypted, ...catData } = category;
+          const catName = catData.name || "";
+          
+          // Skip duplicates in merge mode
+          if (restoreMode === "merge" && existingCategoryNames.has(catName)) {
+            continue;
+          }
+          
+          const newCategory = {
+            name: catName,
+            createdAt: catData.createdAt || Date.now(),
+          };
+          
+          const encrypted = await encryptCategory(newCategory as any, currentKey);
+          await db.categories.add(encrypted);
+          categoriesAdded++;
+        }
+      }
+
+      setRestoreProgress(80);
+      setRestoreMessage("Restoring attachments...");
+
+      let attachmentsAdded = 0;
+
+      // Restore attachments (metadata only - files would need separate handling)
+      if (attachments && attachments.length > 0) {
+        // Build set of existing attachments for merge mode (recordId + filename combo)
+        let existingAttachmentKeys = new Set<string>();
+        if (restoreMode === "merge") {
+          const existingAttachments = await db.attachments.toArray();
+          for (const att of existingAttachments) {
+            const key = `${att.recordId}:${att.filename}`;
+            existingAttachmentKeys.add(key);
+          }
+        }
+        
+        for (const attachment of attachments) {
+          const { id, encryptedPayload, isEncrypted, ...attData } = attachment;
+          const attKey = `${attData.recordId}:${attData.filename}`;
+          
+          // Skip duplicates in merge mode
+          if (restoreMode === "merge" && existingAttachmentKeys.has(attKey)) {
+            continue;
+          }
+          
+          const newAttachment = {
+            recordId: attData.recordId,
+            filename: attData.filename || "unknown",
+            mimeType: attData.mimeType || "application/octet-stream",
+            size: attData.size || 0,
+            objectStoragePath: attData.objectStoragePath || "",
+            createdAt: attData.createdAt || Date.now(),
+          };
+          
+          const encrypted = await encryptAttachment(newAttachment as any, currentKey);
+          await db.attachments.add(encrypted);
+          attachmentsAdded++;
+        }
+      }
+
+      setRestoreProgress(90);
+      setRestoreMessage("Restoring custom fields...");
+
+      let customFieldsAdded = 0;
+
+      // Restore custom fields
+      if (backupCustomFields && backupCustomFields.length > 0) {
+        for (const field of backupCustomFields) {
+          const { id, ...fieldData } = field;
+          if (restoreMode === "merge") {
+            const existing = await db.customFields.where('slug').equals(fieldData.slug).first();
+            if (!existing) {
+              await db.customFields.add({ ...fieldData, createdAt: fieldData.createdAt || Date.now() });
+              customFieldsAdded++;
+            }
+          } else {
+            await db.customFields.add({ ...fieldData, createdAt: fieldData.createdAt || Date.now() });
+            customFieldsAdded++;
+          }
+        }
+      }
+
+      setRestoreProgress(100);
+      setRestoreMessage("Restore complete!");
+
+      const message = restoreMode === "merge"
+        ? `Added ${recordsAdded} records (${recordsSkipped} skipped), ${tagsAdded} tags, ${categoriesAdded} categories.`
+        : `Restored ${recordsAdded} records, ${tagsAdded} tags, ${categoriesAdded} categories.`;
+
+      toast({
+        title: "Restore Successful",
+        description: message,
+      });
+
+      // Close dialog and reset state
+      setTimeout(() => {
+        setRestoreDialogOpen(false);
+        setRestoreFile(null);
+        setRestorePassword("");
+        setRestoreProgress(0);
+        setRestoreMessage("");
+        setBackupInfo(null);
+        // Reload to refresh all data
+        window.location.reload();
+      }, 1500);
+
+    } catch (error) {
+      console.error("Restore failed:", error);
+      toast({
+        variant: "destructive",
+        title: "Restore Failed",
+        description: error instanceof Error ? error.message : "Failed to restore backup",
+      });
+      setRestoreProgress(0);
+      setRestoreMessage("");
+    } finally {
+      setIsRestoring(false);
     }
   };
 
@@ -338,6 +808,55 @@ export default function SettingsPage() {
 
         <Card>
           <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <RefreshCw className="h-5 w-5" />
+              Data Management
+            </CardTitle>
+            <CardDescription>
+              Clear or restore your database
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <Label className="text-base">Restore from Backup</Label>
+                <p className="text-sm text-muted-foreground">
+                  Import data from a previously exported backup file
+                </p>
+              </div>
+              <Button
+                variant="outline"
+                onClick={() => setRestoreDialogOpen(true)}
+                data-testid="button-open-restore"
+              >
+                <Upload className="h-4 w-4 mr-2" />
+                Restore
+              </Button>
+            </div>
+
+            <Separator />
+
+            <div className="flex items-center justify-between">
+              <div>
+                <Label className="text-base text-destructive">Clear Database</Label>
+                <p className="text-sm text-muted-foreground">
+                  Permanently delete all records, tags, and categories
+                </p>
+              </div>
+              <Button
+                variant="destructive"
+                onClick={() => setClearDialogOpen(true)}
+                data-testid="button-open-clear"
+              >
+                <Trash2 className="h-4 w-4 mr-2" />
+                Clear All
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
             <CardTitle>About KYBTC</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
@@ -440,6 +959,258 @@ export default function SettingsPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Clear Database Dialog */}
+      <Dialog open={clearDialogOpen} onOpenChange={(open) => {
+        if (!open && !isClearing) {
+          setClearDialogOpen(false);
+          setClearPassword("");
+          setClearPhrase("");
+        }
+      }}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-destructive">
+              <AlertTriangle className="h-5 w-5" />
+              Clear All Data
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="p-4 bg-destructive/10 rounded-lg border border-destructive/20">
+              <p className="text-sm text-destructive font-medium">
+                Warning: This action cannot be undone!
+              </p>
+              <p className="text-sm text-muted-foreground mt-1">
+                All records, tags, categories, attachments, and custom fields will be permanently deleted.
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="clear-password">Enter your vault password</Label>
+              <Input
+                id="clear-password"
+                type="password"
+                value={clearPassword}
+                onChange={(e) => setClearPassword(e.target.value)}
+                placeholder="Your vault password"
+                disabled={isClearing}
+                data-testid="input-clear-password"
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="clear-phrase">
+                Type <span className="font-mono text-destructive">{DELETE_CONFIRMATION_PHRASE}</span> to confirm
+              </Label>
+              <Input
+                id="clear-phrase"
+                type="text"
+                value={clearPhrase}
+                onChange={(e) => setClearPhrase(e.target.value)}
+                placeholder={DELETE_CONFIRMATION_PHRASE}
+                disabled={isClearing}
+                data-testid="input-clear-phrase"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => {
+              setClearDialogOpen(false);
+              setClearPassword("");
+              setClearPhrase("");
+            }} disabled={isClearing}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={handleClearDatabase}
+              disabled={isClearing || !clearPassword || clearPhrase !== DELETE_CONFIRMATION_PHRASE}
+              data-testid="button-confirm-clear"
+            >
+              {isClearing ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Clearing...
+                </>
+              ) : (
+                <>
+                  <Trash2 className="h-4 w-4 mr-2" />
+                  Clear All Data
+                </>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Restore Dialog */}
+      <Dialog open={restoreDialogOpen} onOpenChange={(open) => {
+        if (!open && !isRestoring) {
+          setRestoreDialogOpen(false);
+          setRestoreFile(null);
+          setRestorePassword("");
+          setRestoreProgress(0);
+          setRestoreMessage("");
+          setBackupInfo(null);
+        }
+      }}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Upload className="h-5 w-5" />
+              Restore from Backup
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label>Select backup file</Label>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".zip"
+                onChange={handleFileSelect}
+                className="hidden"
+                data-testid="input-restore-file"
+              />
+              <div className="flex gap-2">
+                <Button
+                  variant="outline"
+                  className="flex-1"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={isRestoring}
+                >
+                  {restoreFile ? restoreFile.name : "Choose ZIP file..."}
+                </Button>
+                {restoreFile && (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => {
+                      setRestoreFile(null);
+                      setBackupInfo(null);
+                      if (fileInputRef.current) {
+                        fileInputRef.current.value = "";
+                      }
+                    }}
+                    disabled={isRestoring}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                )}
+              </div>
+            </div>
+
+            {backupInfo && (
+              <div className="p-3 bg-muted rounded-lg space-y-2">
+                <div className="flex justify-between text-sm">
+                  <span className="text-muted-foreground">Backup Date:</span>
+                  <span className="font-medium">
+                    {new Date(backupInfo.date).toLocaleDateString()}
+                  </span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span className="text-muted-foreground">Encrypted:</span>
+                  <Badge variant={backupInfo.encrypted ? "default" : "secondary"}>
+                    {backupInfo.encrypted ? "Yes" : "No"}
+                  </Badge>
+                </div>
+                {!backupInfo.encrypted && backupInfo.recordCount >= 0 && (
+                  <div className="flex justify-between text-sm">
+                    <span className="text-muted-foreground">Records:</span>
+                    <span className="font-medium">{backupInfo.recordCount}</span>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {backupInfo?.encrypted && (
+              <div className="space-y-2">
+                <Label htmlFor="restore-password">Backup password</Label>
+                <Input
+                  id="restore-password"
+                  type="password"
+                  value={restorePassword}
+                  onChange={(e) => setRestorePassword(e.target.value)}
+                  placeholder="Enter the password used to encrypt this backup"
+                  disabled={isRestoring}
+                  data-testid="input-restore-password"
+                />
+              </div>
+            )}
+
+            <div className="space-y-2">
+              <Label>Restore mode</Label>
+              <RadioGroup
+                value={restoreMode}
+                onValueChange={(value) => setRestoreMode(value as "replace" | "merge")}
+                disabled={isRestoring}
+              >
+                <div className="flex items-start space-x-3 p-3 rounded-lg border bg-background hover-elevate">
+                  <RadioGroupItem value="replace" id="mode-replace" data-testid="radio-replace" />
+                  <div className="space-y-1">
+                    <Label htmlFor="mode-replace" className="font-medium cursor-pointer">
+                      Replace all data
+                    </Label>
+                    <p className="text-xs text-muted-foreground">
+                      Delete all existing data and replace with backup contents
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-start space-x-3 p-3 rounded-lg border bg-background hover-elevate">
+                  <RadioGroupItem value="merge" id="mode-merge" data-testid="radio-merge" />
+                  <div className="space-y-1">
+                    <Label htmlFor="mode-merge" className="font-medium cursor-pointer">
+                      Merge with existing
+                    </Label>
+                    <p className="text-xs text-muted-foreground">
+                      Add backup data to existing records, skipping duplicates
+                    </p>
+                  </div>
+                </div>
+              </RadioGroup>
+            </div>
+
+            {isRestoring && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between text-sm">
+                  <span>{restoreMessage}</span>
+                  <span>{restoreProgress}%</span>
+                </div>
+                <Progress value={restoreProgress} />
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => {
+              setRestoreDialogOpen(false);
+              setRestoreFile(null);
+              setRestorePassword("");
+              setRestoreProgress(0);
+              setRestoreMessage("");
+              setBackupInfo(null);
+            }} disabled={isRestoring}>
+              Cancel
+            </Button>
+            <Button
+              onClick={handleRestore}
+              disabled={isRestoring || !restoreFile || (backupInfo?.encrypted && !restorePassword)}
+              data-testid="button-confirm-restore"
+            >
+              {isRestoring ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Restoring...
+                </>
+              ) : (
+                <>
+                  <Upload className="h-4 w-4 mr-2" />
+                  Restore Backup
+                </>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
