@@ -128,7 +128,9 @@ export interface Settings {
     seedName: boolean;
     privateKeyStatus: boolean;
     hasAttachments: boolean;
+    source: boolean;
   };
+  customFieldColumns: { [key: string]: boolean };
   theme: 'light' | 'dark';
   defaultView: 'table' | 'grid';
 }
@@ -225,21 +227,39 @@ db.on('ready', async () => {
         seedName: false,
         privateKeyStatus: false,
         hasAttachments: true,
+        source: false,
       },
+      customFieldColumns: {},
       theme: 'light',
       defaultView: 'table',
     });
-  } else if (!settings.tableColumns) {
-    // Migration: add tableColumns if missing
-    await db.settings.update('default', {
-      tableColumns: {
+  } else {
+    // Migrations for existing settings
+    const updates: Partial<Settings> = {};
+    
+    if (!settings.tableColumns) {
+      updates.tableColumns = {
         tags: true,
         categories: false,
         walletSoftware: false,
         seedName: false,
         privateKeyStatus: false,
         hasAttachments: true,
-      },
-    });
+        source: false,
+      };
+    } else if (settings.tableColumns.source === undefined) {
+      updates.tableColumns = {
+        ...settings.tableColumns,
+        source: false,
+      };
+    }
+    
+    if (!settings.customFieldColumns) {
+      updates.customFieldColumns = {};
+    }
+    
+    if (Object.keys(updates).length > 0) {
+      await db.settings.update('default', updates);
+    }
   }
 });

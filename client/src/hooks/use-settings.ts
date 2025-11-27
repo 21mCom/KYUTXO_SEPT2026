@@ -8,6 +8,7 @@ const defaultTableColumns = {
   seedName: false,
   privateKeyStatus: false,
   hasAttachments: true,
+  source: false,
 };
 
 const defaultFieldVisibility = {
@@ -24,6 +25,7 @@ export function useSettings() {
   return {
     settings: settings || null,
     tableColumns: settings?.tableColumns || defaultTableColumns,
+    customFieldColumns: settings?.customFieldColumns || {},
     fieldVisibility: settings?.fieldVisibility || defaultFieldVisibility,
     isLoading: settings === undefined,
   };
@@ -82,6 +84,19 @@ export async function toggleTableColumn(column: keyof Settings['tableColumns']) 
       tableColumns: {
         ...settings.tableColumns,
         [column]: !settings.tableColumns[column],
+      },
+    });
+  }
+}
+
+export async function toggleCustomFieldColumn(slug: string) {
+  const settings = await db.settings.get('default');
+  if (settings) {
+    const currentColumns = settings.customFieldColumns || {};
+    await db.settings.update('default', {
+      customFieldColumns: {
+        ...currentColumns,
+        [slug]: !currentColumns[slug],
       },
     });
   }
