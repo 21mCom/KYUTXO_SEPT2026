@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Download, Lock, FileJson, AlertCircle, CheckCircle2 } from "lucide-react";
+import { Download, Lock, FileJson, AlertCircle, CheckCircle2, FolderOpen, FileSpreadsheet } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -8,9 +8,11 @@ import { Switch } from "@/components/ui/switch";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Progress } from "@/components/ui/progress";
 import { useToast } from "@/hooks/use-toast";
-import { db } from "@/lib/database";
+import { db, type Record } from "@/lib/database";
 import { useAuth } from "@/contexts/AuthContext";
 import { decrypt, encrypt, deriveKey, generateSalt, bufferToBase64 } from "@/lib/crypto";
+import { isElectron } from "@/lib/electron";
+import JSZip from "jszip";
 
 interface ExportData {
   version: string;
@@ -24,6 +26,110 @@ interface ExportData {
     attachments: any[];
     recordOrigins: any[];
   };
+}
+
+function escapeCSVField(value: any): string {
+  if (value === null || value === undefined) return "";
+  const str = String(value);
+  if (str.includes(",") || str.includes('"') || str.includes("\n") || str.includes("\r")) {
+    return `"${str.replace(/"/g, '""')}"`;
+  }
+  return str;
+}
+
+function generateRecordsCSV(records: any[]): string {
+  const headers = [
+    "id",
+    "type",
+    "inputString",
+    "label",
+    "notes",
+    "amount",
+    "date",
+    "tags",
+    "categories",
+    "seedName",
+    "walletSoftware",
+    "privateKeyStatus",
+    "counterparty",
+    "source",
+    "chainType",
+    "derivationPath",
+    "xpub",
+    "isVaultXpub",
+    "vaultName",
+    "vaultM",
+    "vaultN",
+    "vaultNotes",
+    "createdAt",
+    "updatedAt",
+  ];
+
+  const rows = records.map((record) => {
+    return [
+      escapeCSVField(record.id),
+      escapeCSVField(record.type),
+      escapeCSVField(record.inputString),
+      escapeCSVField(record.label),
+      escapeCSVField(record.notes),
+      escapeCSVField(record.amount),
+      escapeCSVField(record.date),
+      escapeCSVField(record.tags?.join(";") || ""),
+      escapeCSVField(record.categories?.join(";") || ""),
+      escapeCSVField(record.seedName),
+      escapeCSVField(record.walletSoftware),
+      escapeCSVField(record.privateKeyStatus),
+      escapeCSVField(record.counterparty),
+      escapeCSVField(record.source),
+      escapeCSVField(record.chainType),
+      escapeCSVField(record.derivationPath),
+      escapeCSVField(record.xpub),
+      escapeCSVField(record.vault?.isVaultXpub),
+      escapeCSVField(record.vault?.vaultName),
+      escapeCSVField(record.vault?.m),
+      escapeCSVField(record.vault?.n),
+      escapeCSVField(record.vault?.vaultNotes),
+      escapeCSVField(record.createdAt ? new Date(record.createdAt).toISOString() : ""),
+      escapeCSVField(record.updatedAt ? new Date(record.updatedAt).toISOString() : ""),
+    ].join(",");
+  });
+
+  return [headers.join(","), ...rows].join("\n");
+}
+
+function generateTagsCSV(tags: any[]): string {
+  const headers = ["id", "name", "color", "createdAt"];
+  const rows = tags.map((tag) => [
+    escapeCSVField(tag.id),
+    escapeCSVField(tag.name),
+    escapeCSVField(tag.color),
+    escapeCSVField(tag.createdAt ? new Date(tag.createdAt).toISOString() : ""),
+  ].join(","));
+  return [headers.join(","), ...rows].join("\n");
+}
+
+function generateCategoriesCSV(categories: any[]): string {
+  const headers = ["id", "name", "createdAt"];
+  const rows = categories.map((cat) => [
+    escapeCSVField(cat.id),
+    escapeCSVField(cat.name),
+    escapeCSVField(cat.createdAt ? new Date(cat.createdAt).toISOString() : ""),
+  ].join(","));
+  return [headers.join(","), ...rows].join("\n");
+}
+
+function generateAttachmentsCSV(attachments: any[]): string {
+  const headers = ["id", "recordId", "filename", "mimeType", "size", "objectStoragePath", "createdAt"];
+  const rows = attachments.map((att) => [
+    escapeCSVField(att.id),
+    escapeCSVField(att.recordId),
+    escapeCSVField(att.filename),
+    escapeCSVField(att.mimeType),
+    escapeCSVField(att.size),
+    escapeCSVField(att.objectStoragePath),
+    escapeCSVField(att.createdAt ? new Date(att.createdAt).toISOString() : ""),
+  ].join(","));
+  return [headers.join(","), ...rows].join("\n");
 }
 
 export default function ExportPage() {
@@ -42,6 +148,10 @@ export default function ExportPage() {
 
   const { encryptionKey } = useAuth();
   const { toast } = useToast();
+
+  const attachmentsFolderPath = isElectron() 
+    ? "User Data Folder → data/attachments/" 
+    : "data/attachments/";
 
   useEffect(() => {
     const loadCounts = async () => {
@@ -113,61 +223,133 @@ export default function ExportPage() {
       setProgressMessage("Decrypting data...");
 
       const records = await Promise.all(rawRecords.map(decryptRecord));
-      setProgress(40);
+      setProgress(35);
 
       const tags = await Promise.all(rawTags.map(decryptRecord));
       const categories = await Promise.all(rawCategories.map(decryptRecord));
       const attachments = await Promise.all(rawAttachments.map(decryptRecord));
       const recordOrigins = await Promise.all(rawOrigins.map(decryptRecord));
 
-      setProgress(60);
-      setProgressMessage("Preparing export...");
+      setProgress(50);
+      setProgressMessage("Generating CSV files...");
+
+      const cleanRecords = records.map(({ encryptedPayload, isEncrypted, ...r }) => r);
+      const cleanTags = tags.map(({ encryptedPayload, isEncrypted, ...t }) => t);
+      const cleanCategories = categories.map(({ encryptedPayload, isEncrypted, ...c }) => c);
+      const cleanAttachments = attachments.map(({ encryptedPayload, isEncrypted, ...a }) => a);
+      const cleanOrigins = recordOrigins.map(({ encryptedPayload, isEncrypted, ...o }) => o);
+
+      const recordsCSV = generateRecordsCSV(cleanRecords);
+      const tagsCSV = generateTagsCSV(cleanTags);
+      const categoriesCSV = generateCategoriesCSV(cleanCategories);
+      const attachmentsCSV = generateAttachmentsCSV(cleanAttachments);
+
+      setProgress(65);
+      setProgressMessage("Creating ZIP archive...");
 
       const exportData: ExportData = {
         version: "1.0.0",
         exportDate: new Date().toISOString(),
         encrypted: encrypted,
         data: {
-          records: records.map(({ encryptedPayload, isEncrypted, ...r }) => r),
-          tags: tags.map(({ encryptedPayload, isEncrypted, ...t }) => t),
-          categories: categories.map(({ encryptedPayload, isEncrypted, ...c }) => c),
-          attachments: attachments.map(({ encryptedPayload, isEncrypted, ...a }) => a),
-          recordOrigins: recordOrigins.map(({ encryptedPayload, isEncrypted, ...o }) => o),
+          records: cleanRecords,
+          tags: cleanTags,
+          categories: cleanCategories,
+          attachments: cleanAttachments,
+          recordOrigins: cleanOrigins,
         },
       };
 
-      setProgress(80);
-
-      let fileContent: string;
-      let fileName: string;
+      const zip = new JSZip();
+      const dateStr = new Date().toISOString().split('T')[0];
 
       if (encrypted) {
-        setProgressMessage("Encrypting export...");
+        setProgress(75);
+        setProgressMessage("Encrypting data...");
+        
         const salt = generateSalt();
         const exportKey = await deriveKey(password, salt);
-        const dataString = JSON.stringify(exportData.data);
-        const encryptedData = await encrypt(dataString, exportKey);
+        
+        const encryptedJson = await encrypt(JSON.stringify(exportData.data), exportKey);
+        const encryptedRecordsCSV = await encrypt(recordsCSV, exportKey);
+        const encryptedTagsCSV = await encrypt(tagsCSV, exportKey);
+        const encryptedCategoriesCSV = await encrypt(categoriesCSV, exportKey);
+        const encryptedAttachmentsCSV = await encrypt(attachmentsCSV, exportKey);
 
         const encryptedExport = {
           version: exportData.version,
           exportDate: exportData.exportDate,
           encrypted: true,
           salt: bufferToBase64(salt),
-          data: encryptedData,
+          data: encryptedJson,
         };
 
-        fileContent = JSON.stringify(encryptedExport, null, 2);
-        fileName = `kybtc-backup-encrypted-${new Date().toISOString().split('T')[0]}.json`;
+        zip.file("backup.json", JSON.stringify(encryptedExport, null, 2));
+        zip.file("records.csv.encrypted", encryptedRecordsCSV);
+        zip.file("tags.csv.encrypted", encryptedTagsCSV);
+        zip.file("categories.csv.encrypted", encryptedCategoriesCSV);
+        zip.file("attachments.csv.encrypted", encryptedAttachmentsCSV);
+        zip.file("README.txt", `KYBTC Encrypted Backup
+========================
+Export Date: ${exportData.exportDate}
+Version: ${exportData.version}
+
+This backup is encrypted with AES-256-GCM.
+You will need your export password to import this backup.
+
+Files:
+- backup.json: Full encrypted database export
+- records.csv.encrypted: Encrypted records spreadsheet
+- tags.csv.encrypted: Encrypted tags list
+- categories.csv.encrypted: Encrypted categories list
+- attachments.csv.encrypted: Encrypted attachment metadata
+
+Note: File attachments are NOT included in this backup.
+They are stored separately in: ${attachmentsFolderPath}
+`);
+
       } else {
-        fileContent = JSON.stringify(exportData, null, 2);
-        fileName = `kybtc-backup-${new Date().toISOString().split('T')[0]}.json`;
+        zip.file("backup.json", JSON.stringify(exportData, null, 2));
+        zip.file("records.csv", recordsCSV);
+        zip.file("tags.csv", tagsCSV);
+        zip.file("categories.csv", categoriesCSV);
+        zip.file("attachments.csv", attachmentsCSV);
+        zip.file("README.txt", `KYBTC Backup
+========================
+Export Date: ${exportData.exportDate}
+Version: ${exportData.version}
+
+This backup is NOT encrypted. Store it securely.
+
+Files:
+- backup.json: Full database export (JSON format)
+- records.csv: Records spreadsheet (can open in Excel/Google Sheets)
+- tags.csv: Tags list
+- categories.csv: Categories list
+- attachments.csv: Attachment metadata
+
+Note: File attachments are NOT included in this backup.
+They are stored separately in: ${attachmentsFolderPath}
+`);
       }
 
-      setProgress(90);
-      setProgressMessage("Creating download...");
+      setProgress(85);
+      setProgressMessage("Compressing ZIP file...");
 
-      const blob = new Blob([fileContent], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
+      const zipBlob = await zip.generateAsync({ 
+        type: "blob",
+        compression: "DEFLATE",
+        compressionOptions: { level: 6 }
+      });
+
+      setProgress(95);
+      setProgressMessage("Downloading...");
+
+      const fileName = encrypted 
+        ? `kybtc-backup-encrypted-${dateStr}.zip`
+        : `kybtc-backup-${dateStr}.zip`;
+
+      const url = URL.createObjectURL(zipBlob);
       const link = document.createElement('a');
       link.href = url;
       link.download = fileName;
@@ -210,15 +392,15 @@ export default function ExportPage() {
         <div>
           <h1 className="text-3xl font-bold mb-2">Export Data</h1>
           <p className="text-muted-foreground">
-            Download your Bitcoin records and metadata as a backup file
+            Download your Bitcoin records and metadata as a backup ZIP file
           </p>
         </div>
 
         <Alert>
           <AlertCircle className="h-4 w-4" />
           <AlertDescription>
-            Export includes all records, tags, categories, and attachment metadata. 
-            The backup file will be downloaded to your browser's default download location.
+            Export includes all records, tags, categories, and attachment metadata in both JSON and CSV formats.
+            The backup will be downloaded as a ZIP file to your browser's default download location.
           </AlertDescription>
         </Alert>
 
@@ -226,7 +408,7 @@ export default function ExportPage() {
           <Alert className="border-green-500 bg-green-50 dark:bg-green-950">
             <CheckCircle2 className="h-4 w-4 text-green-600" />
             <AlertDescription className="text-green-700 dark:text-green-300">
-              Export complete! Check your Downloads folder for the backup file.
+              Export complete! Check your Downloads folder for the backup ZIP file.
             </AlertDescription>
           </Alert>
         )}
@@ -317,6 +499,27 @@ export default function ExportPage() {
 
         <Card>
           <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <FileSpreadsheet className="h-5 w-5" />
+              What's Included
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="text-sm space-y-2">
+              <p className="font-medium">The ZIP file contains:</p>
+              <ul className="list-disc list-inside text-muted-foreground space-y-1 ml-2">
+                <li><code className="text-xs bg-muted px-1 rounded">backup.json</code> - Complete database in JSON format</li>
+                <li><code className="text-xs bg-muted px-1 rounded">records.csv</code> - Records spreadsheet (Excel/Sheets compatible)</li>
+                <li><code className="text-xs bg-muted px-1 rounded">tags.csv</code> - Tags list</li>
+                <li><code className="text-xs bg-muted px-1 rounded">categories.csv</code> - Categories list</li>
+                <li><code className="text-xs bg-muted px-1 rounded">attachments.csv</code> - Attachment metadata</li>
+              </ul>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
             <CardTitle>Export Details</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
@@ -342,10 +545,34 @@ export default function ExportPage() {
             </div>
             <div className="flex justify-between text-sm">
               <span className="text-muted-foreground">Format</span>
-              <span className="font-medium">JSON</span>
+              <span className="font-medium">ZIP (JSON + CSV)</span>
             </div>
           </CardContent>
         </Card>
+
+        {attachmentCount > 0 && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <FolderOpen className="h-5 w-5" />
+                File Attachments
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <p className="text-sm text-muted-foreground">
+                File attachments are stored separately and are not included in this backup. 
+                To backup your attachments, manually copy the attachments folder:
+              </p>
+              <div className="p-3 bg-muted rounded-lg font-mono text-sm break-all" data-testid="text-attachments-path">
+                {attachmentsFolderPath}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                In the desktop app, this will be inside your user data folder. 
+                Attachment files are encrypted and can only be read by the application.
+              </p>
+            </CardContent>
+          </Card>
+        )}
       </div>
     </div>
   );
