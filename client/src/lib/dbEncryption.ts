@@ -13,6 +13,7 @@ const RECORD_SENSITIVE_FIELDS: (keyof Record)[] = [
   'walletSoftware',
   'counterparty',
   'source',
+  'customFields',
 ];
 
 const ATTACHMENT_SENSITIVE_FIELDS: (keyof Attachment)[] = [
@@ -57,6 +58,7 @@ export async function encryptRecord(record: Record, key: CryptoKey): Promise<Rec
     walletSoftware: undefined,
     counterparty: undefined,
     source: undefined,
+    customFields: undefined,
     // Add encryption metadata
     encryptedPayload,
     isEncrypted: true,

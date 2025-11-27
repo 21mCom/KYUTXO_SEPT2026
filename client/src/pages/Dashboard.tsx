@@ -11,6 +11,7 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useRecords, createRecord, createRecordWithAttachments, updateRecord, deleteRecord, searchRecords, filterRecords } from "@/hooks/use-records";
 import { useEncryptedTags, useEncryptedCategories } from "@/hooks/use-encrypted-records";
 import { syncTagsToMaster, syncCategoriesToMaster, isEncryptionReady, findRecordByInputString } from "@/lib/encryptionFacade";
+import { useCustomFields } from "@/hooks/use-settings";
 import { useToast } from "@/hooks/use-toast";
 import { validateBitcoinInput } from "@/lib/bitcoin";
 import { getRecordAttachments } from "@/lib/attachments";
@@ -41,6 +42,7 @@ export default function Dashboard() {
   const { records, isLoading } = useRecords();
   const { tags } = useEncryptedTags();
   const { categories } = useEncryptedCategories();
+  const { enabledCustomFields } = useCustomFields();
   const { toast } = useToast();
 
   // Load attachments when selected record changes
@@ -168,6 +170,7 @@ export default function Dashboard() {
         walletSoftware: data.walletSoftware || "",
         counterparty: data.counterparty || "",
         privateKeyStatus: data.privateKeyStatus || "",
+        customFields: data.customFields,
       };
 
       // If record exists, update it instead of creating
@@ -290,6 +293,7 @@ export default function Dashboard() {
         walletSoftware: data.walletSoftware || "",
         counterparty: data.counterparty || "",
         privateKeyStatus: data.privateKeyStatus || "",
+        customFields: data.customFields,
       });
 
       // Upload any new files for existing record
@@ -492,6 +496,7 @@ export default function Dashboard() {
         availableWalletSoftware={uniqueWalletSoftware}
         availableTags={tags.map(t => t.name).filter(n => n && n !== '[encrypted]')}
         availableCategories={categories.map(c => c.name).filter(n => n && n !== '[encrypted]')}
+        enabledCustomFields={enabledCustomFields}
         onCheckDuplicate={handleCheckDuplicate}
       />
     </div>

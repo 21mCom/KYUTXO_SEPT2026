@@ -36,6 +36,8 @@ export interface Record {
   xpub?: string;
   // Vault metadata for multisig XPUB-derived addresses
   vault?: VaultMetadata;
+  // User-defined custom field values (slug -> value)
+  customFields?: { [slug: string]: string };
   createdAt: number;
   updatedAt: number;
   // Encrypted payload - contains the sensitive data when encryption is enabled
@@ -101,6 +103,15 @@ export interface RecordOrigin {
   isEncrypted?: boolean;
 }
 
+// Custom field definition created by user
+export interface CustomField {
+  id?: number;
+  name: string; // Display name
+  slug: string; // Unique identifier for storage (auto-generated from name)
+  enabled: boolean; // Whether to show in forms
+  createdAt: number;
+}
+
 export interface Settings {
   id: string;
   fieldVisibility: {
@@ -128,10 +139,22 @@ export class KYBTCDatabase extends Dexie {
   tags!: Table<Tag>;
   categories!: Table<Category>;
   recordOrigins!: Table<RecordOrigin>;
+  customFields!: Table<CustomField>;
   settings!: Table<Settings>;
 
   constructor() {
     super('KYBTCDatabase');
+    
+    // Version 5 adds customFields table for user-defined fields
+    this.version(5).stores({
+      records: '++id, type, inputString, label, *tags, *categories, createdAt, updatedAt, isEncrypted, chainType',
+      attachments: '++id, recordId, createdAt, isEncrypted',
+      tags: '++id, name, createdAt, isEncrypted',
+      categories: '++id, name, createdAt, isEncrypted',
+      recordOrigins: '++id, recordId, originType, createdAt, isEncrypted',
+      customFields: '++id, slug, enabled, createdAt',
+      settings: 'id'
+    });
     
     // Version 4 adds recordOrigins table for tracking metadata sources
     // Note: Unique constraint on inputString is NOT enforced at DB level because

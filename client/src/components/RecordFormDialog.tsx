@@ -50,6 +50,14 @@ interface ExistingRecord {
   walletSoftware?: string;
   counterparty?: string;
   privateKeyStatus?: string;
+  customFields?: { [slug: string]: string };
+}
+
+interface CustomFieldDef {
+  id?: number;
+  name: string;
+  slug: string;
+  enabled: boolean;
 }
 
 interface RecordFormDialogProps {
@@ -63,6 +71,7 @@ interface RecordFormDialogProps {
   availableWalletSoftware?: string[];
   availableTags?: string[];
   availableCategories?: string[];
+  enabledCustomFields?: CustomFieldDef[];
   onCheckDuplicate?: (inputString: string) => Promise<ExistingRecord | undefined>;
 }
 
@@ -77,6 +86,7 @@ export function RecordFormDialog({
   availableWalletSoftware = [],
   availableTags = [],
   availableCategories = [],
+  enabledCustomFields = [],
   onCheckDuplicate,
 }: RecordFormDialogProps) {
   const getDefaultFormData = () => ({
@@ -90,6 +100,7 @@ export function RecordFormDialog({
     walletSoftware: "",
     counterparty: "",
     privateKeyStatus: "",
+    customFields: {} as { [slug: string]: string },
   });
 
   const [formData, setFormData] = useState(initialData || getDefaultFormData());
@@ -194,11 +205,22 @@ export function RecordFormDialog({
     const parsedTags = parseCommaSeparated(tagInput);
     const parsedCategories = parseCommaSeparated(categoryInput);
     
+    // Filter out empty custom field values
+    const filteredCustomFields: { [slug: string]: string } = {};
+    if (formData.customFields) {
+      for (const [slug, value] of Object.entries(formData.customFields)) {
+        if (value && typeof value === 'string' && value.trim()) {
+          filteredCustomFields[slug] = value.trim();
+        }
+      }
+    }
+    
     await onSave({
       ...formData,
       tags: parsedTags,
       categories: parsedCategories,
       counterparty: counterpartyInput,
+      customFields: Object.keys(filteredCustomFields).length > 0 ? filteredCustomFields : undefined,
     }, selectedFiles);
   };
 
@@ -587,6 +609,33 @@ export function RecordFormDialog({
               </Select>
             </div>
           </div>
+
+          {/* Custom Fields Section */}
+          {enabledCustomFields.length > 0 && (
+            <div className="space-y-4 pt-2 border-t">
+              <Label className="text-sm font-medium text-muted-foreground">Custom Fields</Label>
+              <div className="grid grid-cols-2 gap-4">
+                {enabledCustomFields.map((field) => (
+                  <div key={field.slug} className="space-y-2">
+                    <Label htmlFor={`custom-${field.slug}`}>{field.name}</Label>
+                    <Input
+                      id={`custom-${field.slug}`}
+                      value={formData.customFields?.[field.slug] || ""}
+                      onChange={(e) => setFormData({
+                        ...formData,
+                        customFields: {
+                          ...formData.customFields,
+                          [field.slug]: e.target.value,
+                        },
+                      })}
+                      disabled={isSubmitting}
+                      data-testid={`input-custom-${field.slug}`}
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           <div className="space-y-2">
             <Label>Attachments</Label>

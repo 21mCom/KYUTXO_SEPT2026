@@ -14,6 +14,14 @@ import { decrypt, encrypt, deriveKey, generateSalt, bufferToBase64 } from "@/lib
 import { isElectron } from "@/lib/electron";
 import JSZip from "jszip";
 
+interface CustomFieldDef {
+  id?: number;
+  name: string;
+  slug: string;
+  enabled: boolean;
+  createdAt: number;
+}
+
 interface ExportData {
   version: string;
   exportDate: string;
@@ -25,6 +33,7 @@ interface ExportData {
     categories: any[];
     attachments: any[];
     recordOrigins: any[];
+    customFields: CustomFieldDef[];
   };
 }
 
@@ -37,8 +46,9 @@ function escapeCSVField(value: any): string {
   return str;
 }
 
-function generateRecordsCSV(records: any[], attachments: any[]): string {
-  const headers = [
+function generateRecordsCSV(records: any[], attachments: any[], customFields: CustomFieldDef[]): string {
+  // Static headers
+  const staticHeaders = [
     "id",
     "type",
     "inputString",
@@ -66,6 +76,11 @@ function generateRecordsCSV(records: any[], attachments: any[]): string {
     "updatedAt",
   ];
 
+  // Add custom field headers (sorted by name for consistency)
+  const sortedCustomFields = [...customFields].sort((a, b) => a.name.localeCompare(b.name));
+  const customFieldHeaders = sortedCustomFields.map(f => `custom:${f.name}`);
+  const headers = [...staticHeaders, ...customFieldHeaders];
+
   // Build a map of recordId -> attachment filenames for quick lookup
   const attachmentsByRecord = new Map<number, string[]>();
   for (const att of attachments) {
@@ -78,7 +93,7 @@ function generateRecordsCSV(records: any[], attachments: any[]): string {
 
   const rows = records.map((record) => {
     const recordAttachments = attachmentsByRecord.get(record.id) || [];
-    return [
+    const staticValues = [
       escapeCSVField(record.id),
       escapeCSVField(record.type),
       escapeCSVField(record.inputString),
@@ -104,7 +119,14 @@ function generateRecordsCSV(records: any[], attachments: any[]): string {
       escapeCSVField(record.vault?.vaultNotes),
       escapeCSVField(record.createdAt ? new Date(record.createdAt).toISOString() : ""),
       escapeCSVField(record.updatedAt ? new Date(record.updatedAt).toISOString() : ""),
-    ].join(",");
+    ];
+
+    // Add custom field values in same order as headers
+    const customFieldValues = sortedCustomFields.map(f => 
+      escapeCSVField(record.customFields?.[f.slug] || "")
+    );
+
+    return [...staticValues, ...customFieldValues].join(",");
   });
 
   return [headers.join(","), ...rows].join("\n");
@@ -231,6 +253,7 @@ export default function ExportPage() {
       const rawCategories = await db.categories.toArray();
       const rawAttachments = await db.attachments.toArray();
       const rawOrigins = await db.recordOrigins.toArray();
+      const rawCustomFields = await db.customFields.toArray();
 
       setProgress(20);
       setProgressMessage("Decrypting data...");
@@ -251,8 +274,9 @@ export default function ExportPage() {
       const cleanCategories = categories.map(({ encryptedPayload, isEncrypted, ...c }) => c);
       const cleanAttachments = attachments.map(({ encryptedPayload, isEncrypted, ...a }) => a);
       const cleanOrigins = recordOrigins.map(({ encryptedPayload, isEncrypted, ...o }) => o);
+      const customFields = rawCustomFields as CustomFieldDef[];
 
-      const recordsCSV = generateRecordsCSV(cleanRecords, cleanAttachments);
+      const recordsCSV = generateRecordsCSV(cleanRecords, cleanAttachments, customFields);
       const tagsCSV = generateTagsCSV(cleanTags);
       const categoriesCSV = generateCategoriesCSV(cleanCategories);
       const attachmentsCSV = generateAttachmentsCSV(cleanAttachments);
@@ -270,6 +294,7 @@ export default function ExportPage() {
           categories: cleanCategories,
           attachments: cleanAttachments,
           recordOrigins: cleanOrigins,
+          customFields: customFields,
         },
       };
 
