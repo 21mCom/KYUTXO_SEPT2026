@@ -298,14 +298,18 @@ export function RecordTable({ records, onEdit, onDelete, onRowClick }: RecordTab
                 )}
                 {tableColumns.source && (
                   <TableCell className="text-sm text-muted-foreground">
-                    {record.source || "-"}
+                    {record.source && record.source !== '[encrypted]' ? record.source : "-"}
                   </TableCell>
                 )}
-                {enabledCustomFields.filter(f => customFieldColumns[f.slug]).map((field) => (
-                  <TableCell key={field.slug} className="text-sm text-muted-foreground">
-                    {record.customFields?.[field.slug] || "-"}
-                  </TableCell>
-                ))}
+                {enabledCustomFields.filter(f => customFieldColumns[f.slug]).map((field) => {
+                  const value = record.customFields?.[field.slug];
+                  const displayValue = value && value !== '[encrypted]' ? value : "-";
+                  return (
+                    <TableCell key={field.slug} className="text-sm text-muted-foreground">
+                      {displayValue}
+                    </TableCell>
+                  );
+                })}
                 <TableCell>
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>

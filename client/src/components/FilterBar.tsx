@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import { X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -36,6 +37,31 @@ interface FilterBarProps {
 export function FilterBar({ filter, onChange, availableTags = [], availableCategories = [], tableColumns }: FilterBarProps) {
   const showTagsFilter = tableColumns?.tags !== false;
   const showCategoriesFilter = tableColumns?.categories !== false;
+  
+  const prevShowTags = useRef(showTagsFilter);
+  const prevShowCategories = useRef(showCategoriesFilter);
+  
+  useEffect(() => {
+    let updatedFilter = { ...filter };
+    let needsUpdate = false;
+    
+    if (prevShowTags.current && !showTagsFilter && filter.tags.length > 0) {
+      updatedFilter.tags = [];
+      needsUpdate = true;
+    }
+    
+    if (prevShowCategories.current && !showCategoriesFilter && filter.categories.length > 0) {
+      updatedFilter.categories = [];
+      needsUpdate = true;
+    }
+    
+    if (needsUpdate) {
+      onChange(updatedFilter);
+    }
+    
+    prevShowTags.current = showTagsFilter;
+    prevShowCategories.current = showCategoriesFilter;
+  }, [showTagsFilter, showCategoriesFilter]);
   
   const hasActiveFilters = filter.type !== "all" || filter.tags.length > 0 || filter.categories.length > 0;
 
