@@ -184,7 +184,53 @@ Settings: { id, fieldVisibility, tableColumns, theme, defaultView }
 - **Cross-Platform Desktop:** Electron enables packaging for Windows, macOS, and Linux distributions.
 - **Bitcoin Library Selection:** bitcoinjs-lib chosen as the de facto standard library with comprehensive Bitcoin protocol support.
 
+### Duplicate Detection & Merge System
+
+**Core Principle:** One record per unique `inputString`, with `RecordOrigin` entries tracking different metadata sources.
+
+**Components:**
+- `findRecordByInputString`: Searches for existing records by address/txid/identifier
+- `createRecordOrigin`: Creates origin entries to track metadata sources
+- `mergeRecordWithOrigins`: Combines record data with origin metadata
+
+**Manual Entry Flow (RecordFormDialog):**
+1. User enters inputString in form
+2. On field blur, `onCheckDuplicate` callback fires
+3. If duplicate found, form auto-populates with existing record data
+4. Alert displays warning about existing record
+5. Save converts to update operation instead of create
+
+**Bulk Import Flow (BulkImport):**
+1. For each derived address, check if it exists via `findRecordByInputString`
+2. If exists: merge tags/categories (union), preserve existing metadata values, create RecordOrigin entry
+3. If new: create record with xpub-derived metadata
+4. Display summary: N new, M merged, K failed
+
+**Merge Priority:**
+- Existing (manual) data takes priority over new (xpub-derived) data
+- Tags and categories are unioned (combined)
+- Empty fields can be filled by new data
+
+**RecordOrigin Table:**
+```typescript
+RecordOrigin: {
+  id, recordId, originType ('manual' | 'xpub-derived'),
+  label, notes, tags[], categories[],
+  seedName, walletSoftware, privateKeyStatus, counterparty,
+  xpub, derivationPath, chainType,
+  createdAt, encryptedPayload?, isEncrypted?
+}
+```
+
 ## Recent Changes
+
+**November 2024 - Duplicate Detection & Record Types:**
+- Renamed "Other Coin" to "Other" for simpler record type naming
+- Added unique constraint on inputString to prevent duplicates at database level
+- Implemented duplicate detection with auto-population in RecordFormDialog
+- Added RecordOrigin table to track metadata sources (manual vs xpub-derived)
+- Updated BulkImport to detect duplicates and merge metadata instead of creating duplicates
+- Import summary now shows created vs merged vs failed counts
 
 **November 2024 - Security & Desktop Transformation:**
 - Replaced Replit Object Storage with local file system storage
