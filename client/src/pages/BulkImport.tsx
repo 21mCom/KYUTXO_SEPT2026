@@ -9,6 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Switch } from "@/components/ui/switch";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import {
   Select,
   SelectContent,
@@ -93,6 +94,13 @@ export default function BulkImport() {
   const [walletOpen, setWalletOpen] = useState(false);
   const [newSeedName, setNewSeedName] = useState("");
   const [newWalletSoftware, setNewWalletSoftware] = useState("");
+
+  // Vault metadata state
+  const [isVaultXpub, setIsVaultXpub] = useState(false);
+  const [vaultName, setVaultName] = useState("");
+  const [vaultM, setVaultM] = useState<number | null>(null);
+  const [vaultN, setVaultN] = useState<number | null>(null);
+  const [vaultNotes, setVaultNotes] = useState("");
 
   const { tags } = useEncryptedTags();
   const { categories } = useEncryptedCategories();
@@ -327,6 +335,21 @@ export default function BulkImport() {
       const parsedTags = parseCommaSeparated(tagInput);
       const parsedCategories = parseCommaSeparated(categoryInput);
 
+      // Build vault metadata object for all derived addresses
+      const vaultMetadata = isVaultXpub ? {
+        isVaultXpub: true,
+        vaultName: vaultName || null,
+        m: vaultM,
+        n: vaultN,
+        vaultNotes: vaultNotes || null,
+      } : {
+        isVaultXpub: false,
+        vaultName: null,
+        m: null,
+        n: null,
+        vaultNotes: null,
+      };
+
       let createdCount = 0;
       let mergedCount = 0;
       let errorCount = 0;
@@ -369,6 +392,8 @@ export default function BulkImport() {
               derivationPath: addr.path,
               xpub: xpub,
               source: `${xpub.substring(0, 20)}... (${addr.path})`,
+              // Add vault metadata (overwrite with new vault info if provided)
+              vault: vaultMetadata,
             });
 
             // Create a record origin entry to track xpub metadata
@@ -396,7 +421,7 @@ export default function BulkImport() {
 
             mergedCount++;
           } else {
-            // New address - create record
+            // New address - create record with vault metadata
             await createRecord({
               type: "address",
               inputString: addr.address,
@@ -412,6 +437,7 @@ export default function BulkImport() {
               chainType: addr.chainType,
               derivationPath: addr.path,
               xpub: xpub,
+              vault: vaultMetadata,
             });
             createdCount++;
           }
@@ -563,6 +589,92 @@ export default function BulkImport() {
                 Supported formats: xpub (Legacy), ypub (Nested SegWit), zpub (Native SegWit), 
                 tpub/upub/vpub (Testnet)
               </p>
+
+              {xpubInfo && !validationError && (
+                <div className="space-y-4 pt-4 border-t">
+                  <div className="space-y-3">
+                    <Label className="text-base font-medium">Is this XPUB from a multisig vault?</Label>
+                    <RadioGroup
+                      value={isVaultXpub ? "yes" : "no"}
+                      onValueChange={(value) => setIsVaultXpub(value === "yes")}
+                      className="flex gap-4"
+                    >
+                      <div className="flex items-center gap-2">
+                        <RadioGroupItem value="no" id="vault-no" data-testid="radio-vault-no" />
+                        <Label htmlFor="vault-no" className="font-normal cursor-pointer">No</Label>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <RadioGroupItem value="yes" id="vault-yes" data-testid="radio-vault-yes" />
+                        <Label htmlFor="vault-yes" className="font-normal cursor-pointer">Yes - add vault metadata</Label>
+                      </div>
+                    </RadioGroup>
+                  </div>
+
+                  {isVaultXpub && (
+                    <div className="space-y-4 p-4 bg-muted/50 rounded-lg border">
+                      <div className="space-y-2">
+                        <Label htmlFor="vault-name">Vault Name (optional)</Label>
+                        <Input
+                          id="vault-name"
+                          value={vaultName}
+                          onChange={(e) => setVaultName(e.target.value)}
+                          placeholder="e.g., Family Cold Vault"
+                          data-testid="input-vault-name"
+                        />
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label>M-of-N Signature Requirement (optional)</Label>
+                        <div className="flex items-center gap-2">
+                          <Select
+                            value={vaultM?.toString() || ""}
+                            onValueChange={(value) => setVaultM(value ? parseInt(value) : null)}
+                          >
+                            <SelectTrigger className="w-24" data-testid="select-vault-m">
+                              <SelectValue placeholder="M" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15].map((num) => (
+                                <SelectItem key={num} value={num.toString()}>{num}</SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                          <span className="text-muted-foreground">of</span>
+                          <Select
+                            value={vaultN?.toString() || ""}
+                            onValueChange={(value) => setVaultN(value ? parseInt(value) : null)}
+                          >
+                            <SelectTrigger className="w-24" data-testid="select-vault-n">
+                              <SelectValue placeholder="N" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15].map((num) => (
+                                <SelectItem key={num} value={num.toString()}>{num}</SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                          <span className="text-sm text-muted-foreground">signatures required</span>
+                        </div>
+                        {vaultM && vaultN && vaultM > vaultN && (
+                          <p className="text-xs text-destructive">Required signatures (M) cannot exceed total keys (N)</p>
+                        )}
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label htmlFor="vault-notes">Vault Notes (optional)</Label>
+                        <Textarea
+                          id="vault-notes"
+                          value={vaultNotes}
+                          onChange={(e) => setVaultNotes(e.target.value)}
+                          placeholder="Additional notes about this vault XPUB..."
+                          className="min-h-[80px]"
+                          data-testid="input-vault-notes"
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
               
               <Button
                 className="w-full"
