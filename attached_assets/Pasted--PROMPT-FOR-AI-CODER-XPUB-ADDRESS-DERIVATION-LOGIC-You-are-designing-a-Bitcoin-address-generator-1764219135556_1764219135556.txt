@@ -1,0 +1,97 @@
+✅ PROMPT FOR AI CODER — XPUB ADDRESS DERIVATION LOGIC
+You are designing a Bitcoin address generator function for KYBTC that takes an XPUB and outputs receive addresses.
+Implement the derivation system using the rules below:
+________________________________________
+1. XPUB Handling Philosophy
+The tool must support two modes:
+(A) Easy Mode (Default)
+•	User pastes an XPUB from a modern wallet (Trezor Suite, Sparrow, Electrum, BlueWallet, Nunchuk, etc.).
+•	The script should not ask for a derivation path.
+•	Instead, automatically:
+o	Detect prefix (xpub, ypub, zpub, vpub, etc.)
+o	Infer BIP type (44/49/84/86)
+o	Use the correct standard account derivation
+o	Derive external addresses from /0/n
+•	Hide all advanced options unless needed.
+(B) Advanced Mode (Optional)
+•	Only shown when:
+o	The XPUB prefix is ambiguous
+o	The XPUB is at a non-standard BIP node
+o	The user toggles "Advanced"
+•	Allow manual derivation path entry (e.g. m/84'/0'/0'/0/n or custom)
+________________________________________
+2. Prefix → Derivation Mapping
+Implement XPUB prefix detection:
+Prefix	Purpose	Default Account Path
+xpub	Legacy (BIP44)	m/44'/0'/0'
+ypub	Nested SegWit (BIP49)	m/49'/0'/0'
+zpub	Native SegWit (BIP84)	m/84'/0'/0'
+vpub	Testnet Native SegWit	m/84'/1'/0'
+tpub	Testnet Legacy	m/44'/1'/0'
+upub	Testnet Nested SegWit	m/49'/1'/0'
+tr(xpub) or xprv-derived	Taproot (BIP86)	m/86'/0'/0'
+If the XPUB type does not match the path, let user override in “Advanced Mode.”
+________________________________________
+3. Automatic Derivation Rules
+Once the account XPUB is detected:
+•	Derive external/receive addresses using:
+m/.../0/n
+•	If internal/change addresses are needed:
+m/.../1/n
+•	No user interaction is required in Easy Mode.
+________________________________________
+4. Behavioral Requirements
+•	If XPUB is at the account level, derive addresses normally.
+•	If XPUB is at a higher level (root/master):
+o	Switch to Advanced Mode automatically.
+o	Ask the user to pick or enter a derivation path.
+•	If XPUB is from multisig (e.g., m/48'/0'/0'/2'):
+o	Show “Advanced Mode” by default.
+o	Preserve exact path.
+________________________________________
+5. UX Requirements
+Default UX (Easy Mode)
+Paste your XPUB:
+[xpub...]
+→ Tool auto-detects everything
+→ Display receive addresses
+Advanced UX (Collapsible Section)
+Advanced Settings ▼
+- Detected BIP Standard: BIP84
+- Suggested Path: m/84'/0'/0'/0
+[Override Derivation Path] → input field
+________________________________________
+6. Output Requirements
+•	Generate first N addresses (e.g., 20) from /0/n
+•	Show text for each address
+•	Never expose private keys or xprvs
+•	Never attempt to "infer" private keys
+________________________________________
+7. Security Requirements
+•	Client-side derivation only
+•	Do not send XPUBs to external servers
+•	Support hardened vs non-hardened detection
+•	Validate XPUB format before derivation
+________________________________________
+8. Address Range Selection (Advanced Mode Only)
+•	In Easy Mode, automatically generate the first 20 external addresses:
+o	Indexes 0–19 (path /0/0 to /0/19)
+•	In Advanced Mode, allow users to manually specify:
+o	Start index (e.g., 0, 20, 100)
+o	End index (e.g., 100, 200)
+•	Example supported syntax:
+o	0–100
+o	101–200
+o	Or two numeric fields: “Start Index” / “End Index”
+•	Validate that:
+o	Range size is reasonable (e.g., max 500 at once)
+o	Start < End
+•	Use the selected range inside the derived path:
+m/.../0/<index>
+
+Goal
+Build a system where:
+•	Normal users paste an XPUB → everything “just works”
+•	Power users can override derivation paths if needed
+•	Errors only appear when the XPUB does not include enough information
+

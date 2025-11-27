@@ -9,60 +9,170 @@ export interface DerivedAddress {
   path: string;
 }
 
-const XPUB_VERSIONS = {
+export interface XpubInfo {
+  prefix: XpubPrefix;
+  bipStandard: BipStandard;
+  network: 'mainnet' | 'testnet';
+  suggestedPath: string;
+  depth: number;
+  isAccountLevel: boolean;
+  isChainLevel: boolean;
+  needsAdvancedMode: boolean;
+  reason?: string;
+}
+
+export type XpubPrefix = 'xpub' | 'ypub' | 'zpub' | 'tpub' | 'upub' | 'vpub';
+export type BipStandard = 'BIP44' | 'BIP49' | 'BIP84' | 'BIP86' | 'unknown';
+
+const XPUB_VERSIONS: Record<string, number> = {
   xpub: 0x0488b21e,
   ypub: 0x049d7cb2,
   zpub: 0x04b24746,
   tpub: 0x043587cf,
+  upub: 0x044a5262,
+  vpub: 0x045f1cf6,
 };
 
-function getXpubType(xpub: string): 'xpub' | 'ypub' | 'zpub' | 'tpub' {
-  if (xpub.startsWith('xpub')) return 'xpub';
-  if (xpub.startsWith('ypub')) return 'ypub';
-  if (xpub.startsWith('zpub')) return 'zpub';
-  if (xpub.startsWith('tpub')) return 'tpub';
-  throw new Error('Unsupported extended public key format. Must start with xpub, ypub, zpub, or tpub.');
+const PREFIX_TO_BIP: Record<XpubPrefix, { bip: BipStandard; network: 'mainnet' | 'testnet'; accountPath: string }> = {
+  xpub: { bip: 'BIP44', network: 'mainnet', accountPath: "m/44'/0'/0'" },
+  ypub: { bip: 'BIP49', network: 'mainnet', accountPath: "m/49'/0'/0'" },
+  zpub: { bip: 'BIP84', network: 'mainnet', accountPath: "m/84'/0'/0'" },
+  tpub: { bip: 'BIP44', network: 'testnet', accountPath: "m/44'/1'/0'" },
+  upub: { bip: 'BIP49', network: 'testnet', accountPath: "m/49'/1'/0'" },
+  vpub: { bip: 'BIP84', network: 'testnet', accountPath: "m/84'/1'/0'" },
+};
+
+function getXpubPrefix(xpub: string): XpubPrefix {
+  const trimmed = xpub.trim();
+  if (trimmed.startsWith('xpub')) return 'xpub';
+  if (trimmed.startsWith('ypub')) return 'ypub';
+  if (trimmed.startsWith('zpub')) return 'zpub';
+  if (trimmed.startsWith('tpub')) return 'tpub';
+  if (trimmed.startsWith('upub')) return 'upub';
+  if (trimmed.startsWith('vpub')) return 'vpub';
+  throw new Error('Unsupported extended public key format. Supported: xpub, ypub, zpub, tpub, upub, vpub.');
 }
 
-function convertToXpub(extendedKey: string, type: 'xpub' | 'ypub' | 'zpub' | 'tpub'): string {
-  if (type === 'xpub' || type === 'tpub') {
+function writeUInt32BE(data: Uint8Array, value: number, offset: number): void {
+  data[offset] = (value >>> 24) & 0xff;
+  data[offset + 1] = (value >>> 16) & 0xff;
+  data[offset + 2] = (value >>> 8) & 0xff;
+  data[offset + 3] = value & 0xff;
+}
+
+function convertToXpub(extendedKey: string, prefix: XpubPrefix): string {
+  if (prefix === 'xpub') {
     return extendedKey;
   }
   
-  const data = Buffer.from(bs58check.decode(extendedKey));
-  data.writeUInt32BE(XPUB_VERSIONS.xpub, 0);
+  const network = PREFIX_TO_BIP[prefix].network;
+  const targetVersion = network === 'testnet' ? XPUB_VERSIONS.tpub : XPUB_VERSIONS.xpub;
+  
+  const decoded = bs58check.decode(extendedKey);
+  const data = new Uint8Array(decoded);
+  writeUInt32BE(data, targetVersion, 0);
   
   return bs58check.encode(data);
 }
 
+function getKeyDepth(extendedKey: string): number {
+  try {
+    const decoded = bs58check.decode(extendedKey);
+    return decoded[4];
+  } catch {
+    return -1;
+  }
+}
+
+export function analyzeXpub(extendedKey: string): XpubInfo {
+  const trimmed = extendedKey.trim();
+  const prefix = getXpubPrefix(trimmed);
+  const prefixInfo = PREFIX_TO_BIP[prefix];
+  const depth = getKeyDepth(trimmed);
+  
+  const isAccountLevel = depth === 3;
+  const isChainLevel = depth === 4;
+  const isRootOrMaster = depth < 3;
+  
+  let needsAdvancedMode = false;
+  let reason: string | undefined;
+  let suggestedPath = "0";
+  
+  if (isRootOrMaster) {
+    needsAdvancedMode = true;
+    reason = 'XPUB appears to be at root/master level (depth ' + depth + '). Please specify a derivation path.';
+    suggestedPath = "0/0";
+  } else if (isChainLevel) {
+    suggestedPath = "";
+  } else if (isAccountLevel) {
+    suggestedPath = "0";
+  }
+  
+  return {
+    prefix,
+    bipStandard: prefixInfo.bip,
+    network: prefixInfo.network,
+    suggestedPath,
+    depth,
+    isAccountLevel,
+    isChainLevel,
+    needsAdvancedMode,
+    reason,
+  };
+}
+
 export async function deriveAddressesFromXpub(
   extendedKey: string,
-  derivationPath: string,
-  count: number
+  startIndex: number = 0,
+  endIndex: number = 19,
+  isChangeChain: boolean = false
 ): Promise<DerivedAddress[]> {
-  const type = getXpubType(extendedKey);
-  const network = type === 'tpub' ? bitcoin.networks.testnet : bitcoin.networks.bitcoin;
+  const trimmed = extendedKey.trim();
+  const prefix = getXpubPrefix(trimmed);
+  const prefixInfo = PREFIX_TO_BIP[prefix];
+  const network = prefixInfo.network === 'testnet' ? bitcoin.networks.testnet : bitcoin.networks.bitcoin;
+  const depth = getKeyDepth(trimmed);
+  
+  if (endIndex < startIndex) {
+    throw new Error('End index must be greater than or equal to start index');
+  }
+  
+  if (endIndex - startIndex > 500) {
+    throw new Error('Maximum 500 addresses can be derived at once');
+  }
   
   const addresses: DerivedAddress[] = [];
 
   try {
     const bip32 = BIP32Factory(ecc);
     
-    const convertedKey = convertToXpub(extendedKey, type);
-    const node = bip32.fromBase58(convertedKey, network);
+    const convertedKey = convertToXpub(trimmed, prefix);
+    let node = bip32.fromBase58(convertedKey, network);
     
-    for (let i = 0; i < count; i++) {
+    const chainIndex = isChangeChain ? 1 : 0;
+    let pathPrefix: string;
+    
+    if (depth === 4) {
+      pathPrefix = `${prefixInfo.accountPath}/${chainIndex}`;
+    } else if (depth === 3) {
+      node = node.derive(chainIndex);
+      pathPrefix = `${prefixInfo.accountPath}/${chainIndex}`;
+    } else {
+      throw new Error(`XPUB at depth ${depth} requires Advanced Mode with a custom derivation path.`);
+    }
+    
+    for (let i = startIndex; i <= endIndex; i++) {
       const child = node.derive(i);
       
       let address: string;
       
-      if (type === 'zpub') {
+      if (prefix === 'zpub' || prefix === 'vpub') {
         const { address: p2wpkhAddress } = bitcoin.payments.p2wpkh({
           pubkey: child.publicKey,
           network,
         });
         address = p2wpkhAddress!;
-      } else if (type === 'ypub') {
+      } else if (prefix === 'ypub' || prefix === 'upub') {
         const { address: p2shAddress } = bitcoin.payments.p2sh({
           redeem: bitcoin.payments.p2wpkh({
             pubkey: child.publicKey,
@@ -82,7 +192,7 @@ export async function deriveAddressesFromXpub(
       addresses.push({
         index: i,
         address,
-        path: `${derivationPath}/${i}`,
+        path: `${pathPrefix}/${i}`,
       });
     }
     
@@ -93,17 +203,149 @@ export async function deriveAddressesFromXpub(
   }
 }
 
-export function validateExtendedPublicKey(key: string): { valid: boolean; type?: string; error?: string } {
+export async function deriveAddressesAdvanced(
+  extendedKey: string,
+  customPath: string,
+  startIndex: number = 0,
+  endIndex: number = 19
+): Promise<DerivedAddress[]> {
+  const trimmed = extendedKey.trim();
+  const prefix = getXpubPrefix(trimmed);
+  const prefixInfo = PREFIX_TO_BIP[prefix];
+  const network = prefixInfo.network === 'testnet' ? bitcoin.networks.testnet : bitcoin.networks.bitcoin;
+  
+  if (endIndex < startIndex) {
+    throw new Error('End index must be greater than or equal to start index');
+  }
+  
+  if (endIndex - startIndex > 500) {
+    throw new Error('Maximum 500 addresses can be derived at once');
+  }
+  
+  const addresses: DerivedAddress[] = [];
+
   try {
-    const type = getXpubType(key);
+    const bip32 = BIP32Factory(ecc);
     
-    const decoded = bs58check.decode(key);
+    const convertedKey = convertToXpub(trimmed, prefix);
+    let node = bip32.fromBase58(convertedKey, network);
+    
+    const cleanPath = customPath.trim();
+    
+    if (cleanPath && cleanPath !== '' && cleanPath !== 'm' && cleanPath !== 'm/') {
+      const pathParts = cleanPath
+        .replace(/^m\/?/, '')
+        .split('/')
+        .filter(p => p.length > 0);
+      
+      for (const part of pathParts) {
+        const isHardened = part.endsWith("'") || part.endsWith('h');
+        const index = parseInt(part.replace(/['h]$/, ''), 10);
+        
+        if (isNaN(index)) {
+          throw new Error(`Invalid path component: ${part}`);
+        }
+        
+        if (isHardened) {
+          throw new Error('Cannot derive hardened paths from an extended public key. Use non-hardened paths like "0" or "0/0".');
+        }
+        
+        node = node.derive(index);
+      }
+    }
+    
+    for (let i = startIndex; i <= endIndex; i++) {
+      const child = node.derive(i);
+      
+      let address: string;
+      
+      if (prefix === 'zpub' || prefix === 'vpub') {
+        const { address: p2wpkhAddress } = bitcoin.payments.p2wpkh({
+          pubkey: child.publicKey,
+          network,
+        });
+        address = p2wpkhAddress!;
+      } else if (prefix === 'ypub' || prefix === 'upub') {
+        const { address: p2shAddress } = bitcoin.payments.p2sh({
+          redeem: bitcoin.payments.p2wpkh({
+            pubkey: child.publicKey,
+            network,
+          }),
+          network,
+        });
+        address = p2shAddress!;
+      } else {
+        const { address: p2pkhAddress } = bitcoin.payments.p2pkh({
+          pubkey: child.publicKey,
+          network,
+        });
+        address = p2pkhAddress!;
+      }
+      
+      const displayPath = cleanPath 
+        ? (cleanPath.endsWith('/') ? `${cleanPath}${i}` : `${cleanPath}/${i}`)
+        : `${i}`;
+      
+      addresses.push({
+        index: i,
+        address,
+        path: displayPath,
+      });
+    }
+    
+    return addresses;
+  } catch (error) {
+    console.error('Derivation error:', error);
+    throw new Error(`Failed to derive addresses: ${error instanceof Error ? error.message : 'Unknown error'}`);
+  }
+}
+
+export function validateExtendedPublicKey(key: string): { valid: boolean; type?: XpubPrefix; error?: string } {
+  try {
+    const trimmed = key.trim();
+    const prefix = getXpubPrefix(trimmed);
+    
+    const decoded = bs58check.decode(trimmed);
     if (decoded.length !== 78) {
       return { valid: false, error: 'Invalid key length' };
     }
     
-    return { valid: true, type };
+    return { valid: true, type: prefix };
   } catch (error) {
-    return { valid: false, error: 'Invalid extended public key format' };
+    return { valid: false, error: error instanceof Error ? error.message : 'Invalid extended public key format' };
+  }
+}
+
+export function getBipDescription(bip: BipStandard): string {
+  switch (bip) {
+    case 'BIP44':
+      return 'Legacy (P2PKH) - Addresses starting with 1';
+    case 'BIP49':
+      return 'Nested SegWit (P2SH-P2WPKH) - Addresses starting with 3';
+    case 'BIP84':
+      return 'Native SegWit (P2WPKH) - Addresses starting with bc1q';
+    case 'BIP86':
+      return 'Taproot (P2TR) - Addresses starting with bc1p';
+    default:
+      return 'Unknown standard';
+  }
+}
+
+export function getDepthDescription(depth: number): string {
+  switch (depth) {
+    case 0:
+      return 'Master key';
+    case 1:
+      return 'Purpose level';
+    case 2:
+      return 'Coin type level';
+    case 3:
+      return 'Account level (standard)';
+    case 4:
+      return 'Chain level (external/change)';
+    case 5:
+      return 'Address level';
+    default:
+      return `Depth ${depth}`;
   }
 }

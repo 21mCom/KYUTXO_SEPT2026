@@ -1,6 +1,6 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useLocation } from "wouter";
-import { Key, ChevronRight, ChevronLeft, Check, Loader2, Plus, X } from "lucide-react";
+import { Key, ChevronRight, ChevronLeft, Check, Loader2, Plus, X, ChevronDown, ChevronUp, AlertCircle, Info } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -8,6 +8,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Switch } from "@/components/ui/switch";
 import {
   Select,
   SelectContent,
@@ -15,19 +16,46 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
+import {
+  Alert,
+  AlertDescription,
+  AlertTitle,
+} from "@/components/ui/alert";
 import { useToast } from "@/hooks/use-toast";
 import { useTags, createTag } from "@/hooks/use-tags";
 import { useCategories, createCategory } from "@/hooks/use-categories";
 import { createRecord } from "@/hooks/use-records";
-import { deriveAddressesFromXpub, type DerivedAddress } from "@/lib/xpub";
+import { 
+  deriveAddressesFromXpub, 
+  deriveAddressesAdvanced,
+  analyzeXpub, 
+  validateExtendedPublicKey,
+  getBipDescription,
+  getDepthDescription,
+  type DerivedAddress,
+  type XpubInfo 
+} from "@/lib/xpub";
 
 export default function BulkImport() {
   const [, navigate] = useLocation();
   const [step, setStep] = useState(1);
   const [xpub, setXpub] = useState("");
   const [xpubLabel, setXpubLabel] = useState("");
-  const [derivationPath, setDerivationPath] = useState("m/84'/0'/0'/0");
-  const [addressCount, setAddressCount] = useState(20);
+  const [xpubInfo, setXpubInfo] = useState<XpubInfo | null>(null);
+  const [validationError, setValidationError] = useState<string | null>(null);
+  
+  const [advancedMode, setAdvancedMode] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [customPath, setCustomPath] = useState("");
+  const [startIndex, setStartIndex] = useState(0);
+  const [endIndex, setEndIndex] = useState(19);
+  const [isChangeChain, setIsChangeChain] = useState(false);
+  
   const [derivedAddresses, setDerivedAddresses] = useState<DerivedAddress[]>([]);
   const [selectedAddresses, setSelectedAddresses] = useState<Set<number>>(new Set());
   const [isDerivingAddresses, setIsDerivingAddresses] = useState(false);
@@ -46,25 +74,72 @@ export default function BulkImport() {
   const { categories } = useCategories();
   const { toast } = useToast();
 
+  const analyzeXpubInput = useCallback((input: string) => {
+    if (!input.trim()) {
+      setXpubInfo(null);
+      setValidationError(null);
+      return;
+    }
+
+    const validation = validateExtendedPublicKey(input);
+    if (!validation.valid) {
+      setValidationError(validation.error || 'Invalid extended public key');
+      setXpubInfo(null);
+      return;
+    }
+
+    try {
+      const info = analyzeXpub(input);
+      setXpubInfo(info);
+      setValidationError(null);
+      
+      if (info.needsAdvancedMode) {
+        setAdvancedMode(true);
+        setAdvancedOpen(true);
+      }
+      
+      setCustomPath(info.suggestedPath);
+    } catch (error) {
+      setValidationError(error instanceof Error ? error.message : 'Failed to analyze key');
+      setXpubInfo(null);
+    }
+  }, []);
+
   useEffect(() => {
-    if (step === 3 && xpub) {
+    const debounceTimer = setTimeout(() => {
+      analyzeXpubInput(xpub);
+    }, 300);
+    return () => clearTimeout(debounceTimer);
+  }, [xpub, analyzeXpubInput]);
+
+  useEffect(() => {
+    if (step === 3 && xpub && xpubInfo) {
       deriveAddresses();
     }
-  }, [step, xpub, derivationPath, addressCount]);
+  }, [step]);
 
   const deriveAddresses = async () => {
+    if (!xpubInfo) return;
+    
     setIsDerivingAddresses(true);
     try {
-      const addresses = await deriveAddressesFromXpub(xpub, derivationPath, addressCount);
+      let addresses: DerivedAddress[];
+      
+      if (advancedMode && customPath) {
+        addresses = await deriveAddressesAdvanced(xpub, customPath, startIndex, endIndex);
+      } else {
+        addresses = await deriveAddressesFromXpub(xpub, startIndex, endIndex, isChangeChain);
+      }
+      
       setDerivedAddresses(addresses);
-      setSelectedAddresses(new Set(addresses.map((_: DerivedAddress, i: number) => i)));
+      setSelectedAddresses(new Set(addresses.map((_, i) => i)));
     } catch (error) {
       toast({
         variant: "destructive",
         title: "Derivation Failed",
         description: error instanceof Error ? error.message : "Failed to derive addresses",
       });
-      setStep(1);
+      setStep(2);
     } finally {
       setIsDerivingAddresses(false);
     }
@@ -136,6 +211,34 @@ export default function BulkImport() {
     setNewCategoryInput("");
   };
 
+  const validateRange = (): boolean => {
+    if (startIndex < 0) {
+      toast({
+        variant: "destructive",
+        title: "Invalid Range",
+        description: "Start index must be 0 or greater",
+      });
+      return false;
+    }
+    if (endIndex < startIndex) {
+      toast({
+        variant: "destructive",
+        title: "Invalid Range",
+        description: "End index must be greater than or equal to start index",
+      });
+      return false;
+    }
+    if (endIndex - startIndex > 500) {
+      toast({
+        variant: "destructive",
+        title: "Invalid Range",
+        description: "Maximum 500 addresses can be derived at once",
+      });
+      return false;
+    }
+    return true;
+  };
+
   const handleSaveAddresses = async () => {
     if (selectedAddresses.size === 0) {
       toast({
@@ -162,7 +265,7 @@ export default function BulkImport() {
           seedName: seedName || undefined,
           walletSoftware: walletSoftware || undefined,
           privateKeyStatus: privateKeyStatus || undefined,
-          source: `${xpub.substring(0, 20)}... (${derivationPath}/${addr.index})`,
+          source: `${xpub.substring(0, 20)}... (${addr.path})`,
         });
       }
 
@@ -183,6 +286,8 @@ export default function BulkImport() {
     }
   };
 
+  const canProceedToStep2 = xpub.trim() && xpubInfo && !validationError;
+
   return (
     <div className="flex-1 overflow-auto p-6">
       <div className="max-w-3xl mx-auto space-y-6">
@@ -198,7 +303,7 @@ export default function BulkImport() {
             <div className={`w-8 h-8 rounded-full flex items-center justify-center ${step >= 1 ? "bg-primary text-primary-foreground" : "bg-muted"}`}>
               {step > 1 ? <Check className="h-4 w-4" /> : "1"}
             </div>
-            <span className="text-sm font-medium">Enter Key</span>
+            <span className="text-sm font-medium">Paste Key</span>
           </div>
           <ChevronRight className="h-4 w-4 text-muted-foreground" />
           <div className={`flex items-center gap-2 ${step >= 2 ? "text-primary" : "text-muted-foreground"}`}>
@@ -221,10 +326,10 @@ export default function BulkImport() {
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <Key className="h-5 w-5" />
-                Extended Public Key
+                Paste Your Extended Public Key
               </CardTitle>
               <CardDescription>
-                Enter your xpub, ypub, or zpub key to derive addresses
+                Just paste your xpub/ypub/zpub - everything will be auto-detected
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
@@ -234,7 +339,7 @@ export default function BulkImport() {
                   id="xpub-label"
                   value={xpubLabel}
                   onChange={(e) => setXpubLabel(e.target.value)}
-                  placeholder="e.g., Savings Wallet"
+                  placeholder="e.g., Savings Wallet, Trezor Main"
                   data-testid="input-xpub-label"
                 />
               </div>
@@ -245,17 +350,49 @@ export default function BulkImport() {
                   value={xpub}
                   onChange={(e) => setXpub(e.target.value)}
                   placeholder="xpub6D... / ypub6D... / zpub6D..."
-                  className="font-mono text-sm min-h-[80px]"
+                  className="font-mono text-sm min-h-[100px]"
                   data-testid="input-xpub"
                 />
-                <p className="text-xs text-muted-foreground">
-                  Supported formats: xpub (P2PKH), ypub (P2WPKH-P2SH), zpub (P2WPKH)
-                </p>
               </div>
+
+              {validationError && (
+                <Alert variant="destructive">
+                  <AlertCircle className="h-4 w-4" />
+                  <AlertTitle>Invalid Key</AlertTitle>
+                  <AlertDescription>{validationError}</AlertDescription>
+                </Alert>
+              )}
+
+              {xpubInfo && !validationError && (
+                <Alert>
+                  <Info className="h-4 w-4" />
+                  <AlertTitle>Key Detected</AlertTitle>
+                  <AlertDescription className="space-y-2">
+                    <div className="flex flex-wrap gap-2 mt-2">
+                      <Badge variant="secondary">{xpubInfo.prefix.toUpperCase()}</Badge>
+                      <Badge variant="outline">{xpubInfo.bipStandard}</Badge>
+                      <Badge variant="outline">{xpubInfo.network}</Badge>
+                      <Badge variant="outline">{getDepthDescription(xpubInfo.depth)}</Badge>
+                    </div>
+                    <p className="text-sm mt-2">{getBipDescription(xpubInfo.bipStandard)}</p>
+                    {xpubInfo.needsAdvancedMode && xpubInfo.reason && (
+                      <p className="text-sm text-amber-600 dark:text-amber-400 mt-2">
+                        {xpubInfo.reason}
+                      </p>
+                    )}
+                  </AlertDescription>
+                </Alert>
+              )}
+
+              <p className="text-xs text-muted-foreground">
+                Supported formats: xpub (Legacy), ypub (Nested SegWit), zpub (Native SegWit), 
+                tpub/upub/vpub (Testnet)
+              </p>
+              
               <Button
                 className="w-full"
                 onClick={() => setStep(2)}
-                disabled={!xpub.trim()}
+                disabled={!canProceedToStep2}
                 data-testid="button-next-step1"
               >
                 Continue
@@ -268,44 +405,132 @@ export default function BulkImport() {
         {step === 2 && (
           <Card>
             <CardHeader>
-              <CardTitle>Derivation & Metadata Options</CardTitle>
+              <CardTitle>Derivation & Metadata</CardTitle>
               <CardDescription>
-                Configure address derivation and add metadata to all imported addresses
+                Configure address generation and add metadata to all imported addresses
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
-              <div className="space-y-4">
-                <h4 className="font-medium">Derivation Settings</h4>
-                <div className="space-y-2">
-                  <Label htmlFor="path">Derivation Path</Label>
-                  <Select value={derivationPath} onValueChange={setDerivationPath}>
-                    <SelectTrigger id="path" data-testid="select-path">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="m/84'/0'/0'/0">m/84'/0'/0'/0 (Native SegWit - External)</SelectItem>
-                      <SelectItem value="m/84'/0'/0'/1">m/84'/0'/0'/1 (Native SegWit - Change)</SelectItem>
-                      <SelectItem value="m/49'/0'/0'/0">m/49'/0'/0'/0 (SegWit - External)</SelectItem>
-                      <SelectItem value="m/44'/0'/0'/0">m/44'/0'/0'/0 (Legacy - External)</SelectItem>
-                    </SelectContent>
-                  </Select>
+              {xpubInfo && (
+                <div className="p-4 bg-muted rounded-lg space-y-3">
+                  <div className="flex items-center justify-between flex-wrap gap-2">
+                    <h4 className="font-medium">Auto-Detected Settings</h4>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <Badge variant="secondary">{xpubInfo.bipStandard}</Badge>
+                      <Badge variant="outline">{xpubInfo.network}</Badge>
+                      <Badge variant="outline">{getDepthDescription(xpubInfo.depth)}</Badge>
+                    </div>
+                  </div>
+                  <p className="text-sm text-muted-foreground">
+                    {getBipDescription(xpubInfo.bipStandard)}
+                  </p>
+                  {!advancedMode && (
+                    <p className="text-sm">
+                      {xpubInfo.isChainLevel 
+                        ? `Will generate addresses ${startIndex}-${endIndex} directly from this key`
+                        : `Will generate addresses ${startIndex}-${endIndex} from ${isChangeChain ? 'change' : 'external'} chain (/0/n)`
+                      }
+                    </p>
+                  )}
                 </div>
-                <div className="space-y-2">
-                  <Label htmlFor="count">Number of Addresses</Label>
-                  <Input
-                    id="count"
-                    type="number"
-                    value={addressCount}
-                    onChange={(e) => setAddressCount(Math.min(100, Math.max(1, Number(e.target.value))))}
-                    min={1}
-                    max={100}
-                    data-testid="input-count"
-                  />
-                  <p className="text-xs text-muted-foreground">Maximum 100 addresses at a time</p>
-                </div>
-              </div>
+              )}
 
-              <div className="space-y-4">
+              <Collapsible open={advancedOpen} onOpenChange={setAdvancedOpen}>
+                <CollapsibleTrigger asChild>
+                  <Button variant="outline" className="w-full justify-between" data-testid="button-toggle-advanced">
+                    <span className="flex items-center gap-2">
+                      Advanced Settings
+                      {advancedMode && <Badge variant="secondary" className="text-xs">Active</Badge>}
+                    </span>
+                    {advancedOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                  </Button>
+                </CollapsibleTrigger>
+                <CollapsibleContent className="pt-4 space-y-4">
+                  <div className="flex items-center justify-between">
+                    <div className="space-y-0.5">
+                      <Label htmlFor="advanced-mode">Use Custom Derivation Path</Label>
+                      <p className="text-xs text-muted-foreground">
+                        Override the auto-detected path with a custom one
+                      </p>
+                    </div>
+                    <Switch
+                      id="advanced-mode"
+                      checked={advancedMode}
+                      onCheckedChange={setAdvancedMode}
+                      data-testid="switch-advanced-mode"
+                    />
+                  </div>
+
+                  {advancedMode && (
+                    <div className="space-y-2 pl-4 border-l-2 border-primary/20">
+                      <Label htmlFor="custom-path">Custom Derivation Path</Label>
+                      <Input
+                        id="custom-path"
+                        value={customPath}
+                        onChange={(e) => setCustomPath(e.target.value)}
+                        placeholder="e.g., 0 or 1 or m/0"
+                        className="font-mono"
+                        data-testid="input-custom-path"
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        Path relative to the XPUB. Use "0" for external chain, "1" for change chain.
+                        Addresses will be derived as path/index.
+                      </p>
+                    </div>
+                  )}
+
+                  {!advancedMode && (
+                    <div className="flex items-center justify-between">
+                      <div className="space-y-0.5">
+                        <Label htmlFor="change-chain">Use Change Chain</Label>
+                        <p className="text-xs text-muted-foreground">
+                          Derive from /1/n (internal) instead of /0/n (external)
+                        </p>
+                      </div>
+                      <Switch
+                        id="change-chain"
+                        checked={isChangeChain}
+                        onCheckedChange={setIsChangeChain}
+                        data-testid="switch-change-chain"
+                      />
+                    </div>
+                  )}
+
+                  <div className="space-y-2">
+                    <Label>Address Range</Label>
+                    <div className="flex items-center gap-2">
+                      <div className="flex-1">
+                        <Label htmlFor="start-index" className="text-xs text-muted-foreground">Start Index</Label>
+                        <Input
+                          id="start-index"
+                          type="number"
+                          value={startIndex}
+                          onChange={(e) => setStartIndex(Math.max(0, Number(e.target.value)))}
+                          min={0}
+                          data-testid="input-start-index"
+                        />
+                      </div>
+                      <span className="text-muted-foreground mt-5">to</span>
+                      <div className="flex-1">
+                        <Label htmlFor="end-index" className="text-xs text-muted-foreground">End Index</Label>
+                        <Input
+                          id="end-index"
+                          type="number"
+                          value={endIndex}
+                          onChange={(e) => setEndIndex(Math.max(0, Number(e.target.value)))}
+                          min={0}
+                          data-testid="input-end-index"
+                        />
+                      </div>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      Will generate {Math.max(0, endIndex - startIndex + 1)} addresses (max 500)
+                    </p>
+                  </div>
+                </CollapsibleContent>
+              </Collapsible>
+
+              <div className="space-y-4 pt-4 border-t">
                 <h4 className="font-medium">Metadata (applied to all addresses)</h4>
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
@@ -462,7 +687,15 @@ export default function BulkImport() {
                   <ChevronLeft className="h-4 w-4 mr-2" />
                   Back
                 </Button>
-                <Button className="flex-1" onClick={() => setStep(3)} data-testid="button-next-step2">
+                <Button 
+                  className="flex-1" 
+                  onClick={() => {
+                    if (validateRange()) {
+                      setStep(3);
+                    }
+                  }} 
+                  data-testid="button-next-step2"
+                >
                   Generate Preview
                   <ChevronRight className="h-4 w-4 ml-2" />
                 </Button>
@@ -562,13 +795,13 @@ export default function BulkImport() {
                     >
                       {isSaving ? (
                         <>
-                          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                          <Loader2 className="h-4 w-4 animate-spin mr-2" />
                           Saving...
                         </>
                       ) : (
                         <>
-                          <Check className="h-4 w-4 mr-2" />
                           Save {selectedAddresses.size} Addresses
+                          <Check className="h-4 w-4 ml-2" />
                         </>
                       )}
                     </Button>
