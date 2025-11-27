@@ -1,0 +1,181 @@
+You previously built a system that derives Bitcoin addresses from an XPUB in “Easy Mode” and “Advanced Mode.”
+Now extend the implementation with the following requirements:
+
+1. Always Derive BOTH External (Receive) and Internal (Change) Chains
+
+Whenever an XPUB is provided — regardless of mode — the system must automatically derive:
+
+External (Receive) addresses
+
+Path:
+
+m/.../0/<index>
+
+
+Label for UI & database:
+
+"Receive Address (External)"
+
+Internal (Change) addresses
+
+Path:
+
+m/.../1/<index>
+
+
+Label for UI & database:
+
+"Change Address (Internal)"
+
+
+No extra key, prompt, or configuration is required from the user.
+Both chains must always be generated as part of each derivation run.
+
+2. Metadata Must Apply to BOTH Address Sets
+
+During each derivation run, the user can define metadata such as:
+
+Wallet name / device
+
+Passphrase or wallet variant name
+
+Account purpose
+
+Notes / labels
+
+Any other metadata already supported
+
+This metadata must be:
+
+Applied identically to both external and change address sets
+
+Stored alongside each derived address
+
+Included in any export or listing views
+
+Used for search and lookup
+
+Example stored fields per address:
+
+{
+  address: "...",
+  type: "receive" or "change",
+  derivationPath: "m/.../0/n" or "m/.../1/n",
+  index: n,
+  xpub: "...",
+  metadata: {
+    device: "...",
+    passphraseName: "...",
+    accountPurpose: "...",
+    notes: "...",
+    ...
+  }
+}
+
+3. UI Requirements
+Easy Mode
+
+Generate 0–19 receive addresses (external)
+
+Generate 0–19 change addresses (internal)
+
+Display receive addresses by default
+
+Include a toggle to reveal change addresses:
+
+[Show Change Addresses]
+
+Advanced Mode
+
+Allow customizable ranges independently for:
+
+External chain (/0/n)
+
+Internal chain (/1/n)
+
+Ranges must be validated (e.g., max 500 per chain)
+
+4. Output Requirements
+
+For each derivation session, output two lists:
+
+List A — Receive Addresses (External)
+
+Label: Receive Address (External)
+
+Path prefix: /0/
+
+Include all metadata
+
+List B — Change Addresses (Internal)
+
+Label: Change Address (Internal)
+
+Path prefix: /1/
+
+Include all metadata
+
+Both lists must be clearly separated in UI, exports, and logs.
+
+5. API / Internal Function Requirements
+
+If derivation happens in a backend module, update the function (or create a wrapper function) so that:
+
+deriveAddresses(xpub, startIndex, endIndex)
+
+
+is expanded into:
+
+deriveAddressesForChain(xpub, chain, startIndex, endIndex)
+
+
+Where:
+
+chain = 0 → external
+
+chain = 1 → internal
+
+The main derivation task must now:
+
+deriveAddressesForChain(xpub, 0, startIndex, endIndex)
+
+deriveAddressesForChain(xpub, 1, startIndex, endIndex)
+
+merge into structured output
+
+6. Data Storage Requirements
+
+Every stored address must include:
+
+chainType (“receive” or “change”)
+
+derivationPath
+
+index
+
+xpub
+
+metadata from user input
+
+The derived address string
+
+Ensure existing schemas are extended safely and remain backward-compatible.
+
+7. Behavior on Existing Features
+
+Do not remove or modify prefix detection logic (xpub/ypub/zpub/vpub/etc).
+
+Do not remove the BIP inference logic.
+
+Do not remove Easy/Advanced mode branching.
+
+Simply add the new dual-chain derivation and labeling to the existing flow.
+
+🚀 Goal
+
+After this update, every derivation run should always produce:
+
+1) Receive Address (External)
+2) Change Address (Internal)
+
+Both annotated with full user-defined metadata, searchable, exportable, and visually separated.

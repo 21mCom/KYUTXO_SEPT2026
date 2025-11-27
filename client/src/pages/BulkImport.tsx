@@ -31,13 +31,14 @@ import { useTags, createTag } from "@/hooks/use-tags";
 import { useCategories, createCategory } from "@/hooks/use-categories";
 import { createRecord } from "@/hooks/use-records";
 import { 
-  deriveAddressesFromXpub, 
-  deriveAddressesAdvanced,
+  deriveDualChainAddresses,
+  deriveDualChainAdvanced,
   analyzeXpub, 
   validateExtendedPublicKey,
   getBipDescription,
   getDepthDescription,
   type DerivedAddress,
+  type DualChainResult,
   type XpubInfo 
 } from "@/lib/xpub";
 
@@ -51,13 +52,17 @@ export default function BulkImport() {
   
   const [advancedMode, setAdvancedMode] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
-  const [customPath, setCustomPath] = useState("");
-  const [startIndex, setStartIndex] = useState(0);
-  const [endIndex, setEndIndex] = useState(19);
-  const [isChangeChain, setIsChangeChain] = useState(false);
+  const [customPathReceive, setCustomPathReceive] = useState("0");
+  const [customPathChange, setCustomPathChange] = useState("1");
+  const [receiveStartIndex, setReceiveStartIndex] = useState(0);
+  const [receiveEndIndex, setReceiveEndIndex] = useState(19);
+  const [changeStartIndex, setChangeStartIndex] = useState(0);
+  const [changeEndIndex, setChangeEndIndex] = useState(19);
   
-  const [derivedAddresses, setDerivedAddresses] = useState<DerivedAddress[]>([]);
-  const [selectedAddresses, setSelectedAddresses] = useState<Set<number>>(new Set());
+  const [dualChainResult, setDualChainResult] = useState<DualChainResult | null>(null);
+  const [selectedReceiveAddresses, setSelectedReceiveAddresses] = useState<Set<number>>(new Set());
+  const [selectedChangeAddresses, setSelectedChangeAddresses] = useState<Set<number>>(new Set());
+  const [showChangeAddresses, setShowChangeAddresses] = useState(false);
   const [isDerivingAddresses, setIsDerivingAddresses] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
 
@@ -98,7 +103,8 @@ export default function BulkImport() {
         setAdvancedOpen(true);
       }
       
-      setCustomPath(info.suggestedPath);
+      setCustomPathReceive(info.suggestedPath || "0");
+      setCustomPathChange("1");
     } catch (error) {
       setValidationError(error instanceof Error ? error.message : 'Failed to analyze key');
       setXpubInfo(null);
@@ -123,16 +129,31 @@ export default function BulkImport() {
     
     setIsDerivingAddresses(true);
     try {
-      let addresses: DerivedAddress[];
+      let result: DualChainResult;
       
-      if (advancedMode && customPath) {
-        addresses = await deriveAddressesAdvanced(xpub, customPath, startIndex, endIndex);
+      if (advancedMode) {
+        result = await deriveDualChainAdvanced(
+          xpub,
+          customPathReceive,
+          customPathChange,
+          receiveStartIndex,
+          receiveEndIndex,
+          changeStartIndex,
+          changeEndIndex
+        );
       } else {
-        addresses = await deriveAddressesFromXpub(xpub, startIndex, endIndex, isChangeChain);
+        result = await deriveDualChainAddresses(
+          xpub,
+          receiveStartIndex,
+          receiveEndIndex,
+          changeStartIndex,
+          changeEndIndex
+        );
       }
       
-      setDerivedAddresses(addresses);
-      setSelectedAddresses(new Set(addresses.map((_, i) => i)));
+      setDualChainResult(result);
+      setSelectedReceiveAddresses(new Set(result.receive.map((_, i) => i)));
+      setSelectedChangeAddresses(new Set(result.change.map((_, i) => i)));
     } catch (error) {
       toast({
         variant: "destructive",
@@ -145,23 +166,45 @@ export default function BulkImport() {
     }
   };
 
-  const toggleAddressSelection = (index: number) => {
-    const newSelected = new Set(selectedAddresses);
+  const toggleReceiveSelection = (index: number) => {
+    const newSelected = new Set(selectedReceiveAddresses);
     if (newSelected.has(index)) {
       newSelected.delete(index);
     } else {
       newSelected.add(index);
     }
-    setSelectedAddresses(newSelected);
+    setSelectedReceiveAddresses(newSelected);
   };
 
-  const toggleAllAddresses = () => {
-    if (selectedAddresses.size === derivedAddresses.length) {
-      setSelectedAddresses(new Set());
+  const toggleChangeSelection = (index: number) => {
+    const newSelected = new Set(selectedChangeAddresses);
+    if (newSelected.has(index)) {
+      newSelected.delete(index);
     } else {
-      setSelectedAddresses(new Set(derivedAddresses.map((_, i) => i)));
+      newSelected.add(index);
+    }
+    setSelectedChangeAddresses(newSelected);
+  };
+
+  const toggleAllReceiveAddresses = () => {
+    if (!dualChainResult) return;
+    if (selectedReceiveAddresses.size === dualChainResult.receive.length) {
+      setSelectedReceiveAddresses(new Set());
+    } else {
+      setSelectedReceiveAddresses(new Set(dualChainResult.receive.map((_, i) => i)));
     }
   };
+
+  const toggleAllChangeAddresses = () => {
+    if (!dualChainResult) return;
+    if (selectedChangeAddresses.size === dualChainResult.change.length) {
+      setSelectedChangeAddresses(new Set());
+    } else {
+      setSelectedChangeAddresses(new Set(dualChainResult.change.map((_, i) => i)));
+    }
+  };
+
+  const totalSelectedAddresses = selectedReceiveAddresses.size + selectedChangeAddresses.size;
 
   const handleAddTag = async () => {
     const trimmed = newTagInput.trim();
@@ -212,7 +255,7 @@ export default function BulkImport() {
   };
 
   const validateRange = (): boolean => {
-    if (startIndex < 0) {
+    if (receiveStartIndex < 0 || changeStartIndex < 0) {
       toast({
         variant: "destructive",
         title: "Invalid Range",
@@ -220,7 +263,7 @@ export default function BulkImport() {
       });
       return false;
     }
-    if (endIndex < startIndex) {
+    if (receiveEndIndex < receiveStartIndex || changeEndIndex < changeStartIndex) {
       toast({
         variant: "destructive",
         title: "Invalid Range",
@@ -228,11 +271,11 @@ export default function BulkImport() {
       });
       return false;
     }
-    if (endIndex - startIndex > 500) {
+    if (receiveEndIndex - receiveStartIndex > 500 || changeEndIndex - changeStartIndex > 500) {
       toast({
         variant: "destructive",
         title: "Invalid Range",
-        description: "Maximum 500 addresses can be derived at once",
+        description: "Maximum 500 addresses per chain can be derived at once",
       });
       return false;
     }
@@ -240,7 +283,7 @@ export default function BulkImport() {
   };
 
   const handleSaveAddresses = async () => {
-    if (selectedAddresses.size === 0) {
+    if (totalSelectedAddresses === 0) {
       toast({
         variant: "destructive",
         title: "No Addresses Selected",
@@ -249,16 +292,21 @@ export default function BulkImport() {
       return;
     }
 
+    if (!dualChainResult) return;
+
     setIsSaving(true);
     try {
-      const addressesToSave = derivedAddresses.filter((_, i) => selectedAddresses.has(i));
+      const receiveToSave = dualChainResult.receive.filter((_, i) => selectedReceiveAddresses.has(i));
+      const changeToSave = dualChainResult.change.filter((_, i) => selectedChangeAddresses.has(i));
+      const allAddresses = [...receiveToSave, ...changeToSave];
       
-      for (const addr of addressesToSave) {
+      for (const addr of allAddresses) {
         const labelPrefix = xpubLabel || seedName || "Derived";
+        const chainSuffix = addr.chainType === 'receive' ? ' (Receive)' : ' (Change)';
         await createRecord({
           type: "address",
           inputString: addr.address,
-          label: `${labelPrefix} #${addr.index}`,
+          label: `${labelPrefix} #${addr.index}${chainSuffix}`,
           notes: notes || undefined,
           tags: selectedTags,
           categories: selectedCategories,
@@ -266,12 +314,15 @@ export default function BulkImport() {
           walletSoftware: walletSoftware || undefined,
           privateKeyStatus: privateKeyStatus || undefined,
           source: `${xpub.substring(0, 20)}... (${addr.path})`,
+          chainType: addr.chainType,
+          derivationPath: addr.path,
+          xpub: xpub,
         });
       }
 
       toast({
         title: "Addresses Saved",
-        description: `${addressesToSave.length} addresses saved successfully`,
+        description: `${allAddresses.length} addresses saved (${receiveToSave.length} receive, ${changeToSave.length} change)`,
       });
 
       navigate("/");
@@ -425,12 +476,26 @@ export default function BulkImport() {
                     {getBipDescription(xpubInfo.bipStandard)}
                   </p>
                   {!advancedMode && (
-                    <p className="text-sm">
-                      {xpubInfo.isChainLevel 
-                        ? `Will generate addresses ${startIndex}-${endIndex} directly from this key`
-                        : `Will generate addresses ${startIndex}-${endIndex} from ${isChangeChain ? 'change' : 'external'} chain (/0/n)`
-                      }
-                    </p>
+                    xpubInfo.depth === 4 ? (
+                      <div className="text-sm space-y-1">
+                        <p className="text-amber-600 dark:text-amber-400">Chain-level key detected (single chain only):</p>
+                        <ul className="list-disc list-inside text-muted-foreground">
+                          <li>Addresses {receiveStartIndex}-{receiveEndIndex}</li>
+                        </ul>
+                        <p className="text-xs text-muted-foreground mt-1">
+                          This key is already at chain level (depth 4). Only one chain can be derived. 
+                          For dual-chain derivation, use an account-level (depth 3) key.
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="text-sm space-y-1">
+                        <p>Will generate both chains:</p>
+                        <ul className="list-disc list-inside text-muted-foreground">
+                          <li>Receive addresses {receiveStartIndex}-{receiveEndIndex} (external chain /0/n)</li>
+                          <li>Change addresses {changeStartIndex}-{changeEndIndex} (internal chain /1/n)</li>
+                        </ul>
+                      </div>
+                    )
                   )}
                 </div>
               )}
@@ -448,9 +513,9 @@ export default function BulkImport() {
                 <CollapsibleContent className="pt-4 space-y-4">
                   <div className="flex items-center justify-between">
                     <div className="space-y-0.5">
-                      <Label htmlFor="advanced-mode">Use Custom Derivation Path</Label>
+                      <Label htmlFor="advanced-mode">Use Custom Derivation Paths</Label>
                       <p className="text-xs text-muted-foreground">
-                        Override the auto-detected path with a custom one
+                        Override the auto-detected paths with custom ones
                       </p>
                     </div>
                     <Switch
@@ -462,70 +527,99 @@ export default function BulkImport() {
                   </div>
 
                   {advancedMode && (
-                    <div className="space-y-2 pl-4 border-l-2 border-primary/20">
-                      <Label htmlFor="custom-path">Custom Derivation Path</Label>
-                      <Input
-                        id="custom-path"
-                        value={customPath}
-                        onChange={(e) => setCustomPath(e.target.value)}
-                        placeholder="e.g., 0 or 1 or m/0"
-                        className="font-mono"
-                        data-testid="input-custom-path"
-                      />
+                    <div className="space-y-4 pl-4 border-l-2 border-primary/20">
+                      <div className="space-y-2">
+                        <Label htmlFor="custom-path-receive">Receive Chain Path</Label>
+                        <Input
+                          id="custom-path-receive"
+                          value={customPathReceive}
+                          onChange={(e) => setCustomPathReceive(e.target.value)}
+                          placeholder="e.g., 0"
+                          className="font-mono"
+                          data-testid="input-custom-path-receive"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="custom-path-change">Change Chain Path</Label>
+                        <Input
+                          id="custom-path-change"
+                          value={customPathChange}
+                          onChange={(e) => setCustomPathChange(e.target.value)}
+                          placeholder="e.g., 1"
+                          className="font-mono"
+                          data-testid="input-custom-path-change"
+                        />
+                      </div>
                       <p className="text-xs text-muted-foreground">
-                        Path relative to the XPUB. Use "0" for external chain, "1" for change chain.
-                        Addresses will be derived as path/index.
+                        Paths relative to the XPUB. Standard: "0" for receive, "1" for change.
                       </p>
                     </div>
                   )}
 
-                  {!advancedMode && (
-                    <div className="flex items-center justify-between">
-                      <div className="space-y-0.5">
-                        <Label htmlFor="change-chain">Use Change Chain</Label>
-                        <p className="text-xs text-muted-foreground">
-                          Derive from /1/n (internal) instead of /0/n (external)
-                        </p>
+                  <div className="space-y-4">
+                    <div className="space-y-2">
+                      <Label>Receive Address Range (External Chain)</Label>
+                      <div className="flex items-center gap-2">
+                        <div className="flex-1">
+                          <Label htmlFor="receive-start-index" className="text-xs text-muted-foreground">Start Index</Label>
+                          <Input
+                            id="receive-start-index"
+                            type="number"
+                            value={receiveStartIndex}
+                            onChange={(e) => setReceiveStartIndex(Math.max(0, Number(e.target.value)))}
+                            min={0}
+                            data-testid="input-receive-start-index"
+                          />
+                        </div>
+                        <span className="text-muted-foreground mt-5">to</span>
+                        <div className="flex-1">
+                          <Label htmlFor="receive-end-index" className="text-xs text-muted-foreground">End Index</Label>
+                          <Input
+                            id="receive-end-index"
+                            type="number"
+                            value={receiveEndIndex}
+                            onChange={(e) => setReceiveEndIndex(Math.max(0, Number(e.target.value)))}
+                            min={0}
+                            data-testid="input-end-index"
+                          />
+                        </div>
                       </div>
-                      <Switch
-                        id="change-chain"
-                        checked={isChangeChain}
-                        onCheckedChange={setIsChangeChain}
-                        data-testid="switch-change-chain"
-                      />
+                      <p className="text-xs text-muted-foreground">
+                        Will generate {Math.max(0, receiveEndIndex - receiveStartIndex + 1)} receive addresses (max 500)
+                      </p>
                     </div>
-                  )}
 
-                  <div className="space-y-2">
-                    <Label>Address Range</Label>
-                    <div className="flex items-center gap-2">
-                      <div className="flex-1">
-                        <Label htmlFor="start-index" className="text-xs text-muted-foreground">Start Index</Label>
-                        <Input
-                          id="start-index"
-                          type="number"
-                          value={startIndex}
-                          onChange={(e) => setStartIndex(Math.max(0, Number(e.target.value)))}
-                          min={0}
-                          data-testid="input-start-index"
-                        />
+                    <div className="space-y-2">
+                      <Label>Change Address Range (Internal Chain)</Label>
+                      <div className="flex items-center gap-2">
+                        <div className="flex-1">
+                          <Label htmlFor="change-start-index" className="text-xs text-muted-foreground">Start Index</Label>
+                          <Input
+                            id="change-start-index"
+                            type="number"
+                            value={changeStartIndex}
+                            onChange={(e) => setChangeStartIndex(Math.max(0, Number(e.target.value)))}
+                            min={0}
+                            data-testid="input-change-start-index"
+                          />
+                        </div>
+                        <span className="text-muted-foreground mt-5">to</span>
+                        <div className="flex-1">
+                          <Label htmlFor="change-end-index" className="text-xs text-muted-foreground">End Index</Label>
+                          <Input
+                            id="change-end-index"
+                            type="number"
+                            value={changeEndIndex}
+                            onChange={(e) => setChangeEndIndex(Math.max(0, Number(e.target.value)))}
+                            min={0}
+                            data-testid="input-change-end-index"
+                          />
+                        </div>
                       </div>
-                      <span className="text-muted-foreground mt-5">to</span>
-                      <div className="flex-1">
-                        <Label htmlFor="end-index" className="text-xs text-muted-foreground">End Index</Label>
-                        <Input
-                          id="end-index"
-                          type="number"
-                          value={endIndex}
-                          onChange={(e) => setEndIndex(Math.max(0, Number(e.target.value)))}
-                          min={0}
-                          data-testid="input-end-index"
-                        />
-                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        Will generate {Math.max(0, changeEndIndex - changeStartIndex + 1)} change addresses (max 500)
+                      </p>
                     </div>
-                    <p className="text-xs text-muted-foreground">
-                      Will generate {Math.max(0, endIndex - startIndex + 1)} addresses (max 500)
-                    </p>
                   </div>
                 </CollapsibleContent>
               </Collapsible>
@@ -718,46 +812,135 @@ export default function BulkImport() {
                   <Loader2 className="h-8 w-8 animate-spin text-primary mb-4" />
                   <p className="text-muted-foreground">Deriving addresses...</p>
                 </div>
-              ) : (
+              ) : dualChainResult && (
                 <>
-                  <div className="flex items-center justify-between mb-2">
-                    <div className="flex items-center gap-2">
-                      <Checkbox
-                        checked={selectedAddresses.size === derivedAddresses.length}
-                        onCheckedChange={toggleAllAddresses}
-                        data-testid="checkbox-select-all"
-                      />
-                      <Label className="cursor-pointer" onClick={toggleAllAddresses}>
-                        Select All ({selectedAddresses.size}/{derivedAddresses.length})
-                      </Label>
+                  <div className="p-3 bg-muted rounded-md mb-4">
+                    <div className="flex items-center justify-between">
+                      <p className="text-sm font-medium">
+                        Total: {totalSelectedAddresses} addresses selected
+                      </p>
+                      <div className="flex gap-2">
+                        {dualChainResult.change.length > 0 ? (
+                          <>
+                            <Badge variant="secondary">{selectedReceiveAddresses.size} receive</Badge>
+                            <Badge variant="outline">{selectedChangeAddresses.size} change</Badge>
+                          </>
+                        ) : (
+                          <Badge variant="secondary">{selectedReceiveAddresses.size} addresses</Badge>
+                        )}
+                      </div>
                     </div>
+                    {dualChainResult.change.length === 0 && (
+                      <p className="text-xs text-amber-600 dark:text-amber-400 mt-2">
+                        Chain-level key: only single chain derivation available
+                      </p>
+                    )}
                   </div>
 
-                  <div className="space-y-2 max-h-[400px] overflow-y-auto">
-                    {derivedAddresses.map((addr, index) => (
-                      <div
-                        key={index}
-                        className={`flex items-center gap-3 p-3 border rounded hover-elevate ${
-                          selectedAddresses.has(index) ? "bg-primary/5 border-primary/30" : ""
-                        }`}
-                        data-testid={`address-preview-${index}`}
-                      >
-                        <Checkbox
-                          checked={selectedAddresses.has(index)}
-                          onCheckedChange={() => toggleAddressSelection(index)}
-                          data-testid={`checkbox-address-${index}`}
-                        />
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2 mb-1">
-                            <Badge variant="outline" className="text-xs">
-                              #{addr.index}
-                            </Badge>
-                            <code className="text-xs text-muted-foreground">{addr.path}</code>
-                          </div>
-                          <code className="text-sm font-mono break-all">{addr.address}</code>
+                  <div className="space-y-4">
+                    <div className="border rounded-lg overflow-hidden">
+                      <div className="bg-primary/10 p-3 flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <Checkbox
+                            checked={selectedReceiveAddresses.size === dualChainResult.receive.length}
+                            onCheckedChange={toggleAllReceiveAddresses}
+                            data-testid="checkbox-select-all-receive"
+                          />
+                          <Label className="cursor-pointer font-medium" onClick={toggleAllReceiveAddresses}>
+                            {dualChainResult.change.length > 0 ? 'Receive Addresses (External)' : 'Derived Addresses'}
+                          </Label>
+                          <Badge variant="secondary" className="text-xs">
+                            {selectedReceiveAddresses.size}/{dualChainResult.receive.length}
+                          </Badge>
                         </div>
                       </div>
-                    ))}
+                      <div className="space-y-2 max-h-[200px] overflow-y-auto p-2">
+                        {dualChainResult.receive.map((addr, index) => (
+                          <div
+                            key={`receive-${index}`}
+                            className={`flex items-center gap-3 p-3 border rounded hover-elevate ${
+                              selectedReceiveAddresses.has(index) ? "bg-primary/5 border-primary/30" : ""
+                            }`}
+                            data-testid={`address-preview-receive-${index}`}
+                          >
+                            <Checkbox
+                              checked={selectedReceiveAddresses.has(index)}
+                              onCheckedChange={() => toggleReceiveSelection(index)}
+                              data-testid={`checkbox-receive-${index}`}
+                            />
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2 mb-1">
+                                <Badge variant="outline" className="text-xs">
+                                  #{addr.index}
+                                </Badge>
+                                <code className="text-xs text-muted-foreground">{addr.path}</code>
+                              </div>
+                              <code className="text-sm font-mono break-all">{addr.address}</code>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {dualChainResult.change.length > 0 && (
+                      <div className="border rounded-lg overflow-hidden">
+                        <div 
+                          className="bg-muted p-3 flex items-center justify-between cursor-pointer hover-elevate"
+                          onClick={() => setShowChangeAddresses(!showChangeAddresses)}
+                          data-testid="toggle-change-addresses"
+                        >
+                          <div className="flex items-center gap-2">
+                            <Checkbox
+                              checked={selectedChangeAddresses.size === dualChainResult.change.length}
+                              onCheckedChange={() => toggleAllChangeAddresses()}
+                              onClick={(e) => e.stopPropagation()}
+                              data-testid="checkbox-select-all-change"
+                            />
+                            <Label className="cursor-pointer font-medium">
+                              Change Addresses (Internal)
+                            </Label>
+                            <Badge variant="outline" className="text-xs">
+                              {selectedChangeAddresses.size}/{dualChainResult.change.length}
+                            </Badge>
+                          </div>
+                          <Button variant="ghost" size="sm">
+                            {showChangeAddresses ? (
+                              <>Hide <ChevronUp className="h-4 w-4 ml-1" /></>
+                            ) : (
+                              <>Show <ChevronDown className="h-4 w-4 ml-1" /></>
+                            )}
+                          </Button>
+                        </div>
+                        {showChangeAddresses && (
+                          <div className="space-y-2 max-h-[200px] overflow-y-auto p-2">
+                            {dualChainResult.change.map((addr, index) => (
+                              <div
+                                key={`change-${index}`}
+                                className={`flex items-center gap-3 p-3 border rounded hover-elevate ${
+                                  selectedChangeAddresses.has(index) ? "bg-primary/5 border-primary/30" : ""
+                                }`}
+                                data-testid={`address-preview-change-${index}`}
+                              >
+                                <Checkbox
+                                  checked={selectedChangeAddresses.has(index)}
+                                  onCheckedChange={() => toggleChangeSelection(index)}
+                                  data-testid={`checkbox-change-${index}`}
+                                />
+                                <div className="flex-1 min-w-0">
+                                  <div className="flex items-center gap-2 mb-1">
+                                    <Badge variant="outline" className="text-xs">
+                                      #{addr.index}
+                                    </Badge>
+                                    <code className="text-xs text-muted-foreground">{addr.path}</code>
+                                  </div>
+                                  <code className="text-sm font-mono break-all">{addr.address}</code>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
 
                   {(seedName || walletSoftware || notes || privateKeyStatus || selectedTags.length > 0 || selectedCategories.length > 0) && (
@@ -790,7 +973,7 @@ export default function BulkImport() {
                     <Button
                       className="flex-1"
                       onClick={handleSaveAddresses}
-                      disabled={isSaving || selectedAddresses.size === 0}
+                      disabled={isSaving || totalSelectedAddresses === 0}
                       data-testid="button-save-addresses"
                     >
                       {isSaving ? (
@@ -800,7 +983,7 @@ export default function BulkImport() {
                         </>
                       ) : (
                         <>
-                          Save {selectedAddresses.size} Addresses
+                          Save {totalSelectedAddresses} Addresses
                           <Check className="h-4 w-4 ml-2" />
                         </>
                       )}

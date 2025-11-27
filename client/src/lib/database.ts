@@ -1,5 +1,8 @@
 import Dexie, { type Table } from 'dexie';
 
+// Chain type for addresses derived from XPUB
+export type ChainType = 'receive' | 'change';
+
 // Plaintext record structure (for type safety and querying)
 export interface Record {
   id?: number;
@@ -16,6 +19,12 @@ export interface Record {
   privateKeyStatus?: string;
   counterparty?: string;
   source?: string;
+  // Chain type for XPUB-derived addresses (receive = external, change = internal)
+  chainType?: ChainType;
+  // Derivation path for XPUB-derived addresses
+  derivationPath?: string;
+  // XPUB key used to derive this address
+  xpub?: string;
   createdAt: number;
   updatedAt: number;
   // Encrypted payload - contains the sensitive data when encryption is enabled
@@ -85,6 +94,15 @@ export class KYBTCDatabase extends Dexie {
   constructor() {
     super('KYBTCDatabase');
     
+    // Version 3 adds chainType, derivationPath, xpub fields for bulk import
+    this.version(3).stores({
+      records: '++id, type, inputString, label, *tags, *categories, createdAt, updatedAt, isEncrypted, chainType',
+      attachments: '++id, recordId, createdAt, isEncrypted',
+      tags: '++id, name, createdAt, isEncrypted',
+      categories: '++id, name, createdAt, isEncrypted',
+      settings: 'id'
+    });
+
     // Version 2 adds encryption support
     this.version(2).stores({
       records: '++id, type, inputString, label, *tags, *categories, createdAt, updatedAt, isEncrypted',

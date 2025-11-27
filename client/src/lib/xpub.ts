@@ -3,10 +3,22 @@ import BIP32Factory from 'bip32';
 import * as ecc from '@bitcoinerlab/secp256k1';
 import bs58check from 'bs58check';
 
+export type ChainType = 'receive' | 'change';
+
 export interface DerivedAddress {
   index: number;
   address: string;
   path: string;
+  chainType: ChainType;
+  chainLabel: string;
+}
+
+export interface DualChainResult {
+  receive: DerivedAddress[];
+  change: DerivedAddress[];
+  xpub: string;
+  bipStandard: BipStandard;
+  network: 'mainnet' | 'testnet';
 }
 
 export interface XpubInfo {
@@ -121,11 +133,11 @@ export function analyzeXpub(extendedKey: string): XpubInfo {
   };
 }
 
-export async function deriveAddressesFromXpub(
+export async function deriveAddressesForChain(
   extendedKey: string,
+  chain: 0 | 1,
   startIndex: number = 0,
-  endIndex: number = 19,
-  isChangeChain: boolean = false
+  endIndex: number = 19
 ): Promise<DerivedAddress[]> {
   const trimmed = extendedKey.trim();
   const prefix = getXpubPrefix(trimmed);
@@ -141,6 +153,8 @@ export async function deriveAddressesFromXpub(
     throw new Error('Maximum 500 addresses can be derived at once');
   }
   
+  const chainType: ChainType = chain === 0 ? 'receive' : 'change';
+  const chainLabel = chain === 0 ? 'Receive Address (External)' : 'Change Address (Internal)';
   const addresses: DerivedAddress[] = [];
 
   try {
@@ -149,14 +163,13 @@ export async function deriveAddressesFromXpub(
     const convertedKey = convertToXpub(trimmed, prefix);
     let node = bip32.fromBase58(convertedKey, network);
     
-    const chainIndex = isChangeChain ? 1 : 0;
     let pathPrefix: string;
     
     if (depth === 4) {
-      pathPrefix = `${prefixInfo.accountPath}/${chainIndex}`;
+      pathPrefix = `chain-level/${chain}`;
     } else if (depth === 3) {
-      node = node.derive(chainIndex);
-      pathPrefix = `${prefixInfo.accountPath}/${chainIndex}`;
+      node = node.derive(chain);
+      pathPrefix = `${prefixInfo.accountPath}/${chain}`;
     } else {
       throw new Error(`XPUB at depth ${depth} requires Advanced Mode with a custom derivation path.`);
     }
@@ -193,6 +206,8 @@ export async function deriveAddressesFromXpub(
         index: i,
         address,
         path: `${pathPrefix}/${i}`,
+        chainType,
+        chainLabel,
       });
     }
     
@@ -203,11 +218,58 @@ export async function deriveAddressesFromXpub(
   }
 }
 
+export async function deriveDualChainAddresses(
+  extendedKey: string,
+  receiveStartIndex: number = 0,
+  receiveEndIndex: number = 19,
+  changeStartIndex: number = 0,
+  changeEndIndex: number = 19
+): Promise<DualChainResult> {
+  const trimmed = extendedKey.trim();
+  const prefix = getXpubPrefix(trimmed);
+  const prefixInfo = PREFIX_TO_BIP[prefix];
+  const depth = getKeyDepth(trimmed);
+  
+  if (depth === 4) {
+    const addresses = await deriveAddressesForChain(trimmed, 0, receiveStartIndex, receiveEndIndex);
+    return {
+      receive: addresses,
+      change: [],
+      xpub: trimmed,
+      bipStandard: prefixInfo.bip,
+      network: prefixInfo.network,
+    };
+  }
+  
+  const [receive, change] = await Promise.all([
+    deriveAddressesForChain(trimmed, 0, receiveStartIndex, receiveEndIndex),
+    deriveAddressesForChain(trimmed, 1, changeStartIndex, changeEndIndex),
+  ]);
+  
+  return {
+    receive,
+    change,
+    xpub: trimmed,
+    bipStandard: prefixInfo.bip,
+    network: prefixInfo.network,
+  };
+}
+
+export async function deriveAddressesFromXpub(
+  extendedKey: string,
+  startIndex: number = 0,
+  endIndex: number = 19,
+  isChangeChain: boolean = false
+): Promise<DerivedAddress[]> {
+  return deriveAddressesForChain(extendedKey, isChangeChain ? 1 : 0, startIndex, endIndex);
+}
+
 export async function deriveAddressesAdvanced(
   extendedKey: string,
   customPath: string,
   startIndex: number = 0,
-  endIndex: number = 19
+  endIndex: number = 19,
+  chainType: ChainType = 'receive'
 ): Promise<DerivedAddress[]> {
   const trimmed = extendedKey.trim();
   const prefix = getXpubPrefix(trimmed);
@@ -222,6 +284,7 @@ export async function deriveAddressesAdvanced(
     throw new Error('Maximum 500 addresses can be derived at once');
   }
   
+  const chainLabel = chainType === 'receive' ? 'Receive Address (External)' : 'Change Address (Internal)';
   const addresses: DerivedAddress[] = [];
 
   try {
@@ -290,6 +353,8 @@ export async function deriveAddressesAdvanced(
         index: i,
         address,
         path: displayPath,
+        chainType,
+        chainLabel,
       });
     }
     
@@ -298,6 +363,33 @@ export async function deriveAddressesAdvanced(
     console.error('Derivation error:', error);
     throw new Error(`Failed to derive addresses: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
+}
+
+export async function deriveDualChainAdvanced(
+  extendedKey: string,
+  receiveCustomPath: string,
+  changeCustomPath: string,
+  receiveStartIndex: number = 0,
+  receiveEndIndex: number = 19,
+  changeStartIndex: number = 0,
+  changeEndIndex: number = 19
+): Promise<DualChainResult> {
+  const trimmed = extendedKey.trim();
+  const prefix = getXpubPrefix(trimmed);
+  const prefixInfo = PREFIX_TO_BIP[prefix];
+  
+  const [receive, change] = await Promise.all([
+    deriveAddressesAdvanced(trimmed, receiveCustomPath, receiveStartIndex, receiveEndIndex, 'receive'),
+    deriveAddressesAdvanced(trimmed, changeCustomPath, changeStartIndex, changeEndIndex, 'change'),
+  ]);
+  
+  return {
+    receive,
+    change,
+    xpub: trimmed,
+    bipStandard: prefixInfo.bip,
+    network: prefixInfo.network,
+  };
 }
 
 export function validateExtendedPublicKey(key: string): { valid: boolean; type?: XpubPrefix; error?: string } {
