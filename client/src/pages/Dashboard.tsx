@@ -11,7 +11,7 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useRecords, createRecord, createRecordWithAttachments, updateRecord, deleteRecord, searchRecords, filterRecords } from "@/hooks/use-records";
 import { useEncryptedTags, useEncryptedCategories } from "@/hooks/use-encrypted-records";
 import { syncTagsToMaster, syncCategoriesToMaster, isEncryptionReady, findRecordByInputString } from "@/lib/encryptionFacade";
-import { useCustomFields } from "@/hooks/use-settings";
+import { useCustomFields, useSettings } from "@/hooks/use-settings";
 import { useToast } from "@/hooks/use-toast";
 import { validateBitcoinInput } from "@/lib/bitcoin";
 import { getRecordAttachments } from "@/lib/attachments";
@@ -43,6 +43,7 @@ export default function Dashboard() {
   const { tags } = useEncryptedTags();
   const { categories } = useEncryptedCategories();
   const { enabledCustomFields } = useCustomFields();
+  const { settings } = useSettings();
   const { toast } = useToast();
 
   // Load attachments when selected record changes
@@ -412,6 +413,7 @@ export default function Dashboard() {
           onChange={setFilter}
           availableTags={tags.map(t => t.name).filter(n => n && n !== '[encrypted]')}
           availableCategories={categories.map(c => c.name).filter(n => n && n !== '[encrypted]')}
+          tableColumns={settings?.tableColumns}
         />
       </div>
 
