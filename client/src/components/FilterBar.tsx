@@ -15,14 +15,28 @@ interface Filter {
   categories: string[];
 }
 
+interface TableColumns {
+  tags: boolean;
+  categories: boolean;
+  walletSoftware: boolean;
+  seedName: boolean;
+  privateKeyStatus: boolean;
+  hasAttachments: boolean;
+  source: boolean;
+}
+
 interface FilterBarProps {
   filter: Filter;
   onChange: (filter: Filter) => void;
   availableTags?: string[];
   availableCategories?: string[];
+  tableColumns?: TableColumns;
 }
 
-export function FilterBar({ filter, onChange, availableTags = [], availableCategories = [] }: FilterBarProps) {
+export function FilterBar({ filter, onChange, availableTags = [], availableCategories = [], tableColumns }: FilterBarProps) {
+  const showTagsFilter = tableColumns?.tags !== false;
+  const showCategoriesFilter = tableColumns?.categories !== false;
+  
   const hasActiveFilters = filter.type !== "all" || filter.tags.length > 0 || filter.categories.length > 0;
 
   const clearAllFilters = () => {
@@ -55,41 +69,45 @@ export function FilterBar({ filter, onChange, availableTags = [], availableCateg
           </SelectContent>
         </Select>
 
-        <Select
-          value=""
-          onValueChange={(value) => {
-            if (!filter.tags.includes(value)) {
-              onChange({ ...filter, tags: [...filter.tags, value] });
-            }
-          }}
-        >
-          <SelectTrigger className="w-[140px]" data-testid="select-tag-filter">
-            <SelectValue placeholder="Add tag filter" />
-          </SelectTrigger>
-          <SelectContent>
-            {availableTags.map((tag) => (
-              <SelectItem key={tag} value={tag}>{tag}</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        {showTagsFilter && (
+          <Select
+            value=""
+            onValueChange={(value) => {
+              if (!filter.tags.includes(value)) {
+                onChange({ ...filter, tags: [...filter.tags, value] });
+              }
+            }}
+          >
+            <SelectTrigger className="w-[140px]" data-testid="select-tag-filter">
+              <SelectValue placeholder="Add tag filter" />
+            </SelectTrigger>
+            <SelectContent>
+              {availableTags.map((tag) => (
+                <SelectItem key={tag} value={tag}>{tag}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
 
-        <Select
-          value=""
-          onValueChange={(value) => {
-            if (!filter.categories.includes(value)) {
-              onChange({ ...filter, categories: [...filter.categories, value] });
-            }
-          }}
-        >
-          <SelectTrigger className="w-[160px]" data-testid="select-category-filter">
-            <SelectValue placeholder="Add category filter" />
-          </SelectTrigger>
-          <SelectContent>
-            {availableCategories.map((category) => (
-              <SelectItem key={category} value={category}>{category}</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        {showCategoriesFilter && (
+          <Select
+            value=""
+            onValueChange={(value) => {
+              if (!filter.categories.includes(value)) {
+                onChange({ ...filter, categories: [...filter.categories, value] });
+              }
+            }}
+          >
+            <SelectTrigger className="w-[160px]" data-testid="select-category-filter">
+              <SelectValue placeholder="Add category filter" />
+            </SelectTrigger>
+            <SelectContent>
+              {availableCategories.map((category) => (
+                <SelectItem key={category} value={category}>{category}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
 
         {hasActiveFilters && (
           <Button variant="ghost" size="sm" onClick={clearAllFilters} data-testid="button-clear-filters">
