@@ -224,6 +224,15 @@ RecordOrigin: {
 
 ## Recent Changes
 
+**November 2024 - Value Updater Feature:**
+- Created new "Value Updater" page to replace "Tags & Categories" page
+- Supports bulk renaming of values across all records for: Tags, Categories, Wallet Software, Seed Name, Counterparty, Source
+- When a value is renamed, ALL records using that value are automatically updated
+- For Tags/Categories, the master list entry is also updated alongside record values
+- Shows usage count for each unique value across records
+- Supports adding new Tags/Categories and deleting unused entries
+- Removes the old "Tags & Categories" page and navigation link
+
 **November 2024 - Dynamic Column Visibility:**
 - Added Source field as toggleable column in records table
 - Custom fields now appear as toggleable columns in the column selector

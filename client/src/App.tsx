@@ -11,7 +11,7 @@ import { LoginScreen } from "@/components/LoginScreen";
 import { Button } from "@/components/ui/button";
 import { LogOut } from "lucide-react";
 import Dashboard from "@/pages/Dashboard";
-import TagsPage from "@/pages/TagsPage";
+import ValueUpdaterPage from "@/pages/ValueUpdaterPage";
 import BulkImport from "@/pages/BulkImport";
 import QRScanner from "@/pages/QRScanner";
 import ExportPage from "@/pages/ExportPage";
@@ -22,7 +22,7 @@ function Router() {
   return (
     <Switch>
       <Route path="/" component={Dashboard} />
-      <Route path="/tags" component={TagsPage} />
+      <Route path="/value-updater" component={ValueUpdaterPage} />
       <Route path="/import" component={BulkImport} />
       <Route path="/scanner" component={QRScanner} />
       <Route path="/export" component={ExportPage} />

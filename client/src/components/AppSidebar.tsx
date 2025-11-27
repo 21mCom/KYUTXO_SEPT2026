@@ -1,4 +1,4 @@
-import { Database, FileText, Settings, Tags, Upload, Download, QrCode, Key } from "lucide-react";
+import { Database, FileText, Settings, Upload, Download, QrCode, Key, RefreshCw } from "lucide-react";
 import { SiBitcoin } from "react-icons/si";
 import {
   Sidebar,
@@ -21,9 +21,9 @@ const menuItems = [
     icon: Database,
   },
   {
-    title: "Tags & Categories",
-    url: "/tags",
-    icon: Tags,
+    title: "Value Updater",
+    url: "/value-updater",
+    icon: RefreshCw,
   },
   {
     title: "Bulk Import",
