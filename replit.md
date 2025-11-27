@@ -226,12 +226,18 @@ RecordOrigin: {
 
 **November 2024 - Value Updater Feature:**
 - Created new "Value Updater" page to replace "Tags & Categories" page
-- Supports bulk renaming of values across all records for: Tags, Categories, Wallet Software, Seed Name, Counterparty, Source
+- Supports bulk renaming of values across all records for: Tags, Categories, Wallet Software, Seed Name, Counterparty
 - When a value is renamed, ALL records using that value are automatically updated
 - For Tags/Categories, the master list entry is also updated alongside record values
 - Shows usage count for each unique value across records
 - Supports adding new Tags/Categories and deleting unused entries
 - Removes the old "Tags & Categories" page and navigation link
+
+**November 2024 - UI/UX Improvements:**
+- Renamed "Bulk Importer" to "Address Importer" in sidebar navigation
+- Reordered sidebar: Records, Address Importer, QR Scanner, Value Updater, Export Data, Settings
+- Added QR code generation feature in record detail panel for addresses and transaction IDs
+- Clicking the QR icon shows a dialog with the scannable QR code
 
 **November 2024 - Dynamic Column Visibility:**
 - Added Source field as toggleable column in records table

@@ -1,5 +1,5 @@
-import { Edit, Paperclip, Wallet as WalletIcon, User, Upload } from "lucide-react";
-import { useState } from "react";
+import { Edit, Paperclip, Wallet as WalletIcon, User, Upload, QrCode } from "lucide-react";
+import { useState, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
@@ -14,7 +14,14 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import type { Attachment } from "@/lib/database";
+import QRCode from "qrcode";
 
 interface RecordDetailPanelProps {
   open: boolean;
@@ -38,6 +45,23 @@ interface RecordDetailPanelProps {
 
 export function RecordDetailPanel({ open, onClose, onEdit, record, attachments = [], onAttachmentsChange }: RecordDetailPanelProps) {
   const [showUpload, setShowUpload] = useState(false);
+  const [qrDialogOpen, setQrDialogOpen] = useState(false);
+  const [qrCodeDataUrl, setQrCodeDataUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (qrDialogOpen && record?.inputString) {
+      QRCode.toDataURL(record.inputString, {
+        width: 256,
+        margin: 2,
+        color: {
+          dark: '#000000',
+          light: '#FFFFFF',
+        },
+      })
+        .then((url) => setQrCodeDataUrl(url))
+        .catch((err) => console.error('Error generating QR code:', err));
+    }
+  }, [qrDialogOpen, record?.inputString]);
 
   if (!record) return null;
 
@@ -46,7 +70,13 @@ export function RecordDetailPanel({ open, onClose, onEdit, record, attachments =
     onAttachmentsChange?.();
   };
 
+  const handleOpenQrDialog = () => {
+    setQrCodeDataUrl(null);
+    setQrDialogOpen(true);
+  };
+
   return (
+    <>
     <Sheet open={open} onOpenChange={onClose}>
       <SheetContent className="w-full sm:max-w-md overflow-hidden flex flex-col p-0">
         <SheetHeader className="p-6 pb-4 space-y-0">
@@ -66,9 +96,21 @@ export function RecordDetailPanel({ open, onClose, onEdit, record, attachments =
         <ScrollArea className="flex-1 px-6">
           <div className="space-y-6 pb-6">
             <div>
-              <h4 className="text-sm font-medium mb-2">
-                {record.type === "address" ? "Bitcoin Address" : "Transaction ID"}
-              </h4>
+              <div className="flex items-center justify-between mb-2">
+                <h4 className="text-sm font-medium">
+                  {record.type === "address" ? "Bitcoin Address" : record.type === "transaction" ? "Transaction ID" : "Identifier"}
+                </h4>
+                {(record.type === "address" || record.type === "transaction") && (
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    onClick={handleOpenQrDialog}
+                    data-testid="button-show-qr"
+                  >
+                    <QrCode className="h-4 w-4" />
+                  </Button>
+                )}
+              </div>
               <BitcoinAddressDisplay address={record.inputString} truncate={false} />
             </div>
 
@@ -185,5 +227,33 @@ export function RecordDetailPanel({ open, onClose, onEdit, record, attachments =
         </ScrollArea>
       </SheetContent>
     </Sheet>
+
+    <Dialog open={qrDialogOpen} onOpenChange={setQrDialogOpen}>
+      <DialogContent className="sm:max-w-[320px]">
+        <DialogHeader>
+          <DialogTitle className="text-center">
+            {record.type === "address" ? "Address QR Code" : "Transaction ID QR Code"}
+          </DialogTitle>
+        </DialogHeader>
+        <div className="flex flex-col items-center gap-4">
+          {qrCodeDataUrl ? (
+            <img
+              src={qrCodeDataUrl}
+              alt="QR Code"
+              className="w-64 h-64"
+              data-testid="img-qr-code"
+            />
+          ) : (
+            <div className="w-64 h-64 flex items-center justify-center bg-muted rounded">
+              <span className="text-muted-foreground">Generating...</span>
+            </div>
+          )}
+          <p className="text-xs text-muted-foreground text-center break-all px-4" data-testid="text-qr-value">
+            {record.inputString}
+          </p>
+        </div>
+      </DialogContent>
+    </Dialog>
+    </>
   );
 }

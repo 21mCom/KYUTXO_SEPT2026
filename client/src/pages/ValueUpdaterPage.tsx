@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from "react";
-import { Edit, Tag, FolderOpen, Wallet, Sprout, Users, FileText, Plus, Trash2, RefreshCw } from "lucide-react";
+import { Edit, Tag, FolderOpen, Wallet, Sprout, Users, Plus, Trash2, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -29,7 +29,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 
-type FieldType = 'tags' | 'categories' | 'walletSoftware' | 'seedName' | 'counterparty' | 'source';
+type FieldType = 'tags' | 'categories' | 'walletSoftware' | 'seedName' | 'counterparty';
 
 interface UniqueValue {
   value: string;
@@ -83,14 +83,6 @@ const FIELD_CONFIGS: FieldConfig[] = [
     label: 'Counterparty', 
     icon: Users, 
     description: 'Other parties in transactions',
-    isArray: false,
-    hasMasterList: false,
-  },
-  { 
-    key: 'source', 
-    label: 'Source', 
-    icon: FileText, 
-    description: 'Origin of the record',
     isArray: false,
     hasMasterList: false,
   },

@@ -21,12 +21,7 @@ const menuItems = [
     icon: Database,
   },
   {
-    title: "Value Updater",
-    url: "/value-updater",
-    icon: RefreshCw,
-  },
-  {
-    title: "Bulk Import",
+    title: "Address Importer",
     url: "/import",
     icon: Key,
   },
@@ -34,6 +29,11 @@ const menuItems = [
     title: "QR Scanner",
     url: "/scanner",
     icon: QrCode,
+  },
+  {
+    title: "Value Updater",
+    url: "/value-updater",
+    icon: RefreshCw,
   },
   {
     title: "Export Data",
