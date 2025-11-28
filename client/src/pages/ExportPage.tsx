@@ -430,7 +430,7 @@ They are stored separately in: ${attachmentsFolderPath}
     <div className="flex-1 overflow-auto p-6">
       <div className="max-w-2xl mx-auto space-y-6">
         <div>
-          <h1 className="text-3xl font-bold mb-2">Export Data</h1>
+          <h1 className="text-3xl font-bold mb-2">Backup</h1>
           <p className="text-muted-foreground">
             Download your Bitcoin records and metadata as a backup ZIP file
           </p>

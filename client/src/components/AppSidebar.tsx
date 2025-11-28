@@ -41,7 +41,7 @@ const menuItems = [
     icon: RefreshCw,
   },
   {
-    title: "Export Data",
+    title: "Backup",
     url: "/export",
     icon: Download,
   },
