@@ -1,6 +1,6 @@
 import type { PriceData } from './database';
 
-export type PriceDataSource = 'cryptodatadownload' | 'coingecko' | 'investing' | 'bitget' | 'unknown';
+export type PriceDataSource = 'investing' | 'unknown';
 
 function parseCSVLine(line: string): string[] {
   const result: string[] = [];
@@ -163,43 +163,6 @@ function detectFormat(lines: string[]): DetectedFormat | null {
   if (lines.length < 2) return null;
   
   const firstLine = lines[0].toLowerCase();
-  const secondLine = lines[1]?.toLowerCase() || '';
-  
-  // CryptoDataDownload format - typically has a note line first
-  // Example: "https://www.CryptoDataDownload.com"
-  // Then: "unix,date,symbol,open,high,low,close,Volume BTC,Volume USDT"
-  if (firstLine.includes('cryptodatadownload')) {
-    const headerLine = lines[1];
-    const cols = headerLine.split(',').map(c => c.toLowerCase().trim());
-    return {
-      source: 'cryptodatadownload',
-      hasHeader: true,
-      headerRows: 2,
-      delimiter: ',',
-      dateColumn: cols.indexOf('date'),
-      dateFormat: 'YYYY-MM-DD',
-      closeColumn: cols.indexOf('close'),
-      openColumn: cols.indexOf('open'),
-      highColumn: cols.indexOf('high'),
-      lowColumn: cols.indexOf('low'),
-      volumeColumn: cols.findIndex(c => c.includes('volume')),
-    };
-  }
-  
-  // CoinGecko format - "snapped_at,price,market_cap,total_volume"
-  if (firstLine.includes('snapped_at') || firstLine.includes('price,market_cap')) {
-    const cols = firstLine.split(',').map(c => c.toLowerCase().trim());
-    return {
-      source: 'coingecko',
-      hasHeader: true,
-      headerRows: 1,
-      delimiter: ',',
-      dateColumn: cols.indexOf('snapped_at'),
-      dateFormat: 'YYYY-MM-DD',
-      closeColumn: cols.indexOf('price'),
-      volumeColumn: cols.indexOf('total_volume'),
-    };
-  }
   
   // Investing.com format - "Date,Price,Open,High,Low,Vol.,Change %"
   // Date format is "Sep 17, 2024" (MMM DD, YYYY)
@@ -225,41 +188,6 @@ function detectFormat(lines: string[]): DetectedFormat | null {
         volumeColumn: cols.findIndex(c => c.includes('vol')),
       };
     }
-  }
-  
-  // Bitget format - exported from Excel, may have unix timestamps
-  // Also handle generic CSV with date/time and price/close columns
-  const cleanFirstLine = firstLine.replace(/"/g, '').toLowerCase();
-  if ((cleanFirstLine.includes('date') || cleanFirstLine.includes('time')) && 
-      (cleanFirstLine.includes('price') || cleanFirstLine.includes('close') || cleanFirstLine.includes('open'))) {
-    const cols = parseCSVLine(firstLine).map(c => c.toLowerCase().trim());
-    const dateCol = cols.findIndex(c => c.includes('date') || c.includes('time'));
-    
-    // Check the first data row to detect date format
-    let detectedDateFormat: DetectedFormat['dateFormat'] = 'YYYY-MM-DD';
-    if (lines[1]) {
-      const dataCols = parseCSVLine(lines[1]);
-      const dateVal = dataCols[dateCol >= 0 ? dateCol : 0]?.trim() || '';
-      if (dateVal.match(/^\d{10,13}$/) || dateVal.match(/^\d+\.?\d*[eE][+\-]?\d+$/)) {
-        detectedDateFormat = 'unix';
-      } else if (dateVal.match(/^[A-Za-z]+\s+\d{1,2},?\s+\d{4}/)) {
-        detectedDateFormat = 'MMM DD, YYYY';
-      }
-    }
-    
-    return {
-      source: 'bitget',
-      hasHeader: true,
-      headerRows: 1,
-      delimiter: ',',
-      dateColumn: dateCol >= 0 ? dateCol : 0,
-      dateFormat: detectedDateFormat,
-      closeColumn: cols.indexOf('price') !== -1 ? cols.indexOf('price') : cols.indexOf('close'),
-      openColumn: cols.indexOf('open'),
-      highColumn: cols.indexOf('high'),
-      lowColumn: cols.indexOf('low'),
-      volumeColumn: cols.findIndex(c => c.includes('volume') || c.includes('vol')),
-    };
   }
   
   // Generic CSV detection - try to auto-detect columns
@@ -437,37 +365,9 @@ export function parsePriceCSV(
 
 export function getSourceDisplayName(source: PriceDataSource): string {
   switch (source) {
-    case 'cryptodatadownload': return 'CryptoDataDownload';
-    case 'coingecko': return 'CoinGecko';
     case 'investing': return 'Investing.com';
-    case 'bitget': return 'Bitget';
     default: return 'Unknown';
   }
 }
 
-export const DATA_SOURCES = [
-  {
-    name: 'CryptoDataDownload',
-    url: 'https://www.cryptodatadownload.com/data/',
-    description: 'Free daily/hourly OHLCV data from 20+ exchanges. No registration required.',
-    format: 'CSV with header row',
-  },
-  {
-    name: 'CoinGecko',
-    url: 'https://www.coingecko.com/en/coins/bitcoin/historical_data',
-    description: 'Historical prices, market cap, and volume. Quick CSV export available.',
-    format: 'CSV with date, price, market_cap, volume',
-  },
-  {
-    name: 'Investing.com',
-    url: 'https://www.investing.com/crypto/bitcoin/historical-data',
-    description: 'Historical data back to 2010. Download as CSV from the page.',
-    format: 'CSV with Date, Price, Open, High, Low, Vol.',
-  },
-  {
-    name: 'Bitget',
-    url: 'https://www.bitget.com/price/bitcoin/historical-data',
-    description: 'Free historical data. Note: Exports as Excel - save as CSV first.',
-    format: 'Excel (convert to CSV)',
-  },
-];
+export const DATA_SOURCE_URL = 'https://www.investing.com/crypto/bitcoin/historical-data';

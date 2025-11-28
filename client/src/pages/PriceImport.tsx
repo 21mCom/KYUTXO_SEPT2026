@@ -23,7 +23,7 @@ import {
   TrendingUp,
   Database
 } from "lucide-react";
-import { parsePriceCSV, DATA_SOURCES, getSourceDisplayName, type ParseResult } from "@/lib/price-parser";
+import { parsePriceCSV, DATA_SOURCE_URL, getSourceDisplayName, type ParseResult } from "@/lib/price-parser";
 import { db, type PriceData } from "@/lib/database";
 
 export default function PriceImport() {
@@ -208,37 +208,34 @@ export default function PriceImport() {
 
         {step === 1 && (
           <div className="space-y-6">
-            {/* Data Sources Card */}
+            {/* Data Source Card */}
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <ExternalLink className="h-5 w-5" />
-                  Data Sources
+                  Download Price Data
                 </CardTitle>
                 <CardDescription>
-                  Download historical Bitcoin price data from any of these sources, then upload the CSV file below.
+                  Download historical Bitcoin price data from Investing.com, then upload the CSV file below.
                 </CardDescription>
               </CardHeader>
               <CardContent>
-                <div className="grid gap-4 sm:grid-cols-2">
-                  {DATA_SOURCES.map((source) => (
-                    <a
-                      key={source.name}
-                      href={source.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="block p-4 rounded-lg border hover-elevate transition-colors"
-                      data-testid={`link-source-${source.name.toLowerCase().replace(/[^a-z]/g, '')}`}
-                    >
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="font-medium">{source.name}</div>
-                        <ExternalLink className="h-4 w-4 text-muted-foreground flex-shrink-0" />
-                      </div>
-                      <p className="text-sm text-muted-foreground mt-1">{source.description}</p>
-                      <Badge variant="outline" className="mt-2 text-xs">{source.format}</Badge>
-                    </a>
-                  ))}
-                </div>
+                <a
+                  href={DATA_SOURCE_URL}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center justify-between p-4 rounded-lg border hover-elevate transition-colors"
+                  data-testid="link-source-investing"
+                >
+                  <div>
+                    <div className="font-medium">Investing.com</div>
+                    <p className="text-sm text-muted-foreground mt-1">
+                      Historical data back to 2010. Click "Download Data" on the page to get a CSV file.
+                    </p>
+                    <Badge variant="outline" className="mt-2 text-xs">CSV with Date, Price, Open, High, Low, Vol.</Badge>
+                  </div>
+                  <ExternalLink className="h-5 w-5 text-muted-foreground flex-shrink-0 ml-4" />
+                </a>
               </CardContent>
             </Card>
 
@@ -310,7 +307,7 @@ export default function PriceImport() {
                       {isDragActive ? 'Drop the file here' : 'Drop CSV file here or click to browse'}
                     </p>
                     <p className="text-sm text-muted-foreground mt-1">
-                      Supports CryptoDataDownload, CoinGecko, Investing.com, and more
+                      Supports Investing.com CSV format
                     </p>
                   </div>
                 ) : (
