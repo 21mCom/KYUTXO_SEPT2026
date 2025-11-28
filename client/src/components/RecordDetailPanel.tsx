@@ -37,7 +37,8 @@ interface RecordDetailPanelProps {
     categories: string[];
     seedName?: string;
     walletSoftware?: string;
-    counterparty?: string;
+    owner?: string;
+    walletName?: string;
   };
   attachments?: Attachment[];
   onAttachmentsChange?: () => void;
@@ -142,13 +143,23 @@ export function RecordDetailPanel({ open, onClose, onEdit, record, attachments =
               </div>
             )}
 
-            {record.counterparty && (
+            {record.owner && (
               <div>
                 <h4 className="text-sm font-medium mb-2 flex items-center gap-2">
                   <User className="h-4 w-4" />
-                  Counterparty
+                  Owner
                 </h4>
-                <p className="text-sm" data-testid="text-counterparty-detail">{record.counterparty}</p>
+                <p className="text-sm" data-testid="text-owner-detail">{record.owner}</p>
+              </div>
+            )}
+
+            {record.walletName && (
+              <div>
+                <h4 className="text-sm font-medium mb-2 flex items-center gap-2">
+                  <WalletIcon className="h-4 w-4" />
+                  Wallet Name
+                </h4>
+                <p className="text-sm" data-testid="text-walletname-detail">{record.walletName}</p>
               </div>
             )}
 

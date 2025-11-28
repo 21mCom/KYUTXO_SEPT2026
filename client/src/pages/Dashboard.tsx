@@ -169,8 +169,10 @@ export default function Dashboard() {
         categories: data.categories || [],
         seedName: data.seedName || "",
         walletSoftware: data.walletSoftware || "",
-        counterparty: data.counterparty || "",
+        owner: data.owner || "",
+        walletName: data.walletName || "",
         privateKeyStatus: data.privateKeyStatus || "",
+        source: data.source || 'manual',
         customFields: data.customFields,
       };
 
@@ -292,8 +294,10 @@ export default function Dashboard() {
         categories: data.categories || [],
         seedName: data.seedName || "",
         walletSoftware: data.walletSoftware || "",
-        counterparty: data.counterparty || "",
+        owner: data.owner || "",
+        walletName: data.walletName || "",
         privateKeyStatus: data.privateKeyStatus || "",
+        source: data.source || 'manual',
         customFields: data.customFields,
       });
 

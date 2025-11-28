@@ -29,7 +29,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 
-type FieldType = 'tags' | 'categories' | 'walletSoftware' | 'seedName' | 'counterparty';
+type FieldType = 'tags' | 'categories' | 'walletSoftware' | 'seedName' | 'owner' | 'walletName';
 
 interface UniqueValue {
   value: string;
@@ -79,10 +79,18 @@ const FIELD_CONFIGS: FieldConfig[] = [
     hasMasterList: false,
   },
   { 
-    key: 'counterparty', 
-    label: 'Counterparty', 
+    key: 'owner', 
+    label: 'Owner', 
     icon: Users, 
-    description: 'Other parties in transactions',
+    description: 'Who owns/controls this address',
+    isArray: false,
+    hasMasterList: false,
+  },
+  { 
+    key: 'walletName', 
+    label: 'Wallet Name', 
+    icon: Wallet, 
+    description: 'Specific wallet purpose or name',
     isArray: false,
     hasMasterList: false,
   },

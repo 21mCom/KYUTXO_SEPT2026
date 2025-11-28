@@ -420,7 +420,8 @@ export function mergeRecordWithOrigins(
     if (!merged.seedName && origin.seedName) merged.seedName = origin.seedName;
     if (!merged.walletSoftware && origin.walletSoftware) merged.walletSoftware = origin.walletSoftware;
     if (!merged.privateKeyStatus && origin.privateKeyStatus) merged.privateKeyStatus = origin.privateKeyStatus;
-    if (!merged.counterparty && origin.counterparty) merged.counterparty = origin.counterparty;
+    if (!merged.owner && origin.owner) merged.owner = origin.owner;
+    if (!merged.walletName && origin.walletName) merged.walletName = origin.walletName;
     if (!merged.source && origin.source) merged.source = origin.source;
     if (!merged.xpub && origin.xpub) merged.xpub = origin.xpub;
     if (!merged.derivationPath && origin.derivationPath) merged.derivationPath = origin.derivationPath;

@@ -8,7 +8,33 @@ KYBTC is a secure, offline-first encrypted desktop application designed for mana
 
 Preferred communication style: Simple, everyday language.
 
+## Project Phases
+
+### Phase 1 (Current): Metadata Collection
+- Manual entry of addresses/transactions with metadata
+- Wallet import from various software (Trezor, Sparrow, Mycelium, etc.)
+- xPub derivation for bulk address import
+- Focus on addresses, transaction IDs, and labels (not amounts/times)
+
+### Phase 2 (Future): Blockchain Data Import
+- Import verified transaction data from user's Bitcoin node
+- Transaction amounts, times, fees, confirmations
+- UTXO tracking and balance calculation
+
+### Phase 3 (Future): Provenance & Reporting
+- Flow-of-funds tracking across addresses
+- Entity relationship mapping
+- Tax and compliance reporting
+
 ## System Architecture
+
+### Data Model - Ownership Fields
+
+Records use two fields to track ownership:
+- **owner**: Who owns/controls the address (e.g., "Personal", "Spouse", "Acme Corp", "Unknown")
+- **walletName**: Specific wallet purpose within an owner (e.g., "College Fund", "Trading", "KYC")
+
+This allows tracking multiple wallets per owner while maintaining clear ownership hierarchy.
 
 ### Security Architecture
 
@@ -36,7 +62,12 @@ This system ensures "one record per unique `inputString`" by detecting duplicate
 
 ### Wallet Import System
 
-A modular wallet import system (`client/src/lib/wallet-import/`) supports importing transaction history from various wallets like Trezor Suite, Sparrow, and Mycelium (CSV and JSON exports). It features auto-detection of file format, parsing of transaction details, multi-step wizard UI, and intelligent duplicate detection with merging capabilities.
+A modular wallet import system (`client/src/lib/wallet-import/`) supports importing transaction history from various wallets like Trezor Suite, Sparrow, and Mycelium (CSV and JSON exports). Features:
+- Auto-detection of file format
+- Extracts addresses, transaction IDs, and labels only (Phase 1 focus)
+- Input addresses get owner/walletName from import settings
+- Output addresses default to owner="Unknown" (for later identification)
+- Intelligent duplicate detection with merging capabilities
 
 ## External Dependencies
 

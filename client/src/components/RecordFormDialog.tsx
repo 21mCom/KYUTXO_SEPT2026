@@ -48,7 +48,8 @@ interface ExistingRecord {
   categories: string[];
   seedName?: string;
   walletSoftware?: string;
-  counterparty?: string;
+  owner?: string;
+  walletName?: string;
   privateKeyStatus?: string;
   customFields?: { [slug: string]: string };
 }
@@ -98,7 +99,8 @@ export function RecordFormDialog({
     categories: [] as string[],
     seedName: "",
     walletSoftware: "",
-    counterparty: "",
+    owner: "",
+    walletName: "",
     privateKeyStatus: "",
     customFields: {} as { [slug: string]: string },
   });
@@ -106,7 +108,8 @@ export function RecordFormDialog({
   const [formData, setFormData] = useState(initialData || getDefaultFormData());
   const [tagInput, setTagInput] = useState("");
   const [categoryInput, setCategoryInput] = useState("");
-  const [counterpartyInput, setCounterpartyInput] = useState("");
+  const [ownerInput, setOwnerInput] = useState("");
+  const [walletNameInput, setWalletNameInput] = useState("");
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [seedOpen, setSeedOpen] = useState(false);
   const [walletOpen, setWalletOpen] = useState(false);
@@ -127,7 +130,8 @@ export function RecordFormDialog({
       setSelectedFiles([]);
       setTagInput(data.tags?.join(", ") || "");
       setCategoryInput(data.categories?.join(", ") || "");
-      setCounterpartyInput(data.counterparty || "");
+      setOwnerInput(data.owner || "");
+      setWalletNameInput(data.walletName || "");
       setNewSeedName("");
       setNewWalletSoftware("");
       setDuplicateRecord(undefined);
@@ -155,7 +159,8 @@ export function RecordFormDialog({
         });
         setTagInput(existing.tags?.join(", ") || "");
         setCategoryInput(existing.categories?.join(", ") || "");
-        setCounterpartyInput(existing.counterparty || "");
+        setOwnerInput(existing.owner || "");
+        setWalletNameInput(existing.walletName || "");
       }
     } catch (error) {
       console.error("Error checking for duplicate:", error);
@@ -219,7 +224,9 @@ export function RecordFormDialog({
       ...formData,
       tags: parsedTags,
       categories: parsedCategories,
-      counterparty: counterpartyInput,
+      owner: ownerInput,
+      walletName: walletNameInput,
+      source: formData.source || 'manual',
       customFields: Object.keys(filteredCustomFields).length > 0 ? filteredCustomFields : undefined,
     }, selectedFiles);
   };
@@ -580,17 +587,31 @@ export function RecordFormDialog({
 
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label htmlFor="counterparty">Counterparty (comma-separated)</Label>
+              <Label htmlFor="owner">Owner</Label>
               <Input
-                id="counterparty"
-                value={counterpartyInput}
-                onChange={(e) => setCounterpartyInput(e.target.value)}
-                placeholder="Coinbase, Kraken"
+                id="owner"
+                value={ownerInput}
+                onChange={(e) => setOwnerInput(e.target.value)}
+                placeholder="e.g., Personal, Company ABC"
                 disabled={isSubmitting}
-                data-testid="input-counterparty"
+                data-testid="input-owner"
               />
             </div>
 
+            <div className="space-y-2">
+              <Label htmlFor="walletName">Wallet Name</Label>
+              <Input
+                id="walletName"
+                value={walletNameInput}
+                onChange={(e) => setWalletNameInput(e.target.value)}
+                placeholder="e.g., College Fund, Trading"
+                disabled={isSubmitting}
+                data-testid="input-wallet-name"
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label htmlFor="privateKeyStatus">Private Key Available</Label>
               <Select

@@ -228,7 +228,8 @@ export default function SettingsPage() {
           seedName: true,
           walletSoftware: true,
           privateKeyStatus: false,
-          counterparty: true,
+          owner: true,
+          walletName: true,
           source: true,
         },
         tableColumns: {
@@ -238,6 +239,8 @@ export default function SettingsPage() {
           seedName: false,
           privateKeyStatus: false,
           hasAttachments: true,
+          owner: false,
+          walletName: false,
           source: false,
         },
         customFieldColumns: {},
@@ -412,7 +415,8 @@ export default function SettingsPage() {
             seedName: recordData.seedName,
             walletSoftware: recordData.walletSoftware,
             privateKeyStatus: recordData.privateKeyStatus,
-            counterparty: recordData.counterparty,
+            owner: recordData.owner,
+            walletName: recordData.walletName,
             source: recordData.source,
             customFields: recordData.customFields,
             createdAt: recordData.createdAt || Date.now(),
@@ -686,12 +690,22 @@ export default function SettingsPage() {
               </div>
               
               <div className="flex items-center justify-between">
-                <Label>Counterparty</Label>
+                <Label>Owner</Label>
                 <Switch
-                  checked={fieldVisibility.counterparty}
-                  onCheckedChange={() => handleToggleBuiltInField('counterparty')}
+                  checked={fieldVisibility.owner}
+                  onCheckedChange={() => handleToggleBuiltInField('owner')}
                   disabled={isLoading}
-                  data-testid="switch-counterparty"
+                  data-testid="switch-owner"
+                />
+              </div>
+              
+              <div className="flex items-center justify-between">
+                <Label>Wallet Name</Label>
+                <Switch
+                  checked={fieldVisibility.walletName}
+                  onCheckedChange={() => handleToggleBuiltInField('walletName')}
+                  disabled={isLoading}
+                  data-testid="switch-wallet-name"
                 />
               </div>
               

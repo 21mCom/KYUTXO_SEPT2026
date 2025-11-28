@@ -89,7 +89,8 @@ export default function BulkImport() {
   const [privateKeyStatus, setPrivateKeyStatus] = useState<string>("");
   const [tagInput, setTagInput] = useState("");
   const [categoryInput, setCategoryInput] = useState("");
-  const [counterpartyInput, setCounterpartyInput] = useState("");
+  const [ownerInput, setOwnerInput] = useState("");
+  const [walletNameInput, setWalletNameInput] = useState("");
   const [seedOpen, setSeedOpen] = useState(false);
   const [walletOpen, setWalletOpen] = useState(false);
   const [newSeedName, setNewSeedName] = useState("");
@@ -409,7 +410,8 @@ export default function BulkImport() {
                   seedName: seedName || undefined,
                   walletSoftware: walletSoftware || undefined,
                   privateKeyStatus: privateKeyStatus || undefined,
-                  counterparty: counterpartyInput || undefined,
+                  owner: ownerInput || undefined,
+                  walletName: walletNameInput || undefined,
                   xpub: xpub,
                   derivationPath: addr.path,
                   chainType: addr.chainType,
@@ -432,8 +434,9 @@ export default function BulkImport() {
               seedName: seedName || undefined,
               walletSoftware: walletSoftware || undefined,
               privateKeyStatus: privateKeyStatus || undefined,
-              counterparty: counterpartyInput || undefined,
-              source: `${xpub.substring(0, 20)}... (${addr.path})`,
+              owner: ownerInput || undefined,
+              walletName: walletNameInput || undefined,
+              source: 'xpub-import',
               chainType: addr.chainType,
               derivationPath: addr.path,
               xpub: xpub,
@@ -1007,16 +1010,29 @@ export default function BulkImport() {
 
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
-                    <Label htmlFor="counterparty">Counterparty (comma-separated)</Label>
+                    <Label htmlFor="owner">Owner</Label>
                     <Input
-                      id="counterparty"
-                      value={counterpartyInput}
-                      onChange={(e) => setCounterpartyInput(e.target.value)}
-                      placeholder="Coinbase, Kraken"
-                      data-testid="input-counterparty"
+                      id="owner"
+                      value={ownerInput}
+                      onChange={(e) => setOwnerInput(e.target.value)}
+                      placeholder="e.g., Personal, Company ABC"
+                      data-testid="input-owner"
                     />
                   </div>
 
+                  <div className="space-y-2">
+                    <Label htmlFor="walletName">Wallet Name</Label>
+                    <Input
+                      id="walletName"
+                      value={walletNameInput}
+                      onChange={(e) => setWalletNameInput(e.target.value)}
+                      placeholder="e.g., College Fund, Trading"
+                      data-testid="input-wallet-name"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <Label htmlFor="private-key-status">Private Key Available</Label>
                     <Select value={privateKeyStatus} onValueChange={setPrivateKeyStatus}>
@@ -1272,13 +1288,14 @@ export default function BulkImport() {
                     )}
                   </div>
 
-                  {(seedName || walletSoftware || notes || privateKeyStatus || counterpartyInput || tagInput || categoryInput) && (
+                  {(seedName || walletSoftware || notes || privateKeyStatus || ownerInput || walletNameInput || tagInput || categoryInput) && (
                     <div className="p-3 bg-muted rounded-md">
                       <p className="text-sm font-medium mb-2">Applied Metadata:</p>
                       <div className="text-sm text-muted-foreground space-y-1">
                         {seedName && <p>Seed Name: {seedName}</p>}
-                        {walletSoftware && <p>Wallet: {walletSoftware}</p>}
-                        {counterpartyInput && <p>Counterparty: {counterpartyInput}</p>}
+                        {walletSoftware && <p>Wallet Software: {walletSoftware}</p>}
+                        {ownerInput && <p>Owner: {ownerInput}</p>}
+                        {walletNameInput && <p>Wallet Name: {walletNameInput}</p>}
                         {privateKeyStatus && <p>Private Key: {privateKeyStatus}</p>}
                         {notes && <p>Notes: {notes.substring(0, 50)}{notes.length > 50 ? "..." : ""}</p>}
                         {parseCommaSeparated(tagInput).length > 0 && (

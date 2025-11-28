@@ -8,6 +8,8 @@ const defaultTableColumns = {
   seedName: false,
   privateKeyStatus: false,
   hasAttachments: true,
+  owner: false,
+  walletName: false,
   source: false,
 };
 
@@ -15,7 +17,8 @@ const defaultFieldVisibility = {
   seedName: true,
   walletSoftware: true,
   privateKeyStatus: false,
-  counterparty: true,
+  owner: true,
+  walletName: true,
   source: true,
 };
 

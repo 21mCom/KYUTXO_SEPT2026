@@ -26,7 +26,11 @@ export interface Record {
   seedName?: string;
   walletSoftware?: string;
   privateKeyStatus?: string;
-  counterparty?: string;
+  // Owner identifies who controls/owns this address (person, entity, or unknown)
+  owner?: string;
+  // Wallet name identifies the specific wallet (e.g., "College Fund", "Trading", "KYC Wallet")
+  walletName?: string;
+  // Source indicates how this record was added: 'manual', 'wallet-import', or 'xpub-import'
   source?: string;
   // Chain type for XPUB-derived addresses (receive = external, change = internal)
   chainType?: ChainType;
@@ -92,7 +96,8 @@ export interface RecordOrigin {
   seedName?: string;
   walletSoftware?: string;
   privateKeyStatus?: string;
-  counterparty?: string;
+  owner?: string;
+  walletName?: string;
   source?: string;
   // For xpub-derived origins
   xpub?: string;
@@ -118,7 +123,8 @@ export interface Settings {
     seedName: boolean;
     walletSoftware: boolean;
     privateKeyStatus: boolean;
-    counterparty: boolean;
+    owner: boolean;
+    walletName: boolean;
     source: boolean;
   };
   tableColumns: {
@@ -128,6 +134,8 @@ export interface Settings {
     seedName: boolean;
     privateKeyStatus: boolean;
     hasAttachments: boolean;
+    owner: boolean;
+    walletName: boolean;
     source: boolean;
   };
   customFieldColumns: { [key: string]: boolean };
@@ -217,7 +225,8 @@ db.on('ready', async () => {
         seedName: true,
         walletSoftware: true,
         privateKeyStatus: false,
-        counterparty: true,
+        owner: true,
+        walletName: true,
         source: true,
       },
       tableColumns: {
@@ -227,6 +236,8 @@ db.on('ready', async () => {
         seedName: false,
         privateKeyStatus: false,
         hasAttachments: true,
+        owner: false,
+        walletName: false,
         source: false,
       },
       customFieldColumns: {},
@@ -236,8 +247,31 @@ db.on('ready', async () => {
   } else {
     // Migrations for existing settings
     const updates: Partial<Settings> = {};
+    let needsFieldVisibilityUpdate = false;
+    let needsTableColumnsUpdate = false;
+    
+    // Migrate counterparty to owner if needed
+    const fieldVis = settings.fieldVisibility as { counterparty?: boolean; owner?: boolean; walletName?: boolean; [key: string]: boolean | undefined };
+    if (fieldVis.counterparty !== undefined && fieldVis.owner === undefined) {
+      needsFieldVisibilityUpdate = true;
+    }
+    if (fieldVis.owner === undefined || fieldVis.walletName === undefined) {
+      needsFieldVisibilityUpdate = true;
+    }
+    
+    if (needsFieldVisibilityUpdate) {
+      updates.fieldVisibility = {
+        seedName: settings.fieldVisibility.seedName ?? true,
+        walletSoftware: settings.fieldVisibility.walletSoftware ?? true,
+        privateKeyStatus: settings.fieldVisibility.privateKeyStatus ?? false,
+        owner: fieldVis.owner ?? fieldVis.counterparty ?? true,
+        walletName: fieldVis.walletName ?? true,
+        source: settings.fieldVisibility.source ?? true,
+      };
+    }
     
     if (!settings.tableColumns) {
+      needsTableColumnsUpdate = true;
       updates.tableColumns = {
         tags: true,
         categories: false,
@@ -245,13 +279,21 @@ db.on('ready', async () => {
         seedName: false,
         privateKeyStatus: false,
         hasAttachments: true,
+        owner: false,
+        walletName: false,
         source: false,
       };
-    } else if (settings.tableColumns.source === undefined) {
-      updates.tableColumns = {
-        ...settings.tableColumns,
-        source: false,
-      };
+    } else {
+      const tableCols = settings.tableColumns as { owner?: boolean; walletName?: boolean; [key: string]: boolean | undefined };
+      if (tableCols.owner === undefined || tableCols.walletName === undefined) {
+        needsTableColumnsUpdate = true;
+        updates.tableColumns = {
+          ...settings.tableColumns,
+          owner: tableCols.owner ?? false,
+          walletName: tableCols.walletName ?? false,
+          source: settings.tableColumns.source ?? false,
+        };
+      }
     }
     
     if (!settings.customFieldColumns) {
