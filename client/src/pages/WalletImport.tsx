@@ -199,15 +199,6 @@ export default function WalletImport() {
       }
       setCurrentStep('setup');
     } else if (currentStep === 'setup') {
-      if (!sourceName.trim()) {
-        toast({
-          title: 'Source name required',
-          description: 'Please enter a source name for these records',
-          variant: 'destructive',
-        });
-        return;
-      }
-      
       setIsAnalyzing(true);
       try {
         const parseResult = parseFile(fileContent, selectedWalletType, selectedFileFormat);
@@ -415,7 +406,6 @@ export default function WalletImport() {
                   value={selectedWalletType}
                   onValueChange={(value) => {
                     setSelectedWalletType(value as WalletType);
-                    setSourceName(getWalletName(value as WalletType));
                   }}
                 >
                   <SelectTrigger id="wallet-type" data-testid="select-wallet-type">
@@ -760,7 +750,7 @@ export default function WalletImport() {
       case 'upload':
         return fileContent && selectedWalletType !== 'unknown';
       case 'setup':
-        return sourceName.trim().length > 0;
+        return true;
       case 'preview':
         return duplicateInfos.length > 0;
       default:

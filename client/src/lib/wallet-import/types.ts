@@ -38,6 +38,8 @@ export interface ParsedRecord {
 
 export interface ImportOptions {
   sourceName: string;
+  owner?: string;
+  walletName?: string;
   defaultTags: string[];
   defaultCategories: string[];
   walletSoftware?: string;
