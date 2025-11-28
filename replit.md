@@ -69,6 +69,16 @@ A modular wallet import system (`client/src/lib/wallet-import/`) supports import
 - Output addresses default to owner="Unknown" (for later identification)
 - Intelligent duplicate detection with merging capabilities
 
+### Historical Price Import System
+
+The price import feature (`client/src/lib/price-parser.ts`, `client/src/pages/PriceImport.tsx`) allows importing historical Bitcoin price data for future reporting. Features:
+- Supports multiple data sources: CryptoDataDownload, CoinGecko, Investing.com, Bitget
+- Auto-detection of CSV format with intelligent parsing
+- OHLCV data storage (Open, High, Low, Close, Volume)
+- Upsert logic: updates existing dates, adds new ones
+- Stored in IndexedDB `priceData` table with compound index on [date+currency+asset]
+- Data is NOT encrypted (public market data, not sensitive)
+
 ## External Dependencies
 
 ### Third-Party Services

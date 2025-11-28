@@ -194,18 +194,38 @@ function detectFormat(lines: string[]): DetectedFormat | null {
   };
 }
 
+function isMetadataRow(line: string): boolean {
+  const lower = line.toLowerCase().trim();
+  return (
+    lower.startsWith('downloaddata') ||
+    lower.startsWith('https://') ||
+    lower.startsWith('http://') ||
+    lower.startsWith('note:') ||
+    lower.startsWith('source:') ||
+    lower.includes('cryptodatadownload') ||
+    lower.startsWith('#') ||
+    lower === '' ||
+    !line.includes(',')
+  );
+}
+
 export function parsePriceCSV(
   csvContent: string,
   asset: string = 'BTC',
   currency: string = 'USD'
 ): ParseResult {
-  const lines = csvContent.split(/\r?\n/).filter(line => line.trim());
+  const rawLines = csvContent.split(/\r?\n/);
+  
+  const lines = rawLines.filter(line => {
+    const trimmed = line.trim();
+    return trimmed && !isMetadataRow(trimmed);
+  });
   
   if (lines.length === 0) {
-    return { success: false, data: [], source: 'unknown', errors: ['Empty file'], skipped: 0 };
+    return { success: false, data: [], source: 'unknown', errors: ['Empty file or no valid data rows found'], skipped: 0 };
   }
   
-  const format = detectFormat(lines);
+  const format = detectFormat(rawLines.filter(l => l.trim()));
   if (!format) {
     return { success: false, data: [], source: 'unknown', errors: ['Could not detect file format'], skipped: 0 };
   }
@@ -214,9 +234,16 @@ export function parsePriceCSV(
   const errors: string[] = [];
   let skipped = 0;
   
-  for (let i = format.headerRows; i < lines.length; i++) {
-    const line = lines[i].trim();
+  const dataLines = rawLines.slice(format.headerRows);
+  
+  for (let i = 0; i < dataLines.length; i++) {
+    const line = dataLines[i].trim();
     if (!line) continue;
+    
+    if (isMetadataRow(line)) {
+      skipped++;
+      continue;
+    }
     
     const cols = line.split(format.delimiter);
     
@@ -228,14 +255,18 @@ export function parsePriceCSV(
     
     const date = parseDate(dateStr, format.dateFormat);
     if (!date) {
-      errors.push(`Line ${i + 1}: Invalid date format "${dateStr}"`);
+      if (errors.length < 5) {
+        errors.push(`Row ${i + format.headerRows + 1}: Invalid date format "${dateStr.substring(0, 30)}"`);
+      }
       skipped++;
       continue;
     }
     
     const close = parseNumber(cols[format.closeColumn]);
-    if (close === undefined) {
-      errors.push(`Line ${i + 1}: Invalid close price`);
+    if (close === undefined || close <= 0) {
+      if (errors.length < 5) {
+        errors.push(`Row ${i + format.headerRows + 1}: Invalid or missing close price`);
+      }
       skipped++;
       continue;
     }
@@ -264,14 +295,19 @@ export function parsePriceCSV(
     data.push(pricePoint);
   }
   
-  // Sort by date ascending
+  // Always sort by date ascending for consistent ordering
   data.sort((a, b) => a.date.localeCompare(b.date));
+  
+  // Add summary error if many rows were skipped
+  if (skipped > 10 && errors.length > 0) {
+    errors.push(`...and ${skipped - errors.length} more rows skipped`);
+  }
   
   return {
     success: data.length > 0,
     data,
     source: format.source,
-    errors: errors.slice(0, 10), // Limit to first 10 errors
+    errors: errors.slice(0, 10),
     skipped,
   };
 }

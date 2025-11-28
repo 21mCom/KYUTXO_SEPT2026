@@ -37,6 +37,23 @@ export default function PriceImport() {
   const [currency, setCurrency] = useState("USD");
   const [isImporting, setIsImporting] = useState(false);
   const [existingCount, setExistingCount] = useState<number | null>(null);
+  const [existingDateRange, setExistingDateRange] = useState<{ first: string; last: string } | null>(null);
+  
+  const loadExistingDataInfo = useCallback(async (targetAsset: string, targetCurrency: string) => {
+    const existing = await db.priceData
+      .where('asset').equals(targetAsset)
+      .and(p => p.currency === targetCurrency)
+      .toArray();
+    
+    setExistingCount(existing.length);
+    
+    if (existing.length > 0) {
+      const dates = existing.map(p => p.date).sort();
+      setExistingDateRange({ first: dates[0], last: dates[dates.length - 1] });
+    } else {
+      setExistingDateRange(null);
+    }
+  }, []);
   
   const onDrop = useCallback(async (acceptedFiles: File[]) => {
     if (acceptedFiles.length === 0) return;
@@ -48,14 +65,8 @@ export default function PriceImport() {
     const result = parsePriceCSV(content, asset, currency);
     setParseResult(result);
     
-    if (result.success) {
-      const existing = await db.priceData
-        .where('asset').equals(asset)
-        .and(p => p.currency === currency)
-        .count();
-      setExistingCount(existing);
-    }
-  }, [asset, currency]);
+    await loadExistingDataInfo(asset, currency);
+  }, [asset, currency, loadExistingDataInfo]);
   
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
@@ -68,6 +79,7 @@ export default function PriceImport() {
   
   const handleAssetChange = async (newAsset: string) => {
     setAsset(newAsset);
+    await loadExistingDataInfo(newAsset, currency);
     if (file) {
       const content = await file.text();
       const result = parsePriceCSV(content, newAsset, currency);
@@ -77,6 +89,7 @@ export default function PriceImport() {
   
   const handleCurrencyChange = async (newCurrency: string) => {
     setCurrency(newCurrency);
+    await loadExistingDataInfo(asset, newCurrency);
     if (file) {
       const content = await file.text();
       const result = parsePriceCSV(content, asset, newCurrency);
@@ -387,7 +400,15 @@ export default function PriceImport() {
                     Importing will update existing dates and add new ones.
                   </CardDescription>
                 </CardHeader>
-                <CardContent>
+                <CardContent className="space-y-4">
+                  {existingDateRange && (
+                    <div className="p-3 rounded-lg bg-muted/50 text-sm">
+                      <span className="text-muted-foreground">Current coverage: </span>
+                      <span className="font-medium">
+                        {formatDate(existingDateRange.first)} to {formatDate(existingDateRange.last)}
+                      </span>
+                    </div>
+                  )}
                   <Button 
                     variant="destructive" 
                     onClick={handleDeleteAllPriceData}
@@ -402,7 +423,7 @@ export default function PriceImport() {
           </div>
         )}
 
-        {step === 2 && parseResult && (
+        {step === 2 && parseResult?.success && (
           <div className="space-y-6">
             <Card>
               <CardHeader>
@@ -415,6 +436,17 @@ export default function PriceImport() {
                 </CardDescription>
               </CardHeader>
               <CardContent>
+                {existingDateRange && existingCount && existingCount > 0 && (
+                  <Alert className="mb-6">
+                    <Database className="h-4 w-4" />
+                    <AlertTitle>Existing Data</AlertTitle>
+                    <AlertDescription>
+                      You have {existingCount.toLocaleString()} existing records covering{' '}
+                      {formatDate(existingDateRange.first)} to {formatDate(existingDateRange.last)}.
+                      Importing will update overlapping dates and add new ones.
+                    </AlertDescription>
+                  </Alert>
+                )}
                 <div className="grid gap-4 sm:grid-cols-3 mb-6">
                   <div className="p-4 rounded-lg bg-muted/50">
                     <p className="text-sm text-muted-foreground">Date Range</p>
