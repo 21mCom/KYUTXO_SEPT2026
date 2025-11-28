@@ -143,6 +143,21 @@ export interface Settings {
   defaultView: 'table' | 'grid';
 }
 
+// Historical price data for Bitcoin and other cryptocurrencies
+export interface PriceData {
+  id?: number;
+  date: string;           // YYYY-MM-DD format
+  currency: string;       // "USD", "EUR", etc.
+  asset: string;          // "BTC", "ETH", etc.
+  open?: number;
+  high?: number;
+  low?: number;
+  close: number;          // Required - daily closing price
+  volume?: number;
+  source: string;         // "cryptodatadownload", "coingecko", "investing", etc.
+  importedAt: number;     // Timestamp of when this data was imported
+}
+
 export class KYBTCDatabase extends Dexie {
   records!: Table<Record>;
   attachments!: Table<Attachment>;
@@ -151,9 +166,22 @@ export class KYBTCDatabase extends Dexie {
   recordOrigins!: Table<RecordOrigin>;
   customFields!: Table<CustomField>;
   settings!: Table<Settings>;
+  priceData!: Table<PriceData>;
 
   constructor() {
     super('KYBTCDatabase');
+    
+    // Version 6 adds priceData table for historical price data
+    this.version(6).stores({
+      records: '++id, type, inputString, label, *tags, *categories, createdAt, updatedAt, isEncrypted, chainType',
+      attachments: '++id, recordId, createdAt, isEncrypted',
+      tags: '++id, name, createdAt, isEncrypted',
+      categories: '++id, name, createdAt, isEncrypted',
+      recordOrigins: '++id, recordId, originType, createdAt, isEncrypted',
+      customFields: '++id, slug, enabled, createdAt',
+      settings: 'id',
+      priceData: '++id, [date+currency+asset], date, asset, currency, source, importedAt'
+    });
     
     // Version 5 adds customFields table for user-defined fields
     this.version(5).stores({
