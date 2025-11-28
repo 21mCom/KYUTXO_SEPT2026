@@ -130,7 +130,7 @@ export default function TransactionSync() {
           </Button>
           <div>
             <h1 className="text-2xl font-bold" data-testid="text-page-title">Transaction Sync</h1>
-            <p className="text-muted-foreground">Fetch blockchain data for your tracked addresses</p>
+            <p className="text-muted-foreground">Sync blockchain data for all your addresses (manual, imported, or derived)</p>
           </div>
         </div>
 
@@ -206,7 +206,7 @@ export default function TransactionSync() {
               Sync Transactions
             </CardTitle>
             <CardDescription>
-              Fetch transaction data for all tracked addresses from the blockchain
+              Fetch latest blockchain data for all addresses in your database (manual entries, wallet imports, xPub derivations)
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -363,7 +363,11 @@ export default function TransactionSync() {
           <CardContent className="space-y-3 text-sm">
             <div className="flex gap-3">
               <Badge variant="outline" className="shrink-0">1</Badge>
-              <p>Sync queries mempool.space for transaction history of each tracked address</p>
+              <p>All addresses in your database are synced: manually added, imported from wallets, or derived from xPubs</p>
+            </div>
+            <div className="flex gap-3">
+              <Badge variant="outline" className="shrink-0">2</Badge>
+              <p>Sync queries mempool.space for transaction history of each address</p>
             </div>
             <div className="flex gap-3">
               <Badge variant="outline" className="shrink-0">2</Badge>
