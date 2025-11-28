@@ -16,6 +16,7 @@ import BulkImport from "@/pages/BulkImport";
 import WalletImport from "@/pages/WalletImport";
 import PriceImport from "@/pages/PriceImport";
 import TransactionSync from "@/pages/TransactionSync";
+import Transactions from "@/pages/Transactions";
 import QRScanner from "@/pages/QRScanner";
 import ExportPage from "@/pages/ExportPage";
 import SettingsPage from "@/pages/SettingsPage";
@@ -30,6 +31,7 @@ function Router() {
       <Route path="/wallet-import" component={WalletImport} />
       <Route path="/price-import" component={PriceImport} />
       <Route path="/transaction-sync" component={TransactionSync} />
+      <Route path="/transactions" component={Transactions} />
       <Route path="/scanner" component={QRScanner} />
       <Route path="/export" component={ExportPage} />
       <Route path="/settings" component={SettingsPage} />
