@@ -71,9 +71,9 @@ export default function BulkImport() {
   const [customPathReceive, setCustomPathReceive] = useState("0");
   const [customPathChange, setCustomPathChange] = useState("1");
   const [receiveStartIndex, setReceiveStartIndex] = useState(0);
-  const [receiveEndIndex, setReceiveEndIndex] = useState(19);
+  const [receiveEndIndex, setReceiveEndIndex] = useState(99);
   const [changeStartIndex, setChangeStartIndex] = useState(0);
-  const [changeEndIndex, setChangeEndIndex] = useState(19);
+  const [changeEndIndex, setChangeEndIndex] = useState(99);
   
   const [dualChainResult, setDualChainResult] = useState<DualChainResult | null>(null);
   const [selectedReceiveAddresses, setSelectedReceiveAddresses] = useState<Set<number>>(new Set());
