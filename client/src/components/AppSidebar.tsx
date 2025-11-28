@@ -1,4 +1,4 @@
-import { Database, FileText, Settings, Upload, Download, QrCode, Key, RefreshCw } from "lucide-react";
+import { Database, FileText, Settings, Upload, Download, QrCode, Key, RefreshCw, Wallet } from "lucide-react";
 import { SiBitcoin } from "react-icons/si";
 import {
   Sidebar,
@@ -24,6 +24,11 @@ const menuItems = [
     title: "Address Importer",
     url: "/import",
     icon: Key,
+  },
+  {
+    title: "Wallet Import",
+    url: "/wallet-import",
+    icon: Wallet,
   },
   {
     title: "QR Scanner",
