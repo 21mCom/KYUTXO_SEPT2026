@@ -61,8 +61,21 @@ export async function createRecord(
     updatedAt: now,
   };
 
+  console.log(`[createRecord] Creating record: type=${data.type}, inputString=${data.inputString?.substring(0, 20)}...`);
+  
   const encrypted = await encryptRecord(record, key);
   const id = await db.records.add(encrypted);
+  
+  console.log(`[createRecord] Record created with id=${id}`);
+  
+  // Verify the record was saved
+  const saved = await db.records.get(id as number);
+  if (saved) {
+    console.log(`[createRecord] Verified: record ${id} exists in database, isEncrypted=${saved.isEncrypted}`);
+  } else {
+    console.error(`[createRecord] ERROR: record ${id} NOT FOUND after creation!`);
+  }
+  
   return id as number;
 }
 
