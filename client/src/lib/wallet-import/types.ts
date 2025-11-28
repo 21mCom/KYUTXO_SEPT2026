@@ -32,6 +32,7 @@ export interface ParsedRecord {
   date?: string;
   source?: string;
   direction?: TransactionDirection;
+  isInputAddress?: boolean;
   derivationPath?: string;
   originalData?: { [key: string]: unknown };
 }

@@ -60,8 +60,10 @@ export function mergeRecordData(
   const existingTags = existing.tags || [];
   const existingCategories = existing.categories || [];
   
-  const incomingTags = options.defaultTags || [];
-  const incomingCategories = options.defaultCategories || [];
+  // Only apply tags/categories to input addresses (addresses you control)
+  const isInput = incoming.isInputAddress === true || incoming.direction === 'incoming';
+  const incomingTags = isInput ? (options.defaultTags || []) : [];
+  const incomingCategories = isInput ? (options.defaultCategories || []) : [];
   
   const mergedTags = Array.from(new Set([...existingTags, ...incomingTags]));
   const mergedCategories = Array.from(new Set([...existingCategories, ...incomingCategories]));
@@ -105,6 +107,9 @@ export function createNewRecordData(
     walletSoftware?: string;
   }
 ): Omit<DBRecord, 'id' | 'createdAt' | 'updatedAt'> {
+  // Only apply tags/categories to input addresses (addresses you control)
+  const isInput = parsed.isInputAddress === true || parsed.direction === 'incoming';
+  
   return {
     type: parsed.type,
     inputString: parsed.inputString,
@@ -112,8 +117,8 @@ export function createNewRecordData(
     notes: parsed.notes,
     amount: parsed.amount,
     date: parsed.date,
-    tags: options.defaultTags || [],
-    categories: options.defaultCategories || [],
+    tags: isInput ? (options.defaultTags || []) : [],
+    categories: isInput ? (options.defaultCategories || []) : [],
     source: options.sourceName,
     walletSoftware: options.walletSoftware,
     derivationPath: parsed.derivationPath,
