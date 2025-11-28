@@ -4,6 +4,7 @@
 import { db, type Record, type BlockchainTransaction, type TransactionParticipant, type AddressSyncState } from './database';
 import { createProvider, parseTransaction, MINIMUM_CONFIRMATIONS, type ProviderType, type ParsedTransaction } from './blockchain-api';
 import { validateAddress } from './bitcoin';
+import { decryptRecords, isEncryptionReady } from './encryptionFacade';
 
 export interface SyncProgress {
   phase: 'idle' | 'fetching-height' | 'syncing-addresses' | 'processing' | 'complete' | 'error';
@@ -68,10 +69,20 @@ export class TransactionSyncService {
       const currentHeight = await this.provider.getBlockHeight();
       const minConfirmedHeight = currentHeight - MINIMUM_CONFIRMATIONS;
 
-      const addressRecords = await db.records
-        .where('type')
-        .equals('address')
-        .toArray();
+      // Get all records and decrypt them first (since type field is encrypted)
+      const allRawRecords = await db.records.toArray();
+      
+      let allRecords: Record[];
+      if (isEncryptionReady()) {
+        allRecords = await decryptRecords(allRawRecords);
+      } else {
+        allRecords = allRawRecords;
+      }
+      
+      // Filter to only address records
+      const addressRecords = allRecords.filter(r => r.type === 'address');
+      
+      console.log(`[TransactionSync] Found ${addressRecords.length} address records out of ${allRecords.length} total`);
 
       if (addressRecords.length === 0) {
         this.updateProgress({ phase: 'complete' });
@@ -92,8 +103,10 @@ export class TransactionSyncService {
 
       const skippedCount = addressRecords.length - validAddressRecords.length;
       if (skippedCount > 0) {
-        console.log(`Skipping ${skippedCount} records with non-standard address formats`);
+        console.log(`[TransactionSync] Skipping ${skippedCount} records with non-standard address formats`);
       }
+      
+      console.log(`[TransactionSync] Will sync ${validAddressRecords.length} valid addresses`);
 
       for (let i = 0; i < validAddressRecords.length; i++) {
         const record = validAddressRecords[i];
