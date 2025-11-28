@@ -3,6 +3,7 @@
 
 import { db, type Record, type BlockchainTransaction, type TransactionParticipant, type AddressSyncState } from './database';
 import { createProvider, parseTransaction, MINIMUM_CONFIRMATIONS, type ProviderType, type ParsedTransaction } from './blockchain-api';
+import { validateAddress } from './bitcoin';
 
 export interface SyncProgress {
   phase: 'idle' | 'fetching-height' | 'syncing-addresses' | 'processing' | 'complete' | 'error';
@@ -83,15 +84,26 @@ export class TransactionSyncService {
         addressesTotal: addressRecords.length,
       });
 
-      for (let i = 0; i < addressRecords.length; i++) {
-        const record = addressRecords[i];
+      // Filter to only valid Bitcoin addresses (skip P2PK scripts, raw public keys, etc.)
+      const validAddressRecords = addressRecords.filter(record => {
+        const validation = validateAddress(record.inputString);
+        return validation.isValid;
+      });
+
+      const skippedCount = addressRecords.length - validAddressRecords.length;
+      if (skippedCount > 0) {
+        console.log(`Skipping ${skippedCount} records with non-standard address formats`);
+      }
+
+      for (let i = 0; i < validAddressRecords.length; i++) {
+        const record = validAddressRecords[i];
         const address = record.inputString;
 
         this.updateProgress({
           phase: 'syncing-addresses',
           currentAddress: address,
           addressesProcessed: i,
-          addressesTotal: addressRecords.length,
+          addressesTotal: validAddressRecords.length,
         });
 
         try {
