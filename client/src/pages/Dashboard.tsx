@@ -6,7 +6,7 @@ import { FilterBar } from "@/components/FilterBar";
 import { RecordCard } from "@/components/RecordCard";
 import { RecordTable } from "@/components/RecordTable";
 import { RecordDetailPanel } from "@/components/RecordDetailPanel";
-import { RecordFormDialog } from "@/components/RecordFormDialog";
+import { RecordFormDialog, type TransactionAddresses } from "@/components/RecordFormDialog";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useRecords, createRecord, createRecordWithAttachments, updateRecord, deleteRecord, searchRecords, filterRecords } from "@/hooks/use-records";
 import { useEncryptedTags, useEncryptedCategories } from "@/hooks/use-encrypted-records";
@@ -127,7 +127,7 @@ export default function Dashboard() {
     }
   };
 
-  const handleCreateRecord = async (data: any, files: File[] = []) => {
+  const handleCreateRecord = async (data: any, files: File[] = [], transactionAddresses?: TransactionAddresses) => {
     try {
       let recordType = data.type;
 
@@ -230,10 +230,75 @@ export default function Dashboard() {
           }
         } else {
           await createRecord(recordData);
-          toast({
-            title: "Record Created",
-            description: `${data.label} has been saved successfully`,
-          });
+          
+          // If transaction addresses were fetched, create address records for inputs/outputs
+          if (transactionAddresses && recordType === 'transaction') {
+            let addressesCreated = 0;
+            const txidShort = transactionAddresses.txid.substring(0, 8);
+            const txDate = new Date(transactionAddresses.blockTime * 1000).toLocaleDateString();
+            
+            // Create input address records
+            for (const input of transactionAddresses.inputs) {
+              // Check if address already exists
+              let existingAddr: Record | undefined;
+              try {
+                existingAddr = await findRecordByInputString(input.address);
+              } catch (e) {
+                // ignore
+              }
+              
+              if (!existingAddr) {
+                await createRecord({
+                  type: 'address',
+                  inputString: input.address,
+                  label: `TX Input ${txDate}`,
+                  notes: `Input address from transaction ${txidShort}...`,
+                  tags: [],
+                  categories: [],
+                  owner: 'Pending Review',
+                  walletName: '',
+                  source: `tx-import:${transactionAddresses.txid}`,
+                });
+                addressesCreated++;
+              }
+            }
+            
+            // Create output address records
+            for (const output of transactionAddresses.outputs) {
+              // Check if address already exists
+              let existingAddr: Record | undefined;
+              try {
+                existingAddr = await findRecordByInputString(output.address);
+              } catch (e) {
+                // ignore
+              }
+              
+              if (!existingAddr) {
+                await createRecord({
+                  type: 'address',
+                  inputString: output.address,
+                  label: `TX Output ${txDate}`,
+                  notes: `Output address from transaction ${txidShort}...`,
+                  tags: [],
+                  categories: [],
+                  owner: 'Pending Review',
+                  walletName: '',
+                  source: `tx-import:${transactionAddresses.txid}`,
+                });
+                addressesCreated++;
+              }
+            }
+            
+            toast({
+              title: "Records Created",
+              description: `Transaction saved with ${addressesCreated} new address records (${transactionAddresses.inputs.length} inputs, ${transactionAddresses.outputs.length} outputs)`,
+            });
+          } else {
+            toast({
+              title: "Record Created",
+              description: `${data.label} has been saved successfully`,
+            });
+          }
         }
       }
 

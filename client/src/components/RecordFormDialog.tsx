@@ -13,8 +13,10 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
-import { Alert, AlertDescription } from "@/components/ui/alert";
-import { X, Upload, File as FileIcon, Loader2, Plus, Check, ChevronsUpDown, AlertTriangle } from "lucide-react";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { X, Upload, File as FileIcon, Loader2, Plus, Check, ChevronsUpDown, AlertTriangle, Download, ArrowDownLeft, ArrowUpRight, Info, ExternalLink } from "lucide-react";
 import {
   Select,
   SelectContent,
@@ -37,6 +39,7 @@ import {
 } from "@/components/ui/command";
 import { cn } from "@/lib/utils";
 import { formatFileSize } from "@/lib/attachments";
+import { createProvider, parseTransaction, type ParsedTransaction, MINIMUM_CONFIRMATIONS } from "@/lib/blockchain-api";
 
 interface ExistingRecord {
   id?: number;
@@ -61,10 +64,20 @@ interface CustomFieldDef {
   enabled: boolean;
 }
 
+export interface TransactionAddresses {
+  inputs: Array<{ address: string; amount: number }>;
+  outputs: Array<{ address: string; amount: number; vout: number }>;
+  txid: string;
+  blockHeight: number;
+  blockTime: number;
+  fee: number;
+  feeRate: number;
+}
+
 interface RecordFormDialogProps {
   open: boolean;
   onClose: () => void;
-  onSave: (data: any, files: File[]) => Promise<void>;
+  onSave: (data: any, files: File[], transactionAddresses?: TransactionAddresses) => Promise<void>;
   initialData?: any;
   isSubmitting?: boolean;
   uploadProgress?: { current: number; total: number } | null;
@@ -122,6 +135,11 @@ export function RecordFormDialog({
   const [isCheckingDuplicate, setIsCheckingDuplicate] = useState(false);
   const duplicateCheckTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
+  // Transaction lookup state
+  const [isFetchingTx, setIsFetchingTx] = useState(false);
+  const [txFetchError, setTxFetchError] = useState<string | null>(null);
+  const [fetchedTxData, setFetchedTxData] = useState<ParsedTransaction | null>(null);
+
   // Reset form data when dialog opens or initialData changes
   useEffect(() => {
     if (open) {
@@ -136,6 +154,8 @@ export function RecordFormDialog({
       setNewWalletSoftware("");
       setDuplicateRecord(undefined);
       setIsCheckingDuplicate(false);
+      setFetchedTxData(null);
+      setTxFetchError(null);
     }
   }, [open, initialData]);
 
@@ -172,6 +192,9 @@ export function RecordFormDialog({
   // Debounced duplicate check on inputString change
   const handleInputStringChange = useCallback((value: string) => {
     setFormData((prev: any) => ({ ...prev, inputString: value }));
+    // Clear fetched tx data when input changes
+    setFetchedTxData(null);
+    setTxFetchError(null);
     
     // Clear previous timeout
     if (duplicateCheckTimeoutRef.current) {
@@ -196,12 +219,79 @@ export function RecordFormDialog({
     };
   }, []);
 
+  // Fetch transaction data from blockchain
+  const handleFetchTransaction = async () => {
+    const txid = formData.inputString.trim();
+    if (!txid) return;
+
+    setIsFetchingTx(true);
+    setTxFetchError(null);
+    setFetchedTxData(null);
+
+    try {
+      const provider = createProvider('mempool');
+      const currentHeight = await provider.getBlockHeight();
+      const rawTx = await provider.getTransaction(txid);
+      
+      if (!rawTx) {
+        setTxFetchError("Transaction not found. Please check the transaction ID.");
+        return;
+      }
+
+      if (!rawTx.status.confirmed) {
+        setTxFetchError("Transaction is unconfirmed. Only confirmed transactions can be imported.");
+        return;
+      }
+
+      const confirmations = currentHeight - (rawTx.status.block_height || 0);
+      if (confirmations < MINIMUM_CONFIRMATIONS) {
+        setTxFetchError(`Transaction has only ${confirmations} confirmations. Minimum ${MINIMUM_CONFIRMATIONS} required.`);
+        return;
+      }
+
+      const parsed = parseTransaction(rawTx);
+      if (!parsed) {
+        setTxFetchError("Could not parse transaction data. The transaction may use non-standard scripts.");
+        return;
+      }
+
+      // Check if we found any addresses
+      if (parsed.inputs.length === 0 && parsed.outputs.length === 0) {
+        setTxFetchError("No standard addresses found in this transaction. It may use non-standard scripts (e.g., coinbase or P2PK).");
+        return;
+      }
+
+      setFetchedTxData(parsed);
+      
+      // Auto-fill label if empty
+      if (!formData.label) {
+        const date = new Date(parsed.blockTime * 1000);
+        const dateStr = date.toLocaleDateString();
+        setFormData((prev: any) => ({
+          ...prev,
+          label: `Transaction ${dateStr}`,
+        }));
+      }
+    } catch (error) {
+      setTxFetchError(error instanceof Error ? error.message : "Failed to fetch transaction");
+    } finally {
+      setIsFetchingTx(false);
+    }
+  };
+
   // Parse comma-separated values into array
   const parseCommaSeparated = (value: string): string[] => {
     return value
       .split(",")
       .map(s => s.trim())
       .filter(s => s.length > 0);
+  };
+
+  const formatSats = (sats: number) => {
+    if (sats >= 100000000) {
+      return `${(sats / 100000000).toFixed(8)} BTC`;
+    }
+    return `${sats.toLocaleString()} sats`;
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -220,6 +310,17 @@ export function RecordFormDialog({
       }
     }
     
+    // Prepare transaction addresses if we fetched tx data
+    const transactionAddresses: TransactionAddresses | undefined = fetchedTxData ? {
+      inputs: fetchedTxData.inputs,
+      outputs: fetchedTxData.outputs,
+      txid: fetchedTxData.txid,
+      blockHeight: fetchedTxData.blockHeight,
+      blockTime: fetchedTxData.blockTime,
+      fee: fetchedTxData.fee,
+      feeRate: fetchedTxData.feeRate,
+    } : undefined;
+    
     await onSave({
       ...formData,
       tags: parsedTags,
@@ -228,7 +329,7 @@ export function RecordFormDialog({
       walletName: walletNameInput,
       source: formData.source || 'manual',
       customFields: Object.keys(filteredCustomFields).length > 0 ? filteredCustomFields : undefined,
-    }, selectedFiles);
+    }, selectedFiles, transactionAddresses);
   };
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -281,10 +382,15 @@ export function RecordFormDialog({
   const getInputPlaceholder = () => {
     switch (formData.type) {
       case "address": return "bc1q...";
-      case "transaction": return "Transaction hash";
+      case "transaction": return "Transaction hash (64 hex characters)";
       case "other": return "Any coin address or identifier";
       default: return "";
     }
+  };
+
+  // Check if txid looks valid (64 hex characters)
+  const isValidTxidFormat = (txid: string) => {
+    return /^[a-fA-F0-9]{64}$/.test(txid.trim());
   };
 
   return (
@@ -302,7 +408,11 @@ export function RecordFormDialog({
               <Label htmlFor="type">Type</Label>
               <Select
                 value={formData.type}
-                onValueChange={(value) => setFormData({ ...formData, type: value })}
+                onValueChange={(value) => {
+                  setFormData({ ...formData, type: value });
+                  setFetchedTxData(null);
+                  setTxFetchError(null);
+                }}
                 disabled={isSubmitting}
               >
                 <SelectTrigger id="type" data-testid="select-type">
@@ -334,19 +444,39 @@ export function RecordFormDialog({
             <Label htmlFor="inputString">
               {getInputLabel()} *
             </Label>
-            <div className="relative">
-              <Input
-                id="inputString"
-                value={formData.inputString}
-                onChange={(e) => handleInputStringChange(e.target.value)}
-                placeholder={getInputPlaceholder()}
-                required
-                disabled={isSubmitting}
-                className="font-mono"
-                data-testid="input-address"
-              />
-              {isCheckingDuplicate && (
-                <Loader2 className="absolute right-3 top-1/2 transform -translate-y-1/2 h-4 w-4 animate-spin text-muted-foreground" />
+            <div className="flex gap-2">
+              <div className="relative flex-1">
+                <Input
+                  id="inputString"
+                  value={formData.inputString}
+                  onChange={(e) => handleInputStringChange(e.target.value)}
+                  placeholder={getInputPlaceholder()}
+                  required
+                  disabled={isSubmitting}
+                  className="font-mono"
+                  data-testid="input-address"
+                />
+                {isCheckingDuplicate && (
+                  <Loader2 className="absolute right-3 top-1/2 transform -translate-y-1/2 h-4 w-4 animate-spin text-muted-foreground" />
+                )}
+              </div>
+              {formData.type === "transaction" && !initialData && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={handleFetchTransaction}
+                  disabled={isSubmitting || isFetchingTx || !isValidTxidFormat(formData.inputString)}
+                  data-testid="button-fetch-tx"
+                >
+                  {isFetchingTx ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <>
+                      <Download className="h-4 w-4 mr-2" />
+                      Fetch Data
+                    </>
+                  )}
+                </Button>
               )}
             </div>
             
@@ -362,7 +492,103 @@ export function RecordFormDialog({
                 </AlertDescription>
               </Alert>
             )}
+
+            {txFetchError && (
+              <Alert variant="destructive" className="mt-2">
+                <AlertTriangle className="h-4 w-4" />
+                <AlertDescription>{txFetchError}</AlertDescription>
+              </Alert>
+            )}
           </div>
+
+          {/* Transaction Preview Section */}
+          {fetchedTxData && formData.type === "transaction" && (
+            <Card className="border-primary/20 bg-primary/5">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm flex items-center gap-2">
+                  <Check className="h-4 w-4 text-green-600" />
+                  Transaction Data Fetched
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <div className="grid grid-cols-3 gap-2 text-sm">
+                  <div>
+                    <p className="text-muted-foreground">Block</p>
+                    <p className="font-medium">{fetchedTxData.blockHeight.toLocaleString()}</p>
+                  </div>
+                  <div>
+                    <p className="text-muted-foreground">Date</p>
+                    <p className="font-medium">
+                      {new Date(fetchedTxData.blockTime * 1000).toLocaleDateString()}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-muted-foreground">Fee</p>
+                    <p className="font-medium">{formatSats(fetchedTxData.fee)}</p>
+                  </div>
+                </div>
+
+                <Alert>
+                  <Info className="h-4 w-4" />
+                  <AlertTitle className="text-sm">Address records will be created</AlertTitle>
+                  <AlertDescription className="text-xs mt-1">
+                    When you save, {fetchedTxData.inputs.length} input and {fetchedTxData.outputs.length} output address records will be created automatically with "Pending Review" owner.
+                  </AlertDescription>
+                </Alert>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <div className="flex items-center gap-1 text-sm font-medium mb-2">
+                      <ArrowDownLeft className="h-4 w-4 text-red-500" />
+                      Inputs ({fetchedTxData.inputs.length})
+                    </div>
+                    <ScrollArea className="h-32 border rounded-md p-2">
+                      <div className="space-y-1">
+                        {fetchedTxData.inputs.map((input, i) => (
+                          <div key={i} className="text-xs">
+                            <p className="font-mono truncate" title={input.address}>
+                              {input.address.substring(0, 8)}...{input.address.substring(input.address.length - 6)}
+                            </p>
+                            <p className="text-muted-foreground">{formatSats(input.amount)}</p>
+                          </div>
+                        ))}
+                      </div>
+                    </ScrollArea>
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-1 text-sm font-medium mb-2">
+                      <ArrowUpRight className="h-4 w-4 text-green-500" />
+                      Outputs ({fetchedTxData.outputs.length})
+                    </div>
+                    <ScrollArea className="h-32 border rounded-md p-2">
+                      <div className="space-y-1">
+                        {fetchedTxData.outputs.map((output, i) => (
+                          <div key={i} className="text-xs">
+                            <p className="font-mono truncate" title={output.address}>
+                              {output.address.substring(0, 8)}...{output.address.substring(output.address.length - 6)}
+                            </p>
+                            <p className="text-muted-foreground">{formatSats(output.amount)}</p>
+                          </div>
+                        ))}
+                      </div>
+                    </ScrollArea>
+                  </div>
+                </div>
+
+                <div className="flex justify-end">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => window.open(`https://mempool.space/tx/${fetchedTxData.txid}`, '_blank')}
+                  >
+                    <ExternalLink className="h-3 w-3 mr-1" />
+                    View on mempool.space
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          )}
 
           <div className="space-y-2">
             <Label htmlFor="notes">Notes</Label>
@@ -739,7 +965,11 @@ export function RecordFormDialog({
                   {uploadProgress ? "Uploading..." : "Saving..."}
                 </>
               ) : (
-                initialData ? "Save Changes" : "Create Record"
+                <>
+                  {initialData ? "Save Changes" : (
+                    fetchedTxData ? `Create ${1 + fetchedTxData.inputs.length + fetchedTxData.outputs.length} Records` : "Create Record"
+                  )}
+                </>
               )}
             </Button>
           </DialogFooter>
