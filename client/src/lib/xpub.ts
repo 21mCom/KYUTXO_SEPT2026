@@ -104,19 +104,30 @@ export function analyzeXpub(extendedKey: string): XpubInfo {
   
   const isAccountLevel = depth === 3;
   const isChainLevel = depth === 4;
-  const isRootOrMaster = depth < 3;
+  // Depth 0-2: Could be Electrum native wallet format (depth 0 or 1) or partial derivation
+  const isElectrumStyle = depth === 0 || depth === 1;
+  const isPartialDerivation = depth === 2;
   
   let needsAdvancedMode = false;
   let reason: string | undefined;
   let suggestedPath = "0";
   
-  if (isRootOrMaster) {
+  if (isElectrumStyle) {
+    // Electrum native wallets export zpub at depth 0 or 1
+    // They use simple derivation: 0/<n> for receive, 1/<n> for change
+    needsAdvancedMode = false;
+    suggestedPath = "0";
+    reason = 'Detected Electrum-style key (depth ' + depth + '). Using standard Electrum paths: 0/<n> for receive, 1/<n> for change.';
+  } else if (isPartialDerivation) {
+    // Depth 2 is unusual - might need user input
     needsAdvancedMode = true;
-    reason = 'XPUB appears to be at root/master level (depth ' + depth + '). Please specify a derivation path.';
+    reason = 'Key is at depth 2 (unusual). You may need to specify derivation paths in advanced mode.';
     suggestedPath = "0/0";
   } else if (isChainLevel) {
+    // Depth 4: Already at chain level (e.g., m/84'/0'/0'/0)
     suggestedPath = "";
   } else if (isAccountLevel) {
+    // Depth 3: Standard account level (e.g., m/84'/0'/0')
     suggestedPath = "0";
   }
   
@@ -166,11 +177,18 @@ export async function deriveAddressesForChain(
     let pathPrefix: string;
     
     if (depth === 4) {
+      // Already at chain level - just derive indices
       pathPrefix = `chain-level/${chain}`;
     } else if (depth === 3) {
+      // Standard account level - derive chain first, then indices
       node = node.derive(chain);
       pathPrefix = `${prefixInfo.accountPath}/${chain}`;
+    } else if (depth === 0 || depth === 1) {
+      // Electrum-style: depth 0 or 1, use simple 0/<n> and 1/<n> derivation
+      node = node.derive(chain);
+      pathPrefix = `${chain}`;
     } else {
+      // Depth 2 or other unusual depths
       throw new Error(`XPUB at depth ${depth} requires Advanced Mode with a custom derivation path.`);
     }
     
