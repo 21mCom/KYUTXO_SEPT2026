@@ -10,7 +10,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { MoreVertical, ArrowUpDown, Settings2, Paperclip, Key } from "lucide-react";
+import { MoreVertical, ArrowUpDown, Settings2, Paperclip, Key, RefreshCw } from "lucide-react";
 import { BitcoinAddressDisplay } from "./BitcoinAddressDisplay";
 import { RecordTypeBadge } from "./RecordTypeBadge";
 import {
@@ -43,6 +43,8 @@ interface Record {
   privateKeyStatus?: string;
   source?: string;
   customFields?: { [key: string]: string };
+  syncDepth?: number;
+  maxSyncedDepth?: number;
 }
 
 interface RecordTableProps {
@@ -50,9 +52,10 @@ interface RecordTableProps {
   onEdit?: (id: string) => void;
   onDelete?: (id: string) => void;
   onRowClick?: (id: string) => void;
+  onSyncDeeper?: (id: string) => void;
 }
 
-export function RecordTable({ records, onEdit, onDelete, onRowClick }: RecordTableProps) {
+export function RecordTable({ records, onEdit, onDelete, onRowClick, onSyncDeeper }: RecordTableProps) {
   const { tableColumns, customFieldColumns } = useSettings();
   const { enabledCustomFields } = useCustomFields();
   const [attachmentCounts, setAttachmentCounts] = useState<Map<string, number>>(new Map());
@@ -311,21 +314,41 @@ export function RecordTable({ records, onEdit, onDelete, onRowClick }: RecordTab
                   );
                 })}
                 <TableCell>
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
-                      <Button size="icon" variant="ghost" data-testid={`button-menu-${record.id}`}>
-                        <MoreVertical className="h-4 w-4" />
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end">
-                      <DropdownMenuItem onClick={(e) => { e.stopPropagation(); onEdit?.(record.id); }} data-testid="button-edit">
-                        Edit
-                      </DropdownMenuItem>
-                      <DropdownMenuItem onClick={(e) => { e.stopPropagation(); onDelete?.(record.id); }} className="text-destructive" data-testid="button-delete">
-                        Delete
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
+                  <div className="flex items-center gap-2 justify-end">
+                    {record.type === 'address' && record.syncDepth !== undefined && (
+                      <Badge 
+                        variant={record.syncDepth === 0 ? "default" : "secondary"} 
+                        className="text-xs"
+                        title={`Sync depth: ${record.syncDepth}${record.maxSyncedDepth !== undefined ? `, synced to: ${record.maxSyncedDepth}` : ''}`}
+                      >
+                        D{record.syncDepth}
+                      </Badge>
+                    )}
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
+                        <Button size="icon" variant="ghost" data-testid={`button-menu-${record.id}`}>
+                          <MoreVertical className="h-4 w-4" />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        <DropdownMenuItem onClick={(e) => { e.stopPropagation(); onEdit?.(record.id); }} data-testid="button-edit">
+                          Edit
+                        </DropdownMenuItem>
+                        {record.type === 'address' && onSyncDeeper && (
+                          <DropdownMenuItem 
+                            onClick={(e) => { e.stopPropagation(); onSyncDeeper(record.id); }} 
+                            data-testid={`button-sync-deeper-${record.id}`}
+                          >
+                            <RefreshCw className="h-4 w-4 mr-2" />
+                            Sync Deeper
+                          </DropdownMenuItem>
+                        )}
+                        <DropdownMenuItem onClick={(e) => { e.stopPropagation(); onDelete?.(record.id); }} className="text-destructive" data-testid="button-delete">
+                          Delete
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </div>
                 </TableCell>
               </TableRow>
             ))

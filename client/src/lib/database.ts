@@ -42,6 +42,15 @@ export interface Record {
   vault?: VaultMetadata;
   // User-defined custom field values (slug -> value)
   customFields?: { [slug: string]: string };
+  // Sync depth: 0 = manually entered/imported, 1+ = discovered via blockchain sync
+  // Addresses at depth N were found in transactions of depth N-1 addresses
+  syncDepth?: number;
+  // Maximum depth this record has been synced to (for incremental deeper syncs)
+  maxSyncedDepth?: number;
+  // Transaction ID where this address was first discovered (for auto-imported addresses)
+  discoveredInTxid?: string;
+  // Record ID of the address that led to discovering this one
+  discoveredFromRecordId?: number;
   createdAt: number;
   updatedAt: number;
   // Encrypted payload - contains the sensitive data when encryption is enabled
@@ -207,6 +216,75 @@ export class KYBTCDatabase extends Dexie {
 
   constructor() {
     super('KYBTCDatabase');
+    
+    // Version 9 fixes maxSyncedDepth initialization
+    // Version 8 incorrectly set maxSyncedDepth=0 for all records, but it should be -1
+    // (meaning "not yet synced") so that depth 0 sync will properly include them
+    this.version(9).stores({
+      records: '++id, type, inputString, label, owner, *tags, *categories, createdAt, updatedAt, isEncrypted, chainType, syncDepth',
+      attachments: '++id, recordId, createdAt, isEncrypted',
+      tags: '++id, name, createdAt, isEncrypted',
+      categories: '++id, name, createdAt, isEncrypted',
+      recordOrigins: '++id, recordId, originType, createdAt, isEncrypted',
+      customFields: '++id, slug, enabled, createdAt',
+      settings: 'id',
+      priceData: '++id, [date+currency+asset], date, asset, currency, source, importedAt',
+      blockchainTransactions: '++id, &txid, blockHeight, blockTime, syncedAt',
+      transactionParticipants: '++id, txid, role, address, recordId',
+      addressSyncState: '++id, &address, recordId, lastSyncedAt'
+    }).upgrade(async (tx) => {
+      // Fix: Reset maxSyncedDepth to -1 for records that haven't actually been synced
+      // Only reset records that don't have corresponding addressSyncState entries
+      const syncedAddresses = new Set<string>();
+      
+      // First, get all addresses that have actually been synced
+      await tx.table('addressSyncState').each((state: any) => {
+        syncedAddresses.add(state.address);
+      });
+      
+      // Now modify records - only reset if the address isn't in our synced set
+      return tx.table('records').toCollection().modify((record: any) => {
+        if (record.type !== 'address') return;
+        
+        // If this address was actually synced (has addressSyncState entry), don't reset
+        if (record.inputString && syncedAddresses.has(record.inputString)) {
+          // Keep existing maxSyncedDepth for synced records
+          return;
+        }
+        
+        // For unsynced records with maxSyncedDepth = 0 or undefined, reset to -1
+        if (record.maxSyncedDepth === 0 || record.maxSyncedDepth === undefined) {
+          record.maxSyncedDepth = -1;
+        }
+      });
+    });
+    
+    // Version 8 adds syncDepth tracking for depth-limited blockchain sync
+    this.version(8).stores({
+      records: '++id, type, inputString, label, owner, *tags, *categories, createdAt, updatedAt, isEncrypted, chainType, syncDepth',
+      attachments: '++id, recordId, createdAt, isEncrypted',
+      tags: '++id, name, createdAt, isEncrypted',
+      categories: '++id, name, createdAt, isEncrypted',
+      recordOrigins: '++id, recordId, originType, createdAt, isEncrypted',
+      customFields: '++id, slug, enabled, createdAt',
+      settings: 'id',
+      priceData: '++id, [date+currency+asset], date, asset, currency, source, importedAt',
+      blockchainTransactions: '++id, &txid, blockHeight, blockTime, syncedAt',
+      transactionParticipants: '++id, txid, role, address, recordId',
+      addressSyncState: '++id, &address, recordId, lastSyncedAt'
+    }).upgrade(tx => {
+      // Migration: set syncDepth=0 for existing manually-entered addresses
+      // and syncDepth=1 for existing blockchain-sync discovered addresses
+      return tx.table('records').toCollection().modify(record => {
+        if (record.source === 'blockchain-sync') {
+          record.syncDepth = 1;
+          record.maxSyncedDepth = -1; // Not yet synced (fixed from 0)
+        } else {
+          record.syncDepth = 0; // Manual/imported = depth 0
+          record.maxSyncedDepth = -1; // Not yet synced (fixed from 0)
+        }
+      });
+    });
     
     // Version 7 adds blockchain transaction tables for Phase 2
     this.version(7).stores({

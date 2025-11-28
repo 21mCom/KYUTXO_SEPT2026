@@ -561,6 +561,66 @@ export default function Dashboard() {
     }
   };
 
+  const handleSyncDeeper = async (id: number) => {
+    const record = records.find(r => r.id === id);
+    if (!record || record.type !== 'address') return;
+
+    // Calculate the target depth: one level deeper than current maxSyncedDepth
+    // But ensure we at least sync the record itself (syncDepth) and one level of children
+    const recordSyncDepth = record.syncDepth ?? 0;
+    const currentMaxSynced = record.maxSyncedDepth ?? -1;
+    
+    // targetDepth must be at least recordSyncDepth + 1 to process this record and discover children
+    // Then we add 1 more because maxDepth is exclusive
+    const minTargetDepth = recordSyncDepth + 2;
+    const targetFromSynced = currentMaxSynced + 2;
+    const targetDepth = Math.max(minTargetDepth, targetFromSynced);
+    
+    const maxAllowedDepth = 5; // Hard ceiling to prevent runaway syncing
+
+    if (currentMaxSynced >= maxAllowedDepth - 1) {
+      toast({
+        title: "Maximum Depth Reached",
+        description: `This address has already been synced to the maximum depth (${maxAllowedDepth - 1}).`,
+      });
+      return;
+    }
+
+    // Display the actual depth we'll sync to (which is targetDepth - 1 since maxDepth is exclusive)
+    const displayFromDepth = Math.max(recordSyncDepth, currentMaxSynced + 1);
+    const displayToDepth = targetDepth - 1;
+
+    toast({
+      title: "Syncing...",
+      description: `Starting deeper sync for ${record.label || record.inputString.substring(0, 12)} (depth ${displayFromDepth} → ${displayToDepth})...`,
+    });
+
+    try {
+      const { transactionSyncService } = await import("@/lib/transaction-sync");
+      
+      transactionSyncService.setProgressCallback((progress) => {
+        if (progress.phase === 'complete') {
+          toast({
+            title: "Sync Complete",
+            description: `Found ${progress.transactionsNew || 0} new transactions, ${progress.newAddressRecords || 0} new addresses`,
+          });
+        }
+      });
+
+      await transactionSyncService.syncWithDepth({
+        sourceFilter: 'all',
+        maxDepth: Math.min(targetDepth, maxAllowedDepth), // Use the calculated target but cap at max
+        specificRecordIds: [id],
+      });
+    } catch (error) {
+      toast({
+        variant: "destructive",
+        title: "Sync Failed",
+        description: error instanceof Error ? error.message : "Failed to sync",
+      });
+    }
+  };
+
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
       <div className="border-b p-4 space-y-4">
@@ -639,6 +699,7 @@ export default function Dashboard() {
                 onRowClick={(id) => handleRecordClick(Number(id))}
                 onEdit={(id) => handleEditRecord(Number(id))}
                 onDelete={(id) => handleDeleteRecord(Number(id))}
+                onSyncDeeper={(id) => handleSyncDeeper(Number(id))}
               />
             )}
 

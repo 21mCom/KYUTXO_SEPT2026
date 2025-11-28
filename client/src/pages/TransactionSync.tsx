@@ -22,9 +22,14 @@ import {
   Loader2,
   Info
 } from "lucide-react";
-import { transactionSyncService, type SyncProgress, type SyncResult, type SourceFilter } from "@/lib/transaction-sync";
+import { transactionSyncService, type SyncProgress, type SyncResult, type SourceFilter, type SyncOptions } from "@/lib/transaction-sync";
 import { db, type Record as DbRecord } from "@/lib/database";
 import { formatDistanceToNow } from "date-fns";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 
 export default function TransactionSync() {
   const [, navigate] = useLocation();
@@ -42,6 +47,8 @@ export default function TransactionSync() {
   const [lastResult, setLastResult] = useState<SyncResult | null>(null);
   const [pendingReviewAddresses, setPendingReviewAddresses] = useState<DbRecord[]>([]);
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>('manual-only');
+  const [maxDepth, setMaxDepth] = useState<number>(1);
+  const [depthStats, setDepthStats] = useState<Map<number, number>>(new Map());
 
   const loadStats = useCallback(async () => {
     const s = await transactionSyncService.getStats();
@@ -49,6 +56,15 @@ export default function TransactionSync() {
     
     const pending = await transactionSyncService.getPendingReviewAddresses();
     setPendingReviewAddresses(pending);
+    
+    // Count addresses by depth
+    const allRecords = await db.records.where('type').equals('address').toArray();
+    const depths = new Map<number, number>();
+    for (const record of allRecords) {
+      const depth = record.syncDepth ?? 0;
+      depths.set(depth, (depths.get(depth) ?? 0) + 1);
+    }
+    setDepthStats(depths);
   }, []);
 
   useEffect(() => {
@@ -59,6 +75,8 @@ export default function TransactionSync() {
     setIsSyncing(true);
     setSyncProgress({
       phase: 'idle',
+      currentDepth: 0,
+      maxDepth,
       addressesTotal: 0,
       addressesProcessed: 0,
       transactionsFound: 0,
@@ -72,7 +90,11 @@ export default function TransactionSync() {
     });
 
     try {
-      const result = await transactionSyncService.syncAllAddresses(sourceFilter);
+      const options: SyncOptions = {
+        sourceFilter,
+        maxDepth,
+      };
+      const result = await transactionSyncService.syncWithDepth(options);
       setLastResult(result);
       
       if (result.success) {
@@ -116,7 +138,12 @@ export default function TransactionSync() {
     switch (syncProgress.phase) {
       case 'idle': return 'Preparing...';
       case 'fetching-height': return 'Getting current block height...';
-      case 'syncing-addresses': return `Syncing address ${syncProgress.addressesProcessed + 1} of ${syncProgress.addressesTotal}`;
+      case 'syncing-addresses': {
+        const depthText = syncProgress.maxDepth && syncProgress.maxDepth > 1 
+          ? ` (depth ${(syncProgress.currentDepth ?? 0) + 1}/${syncProgress.maxDepth})`
+          : '';
+        return `Syncing address ${syncProgress.addressesProcessed + 1} of ${syncProgress.addressesTotal}${depthText}`;
+      }
       case 'processing': return 'Processing transactions...';
       case 'complete': return 'Sync complete!';
       case 'error': return `Error: ${syncProgress.error}`;
@@ -213,31 +240,89 @@ export default function TransactionSync() {
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            {/* Source Filter */}
-            <div className="space-y-2">
-              <Label htmlFor="source-filter">Address Source Filter</Label>
-              <Select
-                value={sourceFilter}
-                onValueChange={(value) => setSourceFilter(value as SourceFilter)}
-                disabled={isSyncing}
-              >
-                <SelectTrigger id="source-filter" className="w-full" data-testid="select-source-filter">
-                  <SelectValue placeholder="Select which addresses to sync" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="manual-only">Manual Only (manual entries, wallet imports, xPub)</SelectItem>
-                  <SelectItem value="include-tx-import">Include TX Import (+ addresses from transaction lookups)</SelectItem>
-                  <SelectItem value="include-blockchain-sync">Include Blockchain Sync (+ addresses from previous syncs)</SelectItem>
-                  <SelectItem value="all">All Addresses (sync everything - use with caution)</SelectItem>
-                </SelectContent>
-              </Select>
-              <p className="text-xs text-muted-foreground">
-                {sourceFilter === 'manual-only' && "Only syncs addresses you explicitly added (safest, prevents cascade)"}
-                {sourceFilter === 'include-tx-import' && "Also syncs addresses discovered from transaction ID lookups"}
-                {sourceFilter === 'include-blockchain-sync' && "Also syncs addresses discovered from previous blockchain syncs"}
-                {sourceFilter === 'all' && "Syncs ALL addresses including auto-discovered ones (may take longer)"}
-              </p>
+            {/* Sync Controls Row */}
+            <div className="grid gap-4 sm:grid-cols-2">
+              {/* Source Filter */}
+              <div className="space-y-2">
+                <Label htmlFor="source-filter">Address Source Filter</Label>
+                <Select
+                  value={sourceFilter}
+                  onValueChange={(value) => setSourceFilter(value as SourceFilter)}
+                  disabled={isSyncing}
+                >
+                  <SelectTrigger id="source-filter" className="w-full" data-testid="select-source-filter">
+                    <SelectValue placeholder="Select which addresses to sync" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="manual-only">Manual Only</SelectItem>
+                    <SelectItem value="include-tx-import">Include TX Import</SelectItem>
+                    <SelectItem value="include-blockchain-sync">Include Blockchain Sync</SelectItem>
+                    <SelectItem value="all">All Addresses</SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">
+                  {sourceFilter === 'manual-only' && "Your entries, wallet imports, xPub"}
+                  {sourceFilter === 'include-tx-import' && "+ addresses from TX lookups"}
+                  {sourceFilter === 'include-blockchain-sync' && "+ addresses from previous syncs"}
+                  {sourceFilter === 'all' && "Syncs everything (caution!)"}
+                </p>
+              </div>
+
+              {/* Depth Control */}
+              <div className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <Label htmlFor="max-depth">Sync Depth</Label>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Info className="h-4 w-4 text-muted-foreground cursor-help" />
+                    </TooltipTrigger>
+                    <TooltipContent className="max-w-xs">
+                      <p className="text-sm">
+                        <strong>Depth 1:</strong> Only sync your addresses (depth 0)<br />
+                        <strong>Depth 2:</strong> Also sync addresses found in their transactions<br />
+                        <strong>Depth 3+:</strong> Continue following the chain
+                      </p>
+                    </TooltipContent>
+                  </Tooltip>
+                </div>
+                <Select
+                  value={maxDepth.toString()}
+                  onValueChange={(value) => setMaxDepth(parseInt(value))}
+                  disabled={isSyncing}
+                >
+                  <SelectTrigger id="max-depth" className="w-full" data-testid="select-max-depth">
+                    <SelectValue placeholder="Select sync depth" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="1">1 level (your addresses only)</SelectItem>
+                    <SelectItem value="2">2 levels (+ first-hop addresses)</SelectItem>
+                    <SelectItem value="3">3 levels (+ second-hop addresses)</SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">
+                  {maxDepth === 1 && "Safe: Only syncs depth-0 addresses"}
+                  {maxDepth === 2 && "Moderate: Discovers connected addresses"}
+                  {maxDepth === 3 && "Deep: Traces further relationships"}
+                </p>
+              </div>
             </div>
+
+            {/* Depth Stats */}
+            {depthStats.size > 0 && (
+              <div className="flex flex-wrap gap-2 pt-2">
+                {Array.from(depthStats.entries())
+                  .sort((a, b) => a[0] - b[0])
+                  .map(([depth, count]) => (
+                    <Badge 
+                      key={depth} 
+                      variant={depth === 0 ? "default" : "secondary"}
+                      className="text-xs"
+                    >
+                      Depth {depth}: {count} addresses
+                    </Badge>
+                  ))}
+              </div>
+            )}
             {isSyncing && syncProgress && (
               <div className="space-y-3">
                 <div className="flex items-center justify-between text-sm">

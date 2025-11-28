@@ -98,8 +98,16 @@ The transaction sync feature (`client/src/lib/transaction-sync.ts`, `client/src/
 - Incremental sync using `AddressSyncState` table (tracks last synced block height)
 - Intelligent address matching: links tx inputs/outputs to existing records
 - Auto-creates "Pending Review" records for unknown addresses
+- **Depth-limited sync**: Controls address discovery with configurable depth levels
+- **Sync Deeper**: Allows incremental exploration of address relationships
 
-**Database Tables** (version 7):
+**Depth Tracking Fields** (Database version 9):
+- `syncDepth`: The address's distance from manually-added records (0 = manual, 1 = first-hop discovered, etc.)
+- `maxSyncedDepth`: Highest depth level at which this address has been synced (-1 = never synced)
+- `discoveredFromRecordId`: Links to the parent address that discovered this one
+- `discoveredInTxid`: The transaction where this address was first seen
+
+**Database Tables**:
 - `blockchainTransactions`: txid, blockHeight, blockTime, fee, feeRate, syncedAt
 - `transactionParticipants`: txid, role (input/output), address, amount, vout, recordId
 - `addressSyncState`: address, recordId, lastSyncedHeight, lastSyncedAt, txCount
@@ -108,6 +116,21 @@ The transaction sync feature (`client/src/lib/transaction-sync.ts`, `client/src/
 - Public APIs can see which addresses you query
 - Local node option (future) provides full privacy
 - All fetched data stored locally and encrypted
+
+### Provenance System (Phase 3)
+
+The provenance feature (`client/src/lib/provenance.ts`, `client/src/pages/Provenance.tsx`) traces the flow of funds across addresses.
+
+**Provenance Path Finding**:
+- BFS-based algorithm to find paths between addresses through transactions
+- Configurable max depth to limit search scope
+- Detects self-loops and prevents infinite recursion
+- Uses transaction-level consolidation for accurate path representation
+
+**Provenance Page UI**:
+- Select source and target addresses from records
+- Visual display of discovered fund flow paths
+- Shows intermediate addresses and transactions
 
 ## External Dependencies
 

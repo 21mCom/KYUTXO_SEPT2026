@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { format } from "date-fns";
 import { db, BlockchainTransaction, TransactionParticipant, Record } from "@/lib/database";
@@ -82,31 +82,32 @@ export default function Transactions() {
 
   // Decrypt records to get addresses
   const [decryptedRecords, setDecryptedRecords] = useState<Record[]>([]);
+  // Use a ref to track the latest request ID and prevent stale async updates
+  const decryptRequestId = useRef(0);
   
   useEffect(() => {
     if (!rawRecords) return;
     
-    let cancelled = false;
+    // Increment request ID for this call - use ref to ensure we can check latest value
+    decryptRequestId.current += 1;
+    const thisRequestId = decryptRequestId.current;
     
     const decrypt = async () => {
       try {
         const decrypted = await decryptRecords(rawRecords);
-        if (!cancelled) {
+        // Only update if this is still the latest request
+        if (thisRequestId === decryptRequestId.current) {
           setDecryptedRecords(decrypted);
         }
       } catch {
-        // On failure, keep last good data or fallback to raw records
-        if (!cancelled && decryptedRecords.length === 0) {
-          setDecryptedRecords(rawRecords);
+        // On failure, use raw records as fallback only if this is latest request
+        if (thisRequestId === decryptRequestId.current) {
+          setDecryptedRecords(prev => prev.length === 0 ? rawRecords : prev);
         }
       }
     };
     
     decrypt();
-    
-    return () => {
-      cancelled = true;
-    };
   }, [rawRecords]);
 
   // Build address -> record lookup

@@ -105,14 +105,22 @@ export function useRecord(id: number | undefined) {
 
 // Create a new record (uses encryption facade)
 export async function createRecord(data: Omit<Record, 'id' | 'createdAt' | 'updatedAt'>) {
+  // Ensure syncDepth and maxSyncedDepth are set for new records
+  // Manual/imported records are at depth 0, and haven't been synced (-1)
+  const recordWithDefaults = {
+    ...data,
+    syncDepth: data.syncDepth ?? 0,
+    maxSyncedDepth: data.maxSyncedDepth ?? -1,
+  };
+  
   if (isEncryptionReady()) {
-    return facadeCreateRecord(data);
+    return facadeCreateRecord(recordWithDefaults);
   }
   
   // Fallback to unencrypted if not authenticated (shouldn't happen in normal flow)
   const now = Date.now();
   const id = await db.records.add({
-    ...data,
+    ...recordWithDefaults,
     createdAt: now,
     updatedAt: now,
   });
