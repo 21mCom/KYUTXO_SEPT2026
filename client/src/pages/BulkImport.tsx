@@ -357,6 +357,9 @@ export default function BulkImport() {
       for (const addr of allAddresses) {
         const labelPrefix = seedName || walletNameInput || "Derived";
         const chainSuffix = addr.chainType === 'receive' ? ' (Receive)' : ' (Change)';
+        // Human-readable source: wallet name or seed name with derivation path
+        const sourcePrefix = walletNameInput || seedName || 'xpub-import';
+        const addressSource = `${sourcePrefix} (${addr.path})`;
         
         try {
           // Check if this address already exists
@@ -391,7 +394,7 @@ export default function BulkImport() {
               chainType: addr.chainType,
               derivationPath: addr.path,
               xpub: xpub,
-              source: `${xpub.substring(0, 20)}... (${addr.path})`,
+              source: addressSource,
               // Add vault metadata (overwrite with new vault info if provided)
               vault: vaultMetadata,
             });
@@ -435,7 +438,7 @@ export default function BulkImport() {
               privateKeyStatus: privateKeyStatus || undefined,
               owner: ownerInput || undefined,
               walletName: walletNameInput || undefined,
-              source: 'xpub-import',
+              source: addressSource,
               chainType: addr.chainType,
               derivationPath: addr.path,
               xpub: xpub,
