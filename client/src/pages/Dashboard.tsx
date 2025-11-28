@@ -201,10 +201,83 @@ export default function Dashboard() {
             description: `${data.label} updated with ${uploadedCount} new file(s)`,
           });
         } else {
-          toast({
-            title: "Record Updated",
-            description: `${data.label} has been updated successfully`,
-          });
+          // Also create address records for transactions when updating (in case they weren't created before)
+          if (transactionAddresses && recordType === 'transaction') {
+            let addressesCreated = 0;
+            let addressesSkipped = 0;
+            const txidShort = transactionAddresses.txid.substring(0, 8);
+            const txDate = new Date(transactionAddresses.blockTime * 1000).toLocaleDateString();
+            
+            console.log(`[Update path] Creating address records from tx ${txidShort}: ${transactionAddresses.inputs.length} inputs, ${transactionAddresses.outputs.length} outputs`);
+            
+            for (const input of transactionAddresses.inputs) {
+              let existingAddr: Record | undefined;
+              try {
+                existingAddr = await findRecordByInputString(input.address);
+              } catch (e) { /* ignore */ }
+              
+              if (!existingAddr) {
+                try {
+                  await createRecord({
+                    type: 'address',
+                    inputString: input.address,
+                    label: `TX Input ${txDate}`,
+                    notes: `Input address from transaction ${txidShort}...`,
+                    tags: [],
+                    categories: [],
+                    owner: 'Pending Review',
+                    walletName: '',
+                    source: `tx-import:${transactionAddresses.txid}`,
+                  });
+                  addressesCreated++;
+                } catch (createError) {
+                  console.error(`Failed to create input address record:`, createError);
+                }
+              } else {
+                addressesSkipped++;
+              }
+            }
+            
+            for (const output of transactionAddresses.outputs) {
+              let existingAddr: Record | undefined;
+              try {
+                existingAddr = await findRecordByInputString(output.address);
+              } catch (e) { /* ignore */ }
+              
+              if (!existingAddr) {
+                try {
+                  await createRecord({
+                    type: 'address',
+                    inputString: output.address,
+                    label: `TX Output ${txDate}`,
+                    notes: `Output address from transaction ${txidShort}...`,
+                    tags: [],
+                    categories: [],
+                    owner: 'Pending Review',
+                    walletName: '',
+                    source: `tx-import:${transactionAddresses.txid}`,
+                  });
+                  addressesCreated++;
+                } catch (createError) {
+                  console.error(`Failed to create output address record:`, createError);
+                }
+              } else {
+                addressesSkipped++;
+              }
+            }
+            
+            console.log(`[Update path] Address creation complete: ${addressesCreated} created, ${addressesSkipped} skipped`);
+            
+            toast({
+              title: "Record Updated",
+              description: `${data.label} updated with ${addressesCreated} new address records`,
+            });
+          } else {
+            toast({
+              title: "Record Updated",
+              description: `${data.label} has been updated successfully`,
+            });
+          }
         }
       } else {
         // Create new record
@@ -234,8 +307,11 @@ export default function Dashboard() {
           // If transaction addresses were fetched, create address records for inputs/outputs
           if (transactionAddresses && recordType === 'transaction') {
             let addressesCreated = 0;
+            let addressesSkipped = 0;
             const txidShort = transactionAddresses.txid.substring(0, 8);
             const txDate = new Date(transactionAddresses.blockTime * 1000).toLocaleDateString();
+            
+            console.log(`Creating address records from tx ${txidShort}: ${transactionAddresses.inputs.length} inputs, ${transactionAddresses.outputs.length} outputs`);
             
             // Create input address records
             for (const input of transactionAddresses.inputs) {
@@ -244,22 +320,28 @@ export default function Dashboard() {
               try {
                 existingAddr = await findRecordByInputString(input.address);
               } catch (e) {
-                // ignore
+                console.log(`Error checking for existing address ${input.address}:`, e);
               }
               
               if (!existingAddr) {
-                await createRecord({
-                  type: 'address',
-                  inputString: input.address,
-                  label: `TX Input ${txDate}`,
-                  notes: `Input address from transaction ${txidShort}...`,
-                  tags: [],
-                  categories: [],
-                  owner: 'Pending Review',
-                  walletName: '',
-                  source: `tx-import:${transactionAddresses.txid}`,
-                });
-                addressesCreated++;
+                try {
+                  await createRecord({
+                    type: 'address',
+                    inputString: input.address,
+                    label: `TX Input ${txDate}`,
+                    notes: `Input address from transaction ${txidShort}...`,
+                    tags: [],
+                    categories: [],
+                    owner: 'Pending Review',
+                    walletName: '',
+                    source: `tx-import:${transactionAddresses.txid}`,
+                  });
+                  addressesCreated++;
+                } catch (createError) {
+                  console.error(`Failed to create input address record for ${input.address}:`, createError);
+                }
+              } else {
+                addressesSkipped++;
               }
             }
             
@@ -270,28 +352,36 @@ export default function Dashboard() {
               try {
                 existingAddr = await findRecordByInputString(output.address);
               } catch (e) {
-                // ignore
+                console.log(`Error checking for existing address ${output.address}:`, e);
               }
               
               if (!existingAddr) {
-                await createRecord({
-                  type: 'address',
-                  inputString: output.address,
-                  label: `TX Output ${txDate}`,
-                  notes: `Output address from transaction ${txidShort}...`,
-                  tags: [],
-                  categories: [],
-                  owner: 'Pending Review',
-                  walletName: '',
-                  source: `tx-import:${transactionAddresses.txid}`,
-                });
-                addressesCreated++;
+                try {
+                  await createRecord({
+                    type: 'address',
+                    inputString: output.address,
+                    label: `TX Output ${txDate}`,
+                    notes: `Output address from transaction ${txidShort}...`,
+                    tags: [],
+                    categories: [],
+                    owner: 'Pending Review',
+                    walletName: '',
+                    source: `tx-import:${transactionAddresses.txid}`,
+                  });
+                  addressesCreated++;
+                } catch (createError) {
+                  console.error(`Failed to create output address record for ${output.address}:`, createError);
+                }
+              } else {
+                addressesSkipped++;
               }
             }
             
+            console.log(`Address creation complete: ${addressesCreated} created, ${addressesSkipped} skipped (already exist)`);
+            
             toast({
               title: "Records Created",
-              description: `Transaction saved with ${addressesCreated} new address records (${transactionAddresses.inputs.length} inputs, ${transactionAddresses.outputs.length} outputs)`,
+              description: `Transaction saved with ${addressesCreated} new address records (${addressesSkipped} already existed)`,
             });
           } else {
             toast({
