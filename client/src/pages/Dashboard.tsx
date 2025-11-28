@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Plus, Grid3x3, List } from "lucide-react";
+import { Plus, Grid3x3, List, ChevronLeft, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { SearchBar } from "@/components/SearchBar";
 import { FilterBar } from "@/components/FilterBar";
@@ -31,6 +31,8 @@ export default function Dashboard() {
     categories: [],
   });
   const [filteredRecords, setFilteredRecords] = useState<Record[]>([]);
+  const [currentPage, setCurrentPage] = useState(1);
+  const ITEMS_PER_PAGE = 50;
   const [selectedRecordId, setSelectedRecordId] = useState<number | undefined>();
   const [selectedRecordAttachments, setSelectedRecordAttachments] = useState<Attachment[]>([]);
   const [showDetail, setShowDetail] = useState(false);
@@ -104,6 +106,26 @@ export default function Dashboard() {
 
     applyFilters();
   }, [search, filter, records]);
+
+  // Reset to page 1 when filters change
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [search, filter]);
+
+  // Pagination calculations
+  const totalPages = Math.max(1, Math.ceil(filteredRecords.length / ITEMS_PER_PAGE));
+  // Clamp currentPage to valid range
+  const safePage = Math.min(currentPage, totalPages);
+  const startIndex = (safePage - 1) * ITEMS_PER_PAGE;
+  const endIndex = startIndex + ITEMS_PER_PAGE;
+  const paginatedRecords = filteredRecords.slice(startIndex, endIndex);
+  
+  // Auto-correct page if it's out of bounds (e.g., after filter changes)
+  useEffect(() => {
+    if (currentPage > totalPages && totalPages > 0) {
+      setCurrentPage(totalPages);
+    }
+  }, [currentPage, totalPages]);
 
   const selectedRecord = records.find(r => r.id === selectedRecordId);
 
@@ -589,33 +611,71 @@ export default function Dashboard() {
               Create First Record
             </Button>
           </div>
-        ) : view === "grid" ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {filteredRecords.map((record) => {
-              const stringId = record.id !== undefined ? String(record.id) : "";
-              return (
-                <RecordCard
-                  key={record.id}
-                  {...record}
-                  id={stringId}
-                  attachmentCount={0}
-                  onClick={() => handleRecordClick(record.id!)}
-                  onEdit={() => handleEditRecord(record.id!)}
-                  onDelete={() => handleDeleteRecord(record.id!)}
-                />
-              );
-            })}
-          </div>
         ) : (
-          <RecordTable
-            records={filteredRecords.map(r => {
-              const stringId = r.id !== undefined ? String(r.id) : "";
-              return { ...r, id: stringId };
-            })}
-            onRowClick={(id) => handleRecordClick(Number(id))}
-            onEdit={(id) => handleEditRecord(Number(id))}
-            onDelete={(id) => handleDeleteRecord(Number(id))}
-          />
+          <>
+            {view === "grid" ? (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {paginatedRecords.map((record) => {
+                  const stringId = record.id !== undefined ? String(record.id) : "";
+                  return (
+                    <RecordCard
+                      key={record.id}
+                      {...record}
+                      id={stringId}
+                      attachmentCount={0}
+                      onClick={() => handleRecordClick(record.id!)}
+                      onEdit={() => handleEditRecord(record.id!)}
+                      onDelete={() => handleDeleteRecord(record.id!)}
+                    />
+                  );
+                })}
+              </div>
+            ) : (
+              <RecordTable
+                records={paginatedRecords.map(r => {
+                  const stringId = r.id !== undefined ? String(r.id) : "";
+                  return { ...r, id: stringId };
+                })}
+                onRowClick={(id) => handleRecordClick(Number(id))}
+                onEdit={(id) => handleEditRecord(Number(id))}
+                onDelete={(id) => handleDeleteRecord(Number(id))}
+              />
+            )}
+
+            {/* Pagination Controls */}
+            {filteredRecords.length > ITEMS_PER_PAGE && (
+              <div className="flex items-center justify-between border-t pt-4 mt-4">
+                <div className="text-sm text-muted-foreground">
+                  Showing {startIndex + 1}-{Math.min(endIndex, filteredRecords.length)} of {filteredRecords.length} records
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                    disabled={safePage === 1}
+                    data-testid="button-prev-page"
+                  >
+                    <ChevronLeft className="h-4 w-4 mr-1" />
+                    Previous
+                  </Button>
+                  <span className="text-sm px-2">
+                    Page {safePage} of {totalPages}
+                  </span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                    disabled={safePage === totalPages}
+                    data-testid="button-next-page"
+                  >
+                    Next
+                    <ChevronRight className="h-4 w-4 ml-1" />
+                  </Button>
+                </div>
+              </div>
+            )}
+          </>
         )}
       </div>
 

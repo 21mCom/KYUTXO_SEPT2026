@@ -7,6 +7,8 @@ import { Progress } from "@/components/ui/progress";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
 import { 
   ArrowLeft,
@@ -20,7 +22,7 @@ import {
   Loader2,
   Info
 } from "lucide-react";
-import { transactionSyncService, type SyncProgress, type SyncResult } from "@/lib/transaction-sync";
+import { transactionSyncService, type SyncProgress, type SyncResult, type SourceFilter } from "@/lib/transaction-sync";
 import { db, type Record as DbRecord } from "@/lib/database";
 import { formatDistanceToNow } from "date-fns";
 
@@ -39,6 +41,7 @@ export default function TransactionSync() {
   const [syncProgress, setSyncProgress] = useState<SyncProgress | null>(null);
   const [lastResult, setLastResult] = useState<SyncResult | null>(null);
   const [pendingReviewAddresses, setPendingReviewAddresses] = useState<DbRecord[]>([]);
+  const [sourceFilter, setSourceFilter] = useState<SourceFilter>('manual-only');
 
   const loadStats = useCallback(async () => {
     const s = await transactionSyncService.getStats();
@@ -69,7 +72,7 @@ export default function TransactionSync() {
     });
 
     try {
-      const result = await transactionSyncService.syncAllAddresses();
+      const result = await transactionSyncService.syncAllAddresses(sourceFilter);
       setLastResult(result);
       
       if (result.success) {
@@ -144,18 +147,18 @@ export default function TransactionSync() {
           </AlertDescription>
         </Alert>
 
-        {/* Stats Overview */}
+        {/* Stats Overview (Global Totals) */}
         <div className="grid gap-4 sm:grid-cols-3">
           <Card>
             <CardHeader className="pb-2">
-              <CardDescription>Tracked Addresses</CardDescription>
+              <CardDescription>Total Addresses (All Sources)</CardDescription>
               <CardTitle className="text-2xl" data-testid="text-total-addresses">
                 {stats?.totalAddresses ?? '-'}
               </CardTitle>
             </CardHeader>
             <CardContent>
               <p className="text-xs text-muted-foreground">
-                {stats?.syncedAddresses ?? 0} synced
+                {stats?.syncedAddresses ?? 0} previously synced
               </p>
             </CardContent>
           </Card>
@@ -206,10 +209,35 @@ export default function TransactionSync() {
               Sync Transactions
             </CardTitle>
             <CardDescription>
-              Fetch latest blockchain data for all addresses in your database (manual entries, wallet imports, xPub derivations)
+              Fetch latest blockchain data for addresses in your database based on the selected source filter
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
+            {/* Source Filter */}
+            <div className="space-y-2">
+              <Label htmlFor="source-filter">Address Source Filter</Label>
+              <Select
+                value={sourceFilter}
+                onValueChange={(value) => setSourceFilter(value as SourceFilter)}
+                disabled={isSyncing}
+              >
+                <SelectTrigger id="source-filter" className="w-full" data-testid="select-source-filter">
+                  <SelectValue placeholder="Select which addresses to sync" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="manual-only">Manual Only (manual entries, wallet imports, xPub)</SelectItem>
+                  <SelectItem value="include-tx-import">Include TX Import (+ addresses from transaction lookups)</SelectItem>
+                  <SelectItem value="include-blockchain-sync">Include Blockchain Sync (+ addresses from previous syncs)</SelectItem>
+                  <SelectItem value="all">All Addresses (sync everything - use with caution)</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                {sourceFilter === 'manual-only' && "Only syncs addresses you explicitly added (safest, prevents cascade)"}
+                {sourceFilter === 'include-tx-import' && "Also syncs addresses discovered from transaction ID lookups"}
+                {sourceFilter === 'include-blockchain-sync' && "Also syncs addresses discovered from previous blockchain syncs"}
+                {sourceFilter === 'all' && "Syncs ALL addresses including auto-discovered ones (may take longer)"}
+              </p>
+            </div>
             {isSyncing && syncProgress && (
               <div className="space-y-3">
                 <div className="flex items-center justify-between text-sm">

@@ -6,6 +6,8 @@ import { createProvider, parseTransaction, MINIMUM_CONFIRMATIONS, type ProviderT
 import { validateAddress } from './bitcoin';
 import { decryptRecords, isEncryptionReady } from './encryptionFacade';
 
+export type SourceFilter = 'manual-only' | 'include-tx-import' | 'include-blockchain-sync' | 'all';
+
 export interface SyncProgress {
   phase: 'idle' | 'fetching-height' | 'syncing-addresses' | 'processing' | 'complete' | 'error';
   currentAddress?: string;
@@ -46,7 +48,7 @@ export class TransactionSyncService {
     }
   }
 
-  async syncAllAddresses(): Promise<SyncResult> {
+  async syncAllAddresses(sourceFilter: SourceFilter = 'manual-only'): Promise<SyncResult> {
     const result: SyncResult = {
       success: false,
       addressesSynced: 0,
@@ -79,21 +81,38 @@ export class TransactionSyncService {
         allRecords = allRawRecords;
       }
       
-      // Filter to only address records that should be synced
-      // Exclude addresses that were auto-created by sync or tx-import (to prevent cascading)
+      // Filter to only address records based on source filter
       const addressRecords = allRecords.filter(r => {
         if (r.type !== 'address') return false;
-        // Skip addresses created by blockchain sync (prevents infinite cascade)
-        if (r.source === 'blockchain-sync') return false;
-        // Skip addresses created by transaction import (user can manually add them if needed)
-        if (r.source?.startsWith('tx-import:')) return false;
-        return true;
+        
+        // Apply source filter
+        switch (sourceFilter) {
+          case 'manual-only':
+            // Exclude blockchain-sync and tx-import sources
+            if (r.source === 'blockchain-sync') return false;
+            if (r.source?.startsWith('tx-import:')) return false;
+            return true;
+          case 'include-tx-import':
+            // Include tx-import but exclude blockchain-sync
+            if (r.source === 'blockchain-sync') return false;
+            return true;
+          case 'include-blockchain-sync':
+            // Include blockchain-sync but exclude tx-import
+            if (r.source?.startsWith('tx-import:')) return false;
+            return true;
+          case 'all':
+            // Include all address records
+            return true;
+          default:
+            return true;
+        }
       });
       
       const totalAddresses = allRecords.filter(r => r.type === 'address').length;
       const excludedCount = totalAddresses - addressRecords.length;
       
-      console.log(`[TransactionSync] Found ${addressRecords.length} syncable address records (${excludedCount} excluded as auto-imported)`);
+      console.log(`[TransactionSync] Source filter: ${sourceFilter}`);
+      console.log(`[TransactionSync] Found ${addressRecords.length} syncable address records (${excludedCount} excluded)`);
       console.log(`[TransactionSync] Total addresses: ${totalAddresses}, Total records: ${allRecords.length}`);
 
       if (addressRecords.length === 0) {
