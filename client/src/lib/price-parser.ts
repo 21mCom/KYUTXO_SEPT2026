@@ -2,6 +2,33 @@ import type { PriceData } from './database';
 
 export type PriceDataSource = 'cryptodatadownload' | 'coingecko' | 'investing' | 'bitget' | 'unknown';
 
+function parseCSVLine(line: string): string[] {
+  const result: string[] = [];
+  let current = '';
+  let inQuotes = false;
+  
+  for (let i = 0; i < line.length; i++) {
+    const char = line[i];
+    
+    if (char === '"') {
+      if (inQuotes && line[i + 1] === '"') {
+        current += '"';
+        i++;
+      } else {
+        inQuotes = !inQuotes;
+      }
+    } else if (char === ',' && !inQuotes) {
+      result.push(current.trim());
+      current = '';
+    } else {
+      current += char;
+    }
+  }
+  
+  result.push(current.trim());
+  return result;
+}
+
 export interface ParseResult {
   success: boolean;
   data: Omit<PriceData, 'id' | 'importedAt'>[];
@@ -179,7 +206,7 @@ function detectFormat(lines: string[]): DetectedFormat | null {
   // Handle quoted headers and various variations
   const cleanHeader = firstLine.replace(/"/g, '').toLowerCase();
   if (cleanHeader.includes('date') && (cleanHeader.includes('change') || cleanHeader.includes('vol'))) {
-    const cols = firstLine.split(',').map(c => c.replace(/"/g, '').toLowerCase().trim());
+    const cols = parseCSVLine(firstLine).map(c => c.toLowerCase().trim());
     const dateCol = cols.findIndex(c => c === 'date');
     const priceCol = cols.findIndex(c => c === 'price' || c === 'close');
     
@@ -205,14 +232,14 @@ function detectFormat(lines: string[]): DetectedFormat | null {
   const cleanFirstLine = firstLine.replace(/"/g, '').toLowerCase();
   if ((cleanFirstLine.includes('date') || cleanFirstLine.includes('time')) && 
       (cleanFirstLine.includes('price') || cleanFirstLine.includes('close') || cleanFirstLine.includes('open'))) {
-    const cols = firstLine.split(',').map(c => c.replace(/"/g, '').toLowerCase().trim());
+    const cols = parseCSVLine(firstLine).map(c => c.toLowerCase().trim());
     const dateCol = cols.findIndex(c => c.includes('date') || c.includes('time'));
     
     // Check the first data row to detect date format
     let detectedDateFormat: DetectedFormat['dateFormat'] = 'YYYY-MM-DD';
     if (lines[1]) {
-      const dataCols = lines[1].split(',');
-      const dateVal = dataCols[dateCol >= 0 ? dateCol : 0]?.replace(/"/g, '').trim() || '';
+      const dataCols = parseCSVLine(lines[1]);
+      const dateVal = dataCols[dateCol >= 0 ? dateCol : 0]?.trim() || '';
       if (dateVal.match(/^\d{10,13}$/) || dateVal.match(/^\d+\.?\d*[eE][+\-]?\d+$/)) {
         detectedDateFormat = 'unix';
       } else if (dateVal.match(/^[A-Za-z]+\s+\d{1,2},?\s+\d{4}/)) {
@@ -237,7 +264,9 @@ function detectFormat(lines: string[]): DetectedFormat | null {
   
   // Generic CSV detection - try to auto-detect columns
   const delimiter = firstLine.includes('\t') ? '\t' : ',';
-  const cols = firstLine.split(delimiter).map(c => c.toLowerCase().trim());
+  const cols = delimiter === ',' 
+    ? parseCSVLine(firstLine).map(c => c.toLowerCase().trim())
+    : firstLine.split(delimiter).map(c => c.toLowerCase().trim());
   
   let dateColumn = cols.findIndex(c => c.includes('date') || c.includes('time'));
   let closeColumn = cols.findIndex(c => c === 'close' || c === 'price');
@@ -247,7 +276,7 @@ function detectFormat(lines: string[]): DetectedFormat | null {
   
   // Detect date format from first data row
   const dataLine = lines[1];
-  const dataCols = dataLine.split(delimiter);
+  const dataCols = delimiter === ',' ? parseCSVLine(dataLine) : dataLine.split(delimiter);
   const dateValue = dataCols[dateColumn]?.trim() || '';
   
   let dateFormat: DetectedFormat['dateFormat'] = 'YYYY-MM-DD';
@@ -339,7 +368,7 @@ export function parsePriceCSV(
       continue;
     }
     
-    const cols = line.split(format.delimiter);
+    const cols = format.delimiter === ',' ? parseCSVLine(line) : line.split(format.delimiter);
     
     const dateStr = cols[format.dateColumn]?.trim();
     if (!dateStr) {
