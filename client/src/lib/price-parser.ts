@@ -106,11 +106,27 @@ function parseDate(value: string, format: DetectedFormat['dateFormat']): string 
   }
   
   if (format === 'unix') {
-    const ts = parseInt(trimmed, 10);
-    if (!isNaN(ts)) {
-      const date = new Date(ts > 1e12 ? ts : ts * 1000);
-      return date.toISOString().split('T')[0];
+    // Handle scientific notation like "1.76424E+12"
+    let ts: number;
+    if (trimmed.toLowerCase().includes('e')) {
+      ts = parseFloat(trimmed);
+    } else {
+      ts = parseInt(trimmed, 10);
     }
+    if (!isNaN(ts)) {
+      // If timestamp is in milliseconds (> 1 trillion), use directly
+      // Otherwise multiply by 1000 to convert seconds to milliseconds
+      const date = new Date(ts > 1e12 ? ts : ts * 1000);
+      if (!isNaN(date.getTime())) {
+        return date.toISOString().split('T')[0];
+      }
+    }
+  }
+  
+  // Last resort: try to parse with JavaScript Date
+  const jsDate = new Date(trimmed);
+  if (!isNaN(jsDate.getTime()) && jsDate.getFullYear() > 1990 && jsDate.getFullYear() < 2100) {
+    return jsDate.toISOString().split('T')[0];
   }
   
   return null;
@@ -160,33 +176,57 @@ function detectFormat(lines: string[]): DetectedFormat | null {
   
   // Investing.com format - "Date,Price,Open,High,Low,Vol.,Change %"
   // Date format is "Sep 17, 2024" (MMM DD, YYYY)
-  if (firstLine.includes('date') && (firstLine.includes('change %') || firstLine.includes('vol.'))) {
-    const cols = firstLine.split(',').map(c => c.toLowerCase().trim());
-    return {
-      source: 'investing',
-      hasHeader: true,
-      headerRows: 1,
-      delimiter: ',',
-      dateColumn: cols.indexOf('date'),
-      dateFormat: 'MMM DD, YYYY',
-      closeColumn: cols.indexOf('price'),
-      openColumn: cols.indexOf('open'),
-      highColumn: cols.indexOf('high'),
-      lowColumn: cols.indexOf('low'),
-      volumeColumn: cols.findIndex(c => c.includes('vol')),
-    };
+  // Handle quoted headers and various variations
+  const cleanHeader = firstLine.replace(/"/g, '').toLowerCase();
+  if (cleanHeader.includes('date') && (cleanHeader.includes('change') || cleanHeader.includes('vol'))) {
+    const cols = firstLine.split(',').map(c => c.replace(/"/g, '').toLowerCase().trim());
+    const dateCol = cols.findIndex(c => c === 'date');
+    const priceCol = cols.findIndex(c => c === 'price' || c === 'close');
+    
+    if (dateCol !== -1 && priceCol !== -1) {
+      return {
+        source: 'investing',
+        hasHeader: true,
+        headerRows: 1,
+        delimiter: ',',
+        dateColumn: dateCol,
+        dateFormat: 'MMM DD, YYYY',
+        closeColumn: priceCol,
+        openColumn: cols.findIndex(c => c === 'open'),
+        highColumn: cols.findIndex(c => c === 'high'),
+        lowColumn: cols.findIndex(c => c === 'low'),
+        volumeColumn: cols.findIndex(c => c.includes('vol')),
+      };
+    }
   }
   
-  // Bitget format - similar to investing.com
-  if (firstLine.includes('date') && firstLine.includes('price')) {
-    const cols = firstLine.split(',').map(c => c.toLowerCase().trim());
+  // Bitget format - exported from Excel, may have unix timestamps
+  // Also handle generic CSV with date/time and price/close columns
+  const cleanFirstLine = firstLine.replace(/"/g, '').toLowerCase();
+  if ((cleanFirstLine.includes('date') || cleanFirstLine.includes('time')) && 
+      (cleanFirstLine.includes('price') || cleanFirstLine.includes('close') || cleanFirstLine.includes('open'))) {
+    const cols = firstLine.split(',').map(c => c.replace(/"/g, '').toLowerCase().trim());
+    const dateCol = cols.findIndex(c => c.includes('date') || c.includes('time'));
+    
+    // Check the first data row to detect date format
+    let detectedDateFormat: DetectedFormat['dateFormat'] = 'YYYY-MM-DD';
+    if (lines[1]) {
+      const dataCols = lines[1].split(',');
+      const dateVal = dataCols[dateCol >= 0 ? dateCol : 0]?.replace(/"/g, '').trim() || '';
+      if (dateVal.match(/^\d{10,13}$/) || dateVal.match(/^\d+\.?\d*[eE][+\-]?\d+$/)) {
+        detectedDateFormat = 'unix';
+      } else if (dateVal.match(/^[A-Za-z]+\s+\d{1,2},?\s+\d{4}/)) {
+        detectedDateFormat = 'MMM DD, YYYY';
+      }
+    }
+    
     return {
       source: 'bitget',
       hasHeader: true,
       headerRows: 1,
       delimiter: ',',
-      dateColumn: cols.indexOf('date'),
-      dateFormat: 'YYYY-MM-DD',
+      dateColumn: dateCol >= 0 ? dateCol : 0,
+      dateFormat: detectedDateFormat,
       closeColumn: cols.indexOf('price') !== -1 ? cols.indexOf('price') : cols.indexOf('close'),
       openColumn: cols.indexOf('open'),
       highColumn: cols.indexOf('high'),
@@ -215,7 +255,8 @@ function detectFormat(lines: string[]): DetectedFormat | null {
     // Check if first part is > 12 (must be DD/MM)
     const firstPart = parseInt(dateValue.split('/')[0], 10);
     dateFormat = firstPart > 12 ? 'DD/MM/YYYY' : 'MM/DD/YYYY';
-  } else if (dateValue.match(/^\d{10,13}$/)) {
+  } else if (dateValue.match(/^\d{10,13}$/) || dateValue.match(/^\d+\.?\d*[eE][+\-]?\d+$/)) {
+    // Matches Unix timestamps or scientific notation like "1.76424E+12"
     dateFormat = 'unix';
   } else if (dateValue.match(/^[A-Za-z]+\s+\d{1,2},?\s+\d{4}/)) {
     // Matches "Sep 17, 2024" or "September 17 2024"
@@ -273,7 +314,14 @@ export function parsePriceCSV(
   
   const format = detectFormat(rawLines.filter(l => l.trim()));
   if (!format) {
-    return { success: false, data: [], source: 'unknown', errors: ['Could not detect file format'], skipped: 0 };
+    const headerPreview = rawLines[0]?.substring(0, 100) || 'empty';
+    return { 
+      success: false, 
+      data: [], 
+      source: 'unknown', 
+      errors: [`Could not detect file format. Header: "${headerPreview}"`], 
+      skipped: 0 
+    };
   }
   
   const data: Omit<PriceData, 'id' | 'importedAt'>[] = [];
