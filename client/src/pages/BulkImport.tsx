@@ -1010,7 +1010,7 @@ export default function BulkImport() {
 
                 <div className="p-3 bg-muted/50 rounded-md border border-muted-foreground/20 mb-4">
                   <p className="text-sm text-muted-foreground">
-                    <strong>What gets applied where:</strong> Tags and categories will be added to all imported addresses. Owner and wallet name define who controls these addresses.
+                    <strong>What gets applied where:</strong> Owner and wallet name will be applied to all derived addresses (all from your xpub). Tags and categories will be added to all addresses.
                   </p>
                 </div>
 

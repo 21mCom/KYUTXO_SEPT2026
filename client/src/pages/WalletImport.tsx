@@ -466,7 +466,7 @@ export default function WalletImport() {
         <CardContent className="space-y-6">
           <div className="p-3 bg-muted/50 rounded-md border border-muted-foreground/20 mb-4">
             <p className="text-sm text-muted-foreground">
-              <strong>What gets applied where:</strong> Tags and categories will be added to all imported addresses. Owner and wallet name define who controls these addresses.
+              <strong>What gets applied where:</strong> Owner and wallet name apply to input addresses (addresses you sent from). Output addresses get owner='Unknown' for later identification. Tags and categories are added to all imported addresses.
             </p>
           </div>
 
