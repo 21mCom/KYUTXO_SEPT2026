@@ -70,7 +70,6 @@ export default function WalletImport() {
   const [selectedWalletType, setSelectedWalletType] = useState<WalletType>('unknown');
   const [selectedFileFormat, setSelectedFileFormat] = useState<FileFormat>('csv');
   
-  const [sourceName, setSourceName] = useState<string>('');
   const [ownerInput, setOwnerInput] = useState<string>('');
   const [walletNameInput, setWalletNameInput] = useState<string>('');
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
@@ -144,9 +143,6 @@ export default function WalletImport() {
       setSelectedWalletType(detection.walletType);
       setSelectedFileFormat(detection.fileFormat);
       
-      if (detection.walletType !== 'unknown') {
-        setSourceName(getWalletName(detection.walletType));
-      }
       
       toast({
         title: 'File loaded',
