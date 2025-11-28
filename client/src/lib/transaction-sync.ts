@@ -79,10 +79,22 @@ export class TransactionSyncService {
         allRecords = allRawRecords;
       }
       
-      // Filter to only address records
-      const addressRecords = allRecords.filter(r => r.type === 'address');
+      // Filter to only address records that should be synced
+      // Exclude addresses that were auto-created by sync or tx-import (to prevent cascading)
+      const addressRecords = allRecords.filter(r => {
+        if (r.type !== 'address') return false;
+        // Skip addresses created by blockchain sync (prevents infinite cascade)
+        if (r.source === 'blockchain-sync') return false;
+        // Skip addresses created by transaction import (user can manually add them if needed)
+        if (r.source?.startsWith('tx-import:')) return false;
+        return true;
+      });
       
-      console.log(`[TransactionSync] Found ${addressRecords.length} address records out of ${allRecords.length} total`);
+      const totalAddresses = allRecords.filter(r => r.type === 'address').length;
+      const excludedCount = totalAddresses - addressRecords.length;
+      
+      console.log(`[TransactionSync] Found ${addressRecords.length} syncable address records (${excludedCount} excluded as auto-imported)`);
+      console.log(`[TransactionSync] Total addresses: ${totalAddresses}, Total records: ${allRecords.length}`);
 
       if (addressRecords.length === 0) {
         this.updateProgress({ phase: 'complete' });
