@@ -1008,6 +1008,12 @@ export default function BulkImport() {
                   </div>
                 </div>
 
+                <div className="p-3 bg-muted/50 rounded-md border border-muted-foreground/20 mb-4">
+                  <p className="text-sm text-muted-foreground">
+                    <strong>What gets applied where:</strong> Tags and categories will be added to all imported addresses. Owner and wallet name define who controls these addresses.
+                  </p>
+                </div>
+
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <Label htmlFor="owner">Owner</Label>

@@ -71,6 +71,8 @@ export default function WalletImport() {
   const [selectedFileFormat, setSelectedFileFormat] = useState<FileFormat>('csv');
   
   const [sourceName, setSourceName] = useState<string>('');
+  const [ownerInput, setOwnerInput] = useState<string>('');
+  const [walletNameInput, setWalletNameInput] = useState<string>('');
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
   const [newTag, setNewTag] = useState<string>('');
@@ -264,6 +266,8 @@ export default function WalletImport() {
         duplicateInfos,
         {
           sourceName,
+          owner: ownerInput || undefined,
+          walletName: walletNameInput || undefined,
           defaultTags: selectedTags,
           defaultCategories: selectedCategories,
           walletSoftware: getWalletName(selectedWalletType),
@@ -301,6 +305,8 @@ export default function WalletImport() {
     setSelectedWalletType('unknown');
     setSelectedFileFormat('csv');
     setSourceName('');
+    setOwnerInput('');
+    setWalletNameInput('');
     setSelectedTags([]);
     setSelectedCategories([]);
     setParsedRecords([]);
@@ -458,6 +464,12 @@ export default function WalletImport() {
           <CardDescription>Configure how the records will be imported</CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
+          <div className="p-3 bg-muted/50 rounded-md border border-muted-foreground/20 mb-4">
+            <p className="text-sm text-muted-foreground">
+              <strong>What gets applied where:</strong> Tags and categories will be added to all imported addresses. Owner and wallet name define who controls these addresses.
+            </p>
+          </div>
+
           <div>
             <Label htmlFor="source-name">Source Name *</Label>
             <Input
@@ -470,6 +482,29 @@ export default function WalletImport() {
             <p className="text-xs text-muted-foreground mt-1">
               This will be saved as the source for all imported records
             </p>
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label htmlFor="owner">Owner</Label>
+              <Input
+                id="owner"
+                value={ownerInput}
+                onChange={(e) => setOwnerInput(e.target.value)}
+                placeholder="e.g., Personal, Spouse"
+                data-testid="input-owner"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="walletName">Wallet Name</Label>
+              <Input
+                id="walletName"
+                value={walletNameInput}
+                onChange={(e) => setWalletNameInput(e.target.value)}
+                placeholder="e.g., College Fund, Trading"
+                data-testid="input-wallet-name"
+              />
+            </div>
           </div>
           
           <div>
