@@ -63,7 +63,6 @@ export default function BulkImport() {
   const [, navigate] = useLocation();
   const [step, setStep] = useState(1);
   const [xpub, setXpub] = useState("");
-  const [xpubLabel, setXpubLabel] = useState("");
   const [xpubInfo, setXpubInfo] = useState<XpubInfo | null>(null);
   const [validationError, setValidationError] = useState<string | null>(null);
   
@@ -356,7 +355,7 @@ export default function BulkImport() {
       let errorCount = 0;
 
       for (const addr of allAddresses) {
-        const labelPrefix = xpubLabel || seedName || "Derived";
+        const labelPrefix = seedName || walletNameInput || "Derived";
         const chainSuffix = addr.chainType === 'receive' ? ' (Receive)' : ' (Change)';
         
         try {
@@ -537,16 +536,6 @@ export default function BulkImport() {
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="xpub-label">Label (optional)</Label>
-                <Input
-                  id="xpub-label"
-                  value={xpubLabel}
-                  onChange={(e) => setXpubLabel(e.target.value)}
-                  placeholder="e.g., Savings Wallet, Trezor Main"
-                  data-testid="input-xpub-label"
-                />
-              </div>
               <div className="space-y-2">
                 <Label htmlFor="xpub">Extended Public Key</Label>
                 <Textarea
