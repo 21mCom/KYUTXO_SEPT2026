@@ -53,6 +53,14 @@ import { getImportSummary } from '@/lib/wallet-import/merge-utils';
 
 type WizardStep = 'upload' | 'setup' | 'preview' | 'import';
 
+const generateSourceName = (walletType: WalletType): string => {
+  const walletName = getWalletName(walletType);
+  const now = new Date();
+  const date = now.toISOString().split('T')[0];
+  const time = now.toTimeString().split(' ')[0].replace(/:/g, '');
+  return `walletImport-${walletName}_${date}_${time}`;
+};
+
 const STEPS: { key: WizardStep; label: string; icon: typeof Upload }[] = [
   { key: 'upload', label: 'Upload', icon: Upload },
   { key: 'setup', label: 'Setup', icon: Settings2 },
@@ -258,6 +266,7 @@ export default function WalletImport() {
     setImportStatus('Starting import...');
     
     try {
+      const sourceName = generateSourceName(selectedWalletType);
       const result = await executeImport(
         duplicateInfos,
         {
@@ -300,7 +309,6 @@ export default function WalletImport() {
     setDetectionResult(null);
     setSelectedWalletType('unknown');
     setSelectedFileFormat('csv');
-    setSourceName('');
     setOwnerInput('');
     setWalletNameInput('');
     setSelectedTags([]);
@@ -463,20 +471,6 @@ export default function WalletImport() {
           <div className="p-3 bg-muted/50 rounded-md border border-muted-foreground/20 mb-4">
             <p className="text-sm text-muted-foreground">
               <strong>What gets applied where:</strong> Owner and wallet name apply to input addresses (addresses you sent from). Output addresses get owner='Unknown' for later identification. Tags and categories are added to all imported addresses.
-            </p>
-          </div>
-
-          <div>
-            <Label htmlFor="source-name">Source Name *</Label>
-            <Input
-              id="source-name"
-              value={sourceName}
-              onChange={(e) => setSourceName(e.target.value)}
-              placeholder="e.g., Trezor Suite Export 2024"
-              data-testid="input-source-name"
-            />
-            <p className="text-xs text-muted-foreground mt-1">
-              This will be saved as the source for all imported records
             </p>
           </div>
 
