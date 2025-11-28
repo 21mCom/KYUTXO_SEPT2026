@@ -16,7 +16,7 @@ interface DetectedFormat {
   headerRows: number;
   delimiter: string;
   dateColumn: number;
-  dateFormat: 'YYYY-MM-DD' | 'MM/DD/YYYY' | 'DD/MM/YYYY' | 'unix';
+  dateFormat: 'YYYY-MM-DD' | 'MM/DD/YYYY' | 'DD/MM/YYYY' | 'MMM DD, YYYY' | 'unix';
   closeColumn: number;
   openColumn?: number;
   highColumn?: number;
@@ -39,6 +39,21 @@ function parseNumber(value: string): number | undefined {
   const num = parseFloat(cleaned);
   return isNaN(num) ? undefined : num;
 }
+
+const MONTH_MAP: Record<string, string> = {
+  'jan': '01', 'january': '01',
+  'feb': '02', 'february': '02',
+  'mar': '03', 'march': '03',
+  'apr': '04', 'april': '04',
+  'may': '05',
+  'jun': '06', 'june': '06',
+  'jul': '07', 'july': '07',
+  'aug': '08', 'august': '08',
+  'sep': '09', 'september': '09',
+  'oct': '10', 'october': '10',
+  'nov': '11', 'november': '11',
+  'dec': '12', 'december': '12',
+};
 
 function parseDate(value: string, format: DetectedFormat['dateFormat']): string | null {
   const trimmed = value.trim();
@@ -63,6 +78,30 @@ function parseDate(value: string, format: DetectedFormat['dateFormat']): string 
       const day = match[1].padStart(2, '0');
       const month = match[2].padStart(2, '0');
       return `${match[3]}-${month}-${day}`;
+    }
+  }
+  
+  // Handle "MMM DD, YYYY" format like "Sep 17, 2024" or "September 17, 2024"
+  if (format === 'MMM DD, YYYY') {
+    // Match patterns like "Sep 17, 2024" or "September 17, 2024"
+    const match = trimmed.match(/^([A-Za-z]+)\s+(\d{1,2}),?\s+(\d{4})/);
+    if (match) {
+      const monthName = match[1].toLowerCase();
+      const month = MONTH_MAP[monthName];
+      if (month) {
+        const day = match[2].padStart(2, '0');
+        return `${match[3]}-${month}-${day}`;
+      }
+    }
+    // Also try "DD MMM YYYY" format like "17 Sep 2024"
+    const altMatch = trimmed.match(/^(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})/);
+    if (altMatch) {
+      const day = altMatch[1].padStart(2, '0');
+      const monthName = altMatch[2].toLowerCase();
+      const month = MONTH_MAP[monthName];
+      if (month) {
+        return `${altMatch[3]}-${month}-${day}`;
+      }
     }
   }
   
@@ -120,6 +159,7 @@ function detectFormat(lines: string[]): DetectedFormat | null {
   }
   
   // Investing.com format - "Date,Price,Open,High,Low,Vol.,Change %"
+  // Date format is "Sep 17, 2024" (MMM DD, YYYY)
   if (firstLine.includes('date') && (firstLine.includes('change %') || firstLine.includes('vol.'))) {
     const cols = firstLine.split(',').map(c => c.toLowerCase().trim());
     return {
@@ -128,7 +168,7 @@ function detectFormat(lines: string[]): DetectedFormat | null {
       headerRows: 1,
       delimiter: ',',
       dateColumn: cols.indexOf('date'),
-      dateFormat: 'MM/DD/YYYY',
+      dateFormat: 'MMM DD, YYYY',
       closeColumn: cols.indexOf('price'),
       openColumn: cols.indexOf('open'),
       highColumn: cols.indexOf('high'),
@@ -177,6 +217,12 @@ function detectFormat(lines: string[]): DetectedFormat | null {
     dateFormat = firstPart > 12 ? 'DD/MM/YYYY' : 'MM/DD/YYYY';
   } else if (dateValue.match(/^\d{10,13}$/)) {
     dateFormat = 'unix';
+  } else if (dateValue.match(/^[A-Za-z]+\s+\d{1,2},?\s+\d{4}/)) {
+    // Matches "Sep 17, 2024" or "September 17 2024"
+    dateFormat = 'MMM DD, YYYY';
+  } else if (dateValue.match(/^\d{1,2}\s+[A-Za-z]+\s+\d{4}/)) {
+    // Matches "17 Sep 2024"
+    dateFormat = 'MMM DD, YYYY';
   }
   
   return {
@@ -344,7 +390,7 @@ export const DATA_SOURCES = [
   {
     name: 'Bitget',
     url: 'https://www.bitget.com/price/bitcoin/historical-data',
-    description: 'Free historical data with daily/weekly/monthly intervals.',
-    format: 'CSV download',
+    description: 'Free historical data. Note: Exports as Excel - save as CSV first.',
+    format: 'Excel (convert to CSV)',
   },
 ];
