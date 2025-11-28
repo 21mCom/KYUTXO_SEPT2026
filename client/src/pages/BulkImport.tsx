@@ -104,7 +104,7 @@ export default function BulkImport() {
 
   const { tags } = useEncryptedTags();
   const { categories } = useEncryptedCategories();
-  const { records } = useRecords();
+  const { records, isLoading: isLoadingRecords } = useRecords();
   const { encryptionKey } = useAuth();
   const { toast } = useToast();
 
