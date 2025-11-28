@@ -10,16 +10,19 @@ Preferred communication style: Simple, everyday language.
 
 ## Project Phases
 
-### Phase 1 (Current): Metadata Collection
+### Phase 1 (Complete): Metadata Collection
 - Manual entry of addresses/transactions with metadata
 - Wallet import from various software (Trezor, Sparrow, Mycelium, etc.)
 - xPub derivation for bulk address import
 - Focus on addresses, transaction IDs, and labels (not amounts/times)
 
-### Phase 2 (Future): Blockchain Data Import
-- Import verified transaction data from user's Bitcoin node
-- Transaction amounts, times, fees, confirmations
-- UTXO tracking and balance calculation
+### Phase 2 (Current): Blockchain Data Import
+- Transaction Sync feature fetches blockchain data for tracked addresses
+- Uses public APIs (mempool.space) by default, with future local node support planned
+- Only imports transactions with 5+ confirmations (considered settled)
+- Stores: txid, block height, block time, fee, fee rate, inputs/outputs
+- Auto-creates "Pending Review" records for discovered addresses
+- Intelligent matching: links transactions to existing labeled addresses
 
 ### Phase 3 (Future): Provenance & Reporting
 - Flow-of-funds tracking across addresses
@@ -72,12 +75,39 @@ A modular wallet import system (`client/src/lib/wallet-import/`) supports import
 ### Historical Price Import System
 
 The price import feature (`client/src/lib/price-parser.ts`, `client/src/pages/PriceImport.tsx`) allows importing historical Bitcoin price data for future reporting. Features:
-- Supports multiple data sources: CryptoDataDownload, CoinGecko, Investing.com, Bitget
-- Auto-detection of CSV format with intelligent parsing
+- Supports Investing.com CSV format with intelligent parsing
 - OHLCV data storage (Open, High, Low, Close, Volume)
 - Upsert logic: updates existing dates, adds new ones
 - Stored in IndexedDB `priceData` table with compound index on [date+currency+asset]
 - Data is NOT encrypted (public market data, not sensitive)
+
+### Transaction Sync System (Phase 2)
+
+The transaction sync feature (`client/src/lib/transaction-sync.ts`, `client/src/lib/blockchain-api.ts`, `client/src/pages/TransactionSync.tsx`) fetches blockchain data for tracked addresses. Architecture:
+
+**Blockchain API Layer** (`client/src/lib/blockchain-api.ts`):
+- Provider-agnostic interface supporting multiple backends
+- Default: mempool.space public API
+- Alternate: blockstream.info
+- Future: local Bitcoin node via electrs/Esplora
+- Rate limiting (250ms between requests) to avoid throttling
+
+**Transaction Sync Service** (`client/src/lib/transaction-sync.ts`):
+- Syncs all tracked addresses on user demand
+- Only imports transactions with 5+ confirmations
+- Incremental sync using `AddressSyncState` table (tracks last synced block height)
+- Intelligent address matching: links tx inputs/outputs to existing records
+- Auto-creates "Pending Review" records for unknown addresses
+
+**Database Tables** (version 7):
+- `blockchainTransactions`: txid, blockHeight, blockTime, fee, feeRate, syncedAt
+- `transactionParticipants`: txid, role (input/output), address, amount, vout, recordId
+- `addressSyncState`: address, recordId, lastSyncedHeight, lastSyncedAt, txCount
+
+**Privacy Considerations**:
+- Public APIs can see which addresses you query
+- Local node option (future) provides full privacy
+- All fetched data stored locally and encrypted
 
 ## External Dependencies
 

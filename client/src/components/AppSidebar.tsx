@@ -1,4 +1,4 @@
-import { Database, FileText, Settings, Upload, Download, QrCode, Key, RefreshCw, Wallet, TrendingUp } from "lucide-react";
+import { Database, FileText, Settings, Upload, Download, QrCode, Key, RefreshCw, Wallet, TrendingUp, ArrowDownUp } from "lucide-react";
 import { SiBitcoin } from "react-icons/si";
 import {
   Sidebar,
@@ -34,6 +34,11 @@ const menuItems = [
     title: "Price Import",
     url: "/price-import",
     icon: TrendingUp,
+  },
+  {
+    title: "Transaction Sync",
+    url: "/transaction-sync",
+    icon: ArrowDownUp,
   },
   {
     title: "QR Scanner",

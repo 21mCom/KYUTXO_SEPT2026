@@ -158,6 +158,40 @@ export interface PriceData {
   importedAt: number;     // Timestamp of when this data was imported
 }
 
+// Blockchain transaction data (fetched from blockchain APIs)
+export interface BlockchainTransaction {
+  id?: number;
+  txid: string;           // Transaction ID (hash)
+  blockHeight: number;    // Block number where tx was confirmed
+  blockTime: number;      // Unix timestamp of block
+  fee: number;            // Transaction fee in satoshis
+  feeRate: number;        // Fee rate in sats/vB
+  syncedAt: number;       // When we fetched this data
+  // Note: We don't store confirmations (always increasing) or raw hex (assumed valid)
+}
+
+// Transaction participant (input or output)
+export interface TransactionParticipant {
+  id?: number;
+  txid: string;           // Foreign key to BlockchainTransaction
+  role: 'input' | 'output';
+  address: string;        // Bitcoin address
+  amount: number;         // Amount in satoshis
+  vout?: number;          // Output index (for outputs)
+  // Link to our records table if address exists there
+  recordId?: number;
+}
+
+// Tracks sync state per address for incremental syncing
+export interface AddressSyncState {
+  id?: number;
+  address: string;        // The address being tracked
+  recordId?: number;      // Link to records table if exists
+  lastSyncedHeight: number; // Last block height we synced up to
+  lastSyncedAt: number;   // Timestamp of last sync
+  txCount: number;        // Number of transactions found for this address
+}
+
 export class KYBTCDatabase extends Dexie {
   records!: Table<Record>;
   attachments!: Table<Attachment>;
@@ -167,9 +201,30 @@ export class KYBTCDatabase extends Dexie {
   customFields!: Table<CustomField>;
   settings!: Table<Settings>;
   priceData!: Table<PriceData>;
+  blockchainTransactions!: Table<BlockchainTransaction>;
+  transactionParticipants!: Table<TransactionParticipant>;
+  addressSyncState!: Table<AddressSyncState>;
 
   constructor() {
     super('KYBTCDatabase');
+    
+    // Version 7 adds blockchain transaction tables for Phase 2
+    this.version(7).stores({
+      records: '++id, type, inputString, label, *tags, *categories, createdAt, updatedAt, isEncrypted, chainType',
+      attachments: '++id, recordId, createdAt, isEncrypted',
+      tags: '++id, name, createdAt, isEncrypted',
+      categories: '++id, name, createdAt, isEncrypted',
+      recordOrigins: '++id, recordId, originType, createdAt, isEncrypted',
+      customFields: '++id, slug, enabled, createdAt',
+      settings: 'id',
+      priceData: '++id, [date+currency+asset], date, asset, currency, source, importedAt',
+      blockchainTransactions: '++id, &txid, blockHeight, blockTime, syncedAt',
+      transactionParticipants: '++id, txid, role, address, recordId',
+      addressSyncState: '++id, &address, recordId, lastSyncedAt'
+    }).upgrade(tx => {
+      // No data migration needed - new tables are empty
+      return Promise.resolve();
+    });
     
     // Version 6 adds priceData table for historical price data
     this.version(6).stores({
