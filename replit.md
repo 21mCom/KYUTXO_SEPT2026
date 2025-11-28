@@ -100,6 +100,10 @@ The transaction sync feature (`client/src/lib/transaction-sync.ts`, `client/src/
 - Auto-creates "Pending Review" records for unknown addresses
 - **Depth-limited sync**: Controls address discovery with configurable depth levels
 - **Sync Deeper**: Allows incremental exploration of address relationships
+  - Two-pass filter system: First pass identifies related records and adds to validAncestorIds, second pass filters for records needing sync
+  - Multi-hop traversal enabled through ancestry tracking (discoveredFromRecordId)
+  - Target record's maxSyncedDepth is updated based on actual progress (prevents premature depth exhaustion)
+  - Dashboard calculates targetDepth accounting for both syncDepth and maxSyncedDepth
 
 **Depth Tracking Fields** (Database version 9):
 - `syncDepth`: The address's distance from manually-added records (0 = manual, 1 = first-hop discovered, etc.)
