@@ -210,7 +210,7 @@ export class KYBTCDatabase extends Dexie {
     
     // Version 7 adds blockchain transaction tables for Phase 2
     this.version(7).stores({
-      records: '++id, type, inputString, label, *tags, *categories, createdAt, updatedAt, isEncrypted, chainType',
+      records: '++id, type, inputString, label, owner, *tags, *categories, createdAt, updatedAt, isEncrypted, chainType',
       attachments: '++id, recordId, createdAt, isEncrypted',
       tags: '++id, name, createdAt, isEncrypted',
       categories: '++id, name, createdAt, isEncrypted',
@@ -228,7 +228,7 @@ export class KYBTCDatabase extends Dexie {
     
     // Version 6 adds priceData table for historical price data
     this.version(6).stores({
-      records: '++id, type, inputString, label, *tags, *categories, createdAt, updatedAt, isEncrypted, chainType',
+      records: '++id, type, inputString, label, owner, *tags, *categories, createdAt, updatedAt, isEncrypted, chainType',
       attachments: '++id, recordId, createdAt, isEncrypted',
       tags: '++id, name, createdAt, isEncrypted',
       categories: '++id, name, createdAt, isEncrypted',
@@ -240,7 +240,7 @@ export class KYBTCDatabase extends Dexie {
     
     // Version 5 adds customFields table for user-defined fields
     this.version(5).stores({
-      records: '++id, type, inputString, label, *tags, *categories, createdAt, updatedAt, isEncrypted, chainType',
+      records: '++id, type, inputString, label, owner, *tags, *categories, createdAt, updatedAt, isEncrypted, chainType',
       attachments: '++id, recordId, createdAt, isEncrypted',
       tags: '++id, name, createdAt, isEncrypted',
       categories: '++id, name, createdAt, isEncrypted',
@@ -254,7 +254,7 @@ export class KYBTCDatabase extends Dexie {
     // existing databases may have duplicates. Duplicate detection is handled at
     // the application level in RecordFormDialog and BulkImport.
     this.version(4).stores({
-      records: '++id, type, inputString, label, *tags, *categories, createdAt, updatedAt, isEncrypted, chainType',
+      records: '++id, type, inputString, label, owner, *tags, *categories, createdAt, updatedAt, isEncrypted, chainType',
       attachments: '++id, recordId, createdAt, isEncrypted',
       tags: '++id, name, createdAt, isEncrypted',
       categories: '++id, name, createdAt, isEncrypted',
@@ -264,7 +264,7 @@ export class KYBTCDatabase extends Dexie {
     
     // Version 3 adds chainType, derivationPath, xpub fields for bulk import
     this.version(3).stores({
-      records: '++id, type, inputString, label, *tags, *categories, createdAt, updatedAt, isEncrypted, chainType',
+      records: '++id, type, inputString, label, owner, *tags, *categories, createdAt, updatedAt, isEncrypted, chainType',
       attachments: '++id, recordId, createdAt, isEncrypted',
       tags: '++id, name, createdAt, isEncrypted',
       categories: '++id, name, createdAt, isEncrypted',
