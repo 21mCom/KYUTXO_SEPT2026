@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { useDropzone } from 'react-dropzone';
 import { 
   Upload, 
@@ -90,37 +90,40 @@ export default function WalletImport() {
   const [availableTags, setAvailableTags] = useState<string[]>([]);
   const [availableCategories, setAvailableCategories] = useState<string[]>([]);
   
-  useState(() => {
+  useEffect(() => {
     const decryptItems = async () => {
       const key = getEncryptionKey();
-      if (!key || !encryptedTags || !encryptedCategories) return;
+      if (!key) return;
       
-      const decryptedTags: string[] = [];
-      for (const tag of encryptedTags) {
-        try {
-          const decrypted = tag.isEncrypted ? await decryptTag(tag, key) : tag;
-          decryptedTags.push(decrypted.name);
-        } catch {
-          // Skip failed decryptions
+      if (encryptedTags) {
+        const decryptedTags: string[] = [];
+        for (const tag of encryptedTags) {
+          try {
+            const decrypted = tag.isEncrypted ? await decryptTag(tag, key) : tag;
+            decryptedTags.push(decrypted.name);
+          } catch {
+            // Skip failed decryptions
+          }
         }
+        setAvailableTags(decryptedTags);
       }
       
-      const decryptedCategories: string[] = [];
-      for (const cat of encryptedCategories) {
-        try {
-          const decrypted = cat.isEncrypted ? await decryptCategory(cat, key) : cat;
-          decryptedCategories.push(decrypted.name);
-        } catch {
-          // Skip failed decryptions
+      if (encryptedCategories) {
+        const decryptedCategories: string[] = [];
+        for (const cat of encryptedCategories) {
+          try {
+            const decrypted = cat.isEncrypted ? await decryptCategory(cat, key) : cat;
+            decryptedCategories.push(decrypted.name);
+          } catch {
+            // Skip failed decryptions
+          }
         }
+        setAvailableCategories(decryptedCategories);
       }
-      
-      setAvailableTags(decryptedTags);
-      setAvailableCategories(decryptedCategories);
     };
     
     decryptItems();
-  });
+  }, [encryptedTags, encryptedCategories]);
   
   const supportedWallets = getSupportedWallets();
   
