@@ -370,19 +370,19 @@ export default function TransactionSync() {
               <p>Sync queries mempool.space for transaction history of each address</p>
             </div>
             <div className="flex gap-3">
-              <Badge variant="outline" className="shrink-0">2</Badge>
+              <Badge variant="outline" className="shrink-0">3</Badge>
               <p>Only transactions with 5+ confirmations are imported (considered settled)</p>
             </div>
             <div className="flex gap-3">
-              <Badge variant="outline" className="shrink-0">3</Badge>
+              <Badge variant="outline" className="shrink-0">4</Badge>
               <p>Transaction details are stored locally: block time, fees, inputs, and outputs</p>
             </div>
             <div className="flex gap-3">
-              <Badge variant="outline" className="shrink-0">4</Badge>
+              <Badge variant="outline" className="shrink-0">5</Badge>
               <p>Unknown addresses in transactions are created as "Pending Review" for you to identify</p>
             </div>
             <div className="flex gap-3">
-              <Badge variant="outline" className="shrink-0">5</Badge>
+              <Badge variant="outline" className="shrink-0">6</Badge>
               <p>Run sync periodically to catch new transactions</p>
             </div>
           </CardContent>
