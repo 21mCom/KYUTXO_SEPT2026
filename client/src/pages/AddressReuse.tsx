@@ -473,6 +473,17 @@ export default function AddressReuse() {
             )}
           </CardContent>
         </Card>
+
+        {/* Info about counterparty addresses */}
+        {otherReusedAddresses.length > 0 && (
+          <div className="text-sm text-muted-foreground bg-muted/50 p-4 rounded-lg">
+            <p>
+              <span className="font-medium">Note:</span> {otherReusedAddresses.length.toLocaleString()} other addresses 
+              (counterparties, exchanges, etc.) also appear in multiple of your transactions but are not shown here 
+              since they're not addresses you control.
+            </p>
+          </div>
+        )}
       </div>
     </ScrollArea>
   );
