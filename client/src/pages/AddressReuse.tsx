@@ -608,7 +608,7 @@ export default function AddressReuse() {
                   <div className="space-y-2">
                     <Filter className="h-12 w-12 mx-auto opacity-50" />
                     <p>No addresses match your filters</p>
-                    <Button variant="ghost" size="sm" onClick={clearAllFilters}>
+                    <Button variant="ghost" size="sm" onClick={clearAllFilters} data-testid="button-clear-filters-empty">
                       Clear Filters
                     </Button>
                   </div>
