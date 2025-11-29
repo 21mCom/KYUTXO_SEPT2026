@@ -34,15 +34,24 @@ export default function Records() {
 
   // Parse query parameters from location
   useEffect(() => {
-    const url = new URL(location, window.location.origin);
-    const id = url.searchParams.get("id");
-    const search = url.searchParams.get("search");
-    
-    if (id) {
-      setSelectedRecordId(id);
-    }
-    if (search) {
-      setSearchQuery(search);
+    try {
+      // Extract query string from location
+      const queryIndex = location.indexOf('?');
+      const queryString = queryIndex >= 0 ? location.substring(queryIndex + 1) : '';
+      const params = new URLSearchParams(queryString);
+      
+      const id = params.get("id");
+      const search = params.get("search");
+      
+      if (id) {
+        setSelectedRecordId(id);
+        setSearchQuery(""); // Clear search when viewing by ID
+      } else if (search) {
+        setSearchQuery(decodeURIComponent(search));
+        setSelectedRecordId(null); // Clear selection when searching
+      }
+    } catch (error) {
+      console.error('[Records] Failed to parse query params:', error);
     }
   }, [location]);
 
