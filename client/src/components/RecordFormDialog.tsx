@@ -83,6 +83,8 @@ interface RecordFormDialogProps {
   uploadProgress?: { current: number; total: number } | null;
   availableSeedNames?: string[];
   availableWalletSoftware?: string[];
+  availableOwners?: string[];
+  availableWalletNames?: string[];
   availableTags?: string[];
   availableCategories?: string[];
   enabledCustomFields?: CustomFieldDef[];
@@ -98,6 +100,8 @@ export function RecordFormDialog({
   uploadProgress = null,
   availableSeedNames = [],
   availableWalletSoftware = [],
+  availableOwners = [],
+  availableWalletNames = [],
   availableTags = [],
   availableCategories = [],
   enabledCustomFields = [],
@@ -126,8 +130,12 @@ export function RecordFormDialog({
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [seedOpen, setSeedOpen] = useState(false);
   const [walletOpen, setWalletOpen] = useState(false);
+  const [ownerOpen, setOwnerOpen] = useState(false);
+  const [walletNameOpen, setWalletNameOpen] = useState(false);
   const [newSeedName, setNewSeedName] = useState("");
   const [newWalletSoftware, setNewWalletSoftware] = useState("");
+  const [newOwner, setNewOwner] = useState("");
+  const [newWalletName, setNewWalletName] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
   
   // Duplicate detection state
@@ -152,6 +160,8 @@ export function RecordFormDialog({
       setWalletNameInput(data.walletName || "");
       setNewSeedName("");
       setNewWalletSoftware("");
+      setNewOwner("");
+      setNewWalletName("");
       setDuplicateRecord(undefined);
       setIsCheckingDuplicate(false);
       setFetchedTxData(null);
@@ -366,9 +376,27 @@ export function RecordFormDialog({
     }
   };
 
+  const addNewOwner = () => {
+    if (newOwner.trim()) {
+      setOwnerInput(newOwner.trim());
+      setNewOwner("");
+      setOwnerOpen(false);
+    }
+  };
+
+  const addNewWalletName = () => {
+    if (newWalletName.trim()) {
+      setWalletNameInput(newWalletName.trim());
+      setNewWalletName("");
+      setWalletNameOpen(false);
+    }
+  };
+
   // Combine available values with any new value that's been set
   const allSeedNames = Array.from(new Set([...availableSeedNames, formData.seedName].filter(Boolean)));
   const allWalletSoftware = Array.from(new Set([...availableWalletSoftware, formData.walletSoftware].filter(Boolean)));
+  const allOwners = Array.from(new Set([...availableOwners, ownerInput].filter(Boolean)));
+  const allWalletNames = Array.from(new Set([...availableWalletNames, walletNameInput].filter(Boolean)));
 
   const getInputLabel = () => {
     switch (formData.type) {
@@ -813,27 +841,145 @@ export function RecordFormDialog({
 
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label htmlFor="owner">Owner</Label>
-              <Input
-                id="owner"
-                value={ownerInput}
-                onChange={(e) => setOwnerInput(e.target.value)}
-                placeholder="e.g., Personal, Company ABC"
-                disabled={isSubmitting}
-                data-testid="input-owner"
-              />
+              <Label>Owner</Label>
+              <Popover open={ownerOpen} onOpenChange={setOwnerOpen}>
+                <PopoverTrigger asChild>
+                  <Button
+                    variant="outline"
+                    role="combobox"
+                    aria-expanded={ownerOpen}
+                    className="w-full justify-between font-normal"
+                    disabled={isSubmitting}
+                    data-testid="select-owner"
+                  >
+                    {ownerInput || "Select or add..."}
+                    <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-full p-0" align="start">
+                  <Command>
+                    <CommandInput 
+                      placeholder="Search or add new..." 
+                      value={newOwner}
+                      onValueChange={setNewOwner}
+                    />
+                    <CommandList>
+                      <CommandEmpty>
+                        {newOwner && (
+                          <Button
+                            variant="ghost"
+                            className="w-full justify-start"
+                            onClick={addNewOwner}
+                          >
+                            <Plus className="mr-2 h-4 w-4" />
+                            Add "{newOwner}"
+                          </Button>
+                        )}
+                      </CommandEmpty>
+                      <CommandGroup>
+                        {allOwners.map((name) => (
+                          <CommandItem
+                            key={name}
+                            value={name}
+                            onSelect={() => {
+                              setOwnerInput(name);
+                              setOwnerOpen(false);
+                            }}
+                          >
+                            <Check
+                              className={cn(
+                                "mr-2 h-4 w-4",
+                                ownerInput === name ? "opacity-100" : "opacity-0"
+                              )}
+                            />
+                            {name}
+                          </CommandItem>
+                        ))}
+                        {newOwner && !allOwners.some(n => n.toLowerCase() === newOwner.toLowerCase()) && (
+                          <CommandItem
+                            value={`create-${newOwner}`}
+                            onSelect={addNewOwner}
+                          >
+                            <Plus className="mr-2 h-4 w-4" />
+                            Add "{newOwner}"
+                          </CommandItem>
+                        )}
+                      </CommandGroup>
+                    </CommandList>
+                  </Command>
+                </PopoverContent>
+              </Popover>
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="walletName">Wallet Name</Label>
-              <Input
-                id="walletName"
-                value={walletNameInput}
-                onChange={(e) => setWalletNameInput(e.target.value)}
-                placeholder="e.g., College Fund, Trading"
-                disabled={isSubmitting}
-                data-testid="input-wallet-name"
-              />
+              <Label>Wallet Name</Label>
+              <Popover open={walletNameOpen} onOpenChange={setWalletNameOpen}>
+                <PopoverTrigger asChild>
+                  <Button
+                    variant="outline"
+                    role="combobox"
+                    aria-expanded={walletNameOpen}
+                    className="w-full justify-between font-normal"
+                    disabled={isSubmitting}
+                    data-testid="select-wallet-name"
+                  >
+                    {walletNameInput || "Select or add..."}
+                    <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-full p-0" align="start">
+                  <Command>
+                    <CommandInput 
+                      placeholder="Search or add new..." 
+                      value={newWalletName}
+                      onValueChange={setNewWalletName}
+                    />
+                    <CommandList>
+                      <CommandEmpty>
+                        {newWalletName && (
+                          <Button
+                            variant="ghost"
+                            className="w-full justify-start"
+                            onClick={addNewWalletName}
+                          >
+                            <Plus className="mr-2 h-4 w-4" />
+                            Add "{newWalletName}"
+                          </Button>
+                        )}
+                      </CommandEmpty>
+                      <CommandGroup>
+                        {allWalletNames.map((name) => (
+                          <CommandItem
+                            key={name}
+                            value={name}
+                            onSelect={() => {
+                              setWalletNameInput(name);
+                              setWalletNameOpen(false);
+                            }}
+                          >
+                            <Check
+                              className={cn(
+                                "mr-2 h-4 w-4",
+                                walletNameInput === name ? "opacity-100" : "opacity-0"
+                              )}
+                            />
+                            {name}
+                          </CommandItem>
+                        ))}
+                        {newWalletName && !allWalletNames.some(n => n.toLowerCase() === newWalletName.toLowerCase()) && (
+                          <CommandItem
+                            value={`create-${newWalletName}`}
+                            onSelect={addNewWalletName}
+                          >
+                            <Plus className="mr-2 h-4 w-4" />
+                            Add "{newWalletName}"
+                          </CommandItem>
+                        )}
+                      </CommandGroup>
+                    </CommandList>
+                  </Command>
+                </PopoverContent>
+              </Popover>
             </div>
           </div>
 

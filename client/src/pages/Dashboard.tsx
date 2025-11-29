@@ -10,6 +10,10 @@ import { RecordFormDialog, type TransactionAddresses } from "@/components/Record
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useRecords, createRecord, createRecordWithAttachments, updateRecord, deleteRecord, searchRecords, filterRecords } from "@/hooks/use-records";
 import { useEncryptedTags, useEncryptedCategories } from "@/hooks/use-encrypted-records";
+import { useOwners } from "@/hooks/use-owners";
+import { useWalletNames } from "@/hooks/use-wallet-names";
+import { useSeedNames } from "@/hooks/use-seed-names";
+import { useWalletSoftware } from "@/hooks/use-wallet-software";
 import { syncTagsToMaster, syncCategoriesToMaster, isEncryptionReady, findRecordByInputString } from "@/lib/encryptionFacade";
 import { useCustomFields, useSettings } from "@/hooks/use-settings";
 import { useToast } from "@/hooks/use-toast";
@@ -44,6 +48,10 @@ export default function Dashboard() {
   const { records, isLoading } = useRecords();
   const { tags } = useEncryptedTags();
   const { categories } = useEncryptedCategories();
+  const { owners } = useOwners();
+  const { walletNames } = useWalletNames();
+  const { seedNames } = useSeedNames();
+  const { walletSoftware } = useWalletSoftware();
   const { enabledCustomFields } = useCustomFields();
   const { settings } = useSettings();
   const { toast } = useToast();
@@ -129,9 +137,23 @@ export default function Dashboard() {
 
   const selectedRecord = records.find(r => r.id === selectedRecordId);
 
-  // Compute unique values for dropdowns
-  const uniqueSeedNames = Array.from(new Set(records.map(r => r.seedName).filter((s): s is string => !!s)));
-  const uniqueWalletSoftware = Array.from(new Set(records.map(r => r.walletSoftware).filter((s): s is string => !!s)));
+  // Compute unique values for dropdowns (combining existing record values with master lists)
+  const uniqueSeedNames = Array.from(new Set([
+    ...seedNames.map(s => s.name).filter(n => n && n !== '[encrypted]'),
+    ...records.map(r => r.seedName).filter((s): s is string => !!s)
+  ]));
+  const uniqueWalletSoftware = Array.from(new Set([
+    ...walletSoftware.map(w => w.name).filter(n => n && n !== '[encrypted]'),
+    ...records.map(r => r.walletSoftware).filter((s): s is string => !!s)
+  ]));
+  const uniqueOwners = Array.from(new Set([
+    ...owners.map(o => o.name).filter(n => n && n !== '[encrypted]'),
+    ...records.map(r => r.owner).filter((s): s is string => !!s)
+  ]));
+  const uniqueWalletNames = Array.from(new Set([
+    ...walletNames.map(w => w.name).filter(n => n && n !== '[encrypted]'),
+    ...records.map(r => r.walletName).filter((s): s is string => !!s)
+  ]));
 
   const handleRecordClick = (id: number) => {
     setSelectedRecordId(id);
@@ -776,6 +798,8 @@ export default function Dashboard() {
         uploadProgress={uploadProgress}
         availableSeedNames={uniqueSeedNames}
         availableWalletSoftware={uniqueWalletSoftware}
+        availableOwners={uniqueOwners}
+        availableWalletNames={uniqueWalletNames}
         availableTags={tags.map(t => t.name).filter(n => n && n !== '[encrypted]')}
         availableCategories={categories.map(c => c.name).filter(n => n && n !== '[encrypted]')}
         enabledCustomFields={enabledCustomFields}
