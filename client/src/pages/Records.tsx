@@ -9,12 +9,26 @@ import { decryptRecords, isEncryptionReady } from "@/lib/encryptionFacade";
 import { RecordTable } from "@/components/RecordTable";
 import { RecordDetailPanel } from "@/components/RecordDetailPanel";
 
+interface ConvertedRecord {
+  id: string;
+  type: "address" | "transaction" | "other";
+  inputString: string;
+  label: string;
+  notes?: string;
+  tags: string[];
+  categories: string[];
+  seedName?: string;
+  walletSoftware?: string;
+  owner?: string;
+  walletName?: string;
+}
+
 export default function Records() {
   const [location, navigate] = useLocation();
   
-  const [records, setRecords] = useState<DbRecord[]>([]);
-  const [filteredRecords, setFilteredRecords] = useState<DbRecord[]>([]);
-  const [selectedRecordId, setSelectedRecordId] = useState<number | null>(null);
+  const [records, setRecords] = useState<ConvertedRecord[]>([]);
+  const [filteredRecords, setFilteredRecords] = useState<ConvertedRecord[]>([]);
+  const [selectedRecordId, setSelectedRecordId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [isLoading, setIsLoading] = useState(true);
 
@@ -25,7 +39,7 @@ export default function Records() {
     const search = url.searchParams.get("search");
     
     if (id) {
-      setSelectedRecordId(parseInt(id));
+      setSelectedRecordId(id);
     }
     if (search) {
       setSearchQuery(search);
@@ -47,7 +61,7 @@ export default function Records() {
         }
         
         // Convert database records to component format (string IDs)
-        const convertedRecords = decrypted.map(r => ({
+        const convertedRecords: ConvertedRecord[] = decrypted.map(r => ({
           id: String(r.id),
           type: r.type as "address" | "transaction" | "other",
           inputString: r.inputString,
@@ -61,7 +75,7 @@ export default function Records() {
           walletName: r.walletName,
         }));
         
-        setRecords(convertedRecords as any);
+        setRecords(convertedRecords);
       } catch (error) {
         console.error('[Records] Failed to load records:', error);
       } finally {
@@ -92,7 +106,7 @@ export default function Records() {
   }, [records, searchQuery]);
 
   const selectedRecord = selectedRecordId 
-    ? records.find(r => parseInt(r.id) === selectedRecordId)
+    ? records.find(r => r.id === selectedRecordId)
     : null;
 
   return (
