@@ -1,23 +1,38 @@
-import { useState, useEffect, useMemo } from "react";
-import { Edit, Tag, FolderOpen, Wallet, Sprout, Users, Plus, Trash2, RefreshCw } from "lucide-react";
+import { useState } from "react";
+import { Edit, Tag, FolderOpen, Wallet, Sprout, Users, Plus, Trash2, RefreshCw, KeySquare } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useEncryptedRecords, useEncryptedTags, useEncryptedCategories } from "@/hooks/use-encrypted-records";
+import { useOwners } from "@/hooks/use-owners";
+import { useWalletNames } from "@/hooks/use-wallet-names";
+import { useSeedNames } from "@/hooks/use-seed-names";
+import { useWalletSoftware } from "@/hooks/use-wallet-software";
 import { 
   updateRecord, 
-  decryptRecords, 
   createTag, 
   updateTag, 
   deleteTag, 
   createCategory, 
   updateCategory, 
-  deleteCategory 
+  deleteCategory,
+  createOwner,
+  updateOwner,
+  deleteOwner,
+  createWalletNameEntry,
+  updateWalletNameEntry,
+  deleteWalletNameEntry,
+  createSeedNameEntry,
+  updateSeedNameEntry,
+  deleteSeedNameEntry,
+  createWalletSoftwareEntry,
+  updateWalletSoftwareEntry,
+  deleteWalletSoftwareEntry,
 } from "@/lib/encryptionFacade";
 import { useToast } from "@/hooks/use-toast";
-import { db, type Record } from "@/lib/database";
+import { type Record } from "@/lib/database";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -63,36 +78,36 @@ const FIELD_CONFIGS: FieldConfig[] = [
     hasMasterList: true,
   },
   { 
-    key: 'walletSoftware', 
-    label: 'Wallet Software', 
-    icon: Wallet, 
-    description: 'Wallet applications used',
-    isArray: false,
-    hasMasterList: false,
-  },
-  { 
-    key: 'seedName', 
-    label: 'Seed Name', 
-    icon: Sprout, 
-    description: 'Named seed phrases',
-    isArray: false,
-    hasMasterList: false,
-  },
-  { 
     key: 'owner', 
     label: 'Owner', 
     icon: Users, 
-    description: 'Who owns/controls this address',
+    description: 'Who owns/controls this address (e.g., Personal, Spouse, Acme Corp)',
     isArray: false,
-    hasMasterList: false,
+    hasMasterList: true,
   },
   { 
     key: 'walletName', 
     label: 'Wallet Name', 
     icon: Wallet, 
-    description: 'Specific wallet purpose or name',
+    description: 'Specific wallet purpose within an owner (e.g., College Fund, Trading)',
     isArray: false,
-    hasMasterList: false,
+    hasMasterList: true,
+  },
+  { 
+    key: 'seedName', 
+    label: 'Seed Name', 
+    icon: Sprout, 
+    description: 'Named seed phrases for wallet recovery',
+    isArray: false,
+    hasMasterList: true,
+  },
+  { 
+    key: 'walletSoftware', 
+    label: 'Wallet Software', 
+    icon: KeySquare, 
+    description: 'Wallet applications used (e.g., Trezor, Sparrow, Mycelium)',
+    isArray: false,
+    hasMasterList: true,
   },
 ];
 
@@ -100,6 +115,10 @@ export default function ValueUpdaterPage() {
   const { records, isLoading: recordsLoading } = useEncryptedRecords();
   const { tags, isLoading: tagsLoading } = useEncryptedTags();
   const { categories, isLoading: categoriesLoading } = useEncryptedCategories();
+  const { owners, isLoading: ownersLoading } = useOwners();
+  const { walletNames, isLoading: walletNamesLoading } = useWalletNames();
+  const { seedNames, isLoading: seedNamesLoading } = useSeedNames();
+  const { walletSoftware, isLoading: walletSoftwareLoading } = useWalletSoftware();
   const { toast } = useToast();
   
   const [editingField, setEditingField] = useState<FieldType | null>(null);
@@ -109,7 +128,7 @@ export default function ValueUpdaterPage() {
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<{ field: FieldType; value: string; count: number } | null>(null);
   const [newItemField, setNewItemField] = useState<FieldType | null>(null);
-  const [newItemValue, setNewItemValue] = useState("");
+  const [newItemValue, setNewItemValue] = useState<string>("");
 
   const extractUniqueValues = (field: FieldType): UniqueValue[] => {
     const valueCounts = new Map<string, number>();
@@ -139,17 +158,36 @@ export default function ValueUpdaterPage() {
       .sort((a, b) => a.value.localeCompare(b.value));
   };
 
-  const getUnusedMasterItems = (field: 'tags' | 'categories'): string[] => {
+  const getUnusedMasterItems = (field: FieldType): string[] => {
     const usedValues = new Set(extractUniqueValues(field).map(v => v.value.toLowerCase()));
     
-    if (field === 'tags') {
-      return tags
-        .filter(t => !usedValues.has(t.name.toLowerCase()))
-        .map(t => t.name);
-    } else {
-      return categories
-        .filter(c => !usedValues.has(c.name.toLowerCase()))
-        .map(c => c.name);
+    switch (field) {
+      case 'tags':
+        return tags
+          .filter(t => !usedValues.has(t.name.toLowerCase()))
+          .map(t => t.name);
+      case 'categories':
+        return categories
+          .filter(c => !usedValues.has(c.name.toLowerCase()))
+          .map(c => c.name);
+      case 'owner':
+        return owners
+          .filter(o => !usedValues.has(o.name.toLowerCase()))
+          .map(o => o.name);
+      case 'walletName':
+        return walletNames
+          .filter(wn => !usedValues.has(wn.name.toLowerCase()))
+          .map(wn => wn.name);
+      case 'seedName':
+        return seedNames
+          .filter(sn => !usedValues.has(sn.name.toLowerCase()))
+          .map(sn => sn.name);
+      case 'walletSoftware':
+        return walletSoftware
+          .filter(ws => !usedValues.has(ws.name.toLowerCase()))
+          .map(ws => ws.name);
+      default:
+        return [];
     }
   };
 
@@ -194,15 +232,48 @@ export default function ValueUpdaterPage() {
       }
 
       if (config.hasMasterList) {
-        if (field === 'tags') {
-          const tag = tags.find(t => t.name === oldValue);
-          if (tag?.id) {
-            await updateTag(tag.id, { name: trimmedNewValue });
+        switch (field) {
+          case 'tags': {
+            const tag = tags.find(t => t.name === oldValue);
+            if (tag?.id) {
+              await updateTag(tag.id, { name: trimmedNewValue });
+            }
+            break;
           }
-        } else if (field === 'categories') {
-          const category = categories.find(c => c.name === oldValue);
-          if (category?.id) {
-            await updateCategory(category.id, { name: trimmedNewValue });
+          case 'categories': {
+            const category = categories.find(c => c.name === oldValue);
+            if (category?.id) {
+              await updateCategory(category.id, { name: trimmedNewValue });
+            }
+            break;
+          }
+          case 'owner': {
+            const owner = owners.find(o => o.name === oldValue);
+            if (owner?.id) {
+              await updateOwner(owner.id, { name: trimmedNewValue });
+            }
+            break;
+          }
+          case 'walletName': {
+            const walletName = walletNames.find(wn => wn.name === oldValue);
+            if (walletName?.id) {
+              await updateWalletNameEntry(walletName.id, { name: trimmedNewValue });
+            }
+            break;
+          }
+          case 'seedName': {
+            const seedName = seedNames.find(sn => sn.name === oldValue);
+            if (seedName?.id) {
+              await updateSeedNameEntry(seedName.id, { name: trimmedNewValue });
+            }
+            break;
+          }
+          case 'walletSoftware': {
+            const ws = walletSoftware.find(w => w.name === oldValue);
+            if (ws?.id) {
+              await updateWalletSoftwareEntry(ws.id, { name: trimmedNewValue });
+            }
+            break;
           }
         }
       }
@@ -260,15 +331,48 @@ export default function ValueUpdaterPage() {
       }
 
       if (config.hasMasterList) {
-        if (field === 'tags') {
-          const tag = tags.find(t => t.name === value);
-          if (tag?.id) {
-            await deleteTag(tag.id);
+        switch (field) {
+          case 'tags': {
+            const tag = tags.find(t => t.name === value);
+            if (tag?.id) {
+              await deleteTag(tag.id);
+            }
+            break;
           }
-        } else if (field === 'categories') {
-          const category = categories.find(c => c.name === value);
-          if (category?.id) {
-            await deleteCategory(category.id);
+          case 'categories': {
+            const category = categories.find(c => c.name === value);
+            if (category?.id) {
+              await deleteCategory(category.id);
+            }
+            break;
+          }
+          case 'owner': {
+            const owner = owners.find(o => o.name === value);
+            if (owner?.id) {
+              await deleteOwner(owner.id);
+            }
+            break;
+          }
+          case 'walletName': {
+            const walletName = walletNames.find(wn => wn.name === value);
+            if (walletName?.id) {
+              await deleteWalletNameEntry(walletName.id);
+            }
+            break;
+          }
+          case 'seedName': {
+            const seedName = seedNames.find(sn => sn.name === value);
+            if (seedName?.id) {
+              await deleteSeedNameEntry(seedName.id);
+            }
+            break;
+          }
+          case 'walletSoftware': {
+            const ws = walletSoftware.find(w => w.name === value);
+            if (ws?.id) {
+              await deleteWalletSoftwareEntry(ws.id);
+            }
+            break;
           }
         }
       }
@@ -291,19 +395,38 @@ export default function ValueUpdaterPage() {
     }
   };
 
-  const handleAddItem = async (field: 'tags' | 'categories') => {
+  const handleAddItem = async (field: FieldType) => {
     if (!newItemValue.trim()) return;
     
+    const trimmedValue = newItemValue.trim();
+    const config = FIELD_CONFIGS.find(f => f.key === field);
+    if (!config?.hasMasterList) return;
+    
     try {
-      if (field === 'tags') {
-        await createTag(newItemValue.trim());
-      } else {
-        await createCategory(newItemValue.trim());
+      switch (field) {
+        case 'tags':
+          await createTag(trimmedValue);
+          break;
+        case 'categories':
+          await createCategory(trimmedValue);
+          break;
+        case 'owner':
+          await createOwner(trimmedValue);
+          break;
+        case 'walletName':
+          await createWalletNameEntry(trimmedValue);
+          break;
+        case 'seedName':
+          await createSeedNameEntry(trimmedValue);
+          break;
+        case 'walletSoftware':
+          await createWalletSoftwareEntry(trimmedValue);
+          break;
       }
       
       toast({
-        title: `${field === 'tags' ? 'Tag' : 'Category'} Created`,
-        description: `"${newItemValue}" has been created`,
+        title: `${config.label} Created`,
+        description: `"${trimmedValue}" has been created`,
       });
       
       setNewItemField(null);
@@ -317,22 +440,58 @@ export default function ValueUpdaterPage() {
     }
   };
 
-  const handleDeleteUnused = async (field: 'tags' | 'categories', name: string) => {
+  const handleDeleteUnused = async (field: FieldType, name: string) => {
+    const config = FIELD_CONFIGS.find(f => f.key === field);
+    if (!config?.hasMasterList) return;
+    
     try {
-      if (field === 'tags') {
-        const tag = tags.find(t => t.name === name);
-        if (tag?.id) {
-          await deleteTag(tag.id);
+      switch (field) {
+        case 'tags': {
+          const tag = tags.find(t => t.name === name);
+          if (tag?.id) {
+            await deleteTag(tag.id);
+          }
+          break;
         }
-      } else {
-        const category = categories.find(c => c.name === name);
-        if (category?.id) {
-          await deleteCategory(category.id);
+        case 'categories': {
+          const category = categories.find(c => c.name === name);
+          if (category?.id) {
+            await deleteCategory(category.id);
+          }
+          break;
+        }
+        case 'owner': {
+          const owner = owners.find(o => o.name === name);
+          if (owner?.id) {
+            await deleteOwner(owner.id);
+          }
+          break;
+        }
+        case 'walletName': {
+          const walletName = walletNames.find(wn => wn.name === name);
+          if (walletName?.id) {
+            await deleteWalletNameEntry(walletName.id);
+          }
+          break;
+        }
+        case 'seedName': {
+          const seedName = seedNames.find(sn => sn.name === name);
+          if (seedName?.id) {
+            await deleteSeedNameEntry(seedName.id);
+          }
+          break;
+        }
+        case 'walletSoftware': {
+          const ws = walletSoftware.find(w => w.name === name);
+          if (ws?.id) {
+            await deleteWalletSoftwareEntry(ws.id);
+          }
+          break;
         }
       }
       
       toast({
-        title: `${field === 'tags' ? 'Tag' : 'Category'} Deleted`,
+        title: `${config.label} Deleted`,
         description: `"${name}" has been removed`,
       });
     } catch (error) {
@@ -344,13 +503,13 @@ export default function ValueUpdaterPage() {
     }
   };
 
-  const isLoading = recordsLoading || tagsLoading || categoriesLoading;
+  const isLoading = recordsLoading || tagsLoading || categoriesLoading || ownersLoading || walletNamesLoading || seedNamesLoading || walletSoftwareLoading;
 
   const renderFieldSection = (config: FieldConfig) => {
     const values = extractUniqueValues(config.key);
     const Icon = config.icon;
     const unusedItems = config.hasMasterList 
-      ? getUnusedMasterItems(config.key as 'tags' | 'categories')
+      ? getUnusedMasterItems(config.key)
       : [];
 
     return (
@@ -366,7 +525,7 @@ export default function ValueUpdaterPage() {
                 size="sm"
                 variant="outline"
                 onClick={() => {
-                  setNewItemField(config.key as 'tags' | 'categories');
+                  setNewItemField(config.key);
                   setNewItemValue("");
                 }}
                 data-testid={`button-add-${config.key}`}
@@ -386,19 +545,19 @@ export default function ValueUpdaterPage() {
                 onChange={(e) => setNewItemValue(e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') {
-                    handleAddItem(config.key as 'tags' | 'categories');
+                    handleAddItem(config.key);
                   } else if (e.key === 'Escape') {
                     setNewItemField(null);
                     setNewItemValue("");
                   }
                 }}
-                placeholder={`New ${config.label.toLowerCase().slice(0, -1)} name`}
+                placeholder={`New ${config.label.toLowerCase()} name`}
                 autoFocus
                 data-testid={`input-new-${config.key}`}
               />
               <Button
                 size="sm"
-                onClick={() => handleAddItem(config.key as 'tags' | 'categories')}
+                onClick={() => handleAddItem(config.key)}
                 data-testid={`button-save-new-${config.key}`}
               >
                 Add
@@ -521,7 +680,7 @@ export default function ValueUpdaterPage() {
                         <Button
                           size="icon"
                           variant="ghost"
-                          onClick={() => handleDeleteUnused(config.key as 'tags' | 'categories', name)}
+                          onClick={() => handleDeleteUnused(config.key, name)}
                           data-testid={`button-delete-unused-${config.key}-${name}`}
                         >
                           <Trash2 className="h-4 w-4" />
@@ -591,8 +750,8 @@ export default function ValueUpdaterPage() {
               <AlertDialogTitle>Remove this value?</AlertDialogTitle>
               <AlertDialogDescription>
                 This will remove "{deleteTarget?.value}" from {deleteTarget?.count} record{deleteTarget?.count !== 1 ? 's' : ''}.
-                {deleteTarget?.field === 'tags' || deleteTarget?.field === 'categories' 
-                  ? ` The ${deleteTarget?.field === 'tags' ? 'tag' : 'category'} will also be deleted from the master list.`
+                {deleteTarget && FIELD_CONFIGS.find(f => f.key === deleteTarget.field)?.hasMasterList 
+                  ? ` The ${FIELD_CONFIGS.find(f => f.key === deleteTarget.field)?.label.toLowerCase()} entry will also be deleted from the master list.`
                   : ''
                 }
               </AlertDialogDescription>
