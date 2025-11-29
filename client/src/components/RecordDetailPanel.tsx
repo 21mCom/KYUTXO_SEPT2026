@@ -1,5 +1,5 @@
 import { Edit, Paperclip, Wallet as WalletIcon, User, Upload, QrCode } from "lucide-react";
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
@@ -8,6 +8,7 @@ import { BitcoinAddressDisplay } from "./BitcoinAddressDisplay";
 import { RecordTypeBadge } from "./RecordTypeBadge";
 import { AttachmentList } from "./AttachmentList";
 import { AttachmentUpload } from "./AttachmentUpload";
+import { MetadataSourcesPanel } from "./MetadataSourcesPanel";
 import {
   Sheet,
   SheetContent,
@@ -188,6 +189,8 @@ export function RecordDetailPanel({ open, onClose, onEdit, record, attachments =
                 </div>
               </div>
             )}
+
+            <MetadataSourcesPanel recordId={Number(record.id)} />
 
             <Separator />
 
