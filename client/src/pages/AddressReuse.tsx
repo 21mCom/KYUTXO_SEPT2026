@@ -139,12 +139,11 @@ export default function AddressReuse() {
           const isInput = data.inputTxids.has(txid);
           const isOutput = data.outputTxids.has(txid);
           
+          if (isOutput) {
+            transactions.push({ txid, blockTime, role: 'output' });
+          }
           if (isInput) {
             transactions.push({ txid, blockTime, role: 'input' });
-          }
-          if (isOutput && !isInput) {
-            transactions.push({ txid, blockTime, role: 'output' });
-          } else if (isOutput && isInput) {
           }
         });
 
@@ -330,13 +329,13 @@ export default function AddressReuse() {
 
                           <div className="flex items-center gap-3 flex-shrink-0">
                             <div className="flex items-center gap-2">
-                              <Badge variant="outline" className="flex items-center gap-1">
+                              <Badge variant="outline" className="flex items-center gap-1" title="Incoming (received)">
                                 <ArrowDownLeft className="h-3 w-3 text-green-500" />
-                                <span data-testid={`text-input-count-${item.address.slice(0, 8)}`}>{item.inputCount}</span>
+                                <span data-testid={`text-incoming-count-${item.address.slice(0, 8)}`}>{item.outputCount}</span>
                               </Badge>
-                              <Badge variant="outline" className="flex items-center gap-1">
+                              <Badge variant="outline" className="flex items-center gap-1" title="Outgoing (spent)">
                                 <ArrowUpRight className="h-3 w-3 text-orange-500" />
-                                <span data-testid={`text-output-count-${item.address.slice(0, 8)}`}>{item.outputCount}</span>
+                                <span data-testid={`text-outgoing-count-${item.address.slice(0, 8)}`}>{item.inputCount}</span>
                               </Badge>
                             </div>
                             
@@ -395,15 +394,15 @@ export default function AddressReuse() {
                                   data-testid={`row-tx-${tx.txid.slice(0, 8)}`}
                                 >
                                   <div className="flex items-center gap-3 min-w-0">
-                                    {tx.role === 'input' ? (
-                                      <div className="flex items-center gap-1 text-green-500" title="Outgoing (spent from this address)">
-                                        <ArrowUpRight className="h-4 w-4" />
-                                        <span className="text-xs font-medium">OUT</span>
-                                      </div>
-                                    ) : (
-                                      <div className="flex items-center gap-1 text-orange-500" title="Incoming (received to this address)">
+                                    {tx.role === 'output' ? (
+                                      <div className="flex items-center gap-1 text-green-500" title="Incoming (received to this address)">
                                         <ArrowDownLeft className="h-4 w-4" />
                                         <span className="text-xs font-medium">IN</span>
+                                      </div>
+                                    ) : (
+                                      <div className="flex items-center gap-1 text-orange-500" title="Outgoing (spent from this address)">
+                                        <ArrowUpRight className="h-4 w-4" />
+                                        <span className="text-xs font-medium">OUT</span>
                                       </div>
                                     )}
                                     <span className="font-mono text-sm truncate">
