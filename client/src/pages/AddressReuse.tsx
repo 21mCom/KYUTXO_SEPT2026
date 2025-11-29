@@ -267,7 +267,8 @@ export default function AddressReuse() {
 
   // Statistics for YOUR addresses only (the ones you control)
   const totalReusedAddresses = yourReusedAddresses.length;
-  const totalReuseInstances = yourReusedAddresses.reduce((sum, a) => sum + a.totalCount, 0);
+  const multiReceiveCount = yourReusedAddresses.filter(a => a.reuseReason === 'multi-receive' || a.reuseReason === 'both').length;
+  const changeToSelfCount = yourReusedAddresses.filter(a => a.reuseReason === 'change-to-self' || a.reuseReason === 'both').length;
 
   return (
     <ScrollArea className="h-full">
@@ -276,14 +277,14 @@ export default function AddressReuse() {
           <div>
             <h1 className="text-2xl font-bold" data-testid="text-page-title">Address Reuse</h1>
             <p className="text-muted-foreground mt-1">
-              Your addresses that have been used in multiple transactions (not best practice for privacy)
+              Addresses that received funds multiple times or had change routed back to them
             </p>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <Card>
               <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium text-muted-foreground">Your Reused Addresses</CardTitle>
+                <CardTitle className="text-sm font-medium text-muted-foreground">Total Reused</CardTitle>
               </CardHeader>
               <CardContent>
                 <div className="flex items-center gap-2">
@@ -295,24 +296,27 @@ export default function AddressReuse() {
 
             <Card>
               <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium text-muted-foreground">Total Transactions</CardTitle>
+                <CardTitle className="text-sm font-medium text-muted-foreground">Multi-Receive</CardTitle>
               </CardHeader>
               <CardContent>
                 <div className="flex items-center gap-2">
-                  <Repeat2 className="h-5 w-5 text-blue-500" />
-                  <span className="text-2xl font-bold" data-testid="text-reuse-instances">{totalReuseInstances}</span>
+                  <ArrowDownLeft className="h-5 w-5 text-amber-600" />
+                  <span className="text-2xl font-bold" data-testid="text-multi-receive-count">{multiReceiveCount}</span>
                 </div>
+                <p className="text-xs text-muted-foreground mt-1">Received funds 2+ times</p>
               </CardContent>
             </Card>
 
             <Card>
               <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium text-muted-foreground">Avg Uses Per Address</CardTitle>
+                <CardTitle className="text-sm font-medium text-muted-foreground">Change-to-Self</CardTitle>
               </CardHeader>
               <CardContent>
-                <span className="text-2xl font-bold" data-testid="text-average-reuse">
-                  {totalReusedAddresses > 0 ? (totalReuseInstances / totalReusedAddresses).toFixed(1) : "0"}x
-                </span>
+                <div className="flex items-center gap-2">
+                  <Repeat2 className="h-5 w-5 text-orange-500" />
+                  <span className="text-2xl font-bold" data-testid="text-change-to-self-count">{changeToSelfCount}</span>
+                </div>
+                <p className="text-xs text-muted-foreground mt-1">Change sent back to same address</p>
               </CardContent>
             </Card>
           </div>
@@ -382,6 +386,23 @@ export default function AddressReuse() {
                           </div>
 
                           <div className="flex items-center gap-3 flex-shrink-0">
+                            {/* Reuse reason badge */}
+                            {item.reuseReason === 'multi-receive' && (
+                              <Badge variant="secondary" className="text-amber-600 dark:text-amber-400" title="Received funds multiple times">
+                                Multi-receive
+                              </Badge>
+                            )}
+                            {item.reuseReason === 'change-to-self' && (
+                              <Badge variant="secondary" className="text-orange-600 dark:text-orange-400" title="Change sent back to same address">
+                                Change-to-self
+                              </Badge>
+                            )}
+                            {item.reuseReason === 'both' && (
+                              <Badge variant="secondary" className="text-red-600 dark:text-red-400" title="Both multi-receive and change-to-self">
+                                Both
+                              </Badge>
+                            )}
+
                             <div className="flex items-center gap-2">
                               <Badge variant="outline" className="flex items-center gap-1" title="Incoming (received)">
                                 <ArrowDownLeft className="h-3 w-3 text-green-500" />
@@ -392,10 +413,6 @@ export default function AddressReuse() {
                                 <span data-testid={`text-outgoing-count-${item.address.slice(0, 8)}`}>{item.inputCount}</span>
                               </Badge>
                             </div>
-                            
-                            <Badge className="font-bold" data-testid={`text-total-count-${item.address.slice(0, 8)}`}>
-                              {item.totalCount}x
-                            </Badge>
 
                             {expandedAddresses.has(item.address) ? (
                               <ChevronUp className="h-4 w-4 text-muted-foreground" />
