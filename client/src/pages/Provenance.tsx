@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { useLocation } from "wouter";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -13,6 +13,14 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Separator } from "@/components/ui/separator";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
 import {
   Dialog,
   DialogContent,
@@ -45,7 +53,9 @@ import {
   ShieldCheck,
   Download,
   Upload,
-  Sparkles
+  Sparkles,
+  X,
+  Check
 } from "lucide-react";
 import { 
   findLabeledConnections, 
@@ -89,6 +99,8 @@ export default function Provenance() {
   const [explorerAddress, setExplorerAddress] = useState("");
   const [explorationResult, setExplorationResult] = useState<AddressExplorationResult | null>(null);
   const [isExploring, setIsExploring] = useState(false);
+  const [addressPickerOpen, setAddressPickerOpen] = useState(false);
+  const [addressSearchQuery, setAddressSearchQuery] = useState("");
   
   // Tier filter state
   const [enabledTiers, setEnabledTiers] = useState<Set<AddressImportance>>(
@@ -144,11 +156,21 @@ export default function Provenance() {
   });
 
   const handleExploreAddress = async () => {
-    if (!explorerAddress) {
+    const trimmedAddress = explorerAddress.trim();
+    if (!trimmedAddress) {
       toast({
         variant: "destructive",
         title: "Missing Input",
-        description: "Please select an address to explore",
+        description: "Please enter or select an address to explore",
+      });
+      return;
+    }
+
+    if (!isValidBitcoinAddress(trimmedAddress)) {
+      toast({
+        variant: "destructive",
+        title: "Invalid Address",
+        description: "Please enter a valid Bitcoin address",
       });
       return;
     }
@@ -156,8 +178,17 @@ export default function Provenance() {
     setIsExploring(true);
     setExplorationResult(null);
     
+    // Check if this is an unlabeled/unknown address
+    const existingRecord = allAddresses.find(r => r.inputString === trimmedAddress);
+    if (!existingRecord) {
+      toast({
+        title: "Exploring Unknown Address",
+        description: "This address is not in your records. You can add it via the Records page.",
+      });
+    }
+    
     try {
-      const result = await exploreAddress(explorerAddress, searchDepth, buildFilter());
+      const result = await exploreAddress(trimmedAddress, searchDepth, buildFilter());
       setExplorationResult(result);
       
       const totalConnections = result.incoming.length + result.outgoing.length;
@@ -256,6 +287,56 @@ export default function Provenance() {
   const getLabelForAddress = (address: string) => {
     const record = allAddresses.find(r => r.inputString === address);
     return record?.label || null;
+  };
+
+  // Check if an address looks like a valid Bitcoin address (basic validation)
+  const isValidBitcoinAddress = (addr: string): boolean => {
+    const trimmed = addr.trim();
+    if (!trimmed) return false;
+    // Basic regex for Bitcoin addresses (mainnet and testnet)
+    // P2PKH: starts with 1, P2SH: starts with 3, Bech32: starts with bc1/tb1
+    const btcRegex = /^(1[1-9A-HJ-NP-Za-km-z]{25,34}|3[1-9A-HJ-NP-Za-km-z]{25,34}|bc1[a-zA-HJ-NP-Z0-9]{25,90}|tb1[a-zA-HJ-NP-Z0-9]{25,90})$/;
+    return btcRegex.test(trimmed);
+  };
+
+  // Get the matching record for the current explorer address (trimmed for comparison)
+  const selectedAddressRecord = useMemo(() => {
+    const trimmed = explorerAddress.trim();
+    if (!trimmed) return null;
+    return allAddresses.find(r => r.inputString === trimmed) || null;
+  }, [explorerAddress, allAddresses]);
+
+  // Check if explore button should be enabled
+  const canExplore = useMemo(() => {
+    const trimmed = explorerAddress.trim();
+    return trimmed.length > 0 && isValidBitcoinAddress(trimmed);
+  }, [explorerAddress]);
+
+  // Filter addresses for the picker based on search query
+  const filteredAddresses = useMemo(() => {
+    if (!addressSearchQuery.trim()) {
+      return allAddresses.slice(0, 100); // Limit initial display
+    }
+    const query = addressSearchQuery.toLowerCase();
+    return allAddresses.filter(r => 
+      r.inputString?.toLowerCase().includes(query) ||
+      r.label?.toLowerCase().includes(query) ||
+      r.owner?.toLowerCase().includes(query) ||
+      r.walletName?.toLowerCase().includes(query)
+    ).slice(0, 100);
+  }, [allAddresses, addressSearchQuery]);
+
+  // Handle address selection from picker
+  const handleAddressSelect = (address: string) => {
+    setExplorerAddress(address);
+    setAddressPickerOpen(false);
+    setAddressSearchQuery("");
+  };
+
+  // Handle clearing the address input
+  const handleClearAddress = () => {
+    setExplorerAddress("");
+    setExplorationResult(null);
   };
 
   const toggleTier = (tier: AddressImportance) => {
@@ -498,33 +579,123 @@ export default function Provenance() {
               Explore Address Connections
             </CardTitle>
             <CardDescription>
-              Select an address to see all incoming and outgoing connections at once
+              Paste any Bitcoin address or select from your records to explore connections
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="flex flex-col sm:flex-row gap-4">
-              {/* Address selector */}
+              {/* Address input with searchable picker */}
               <div className="space-y-2 flex-1">
                 <Label htmlFor="explorer-address">Address to Explore</Label>
-                <Select
-                  value={explorerAddress}
-                  onValueChange={setExplorerAddress}
-                  disabled={isExploring}
-                >
-                  <SelectTrigger id="explorer-address" data-testid="select-explorer-address">
-                    <SelectValue placeholder="Select an address" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {allAddresses.map((record) => (
-                      <SelectItem key={record.id} value={record.inputString}>
-                        <div className="flex items-center gap-2">
-                          {renderImportanceBadge(record.addressImportance)}
-                          <span>{record.label || truncateAddress(record.inputString)}</span>
-                        </div>
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <div className="flex gap-2">
+                  <div className="relative flex-1">
+                    <Input
+                      id="explorer-address"
+                      placeholder="Paste address or select from list..."
+                      value={explorerAddress}
+                      onChange={(e) => setExplorerAddress(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && explorerAddress.trim()) {
+                          handleExploreAddress();
+                        }
+                      }}
+                      disabled={isExploring}
+                      className="pr-8 font-mono text-sm"
+                      data-testid="input-explorer-address"
+                    />
+                    {explorerAddress && (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="absolute right-0 top-0 h-full px-2 hover:bg-transparent"
+                        onClick={handleClearAddress}
+                        disabled={isExploring}
+                        data-testid="button-clear-address"
+                      >
+                        <X className="h-4 w-4 text-muted-foreground" />
+                      </Button>
+                    )}
+                  </div>
+                  <Popover open={addressPickerOpen} onOpenChange={setAddressPickerOpen}>
+                    <PopoverTrigger asChild>
+                      <Button
+                        variant="outline"
+                        size="icon"
+                        disabled={isExploring}
+                        data-testid="button-address-picker"
+                      >
+                        <ChevronDown className="h-4 w-4" />
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-[400px] p-0" align="end">
+                      <Command shouldFilter={false}>
+                        <CommandInput 
+                          placeholder="Search addresses, labels, owners..." 
+                          value={addressSearchQuery}
+                          onValueChange={setAddressSearchQuery}
+                          data-testid="input-address-search"
+                        />
+                        <CommandList>
+                          <CommandEmpty>No addresses found</CommandEmpty>
+                          <CommandGroup heading={`${allAddresses.length} addresses (showing up to 100)`}>
+                            {filteredAddresses.map((record) => (
+                              <CommandItem
+                                key={record.id}
+                                value={record.inputString}
+                                onSelect={() => handleAddressSelect(record.inputString)}
+                                className="flex items-center gap-2"
+                                data-testid={`address-option-${record.id}`}
+                              >
+                                <Check 
+                                  className={`h-4 w-4 ${explorerAddress === record.inputString ? 'opacity-100' : 'opacity-0'}`} 
+                                />
+                                {renderImportanceBadge(record.addressImportance)}
+                                <div className="flex flex-col flex-1 min-w-0">
+                                  <span className="truncate font-medium">
+                                    {record.label || 'Unlabeled'}
+                                  </span>
+                                  <span className="text-xs text-muted-foreground font-mono truncate">
+                                    {truncateAddress(record.inputString)}
+                                  </span>
+                                </div>
+                                {record.owner && record.owner !== 'Pending Review' && (
+                                  <Badge variant="outline" className="text-xs shrink-0">
+                                    {record.owner}
+                                  </Badge>
+                                )}
+                              </CommandItem>
+                            ))}
+                          </CommandGroup>
+                        </CommandList>
+                      </Command>
+                    </PopoverContent>
+                  </Popover>
+                </div>
+                {/* Show validation hint or matching record info */}
+                {explorerAddress && (
+                  <div className="text-xs">
+                    {selectedAddressRecord ? (
+                      <span className="text-muted-foreground flex items-center gap-1">
+                        <Check className="h-3 w-3 text-green-500" />
+                        {selectedAddressRecord.label || 'Unlabeled'} 
+                        {selectedAddressRecord.owner && selectedAddressRecord.owner !== 'Pending Review' && (
+                          <span>({selectedAddressRecord.owner})</span>
+                        )}
+                      </span>
+                    ) : isValidBitcoinAddress(explorerAddress) ? (
+                      <span className="text-muted-foreground flex items-center gap-1">
+                        <AlertCircle className="h-3 w-3 text-yellow-500" />
+                        Address not in records - will explore blockchain data
+                      </span>
+                    ) : (
+                      <span className="text-destructive flex items-center gap-1">
+                        <AlertCircle className="h-3 w-3" />
+                        Invalid Bitcoin address format
+                      </span>
+                    )}
+                  </div>
+                )}
               </div>
               
               {/* Search depth */}
@@ -588,7 +759,7 @@ export default function Provenance() {
             
             <Button 
               onClick={handleExploreAddress}
-              disabled={isExploring || !explorerAddress}
+              disabled={isExploring || !canExplore}
               className="w-full sm:w-auto"
               data-testid="button-explore-address"
             >
