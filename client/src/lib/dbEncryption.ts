@@ -2,7 +2,7 @@
 // Handles encryption/decryption of record data in IndexedDB
 
 import { encrypt, decrypt } from './crypto';
-import { db, type Record, type Attachment, type Tag, type Category, type RecordOrigin } from './database';
+import { db, type Record, type Attachment, type Tag, type Category, type RecordOrigin, type Owner, type WalletName, type SeedName, type WalletSoftware } from './database';
 
 // Fields to encrypt for each record type
 const RECORD_SENSITIVE_FIELDS: (keyof Record)[] = [
@@ -338,5 +338,124 @@ export async function decryptRecordOrigin(origin: RecordOrigin, key: CryptoKey):
   } catch (error) {
     console.error('Failed to decrypt record origin:', error);
     throw new Error('Failed to decrypt record origin.');
+  }
+}
+
+// Generic vocabulary item encryption/decryption (for Owner, WalletName, SeedName, WalletSoftware)
+// These all have the same structure: id, name, createdAt, encryptedPayload, isEncrypted
+
+export async function encryptOwner(owner: Owner, key: CryptoKey): Promise<Owner> {
+  const encryptedPayload = await encrypt(JSON.stringify({ name: owner.name }), key);
+  return {
+    ...owner,
+    name: '[encrypted]',
+    encryptedPayload,
+    isEncrypted: true,
+  };
+}
+
+export async function decryptOwner(owner: Owner, key: CryptoKey): Promise<Owner> {
+  if (!owner.isEncrypted || !owner.encryptedPayload) {
+    return owner;
+  }
+  try {
+    const decryptedJson = await decrypt(owner.encryptedPayload, key);
+    const { name } = JSON.parse(decryptedJson);
+    return {
+      ...owner,
+      name,
+      encryptedPayload: undefined,
+      isEncrypted: false,
+    };
+  } catch (error) {
+    console.error('Failed to decrypt owner:', error);
+    throw new Error('Failed to decrypt owner.');
+  }
+}
+
+export async function encryptWalletName(walletName: WalletName, key: CryptoKey): Promise<WalletName> {
+  const encryptedPayload = await encrypt(JSON.stringify({ name: walletName.name }), key);
+  return {
+    ...walletName,
+    name: '[encrypted]',
+    encryptedPayload,
+    isEncrypted: true,
+  };
+}
+
+export async function decryptWalletName(walletName: WalletName, key: CryptoKey): Promise<WalletName> {
+  if (!walletName.isEncrypted || !walletName.encryptedPayload) {
+    return walletName;
+  }
+  try {
+    const decryptedJson = await decrypt(walletName.encryptedPayload, key);
+    const { name } = JSON.parse(decryptedJson);
+    return {
+      ...walletName,
+      name,
+      encryptedPayload: undefined,
+      isEncrypted: false,
+    };
+  } catch (error) {
+    console.error('Failed to decrypt wallet name:', error);
+    throw new Error('Failed to decrypt wallet name.');
+  }
+}
+
+export async function encryptSeedName(seedName: SeedName, key: CryptoKey): Promise<SeedName> {
+  const encryptedPayload = await encrypt(JSON.stringify({ name: seedName.name }), key);
+  return {
+    ...seedName,
+    name: '[encrypted]',
+    encryptedPayload,
+    isEncrypted: true,
+  };
+}
+
+export async function decryptSeedName(seedName: SeedName, key: CryptoKey): Promise<SeedName> {
+  if (!seedName.isEncrypted || !seedName.encryptedPayload) {
+    return seedName;
+  }
+  try {
+    const decryptedJson = await decrypt(seedName.encryptedPayload, key);
+    const { name } = JSON.parse(decryptedJson);
+    return {
+      ...seedName,
+      name,
+      encryptedPayload: undefined,
+      isEncrypted: false,
+    };
+  } catch (error) {
+    console.error('Failed to decrypt seed name:', error);
+    throw new Error('Failed to decrypt seed name.');
+  }
+}
+
+export async function encryptWalletSoftware(walletSoftware: WalletSoftware, key: CryptoKey): Promise<WalletSoftware> {
+  const encryptedPayload = await encrypt(JSON.stringify({ name: walletSoftware.name }), key);
+  return {
+    ...walletSoftware,
+    name: '[encrypted]',
+    encryptedPayload,
+    isEncrypted: true,
+  };
+}
+
+export async function decryptWalletSoftware(walletSoftware: WalletSoftware, key: CryptoKey): Promise<WalletSoftware> {
+  if (!walletSoftware.isEncrypted || !walletSoftware.encryptedPayload) {
+    return walletSoftware;
+  }
+  try {
+    const decryptedJson = await decrypt(walletSoftware.encryptedPayload, key);
+    const { name } = JSON.parse(decryptedJson);
+    return {
+      ...walletSoftware,
+      name,
+      encryptedPayload: undefined,
+      isEncrypted: false,
+    };
+  } catch (error) {
+    console.error('Failed to decrypt wallet software:', error);
+    throw new Error('Failed to decrypt wallet software.');
   }
 }

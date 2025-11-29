@@ -2,7 +2,7 @@
 // Provides encryption-aware CRUD operations while maintaining compatibility
 // with existing Dexie live queries
 
-import { db, type Record, type Attachment, type Tag, type Category, type RecordOrigin, type RecordOriginType } from './database';
+import { db, type Record, type Attachment, type Tag, type Category, type RecordOrigin, type RecordOriginType, type Owner, type WalletName, type SeedName, type WalletSoftware } from './database';
 import { 
   encryptRecord, 
   decryptRecord, 
@@ -14,6 +14,14 @@ import {
   decryptCategory,
   encryptRecordOrigin,
   decryptRecordOrigin,
+  encryptOwner,
+  decryptOwner,
+  encryptWalletName,
+  decryptWalletName,
+  encryptSeedName,
+  decryptSeedName,
+  encryptWalletSoftware,
+  decryptWalletSoftware,
 } from './dbEncryption';
 
 let _encryptionKey: CryptoKey | null = null;
@@ -315,6 +323,234 @@ export async function updateCategory(id: number, data: Partial<Category>): Promi
 // Delete a category
 export async function deleteCategory(id: number): Promise<void> {
   await db.categories.delete(id);
+}
+
+// ============ OWNER OPERATIONS ============
+
+// Create an owner (encrypted)
+export async function createOwner(name: string): Promise<number> {
+  const key = getKey();
+  
+  const owner: Owner = {
+    name,
+    createdAt: Date.now(),
+  };
+
+  const encrypted = await encryptOwner(owner, key);
+  const id = await db.owners.add(encrypted);
+  return id as number;
+}
+
+// Get all decrypted owners
+export async function getDecryptedOwners(): Promise<Owner[]> {
+  const key = getKey();
+  const owners = await db.owners.toArray();
+  
+  return Promise.all(
+    owners.map(async (owner) => {
+      if (owner.isEncrypted) {
+        return await decryptOwner(owner, key);
+      }
+      return owner;
+    })
+  );
+}
+
+// Update an owner (encrypted)
+export async function updateOwner(id: number, data: Partial<Owner>): Promise<void> {
+  const key = getKey();
+  
+  const existing = await db.owners.get(id);
+  if (!existing) throw new Error('Owner not found');
+  
+  const decrypted = existing.isEncrypted
+    ? await decryptOwner(existing, key)
+    : existing;
+  
+  const updated: Owner = {
+    ...decrypted,
+    ...data,
+    id,
+  };
+  
+  const encrypted = await encryptOwner(updated, key);
+  await db.owners.put(encrypted);
+}
+
+// Delete an owner
+export async function deleteOwner(id: number): Promise<void> {
+  await db.owners.delete(id);
+}
+
+// ============ WALLET NAME OPERATIONS ============
+
+// Create a wallet name (encrypted)
+export async function createWalletNameEntry(name: string): Promise<number> {
+  const key = getKey();
+  
+  const walletName: WalletName = {
+    name,
+    createdAt: Date.now(),
+  };
+
+  const encrypted = await encryptWalletName(walletName, key);
+  const id = await db.walletNames.add(encrypted);
+  return id as number;
+}
+
+// Get all decrypted wallet names
+export async function getDecryptedWalletNames(): Promise<WalletName[]> {
+  const key = getKey();
+  const walletNames = await db.walletNames.toArray();
+  
+  return Promise.all(
+    walletNames.map(async (wn) => {
+      if (wn.isEncrypted) {
+        return await decryptWalletName(wn, key);
+      }
+      return wn;
+    })
+  );
+}
+
+// Update a wallet name (encrypted)
+export async function updateWalletNameEntry(id: number, data: Partial<WalletName>): Promise<void> {
+  const key = getKey();
+  
+  const existing = await db.walletNames.get(id);
+  if (!existing) throw new Error('Wallet name not found');
+  
+  const decrypted = existing.isEncrypted
+    ? await decryptWalletName(existing, key)
+    : existing;
+  
+  const updated: WalletName = {
+    ...decrypted,
+    ...data,
+    id,
+  };
+  
+  const encrypted = await encryptWalletName(updated, key);
+  await db.walletNames.put(encrypted);
+}
+
+// Delete a wallet name
+export async function deleteWalletNameEntry(id: number): Promise<void> {
+  await db.walletNames.delete(id);
+}
+
+// ============ SEED NAME OPERATIONS ============
+
+// Create a seed name (encrypted)
+export async function createSeedNameEntry(name: string): Promise<number> {
+  const key = getKey();
+  
+  const seedName: SeedName = {
+    name,
+    createdAt: Date.now(),
+  };
+
+  const encrypted = await encryptSeedName(seedName, key);
+  const id = await db.seedNames.add(encrypted);
+  return id as number;
+}
+
+// Get all decrypted seed names
+export async function getDecryptedSeedNames(): Promise<SeedName[]> {
+  const key = getKey();
+  const seedNames = await db.seedNames.toArray();
+  
+  return Promise.all(
+    seedNames.map(async (sn) => {
+      if (sn.isEncrypted) {
+        return await decryptSeedName(sn, key);
+      }
+      return sn;
+    })
+  );
+}
+
+// Update a seed name (encrypted)
+export async function updateSeedNameEntry(id: number, data: Partial<SeedName>): Promise<void> {
+  const key = getKey();
+  
+  const existing = await db.seedNames.get(id);
+  if (!existing) throw new Error('Seed name not found');
+  
+  const decrypted = existing.isEncrypted
+    ? await decryptSeedName(existing, key)
+    : existing;
+  
+  const updated: SeedName = {
+    ...decrypted,
+    ...data,
+    id,
+  };
+  
+  const encrypted = await encryptSeedName(updated, key);
+  await db.seedNames.put(encrypted);
+}
+
+// Delete a seed name
+export async function deleteSeedNameEntry(id: number): Promise<void> {
+  await db.seedNames.delete(id);
+}
+
+// ============ WALLET SOFTWARE OPERATIONS ============
+
+// Create a wallet software entry (encrypted)
+export async function createWalletSoftwareEntry(name: string): Promise<number> {
+  const key = getKey();
+  
+  const walletSoftware: WalletSoftware = {
+    name,
+    createdAt: Date.now(),
+  };
+
+  const encrypted = await encryptWalletSoftware(walletSoftware, key);
+  const id = await db.walletSoftware.add(encrypted);
+  return id as number;
+}
+
+// Get all decrypted wallet software entries
+export async function getDecryptedWalletSoftware(): Promise<WalletSoftware[]> {
+  const key = getKey();
+  const walletSoftware = await db.walletSoftware.toArray();
+  
+  return Promise.all(
+    walletSoftware.map(async (ws) => {
+      if (ws.isEncrypted) {
+        return await decryptWalletSoftware(ws, key);
+      }
+      return ws;
+    })
+  );
+}
+
+// Update a wallet software entry (encrypted)
+export async function updateWalletSoftwareEntry(id: number, data: Partial<WalletSoftware>): Promise<void> {
+  const key = getKey();
+  
+  const existing = await db.walletSoftware.get(id);
+  if (!existing) throw new Error('Wallet software not found');
+  
+  const decrypted = existing.isEncrypted
+    ? await decryptWalletSoftware(existing, key)
+    : existing;
+  
+  const updated: WalletSoftware = {
+    ...decrypted,
+    ...data,
+    id,
+  };
+  
+  const encrypted = await encryptWalletSoftware(updated, key);
+  await db.walletSoftware.put(encrypted);
+}
+
+// Delete a wallet software entry
+export async function deleteWalletSoftwareEntry(id: number): Promise<void> {
+  await db.walletSoftware.delete(id);
 }
 
 // ============ DUPLICATE DETECTION ============
