@@ -28,15 +28,20 @@ function truncate(str: string, start = 8, end = 8): string {
   return `${str.slice(0, start)}...${str.slice(-end)}`;
 }
 
+type ReuseReason = 'multi-receive' | 'change-to-self' | 'both';
+
 interface AddressReuseInfo {
   address: string;
   totalCount: number;
   inputCount: number;
   outputCount: number;
+  reuseReason: ReuseReason;
+  selfChangeTxids: string[]; // Transactions where address is both input and output
   transactions: {
     txid: string;
     blockTime: number;
     role: 'input' | 'output';
+    isSelfChange?: boolean;
   }[];
   record?: Record;
 }
@@ -108,6 +113,7 @@ export default function AddressReuse() {
   const reusedAddresses = useMemo(() => {
     if (!participants) return [];
 
+    // Build address map tracking input/output txids
     const addressMap = new Map<string, {
       inputTxids: Set<string>;
       outputTxids: Set<string>;
@@ -128,39 +134,70 @@ export default function AddressReuse() {
     const result: AddressReuseInfo[] = [];
 
     addressMap.forEach((data, address) => {
-      const allTxids = new Set([...Array.from(data.inputTxids), ...Array.from(data.outputTxids)]);
-      const totalCount = allTxids.size;
+      // Find transactions where address appears as BOTH input and output (change-to-self)
+      const selfChangeTxids: string[] = [];
+      data.inputTxids.forEach(txid => {
+        if (data.outputTxids.has(txid)) {
+          selfChangeTxids.push(txid);
+        }
+      });
       
-      if (totalCount > 1) {
-        const transactions: AddressReuseInfo['transactions'] = [];
-        
-        allTxids.forEach(txid => {
-          const blockTime = txidToBlockTime.get(txid) || 0;
-          const isInput = data.inputTxids.has(txid);
-          const isOutput = data.outputTxids.has(txid);
-          
-          if (isOutput) {
-            transactions.push({ txid, blockTime, role: 'output' });
-          }
-          if (isInput) {
-            transactions.push({ txid, blockTime, role: 'input' });
-          }
-        });
-
-        transactions.sort((a, b) => b.blockTime - a.blockTime);
-
-        result.push({
-          address,
-          totalCount,
-          inputCount: data.inputTxids.size,
-          outputCount: data.outputTxids.size,
-          transactions,
-          record: addressToRecord.get(address),
-        });
+      const hasSelfChange = selfChangeTxids.length > 0;
+      const hasMultiReceive = data.outputTxids.size >= 2;
+      
+      // Only flag as reuse if: received 2+ times OR has change-to-self
+      if (!hasMultiReceive && !hasSelfChange) {
+        return; // Not reuse - skip this address
       }
+      
+      // Determine reuse reason
+      let reuseReason: ReuseReason;
+      if (hasMultiReceive && hasSelfChange) {
+        reuseReason = 'both';
+      } else if (hasMultiReceive) {
+        reuseReason = 'multi-receive';
+      } else {
+        reuseReason = 'change-to-self';
+      }
+
+      const allTxids = new Set([...Array.from(data.inputTxids), ...Array.from(data.outputTxids)]);
+      const transactions: AddressReuseInfo['transactions'] = [];
+      
+      allTxids.forEach(txid => {
+        const blockTime = txidToBlockTime.get(txid) || 0;
+        const isInput = data.inputTxids.has(txid);
+        const isOutput = data.outputTxids.has(txid);
+        const isSelfChange = isInput && isOutput;
+        
+        if (isOutput) {
+          transactions.push({ txid, blockTime, role: 'output', isSelfChange });
+        }
+        if (isInput) {
+          transactions.push({ txid, blockTime, role: 'input', isSelfChange });
+        }
+      });
+
+      transactions.sort((a, b) => b.blockTime - a.blockTime);
+
+      result.push({
+        address,
+        totalCount: allTxids.size,
+        inputCount: data.inputTxids.size,
+        outputCount: data.outputTxids.size,
+        reuseReason,
+        selfChangeTxids,
+        transactions,
+        record: addressToRecord.get(address),
+      });
     });
 
-    result.sort((a, b) => b.totalCount - a.totalCount);
+    // Sort by output count (multi-receive is more concerning), then by self-change count
+    result.sort((a, b) => {
+      // Primary: more receives = worse
+      if (b.outputCount !== a.outputCount) return b.outputCount - a.outputCount;
+      // Secondary: more self-changes = worse
+      return b.selfChangeTxids.length - a.selfChangeTxids.length;
+    });
 
     return result;
   }, [participants, txidToBlockTime, addressToRecord]);
