@@ -46,7 +46,22 @@ export default function Records() {
           decrypted = rawRecords;
         }
         
-        setRecords(decrypted);
+        // Convert database records to component format (string IDs)
+        const convertedRecords = decrypted.map(r => ({
+          id: String(r.id),
+          type: r.type as "address" | "transaction" | "other",
+          inputString: r.inputString,
+          label: r.label,
+          notes: r.notes,
+          tags: r.tags || [],
+          categories: r.categories || [],
+          seedName: r.seedName,
+          walletSoftware: r.walletSoftware,
+          owner: r.owner,
+          walletName: r.walletName,
+        }));
+        
+        setRecords(convertedRecords as any);
       } catch (error) {
         console.error('[Records] Failed to load records:', error);
       } finally {
@@ -77,7 +92,7 @@ export default function Records() {
   }, [records, searchQuery]);
 
   const selectedRecord = selectedRecordId 
-    ? records.find(r => r.id === selectedRecordId)
+    ? records.find(r => parseInt(r.id) === selectedRecordId)
     : null;
 
   return (
