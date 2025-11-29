@@ -1,4 +1,4 @@
-import { Database, FileText, Settings, Upload, Download, QrCode, Key, RefreshCw, Wallet, TrendingUp, ArrowDownUp, List, GitBranch, Repeat2 } from "lucide-react";
+import { Database, FileText, Settings, Upload, Download, QrCode, Key, RefreshCw, Wallet, TrendingUp, ArrowDownUp, List, GitBranch, Repeat2, BarChart3 } from "lucide-react";
 import { SiBitcoin } from "react-icons/si";
 import {
   Sidebar,
@@ -54,6 +54,11 @@ const menuItems = [
     title: "Address Reuse",
     url: "/address-reuse",
     icon: Repeat2,
+  },
+  {
+    title: "Data Stats",
+    url: "/data-stats",
+    icon: BarChart3,
   },
   {
     title: "QR Scanner",
