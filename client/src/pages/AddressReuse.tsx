@@ -165,18 +165,34 @@ export default function AddressReuse() {
     return result;
   }, [participants, txidToBlockTime, addressToRecord]);
 
+  // Split into YOUR addresses (with records) vs OTHER addresses (counterparties)
+  const { yourReusedAddresses, otherReusedAddresses } = useMemo(() => {
+    const yours: AddressReuseInfo[] = [];
+    const others: AddressReuseInfo[] = [];
+    
+    reusedAddresses.forEach(item => {
+      if (item.record) {
+        yours.push(item);
+      } else {
+        others.push(item);
+      }
+    });
+    
+    return { yourReusedAddresses: yours, otherReusedAddresses: others };
+  }, [reusedAddresses]);
+
   const filteredAddresses = useMemo(() => {
-    if (!search.trim()) return reusedAddresses;
+    if (!search.trim()) return yourReusedAddresses;
     
     const searchLower = search.toLowerCase();
-    return reusedAddresses.filter(item => {
+    return yourReusedAddresses.filter(item => {
       if (item.address.toLowerCase().includes(searchLower)) return true;
       if (item.record?.label?.toLowerCase().includes(searchLower)) return true;
       if (item.record?.owner?.toLowerCase().includes(searchLower)) return true;
       if (item.record?.walletName?.toLowerCase().includes(searchLower)) return true;
       return false;
     });
-  }, [reusedAddresses, search]);
+  }, [yourReusedAddresses, search]);
 
   const toggleExpanded = (address: string) => {
     setExpandedAddresses(prev => {
@@ -212,8 +228,9 @@ export default function AddressReuse() {
     window.open(`https://mempool.space/tx/${txid}`, '_blank');
   };
 
-  const totalReusedAddresses = reusedAddresses.length;
-  const totalReuseInstances = reusedAddresses.reduce((sum, a) => sum + a.totalCount, 0);
+  // Statistics for YOUR addresses only (the ones you control)
+  const totalReusedAddresses = yourReusedAddresses.length;
+  const totalReuseInstances = yourReusedAddresses.reduce((sum, a) => sum + a.totalCount, 0);
 
   return (
     <ScrollArea className="h-full">
@@ -222,14 +239,14 @@ export default function AddressReuse() {
           <div>
             <h1 className="text-2xl font-bold" data-testid="text-page-title">Address Reuse</h1>
             <p className="text-muted-foreground mt-1">
-              Addresses that have been used in multiple transactions
+              Your addresses that have been used in multiple transactions (not best practice for privacy)
             </p>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <Card>
               <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium text-muted-foreground">Reused Addresses</CardTitle>
+                <CardTitle className="text-sm font-medium text-muted-foreground">Your Reused Addresses</CardTitle>
               </CardHeader>
               <CardContent>
                 <div className="flex items-center gap-2">
@@ -241,7 +258,7 @@ export default function AddressReuse() {
 
             <Card>
               <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium text-muted-foreground">Total Reuse Instances</CardTitle>
+                <CardTitle className="text-sm font-medium text-muted-foreground">Total Transactions</CardTitle>
               </CardHeader>
               <CardContent>
                 <div className="flex items-center gap-2">
@@ -253,7 +270,7 @@ export default function AddressReuse() {
 
             <Card>
               <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium text-muted-foreground">Average Reuse</CardTitle>
+                <CardTitle className="text-sm font-medium text-muted-foreground">Avg Uses Per Address</CardTitle>
               </CardHeader>
               <CardContent>
                 <span className="text-2xl font-bold" data-testid="text-average-reuse">
@@ -268,10 +285,10 @@ export default function AddressReuse() {
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <Repeat2 className="h-5 w-5" />
-              Reused Addresses
+              Your Reused Addresses
             </CardTitle>
             <CardDescription>
-              Click on an address to see the transactions where it was reused
+              These are addresses you control that appear in multiple transactions. Click to see details.
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -290,10 +307,10 @@ export default function AddressReuse() {
 
             {filteredAddresses.length === 0 ? (
               <div className="text-center py-12 text-muted-foreground">
-                {reusedAddresses.length === 0 ? (
+                {yourReusedAddresses.length === 0 ? (
                   <div className="space-y-2">
                     <Repeat2 className="h-12 w-12 mx-auto opacity-50" />
-                    <p>No address reuse detected</p>
+                    <p>No address reuse detected in your tracked addresses</p>
                     <p className="text-sm">Sync transactions to detect address reuse patterns</p>
                   </div>
                 ) : (
