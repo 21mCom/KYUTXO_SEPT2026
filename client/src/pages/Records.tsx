@@ -1,6 +1,5 @@
 import { useState, useEffect } from "react";
 import { useLocation } from "wouter";
-import { useSearch } from "wouter/use-location";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -11,8 +10,7 @@ import { RecordTable } from "@/components/RecordTable";
 import { RecordDetailPanel } from "@/components/RecordDetailPanel";
 
 export default function Records() {
-  const [, navigate] = useLocation();
-  const searchParams = useSearch();
+  const [location, navigate] = useLocation();
   
   const [records, setRecords] = useState<DbRecord[]>([]);
   const [filteredRecords, setFilteredRecords] = useState<DbRecord[]>([]);
@@ -20,11 +18,11 @@ export default function Records() {
   const [searchQuery, setSearchQuery] = useState("");
   const [isLoading, setIsLoading] = useState(true);
 
-  // Parse query parameters
+  // Parse query parameters from location
   useEffect(() => {
-    const params = new URLSearchParams(searchParams);
-    const id = params.get("id");
-    const search = params.get("search");
+    const url = new URL(location, window.location.origin);
+    const id = url.searchParams.get("id");
+    const search = url.searchParams.get("search");
     
     if (id) {
       setSelectedRecordId(parseInt(id));
@@ -32,7 +30,7 @@ export default function Records() {
     if (search) {
       setSearchQuery(search);
     }
-  }, [searchParams]);
+  }, [location]);
 
   // Load records
   useEffect(() => {
