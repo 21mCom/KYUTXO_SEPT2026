@@ -22,6 +22,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
+import { AddressLink } from "@/components/AddressLink";
+import { TxidLink } from "@/components/TxidLink";
 import { 
   ArrowLeft,
   Search,
@@ -345,9 +347,15 @@ export default function Provenance() {
                 </span>
                 {renderImportanceBadge(node.addressImportance)}
               </div>
-              <p className="text-xs font-mono text-muted-foreground break-all">
-                {node.address}
-              </p>
+              <div className="py-1">
+                <AddressLink 
+                  address={node.address}
+                  recordId={node.recordId}
+                  hasMetadata={!!(node.label || node.owner !== 'Pending Review')}
+                  truncate={false}
+                  showCopy={true}
+                />
+              </div>
               {node.owner && node.owner !== 'Pending Review' && (
                 <p className="text-xs text-muted-foreground">
                   Owner: {node.owner}
@@ -379,10 +387,12 @@ export default function Provenance() {
             <div className="space-y-1 max-h-32 overflow-y-auto">
               <p className="text-xs font-medium">Transactions:</p>
               {node.edges.slice(0, 5).map((edge, idx) => (
-                <div key={idx} className="text-xs flex items-center gap-1">
-                  <span className="font-mono text-muted-foreground">
-                    {truncateAddress(edge.txid)}
-                  </span>
+                <div key={idx} className="text-xs flex items-center gap-1 flex-wrap">
+                  <TxidLink 
+                    txid={edge.txid}
+                    showCopy={true}
+                    showExternalLink={true}
+                  />
                   <span className="text-muted-foreground">•</span>
                   <span>{formatSats(edge.amount)}</span>
                 </div>
@@ -608,9 +618,14 @@ export default function Provenance() {
                         </span>
                         {renderImportanceBadge(explorationResult.centerNode.addressImportance)}
                       </div>
-                      <p className="text-xs font-mono text-muted-foreground">
-                        {truncateAddress(explorationResult.centerAddress)}
-                      </p>
+                      <div className="mt-1">
+                        <AddressLink 
+                          address={explorationResult.centerAddress}
+                          recordId={explorationResult.centerNode.recordId}
+                          hasMetadata={!!(explorationResult.centerNode.label)}
+                          showCopy={true}
+                        />
+                      </div>
                     </div>
                     <div className="text-right text-sm">
                       <div className="flex items-center gap-1 text-green-600 dark:text-green-400">
@@ -741,7 +756,7 @@ export default function Provenance() {
                       className="space-y-2"
                     >
                       <div 
-                        className="flex items-center gap-2 p-2 rounded-md bg-muted/50 cursor-pointer hover-elevate"
+                        className="flex items-center gap-2 p-2 rounded-md bg-muted/50 cursor-pointer hover-elevate flex-wrap"
                         onClick={() => toggleConnectionExpanded(idx)}
                         data-testid={`connection-${idx}`}
                       >
@@ -750,13 +765,19 @@ export default function Provenance() {
                         ) : (
                           <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" />
                         )}
-                        <Badge variant="default" className="text-xs shrink-0">
-                          {getLabelForAddress(conn.sourceAddress) || truncateAddress(conn.sourceAddress)}
-                        </Badge>
+                        <AddressLink 
+                          address={conn.sourceAddress}
+                          label={getLabelForAddress(conn.sourceAddress)}
+                          hasMetadata={!!getLabelForAddress(conn.sourceAddress)}
+                          showCopy={false}
+                        />
                         <ArrowRight className="h-4 w-4 text-muted-foreground shrink-0" />
-                        <Badge variant="default" className="text-xs shrink-0">
-                          {getLabelForAddress(conn.targetAddress) || truncateAddress(conn.targetAddress)}
-                        </Badge>
+                        <AddressLink 
+                          address={conn.targetAddress}
+                          label={getLabelForAddress(conn.targetAddress)}
+                          hasMetadata={!!getLabelForAddress(conn.targetAddress)}
+                          showCopy={false}
+                        />
                         <div className="ml-auto flex items-center gap-2">
                           <Badge variant="outline" className="text-xs">
                             {conn.shortestPath} hop{conn.shortestPath !== 1 ? 's' : ''}
@@ -771,18 +792,24 @@ export default function Provenance() {
                       {expandedConnections.has(idx) && conn.paths.length > 0 && (
                         <div className="ml-6 p-2 rounded-md border bg-background">
                           {conn.paths[0].hops.map((hop, hopIdx) => (
-                            <div key={hopIdx} className="flex items-center gap-2 text-xs py-1">
+                            <div key={hopIdx} className="flex items-center gap-2 text-xs py-1 flex-wrap">
                               <Badge variant="outline" className="shrink-0 w-5 h-5 flex items-center justify-center p-0">
                                 {hopIdx + 1}
                               </Badge>
-                              <span className="font-mono text-muted-foreground">
-                                {getLabelForAddress(hop.fromAddress) || truncateAddress(hop.fromAddress)}
-                              </span>
+                              <AddressLink 
+                                address={hop.fromAddress}
+                                label={getLabelForAddress(hop.fromAddress)}
+                                hasMetadata={!!getLabelForAddress(hop.fromAddress)}
+                                showCopy={false}
+                              />
                               <ArrowRight className="h-3 w-3 text-muted-foreground shrink-0" />
-                              <span className="font-mono text-muted-foreground">
-                                {getLabelForAddress(hop.toAddress) || truncateAddress(hop.toAddress)}
-                              </span>
-                              <span className="ml-auto text-muted-foreground">
+                              <AddressLink 
+                                address={hop.toAddress}
+                                label={getLabelForAddress(hop.toAddress)}
+                                hasMetadata={!!getLabelForAddress(hop.toAddress)}
+                                showCopy={false}
+                              />
+                              <span className="ml-auto text-muted-foreground whitespace-nowrap">
                                 {formatSats(hop.amount)}
                               </span>
                             </div>
@@ -810,7 +837,7 @@ export default function Provenance() {
           
           {nodeToUpgrade && (
             <div className="space-y-2 p-4 rounded-lg bg-muted">
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 <span className="font-medium">
                   {nodeToUpgrade.label || 'Unlabeled Address'}
                 </span>
@@ -818,9 +845,15 @@ export default function Provenance() {
                 <ArrowRight className="h-4 w-4" />
                 {renderImportanceBadge('verified')}
               </div>
-              <p className="text-xs font-mono text-muted-foreground break-all">
-                {nodeToUpgrade.address}
-              </p>
+              <div className="pt-1">
+                <AddressLink 
+                  address={nodeToUpgrade.address}
+                  recordId={nodeToUpgrade.recordId}
+                  hasMetadata={!!(nodeToUpgrade.label)}
+                  truncate={false}
+                  showCopy={true}
+                />
+              </div>
             </div>
           )}
           
