@@ -1,10 +1,10 @@
 import { useState, useCallback } from "react";
-import { useLocation } from "wouter";
-import { Copy, Check, FileText, ExternalLink } from "lucide-react";
+import { Copy, Check, FileText } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { db, type Record as DbRecord } from "@/lib/database";
 import { decryptRecords, isEncryptionReady } from "@/lib/encryptionFacade";
+import { useRecordPreview } from "@/contexts/RecordPreviewContext";
 
 interface AddressLinkProps {
   address: string;
@@ -29,7 +29,7 @@ export function AddressLink({
   className = "",
   onNavigate
 }: AddressLinkProps) {
-  const [, navigate] = useLocation();
+  const { openRecordPreview, openRecordPreviewByAddress } = useRecordPreview();
   const [copied, setCopied] = useState(false);
   const [resolvedRecordId, setResolvedRecordId] = useState<number | null>(recordId ?? null);
   const [resolvedHasMetadata, setResolvedHasMetadata] = useState<boolean>(hasMetadata ?? false);
@@ -91,19 +91,18 @@ export function AddressLink({
     e.preventDefault();
     e.stopPropagation();
     
-    // Use the returned value directly instead of stale state
     const { recordId: foundRecordId } = await resolveRecord();
     
     if (foundRecordId) {
       if (onNavigate) {
         onNavigate(foundRecordId);
       } else {
-        navigate(`/records?id=${foundRecordId}`);
+        await openRecordPreview(foundRecordId);
       }
     } else {
-      navigate(`/records?search=${encodeURIComponent(address)}`);
+      await openRecordPreviewByAddress(address);
     }
-  }, [address, navigate, onNavigate, resolveRecord]);
+  }, [address, onNavigate, resolveRecord, openRecordPreview, openRecordPreviewByAddress]);
 
   const displayAddress = truncate && address.length > 16
     ? `${address.slice(0, 8)}...${address.slice(-6)}`

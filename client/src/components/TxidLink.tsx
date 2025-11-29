@@ -1,10 +1,10 @@
 import { useState, useCallback } from "react";
-import { useLocation } from "wouter";
 import { Copy, Check, FileText, ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { db, type Record as DbRecord } from "@/lib/database";
 import { decryptRecords, isEncryptionReady } from "@/lib/encryptionFacade";
+import { useRecordPreview } from "@/contexts/RecordPreviewContext";
 
 interface TxidLinkProps {
   txid: string;
@@ -31,7 +31,7 @@ export function TxidLink({
   className = "",
   onNavigate
 }: TxidLinkProps) {
-  const [, navigate] = useLocation();
+  const { openRecordPreview, openRecordPreviewByAddress } = useRecordPreview();
   const [copied, setCopied] = useState(false);
   const [resolvedRecordId, setResolvedRecordId] = useState<number | null>(recordId ?? null);
   const [resolvedHasMetadata, setResolvedHasMetadata] = useState<boolean>(hasMetadata ?? false);
@@ -92,19 +92,18 @@ export function TxidLink({
     e.preventDefault();
     e.stopPropagation();
     
-    // Use the returned value directly instead of stale state
     const { recordId: foundRecordId } = await resolveRecord();
     
     if (foundRecordId) {
       if (onNavigate) {
         onNavigate(foundRecordId);
       } else {
-        navigate(`/records?id=${foundRecordId}`);
+        await openRecordPreview(foundRecordId);
       }
     } else {
-      navigate(`/records?search=${encodeURIComponent(txid)}`);
+      await openRecordPreviewByAddress(txid);
     }
-  }, [txid, navigate, onNavigate, resolveRecord]);
+  }, [txid, onNavigate, resolveRecord, openRecordPreview, openRecordPreviewByAddress]);
 
   const handleExternalLink = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();

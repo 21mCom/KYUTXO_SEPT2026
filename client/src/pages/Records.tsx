@@ -30,12 +30,12 @@ export default function Records() {
   const [filteredRecords, setFilteredRecords] = useState<ConvertedRecord[]>([]);
   const [selectedRecordId, setSelectedRecordId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const [urlSearchQuery, setUrlSearchQuery] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
-  // Parse query parameters from location
+  // Parse query parameters from location - store them for later application
   useEffect(() => {
     try {
-      // Extract query string from location
       const queryIndex = location.indexOf('?');
       const queryString = queryIndex >= 0 ? location.substring(queryIndex + 1) : '';
       const params = new URLSearchParams(queryString);
@@ -45,15 +45,26 @@ export default function Records() {
       
       if (id) {
         setSelectedRecordId(id);
-        setSearchQuery(""); // Clear search when viewing by ID
+        setUrlSearchQuery(null);
       } else if (search) {
-        setSearchQuery(decodeURIComponent(search));
-        setSelectedRecordId(null); // Clear selection when searching
+        const decodedSearch = decodeURIComponent(search);
+        setUrlSearchQuery(decodedSearch);
+        setSelectedRecordId(null);
+      } else {
+        setUrlSearchQuery(null);
       }
     } catch (error) {
       console.error('[Records] Failed to parse query params:', error);
     }
   }, [location]);
+
+  // Apply URL search query to input once records are loaded
+  useEffect(() => {
+    if (urlSearchQuery !== null && records.length > 0 && !isLoading) {
+      setSearchQuery(urlSearchQuery);
+      setUrlSearchQuery(null); // Clear after applying
+    }
+  }, [urlSearchQuery, records.length, isLoading]);
 
   // Load records
   useEffect(() => {
@@ -69,7 +80,6 @@ export default function Records() {
           decrypted = rawRecords;
         }
         
-        // Convert database records to component format (string IDs)
         const convertedRecords: ConvertedRecord[] = decrypted.map(r => ({
           id: String(r.id),
           type: r.type as "address" | "transaction" | "other",
