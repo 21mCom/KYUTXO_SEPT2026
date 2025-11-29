@@ -1,13 +1,21 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { format } from "date-fns";
-import { db, BlockchainTransaction, TransactionParticipant, Record } from "@/lib/database";
+import { db, BlockchainTransaction, TransactionParticipant, Record, AddressImportance } from "@/lib/database";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { 
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { 
   ChevronDown, 
   ChevronUp,
@@ -18,10 +26,20 @@ import {
   ExternalLink,
   Copy,
   Check,
-  AlertTriangle
+  AlertTriangle,
+  Filter,
+  Edit,
+  X
 } from "lucide-react";
-import { decryptRecords } from "@/lib/encryptionFacade";
+import { decryptRecords, updateRecord } from "@/lib/encryptionFacade";
 import { useToast } from "@/hooks/use-toast";
+import { useOwners } from "@/hooks/use-owners";
+import { useWalletNames } from "@/hooks/use-wallet-names";
+import { RecordFormDialog } from "@/components/RecordFormDialog";
+import { useTags } from "@/hooks/use-tags";
+import { useCategories } from "@/hooks/use-categories";
+import { useSeedNames } from "@/hooks/use-seed-names";
+import { useWalletSoftware } from "@/hooks/use-wallet-software";
 
 function truncate(str: string, start = 8, end = 8): string {
   if (str.length <= start + end + 3) return str;
@@ -46,11 +64,41 @@ interface AddressReuseInfo {
   record?: Record;
 }
 
+// Importance tier display labels and order
+const IMPORTANCE_OPTIONS: { value: AddressImportance | 'all'; label: string }[] = [
+  { value: 'all', label: 'All Tiers' },
+  { value: 'verified', label: 'Verified' },
+  { value: 'manual', label: 'Manual' },
+  { value: 'wallet-import', label: 'Wallet Import' },
+  { value: 'xpub-derived', label: 'xPub Derived' },
+  { value: 'blockchain-discovered', label: 'Blockchain Discovered' },
+  { value: 'pending-review', label: 'Pending Review' },
+];
+
 export default function AddressReuse() {
   const [search, setSearch] = useState("");
   const [expandedAddresses, setExpandedAddresses] = useState<Set<string>>(new Set());
   const [copiedAddress, setCopiedAddress] = useState<string | null>(null);
   const { toast } = useToast();
+  
+  // Filter states
+  const [reuseTypeFilter, setReuseTypeFilter] = useState<ReuseReason | 'all'>('all');
+  const [ownerFilter, setOwnerFilter] = useState<string>('all');
+  const [importanceFilter, setImportanceFilter] = useState<AddressImportance | 'all'>('all');
+  const [walletNameFilter, setWalletNameFilter] = useState<string>('all');
+  
+  // Dialog state for editing records
+  const [editDialogOpen, setEditDialogOpen] = useState(false);
+  const [editingRecord, setEditingRecord] = useState<Record | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  
+  // Vocabulary hooks for filters and dialog
+  const { owners } = useOwners();
+  const { walletNames } = useWalletNames();
+  const { tags } = useTags();
+  const { categories } = useCategories();
+  const { seedNames } = useSeedNames();
+  const { walletSoftware } = useWalletSoftware();
 
   const transactions = useLiveQuery(
     () => db.blockchainTransactions.toArray(),
@@ -191,12 +239,11 @@ export default function AddressReuse() {
       });
     });
 
-    // Sort by output count (multi-receive is more concerning), then by self-change count
+    // Sort by most recent transaction activity first (for default view)
     result.sort((a, b) => {
-      // Primary: more receives = worse
-      if (b.outputCount !== a.outputCount) return b.outputCount - a.outputCount;
-      // Secondary: more self-changes = worse
-      return b.selfChangeTxids.length - a.selfChangeTxids.length;
+      const aLatest = a.transactions[0]?.blockTime || 0;
+      const bLatest = b.transactions[0]?.blockTime || 0;
+      return bLatest - aLatest;
     });
 
     return result;
@@ -218,18 +265,119 @@ export default function AddressReuse() {
     return { yourReusedAddresses: yours, otherReusedAddresses: others };
   }, [reusedAddresses]);
 
-  const filteredAddresses = useMemo(() => {
-    if (!search.trim()) return yourReusedAddresses;
-    
-    const searchLower = search.toLowerCase();
-    return yourReusedAddresses.filter(item => {
-      if (item.address.toLowerCase().includes(searchLower)) return true;
-      if (item.record?.label?.toLowerCase().includes(searchLower)) return true;
-      if (item.record?.owner?.toLowerCase().includes(searchLower)) return true;
-      if (item.record?.walletName?.toLowerCase().includes(searchLower)) return true;
-      return false;
+  // Unique owners and wallet names from reused addresses for filter dropdowns
+  const uniqueOwners = useMemo(() => {
+    const ownersSet = new Set<string>();
+    yourReusedAddresses.forEach(item => {
+      if (item.record?.owner) ownersSet.add(item.record.owner);
     });
-  }, [yourReusedAddresses, search]);
+    return Array.from(ownersSet).sort();
+  }, [yourReusedAddresses]);
+
+  const uniqueWalletNames = useMemo(() => {
+    const walletNamesSet = new Set<string>();
+    yourReusedAddresses.forEach(item => {
+      if (item.record?.walletName) walletNamesSet.add(item.record.walletName);
+    });
+    return Array.from(walletNamesSet).sort();
+  }, [yourReusedAddresses]);
+
+  // Apply all filters
+  const filteredAddresses = useMemo(() => {
+    let result = yourReusedAddresses;
+    
+    // Filter by reuse type
+    if (reuseTypeFilter !== 'all') {
+      result = result.filter(item => {
+        if (reuseTypeFilter === 'both') return item.reuseReason === 'both';
+        if (item.reuseReason === 'both') return true; // 'both' matches either filter
+        return item.reuseReason === reuseTypeFilter;
+      });
+    }
+    
+    // Filter by owner
+    if (ownerFilter !== 'all') {
+      result = result.filter(item => item.record?.owner === ownerFilter);
+    }
+    
+    // Filter by importance tier
+    if (importanceFilter !== 'all') {
+      result = result.filter(item => item.record?.addressImportance === importanceFilter);
+    }
+    
+    // Filter by wallet name
+    if (walletNameFilter !== 'all') {
+      result = result.filter(item => item.record?.walletName === walletNameFilter);
+    }
+    
+    // Filter by search text
+    if (search.trim()) {
+      const searchLower = search.toLowerCase();
+      result = result.filter(item => {
+        if (item.address.toLowerCase().includes(searchLower)) return true;
+        if (item.record?.label?.toLowerCase().includes(searchLower)) return true;
+        if (item.record?.owner?.toLowerCase().includes(searchLower)) return true;
+        if (item.record?.walletName?.toLowerCase().includes(searchLower)) return true;
+        return false;
+      });
+    }
+    
+    return result;
+  }, [yourReusedAddresses, search, reuseTypeFilter, ownerFilter, importanceFilter, walletNameFilter]);
+
+  // Check if any filters are active
+  const hasActiveFilters = reuseTypeFilter !== 'all' || ownerFilter !== 'all' || importanceFilter !== 'all' || walletNameFilter !== 'all';
+  
+  const clearAllFilters = () => {
+    setReuseTypeFilter('all');
+    setOwnerFilter('all');
+    setImportanceFilter('all');
+    setWalletNameFilter('all');
+    setSearch('');
+  };
+  
+  // Open record for editing
+  const openRecordDialog = (record: Record) => {
+    setEditingRecord(record);
+    setEditDialogOpen(true);
+  };
+  
+  // Handle saving record
+  const handleSaveRecord = async (data: any, files: File[]) => {
+    if (!editingRecord?.id) return;
+    
+    setIsSubmitting(true);
+    try {
+      await updateRecord(editingRecord.id, {
+        label: data.label,
+        notes: data.notes,
+        tags: data.tags,
+        categories: data.categories,
+        seedName: data.seedName,
+        walletSoftware: data.walletSoftware,
+        owner: data.owner,
+        walletName: data.walletName,
+        privateKeyStatus: data.privateKeyStatus,
+        customFields: data.customFields,
+      });
+      
+      toast({
+        title: "Saved",
+        description: "Record updated successfully",
+      });
+      
+      setEditDialogOpen(false);
+      setEditingRecord(null);
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: "Failed to save record",
+        variant: "destructive",
+      });
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
 
   const toggleExpanded = (address: string) => {
     setExpandedAddresses(prev => {
@@ -265,10 +413,10 @@ export default function AddressReuse() {
     window.open(`https://mempool.space/tx/${txid}`, '_blank');
   };
 
-  // Statistics for YOUR addresses only (the ones you control)
-  const totalReusedAddresses = yourReusedAddresses.length;
-  const multiReceiveCount = yourReusedAddresses.filter(a => a.reuseReason === 'multi-receive' || a.reuseReason === 'both').length;
-  const changeToSelfCount = yourReusedAddresses.filter(a => a.reuseReason === 'change-to-self' || a.reuseReason === 'both').length;
+  // Statistics based on filtered results (so stats update as filters change)
+  const totalReusedAddresses = filteredAddresses.length;
+  const multiReceiveCount = filteredAddresses.filter(a => a.reuseReason === 'multi-receive' || a.reuseReason === 'both').length;
+  const changeToSelfCount = filteredAddresses.filter(a => a.reuseReason === 'change-to-self' || a.reuseReason === 'both').length;
 
   return (
     <ScrollArea className="h-full">
@@ -322,14 +470,116 @@ export default function AddressReuse() {
           </div>
         </div>
 
+        {/* Filters Section */}
+        <Card>
+          <CardHeader className="pb-3">
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <CardTitle className="flex items-center gap-2 text-base">
+                <Filter className="h-4 w-4" />
+                Filters
+              </CardTitle>
+              {hasActiveFilters && (
+                <Button 
+                  variant="ghost" 
+                  size="sm" 
+                  onClick={clearAllFilters}
+                  className="h-7 text-xs"
+                  data-testid="button-clear-filters"
+                >
+                  <X className="h-3 w-3 mr-1" />
+                  Clear All
+                </Button>
+              )}
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {/* Reuse Type Toggle */}
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-muted-foreground">Reuse Type</label>
+              <ToggleGroup 
+                type="single" 
+                value={reuseTypeFilter} 
+                onValueChange={(val) => setReuseTypeFilter((val as ReuseReason | 'all') || 'all')}
+                className="justify-start flex-wrap"
+              >
+                <ToggleGroupItem value="all" size="sm" data-testid="toggle-reuse-all">All</ToggleGroupItem>
+                <ToggleGroupItem value="multi-receive" size="sm" data-testid="toggle-reuse-multi-receive">
+                  <ArrowDownLeft className="h-3 w-3 mr-1" />
+                  Multi-Receive
+                </ToggleGroupItem>
+                <ToggleGroupItem value="change-to-self" size="sm" data-testid="toggle-reuse-change-to-self">
+                  <Repeat2 className="h-3 w-3 mr-1" />
+                  Change-to-Self
+                </ToggleGroupItem>
+                <ToggleGroupItem value="both" size="sm" data-testid="toggle-reuse-both">Both</ToggleGroupItem>
+              </ToggleGroup>
+            </div>
+            
+            {/* Row of dropdown filters */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              {/* Owner Filter */}
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium text-muted-foreground">Owner</label>
+                <Select value={ownerFilter} onValueChange={setOwnerFilter}>
+                  <SelectTrigger data-testid="select-owner-filter">
+                    <SelectValue placeholder="All Owners" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Owners</SelectItem>
+                    {uniqueOwners.map(owner => (
+                      <SelectItem key={owner} value={owner}>{owner}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              
+              {/* Wallet Name Filter */}
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium text-muted-foreground">Wallet</label>
+                <Select value={walletNameFilter} onValueChange={setWalletNameFilter}>
+                  <SelectTrigger data-testid="select-wallet-filter">
+                    <SelectValue placeholder="All Wallets" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Wallets</SelectItem>
+                    {uniqueWalletNames.map(wallet => (
+                      <SelectItem key={wallet} value={wallet}>{wallet}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              
+              {/* Importance Tier Filter */}
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium text-muted-foreground">Importance</label>
+                <Select value={importanceFilter} onValueChange={(val) => setImportanceFilter(val as AddressImportance | 'all')}>
+                  <SelectTrigger data-testid="select-importance-filter">
+                    <SelectValue placeholder="All Tiers" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {IMPORTANCE_OPTIONS.map(opt => (
+                      <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <Repeat2 className="h-5 w-5" />
-              Your Reused Addresses
+              Reused Addresses
+              {hasActiveFilters && (
+                <Badge variant="secondary" className="ml-2 text-xs">
+                  Filtered
+                </Badge>
+              )}
             </CardTitle>
             <CardDescription>
-              These are addresses you control that appear in multiple transactions. Click to see details.
+              Addresses that appear in multiple transactions. Click to expand, or click the edit icon to view metadata.
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -353,6 +603,14 @@ export default function AddressReuse() {
                     <Repeat2 className="h-12 w-12 mx-auto opacity-50" />
                     <p>No address reuse detected in your tracked addresses</p>
                     <p className="text-sm">Sync transactions to detect address reuse patterns</p>
+                  </div>
+                ) : hasActiveFilters || search.trim() ? (
+                  <div className="space-y-2">
+                    <Filter className="h-12 w-12 mx-auto opacity-50" />
+                    <p>No addresses match your filters</p>
+                    <Button variant="ghost" size="sm" onClick={clearAllFilters}>
+                      Clear Filters
+                    </Button>
                   </div>
                 ) : (
                   <p>No addresses match your search</p>
@@ -425,23 +683,39 @@ export default function AddressReuse() {
 
                       <CollapsibleContent>
                         <div className="border-t bg-muted/30 p-4 space-y-3">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <span className="font-mono text-sm break-all">{item.address}</span>
-                            <Button
-                              size="icon"
-                              variant="ghost"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                copyToClipboard(item.address, "Address");
-                              }}
-                              data-testid={`button-copy-address-${item.address.slice(0, 8)}`}
-                            >
-                              {copiedAddress === item.address ? (
-                                <Check className="h-4 w-4 text-green-500" />
-                              ) : (
-                                <Copy className="h-4 w-4" />
-                              )}
-                            </Button>
+                          <div className="flex items-center justify-between gap-2 flex-wrap">
+                            <div className="flex items-center gap-2 flex-wrap min-w-0 flex-1">
+                              <span className="font-mono text-sm break-all">{item.address}</span>
+                              <Button
+                                size="icon"
+                                variant="ghost"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  copyToClipboard(item.address, "Address");
+                                }}
+                                data-testid={`button-copy-address-${item.address.slice(0, 8)}`}
+                              >
+                                {copiedAddress === item.address ? (
+                                  <Check className="h-4 w-4 text-green-500" />
+                                ) : (
+                                  <Copy className="h-4 w-4" />
+                                )}
+                              </Button>
+                            </div>
+                            {item.record && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  openRecordDialog(item.record!);
+                                }}
+                                data-testid={`button-edit-record-${item.address.slice(0, 8)}`}
+                              >
+                                <Edit className="h-3 w-3 mr-1" />
+                                Edit Metadata
+                              </Button>
+                            )}
                           </div>
 
                           {item.record && (
@@ -451,6 +725,11 @@ export default function AddressReuse() {
                               )}
                               {item.record.walletName && (
                                 <Badge variant="secondary">Wallet: {item.record.walletName}</Badge>
+                              )}
+                              {item.record.addressImportance && (
+                                <Badge variant="outline" className="capitalize">
+                                  {item.record.addressImportance.replace(/-/g, ' ')}
+                                </Badge>
                               )}
                             </div>
                           )}
@@ -539,6 +818,24 @@ export default function AddressReuse() {
           </div>
         )}
       </div>
+      
+      {/* Record Edit Dialog */}
+      <RecordFormDialog
+        open={editDialogOpen}
+        onClose={() => {
+          setEditDialogOpen(false);
+          setEditingRecord(null);
+        }}
+        onSave={handleSaveRecord}
+        initialData={editingRecord}
+        isSubmitting={isSubmitting}
+        availableTags={tags.map(t => t.name)}
+        availableCategories={categories.map(c => c.name)}
+        availableSeedNames={seedNames.map(s => s.name)}
+        availableWalletSoftware={walletSoftware.map(w => w.name)}
+        availableOwners={owners.map(o => o.name)}
+        availableWalletNames={walletNames.map(w => w.name)}
+      />
     </ScrollArea>
   );
 }
