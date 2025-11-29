@@ -174,8 +174,7 @@ export default function Records() {
                 ) : (
                   <RecordTable 
                     records={filteredRecords}
-                    selectedId={selectedRecordId}
-                    onSelect={setSelectedRecordId}
+                    onRowClick={setSelectedRecordId}
                   />
                 )}
               </CardContent>
@@ -186,6 +185,7 @@ export default function Records() {
           {selectedRecord && (
             <div className="lg:col-span-1">
               <RecordDetailPanel
+                open={true}
                 record={selectedRecord}
                 onClose={() => setSelectedRecordId(null)}
               />
