@@ -101,6 +101,39 @@ export interface Category {
   isEncrypted?: boolean;
 }
 
+// Vocabulary items for dropdown selections
+export interface Owner {
+  id?: number;
+  name: string;
+  createdAt: number;
+  encryptedPayload?: string;
+  isEncrypted?: boolean;
+}
+
+export interface WalletName {
+  id?: number;
+  name: string;
+  createdAt: number;
+  encryptedPayload?: string;
+  isEncrypted?: boolean;
+}
+
+export interface SeedName {
+  id?: number;
+  name: string;
+  createdAt: number;
+  encryptedPayload?: string;
+  isEncrypted?: boolean;
+}
+
+export interface WalletSoftware {
+  id?: number;
+  name: string;
+  createdAt: number;
+  encryptedPayload?: string;
+  isEncrypted?: boolean;
+}
+
 // Origin type for tracking how a record was added
 export type RecordOriginType = 'manual' | 'xpub-derived' | 'bulk-import';
 
@@ -218,6 +251,10 @@ export class KYBTCDatabase extends Dexie {
   attachments!: Table<Attachment>;
   tags!: Table<Tag>;
   categories!: Table<Category>;
+  owners!: Table<Owner>;
+  walletNames!: Table<WalletName>;
+  seedNames!: Table<SeedName>;
+  walletSoftware!: Table<WalletSoftware>;
   recordOrigins!: Table<RecordOrigin>;
   customFields!: Table<CustomField>;
   settings!: Table<Settings>;
@@ -228,6 +265,25 @@ export class KYBTCDatabase extends Dexie {
 
   constructor() {
     super('KYBTCDatabase');
+    
+    // Version 11 adds vocabulary tables for owners, walletNames, seedNames, walletSoftware
+    this.version(11).stores({
+      records: '++id, type, inputString, label, owner, *tags, *categories, createdAt, updatedAt, isEncrypted, chainType, syncDepth, addressImportance',
+      attachments: '++id, recordId, createdAt, isEncrypted',
+      tags: '++id, name, createdAt, isEncrypted',
+      categories: '++id, name, createdAt, isEncrypted',
+      owners: '++id, name, createdAt, isEncrypted',
+      walletNames: '++id, name, createdAt, isEncrypted',
+      seedNames: '++id, name, createdAt, isEncrypted',
+      walletSoftware: '++id, name, createdAt, isEncrypted',
+      recordOrigins: '++id, recordId, originType, createdAt, isEncrypted',
+      customFields: '++id, slug, enabled, createdAt',
+      settings: 'id',
+      priceData: '++id, [date+currency+asset], date, asset, currency, source, importedAt',
+      blockchainTransactions: '++id, &txid, blockHeight, blockTime, syncedAt',
+      transactionParticipants: '++id, txid, role, address, recordId',
+      addressSyncState: '++id, &address, recordId, lastSyncedAt'
+    });
     
     // Version 10 adds addressImportance field for filtering provenance views
     // Auto-assigns importance tier based on existing source/syncDepth patterns
