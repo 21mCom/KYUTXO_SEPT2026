@@ -59,6 +59,27 @@ The Electron framework packages KYBTC as a cross-platform desktop application. I
 
 KYBTC uses **Dexie.js (IndexedDB)** for structured local data, including records, attachment metadata, tags, categories, and settings. All sensitive records are encrypted with AES-256-GCM. The data model supports various record types and includes `RecordOrigin` entries to track metadata sources, facilitating intelligent duplicate detection and merging.
 
+### Vocabulary Management System
+
+KYBTC supports six vocabulary types that can be pre-created and managed through the Value Updater page:
+- **Tags**: Multiple labels for organizing records (e.g., "cold storage", "hardware wallet")
+- **Categories**: Record classifications (e.g., "Personal", "Business")
+- **Owners**: Who controls an address (e.g., "Personal", "Spouse", "Acme Corp")
+- **Wallet Names**: Specific wallet purposes within an owner (e.g., "College Fund", "Trading")
+- **Seed Names**: Names for HD wallet seeds (e.g., "Main Seed", "Cold Storage Seed")
+- **Wallet Software**: Software used (e.g., "Trezor Suite", "Sparrow", "Electrum")
+
+All vocabulary items are stored in separate encrypted IndexedDB tables and appear as dropdown options in record forms. Users can select from existing values or add new ones inline. The Value Updater page allows bulk editing and management of all vocabulary types in one place.
+
+**Database Tables** (added in DB version 10):
+- `owners`: Owner names for address ownership tracking
+- `walletNames`: Wallet purpose identifiers
+- `seedNames`: HD seed identifiers
+- `walletSoftware`: Wallet software names
+
+**Hooks for accessing vocabulary data**:
+- `use-owners.ts`, `use-wallet-names.ts`, `use-seed-names.ts`, `use-wallet-software.ts`
+
 ### Duplicate Detection & Merge System
 
 This system ensures "one record per unique `inputString`" by detecting duplicates and intelligently merging new metadata with existing records. It prioritizes existing manual data over new data (e.g., xpub-derived) and unions tags/categories. The `RecordOrigin` table tracks the source of each piece of metadata.
