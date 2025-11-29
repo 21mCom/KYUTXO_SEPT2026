@@ -10,6 +10,7 @@ import {
   decryptRecordById,
   decryptRecords,
   isEncryptionReady,
+  createRecordOrigin,
 } from '@/lib/encryptionFacade';
 
 // Hook to get all records with automatic decryption
@@ -104,6 +105,7 @@ export function useRecord(id: number | undefined) {
 }
 
 // Create a new record (uses encryption facade)
+// Also creates a RecordOrigin entry to track metadata provenance
 export async function createRecord(data: Omit<Record, 'id' | 'createdAt' | 'updatedAt'>) {
   // Ensure syncDepth and maxSyncedDepth are set for new records
   // Manual/imported records are at depth 0, and haven't been synced (-1)
@@ -113,8 +115,38 @@ export async function createRecord(data: Omit<Record, 'id' | 'createdAt' | 'upda
     maxSyncedDepth: data.maxSyncedDepth ?? -1,
   };
   
+  let recordId: number;
+  
   if (isEncryptionReady()) {
-    return facadeCreateRecord(recordWithDefaults);
+    recordId = await facadeCreateRecord(recordWithDefaults) as number;
+    
+    // Create a RecordOrigin entry to track the source of metadata
+    // Determine origin type based on source field
+    const originType = data.source?.startsWith('tx-import:') ? 'manual' 
+      : data.source?.startsWith('xpub:') ? 'xpub-derived'
+      : data.source?.includes('bulk') || data.source?.includes('import') ? 'bulk-import'
+      : 'manual';
+    
+    try {
+      await createRecordOrigin({
+        recordId,
+        originType,
+        source: data.source || 'Manual entry',
+        label: data.label,
+        notes: data.notes,
+        owner: data.owner,
+        walletName: data.walletName,
+        seedName: data.seedName,
+        walletSoftware: data.walletSoftware,
+        tags: data.tags,
+        categories: data.categories,
+      });
+    } catch (originError) {
+      console.error('[createRecord] Failed to create RecordOrigin:', originError);
+      // Don't fail the record creation if origin creation fails
+    }
+    
+    return recordId;
   }
   
   // Fallback to unencrypted if not authenticated (shouldn't happen in normal flow)
