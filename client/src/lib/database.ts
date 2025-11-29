@@ -3,6 +3,16 @@ import Dexie, { type Table } from 'dexie';
 // Chain type for addresses derived from XPUB
 export type ChainType = 'receive' | 'change';
 
+// Address importance levels for filtering and prioritization
+// Hierarchy: verified > manual > wallet-import > xpub-derived > blockchain-discovered > pending-review
+export type AddressImportance = 
+  | 'verified'              // User has manually verified/confirmed this address
+  | 'manual'                // Manually entered address
+  | 'wallet-import'         // Imported from wallet software  
+  | 'xpub-derived'          // Derived from an xpub key
+  | 'blockchain-discovered' // Auto-discovered from blockchain sync
+  | 'pending-review';       // Awaiting user review
+
 // Vault metadata for multisig XPUB-derived addresses
 export interface VaultMetadata {
   isVaultXpub: boolean;
@@ -51,6 +61,8 @@ export interface Record {
   discoveredInTxid?: string;
   // Record ID of the address that led to discovering this one
   discoveredFromRecordId?: number;
+  // Importance tier for filtering provenance views and prioritization
+  addressImportance?: AddressImportance;
   createdAt: number;
   updatedAt: number;
   // Encrypted payload - contains the sensitive data when encryption is enabled
@@ -216,6 +228,49 @@ export class KYBTCDatabase extends Dexie {
 
   constructor() {
     super('KYBTCDatabase');
+    
+    // Version 10 adds addressImportance field for filtering provenance views
+    // Auto-assigns importance tier based on existing source/syncDepth patterns
+    this.version(10).stores({
+      records: '++id, type, inputString, label, owner, *tags, *categories, createdAt, updatedAt, isEncrypted, chainType, syncDepth, addressImportance',
+      attachments: '++id, recordId, createdAt, isEncrypted',
+      tags: '++id, name, createdAt, isEncrypted',
+      categories: '++id, name, createdAt, isEncrypted',
+      recordOrigins: '++id, recordId, originType, createdAt, isEncrypted',
+      customFields: '++id, slug, enabled, createdAt',
+      settings: 'id',
+      priceData: '++id, [date+currency+asset], date, asset, currency, source, importedAt',
+      blockchainTransactions: '++id, &txid, blockHeight, blockTime, syncedAt',
+      transactionParticipants: '++id, txid, role, address, recordId',
+      addressSyncState: '++id, &address, recordId, lastSyncedAt'
+    }).upgrade(tx => {
+      return tx.table('records').toCollection().modify((record: any) => {
+        // Auto-assign addressImportance based on existing patterns
+        // Priority: pending-review > blockchain-discovered > xpub > wallet > manual
+        if (record.owner === 'Pending Review') {
+          record.addressImportance = 'pending-review';
+        } else if (
+          record.source === 'blockchain-sync' || 
+          record.source === 'blockchain' ||
+          (record.syncDepth !== undefined && record.syncDepth > 0) ||
+          record.discoveredFromRecordId !== undefined
+        ) {
+          // Blockchain-discovered: has blockchain source, syncDepth > 0, or has parent record
+          record.addressImportance = 'blockchain-discovered';
+        } else if (record.source === 'xpub-import' || record.xpub || record.derivationPath) {
+          // XPUB-derived: has xpub source, xpub key, or derivation path
+          record.addressImportance = 'xpub-derived';
+        } else if (record.source === 'wallet-import') {
+          record.addressImportance = 'wallet-import';
+        } else if (record.source === 'manual' || !record.source) {
+          // Manual: explicit manual source or no source (default for old records)
+          record.addressImportance = 'manual';
+        } else {
+          // Fallback for any unknown source
+          record.addressImportance = 'manual';
+        }
+      });
+    });
     
     // Version 9 fixes maxSyncedDepth initialization
     // Version 8 incorrectly set maxSyncedDepth=0 for all records, but it should be -1

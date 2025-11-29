@@ -125,16 +125,33 @@ The transaction sync feature (`client/src/lib/transaction-sync.ts`, `client/src/
 
 The provenance feature (`client/src/lib/provenance.ts`, `client/src/pages/Provenance.tsx`) traces the flow of funds across addresses.
 
+**Address Importance Hierarchy**:
+- `verified`: User has manually verified/confirmed address ownership
+- `manual`: Manually entered addresses
+- `wallet-import`: Imported from wallet software
+- `xpub-derived`: Derived from extended public key
+- `blockchain-discovered`: Auto-discovered from blockchain sync
+- `pending-review`: Awaiting user review
+
+**Address Explorer**:
+- Unified bidirectional view: shows both incoming (sources) and outgoing (destinations) from a single address
+- Tier-based filtering: focus on verified/manual/wallet addresses or include blockchain-discovered
+- Clickable connection nodes with hover/popover details showing:
+  - Address label, owner, wallet name
+  - Hop distance from center address
+  - Transaction list with amounts
+- Address upgrade workflow: promote blockchain-discovered addresses to verified status
+
 **Provenance Path Finding**:
 - BFS-based algorithm to find paths between addresses through transactions
 - Configurable max depth to limit search scope
 - Detects self-loops and prevents infinite recursion
 - Uses transaction-level consolidation for accurate path representation
 
-**Provenance Page UI**:
-- Select source and target addresses from records
-- Visual display of discovered fund flow paths
-- Shows intermediate addresses and transactions
+**Find All Connections**:
+- Discovers paths between labeled addresses
+- Expandable connection cards showing hop details
+- Visual indicators for direct vs multi-hop connections
 
 ## External Dependencies
 

@@ -1,10 +1,27 @@
 // Provenance Tracking - Flow of Funds Path Finding
 // Traces UTXO origins and connections between addresses
 
-import { db, type Record, type TransactionParticipant, type BlockchainTransaction } from './database';
+import { db, type Record, type TransactionParticipant, type BlockchainTransaction, type AddressImportance } from './database';
 import { decryptRecords, isEncryptionReady } from './encryptionFacade';
 
-// A node in the address graph
+// Importance tier levels (higher number = higher importance)
+export const IMPORTANCE_TIERS: { [key in AddressImportance]: number } = {
+  'verified': 6,
+  'manual': 5,
+  'wallet-import': 4,
+  'xpub-derived': 3,
+  'blockchain-discovered': 2,
+  'pending-review': 1,
+};
+
+// Filter options for provenance exploration
+export interface ProvenanceFilter {
+  minImportance?: AddressImportance; // Minimum tier to include
+  includeTiers?: AddressImportance[]; // Specific tiers to include (if set, overrides minImportance)
+  excludePendingReview?: boolean; // Exclude pending review addresses
+}
+
+// A node in the address graph - enhanced with importance tier
 export interface AddressNode {
   address: string;
   recordId?: number;
@@ -12,6 +29,9 @@ export interface AddressNode {
   owner?: string;
   syncDepth?: number;
   isLabeled: boolean;
+  addressImportance?: AddressImportance;
+  walletName?: string;
+  source?: string;
 }
 
 // An edge representing a transaction between addresses
@@ -65,7 +85,7 @@ async function getTransactionParticipants(txid: string): Promise<TransactionPart
     .toArray();
 }
 
-// Build address node with label info
+// Build address node with label info and importance tier
 async function buildAddressNode(address: string, records: Record[]): Promise<AddressNode> {
   const record = records.find(r => r.inputString === address);
   
@@ -76,7 +96,41 @@ async function buildAddressNode(address: string, records: Record[]): Promise<Add
     owner: record?.owner,
     syncDepth: record?.syncDepth,
     isLabeled: !!record?.label && record.label !== '' && record.owner !== 'Pending Review',
+    addressImportance: record?.addressImportance,
+    walletName: record?.walletName,
+    source: record?.source,
   };
+}
+
+// Check if an address meets the filter criteria
+function meetsFilterCriteria(
+  record: Record | undefined,
+  filter?: ProvenanceFilter
+): boolean {
+  if (!filter) return true;
+  
+  // Treat unknown addresses (no record) as pending-review for filtering purposes
+  // This ensures tier filtering properly excludes unknown/untracked addresses
+  const importance: AddressImportance = record?.addressImportance || 'pending-review';
+  
+  // Exclude pending review if specified
+  if (filter.excludePendingReview && importance === 'pending-review') {
+    return false;
+  }
+  
+  // If specific tiers are listed, use those
+  if (filter.includeTiers && filter.includeTiers.length > 0) {
+    return filter.includeTiers.includes(importance);
+  }
+  
+  // If minimum importance is set, check tier level
+  if (filter.minImportance) {
+    const minLevel = IMPORTANCE_TIERS[filter.minImportance];
+    const recordLevel = IMPORTANCE_TIERS[importance];
+    return recordLevel >= minLevel;
+  }
+  
+  return true;
 }
 
 // Find all addresses that received funds FROM a given address (forward tracing)
@@ -416,4 +470,242 @@ export async function getProvenanceStats(): Promise<{
     transactionsStored,
     potentialConnections,
   };
+}
+
+// Enhanced connection node with transaction details for visualization
+export interface ConnectionNode extends AddressNode {
+  edges: TransactionEdge[];  // Transactions connecting to/from this node
+  direction: 'incoming' | 'outgoing';
+  hopDistance: number;  // Distance from the center address
+}
+
+// Result of exploring an address bidirectionally
+export interface AddressExplorationResult {
+  centerAddress: string;
+  centerNode: AddressNode | null;
+  incoming: ConnectionNode[];  // Addresses that sent funds to center
+  outgoing: ConnectionNode[];  // Addresses that received funds from center
+  totalIncoming: number;
+  totalOutgoing: number;
+  filteredOut: number;  // Count of addresses excluded by filter
+}
+
+// Unified address exploration - explore all connections from a single address
+// with bidirectional view (incoming AND outgoing) and tier filtering
+export async function exploreAddress(
+  address: string,
+  maxDepth: number = 3,
+  filter?: ProvenanceFilter
+): Promise<AddressExplorationResult> {
+  // Get all records for labeling and filtering
+  const allRawRecords = await db.records.toArray();
+  let allRecords: Record[];
+  if (isEncryptionReady()) {
+    allRecords = await decryptRecords(allRawRecords);
+  } else {
+    allRecords = allRawRecords;
+  }
+  
+  // Build lookup map for quick record access
+  const recordLookup = new Map<string, Record>();
+  allRecords.forEach(r => {
+    if (r.type === 'address' && r.inputString) {
+      recordLookup.set(r.inputString, r);
+    }
+  });
+  
+  // Build center node
+  const centerNode = await buildAddressNode(address, allRecords);
+  
+  // Find incoming connections (who sent to this address)
+  const incomingMap = await findIncomingConnections(address, maxDepth);
+  
+  // Find outgoing connections (who received from this address)
+  const outgoingMap = await findOutgoingConnections(address, maxDepth);
+  
+  // Process incoming connections with filter
+  const incoming: ConnectionNode[] = [];
+  let filteredOut = 0;
+  
+  const incomingAddresses = Array.from(incomingMap.keys());
+  for (const addr of incomingAddresses) {
+    const edges = incomingMap.get(addr)!;
+    const record = recordLookup.get(addr);
+    if (!meetsFilterCriteria(record, filter)) {
+      filteredOut++;
+      continue;
+    }
+    
+    const node = await buildAddressNode(addr, allRecords);
+    
+    // Calculate hop distance (minimum edges to reach center)
+    const minHops = edges.reduce((min: number, _edge: TransactionEdge) => {
+      // Count hops in the edge chain
+      const hops = edges.filter((e: TransactionEdge) => e.toAddress === address || edges.some((e2: TransactionEdge) => e2.toAddress === e.fromAddress)).length;
+      return Math.min(min, hops);
+    }, maxDepth);
+    
+    incoming.push({
+      ...node,
+      edges,
+      direction: 'incoming',
+      hopDistance: minHops > 0 ? minHops : 1,
+    });
+  }
+  
+  // Process outgoing connections with filter
+  const outgoing: ConnectionNode[] = [];
+  
+  const outgoingAddresses = Array.from(outgoingMap.keys());
+  for (const addr of outgoingAddresses) {
+    const edges = outgoingMap.get(addr)!;
+    const record = recordLookup.get(addr);
+    if (!meetsFilterCriteria(record, filter)) {
+      filteredOut++;
+      continue;
+    }
+    
+    const node = await buildAddressNode(addr, allRecords);
+    
+    // Calculate hop distance
+    const minHops = edges.reduce((min: number, _edge: TransactionEdge) => {
+      const hops = edges.filter((e: TransactionEdge) => e.fromAddress === address || edges.some((e2: TransactionEdge) => e2.fromAddress === e.toAddress)).length;
+      return Math.min(min, hops);
+    }, maxDepth);
+    
+    outgoing.push({
+      ...node,
+      edges,
+      direction: 'outgoing',
+      hopDistance: minHops > 0 ? minHops : 1,
+    });
+  }
+  
+  // Sort by importance tier (higher first), then by labeled status, then by hop distance
+  const sortNodes = (a: ConnectionNode, b: ConnectionNode) => {
+    // First by importance tier (higher is better)
+    const aImportance = IMPORTANCE_TIERS[a.addressImportance || 'pending-review'];
+    const bImportance = IMPORTANCE_TIERS[b.addressImportance || 'pending-review'];
+    if (bImportance !== aImportance) return bImportance - aImportance;
+    
+    // Then by labeled status
+    if (a.isLabeled && !b.isLabeled) return -1;
+    if (!a.isLabeled && b.isLabeled) return 1;
+    
+    // Then by hop distance (closer is better)
+    return a.hopDistance - b.hopDistance;
+  };
+  
+  incoming.sort(sortNodes);
+  outgoing.sort(sortNodes);
+  
+  return {
+    centerAddress: address,
+    centerNode,
+    incoming,
+    outgoing,
+    totalIncoming: incomingMap.size,
+    totalOutgoing: outgoingMap.size,
+    filteredOut,
+  };
+}
+
+// Upgrade an address from blockchain-discovered to verified status
+export async function upgradeAddressImportance(
+  recordId: number,
+  newImportance: AddressImportance = 'verified'
+): Promise<boolean> {
+  try {
+    const record = await db.records.get(recordId);
+    if (!record) {
+      console.error(`[Provenance] Record ${recordId} not found`);
+      return false;
+    }
+    
+    const oldImportance = record.addressImportance || 'pending-review';
+    
+    // Only allow upgrading to higher tiers
+    if (IMPORTANCE_TIERS[newImportance] <= IMPORTANCE_TIERS[oldImportance]) {
+      console.warn(`[Provenance] Cannot downgrade importance from ${oldImportance} to ${newImportance}`);
+      return false;
+    }
+    
+    const now = Date.now();
+    
+    // Update the record
+    await db.records.update(recordId, {
+      addressImportance: newImportance,
+      updatedAt: now,
+    });
+    
+    // Create audit log entry in RecordOrigin
+    await db.recordOrigins.add({
+      recordId,
+      originType: 'manual', // Manual action to upgrade
+      createdAt: now,
+      // Store the upgrade action details
+      notes: `Upgraded from ${oldImportance} to ${newImportance}`,
+      source: `importance-upgrade:${oldImportance}->${newImportance}`,
+    });
+    
+    console.log(`[Provenance] Upgraded record ${recordId} from ${oldImportance} to ${newImportance}`);
+    return true;
+  } catch (error) {
+    console.error('[Provenance] Failed to upgrade address importance:', error);
+    return false;
+  }
+}
+
+// Get importance tier display info
+export function getImportanceTierInfo(importance: AddressImportance | undefined): {
+  label: string;
+  shortLabel: string;
+  color: string;
+  description: string;
+} {
+  switch (importance) {
+    case 'verified':
+      return {
+        label: 'Verified',
+        shortLabel: 'V',
+        color: 'text-green-600 dark:text-green-400',
+        description: 'Manually verified and confirmed address',
+      };
+    case 'manual':
+      return {
+        label: 'Manual Entry',
+        shortLabel: 'M',
+        color: 'text-blue-600 dark:text-blue-400',
+        description: 'Manually entered address',
+      };
+    case 'wallet-import':
+      return {
+        label: 'Wallet Import',
+        shortLabel: 'W',
+        color: 'text-purple-600 dark:text-purple-400',
+        description: 'Imported from wallet software',
+      };
+    case 'xpub-derived':
+      return {
+        label: 'XPUB Derived',
+        shortLabel: 'X',
+        color: 'text-orange-600 dark:text-orange-400',
+        description: 'Derived from extended public key',
+      };
+    case 'blockchain-discovered':
+      return {
+        label: 'Blockchain',
+        shortLabel: 'B',
+        color: 'text-muted-foreground',
+        description: 'Auto-discovered from blockchain sync',
+      };
+    case 'pending-review':
+    default:
+      return {
+        label: 'Pending Review',
+        shortLabel: 'P',
+        color: 'text-muted-foreground/60',
+        description: 'Awaiting user review',
+      };
+  }
 }
