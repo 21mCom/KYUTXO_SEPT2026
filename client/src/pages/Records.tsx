@@ -109,6 +109,41 @@ export default function Records() {
     ? records.find(r => r.id === selectedRecordId)
     : null;
 
+  // If viewing a specific record by ID, show detail-focused view
+  if (selectedRecordId && selectedRecord && !searchQuery) {
+    return (
+      <div className="flex-1 overflow-auto p-6">
+        <div className="max-w-2xl mx-auto space-y-6">
+          <div className="flex items-center gap-4">
+            <Button 
+              variant="ghost" 
+              size="icon" 
+              onClick={() => navigate("/records")}
+              data-testid="button-back"
+            >
+              <ArrowLeft className="h-4 w-4" />
+            </Button>
+            <div>
+              <h1 className="text-2xl font-bold" data-testid="text-page-title">
+                Record Details
+              </h1>
+              <p className="text-muted-foreground">
+                View and edit metadata
+              </p>
+            </div>
+          </div>
+
+          <RecordDetailPanel
+            open={true}
+            record={selectedRecord}
+            onClose={() => navigate("/records")}
+          />
+        </div>
+      </div>
+    );
+  }
+
+  // Default view: all records with search
   return (
     <div className="flex-1 overflow-auto p-6">
       <div className="max-w-6xl mx-auto space-y-6">
