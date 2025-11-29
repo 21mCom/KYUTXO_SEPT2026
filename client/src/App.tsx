@@ -18,6 +18,7 @@ import PriceImport from "@/pages/PriceImport";
 import TransactionSync from "@/pages/TransactionSync";
 import Transactions from "@/pages/Transactions";
 import Provenance from "@/pages/Provenance";
+import Records from "@/pages/Records";
 import QRScanner from "@/pages/QRScanner";
 import ExportPage from "@/pages/ExportPage";
 import SettingsPage from "@/pages/SettingsPage";
@@ -34,6 +35,7 @@ function Router() {
       <Route path="/transaction-sync" component={TransactionSync} />
       <Route path="/transactions" component={Transactions} />
       <Route path="/provenance" component={Provenance} />
+      <Route path="/records" component={Records} />
       <Route path="/scanner" component={QRScanner} />
       <Route path="/export" component={ExportPage} />
       <Route path="/settings" component={SettingsPage} />
