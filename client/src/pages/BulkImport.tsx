@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { useLocation } from "wouter";
-import { Key, ChevronRight, ChevronLeft, Check, Loader2, Plus, X, ChevronDown, ChevronUp, AlertCircle, Info, ChevronsUpDown } from "lucide-react";
+import { Key, ChevronRight, ChevronLeft, Check, Loader2, Plus, X, ChevronDown, ChevronUp, AlertCircle, Info, ChevronsUpDown, ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -101,6 +101,9 @@ export default function BulkImport() {
   const [vaultM, setVaultM] = useState<number | null>(null);
   const [vaultN, setVaultN] = useState<number | null>(null);
   const [vaultNotes, setVaultNotes] = useState("");
+  
+  // Verified status
+  const [markAsVerified, setMarkAsVerified] = useState(false);
 
   const { tags } = useEncryptedTags();
   const { categories } = useEncryptedCategories();
@@ -380,6 +383,21 @@ export default function BulkImport() {
             const mergedTags = Array.from(new Set([...existingTags, ...parsedTags]));
             const mergedCategories = Array.from(new Set([...existingCategories, ...parsedCategories]));
 
+            // Handle addressImportance - can upgrade but never downgrade from verified
+            // If markAsVerified is set, upgrade to verified; otherwise upgrade to xpub-derived if lower
+            let newImportance = existingRecord.addressImportance;
+            if (markAsVerified) {
+              // Only upgrade to verified if not already verified
+              if (existingRecord.addressImportance !== 'verified') {
+                newImportance = 'verified';
+              }
+            } else if (existingRecord.addressImportance !== 'verified' && 
+                       existingRecord.addressImportance !== 'manual' && 
+                       existingRecord.addressImportance !== 'wallet-import') {
+              // Upgrade from blockchain-discovered or pending-review to xpub-derived
+              newImportance = 'xpub-derived';
+            }
+
             // Update the record with merged metadata
             // Keep existing values if they exist, otherwise use new values
             await updateRecord(existingRecord.id, {
@@ -397,6 +415,8 @@ export default function BulkImport() {
               source: addressSource,
               // Add vault metadata (overwrite with new vault info if provided)
               vault: vaultMetadata,
+              // Handle addressImportance upgrade
+              addressImportance: newImportance,
             });
 
             // Create a record origin entry to track xpub metadata
@@ -443,6 +463,7 @@ export default function BulkImport() {
               derivationPath: addr.path,
               xpub: xpub,
               vault: vaultMetadata,
+              addressImportance: markAsVerified ? 'verified' : 'xpub-derived',
             });
             createdCount++;
           }
@@ -1043,6 +1064,24 @@ export default function BulkImport() {
                         <SelectItem value="unsure">Unsure</SelectItem>
                       </SelectContent>
                     </Select>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="mark-verified" className="flex items-center gap-2">
+                      <ShieldCheck className="h-4 w-4 text-green-600" />
+                      Mark as Verified
+                    </Label>
+                    <div className="flex items-center gap-3 h-9">
+                      <Switch
+                        id="mark-verified"
+                        checked={markAsVerified}
+                        onCheckedChange={setMarkAsVerified}
+                        data-testid="switch-verified"
+                      />
+                      <span className="text-sm text-muted-foreground">
+                        {markAsVerified ? "Confirmed ownership" : "Not verified"}
+                      </span>
+                    </div>
                   </div>
                 </div>
 
