@@ -130,6 +130,7 @@ export async function executeImport(
           owner: options.owner,
           walletName: options.walletName,
           privateKeyStatus: options.privateKeyStatus,
+          labelPrefix: options.labelPrefix,
         });
         
         await createRecord(newRecordData);

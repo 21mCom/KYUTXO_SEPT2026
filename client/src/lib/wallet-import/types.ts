@@ -47,6 +47,7 @@ export interface ImportOptions {
   seedName?: string;
   markInputsAsVerified?: boolean;
   privateKeyStatus?: string;
+  labelPrefix?: string;
 }
 
 export interface ImportResult {

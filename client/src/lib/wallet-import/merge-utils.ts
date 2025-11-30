@@ -2,6 +2,7 @@ import type { ParsedRecord, DuplicateInfo } from './types';
 import type { Record as DBRecord, AddressImportance } from '../database';
 import { findRecordByInputString, isEncryptionReady } from '../encryptionFacade';
 import { IMPORTANCE_TIERS } from '../provenance';
+import { expandLabelTokens } from '../label-tokens';
 
 // Determine if the incoming importance should upgrade the existing one
 // Returns the new importance if it should be upgraded, or undefined if no change
@@ -164,6 +165,7 @@ export function createNewRecordData(
     owner?: string;
     walletName?: string;
     privateKeyStatus?: string;
+    labelPrefix?: string;
   }
 ): Omit<DBRecord, 'id' | 'createdAt' | 'updatedAt'> {
   // Only apply tags/categories to input addresses (addresses you control)
@@ -185,10 +187,21 @@ export function createNewRecordData(
     importance = options.defaultImportance || 'wallet-import';
   }
   
+  // Build the label, optionally prepending a prefix with token expansion
+  let finalLabel = parsed.label || `Imported ${parsed.type}`;
+  if (options.labelPrefix) {
+    const expandedPrefix = expandLabelTokens(options.labelPrefix, {
+      index: 0, // No sequential numbering for wallet imports
+      totalCount: 1,
+      walletName: options.walletName,
+    });
+    finalLabel = `${expandedPrefix}${finalLabel}`;
+  }
+  
   return {
     type: parsed.type,
     inputString: parsed.inputString,
-    label: parsed.label || `Imported ${parsed.type}`,
+    label: finalLabel,
     notes: parsed.notes,
     amount: parsed.amount,
     date: parsed.date,

@@ -57,6 +57,7 @@ import {
   type DetectionResult,
 } from '@/lib/wallet-import/import-manager';
 import { getImportSummary } from '@/lib/wallet-import/merge-utils';
+import { expandLabelTokens, hasTokens, AVAILABLE_TOKENS } from '@/lib/label-tokens';
 
 type WizardStep = 'upload' | 'setup' | 'preview' | 'import';
 
@@ -101,6 +102,7 @@ export default function WalletImport() {
   
   const [markInputsAsVerified, setMarkInputsAsVerified] = useState(false);
   const [privateKeyStatus, setPrivateKeyStatus] = useState<string>('');
+  const [labelPrefix, setLabelPrefix] = useState<string>('');
   
   // Seed name state
   const [seedNameInput, setSeedNameInput] = useState<string>('');
@@ -304,6 +306,7 @@ export default function WalletImport() {
           seedName: seedNameInput || undefined,
           markInputsAsVerified,
           privateKeyStatus: privateKeyStatus || undefined,
+          labelPrefix: labelPrefix || undefined,
         },
         (current, total, status) => {
           setImportProgress(Math.round((current / total) * 100));
@@ -349,6 +352,7 @@ export default function WalletImport() {
     setImportStatus('');
     setMarkInputsAsVerified(false);
     setPrivateKeyStatus('');
+    setLabelPrefix('');
   };
   
   
@@ -481,6 +485,30 @@ export default function WalletImport() {
             <p className="text-sm text-muted-foreground">
               <strong>What gets applied where:</strong> Owner, wallet name, tags, and categories apply only to input addresses (your addresses that received funds). Output addresses (counterparties) get owner='Unknown' and can be tagged individually later.
             </p>
+          </div>
+
+          {/* Label Prefix Section */}
+          <div className="space-y-2">
+            <Label htmlFor="label-prefix">Label Prefix (optional)</Label>
+            <Input
+              id="label-prefix"
+              value={labelPrefix}
+              onChange={(e) => setLabelPrefix(e.target.value)}
+              placeholder="e.g., [wallet] - or [date] Import"
+              data-testid="input-label-prefix"
+            />
+            <div className="text-xs text-muted-foreground">
+              <p>Add a prefix to all imported labels. Available tokens:</p>
+              <ul className="list-disc list-inside ml-2 mt-1">
+                <li><code className="bg-muted px-1 rounded">[date]</code> Today's date (YYYY-MM-DD)</li>
+                <li><code className="bg-muted px-1 rounded">[wallet]</code> Wallet name from below</li>
+              </ul>
+              {labelPrefix && (
+                <p className="mt-2">
+                  Preview: <span className="font-mono">{expandLabelTokens(labelPrefix, { index: 0, totalCount: 1, walletName: walletNameInput || 'MyWallet' })}</span>
+                </p>
+              )}
+            </div>
           </div>
 
           {/* Ownership Section */}

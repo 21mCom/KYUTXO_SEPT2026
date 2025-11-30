@@ -59,6 +59,7 @@ import {
   type DualChainResult,
   type XpubInfo 
 } from "@/lib/xpub";
+import { expandLabelTokens, hasTokens, previewLabelTemplate, AVAILABLE_TOKENS } from "@/lib/label-tokens";
 
 export default function BulkImport() {
   const [, navigate] = useLocation();
@@ -91,6 +92,7 @@ export default function BulkImport() {
   const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
   const [ownerInput, setOwnerInput] = useState("");
   const [walletNameInput, setWalletNameInput] = useState("");
+  const [labelTemplate, setLabelTemplate] = useState("[wallet] [#]");
   const [seedOpen, setSeedOpen] = useState(false);
   const [walletOpen, setWalletOpen] = useState(false);
   const [newSeedName, setNewSeedName] = useState("");
@@ -336,12 +338,19 @@ export default function BulkImport() {
       let mergedCount = 0;
       let errorCount = 0;
 
-      for (const addr of allAddresses) {
-        const labelPrefix = seedName || walletNameInput || "Derived";
+      for (let i = 0; i < allAddresses.length; i++) {
+        const addr = allAddresses[i];
         const chainSuffix = addr.chainType === 'receive' ? ' (Receive)' : ' (Change)';
         // Human-readable source: wallet name or seed name with derivation path
         const sourcePrefix = walletNameInput || seedName || 'xpub-import';
         const addressSource = `${sourcePrefix} (${addr.path})`;
+        
+        // Generate label from template with token expansion
+        const generatedLabel = expandLabelTokens(labelTemplate, {
+          index: i,
+          totalCount: allAddresses.length,
+          walletName: walletNameInput || seedName || 'Derived',
+        }) + chainSuffix;
         
         try {
           // Check if this address already exists
@@ -404,7 +413,7 @@ export default function BulkImport() {
                 await createRecordOrigin({
                   recordId: existingRecord.id,
                   originType: 'xpub-derived',
-                  label: `${labelPrefix} #${addr.index}${chainSuffix}`,
+                  label: generatedLabel,
                   notes: notes || undefined,
                   tags: parsedTags,
                   categories: parsedCategories,
@@ -428,7 +437,7 @@ export default function BulkImport() {
             await createRecord({
               type: "address",
               inputString: addr.address,
-              label: `${labelPrefix} #${addr.index}${chainSuffix}`,
+              label: generatedLabel,
               notes: notes || undefined,
               tags: parsedTags,
               categories: parsedCategories,
@@ -862,6 +871,41 @@ export default function BulkImport() {
                   <p className="text-sm text-muted-foreground">
                     <strong>What gets applied where:</strong> Owner and wallet name will be applied to all derived addresses (all from your xpub). Tags and categories will be added to all addresses.
                   </p>
+                </div>
+
+                {/* Label Template Section */}
+                <div className="space-y-2">
+                  <Label htmlFor="label-template">Label Template</Label>
+                  <Input
+                    id="label-template"
+                    value={labelTemplate}
+                    onChange={(e) => setLabelTemplate(e.target.value)}
+                    placeholder="e.g., [wallet] [#] or Savings-[#]"
+                    data-testid="input-label-template"
+                  />
+                  <div className="text-xs text-muted-foreground space-y-1">
+                    <p>Available tokens:</p>
+                    <ul className="list-disc list-inside ml-2">
+                      {AVAILABLE_TOKENS.map(t => (
+                        <li key={t.token}><code className="bg-muted px-1 rounded">{t.token}</code> {t.description}</li>
+                      ))}
+                    </ul>
+                    {hasTokens(labelTemplate) && (
+                      <div className="mt-2 p-2 bg-muted/50 rounded">
+                        <p className="font-medium mb-1">Preview:</p>
+                        {previewLabelTemplate(
+                          labelTemplate, 
+                          Math.max(1, (receiveEndIndex - receiveStartIndex + 1) + (changeEndIndex - changeStartIndex + 1)),
+                          walletNameInput || seedName || 'Derived'
+                        ).map((preview, idx) => (
+                          <span key={idx} className="font-mono text-sm">
+                            {idx > 0 && <span className="text-muted-foreground mx-1">...</span>}
+                            {preview}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 </div>
 
                 {/* Ownership Section */}
