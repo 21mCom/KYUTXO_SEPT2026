@@ -16,7 +16,7 @@ import { Progress } from "@/components/ui/progress";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { X, Upload, File as FileIcon, Loader2, Plus, Check, ChevronsUpDown, AlertTriangle, Download, ArrowDownLeft, ArrowUpRight, Info, ExternalLink, ShieldCheck } from "lucide-react";
+import { X, Upload, File as FileIcon, Loader2, Plus, Check, ChevronsUpDown, AlertTriangle, Download, ArrowDownLeft, ArrowUpRight, Info, ExternalLink, ShieldCheck, Wallet } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import type { AddressImportance } from "@/lib/database";
 import {
@@ -700,153 +700,12 @@ export function RecordFormDialog({
             )}
           </div>
 
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <Label>Seed Name</Label>
-              <Popover open={seedOpen} onOpenChange={setSeedOpen}>
-                <PopoverTrigger asChild>
-                  <Button
-                    variant="outline"
-                    role="combobox"
-                    aria-expanded={seedOpen}
-                    className="w-full justify-between font-normal"
-                    disabled={isSubmitting}
-                    data-testid="select-seed"
-                  >
-                    {formData.seedName || "Select or add..."}
-                    <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent className="w-full p-0" align="start">
-                  <Command>
-                    <CommandInput 
-                      placeholder="Search or add new..." 
-                      value={newSeedName}
-                      onValueChange={setNewSeedName}
-                    />
-                    <CommandList>
-                      <CommandEmpty>
-                        {newSeedName && (
-                          <Button
-                            variant="ghost"
-                            className="w-full justify-start"
-                            onClick={addNewSeedName}
-                          >
-                            <Plus className="mr-2 h-4 w-4" />
-                            Add "{newSeedName}"
-                          </Button>
-                        )}
-                      </CommandEmpty>
-                      <CommandGroup>
-                        {allSeedNames.map((name) => (
-                          <CommandItem
-                            key={name}
-                            value={name}
-                            onSelect={() => {
-                              setFormData({ ...formData, seedName: name });
-                              setSeedOpen(false);
-                            }}
-                          >
-                            <Check
-                              className={cn(
-                                "mr-2 h-4 w-4",
-                                formData.seedName === name ? "opacity-100" : "opacity-0"
-                              )}
-                            />
-                            {name}
-                          </CommandItem>
-                        ))}
-                        {newSeedName && !allSeedNames.some(n => n.toLowerCase() === newSeedName.toLowerCase()) && (
-                          <CommandItem
-                            value={`create-${newSeedName}`}
-                            onSelect={addNewSeedName}
-                          >
-                            <Plus className="mr-2 h-4 w-4" />
-                            Add "{newSeedName}"
-                          </CommandItem>
-                        )}
-                      </CommandGroup>
-                    </CommandList>
-                  </Command>
-                </PopoverContent>
-              </Popover>
-            </div>
-
-            <div className="space-y-2">
-              <Label>Wallet Software</Label>
-              <Popover open={walletOpen} onOpenChange={setWalletOpen}>
-                <PopoverTrigger asChild>
-                  <Button
-                    variant="outline"
-                    role="combobox"
-                    aria-expanded={walletOpen}
-                    className="w-full justify-between font-normal"
-                    disabled={isSubmitting}
-                    data-testid="select-wallet"
-                  >
-                    {formData.walletSoftware || "Select or add..."}
-                    <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent className="w-full p-0" align="start">
-                  <Command>
-                    <CommandInput 
-                      placeholder="Search or add new..." 
-                      value={newWalletSoftware}
-                      onValueChange={setNewWalletSoftware}
-                    />
-                    <CommandList>
-                      <CommandEmpty>
-                        {newWalletSoftware && (
-                          <Button
-                            variant="ghost"
-                            className="w-full justify-start"
-                            onClick={addNewWalletSoftware}
-                          >
-                            <Plus className="mr-2 h-4 w-4" />
-                            Add "{newWalletSoftware}"
-                          </Button>
-                        )}
-                      </CommandEmpty>
-                      <CommandGroup>
-                        {allWalletSoftware.map((name) => (
-                          <CommandItem
-                            key={name}
-                            value={name}
-                            onSelect={() => {
-                              setFormData({ ...formData, walletSoftware: name });
-                              setWalletOpen(false);
-                            }}
-                          >
-                            <Check
-                              className={cn(
-                                "mr-2 h-4 w-4",
-                                formData.walletSoftware === name ? "opacity-100" : "opacity-0"
-                              )}
-                            />
-                            {name}
-                          </CommandItem>
-                        ))}
-                        {newWalletSoftware && !allWalletSoftware.some(n => n.toLowerCase() === newWalletSoftware.toLowerCase()) && (
-                          <CommandItem
-                            value={`create-${newWalletSoftware}`}
-                            onSelect={addNewWalletSoftware}
-                          >
-                            <Plus className="mr-2 h-4 w-4" />
-                            Add "{newWalletSoftware}"
-                          </CommandItem>
-                        )}
-                      </CommandGroup>
-                    </CommandList>
-                  </Command>
-                </PopoverContent>
-              </Popover>
-            </div>
-          </div>
-
           {/* Ownership Section */}
-          <div className="space-y-2 pt-2 border-t">
-            <Label className="text-sm font-medium text-muted-foreground">Ownership</Label>
+          <div className="space-y-3 p-4 bg-muted/30 rounded-lg border">
+            <h5 className="font-medium text-sm flex items-center gap-2">
+              <ShieldCheck className="h-4 w-4" />
+              Ownership
+            </h5>
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label>Owner</Label>
@@ -949,95 +808,244 @@ export function RecordFormDialog({
             </p>
           </div>
 
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <Label>Wallet Name</Label>
-              <Popover open={walletNameOpen} onOpenChange={setWalletNameOpen}>
-                <PopoverTrigger asChild>
-                  <Button
-                    variant="outline"
-                    role="combobox"
-                    aria-expanded={walletNameOpen}
-                    className="w-full justify-between font-normal"
-                    disabled={isSubmitting}
-                    data-testid="select-wallet-name"
-                  >
-                    {walletNameInput || "Select or add..."}
-                    <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent className="w-full p-0" align="start">
-                  <Command>
-                    <CommandInput 
-                      placeholder="Search or add new..." 
-                      value={newWalletName}
-                      onValueChange={setNewWalletName}
-                    />
-                    <CommandList>
-                      <CommandEmpty>
-                        {newWalletName && (
-                          <Button
-                            variant="ghost"
-                            className="w-full justify-start"
-                            onClick={addNewWalletName}
-                          >
-                            <Plus className="mr-2 h-4 w-4" />
-                            Add "{newWalletName}"
-                          </Button>
-                        )}
-                      </CommandEmpty>
-                      <CommandGroup>
-                        {allWalletNames.map((name) => (
-                          <CommandItem
-                            key={name}
-                            value={name}
-                            onSelect={() => {
-                              setWalletNameInput(name);
-                              setWalletNameOpen(false);
-                            }}
-                          >
-                            <Check
-                              className={cn(
-                                "mr-2 h-4 w-4",
-                                walletNameInput === name ? "opacity-100" : "opacity-0"
-                              )}
-                            />
-                            {name}
-                          </CommandItem>
-                        ))}
-                        {newWalletName && !allWalletNames.some(n => n.toLowerCase() === newWalletName.toLowerCase()) && (
-                          <CommandItem
-                            value={`create-${newWalletName}`}
-                            onSelect={addNewWalletName}
-                          >
-                            <Plus className="mr-2 h-4 w-4" />
-                            Add "{newWalletName}"
-                          </CommandItem>
-                        )}
-                      </CommandGroup>
-                    </CommandList>
-                  </Command>
-                </PopoverContent>
-              </Popover>
-            </div>
-          </div>
+          {/* Wallet Details Section */}
+          <div className="space-y-3 p-4 bg-muted/30 rounded-lg border">
+            <h5 className="font-medium text-sm flex items-center gap-2">
+              <Wallet className="h-4 w-4" />
+              Wallet Details
+            </h5>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>Seed Name</Label>
+                <Popover open={seedOpen} onOpenChange={setSeedOpen}>
+                  <PopoverTrigger asChild>
+                    <Button
+                      variant="outline"
+                      role="combobox"
+                      aria-expanded={seedOpen}
+                      className="w-full justify-between font-normal"
+                      disabled={isSubmitting}
+                      data-testid="select-seed"
+                    >
+                      {formData.seedName || "Select or add..."}
+                      <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-full p-0" align="start">
+                    <Command>
+                      <CommandInput 
+                        placeholder="Search or add new..." 
+                        value={newSeedName}
+                        onValueChange={setNewSeedName}
+                      />
+                      <CommandList>
+                        <CommandEmpty>
+                          {newSeedName && (
+                            <Button
+                              variant="ghost"
+                              className="w-full justify-start"
+                              onClick={addNewSeedName}
+                            >
+                              <Plus className="mr-2 h-4 w-4" />
+                              Add "{newSeedName}"
+                            </Button>
+                          )}
+                        </CommandEmpty>
+                        <CommandGroup>
+                          {allSeedNames.map((name) => (
+                            <CommandItem
+                              key={name}
+                              value={name}
+                              onSelect={() => {
+                                setFormData({ ...formData, seedName: name });
+                                setSeedOpen(false);
+                              }}
+                            >
+                              <Check
+                                className={cn(
+                                  "mr-2 h-4 w-4",
+                                  formData.seedName === name ? "opacity-100" : "opacity-0"
+                                )}
+                              />
+                              {name}
+                            </CommandItem>
+                          ))}
+                          {newSeedName && !allSeedNames.some(n => n.toLowerCase() === newSeedName.toLowerCase()) && (
+                            <CommandItem
+                              value={`create-${newSeedName}`}
+                              onSelect={addNewSeedName}
+                            >
+                              <Plus className="mr-2 h-4 w-4" />
+                              Add "{newSeedName}"
+                            </CommandItem>
+                          )}
+                        </CommandGroup>
+                      </CommandList>
+                    </Command>
+                  </PopoverContent>
+                </Popover>
+              </div>
 
-          <div className="space-y-2">
-            <Label htmlFor="privateKeyStatus">Private Key Available</Label>
-            <Select
-              value={formData.privateKeyStatus || ""}
-              onValueChange={(value) => setFormData({ ...formData, privateKeyStatus: value })}
-              disabled={isSubmitting}
-            >
-              <SelectTrigger id="privateKeyStatus" data-testid="select-private-key" className="w-full max-w-xs">
-                <SelectValue placeholder="Select status..." />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="yes">Yes - I have the keys</SelectItem>
-                <SelectItem value="no">No - Third party controls</SelectItem>
-                <SelectItem value="unsure">Unsure</SelectItem>
-              </SelectContent>
-            </Select>
+              <div className="space-y-2">
+                <Label>Wallet Software</Label>
+                <Popover open={walletOpen} onOpenChange={setWalletOpen}>
+                  <PopoverTrigger asChild>
+                    <Button
+                      variant="outline"
+                      role="combobox"
+                      aria-expanded={walletOpen}
+                      className="w-full justify-between font-normal"
+                      disabled={isSubmitting}
+                      data-testid="select-wallet"
+                    >
+                      {formData.walletSoftware || "Select or add..."}
+                      <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-full p-0" align="start">
+                    <Command>
+                      <CommandInput 
+                        placeholder="Search or add new..." 
+                        value={newWalletSoftware}
+                        onValueChange={setNewWalletSoftware}
+                      />
+                      <CommandList>
+                        <CommandEmpty>
+                          {newWalletSoftware && (
+                            <Button
+                              variant="ghost"
+                              className="w-full justify-start"
+                              onClick={addNewWalletSoftware}
+                            >
+                              <Plus className="mr-2 h-4 w-4" />
+                              Add "{newWalletSoftware}"
+                            </Button>
+                          )}
+                        </CommandEmpty>
+                        <CommandGroup>
+                          {allWalletSoftware.map((name) => (
+                            <CommandItem
+                              key={name}
+                              value={name}
+                              onSelect={() => {
+                                setFormData({ ...formData, walletSoftware: name });
+                                setWalletOpen(false);
+                              }}
+                            >
+                              <Check
+                                className={cn(
+                                  "mr-2 h-4 w-4",
+                                  formData.walletSoftware === name ? "opacity-100" : "opacity-0"
+                                )}
+                              />
+                              {name}
+                            </CommandItem>
+                          ))}
+                          {newWalletSoftware && !allWalletSoftware.some(n => n.toLowerCase() === newWalletSoftware.toLowerCase()) && (
+                            <CommandItem
+                              value={`create-${newWalletSoftware}`}
+                              onSelect={addNewWalletSoftware}
+                            >
+                              <Plus className="mr-2 h-4 w-4" />
+                              Add "{newWalletSoftware}"
+                            </CommandItem>
+                          )}
+                        </CommandGroup>
+                      </CommandList>
+                    </Command>
+                  </PopoverContent>
+                </Popover>
+              </div>
+
+              <div className="space-y-2">
+                <Label>Wallet Name</Label>
+                <Popover open={walletNameOpen} onOpenChange={setWalletNameOpen}>
+                  <PopoverTrigger asChild>
+                    <Button
+                      variant="outline"
+                      role="combobox"
+                      aria-expanded={walletNameOpen}
+                      className="w-full justify-between font-normal"
+                      disabled={isSubmitting}
+                      data-testid="select-wallet-name"
+                    >
+                      {walletNameInput || "Select or add..."}
+                      <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-full p-0" align="start">
+                    <Command>
+                      <CommandInput 
+                        placeholder="Search or add new..." 
+                        value={newWalletName}
+                        onValueChange={setNewWalletName}
+                      />
+                      <CommandList>
+                        <CommandEmpty>
+                          {newWalletName && (
+                            <Button
+                              variant="ghost"
+                              className="w-full justify-start"
+                              onClick={addNewWalletName}
+                            >
+                              <Plus className="mr-2 h-4 w-4" />
+                              Add "{newWalletName}"
+                            </Button>
+                          )}
+                        </CommandEmpty>
+                        <CommandGroup>
+                          {allWalletNames.map((name) => (
+                            <CommandItem
+                              key={name}
+                              value={name}
+                              onSelect={() => {
+                                setWalletNameInput(name);
+                                setWalletNameOpen(false);
+                              }}
+                            >
+                              <Check
+                                className={cn(
+                                  "mr-2 h-4 w-4",
+                                  walletNameInput === name ? "opacity-100" : "opacity-0"
+                                )}
+                              />
+                              {name}
+                            </CommandItem>
+                          ))}
+                          {newWalletName && !allWalletNames.some(n => n.toLowerCase() === newWalletName.toLowerCase()) && (
+                            <CommandItem
+                              value={`create-${newWalletName}`}
+                              onSelect={addNewWalletName}
+                            >
+                              <Plus className="mr-2 h-4 w-4" />
+                              Add "{newWalletName}"
+                            </CommandItem>
+                          )}
+                        </CommandGroup>
+                      </CommandList>
+                    </Command>
+                  </PopoverContent>
+                </Popover>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="privateKeyStatus">Private Key Available</Label>
+                <Select
+                  value={formData.privateKeyStatus || ""}
+                  onValueChange={(value) => setFormData({ ...formData, privateKeyStatus: value })}
+                  disabled={isSubmitting}
+                >
+                  <SelectTrigger id="privateKeyStatus" data-testid="select-private-key">
+                    <SelectValue placeholder="Select status..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="yes">Yes - I have the keys</SelectItem>
+                    <SelectItem value="no">No - Third party controls</SelectItem>
+                    <SelectItem value="unsure">Unsure</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
             <p className="text-xs text-muted-foreground">
               Do you have the private keys to spend from this address?
             </p>
