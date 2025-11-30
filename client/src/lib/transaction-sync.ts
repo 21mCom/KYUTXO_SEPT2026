@@ -591,6 +591,7 @@ export class TransactionSyncService {
       maxSyncedDepth: -1, // Not yet synced
       discoveredInTxid,
       discoveredFromRecordId,
+      addressImportance: 'blockchain-discovered', // Lowest importance tier for discovered addresses
       createdAt: now,
       updatedAt: now,
     });

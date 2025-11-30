@@ -281,6 +281,7 @@ export default function Dashboard() {
                     owner: 'Pending Review',
                     walletName: '',
                     source: `tx-import:${transactionAddresses.txid}`,
+                    addressImportance: 'pending-review',
                   });
                   addressesCreated++;
                 } catch (createError) {
@@ -309,6 +310,7 @@ export default function Dashboard() {
                     owner: 'Pending Review',
                     walletName: '',
                     source: `tx-import:${transactionAddresses.txid}`,
+                    addressImportance: 'pending-review',
                   });
                   addressesCreated++;
                 } catch (createError) {
@@ -388,6 +390,7 @@ export default function Dashboard() {
                     owner: 'Pending Review',
                     walletName: '',
                     source: `tx-import:${transactionAddresses.txid}`,
+                    addressImportance: 'pending-review',
                   });
                   addressesCreated++;
                 } catch (createError) {
@@ -420,6 +423,7 @@ export default function Dashboard() {
                     owner: 'Pending Review',
                     walletName: '',
                     source: `tx-import:${transactionAddresses.txid}`,
+                    addressImportance: 'pending-review',
                   });
                   addressesCreated++;
                 } catch (createError) {
