@@ -25,6 +25,7 @@ import Records from "@/pages/Records";
 import QRScanner from "@/pages/QRScanner";
 import ExportPage from "@/pages/ExportPage";
 import SettingsPage from "@/pages/SettingsPage";
+import NodeSettings from "@/pages/NodeSettings";
 import NotFound from "@/pages/not-found";
 
 function Router() {
@@ -44,6 +45,7 @@ function Router() {
       <Route path="/scanner" component={QRScanner} />
       <Route path="/export" component={ExportPage} />
       <Route path="/settings" component={SettingsPage} />
+      <Route path="/node-settings" component={NodeSettings} />
       <Route component={NotFound} />
     </Switch>
   );

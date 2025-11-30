@@ -1,8 +1,8 @@
 // Transaction Sync Service
 // Syncs blockchain transaction data for addresses in the local database
 
-import { db, type Record, type BlockchainTransaction, type TransactionParticipant, type AddressSyncState } from './database';
-import { createProvider, parseTransaction, MINIMUM_CONFIRMATIONS, type ProviderType, type ParsedTransaction } from './blockchain-api';
+import { db, type Record, type BlockchainTransaction, type TransactionParticipant, type AddressSyncState, type NodeSettings } from './database';
+import { createProvider, createProviderFromSettings, parseTransaction, MINIMUM_CONFIRMATIONS, type ProviderType, type ParsedTransaction, type BlockchainProvider } from './blockchain-api';
 import { validateAddress } from './bitcoin';
 import { decryptRecords, isEncryptionReady } from './encryptionFacade';
 
@@ -40,11 +40,32 @@ export interface SyncOptions {
 export type SyncProgressCallback = (progress: SyncProgress) => void;
 
 export class TransactionSyncService {
-  private provider;
+  private provider: BlockchainProvider;
   private onProgress?: SyncProgressCallback;
 
   constructor(providerType: ProviderType = 'mempool') {
     this.provider = createProvider(providerType);
+  }
+
+  // Create a sync service from saved node settings
+  static async fromSettings(): Promise<TransactionSyncService> {
+    const settings = await db.nodeSettings.get('default');
+    const service = new TransactionSyncService();
+    
+    if (settings) {
+      service.provider = createProviderFromSettings(settings);
+    }
+    
+    return service;
+  }
+
+  // Update the provider based on new settings
+  updateProvider(settings: NodeSettings) {
+    this.provider = createProviderFromSettings(settings);
+  }
+
+  getProviderName(): string {
+    return this.provider.name;
   }
 
   setProgressCallback(callback: SyncProgressCallback) {

@@ -246,6 +246,32 @@ export interface AddressSyncState {
   txCount: number;        // Number of transactions found for this address
 }
 
+// Node connection provider types
+export type NodeProviderType = 
+  | 'mempool-space'       // mempool.space public API (default)
+  | 'blockstream'         // blockstream.info public API
+  | 'custom-electrs'      // Self-hosted Electrs/Esplora API
+  | 'custom-mempool';     // Self-hosted mempool instance
+
+// Node connection settings for blockchain data fetching
+export interface NodeSettings {
+  id: string;             // Always 'default' - singleton pattern
+  providerType: NodeProviderType;
+  // Custom server settings (for custom-electrs or custom-mempool)
+  customUrl?: string;     // e.g., "http://192.168.1.100:3002" or "http://xyz.onion:3002"
+  // Tor/onion settings
+  useTor: boolean;        // Whether to route through Tor
+  torProxyUrl?: string;   // Tor SOCKS proxy URL (e.g., "socks5h://127.0.0.1:9050")
+  // Timeout settings (in milliseconds)
+  requestTimeout: number; // Default 30000 (30s), higher for Tor
+  // Network selection
+  network: 'mainnet' | 'testnet';
+  // Last successful connection timestamp
+  lastConnectedAt?: number;
+  // Connection status message
+  lastConnectionStatus?: string;
+}
+
 export class KYBTCDatabase extends Dexie {
   records!: Table<Record>;
   attachments!: Table<Attachment>;
@@ -262,9 +288,30 @@ export class KYBTCDatabase extends Dexie {
   blockchainTransactions!: Table<BlockchainTransaction>;
   transactionParticipants!: Table<TransactionParticipant>;
   addressSyncState!: Table<AddressSyncState>;
+  nodeSettings!: Table<NodeSettings>;
 
   constructor() {
     super('KYBTCDatabase');
+    
+    // Version 12 adds nodeSettings table for blockchain API connection configuration
+    this.version(12).stores({
+      records: '++id, type, inputString, label, owner, *tags, *categories, createdAt, updatedAt, isEncrypted, chainType, syncDepth, addressImportance',
+      attachments: '++id, recordId, createdAt, isEncrypted',
+      tags: '++id, name, createdAt, isEncrypted',
+      categories: '++id, name, createdAt, isEncrypted',
+      owners: '++id, name, createdAt, isEncrypted',
+      walletNames: '++id, name, createdAt, isEncrypted',
+      seedNames: '++id, name, createdAt, isEncrypted',
+      walletSoftware: '++id, name, createdAt, isEncrypted',
+      recordOrigins: '++id, recordId, originType, createdAt, isEncrypted',
+      customFields: '++id, slug, enabled, createdAt',
+      settings: 'id',
+      priceData: '++id, [date+currency+asset], date, asset, currency, source, importedAt',
+      blockchainTransactions: '++id, &txid, blockHeight, blockTime, syncedAt',
+      transactionParticipants: '++id, txid, role, address, recordId',
+      addressSyncState: '++id, &address, recordId, lastSyncedAt',
+      nodeSettings: 'id'
+    });
     
     // Version 11 adds vocabulary tables for owners, walletNames, seedNames, walletSoftware
     this.version(11).stores({

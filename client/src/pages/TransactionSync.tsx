@@ -20,10 +20,15 @@ import {
   ArrowDownUp,
   ExternalLink,
   Loader2,
-  Info
+  Info,
+  Server,
+  Settings
 } from "lucide-react";
 import { transactionSyncService, type SyncProgress, type SyncResult, type SourceFilter, type SyncOptions } from "@/lib/transaction-sync";
 import { db, type Record as DbRecord } from "@/lib/database";
+import { useNodeSettings } from "@/hooks/use-node-settings";
+import { getProviderDisplayName, getProviderPrivacyInfo } from "@/lib/blockchain-api";
+import { Link } from "wouter";
 import { formatDistanceToNow } from "date-fns";
 import {
   Tooltip,
@@ -34,6 +39,9 @@ import {
 export default function TransactionSync() {
   const [, navigate] = useLocation();
   const { toast } = useToast();
+  const { nodeSettings } = useNodeSettings();
+  
+  const privacyInfo = getProviderPrivacyInfo(nodeSettings.providerType, nodeSettings.useTor);
   
   const [stats, setStats] = useState<{
     totalAddresses: number;
@@ -85,6 +93,9 @@ export default function TransactionSync() {
     });
     setLastResult(null);
 
+    // Update the sync service to use current node settings
+    transactionSyncService.updateProvider(nodeSettings);
+    
     transactionSyncService.setProgressCallback((progress) => {
       setSyncProgress(progress);
     });
@@ -164,13 +175,25 @@ export default function TransactionSync() {
           </div>
         </div>
 
-        <Alert>
-          <Info className="h-4 w-4" />
-          <AlertTitle>Privacy Notice</AlertTitle>
+        {/* Current Provider Info */}
+        <Alert variant={privacyInfo.level === 'low' ? 'destructive' : 'default'}>
+          <Server className="h-4 w-4" />
+          <AlertTitle className="flex items-center justify-between">
+            <span className="flex items-center gap-2">
+              Data Provider: {getProviderDisplayName(nodeSettings.providerType)}
+              {nodeSettings.useTor && (
+                <Badge variant="outline" className="text-xs">via Tor</Badge>
+              )}
+            </span>
+            <Link href="/node-settings">
+              <Button variant="ghost" size="sm" className="h-7 text-xs" data-testid="link-node-settings">
+                <Settings className="h-3 w-3 mr-1" />
+                Configure
+              </Button>
+            </Link>
+          </AlertTitle>
           <AlertDescription>
-            This feature queries mempool.space to fetch transaction data. The addresses you're syncing 
-            will be visible to their servers. For maximum privacy, consider running your own Bitcoin node 
-            (future feature).
+            {privacyInfo.description}
           </AlertDescription>
         </Alert>
 

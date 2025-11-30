@@ -1,11 +1,15 @@
 // Blockchain API provider for fetching transaction data
-// Supports mempool.space (default) with future support for local Bitcoin node
+// Supports mempool.space, blockstream.info, and self-hosted Electrs/Esplora nodes
+// Can route through Tor for privacy when connecting to .onion addresses
+
+import { NodeSettings, NodeProviderType } from '@/lib/database';
 
 export interface BlockchainProvider {
   name: string;
   getBlockHeight(): Promise<number>;
   getAddressTransactions(address: string): Promise<ApiTransaction[]>;
   getTransaction(txid: string): Promise<ApiTransaction | null>;
+  testConnection(): Promise<{ success: boolean; blockHeight?: number; error?: string; latency?: number }>;
 }
 
 export interface ApiTransaction {
@@ -49,118 +53,154 @@ export interface ParsedTransaction {
   }>;
 }
 
-const RATE_LIMIT_DELAY = 250; // ms between requests to avoid rate limiting
+const DEFAULT_RATE_LIMIT_DELAY = 250; // ms between requests to avoid rate limiting
+const TOR_RATE_LIMIT_DELAY = 500; // Slower rate limit for Tor connections
 
-class MempoolSpaceProvider implements BlockchainProvider {
+// Base class with shared functionality for Esplora-compatible APIs
+abstract class EsploraProvider implements BlockchainProvider {
+  abstract name: string;
+  protected baseUrl: string;
+  protected lastRequestTime = 0;
+  protected timeout: number;
+  protected rateLimitDelay: number;
+
+  constructor(baseUrl: string, timeout: number = 30000, useTor: boolean = false) {
+    this.baseUrl = baseUrl.replace(/\/$/, ''); // Remove trailing slash
+    this.timeout = timeout;
+    this.rateLimitDelay = useTor ? TOR_RATE_LIMIT_DELAY : DEFAULT_RATE_LIMIT_DELAY;
+  }
+
+  protected async rateLimitedFetch(url: string): Promise<Response> {
+    const now = Date.now();
+    const timeSinceLastRequest = now - this.lastRequestTime;
+    
+    if (timeSinceLastRequest < this.rateLimitDelay) {
+      await new Promise(resolve => setTimeout(resolve, this.rateLimitDelay - timeSinceLastRequest));
+    }
+    
+    this.lastRequestTime = Date.now();
+    
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+    
+    try {
+      const response = await fetch(url, { signal: controller.signal });
+      clearTimeout(timeoutId);
+      
+      if (!response.ok) {
+        if (response.status === 429) {
+          throw new Error(`Rate limited by ${this.name}. Please wait a moment and try again.`);
+        }
+        throw new Error(`API request failed: ${response.status} ${response.statusText}`);
+      }
+      return response;
+    } catch (error) {
+      clearTimeout(timeoutId);
+      if (error instanceof Error && error.name === 'AbortError') {
+        throw new Error(`Request timed out after ${this.timeout / 1000}s. Try increasing the timeout for slow connections.`);
+      }
+      throw error;
+    }
+  }
+
+  async getBlockHeight(): Promise<number> {
+    const response = await this.rateLimitedFetch(`${this.baseUrl}/blocks/tip/height`);
+    return response.json();
+  }
+
+  async getAddressTransactions(address: string): Promise<ApiTransaction[]> {
+    const response = await this.rateLimitedFetch(`${this.baseUrl}/address/${address}/txs`);
+    return response.json();
+  }
+
+  async getTransaction(txid: string): Promise<ApiTransaction | null> {
+    try {
+      const response = await this.rateLimitedFetch(`${this.baseUrl}/tx/${txid}`);
+      return response.json();
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('404')) {
+        return null;
+      }
+      throw error;
+    }
+  }
+
+  async testConnection(): Promise<{ success: boolean; blockHeight?: number; error?: string; latency?: number }> {
+    const startTime = Date.now();
+    try {
+      const blockHeight = await this.getBlockHeight();
+      const latency = Date.now() - startTime;
+      return { success: true, blockHeight, latency };
+    } catch (error) {
+      return { 
+        success: false, 
+        error: error instanceof Error ? error.message : 'Unknown error',
+        latency: Date.now() - startTime
+      };
+    }
+  }
+}
+
+// mempool.space public API provider
+class MempoolSpaceProvider extends EsploraProvider {
   name = 'mempool.space';
-  private baseUrl: string;
-  private lastRequestTime = 0;
 
-  constructor(network: 'mainnet' | 'testnet' = 'mainnet') {
-    this.baseUrl = network === 'mainnet' 
+  constructor(network: 'mainnet' | 'testnet' = 'mainnet', timeout: number = 30000) {
+    const baseUrl = network === 'mainnet' 
       ? 'https://mempool.space/api'
       : 'https://mempool.space/testnet/api';
-  }
-
-  private async rateLimitedFetch(url: string): Promise<Response> {
-    const now = Date.now();
-    const timeSinceLastRequest = now - this.lastRequestTime;
-    
-    if (timeSinceLastRequest < RATE_LIMIT_DELAY) {
-      await new Promise(resolve => setTimeout(resolve, RATE_LIMIT_DELAY - timeSinceLastRequest));
-    }
-    
-    this.lastRequestTime = Date.now();
-    
-    const response = await fetch(url);
-    if (!response.ok) {
-      if (response.status === 429) {
-        throw new Error('Rate limited by mempool.space. Please wait a moment and try again.');
-      }
-      throw new Error(`API request failed: ${response.status} ${response.statusText}`);
-    }
-    return response;
-  }
-
-  async getBlockHeight(): Promise<number> {
-    const response = await this.rateLimitedFetch(`${this.baseUrl}/blocks/tip/height`);
-    return response.json();
-  }
-
-  async getAddressTransactions(address: string): Promise<ApiTransaction[]> {
-    const response = await this.rateLimitedFetch(`${this.baseUrl}/address/${address}/txs`);
-    return response.json();
-  }
-
-  async getTransaction(txid: string): Promise<ApiTransaction | null> {
-    try {
-      const response = await this.rateLimitedFetch(`${this.baseUrl}/tx/${txid}`);
-      return response.json();
-    } catch (error) {
-      if (error instanceof Error && error.message.includes('404')) {
-        return null;
-      }
-      throw error;
-    }
+    super(baseUrl, timeout, false);
   }
 }
 
-class BlockstreamProvider implements BlockchainProvider {
+// blockstream.info public API provider
+class BlockstreamProvider extends EsploraProvider {
   name = 'blockstream.info';
-  private baseUrl: string;
-  private lastRequestTime = 0;
 
-  constructor(network: 'mainnet' | 'testnet' = 'mainnet') {
-    this.baseUrl = network === 'mainnet'
+  constructor(network: 'mainnet' | 'testnet' = 'mainnet', timeout: number = 30000) {
+    const baseUrl = network === 'mainnet'
       ? 'https://blockstream.info/api'
       : 'https://blockstream.info/testnet/api';
+    super(baseUrl, timeout, false);
   }
+}
 
-  private async rateLimitedFetch(url: string): Promise<Response> {
-    const now = Date.now();
-    const timeSinceLastRequest = now - this.lastRequestTime;
-    
-    if (timeSinceLastRequest < RATE_LIMIT_DELAY) {
-      await new Promise(resolve => setTimeout(resolve, RATE_LIMIT_DELAY - timeSinceLastRequest));
-    }
-    
-    this.lastRequestTime = Date.now();
-    
-    const response = await fetch(url);
-    if (!response.ok) {
-      if (response.status === 429) {
-        throw new Error('Rate limited by blockstream.info. Please wait a moment and try again.');
-      }
-      throw new Error(`API request failed: ${response.status} ${response.statusText}`);
-    }
-    return response;
-  }
+// Custom Electrs/Esplora provider (for self-hosted nodes)
+class CustomElectrsProvider extends EsploraProvider {
+  name: string;
 
-  async getBlockHeight(): Promise<number> {
-    const response = await this.rateLimitedFetch(`${this.baseUrl}/blocks/tip/height`);
-    return response.json();
-  }
-
-  async getAddressTransactions(address: string): Promise<ApiTransaction[]> {
-    const response = await this.rateLimitedFetch(`${this.baseUrl}/address/${address}/txs`);
-    return response.json();
-  }
-
-  async getTransaction(txid: string): Promise<ApiTransaction | null> {
-    try {
-      const response = await this.rateLimitedFetch(`${this.baseUrl}/tx/${txid}`);
-      return response.json();
-    } catch (error) {
-      if (error instanceof Error && error.message.includes('404')) {
-        return null;
-      }
-      throw error;
+  constructor(customUrl: string, timeout: number = 30000, useTor: boolean = false) {
+    super(customUrl, timeout, useTor);
+    // Determine name based on URL
+    if (customUrl.includes('.onion')) {
+      this.name = 'Custom Electrs (Tor)';
+    } else {
+      this.name = 'Custom Electrs';
     }
   }
 }
 
+// Custom mempool instance provider
+class CustomMempoolProvider extends EsploraProvider {
+  name: string;
+
+  constructor(customUrl: string, timeout: number = 30000, useTor: boolean = false) {
+    // Custom mempool instances use /api path
+    const apiUrl = customUrl.endsWith('/api') ? customUrl : `${customUrl}/api`;
+    super(apiUrl, timeout, useTor);
+    
+    if (customUrl.includes('.onion')) {
+      this.name = 'Custom Mempool (Tor)';
+    } else {
+      this.name = 'Custom Mempool';
+    }
+  }
+}
+
+// Legacy type for backwards compatibility
 export type ProviderType = 'mempool' | 'blockstream';
 
+// Create a provider from legacy type (for backwards compatibility)
 export function createProvider(type: ProviderType = 'mempool', network: 'mainnet' | 'testnet' = 'mainnet'): BlockchainProvider {
   switch (type) {
     case 'blockstream':
@@ -169,6 +209,101 @@ export function createProvider(type: ProviderType = 'mempool', network: 'mainnet
     default:
       return new MempoolSpaceProvider(network);
   }
+}
+
+// Create a provider from NodeSettings configuration
+export function createProviderFromSettings(settings: NodeSettings): BlockchainProvider {
+  const { providerType, customUrl, useTor, requestTimeout, network } = settings;
+  
+  switch (providerType) {
+    case 'blockstream':
+      return new BlockstreamProvider(network, requestTimeout);
+    
+    case 'custom-electrs':
+      if (!customUrl) {
+        throw new Error('Custom URL is required for custom Electrs provider');
+      }
+      return new CustomElectrsProvider(customUrl, requestTimeout, useTor);
+    
+    case 'custom-mempool':
+      if (!customUrl) {
+        throw new Error('Custom URL is required for custom mempool provider');
+      }
+      return new CustomMempoolProvider(customUrl, requestTimeout, useTor);
+    
+    case 'mempool-space':
+    default:
+      return new MempoolSpaceProvider(network, requestTimeout);
+  }
+}
+
+// Test connection with given settings without saving
+export async function testConnectionWithSettings(settings: NodeSettings): Promise<{
+  success: boolean;
+  blockHeight?: number;
+  error?: string;
+  latency?: number;
+  providerName: string;
+}> {
+  try {
+    const provider = createProviderFromSettings(settings);
+    const result = await provider.testConnection();
+    return { ...result, providerName: provider.name };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to create provider',
+      providerName: 'Unknown',
+    };
+  }
+}
+
+// Get human-readable provider name
+export function getProviderDisplayName(providerType: NodeProviderType): string {
+  switch (providerType) {
+    case 'mempool-space':
+      return 'mempool.space (Public)';
+    case 'blockstream':
+      return 'blockstream.info (Public)';
+    case 'custom-electrs':
+      return 'Custom Electrs Server';
+    case 'custom-mempool':
+      return 'Custom Mempool Server';
+    default:
+      return 'Unknown Provider';
+  }
+}
+
+// Get privacy warning for provider type
+export function getProviderPrivacyInfo(providerType: NodeProviderType, useTor: boolean): {
+  level: 'high' | 'medium' | 'low';
+  description: string;
+} {
+  if (providerType === 'custom-electrs' || providerType === 'custom-mempool') {
+    if (useTor) {
+      return {
+        level: 'high',
+        description: 'Your own node via Tor. Queries are end-to-end encrypted and your IP is hidden.',
+      };
+    }
+    return {
+      level: 'high',
+      description: 'Your own node. No third party sees which addresses you query.',
+    };
+  }
+  
+  // Public APIs
+  if (useTor) {
+    return {
+      level: 'medium',
+      description: 'Public API via Tor. The provider sees your queries but not your IP address.',
+    };
+  }
+  
+  return {
+    level: 'low',
+    description: 'Public API. The provider can see your IP and which addresses you query.',
+  };
 }
 
 export function parseTransaction(tx: ApiTransaction): ParsedTransaction | null {
