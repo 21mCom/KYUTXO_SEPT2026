@@ -14,7 +14,9 @@ import {
   RefreshCw,
   FileJson,
   FileSpreadsheet,
+  ShieldCheck,
 } from 'lucide-react';
+import { Switch } from '@/components/ui/switch';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -93,6 +95,8 @@ export default function WalletImport() {
   const [importProgress, setImportProgress] = useState(0);
   const [importStatus, setImportStatus] = useState('');
   const [importResult, setImportResult] = useState<ImportResult | null>(null);
+  
+  const [markInputsAsVerified, setMarkInputsAsVerified] = useState(false);
   
   const encryptedTags = useLiveQuery(() => db.tags.toArray());
   const encryptedCategories = useLiveQuery(() => db.categories.toArray());
@@ -267,6 +271,7 @@ export default function WalletImport() {
           defaultTags: selectedTags,
           defaultCategories: selectedCategories,
           walletSoftware: getWalletName(selectedWalletType),
+          markInputsAsVerified,
         },
         (current, total, status) => {
           setImportProgress(Math.round((current / total) * 100));
@@ -566,6 +571,26 @@ export default function WalletImport() {
               <Button size="icon" variant="outline" onClick={addCategory} data-testid="button-add-category">
                 <Plus className="w-4 h-4" />
               </Button>
+            </div>
+          </div>
+
+          <div className="pt-4 border-t">
+            <div className="flex items-center justify-between">
+              <div className="space-y-1">
+                <Label htmlFor="mark-verified" className="flex items-center gap-2">
+                  <ShieldCheck className="h-4 w-4 text-green-600" />
+                  Mark input addresses as verified
+                </Label>
+                <p className="text-sm text-muted-foreground">
+                  Confirms you control these addresses. Only applies to input addresses (your receiving addresses).
+                </p>
+              </div>
+              <Switch
+                id="mark-verified"
+                checked={markInputsAsVerified}
+                onCheckedChange={setMarkInputsAsVerified}
+                data-testid="switch-mark-verified"
+              />
             </div>
           </div>
         </CardContent>

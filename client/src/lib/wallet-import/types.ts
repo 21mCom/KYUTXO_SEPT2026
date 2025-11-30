@@ -44,6 +44,7 @@ export interface ImportOptions {
   defaultTags: string[];
   defaultCategories: string[];
   walletSoftware?: string;
+  markInputsAsVerified?: boolean;
 }
 
 export interface ImportResult {

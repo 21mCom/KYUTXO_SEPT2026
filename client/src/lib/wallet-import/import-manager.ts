@@ -125,6 +125,9 @@ export async function executeImport(
           defaultCategories: options.defaultCategories,
           sourceName: options.sourceName,
           walletSoftware: options.walletSoftware,
+          markAsVerified: options.markInputsAsVerified,
+          owner: options.owner,
+          walletName: options.walletName,
         });
         
         await createRecord(newRecordData);
@@ -135,6 +138,7 @@ export async function executeImport(
           defaultCategories: options.defaultCategories,
           sourceName: options.sourceName,
           walletSoftware: options.walletSoftware,
+          markAsVerified: options.markInputsAsVerified,
         });
         
         await updateRecord(existingRecord.id, mergedData);
