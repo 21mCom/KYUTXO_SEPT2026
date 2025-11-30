@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { useLocation } from "wouter";
-import { Key, ChevronRight, ChevronLeft, Check, Loader2, Plus, X, ChevronDown, ChevronUp, AlertCircle, Info, ChevronsUpDown, ShieldCheck } from "lucide-react";
+import { Key, ChevronRight, ChevronLeft, Check, Loader2, Plus, X, ChevronDown, ChevronUp, AlertCircle, Info, ChevronsUpDown, ShieldCheck, Wallet } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -878,148 +878,6 @@ export default function BulkImport() {
 
               <div className="space-y-4 pt-4 border-t">
                 <h4 className="font-medium">Metadata (applied to all addresses)</h4>
-                
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label>Seed Name</Label>
-                    <Popover open={seedOpen} onOpenChange={setSeedOpen}>
-                      <PopoverTrigger asChild>
-                        <Button
-                          variant="outline"
-                          role="combobox"
-                          aria-expanded={seedOpen}
-                          className="w-full justify-between font-normal"
-                          data-testid="select-seed"
-                        >
-                          {seedName || "Select or add..."}
-                          <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-                        </Button>
-                      </PopoverTrigger>
-                      <PopoverContent className="w-full p-0" align="start">
-                        <Command>
-                          <CommandInput 
-                            placeholder="Search or add new..." 
-                            value={newSeedName}
-                            onValueChange={setNewSeedName}
-                          />
-                          <CommandList>
-                            <CommandEmpty>
-                              {newSeedName && (
-                                <Button
-                                  variant="ghost"
-                                  className="w-full justify-start"
-                                  onClick={addNewSeedName}
-                                >
-                                  <Plus className="mr-2 h-4 w-4" />
-                                  Add "{newSeedName}"
-                                </Button>
-                              )}
-                            </CommandEmpty>
-                            <CommandGroup>
-                              {allSeedNames.map((name) => (
-                                <CommandItem
-                                  key={name}
-                                  value={name}
-                                  onSelect={() => {
-                                    setSeedName(name);
-                                    setSeedOpen(false);
-                                  }}
-                                >
-                                  <Check
-                                    className={cn(
-                                      "mr-2 h-4 w-4",
-                                      seedName === name ? "opacity-100" : "opacity-0"
-                                    )}
-                                  />
-                                  {name}
-                                </CommandItem>
-                              ))}
-                              {newSeedName && !allSeedNames.some(n => n.toLowerCase() === newSeedName.toLowerCase()) && (
-                                <CommandItem
-                                  value={`create-${newSeedName}`}
-                                  onSelect={addNewSeedName}
-                                >
-                                  <Plus className="mr-2 h-4 w-4" />
-                                  Add "{newSeedName}"
-                                </CommandItem>
-                              )}
-                            </CommandGroup>
-                          </CommandList>
-                        </Command>
-                      </PopoverContent>
-                    </Popover>
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label>Wallet Software</Label>
-                    <Popover open={walletOpen} onOpenChange={setWalletOpen}>
-                      <PopoverTrigger asChild>
-                        <Button
-                          variant="outline"
-                          role="combobox"
-                          aria-expanded={walletOpen}
-                          className="w-full justify-between font-normal"
-                          data-testid="select-wallet"
-                        >
-                          {walletSoftware || "Select or add..."}
-                          <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-                        </Button>
-                      </PopoverTrigger>
-                      <PopoverContent className="w-full p-0" align="start">
-                        <Command>
-                          <CommandInput 
-                            placeholder="Search or add new..." 
-                            value={newWalletSoftware}
-                            onValueChange={setNewWalletSoftware}
-                          />
-                          <CommandList>
-                            <CommandEmpty>
-                              {newWalletSoftware && (
-                                <Button
-                                  variant="ghost"
-                                  className="w-full justify-start"
-                                  onClick={addNewWalletSoftware}
-                                >
-                                  <Plus className="mr-2 h-4 w-4" />
-                                  Add "{newWalletSoftware}"
-                                </Button>
-                              )}
-                            </CommandEmpty>
-                            <CommandGroup>
-                              {allWalletSoftware.map((name) => (
-                                <CommandItem
-                                  key={name}
-                                  value={name}
-                                  onSelect={() => {
-                                    setWalletSoftware(name);
-                                    setWalletOpen(false);
-                                  }}
-                                >
-                                  <Check
-                                    className={cn(
-                                      "mr-2 h-4 w-4",
-                                      walletSoftware === name ? "opacity-100" : "opacity-0"
-                                    )}
-                                  />
-                                  {name}
-                                </CommandItem>
-                              ))}
-                              {newWalletSoftware && !allWalletSoftware.some(n => n.toLowerCase() === newWalletSoftware.toLowerCase()) && (
-                                <CommandItem
-                                  value={`create-${newWalletSoftware}`}
-                                  onSelect={addNewWalletSoftware}
-                                >
-                                  <Plus className="mr-2 h-4 w-4" />
-                                  Add "{newWalletSoftware}"
-                                </CommandItem>
-                              )}
-                            </CommandGroup>
-                          </CommandList>
-                        </Command>
-                      </PopoverContent>
-                    </Popover>
-                  </div>
-                </div>
 
                 <div className="p-3 bg-muted/50 rounded-md border border-muted-foreground/20 mb-4">
                   <p className="text-sm text-muted-foreground">
@@ -1027,6 +885,7 @@ export default function BulkImport() {
                   </p>
                 </div>
 
+                {/* Ownership Section */}
                 <div className="space-y-3 p-4 bg-muted/30 rounded-lg border">
                   <h5 className="font-medium text-sm flex items-center gap-2">
                     <ShieldCheck className="h-4 w-4" />
@@ -1065,34 +924,181 @@ export default function BulkImport() {
                   </p>
                 </div>
 
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="walletName">Wallet Name</Label>
-                    <Input
-                      id="walletName"
-                      value={walletNameInput}
-                      onChange={(e) => setWalletNameInput(e.target.value)}
-                      placeholder="e.g., College Fund, Trading"
-                      data-testid="input-wallet-name"
-                    />
-                  </div>
+                {/* Wallet Details Section */}
+                <div className="space-y-3 p-4 bg-muted/30 rounded-lg border">
+                  <h5 className="font-medium text-sm flex items-center gap-2">
+                    <Wallet className="h-4 w-4" />
+                    Wallet Details
+                  </h5>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label>Seed Name</Label>
+                      <Popover open={seedOpen} onOpenChange={setSeedOpen}>
+                        <PopoverTrigger asChild>
+                          <Button
+                            variant="outline"
+                            role="combobox"
+                            aria-expanded={seedOpen}
+                            className="w-full justify-between font-normal"
+                            data-testid="select-seed"
+                          >
+                            {seedName || "Select or add..."}
+                            <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                          </Button>
+                        </PopoverTrigger>
+                        <PopoverContent className="w-full p-0" align="start">
+                          <Command>
+                            <CommandInput 
+                              placeholder="Search or add new..." 
+                              value={newSeedName}
+                              onValueChange={setNewSeedName}
+                            />
+                            <CommandList>
+                              <CommandEmpty>
+                                {newSeedName && (
+                                  <Button
+                                    variant="ghost"
+                                    className="w-full justify-start"
+                                    onClick={addNewSeedName}
+                                  >
+                                    <Plus className="mr-2 h-4 w-4" />
+                                    Add "{newSeedName}"
+                                  </Button>
+                                )}
+                              </CommandEmpty>
+                              <CommandGroup>
+                                {allSeedNames.map((name) => (
+                                  <CommandItem
+                                    key={name}
+                                    value={name}
+                                    onSelect={() => {
+                                      setSeedName(name);
+                                      setSeedOpen(false);
+                                    }}
+                                  >
+                                    <Check
+                                      className={cn(
+                                        "mr-2 h-4 w-4",
+                                        seedName === name ? "opacity-100" : "opacity-0"
+                                      )}
+                                    />
+                                    {name}
+                                  </CommandItem>
+                                ))}
+                                {newSeedName && !allSeedNames.some(n => n.toLowerCase() === newSeedName.toLowerCase()) && (
+                                  <CommandItem
+                                    value={`create-${newSeedName}`}
+                                    onSelect={addNewSeedName}
+                                  >
+                                    <Plus className="mr-2 h-4 w-4" />
+                                    Add "{newSeedName}"
+                                  </CommandItem>
+                                )}
+                              </CommandGroup>
+                            </CommandList>
+                          </Command>
+                        </PopoverContent>
+                      </Popover>
+                    </div>
 
-                  <div className="space-y-2">
-                    <Label htmlFor="private-key-status">Private Key Available</Label>
-                    <Select value={privateKeyStatus} onValueChange={setPrivateKeyStatus}>
-                      <SelectTrigger id="private-key-status" data-testid="select-private-key">
-                        <SelectValue placeholder="Select status..." />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="yes">Yes - I have the keys</SelectItem>
-                        <SelectItem value="no">No - Third party controls</SelectItem>
-                        <SelectItem value="unsure">Unsure</SelectItem>
-                      </SelectContent>
-                    </Select>
-                    <p className="text-xs text-muted-foreground">
-                      Do you have the private keys to spend from these addresses?
-                    </p>
+                    <div className="space-y-2">
+                      <Label>Wallet Software</Label>
+                      <Popover open={walletOpen} onOpenChange={setWalletOpen}>
+                        <PopoverTrigger asChild>
+                          <Button
+                            variant="outline"
+                            role="combobox"
+                            aria-expanded={walletOpen}
+                            className="w-full justify-between font-normal"
+                            data-testid="select-wallet"
+                          >
+                            {walletSoftware || "Select or add..."}
+                            <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                          </Button>
+                        </PopoverTrigger>
+                        <PopoverContent className="w-full p-0" align="start">
+                          <Command>
+                            <CommandInput 
+                              placeholder="Search or add new..." 
+                              value={newWalletSoftware}
+                              onValueChange={setNewWalletSoftware}
+                            />
+                            <CommandList>
+                              <CommandEmpty>
+                                {newWalletSoftware && (
+                                  <Button
+                                    variant="ghost"
+                                    className="w-full justify-start"
+                                    onClick={addNewWalletSoftware}
+                                  >
+                                    <Plus className="mr-2 h-4 w-4" />
+                                    Add "{newWalletSoftware}"
+                                  </Button>
+                                )}
+                              </CommandEmpty>
+                              <CommandGroup>
+                                {allWalletSoftware.map((name) => (
+                                  <CommandItem
+                                    key={name}
+                                    value={name}
+                                    onSelect={() => {
+                                      setWalletSoftware(name);
+                                      setWalletOpen(false);
+                                    }}
+                                  >
+                                    <Check
+                                      className={cn(
+                                        "mr-2 h-4 w-4",
+                                        walletSoftware === name ? "opacity-100" : "opacity-0"
+                                      )}
+                                    />
+                                    {name}
+                                  </CommandItem>
+                                ))}
+                                {newWalletSoftware && !allWalletSoftware.some(n => n.toLowerCase() === newWalletSoftware.toLowerCase()) && (
+                                  <CommandItem
+                                    value={`create-${newWalletSoftware}`}
+                                    onSelect={addNewWalletSoftware}
+                                  >
+                                    <Plus className="mr-2 h-4 w-4" />
+                                    Add "{newWalletSoftware}"
+                                  </CommandItem>
+                                )}
+                              </CommandGroup>
+                            </CommandList>
+                          </Command>
+                        </PopoverContent>
+                      </Popover>
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="walletName">Wallet Name</Label>
+                      <Input
+                        id="walletName"
+                        value={walletNameInput}
+                        onChange={(e) => setWalletNameInput(e.target.value)}
+                        placeholder="e.g., College Fund, Trading"
+                        data-testid="input-wallet-name"
+                      />
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="private-key-status">Private Key Available</Label>
+                      <Select value={privateKeyStatus} onValueChange={setPrivateKeyStatus}>
+                        <SelectTrigger id="private-key-status" data-testid="select-private-key">
+                          <SelectValue placeholder="Select status..." />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="yes">Yes - I have the keys</SelectItem>
+                          <SelectItem value="no">No - Third party controls</SelectItem>
+                          <SelectItem value="unsure">Unsure</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
                   </div>
+                  <p className="text-xs text-muted-foreground">
+                    Do you have the private keys to spend from these addresses?
+                  </p>
                 </div>
 
                 <div className="space-y-2">
