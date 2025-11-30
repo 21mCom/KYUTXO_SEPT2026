@@ -502,7 +502,7 @@ export default function AddressReuse() {
                 onValueChange={(val) => setReuseTypeFilter((val as ReuseReason | 'all') || 'all')}
                 className="justify-start flex-wrap"
               >
-                <ToggleGroupItem value="all" size="sm" data-testid="toggle-reuse-all">All</ToggleGroupItem>
+                <ToggleGroupItem value="all" size="sm" data-testid="toggle-reuse-all">Any Type</ToggleGroupItem>
                 <ToggleGroupItem value="multi-receive" size="sm" data-testid="toggle-reuse-multi-receive">
                   <ArrowDownLeft className="h-3 w-3 mr-1" />
                   Multi-Receive
