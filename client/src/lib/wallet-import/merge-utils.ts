@@ -80,6 +80,7 @@ export function mergeRecordData(
     defaultCategories: string[];
     sourceName: string;
     walletSoftware?: string;
+    seedName?: string;
     incomingImportance?: AddressImportance;
     markAsVerified?: boolean;
     owner?: string;
@@ -136,6 +137,7 @@ export function mergeRecordData(
     date: existing.date ?? incoming.date,
     source: mergedSource,
     walletSoftware: existing.walletSoftware || options.walletSoftware,
+    seedName: existing.seedName || options.seedName,
     owner: existing.owner || (isInput ? options.owner : undefined),
     walletName: existing.walletName || (isInput ? options.walletName : undefined),
     privateKeyStatus: existing.privateKeyStatus || (isInput ? options.privateKeyStatus : undefined),
@@ -156,6 +158,7 @@ export function createNewRecordData(
     defaultCategories: string[];
     sourceName: string;
     walletSoftware?: string;
+    seedName?: string;
     defaultImportance?: AddressImportance;
     markAsVerified?: boolean;
     owner?: string;
@@ -193,6 +196,7 @@ export function createNewRecordData(
     categories: isInput ? (options.defaultCategories || []) : [],
     source: options.sourceName,
     walletSoftware: options.walletSoftware,
+    seedName: options.seedName,
     derivationPath: parsed.derivationPath,
     addressImportance: importance,
     owner: isInput ? options.owner : 'Unknown',

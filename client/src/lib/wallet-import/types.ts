@@ -44,6 +44,7 @@ export interface ImportOptions {
   defaultTags: string[];
   defaultCategories: string[];
   walletSoftware?: string;
+  seedName?: string;
   markInputsAsVerified?: boolean;
   privateKeyStatus?: string;
 }

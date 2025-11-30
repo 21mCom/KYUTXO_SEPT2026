@@ -37,6 +37,11 @@ import { db } from '@/lib/database';
 import { isEncryptionReady } from '@/lib/encryptionFacade';
 import { decryptTag, decryptCategory } from '@/lib/dbEncryption';
 import { getEncryptionKey } from '@/lib/encryptionFacade';
+import { useSeedNames, createSeedName } from '@/hooks/use-seed-names';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command';
+import { Check, ChevronsUpDown, Wallet } from 'lucide-react';
+import { cn } from '@/lib/utils';
 import {
   detectWalletType,
   parseFile,
@@ -98,6 +103,32 @@ export default function WalletImport() {
   
   const [markInputsAsVerified, setMarkInputsAsVerified] = useState(false);
   const [privateKeyStatus, setPrivateKeyStatus] = useState<string>('');
+  
+  // Seed name state
+  const [seedNameInput, setSeedNameInput] = useState<string>('');
+  const [seedNameOpen, setSeedNameOpen] = useState(false);
+  const [newSeedName, setNewSeedName] = useState<string>('');
+  const { seedNames } = useSeedNames();
+  const allSeedNames = Array.from(new Set([
+    ...seedNames.map(s => s.name).filter(n => n && n !== '[encrypted]'),
+    seedNameInput
+  ].filter(Boolean)));
+  
+  const addNewSeedName = async () => {
+    if (!newSeedName.trim()) return;
+    try {
+      await createSeedName(newSeedName.trim());
+      setSeedNameInput(newSeedName.trim());
+      setNewSeedName('');
+      setSeedNameOpen(false);
+    } catch (e) {
+      toast({
+        title: 'Error',
+        description: e instanceof Error ? e.message : 'Failed to add seed name',
+        variant: 'destructive',
+      });
+    }
+  };
   
   const encryptedTags = useLiveQuery(() => db.tags.toArray());
   const encryptedCategories = useLiveQuery(() => db.categories.toArray());
@@ -272,6 +303,7 @@ export default function WalletImport() {
           defaultTags: selectedTags,
           defaultCategories: selectedCategories,
           walletSoftware: getWalletName(selectedWalletType),
+          seedName: seedNameInput || undefined,
           markInputsAsVerified,
           privateKeyStatus: privateKeyStatus || undefined,
         },
@@ -309,6 +341,7 @@ export default function WalletImport() {
     setSelectedFileFormat('csv');
     setOwnerInput('');
     setWalletNameInput('');
+    setSeedNameInput('');
     setSelectedTags([]);
     setSelectedCategories([]);
     setParsedRecords([]);
@@ -512,36 +545,121 @@ export default function WalletImport() {
             </p>
           </div>
 
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <Label htmlFor="walletName">Wallet Name</Label>
-              <Input
-                id="walletName"
-                value={walletNameInput}
-                onChange={(e) => setWalletNameInput(e.target.value)}
-                placeholder="e.g., College Fund, Trading"
-                data-testid="input-wallet-name"
-              />
+          {/* Wallet Details Section */}
+          <div className="space-y-3 p-4 bg-muted/30 rounded-lg border">
+            <h5 className="font-medium text-sm flex items-center gap-2">
+              <Wallet className="h-4 w-4" />
+              Wallet Details
+            </h5>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>Seed Name</Label>
+                <Popover open={seedNameOpen} onOpenChange={setSeedNameOpen}>
+                  <PopoverTrigger asChild>
+                    <Button
+                      variant="outline"
+                      role="combobox"
+                      aria-expanded={seedNameOpen}
+                      className="w-full justify-between font-normal"
+                      data-testid="select-seed-name"
+                    >
+                      {seedNameInput || "Select or add..."}
+                      <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-full p-0" align="start">
+                    <Command>
+                      <CommandInput 
+                        placeholder="Search or add new..." 
+                        value={newSeedName}
+                        onValueChange={setNewSeedName}
+                      />
+                      <CommandList>
+                        <CommandEmpty>
+                          {newSeedName && (
+                            <Button
+                              variant="ghost"
+                              className="w-full justify-start"
+                              onClick={addNewSeedName}
+                            >
+                              <Plus className="mr-2 h-4 w-4" />
+                              Add "{newSeedName}"
+                            </Button>
+                          )}
+                        </CommandEmpty>
+                        <CommandGroup>
+                          {allSeedNames.map((name) => (
+                            <CommandItem
+                              key={name}
+                              value={name}
+                              onSelect={() => {
+                                setSeedNameInput(name);
+                                setSeedNameOpen(false);
+                              }}
+                            >
+                              <Check
+                                className={cn(
+                                  "mr-2 h-4 w-4",
+                                  seedNameInput === name ? "opacity-100" : "opacity-0"
+                                )}
+                              />
+                              {name}
+                            </CommandItem>
+                          ))}
+                          {newSeedName && !allSeedNames.some(n => n.toLowerCase() === newSeedName.toLowerCase()) && (
+                            <CommandItem
+                              value={`create-${newSeedName}`}
+                              onSelect={addNewSeedName}
+                            >
+                              <Plus className="mr-2 h-4 w-4" />
+                              Add "{newSeedName}"
+                            </CommandItem>
+                          )}
+                        </CommandGroup>
+                      </CommandList>
+                    </Command>
+                  </PopoverContent>
+                </Popover>
+              </div>
+
+              <div className="space-y-2">
+                <Label>Wallet Software</Label>
+                <div className="h-9 px-3 py-2 rounded-md border bg-muted/50 text-sm text-muted-foreground flex items-center">
+                  {getWalletName(selectedWalletType)} (auto-detected)
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="walletName">Wallet Name</Label>
+                <Input
+                  id="walletName"
+                  value={walletNameInput}
+                  onChange={(e) => setWalletNameInput(e.target.value)}
+                  placeholder="e.g., College Fund, Trading"
+                  data-testid="input-wallet-name"
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="privateKeyStatus">Private Key Available</Label>
+                <Select
+                  value={privateKeyStatus}
+                  onValueChange={setPrivateKeyStatus}
+                >
+                  <SelectTrigger id="privateKeyStatus" data-testid="select-private-key">
+                    <SelectValue placeholder="Select status..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="yes">Yes - I have the keys</SelectItem>
+                    <SelectItem value="no">No - Third party controls</SelectItem>
+                    <SelectItem value="unsure">Unsure</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
-            <div className="space-y-2">
-              <Label htmlFor="privateKeyStatus">Private Key Available</Label>
-              <Select
-                value={privateKeyStatus}
-                onValueChange={setPrivateKeyStatus}
-              >
-                <SelectTrigger id="privateKeyStatus" data-testid="select-private-key">
-                  <SelectValue placeholder="Select status..." />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="yes">Yes - I have the keys</SelectItem>
-                  <SelectItem value="no">No - Third party controls</SelectItem>
-                  <SelectItem value="unsure">Unsure</SelectItem>
-                </SelectContent>
-              </Select>
-              <p className="text-xs text-muted-foreground">
-                Do you have the private keys to spend from these addresses?
-              </p>
-            </div>
+            <p className="text-xs text-muted-foreground">
+              Do you have the private keys to spend from these addresses?
+            </p>
           </div>
           
           <div>
