@@ -2,6 +2,7 @@ import { useState, useMemo } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { db, type Record as DBRecord, type TransactionParticipant, type BlockchainTransaction, type AddressImportance } from "@/lib/database";
 import { decryptRecords, isEncryptionReady } from "@/lib/encryptionFacade";
+import { useRecordPreview } from "@/contexts/RecordPreviewContext";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -39,6 +40,7 @@ interface ConnectionContext {
 }
 
 export function HopPointReport() {
+  const { openRecordPreviewByAddress } = useRecordPreview();
   const [hopPoints, setHopPoints] = useState<HopPoint[]>([]);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [maxDepth, setMaxDepth] = useState(2);
@@ -488,7 +490,7 @@ export function HopPointReport() {
                         size="sm"
                         onClick={() => {
                           if (selectedHopPoint) {
-                            window.open(`/?address=${encodeURIComponent(selectedHopPoint.address)}`, '_self');
+                            openRecordPreviewByAddress(selectedHopPoint.address);
                           }
                         }}
                         data-testid="button-view-record"
