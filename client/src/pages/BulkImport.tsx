@@ -1027,18 +1027,45 @@ export default function BulkImport() {
                   </p>
                 </div>
 
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="owner">Owner</Label>
-                    <Input
-                      id="owner"
-                      value={ownerInput}
-                      onChange={(e) => setOwnerInput(e.target.value)}
-                      placeholder="e.g., Personal, Company ABC"
-                      data-testid="input-owner"
-                    />
+                <div className="space-y-3 p-4 bg-muted/30 rounded-lg border">
+                  <h5 className="font-medium text-sm flex items-center gap-2">
+                    <ShieldCheck className="h-4 w-4" />
+                    Ownership
+                  </h5>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="owner">Owner</Label>
+                      <Input
+                        id="owner"
+                        value={ownerInput}
+                        onChange={(e) => setOwnerInput(e.target.value)}
+                        placeholder="e.g., Personal, Company ABC"
+                        data-testid="input-owner"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="mark-verified" className="flex items-center gap-2">
+                        Ownership Verified
+                      </Label>
+                      <div className="flex items-center gap-3 h-9">
+                        <Switch
+                          id="mark-verified"
+                          checked={markAsVerified}
+                          onCheckedChange={setMarkAsVerified}
+                          data-testid="switch-verified"
+                        />
+                        <span className="text-sm text-muted-foreground">
+                          {markAsVerified ? "Ownership confirmed" : "Not verified"}
+                        </span>
+                      </div>
+                    </div>
                   </div>
+                  <p className="text-xs text-muted-foreground">
+                    Turn on if you are certain about who owns these addresses. This confirms attribution certainty, not private key possession.
+                  </p>
+                </div>
 
+                <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <Label htmlFor="walletName">Wallet Name</Label>
                     <Input
@@ -1049,9 +1076,7 @@ export default function BulkImport() {
                       data-testid="input-wallet-name"
                     />
                   </div>
-                </div>
 
-                <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <Label htmlFor="private-key-status">Private Key Available</Label>
                     <Select value={privateKeyStatus} onValueChange={setPrivateKeyStatus}>
@@ -1059,29 +1084,14 @@ export default function BulkImport() {
                         <SelectValue placeholder="Select status..." />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="yes">Yes</SelectItem>
-                        <SelectItem value="no">No</SelectItem>
+                        <SelectItem value="yes">Yes - I have the keys</SelectItem>
+                        <SelectItem value="no">No - Third party controls</SelectItem>
                         <SelectItem value="unsure">Unsure</SelectItem>
                       </SelectContent>
                     </Select>
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label htmlFor="mark-verified" className="flex items-center gap-2">
-                      <ShieldCheck className="h-4 w-4 text-green-600" />
-                      Mark as Verified
-                    </Label>
-                    <div className="flex items-center gap-3 h-9">
-                      <Switch
-                        id="mark-verified"
-                        checked={markAsVerified}
-                        onCheckedChange={setMarkAsVerified}
-                        data-testid="switch-verified"
-                      />
-                      <span className="text-sm text-muted-foreground">
-                        {markAsVerified ? "Confirmed ownership" : "Not verified"}
-                      </span>
-                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      Do you have the private keys to spend from these addresses?
+                    </p>
                   </div>
                 </div>
 
