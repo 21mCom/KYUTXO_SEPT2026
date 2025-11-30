@@ -2,228 +2,58 @@
 
 ## Overview
 
-KYBTC is a secure, offline-first encrypted desktop application designed for managing cryptocurrency metadata. It enables users to organize information about Bitcoin addresses and transactions, attach encrypted files, and manage custom vocabularies (tags, categories). The project prioritizes data privacy through **full encryption at rest**, password-protected access, and complete offline functionality, offering a robust solution for personal crypto data management.
+KYBTC is a secure, offline-first encrypted desktop application designed for managing cryptocurrency metadata. It allows users to organize information about Bitcoin addresses and transactions, attach encrypted files, and manage custom vocabularies (tags, categories). The project prioritizes data privacy through **full encryption at rest**, password-protected access, and complete offline functionality, offering a robust solution for personal crypto data management.
+
+The project is currently in Phase 2, focusing on blockchain data import and transaction synchronization. Future ambitions include advanced provenance tracking, entity relationship mapping, and tax/compliance reporting.
 
 ## User Preferences
 
 Preferred communication style: Simple, everyday language.
 
-## Project Phases
-
-### Phase 1 (Complete): Metadata Collection
-- Manual entry of addresses/transactions with metadata
-- Wallet import from various software (Trezor, Sparrow, Mycelium, etc.)
-- xPub derivation for bulk address import
-- Focus on addresses, transaction IDs, and labels (not amounts/times)
-
-### Phase 2 (Current): Blockchain Data Import
-- Transaction Sync feature fetches blockchain data for tracked addresses
-- Flexible data source: public APIs (mempool.space, blockstream), custom Electrs servers, or Tor routing
-- Node Settings page for configuring blockchain data providers with privacy indicators
-- Only imports transactions with 5+ confirmations (considered settled)
-- Stores: txid, block height, block time, fee, fee rate, inputs/outputs
-- Auto-creates "Pending Review" records for discovered addresses
-- Intelligent matching: links transactions to existing labeled addresses
-
-### Phase 3 (Future): Provenance & Reporting
-- Flow-of-funds tracking across addresses
-- Entity relationship mapping
-- Tax and compliance reporting
-
 ## System Architecture
 
-### Data Model - Ownership Fields
+KYBTC employs a robust, security-focused architecture. All data and attachments are secured with **password-based AES-256-GCM encryption**, deriving keys using PBKDF2.
 
-Records use two fields to track ownership:
-- **owner**: Who owns/controls the address (e.g., "Personal", "Spouse", "Acme Corp", "Unknown")
-- **walletName**: Specific wallet purpose within an owner (e.g., "College Fund", "Trading", "KYC")
+The frontend is built with **React 18, TypeScript, and Vite**, utilizing `shadcn/ui` and Tailwind CSS for a responsive, offline-first UI. State management is handled by TanStack Query and Dexie.js for IndexedDB interactions. **Electron** packages the application for cross-platform desktop deployment.
 
-This allows tracking multiple wallets per owner while maintaining clear ownership hierarchy.
+The backend uses **Express.js with TypeScript** primarily for local file attachment management, ensuring core business logic remains client-side to support offline capabilities.
 
-### Security Architecture
+Data is stored locally using **Dexie.js (IndexedDB)** for structured data (records, attachments, vocabularies, settings), with all sensitive information encrypted. A comprehensive **Vocabulary Management System** allows users to define and manage tags, categories, owners, wallet names, seed names, and wallet software.
 
-KYBTC implements robust security via **password-based AES-256-GCM encryption** for all data and attachments. User passwords derive encryption keys using PBKDF2 (100,000 iterations), with keys held only in memory. An automatic logout clears all encryption state, and a data migration process encrypts existing plaintext records upon initial login.
-
-### Frontend Architecture
-
-Built with **React 18, TypeScript, and Vite**, the frontend offers an offline-first, responsive design using `shadcn/ui` and Tailwind CSS. State management leverages TanStack Query for server state and Dexie.js for IndexedDB interactions. It includes **Electron support** for desktop deployment and bitcoinjs-lib for Bitcoin address validation. The UI features a responsive three-panel layout optimized for desktop and mobile, with all core functionality designed to operate without internet access.
-
-### Backend Architecture
-
-The backend utilizes **Express.js with TypeScript**, primarily handling file attachments by storing them in a local `data/attachments/` directory. This minimal backend approach ensures business logic remains client-side, supporting offline capabilities. Development is streamlined with Vite integration for Hot Module Replacement (HMR).
-
-### Electron Desktop App
-
-The Electron framework packages KYBTC as a cross-platform desktop application. It uses OS-specific user data directories for storage and manages file operations (save, read, delete, list) via secure IPC communication, facilitating local, encrypted attachment storage.
-
-### Data Storage Solutions
-
-KYBTC uses **Dexie.js (IndexedDB)** for structured local data, including records, attachment metadata, tags, categories, and settings. All sensitive records are encrypted with AES-256-GCM. The data model supports various record types and includes `RecordOrigin` entries to track metadata sources, facilitating intelligent duplicate detection and merging.
-
-### Vocabulary Management System
-
-KYBTC supports six vocabulary types that can be pre-created and managed through the Value Updater page:
-- **Tags**: Multiple labels for organizing records (e.g., "cold storage", "hardware wallet")
-- **Categories**: Record classifications (e.g., "Personal", "Business")
-- **Owners**: Who controls an address (e.g., "Personal", "Spouse", "Acme Corp")
-- **Wallet Names**: Specific wallet purposes within an owner (e.g., "College Fund", "Trading")
-- **Seed Names**: Names for HD wallet seeds (e.g., "Main Seed", "Cold Storage Seed")
-- **Wallet Software**: Software used (e.g., "Trezor Suite", "Sparrow", "Electrum")
-
-All vocabulary items are stored in separate encrypted IndexedDB tables and appear as dropdown options in record forms. Users can select from existing values or add new ones inline. The Value Updater page allows bulk editing and management of all vocabulary types in one place.
-
-**Database Tables** (added in DB version 10):
-- `owners`: Owner names for address ownership tracking
-- `walletNames`: Wallet purpose identifiers
-- `seedNames`: HD seed identifiers
-- `walletSoftware`: Wallet software names
-
-**Hooks for accessing vocabulary data**:
-- `use-owners.ts`, `use-wallet-names.ts`, `use-seed-names.ts`, `use-wallet-software.ts`
-
-### Duplicate Detection & Merge System
-
-This system ensures "one record per unique `inputString`" by detecting duplicates and intelligently merging new metadata with existing records. It prioritizes existing manual data over new data (e.g., xpub-derived) and unions tags/categories. The `RecordOrigin` table tracks the source of each piece of metadata.
-
-### Wallet Import System
-
-A modular wallet import system (`client/src/lib/wallet-import/`) supports importing transaction history from various wallets like Trezor Suite, Sparrow, and Mycelium (CSV and JSON exports). Features:
-- Auto-detection of file format
-- Extracts addresses, transaction IDs, and labels only (Phase 1 focus)
-- Input addresses get owner/walletName from import settings
-- Output addresses default to owner="Unknown" (for later identification)
-- Intelligent duplicate detection with merging capabilities
-
-### Historical Price Import System
-
-The price import feature (`client/src/lib/price-parser.ts`, `client/src/pages/PriceImport.tsx`) allows importing historical Bitcoin price data for future reporting. Features:
-- Supports Investing.com CSV format with intelligent parsing
-- OHLCV data storage (Open, High, Low, Close, Volume)
-- Upsert logic: updates existing dates, adds new ones
-- Stored in IndexedDB `priceData` table with compound index on [date+currency+asset]
-- Data is NOT encrypted (public market data, not sensitive)
-
-### Transaction Sync System (Phase 2)
-
-The transaction sync feature (`client/src/lib/transaction-sync.ts`, `client/src/lib/blockchain-api.ts`, `client/src/pages/TransactionSync.tsx`) fetches blockchain data for tracked addresses. Architecture:
-
-**Blockchain API Layer** (`client/src/lib/blockchain-api.ts`):
-- Provider-agnostic interface supporting multiple backends
-- Default: mempool.space public API
-- Alternate: blockstream.info
-- Custom Electrs/Esplora servers (local LAN or remote via Tor)
-- Rate limiting (250ms between requests, configurable longer for Tor)
-
-**Node Settings** (`client/src/pages/NodeSettings.tsx`, `client/src/hooks/use-node-settings.ts`):
-Configurable blockchain data source with three provider types:
-- **Public APIs**: mempool.space or blockstream.info (convenient but exposes addresses to third parties)
-- **Custom Electrs Server**: Connect to your own local node for full privacy
-- **Tor Support**: Route connections through Tor for enhanced privacy (requires local SOCKS proxy)
-
-Settings stored in IndexedDB `nodeSettings` table (DB version 12):
-- `providerType`: 'mempool-space' | 'blockstream' | 'custom-electrs'
-- `customServerUrl`: URL for custom Electrs/Esplora server
-- `useTor`: Enable Tor routing (auto-extends timeouts to 60s+)
-- `requestTimeout`: Configurable per-request timeout
-- `network`: 'mainnet' | 'testnet'
-- Connection testing validates settings before save
-
-Privacy levels displayed contextually:
-- **Low Privacy**: Public APIs see your addresses
-- **Medium Privacy**: Tor hides your IP but API still sees addresses
-- **High Privacy**: Local node reveals nothing to third parties
-
-**Transaction Sync Service** (`client/src/lib/transaction-sync.ts`):
-- Syncs all tracked addresses on user demand
-- Only imports transactions with 5+ confirmations
-- Incremental sync using `AddressSyncState` table (tracks last synced block height)
-- Intelligent address matching: links tx inputs/outputs to existing records
-- Auto-creates "Pending Review" records for unknown addresses
-- **Depth-limited sync**: Controls address discovery with configurable depth levels
-- **Sync Deeper**: Allows incremental exploration of address relationships
-  - Two-pass filter system: First pass identifies related records and adds to validAncestorIds, second pass filters for records needing sync
-  - Multi-hop traversal enabled through ancestry tracking (discoveredFromRecordId)
-  - Target record's maxSyncedDepth is updated based on actual progress (prevents premature depth exhaustion)
-  - Dashboard calculates targetDepth accounting for both syncDepth and maxSyncedDepth
-
-**Depth Tracking Fields** (Database version 9):
-- `syncDepth`: The address's distance from manually-added records (0 = manual, 1 = first-hop discovered, etc.)
-- `maxSyncedDepth`: Highest depth level at which this address has been synced (-1 = never synced)
-- `discoveredFromRecordId`: Links to the parent address that discovered this one
-- `discoveredInTxid`: The transaction where this address was first seen
-
-**Database Tables**:
-- `blockchainTransactions`: txid, blockHeight, blockTime, fee, feeRate, syncedAt
-- `transactionParticipants`: txid, role (input/output), address, amount, vout, recordId
-- `addressSyncState`: address, recordId, lastSyncedHeight, lastSyncedAt, txCount
-
-**Privacy Considerations**:
-- Public APIs can see which addresses you query (Low Privacy)
-- Tor routing hides your IP but API still sees addresses (Medium Privacy)
-- Local Electrs node provides full privacy (High Privacy)
-- All fetched data stored locally and encrypted
-
-### Provenance System (Phase 3)
-
-The provenance feature (`client/src/lib/provenance.ts`, `client/src/pages/Provenance.tsx`) traces the flow of funds across addresses.
-
-**Address Importance Hierarchy**:
-- `verified`: User has manually verified/confirmed address ownership
-- `manual`: Manually entered addresses
-- `wallet-import`: Imported from wallet software
-- `xpub-derived`: Derived from extended public key
-- `blockchain-discovered`: Auto-discovered from blockchain sync
-- `pending-review`: Awaiting user review
-
-**Address Explorer**:
-- Unified bidirectional view: shows both incoming (sources) and outgoing (destinations) from a single address
-- Tier-based filtering: focus on verified/manual/wallet addresses or include blockchain-discovered
-- Clickable connection nodes with hover/popover details showing:
-  - Address label, owner, wallet name
-  - Hop distance from center address
-  - Transaction list with amounts
-- Address upgrade workflow: promote blockchain-discovered addresses to verified status
-
-**Provenance Path Finding**:
-- BFS-based algorithm to find paths between addresses through transactions
-- Configurable max depth to limit search scope
-- Detects self-loops and prevents infinite recursion
-- Uses transaction-level consolidation for accurate path representation
-
-**Find All Connections**:
-- Discovers paths between labeled addresses
-- Expandable connection cards showing hop details
-- Visual indicators for direct vs multi-hop connections
+Key features include:
+- **Data Model**: Records track ownership via `owner` and `walletName` fields.
+- **Duplicate Detection & Merge System**: Ensures data integrity by merging new metadata with existing records, prioritizing manual data.
+- **Wallet Import System**: Modular system for importing transaction history from various wallet software (e.g., Trezor, Sparrow) with intelligent duplicate detection and address verification.
+- **Address Verification System**: Explicitly confirms address ownership, with a tiered `addressImportance` system to prevent downgrading verified addresses.
+- **Historical Price Import System**: Allows importing and storing Bitcoin OHLCV price data from CSV files for future reporting.
+- **Transaction Sync System (Phase 2)**: Fetches blockchain data for tracked addresses from configurable sources (public APIs, custom Electrs, Tor) with privacy indicators. It only imports transactions with 5+ confirmations, intelligently matches addresses, and auto-creates "Pending Review" records for discovered addresses. It includes a depth-limited sync for exploring address relationships.
+- **Provenance System (Phase 3)**: A future feature for tracing the flow of funds between addresses using BFS-based pathfinding, an address importance hierarchy, and an interactive Address Explorer.
 
 ## External Dependencies
 
 ### Third-Party Services
 
-*   **Local File System:** Used for storing encrypted attachments, replacing cloud storage dependencies.
-*   **Google Fonts CDN:** For optimized typography, specifically the Inter font family.
+*   **Local File System:** For storing encrypted attachments.
+*   **Google Fonts CDN:** For the Inter font family.
 
 ### Bitcoin Libraries
 
-*   **bitcoinjs-lib:** Essential for Bitcoin address validation and network detection.
-*   **bip32:** Used for HD wallet key derivation, enabling bulk address generation.
-*   **bip39:** Facilitates mnemonic seed phrase handling.
+*   **bitcoinjs-lib:** For Bitcoin address validation and network detection.
+*   **bip32:** For HD wallet key derivation.
+*   **bip39:** For mnemonic seed phrase handling.
 
 ### Security Libraries
 
-*   **Web Crypto API:** Native browser API used for AES-256-GCM encryption and PBKDF2 key derivation.
+*   **Web Crypto API:** For AES-256-GCM encryption and PBKDF2 key derivation.
 
 ### Desktop Packaging
 
-*   **Electron:** The core framework for building the cross-platform desktop application.
-*   **electron-builder:** Used for packaging and distributing the Electron application across different operating systems.
-
-### Development Tools
-
-*   **Replit Vite Plugins:** Enhances the development experience with features like a runtime error modal and code mapping.
+*   **Electron:** Core framework for the desktop application.
+*   **electron-builder:** For packaging and distribution.
 
 ### UI Dependencies
 
 *   **Radix UI:** Provides unstyled, accessible component primitives.
-*   **Lucide React & React Icons:** Icon libraries for a consistent visual language.
-*   **cmdk:** A command palette component for search and command functionality.
-*   **class-variance-authority & clsx:** Utilities for dynamic className composition and variant-based styling.
+*   **Lucide React & React Icons:** Icon libraries.
+*   **cmdk:** Command palette component.
+*   **class-variance-authority & clsx:** Utilities for dynamic className composition.
