@@ -202,6 +202,14 @@ export default function Dashboard() {
         }
       }
 
+      // Handle addressImportance - verified if explicitly marked, otherwise manual for new records
+      let addressImportance = data.addressImportance;
+      if (data.markAsVerified) {
+        addressImportance = 'verified';
+      } else if (!addressImportance) {
+        addressImportance = 'manual';
+      }
+      
       const recordData = {
         type: recordType,
         inputString: data.inputString,
@@ -218,6 +226,7 @@ export default function Dashboard() {
         privateKeyStatus: data.privateKeyStatus || "",
         source: data.source || 'manual',
         customFields: data.customFields,
+        addressImportance,
       };
 
       // If record exists, update it instead of creating
@@ -483,6 +492,12 @@ export default function Dashboard() {
 
       setIsSubmitting(true);
 
+      // Handle addressImportance - can upgrade but never downgrade from verified
+      let addressImportance = editingRecord.addressImportance;
+      if (data.markAsVerified || data.addressImportance === 'verified') {
+        addressImportance = 'verified';
+      }
+      
       await updateRecord(editingRecord.id, {
         inputString: data.inputString,
         label: data.label,
@@ -498,6 +513,7 @@ export default function Dashboard() {
         privateKeyStatus: data.privateKeyStatus || "",
         source: data.source || 'manual',
         customFields: data.customFields,
+        addressImportance,
       });
 
       // Upload any new files for existing record

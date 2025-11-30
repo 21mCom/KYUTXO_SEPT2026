@@ -1,6 +1,31 @@
 import type { ParsedRecord, DuplicateInfo } from './types';
-import type { Record as DBRecord } from '../database';
+import type { Record as DBRecord, AddressImportance } from '../database';
 import { findRecordByInputString, isEncryptionReady } from '../encryptionFacade';
+import { IMPORTANCE_TIERS } from '../provenance';
+
+// Determine if the incoming importance should upgrade the existing one
+// Returns the new importance if it should be upgraded, or undefined if no change
+export function shouldUpgradeImportance(
+  existingImportance: AddressImportance | undefined,
+  incomingImportance: AddressImportance | undefined
+): AddressImportance | undefined {
+  if (!incomingImportance) return undefined;
+  
+  const existingTier = IMPORTANCE_TIERS[existingImportance || 'pending-review'];
+  const incomingTier = IMPORTANCE_TIERS[incomingImportance];
+  
+  // Only upgrade, never downgrade
+  if (incomingTier > existingTier) {
+    return incomingImportance;
+  }
+  
+  return undefined;
+}
+
+// Check if a record is verified - verified records should never be downgraded
+export function isVerified(record: DBRecord | null | undefined): boolean {
+  return record?.addressImportance === 'verified';
+}
 
 export async function checkForDuplicates(
   parsedRecords: ParsedRecord[]
@@ -55,6 +80,8 @@ export function mergeRecordData(
     defaultCategories: string[];
     sourceName: string;
     walletSoftware?: string;
+    incomingImportance?: AddressImportance;
+    markAsVerified?: boolean;
   }
 ): Partial<DBRecord> {
   const existingTags = existing.tags || [];
@@ -86,7 +113,18 @@ export function mergeRecordData(
     ? `${existing.source}; ${options.sourceName}`
     : options.sourceName;
   
-  return {
+  // Handle importance upgrading - NEVER downgrade verified addresses
+  let newImportance: AddressImportance | undefined;
+  
+  // If markAsVerified is explicitly set AND this is an input address, mark as verified
+  if (options.markAsVerified && isInput) {
+    newImportance = shouldUpgradeImportance(existing.addressImportance, 'verified');
+  } else if (options.incomingImportance) {
+    // Otherwise, try to upgrade based on incoming importance
+    newImportance = shouldUpgradeImportance(existing.addressImportance, options.incomingImportance);
+  }
+  
+  const result: Partial<DBRecord> = {
     tags: mergedTags,
     categories: mergedCategories,
     label: mergedLabel,
@@ -96,6 +134,13 @@ export function mergeRecordData(
     source: mergedSource,
     walletSoftware: existing.walletSoftware || options.walletSoftware,
   };
+  
+  // Only include addressImportance if it should be upgraded
+  if (newImportance) {
+    result.addressImportance = newImportance;
+  }
+  
+  return result;
 }
 
 export function createNewRecordData(
@@ -105,10 +150,30 @@ export function createNewRecordData(
     defaultCategories: string[];
     sourceName: string;
     walletSoftware?: string;
+    defaultImportance?: AddressImportance;
+    markAsVerified?: boolean;
+    owner?: string;
+    walletName?: string;
   }
 ): Omit<DBRecord, 'id' | 'createdAt' | 'updatedAt'> {
   // Only apply tags/categories to input addresses (addresses you control)
   const isInput = parsed.isInputAddress === true || parsed.direction === 'incoming';
+  
+  // Determine importance level
+  let importance: AddressImportance | undefined;
+  if (options.markAsVerified && isInput) {
+    // If markAsVerified is set for input addresses, use verified
+    importance = 'verified';
+  } else if (isInput && options.defaultImportance) {
+    // For input addresses, use the provided default importance
+    importance = options.defaultImportance;
+  } else if (!isInput) {
+    // Output addresses (not controlled by user) default to pending-review
+    importance = 'pending-review';
+  } else {
+    // Fallback
+    importance = options.defaultImportance || 'wallet-import';
+  }
   
   return {
     type: parsed.type,
@@ -122,6 +187,9 @@ export function createNewRecordData(
     source: options.sourceName,
     walletSoftware: options.walletSoftware,
     derivationPath: parsed.derivationPath,
+    addressImportance: importance,
+    owner: isInput ? options.owner : 'Unknown',
+    walletName: isInput ? options.walletName : undefined,
   };
 }
 

@@ -16,7 +16,9 @@ import { Progress } from "@/components/ui/progress";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { X, Upload, File as FileIcon, Loader2, Plus, Check, ChevronsUpDown, AlertTriangle, Download, ArrowDownLeft, ArrowUpRight, Info, ExternalLink } from "lucide-react";
+import { X, Upload, File as FileIcon, Loader2, Plus, Check, ChevronsUpDown, AlertTriangle, Download, ArrowDownLeft, ArrowUpRight, Info, ExternalLink, ShieldCheck } from "lucide-react";
+import { Switch } from "@/components/ui/switch";
+import type { AddressImportance } from "@/lib/database";
 import {
   Select,
   SelectContent,
@@ -55,6 +57,7 @@ interface ExistingRecord {
   walletName?: string;
   privateKeyStatus?: string;
   customFields?: { [slug: string]: string };
+  addressImportance?: AddressImportance;
 }
 
 interface CustomFieldDef {
@@ -120,6 +123,8 @@ export function RecordFormDialog({
     walletName: "",
     privateKeyStatus: "",
     customFields: {} as { [slug: string]: string },
+    addressImportance: undefined as AddressImportance | undefined,
+    markAsVerified: false,
   });
 
   const [formData, setFormData] = useState(initialData || getDefaultFormData());
@@ -1000,6 +1005,32 @@ export function RecordFormDialog({
                   <SelectItem value="unsure">Unsure</SelectItem>
                 </SelectContent>
               </Select>
+            </div>
+
+            {/* Mark as Verified Toggle */}
+            <div className="space-y-2">
+              <Label htmlFor="markAsVerified" className="flex items-center gap-2">
+                <ShieldCheck className="h-4 w-4 text-green-600" />
+                Mark as Verified
+              </Label>
+              <div className="flex items-center gap-3 h-9">
+                <Switch
+                  id="markAsVerified"
+                  checked={formData.markAsVerified || formData.addressImportance === 'verified'}
+                  onCheckedChange={(checked) => setFormData({ 
+                    ...formData, 
+                    markAsVerified: checked,
+                    addressImportance: checked ? 'verified' : (initialData?.addressImportance || undefined)
+                  })}
+                  disabled={isSubmitting}
+                  data-testid="switch-verified"
+                />
+                <span className="text-sm text-muted-foreground">
+                  {formData.markAsVerified || formData.addressImportance === 'verified' 
+                    ? "Confirmed ownership" 
+                    : "Not verified"}
+                </span>
+              </div>
             </div>
           </div>
 
