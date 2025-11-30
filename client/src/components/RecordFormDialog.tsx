@@ -844,78 +844,110 @@ export function RecordFormDialog({
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <Label>Owner</Label>
-              <Popover open={ownerOpen} onOpenChange={setOwnerOpen}>
-                <PopoverTrigger asChild>
-                  <Button
-                    variant="outline"
-                    role="combobox"
-                    aria-expanded={ownerOpen}
-                    className="w-full justify-between font-normal"
-                    disabled={isSubmitting}
-                    data-testid="select-owner"
-                  >
-                    {ownerInput || "Select or add..."}
-                    <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent className="w-full p-0" align="start">
-                  <Command>
-                    <CommandInput 
-                      placeholder="Search or add new..." 
-                      value={newOwner}
-                      onValueChange={setNewOwner}
-                    />
-                    <CommandList>
-                      <CommandEmpty>
-                        {newOwner && (
-                          <Button
-                            variant="ghost"
-                            className="w-full justify-start"
-                            onClick={addNewOwner}
-                          >
-                            <Plus className="mr-2 h-4 w-4" />
-                            Add "{newOwner}"
-                          </Button>
-                        )}
-                      </CommandEmpty>
-                      <CommandGroup>
-                        {allOwners.map((name) => (
-                          <CommandItem
-                            key={name}
-                            value={name}
-                            onSelect={() => {
-                              setOwnerInput(name);
-                              setOwnerOpen(false);
-                            }}
-                          >
-                            <Check
-                              className={cn(
-                                "mr-2 h-4 w-4",
-                                ownerInput === name ? "opacity-100" : "opacity-0"
-                              )}
-                            />
-                            {name}
-                          </CommandItem>
-                        ))}
-                        {newOwner && !allOwners.some(n => n.toLowerCase() === newOwner.toLowerCase()) && (
-                          <CommandItem
-                            value={`create-${newOwner}`}
-                            onSelect={addNewOwner}
-                          >
-                            <Plus className="mr-2 h-4 w-4" />
-                            Add "{newOwner}"
-                          </CommandItem>
-                        )}
-                      </CommandGroup>
-                    </CommandList>
-                  </Command>
-                </PopoverContent>
-              </Popover>
-            </div>
+          {/* Ownership Section */}
+          <div className="space-y-2 pt-2 border-t">
+            <Label className="text-sm font-medium text-muted-foreground">Ownership</Label>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>Owner</Label>
+                <Popover open={ownerOpen} onOpenChange={setOwnerOpen}>
+                  <PopoverTrigger asChild>
+                    <Button
+                      variant="outline"
+                      role="combobox"
+                      aria-expanded={ownerOpen}
+                      className="w-full justify-between font-normal"
+                      disabled={isSubmitting}
+                      data-testid="select-owner"
+                    >
+                      {ownerInput || "Select or add..."}
+                      <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-full p-0" align="start">
+                    <Command>
+                      <CommandInput 
+                        placeholder="Search or add new..." 
+                        value={newOwner}
+                        onValueChange={setNewOwner}
+                      />
+                      <CommandList>
+                        <CommandEmpty>
+                          {newOwner && (
+                            <Button
+                              variant="ghost"
+                              className="w-full justify-start"
+                              onClick={addNewOwner}
+                            >
+                              <Plus className="mr-2 h-4 w-4" />
+                              Add "{newOwner}"
+                            </Button>
+                          )}
+                        </CommandEmpty>
+                        <CommandGroup>
+                          {allOwners.map((name) => (
+                            <CommandItem
+                              key={name}
+                              value={name}
+                              onSelect={() => {
+                                setOwnerInput(name);
+                                setOwnerOpen(false);
+                              }}
+                            >
+                              <Check
+                                className={cn(
+                                  "mr-2 h-4 w-4",
+                                  ownerInput === name ? "opacity-100" : "opacity-0"
+                                )}
+                              />
+                              {name}
+                            </CommandItem>
+                          ))}
+                          {newOwner && !allOwners.some(n => n.toLowerCase() === newOwner.toLowerCase()) && (
+                            <CommandItem
+                              value={`create-${newOwner}`}
+                              onSelect={addNewOwner}
+                            >
+                              <Plus className="mr-2 h-4 w-4" />
+                              Add "{newOwner}"
+                            </CommandItem>
+                          )}
+                        </CommandGroup>
+                      </CommandList>
+                    </Command>
+                  </PopoverContent>
+                </Popover>
+              </div>
 
+              {/* Ownership Confirmed Toggle - next to Owner */}
+              <div className="space-y-2">
+                <Label htmlFor="markAsVerified" className="flex items-center gap-2">
+                  <ShieldCheck className="h-4 w-4 text-green-600" />
+                  Ownership Confirmed
+                </Label>
+                <div className="flex items-center gap-3 h-9">
+                  <Switch
+                    id="markAsVerified"
+                    checked={formData.markAsVerified || formData.addressImportance === 'verified'}
+                    onCheckedChange={(checked) => setFormData({ 
+                      ...formData, 
+                      markAsVerified: checked,
+                      addressImportance: checked ? 'verified' : (initialData?.addressImportance || undefined)
+                    })}
+                    disabled={isSubmitting}
+                    data-testid="switch-verified"
+                  />
+                  <span className="text-sm text-muted-foreground">
+                    {formData.markAsVerified || formData.addressImportance === 'verified' 
+                      ? "I've verified this" 
+                      : "Not verified"}
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label>Wallet Name</Label>
               <Popover open={walletNameOpen} onOpenChange={setWalletNameOpen}>
@@ -988,50 +1020,22 @@ export function RecordFormDialog({
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <Label htmlFor="privateKeyStatus">Private Key Available</Label>
-              <Select
-                value={formData.privateKeyStatus || ""}
-                onValueChange={(value) => setFormData({ ...formData, privateKeyStatus: value })}
-                disabled={isSubmitting}
-              >
-                <SelectTrigger id="privateKeyStatus" data-testid="select-private-key">
-                  <SelectValue placeholder="Select status..." />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="yes">Yes</SelectItem>
-                  <SelectItem value="no">No</SelectItem>
-                  <SelectItem value="unsure">Unsure</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-
-            {/* Mark as Verified Toggle */}
-            <div className="space-y-2">
-              <Label htmlFor="markAsVerified" className="flex items-center gap-2">
-                <ShieldCheck className="h-4 w-4 text-green-600" />
-                Mark as Verified
-              </Label>
-              <div className="flex items-center gap-3 h-9">
-                <Switch
-                  id="markAsVerified"
-                  checked={formData.markAsVerified || formData.addressImportance === 'verified'}
-                  onCheckedChange={(checked) => setFormData({ 
-                    ...formData, 
-                    markAsVerified: checked,
-                    addressImportance: checked ? 'verified' : (initialData?.addressImportance || undefined)
-                  })}
-                  disabled={isSubmitting}
-                  data-testid="switch-verified"
-                />
-                <span className="text-sm text-muted-foreground">
-                  {formData.markAsVerified || formData.addressImportance === 'verified' 
-                    ? "Confirmed ownership" 
-                    : "Not verified"}
-                </span>
-              </div>
-            </div>
+          <div className="space-y-2">
+            <Label htmlFor="privateKeyStatus">Private Key Available</Label>
+            <Select
+              value={formData.privateKeyStatus || ""}
+              onValueChange={(value) => setFormData({ ...formData, privateKeyStatus: value })}
+              disabled={isSubmitting}
+            >
+              <SelectTrigger id="privateKeyStatus" data-testid="select-private-key" className="w-full max-w-xs">
+                <SelectValue placeholder="Select status..." />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="yes">Yes</SelectItem>
+                <SelectItem value="no">No</SelectItem>
+                <SelectItem value="unsure">Unsure</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
 
           {/* Custom Fields Section */}

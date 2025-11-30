@@ -97,6 +97,7 @@ export default function WalletImport() {
   const [importResult, setImportResult] = useState<ImportResult | null>(null);
   
   const [markInputsAsVerified, setMarkInputsAsVerified] = useState(false);
+  const [privateKeyStatus, setPrivateKeyStatus] = useState<string>('');
   
   const encryptedTags = useLiveQuery(() => db.tags.toArray());
   const encryptedCategories = useLiveQuery(() => db.categories.toArray());
@@ -272,6 +273,7 @@ export default function WalletImport() {
           defaultCategories: selectedCategories,
           walletSoftware: getWalletName(selectedWalletType),
           markInputsAsVerified,
+          privateKeyStatus: privateKeyStatus || undefined,
         },
         (current, total, status) => {
           setImportProgress(Math.round((current / total) * 100));
@@ -314,6 +316,8 @@ export default function WalletImport() {
     setImportResult(null);
     setImportProgress(0);
     setImportStatus('');
+    setMarkInputsAsVerified(false);
+    setPrivateKeyStatus('');
   };
   
   const addTag = () => {
@@ -469,17 +473,41 @@ export default function WalletImport() {
             </p>
           </div>
 
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <Label htmlFor="owner">Owner</Label>
-              <Input
-                id="owner"
-                value={ownerInput}
-                onChange={(e) => setOwnerInput(e.target.value)}
-                placeholder="e.g., Personal, Spouse"
-                data-testid="input-owner"
-              />
+          {/* Ownership Section */}
+          <div className="p-4 border rounded-md space-y-4">
+            <Label className="text-sm font-medium text-muted-foreground">Ownership</Label>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="owner">Owner</Label>
+                <Input
+                  id="owner"
+                  value={ownerInput}
+                  onChange={(e) => setOwnerInput(e.target.value)}
+                  placeholder="e.g., Personal, Spouse"
+                  data-testid="input-owner"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="mark-verified" className="flex items-center gap-2">
+                  <ShieldCheck className="h-4 w-4 text-green-600" />
+                  Ownership Confirmed
+                </Label>
+                <div className="flex items-center gap-3 h-9">
+                  <Switch
+                    id="mark-verified"
+                    checked={markInputsAsVerified}
+                    onCheckedChange={setMarkInputsAsVerified}
+                    data-testid="switch-mark-verified"
+                  />
+                  <span className="text-sm text-muted-foreground">
+                    {markInputsAsVerified ? "I've verified this" : "Not verified"}
+                  </span>
+                </div>
+              </div>
             </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label htmlFor="walletName">Wallet Name</Label>
               <Input
@@ -489,6 +517,22 @@ export default function WalletImport() {
                 placeholder="e.g., College Fund, Trading"
                 data-testid="input-wallet-name"
               />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="privateKeyStatus">Private Key Available</Label>
+              <Select
+                value={privateKeyStatus}
+                onValueChange={setPrivateKeyStatus}
+              >
+                <SelectTrigger id="privateKeyStatus" data-testid="select-private-key">
+                  <SelectValue placeholder="Select status..." />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="yes">Yes</SelectItem>
+                  <SelectItem value="no">No</SelectItem>
+                  <SelectItem value="unsure">Unsure</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
           </div>
           
@@ -574,25 +618,6 @@ export default function WalletImport() {
             </div>
           </div>
 
-          <div className="pt-4 border-t">
-            <div className="flex items-center justify-between">
-              <div className="space-y-1">
-                <Label htmlFor="mark-verified" className="flex items-center gap-2">
-                  <ShieldCheck className="h-4 w-4 text-green-600" />
-                  Mark input addresses as verified
-                </Label>
-                <p className="text-sm text-muted-foreground">
-                  Confirms you control these addresses. Only applies to input addresses (your receiving addresses).
-                </p>
-              </div>
-              <Switch
-                id="mark-verified"
-                checked={markInputsAsVerified}
-                onCheckedChange={setMarkInputsAsVerified}
-                data-testid="switch-mark-verified"
-              />
-            </div>
-          </div>
         </CardContent>
       </Card>
     </div>

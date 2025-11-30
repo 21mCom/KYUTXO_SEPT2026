@@ -128,6 +128,7 @@ export async function executeImport(
           markAsVerified: options.markInputsAsVerified,
           owner: options.owner,
           walletName: options.walletName,
+          privateKeyStatus: options.privateKeyStatus,
         });
         
         await createRecord(newRecordData);

@@ -154,6 +154,7 @@ export function createNewRecordData(
     markAsVerified?: boolean;
     owner?: string;
     walletName?: string;
+    privateKeyStatus?: string;
   }
 ): Omit<DBRecord, 'id' | 'createdAt' | 'updatedAt'> {
   // Only apply tags/categories to input addresses (addresses you control)
@@ -190,6 +191,7 @@ export function createNewRecordData(
     addressImportance: importance,
     owner: isInput ? options.owner : 'Unknown',
     walletName: isInput ? options.walletName : undefined,
+    privateKeyStatus: isInput ? options.privateKeyStatus : undefined,
   };
 }
 

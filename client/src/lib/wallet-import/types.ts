@@ -45,6 +45,7 @@ export interface ImportOptions {
   defaultCategories: string[];
   walletSoftware?: string;
   markInputsAsVerified?: boolean;
+  privateKeyStatus?: string;
 }
 
 export interface ImportResult {
