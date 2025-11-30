@@ -21,6 +21,9 @@ interface ConvertedRecord {
   walletSoftware?: string;
   owner?: string;
   walletName?: string;
+  privateKeyStatus?: string;
+  source?: string;
+  customFields?: { [key: string]: string };
 }
 
 export default function Records() {
@@ -92,6 +95,9 @@ export default function Records() {
           walletSoftware: r.walletSoftware,
           owner: r.owner,
           walletName: r.walletName,
+          privateKeyStatus: r.privateKeyStatus,
+          source: r.source,
+          customFields: r.customFields,
         }));
         
         setRecords(convertedRecords);
