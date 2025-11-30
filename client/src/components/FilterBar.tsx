@@ -9,6 +9,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { MultiSelectCombobox } from "@/components/ui/multi-select-combobox";
 
 interface Filter {
   type?: "address" | "transaction" | "other" | "all";
@@ -69,13 +70,6 @@ export function FilterBar({ filter, onChange, availableTags = [], availableCateg
     onChange({ type: "all", tags: [], categories: [] });
   };
 
-  const removeTag = (tag: string) => {
-    onChange({ ...filter, tags: filter.tags.filter(t => t !== tag) });
-  };
-
-  const removeCategory = (category: string) => {
-    onChange({ ...filter, categories: filter.categories.filter(c => c !== category) });
-  };
 
   return (
     <div className="space-y-3">
@@ -95,44 +89,30 @@ export function FilterBar({ filter, onChange, availableTags = [], availableCateg
           </SelectContent>
         </Select>
 
-        {showTagsFilter && (
-          <Select
-            value=""
-            onValueChange={(value) => {
-              if (!filter.tags.includes(value)) {
-                onChange({ ...filter, tags: [...filter.tags, value] });
-              }
-            }}
-          >
-            <SelectTrigger className="w-[140px]" data-testid="select-tag-filter">
-              <SelectValue placeholder="Add tag filter" />
-            </SelectTrigger>
-            <SelectContent>
-              {availableTags.map((tag) => (
-                <SelectItem key={tag} value={tag}>{tag}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+        {showTagsFilter && availableTags.length > 0 && (
+          <div className="w-[180px]">
+            <MultiSelectCombobox
+              values={filter.tags}
+              onChange={(tags) => onChange({ ...filter, tags })}
+              options={availableTags}
+              placeholder="Filter by tags..."
+              searchPlaceholder="Search tags..."
+              testId="select-tag-filter"
+            />
+          </div>
         )}
 
-        {showCategoriesFilter && (
-          <Select
-            value=""
-            onValueChange={(value) => {
-              if (!filter.categories.includes(value)) {
-                onChange({ ...filter, categories: [...filter.categories, value] });
-              }
-            }}
-          >
-            <SelectTrigger className="w-[160px]" data-testid="select-category-filter">
-              <SelectValue placeholder="Add category filter" />
-            </SelectTrigger>
-            <SelectContent>
-              {availableCategories.map((category) => (
-                <SelectItem key={category} value={category}>{category}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+        {showCategoriesFilter && availableCategories.length > 0 && (
+          <div className="w-[180px]">
+            <MultiSelectCombobox
+              values={filter.categories}
+              onChange={(categories) => onChange({ ...filter, categories })}
+              options={availableCategories}
+              placeholder="Filter by category..."
+              searchPlaceholder="Search categories..."
+              testId="select-category-filter"
+            />
+          </div>
         )}
 
         {hasActiveFilters && (
@@ -142,22 +122,6 @@ export function FilterBar({ filter, onChange, availableTags = [], availableCateg
         )}
       </div>
 
-      {(filter.tags.length > 0 || filter.categories.length > 0) && (
-        <div className="flex flex-wrap gap-2">
-          {filter.tags.map((tag) => (
-            <Badge key={tag} variant="secondary" className="gap-1" data-testid={`badge-filter-tag-${tag}`}>
-              Tag: {tag}
-              <X className="h-3 w-3 cursor-pointer" onClick={() => removeTag(tag)} />
-            </Badge>
-          ))}
-          {filter.categories.map((category) => (
-            <Badge key={category} variant="secondary" className="gap-1" data-testid={`badge-filter-category-${category}`}>
-              Category: {category}
-              <X className="h-3 w-3 cursor-pointer" onClick={() => removeCategory(category)} />
-            </Badge>
-          ))}
-        </div>
-      )}
     </div>
   );
 }

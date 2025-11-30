@@ -10,7 +10,6 @@ import {
   ArrowRight, 
   ArrowLeft,
   Plus,
-  X,
   RefreshCw,
   FileJson,
   FileSpreadsheet,
@@ -31,6 +30,7 @@ import {
   SelectTrigger, 
   SelectValue 
 } from '@/components/ui/select';
+import { MultiSelectCombobox } from '@/components/ui/multi-select-combobox';
 import { useToast } from '@/hooks/use-toast';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '@/lib/database';
@@ -89,8 +89,6 @@ export default function WalletImport() {
   const [walletNameInput, setWalletNameInput] = useState<string>('');
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
-  const [newTag, setNewTag] = useState<string>('');
-  const [newCategory, setNewCategory] = useState<string>('');
   
   const [parsedRecords, setParsedRecords] = useState<ParsedRecord[]>([]);
   const [duplicateInfos, setDuplicateInfos] = useState<DuplicateInfo[]>([]);
@@ -353,27 +351,6 @@ export default function WalletImport() {
     setPrivateKeyStatus('');
   };
   
-  const addTag = () => {
-    if (newTag.trim() && !selectedTags.includes(newTag.trim())) {
-      setSelectedTags([...selectedTags, newTag.trim()]);
-      setNewTag('');
-    }
-  };
-  
-  const removeTag = (tag: string) => {
-    setSelectedTags(selectedTags.filter(t => t !== tag));
-  };
-  
-  const addCategory = () => {
-    if (newCategory.trim() && !selectedCategories.includes(newCategory.trim())) {
-      setSelectedCategories([...selectedCategories, newCategory.trim()]);
-      setNewCategory('');
-    }
-  };
-  
-  const removeCategory = (category: string) => {
-    setSelectedCategories(selectedCategories.filter(c => c !== category));
-  };
   
   const summary = duplicateInfos.length > 0 ? getImportSummary(duplicateInfos) : null;
   
@@ -662,86 +639,30 @@ export default function WalletImport() {
             </p>
           </div>
           
-          <div>
+          <div className="space-y-2">
             <Label>Default Tags</Label>
-            <div className="flex flex-wrap gap-2 mb-2">
-              {selectedTags.map(tag => (
-                <Badge key={tag} variant="secondary" className="gap-1">
-                  {tag}
-                  <button onClick={() => removeTag(tag)} className="ml-1">
-                    <X className="w-3 h-3" />
-                  </button>
-                </Badge>
-              ))}
-            </div>
-            <div className="flex gap-2">
-              <Select onValueChange={(value) => {
-                if (value && !selectedTags.includes(value)) {
-                  setSelectedTags([...selectedTags, value]);
-                }
-              }}>
-                <SelectTrigger className="flex-1" data-testid="select-existing-tag">
-                  <SelectValue placeholder="Add existing tag" />
-                </SelectTrigger>
-                <SelectContent>
-                  {availableTags.filter(t => !selectedTags.includes(t)).map(tag => (
-                    <SelectItem key={tag} value={tag}>{tag}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Input
-                value={newTag}
-                onChange={(e) => setNewTag(e.target.value)}
-                placeholder="New tag"
-                className="flex-1"
-                onKeyDown={(e) => e.key === 'Enter' && addTag()}
-                data-testid="input-new-tag"
-              />
-              <Button size="icon" variant="outline" onClick={addTag} data-testid="button-add-tag">
-                <Plus className="w-4 h-4" />
-              </Button>
-            </div>
+            <MultiSelectCombobox
+              values={selectedTags}
+              onChange={setSelectedTags}
+              options={availableTags}
+              onAddNew={(value) => setSelectedTags([...selectedTags, value])}
+              placeholder="Select tags..."
+              searchPlaceholder="Search or add new tag..."
+              testId="select-tags"
+            />
           </div>
           
-          <div>
+          <div className="space-y-2">
             <Label>Default Categories</Label>
-            <div className="flex flex-wrap gap-2 mb-2">
-              {selectedCategories.map(cat => (
-                <Badge key={cat} variant="secondary" className="gap-1">
-                  {cat}
-                  <button onClick={() => removeCategory(cat)} className="ml-1">
-                    <X className="w-3 h-3" />
-                  </button>
-                </Badge>
-              ))}
-            </div>
-            <div className="flex gap-2">
-              <Select onValueChange={(value) => {
-                if (value && !selectedCategories.includes(value)) {
-                  setSelectedCategories([...selectedCategories, value]);
-                }
-              }}>
-                <SelectTrigger className="flex-1" data-testid="select-existing-category">
-                  <SelectValue placeholder="Add existing category" />
-                </SelectTrigger>
-                <SelectContent>
-                  {availableCategories.filter(c => !selectedCategories.includes(c)).map(cat => (
-                    <SelectItem key={cat} value={cat}>{cat}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Input
-                value={newCategory}
-                onChange={(e) => setNewCategory(e.target.value)}
-                placeholder="New category"
-                className="flex-1"
-                onKeyDown={(e) => e.key === 'Enter' && addCategory()}
-                data-testid="input-new-category"
-              />
-              <Button size="icon" variant="outline" onClick={addCategory} data-testid="button-add-category">
-                <Plus className="w-4 h-4" />
-              </Button>
-            </div>
+            <MultiSelectCombobox
+              values={selectedCategories}
+              onChange={setSelectedCategories}
+              options={availableCategories}
+              onAddNew={(value) => setSelectedCategories([...selectedCategories, value])}
+              placeholder="Select categories..."
+              searchPlaceholder="Search or add new category..."
+              testId="select-categories"
+            />
           </div>
 
         </CardContent>

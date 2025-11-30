@@ -42,6 +42,7 @@ import {
 } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
+import { MultiSelectCombobox } from "@/components/ui/multi-select-combobox";
 import { useEncryptedTags, useEncryptedCategories, createEncryptedTag, createEncryptedCategory } from "@/hooks/use-encrypted-records";
 import { useAuth } from "@/contexts/AuthContext";
 import { useRecords, createRecord } from "@/hooks/use-records";
@@ -86,8 +87,8 @@ export default function BulkImport() {
   const [walletSoftware, setWalletSoftware] = useState("");
   const [notes, setNotes] = useState("");
   const [privateKeyStatus, setPrivateKeyStatus] = useState<string>("");
-  const [tagInput, setTagInput] = useState("");
-  const [categoryInput, setCategoryInput] = useState("");
+  const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
   const [ownerInput, setOwnerInput] = useState("");
   const [walletNameInput, setWalletNameInput] = useState("");
   const [seedOpen, setSeedOpen] = useState(false);
@@ -111,40 +112,18 @@ export default function BulkImport() {
   const { encryptionKey } = useAuth();
   const { toast } = useToast();
 
-  const parseCommaSeparated = (value: string): string[] => {
-    return value
-      .split(",")
-      .map(s => s.trim())
-      .filter(s => s.length > 0);
-  };
-
   const uniqueSeedNames = Array.from(new Set(records.map(r => r.seedName).filter((s): s is string => !!s)));
   const uniqueWalletSoftware = Array.from(new Set(records.map(r => r.walletSoftware).filter((s): s is string => !!s)));
   const allSeedNames = Array.from(new Set([...uniqueSeedNames, seedName].filter(Boolean)));
   const allWalletSoftware = Array.from(new Set([...uniqueWalletSoftware, walletSoftware].filter(Boolean)));
 
-  const getCurrentToken = (input: string): string => {
-    const parts = input.split(",");
-    return (parts[parts.length - 1] || "").trim().toLowerCase();
-  };
-
-  const currentTagToken = getCurrentToken(tagInput);
-  const selectedTagNames = parseCommaSeparated(tagInput).map(t => t.toLowerCase());
-  const filteredTags = tags
+  const availableTags = tags
     .map(t => t.name)
-    .filter(name => name && name !== "[encrypted]")
-    .filter(name => !selectedTagNames.includes(name.toLowerCase()))
-    .filter(name => currentTagToken === "" || name.toLowerCase().includes(currentTagToken))
-    .slice(0, 8);
+    .filter(name => name && name !== "[encrypted]");
 
-  const currentCategoryToken = getCurrentToken(categoryInput);
-  const selectedCategoryNames = parseCommaSeparated(categoryInput).map(c => c.toLowerCase());
-  const filteredCategories = categories
+  const availableCategories = categories
     .map(c => c.name)
-    .filter(name => name && name !== "[encrypted]")
-    .filter(name => !selectedCategoryNames.includes(name.toLowerCase()))
-    .filter(name => currentCategoryToken === "" || name.toLowerCase().includes(currentCategoryToken))
-    .slice(0, 8);
+    .filter(name => name && name !== "[encrypted]");
 
   const addNewSeedName = () => {
     if (newSeedName.trim()) {
@@ -335,8 +314,8 @@ export default function BulkImport() {
       const changeToSave = dualChainResult.change.filter((_, i) => selectedChangeAddresses.has(i));
       const allAddresses = [...receiveToSave, ...changeToSave];
       
-      const parsedTags = parseCommaSeparated(tagInput);
-      const parsedCategories = parseCommaSeparated(categoryInput);
+      const parsedTags = selectedTags;
+      const parsedCategories = selectedCategories;
 
       // Build vault metadata object for all derived addresses
       const vaultMetadata = isVaultXpub ? {
@@ -1114,63 +1093,29 @@ export default function BulkImport() {
                 </div>
                 
                 <div className="space-y-2">
-                  <Label htmlFor="tags">Tags (comma-separated)</Label>
-                  <Input
-                    id="tags"
-                    value={tagInput}
-                    onChange={(e) => setTagInput(e.target.value)}
-                    placeholder="cold storage, hardware wallet, savings"
-                    data-testid="input-tags"
+                  <Label>Tags</Label>
+                  <MultiSelectCombobox
+                    values={selectedTags}
+                    onChange={setSelectedTags}
+                    options={availableTags}
+                    onAddNew={(value) => setSelectedTags([...selectedTags, value])}
+                    placeholder="Select tags..."
+                    searchPlaceholder="Search or add new tag..."
+                    testId="select-tags"
                   />
-                  {filteredTags.length > 0 && (
-                    <div className="flex flex-wrap gap-1 mt-1">
-                      {filteredTags.map((tag) => (
-                        <Badge
-                          key={tag}
-                          variant="outline"
-                          className="cursor-pointer text-xs"
-                          onClick={() => {
-                            const parts = tagInput.split(",");
-                            parts[parts.length - 1] = parts.length > 1 ? ` ${tag}` : tag;
-                            setTagInput(parts.join(",") + ", ");
-                          }}
-                          data-testid={`badge-tag-${tag}`}
-                        >
-                          {tag}
-                        </Badge>
-                      ))}
-                    </div>
-                  )}
                 </div>
 
                 <div className="space-y-2">
-                  <Label htmlFor="categories">Categories (comma-separated)</Label>
-                  <Input
-                    id="categories"
-                    value={categoryInput}
-                    onChange={(e) => setCategoryInput(e.target.value)}
-                    placeholder="Personal, Business, Investment"
-                    data-testid="input-categories"
+                  <Label>Categories</Label>
+                  <MultiSelectCombobox
+                    values={selectedCategories}
+                    onChange={setSelectedCategories}
+                    options={availableCategories}
+                    onAddNew={(value) => setSelectedCategories([...selectedCategories, value])}
+                    placeholder="Select categories..."
+                    searchPlaceholder="Search or add new category..."
+                    testId="select-categories"
                   />
-                  {filteredCategories.length > 0 && (
-                    <div className="flex flex-wrap gap-1 mt-1">
-                      {filteredCategories.map((cat) => (
-                        <Badge
-                          key={cat}
-                          variant="outline"
-                          className="cursor-pointer text-xs"
-                          onClick={() => {
-                            const parts = categoryInput.split(",");
-                            parts[parts.length - 1] = parts.length > 1 ? ` ${cat}` : cat;
-                            setCategoryInput(parts.join(",") + ", ");
-                          }}
-                          data-testid={`badge-category-${cat}`}
-                        >
-                          {cat}
-                        </Badge>
-                      ))}
-                    </div>
-                  )}
                 </div>
               </div>
 
@@ -1341,7 +1286,7 @@ export default function BulkImport() {
                     )}
                   </div>
 
-                  {(seedName || walletSoftware || notes || privateKeyStatus || ownerInput || walletNameInput || tagInput || categoryInput) && (
+                  {(seedName || walletSoftware || notes || privateKeyStatus || ownerInput || walletNameInput || selectedTags.length > 0 || selectedCategories.length > 0) && (
                     <div className="p-3 bg-muted rounded-md">
                       <p className="text-sm font-medium mb-2">Applied Metadata:</p>
                       <div className="text-sm text-muted-foreground space-y-1">
@@ -1351,14 +1296,14 @@ export default function BulkImport() {
                         {walletNameInput && <p>Wallet Name: {walletNameInput}</p>}
                         {privateKeyStatus && <p>Private Key: {privateKeyStatus}</p>}
                         {notes && <p>Notes: {notes.substring(0, 50)}{notes.length > 50 ? "..." : ""}</p>}
-                        {parseCommaSeparated(tagInput).length > 0 && (
+                        {selectedTags.length > 0 && (
                           <div className="flex items-center gap-1 flex-wrap">
-                            Tags: {parseCommaSeparated(tagInput).map(t => <Badge key={t} variant="secondary" className="text-xs">{t}</Badge>)}
+                            Tags: {selectedTags.map(t => <Badge key={t} variant="secondary" className="text-xs">{t}</Badge>)}
                           </div>
                         )}
-                        {parseCommaSeparated(categoryInput).length > 0 && (
+                        {selectedCategories.length > 0 && (
                           <div className="flex items-center gap-1 flex-wrap">
-                            Categories: {parseCommaSeparated(categoryInput).map(c => <Badge key={c} variant="outline" className="text-xs">{c}</Badge>)}
+                            Categories: {selectedCategories.map(c => <Badge key={c} variant="outline" className="text-xs">{c}</Badge>)}
                           </div>
                         )}
                       </div>

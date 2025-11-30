@@ -41,6 +41,7 @@ import {
 } from "@/components/ui/command";
 import { cn } from "@/lib/utils";
 import { formatFileSize } from "@/lib/attachments";
+import { MultiSelectCombobox } from "@/components/ui/multi-select-combobox";
 import { createProvider, parseTransaction, type ParsedTransaction, MINIMUM_CONFIRMATIONS } from "@/lib/blockchain-api";
 
 interface ExistingRecord {
@@ -128,8 +129,8 @@ export function RecordFormDialog({
   });
 
   const [formData, setFormData] = useState(initialData || getDefaultFormData());
-  const [tagInput, setTagInput] = useState("");
-  const [categoryInput, setCategoryInput] = useState("");
+  const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
   const [ownerInput, setOwnerInput] = useState("");
   const [walletNameInput, setWalletNameInput] = useState("");
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
@@ -159,8 +160,8 @@ export function RecordFormDialog({
       const data = initialData || getDefaultFormData();
       setFormData(data);
       setSelectedFiles([]);
-      setTagInput(data.tags?.join(", ") || "");
-      setCategoryInput(data.categories?.join(", ") || "");
+      setSelectedTags(data.tags || []);
+      setSelectedCategories(data.categories || []);
       setOwnerInput(data.owner || "");
       setWalletNameInput(data.walletName || "");
       setNewSeedName("");
@@ -192,8 +193,8 @@ export function RecordFormDialog({
           ...existing,
           type: existing.type,
         });
-        setTagInput(existing.tags?.join(", ") || "");
-        setCategoryInput(existing.categories?.join(", ") || "");
+        setSelectedTags(existing.tags || []);
+        setSelectedCategories(existing.categories || []);
         setOwnerInput(existing.owner || "");
         setWalletNameInput(existing.walletName || "");
       }
@@ -294,14 +295,6 @@ export function RecordFormDialog({
     }
   };
 
-  // Parse comma-separated values into array
-  const parseCommaSeparated = (value: string): string[] => {
-    return value
-      .split(",")
-      .map(s => s.trim())
-      .filter(s => s.length > 0);
-  };
-
   const formatSats = (sats: number) => {
     if (sats >= 100000000) {
       return `${(sats / 100000000).toFixed(8)} BTC`;
@@ -311,9 +304,9 @@ export function RecordFormDialog({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    // Parse tags and categories from comma-separated input
-    const parsedTags = parseCommaSeparated(tagInput);
-    const parsedCategories = parseCommaSeparated(categoryInput);
+    // Get selected tags and categories from combobox state
+    const parsedTags = selectedTags;
+    const parsedCategories = selectedCategories;
     
     // Filter out empty custom field values
     const filteredCustomFields: { [slug: string]: string } = {};
@@ -637,67 +630,31 @@ export function RecordFormDialog({
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="tags">Tags (comma-separated)</Label>
-            <Input
-              id="tags"
-              value={tagInput}
-              onChange={(e) => setTagInput(e.target.value)}
-              placeholder="cold storage, hardware wallet, savings"
+            <Label>Tags</Label>
+            <MultiSelectCombobox
+              values={selectedTags}
+              onChange={setSelectedTags}
+              options={availableTags}
+              onAddNew={(value) => setSelectedTags([...selectedTags, value])}
+              placeholder="Select tags..."
+              searchPlaceholder="Search or add new tag..."
               disabled={isSubmitting}
-              data-testid="input-tags"
+              testId="select-tags"
             />
-            {availableTags.length > 0 && (
-              <div className="flex flex-wrap gap-1 mt-1">
-                {availableTags.slice(0, 8).map((tag) => (
-                  <Badge
-                    key={tag}
-                    variant="outline"
-                    className="cursor-pointer text-xs"
-                    onClick={() => {
-                      const current = parseCommaSeparated(tagInput);
-                      if (!current.includes(tag)) {
-                        setTagInput(current.length > 0 ? `${tagInput}, ${tag}` : tag);
-                      }
-                    }}
-                    data-testid={`badge-tag-${tag}`}
-                  >
-                    + {tag}
-                  </Badge>
-                ))}
-              </div>
-            )}
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="categories">Categories (comma-separated)</Label>
-            <Input
-              id="categories"
-              value={categoryInput}
-              onChange={(e) => setCategoryInput(e.target.value)}
-              placeholder="Personal, Business, Investment"
+            <Label>Categories</Label>
+            <MultiSelectCombobox
+              values={selectedCategories}
+              onChange={setSelectedCategories}
+              options={availableCategories}
+              onAddNew={(value) => setSelectedCategories([...selectedCategories, value])}
+              placeholder="Select categories..."
+              searchPlaceholder="Search or add new category..."
               disabled={isSubmitting}
-              data-testid="input-categories"
+              testId="select-categories"
             />
-            {availableCategories.length > 0 && (
-              <div className="flex flex-wrap gap-1 mt-1">
-                {availableCategories.slice(0, 8).map((cat) => (
-                  <Badge
-                    key={cat}
-                    variant="outline"
-                    className="cursor-pointer text-xs"
-                    onClick={() => {
-                      const current = parseCommaSeparated(categoryInput);
-                      if (!current.includes(cat)) {
-                        setCategoryInput(current.length > 0 ? `${categoryInput}, ${cat}` : cat);
-                      }
-                    }}
-                    data-testid={`badge-category-${cat}`}
-                  >
-                    + {cat}
-                  </Badge>
-                ))}
-              </div>
-            )}
           </div>
 
           {/* Ownership Section */}
