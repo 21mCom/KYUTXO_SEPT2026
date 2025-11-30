@@ -27,6 +27,9 @@ Key features include:
 - **Address Verification System**: Explicitly confirms address ownership, with a tiered `addressImportance` system to prevent downgrading verified addresses.
 - **Historical Price Import System**: Allows importing and storing Bitcoin OHLCV price data from CSV files for future reporting.
 - **Transaction Sync System (Phase 2)**: Fetches blockchain data for tracked addresses from configurable sources (public APIs, custom Electrs, Tor) with privacy indicators. It only imports transactions with 5+ confirmations, intelligently matches addresses, and auto-creates "Pending Review" records for discovered addresses. It includes a depth-limited sync for exploring address relationships.
+- **Reports System**: Self-contained reporting features in `/client/src/components/reports/`:
+  - **Source of Funds Report**: Shows acquisition history, cost basis from historical price data, current valuation, and unrealized gain/loss. Internal transfers (same owner) are flagged as non-taxable for capital gains purposes.
+  - **Hop-Point Detection Report**: Identifies unclassified addresses that connect known addresses, with confidence scoring to suggest classification (likely own wallet vs. counterparty).
 - **Provenance System (Phase 3)**: A future feature for tracing the flow of funds between addresses using BFS-based pathfinding, an address importance hierarchy, and an interactive Address Explorer.
 
 ## External Dependencies
