@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import {
   Table,
   TableBody,
@@ -10,7 +10,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { MoreVertical, ArrowUpDown, Settings2, Paperclip, Key, RefreshCw } from "lucide-react";
+import { MoreVertical, ArrowUp, ArrowDown, ArrowUpDown, Settings2, Paperclip, Key, RefreshCw } from "lucide-react";
 import { BitcoinAddressDisplay } from "./BitcoinAddressDisplay";
 import { RecordTypeBadge } from "./RecordTypeBadge";
 import {
@@ -30,6 +30,9 @@ import {
 import { useSettings, useCustomFields, toggleTableColumn, toggleCustomFieldColumn } from "@/hooks/use-settings";
 import { db, type CustomField } from "@/lib/database";
 import { Separator } from "@/components/ui/separator";
+
+type SortDirection = "asc" | "desc" | null;
+type SortColumn = "type" | "label" | "inputString" | "tags" | "categories" | "walletSoftware" | "seedName" | "privateKeyStatus" | "attachments" | "source" | string;
 
 interface Record {
   id: string;
@@ -55,10 +58,46 @@ interface RecordTableProps {
   onSyncDeeper?: (id: string) => void;
 }
 
+interface SortableHeaderProps {
+  column: SortColumn;
+  label: string;
+  currentSort: SortColumn | null;
+  direction: SortDirection;
+  onSort: (column: SortColumn) => void;
+  className?: string;
+}
+
+function SortableHeader({ column, label, currentSort, direction, onSort, className }: SortableHeaderProps) {
+  const isActive = currentSort === column;
+  
+  return (
+    <TableHead className={className}>
+      <Button
+        variant="ghost"
+        size="sm"
+        className="h-8 gap-1 -ml-3"
+        onClick={() => onSort(column)}
+        data-testid={`button-sort-${column}`}
+      >
+        {label}
+        {isActive && direction === "asc" ? (
+          <ArrowUp className="h-3 w-3" />
+        ) : isActive && direction === "desc" ? (
+          <ArrowDown className="h-3 w-3" />
+        ) : (
+          <ArrowUpDown className="h-3 w-3 opacity-50" />
+        )}
+      </Button>
+    </TableHead>
+  );
+}
+
 export function RecordTable({ records, onEdit, onDelete, onRowClick, onSyncDeeper }: RecordTableProps) {
   const { tableColumns, customFieldColumns } = useSettings();
   const { enabledCustomFields } = useCustomFields();
   const [attachmentCounts, setAttachmentCounts] = useState<Map<string, number>>(new Map());
+  const [sortColumn, setSortColumn] = useState<SortColumn | null>(null);
+  const [sortDirection, setSortDirection] = useState<SortDirection>(null);
 
   useEffect(() => {
     const loadAttachmentCounts = async () => {
@@ -74,6 +113,86 @@ export function RecordTable({ records, onEdit, onDelete, onRowClick, onSyncDeepe
       loadAttachmentCounts();
     }
   }, [records]);
+
+  const handleSort = (column: SortColumn) => {
+    if (sortColumn === column) {
+      if (sortDirection === "asc") {
+        setSortDirection("desc");
+      } else if (sortDirection === "desc") {
+        setSortColumn(null);
+        setSortDirection(null);
+      } else {
+        setSortDirection("asc");
+      }
+    } else {
+      setSortColumn(column);
+      setSortDirection("asc");
+    }
+  };
+
+  const sortedRecords = useMemo(() => {
+    if (!sortColumn || !sortDirection) {
+      return records;
+    }
+
+    return [...records].sort((a, b) => {
+      let aVal: string | number = "";
+      let bVal: string | number = "";
+
+      switch (sortColumn) {
+        case "type":
+          aVal = a.type;
+          bVal = b.type;
+          break;
+        case "label":
+          aVal = a.label.toLowerCase();
+          bVal = b.label.toLowerCase();
+          break;
+        case "inputString":
+          aVal = a.inputString.toLowerCase();
+          bVal = b.inputString.toLowerCase();
+          break;
+        case "tags":
+          aVal = (a.tags[0] || "").toLowerCase();
+          bVal = (b.tags[0] || "").toLowerCase();
+          break;
+        case "categories":
+          aVal = ((a.categories || [])[0] || "").toLowerCase();
+          bVal = ((b.categories || [])[0] || "").toLowerCase();
+          break;
+        case "walletSoftware":
+          aVal = (a.walletSoftware || "").toLowerCase();
+          bVal = (b.walletSoftware || "").toLowerCase();
+          break;
+        case "seedName":
+          aVal = (a.seedName || "").toLowerCase();
+          bVal = (b.seedName || "").toLowerCase();
+          break;
+        case "privateKeyStatus":
+          aVal = (a.privateKeyStatus || "").toLowerCase();
+          bVal = (b.privateKeyStatus || "").toLowerCase();
+          break;
+        case "attachments":
+          aVal = attachmentCounts.get(a.id) || 0;
+          bVal = attachmentCounts.get(b.id) || 0;
+          break;
+        case "source":
+          aVal = (a.source || "").toLowerCase();
+          bVal = (b.source || "").toLowerCase();
+          break;
+        default:
+          if (sortColumn.startsWith("custom_")) {
+            const fieldSlug = sortColumn.replace("custom_", "");
+            aVal = (a.customFields?.[fieldSlug] || "").toLowerCase();
+            bVal = (b.customFields?.[fieldSlug] || "").toLowerCase();
+          }
+      }
+
+      if (aVal < bVal) return sortDirection === "asc" ? -1 : 1;
+      if (aVal > bVal) return sortDirection === "asc" ? 1 : -1;
+      return 0;
+    });
+  }, [records, sortColumn, sortDirection, attachmentCounts]);
 
   const getPrivateKeyBadge = (status?: string) => {
     if (!status) return null;
@@ -185,23 +304,101 @@ export function RecordTable({ records, onEdit, onDelete, onRowClick, onSyncDeepe
       <Table>
         <TableHeader>
           <TableRow>
-            <TableHead className="w-[100px]">
-              <Button variant="ghost" size="sm" className="h-8 gap-1" data-testid="button-sort-type">
-                Type
-                <ArrowUpDown className="h-3 w-3" />
-              </Button>
-            </TableHead>
-            <TableHead>Label</TableHead>
-            <TableHead>Address / TXID</TableHead>
-            {tableColumns.tags && <TableHead>Tags</TableHead>}
-            {tableColumns.categories && <TableHead>Categories</TableHead>}
-            {tableColumns.walletSoftware && <TableHead>Wallet</TableHead>}
-            {tableColumns.seedName && <TableHead>Seed</TableHead>}
-            {tableColumns.privateKeyStatus && <TableHead>Private Key</TableHead>}
-            {tableColumns.hasAttachments && <TableHead className="w-[50px]">Files</TableHead>}
-            {tableColumns.source && <TableHead>Source</TableHead>}
+            <SortableHeader
+              column="type"
+              label="Type"
+              currentSort={sortColumn}
+              direction={sortDirection}
+              onSort={handleSort}
+              className="w-[100px]"
+            />
+            <SortableHeader
+              column="label"
+              label="Label"
+              currentSort={sortColumn}
+              direction={sortDirection}
+              onSort={handleSort}
+            />
+            <SortableHeader
+              column="inputString"
+              label="Address / TXID"
+              currentSort={sortColumn}
+              direction={sortDirection}
+              onSort={handleSort}
+            />
+            {tableColumns.tags && (
+              <SortableHeader
+                column="tags"
+                label="Tags"
+                currentSort={sortColumn}
+                direction={sortDirection}
+                onSort={handleSort}
+              />
+            )}
+            {tableColumns.categories && (
+              <SortableHeader
+                column="categories"
+                label="Categories"
+                currentSort={sortColumn}
+                direction={sortDirection}
+                onSort={handleSort}
+              />
+            )}
+            {tableColumns.walletSoftware && (
+              <SortableHeader
+                column="walletSoftware"
+                label="Wallet"
+                currentSort={sortColumn}
+                direction={sortDirection}
+                onSort={handleSort}
+              />
+            )}
+            {tableColumns.seedName && (
+              <SortableHeader
+                column="seedName"
+                label="Seed"
+                currentSort={sortColumn}
+                direction={sortDirection}
+                onSort={handleSort}
+              />
+            )}
+            {tableColumns.privateKeyStatus && (
+              <SortableHeader
+                column="privateKeyStatus"
+                label="Private Key"
+                currentSort={sortColumn}
+                direction={sortDirection}
+                onSort={handleSort}
+              />
+            )}
+            {tableColumns.hasAttachments && (
+              <SortableHeader
+                column="attachments"
+                label="Files"
+                currentSort={sortColumn}
+                direction={sortDirection}
+                onSort={handleSort}
+                className="w-[50px]"
+              />
+            )}
+            {tableColumns.source && (
+              <SortableHeader
+                column="source"
+                label="Source"
+                currentSort={sortColumn}
+                direction={sortDirection}
+                onSort={handleSort}
+              />
+            )}
             {enabledCustomFields.filter(f => customFieldColumns[f.slug]).map((field) => (
-              <TableHead key={field.slug}>{field.name}</TableHead>
+              <SortableHeader
+                key={field.slug}
+                column={`custom_${field.slug}`}
+                label={field.name}
+                currentSort={sortColumn}
+                direction={sortDirection}
+                onSort={handleSort}
+              />
             ))}
             <TableHead className="w-[50px]"></TableHead>
           </TableRow>
@@ -226,7 +423,7 @@ export function RecordTable({ records, onEdit, onDelete, onRowClick, onSyncDeepe
               </TableCell>
             </TableRow>
           ) : (
-            records.map((record) => (
+            sortedRecords.map((record) => (
               <TableRow
                 key={record.id}
                 className="cursor-pointer hover-elevate"
