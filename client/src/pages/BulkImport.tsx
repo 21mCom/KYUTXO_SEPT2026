@@ -1045,7 +1045,7 @@ export default function BulkImport() {
                     </div>
                     <div className="space-y-2">
                       <Label htmlFor="mark-verified" className="flex items-center gap-2">
-                        Ownership Verified
+                        Ownership Confirmed
                       </Label>
                       <div className="flex items-center gap-3 h-9">
                         <Switch

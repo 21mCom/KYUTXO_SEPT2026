@@ -82,6 +82,9 @@ export function mergeRecordData(
     walletSoftware?: string;
     incomingImportance?: AddressImportance;
     markAsVerified?: boolean;
+    owner?: string;
+    walletName?: string;
+    privateKeyStatus?: string;
   }
 ): Partial<DBRecord> {
   const existingTags = existing.tags || [];
@@ -133,6 +136,9 @@ export function mergeRecordData(
     date: existing.date ?? incoming.date,
     source: mergedSource,
     walletSoftware: existing.walletSoftware || options.walletSoftware,
+    owner: existing.owner || (isInput ? options.owner : undefined),
+    walletName: existing.walletName || (isInput ? options.walletName : undefined),
+    privateKeyStatus: existing.privateKeyStatus || (isInput ? options.privateKeyStatus : undefined),
   };
   
   // Only include addressImportance if it should be upgraded

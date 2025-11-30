@@ -140,6 +140,9 @@ export async function executeImport(
           sourceName: options.sourceName,
           walletSoftware: options.walletSoftware,
           markAsVerified: options.markInputsAsVerified,
+          owner: options.owner,
+          walletName: options.walletName,
+          privateKeyStatus: options.privateKeyStatus,
         });
         
         await updateRecord(existingRecord.id, mergedData);

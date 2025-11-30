@@ -922,7 +922,6 @@ export function RecordFormDialog({
               {/* Ownership Confirmed Toggle - next to Owner */}
               <div className="space-y-2">
                 <Label htmlFor="markAsVerified" className="flex items-center gap-2">
-                  <ShieldCheck className="h-4 w-4 text-green-600" />
                   Ownership Confirmed
                 </Label>
                 <div className="flex items-center gap-3 h-9">
@@ -939,12 +938,15 @@ export function RecordFormDialog({
                   />
                   <span className="text-sm text-muted-foreground">
                     {formData.markAsVerified || formData.addressImportance === 'verified' 
-                      ? "I've verified this" 
+                      ? "Ownership confirmed" 
                       : "Not verified"}
                   </span>
                 </div>
               </div>
             </div>
+            <p className="text-xs text-muted-foreground">
+              Turn on if you are certain about who owns this address. This confirms attribution certainty, not private key possession.
+            </p>
           </div>
 
           <div className="grid grid-cols-2 gap-4">
@@ -1031,11 +1033,14 @@ export function RecordFormDialog({
                 <SelectValue placeholder="Select status..." />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="yes">Yes</SelectItem>
-                <SelectItem value="no">No</SelectItem>
+                <SelectItem value="yes">Yes - I have the keys</SelectItem>
+                <SelectItem value="no">No - Third party controls</SelectItem>
                 <SelectItem value="unsure">Unsure</SelectItem>
               </SelectContent>
             </Select>
+            <p className="text-xs text-muted-foreground">
+              Do you have the private keys to spend from this address?
+            </p>
           </div>
 
           {/* Custom Fields Section */}
