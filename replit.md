@@ -18,7 +18,8 @@ Preferred communication style: Simple, everyday language.
 
 ### Phase 2 (Current): Blockchain Data Import
 - Transaction Sync feature fetches blockchain data for tracked addresses
-- Uses public APIs (mempool.space) by default, with future local node support planned
+- Flexible data source: public APIs (mempool.space, blockstream), custom Electrs servers, or Tor routing
+- Node Settings page for configuring blockchain data providers with privacy indicators
 - Only imports transactions with 5+ confirmations (considered settled)
 - Stores: txid, block height, block time, fee, fee rate, inputs/outputs
 - Auto-creates "Pending Review" records for discovered addresses
@@ -110,8 +111,27 @@ The transaction sync feature (`client/src/lib/transaction-sync.ts`, `client/src/
 - Provider-agnostic interface supporting multiple backends
 - Default: mempool.space public API
 - Alternate: blockstream.info
-- Future: local Bitcoin node via electrs/Esplora
-- Rate limiting (250ms between requests) to avoid throttling
+- Custom Electrs/Esplora servers (local LAN or remote via Tor)
+- Rate limiting (250ms between requests, configurable longer for Tor)
+
+**Node Settings** (`client/src/pages/NodeSettings.tsx`, `client/src/hooks/use-node-settings.ts`):
+Configurable blockchain data source with three provider types:
+- **Public APIs**: mempool.space or blockstream.info (convenient but exposes addresses to third parties)
+- **Custom Electrs Server**: Connect to your own local node for full privacy
+- **Tor Support**: Route connections through Tor for enhanced privacy (requires local SOCKS proxy)
+
+Settings stored in IndexedDB `nodeSettings` table (DB version 12):
+- `providerType`: 'mempool-space' | 'blockstream' | 'custom-electrs'
+- `customServerUrl`: URL for custom Electrs/Esplora server
+- `useTor`: Enable Tor routing (auto-extends timeouts to 60s+)
+- `requestTimeout`: Configurable per-request timeout
+- `network`: 'mainnet' | 'testnet'
+- Connection testing validates settings before save
+
+Privacy levels displayed contextually:
+- **Low Privacy**: Public APIs see your addresses
+- **Medium Privacy**: Tor hides your IP but API still sees addresses
+- **High Privacy**: Local node reveals nothing to third parties
 
 **Transaction Sync Service** (`client/src/lib/transaction-sync.ts`):
 - Syncs all tracked addresses on user demand
@@ -138,8 +158,9 @@ The transaction sync feature (`client/src/lib/transaction-sync.ts`, `client/src/
 - `addressSyncState`: address, recordId, lastSyncedHeight, lastSyncedAt, txCount
 
 **Privacy Considerations**:
-- Public APIs can see which addresses you query
-- Local node option (future) provides full privacy
+- Public APIs can see which addresses you query (Low Privacy)
+- Tor routing hides your IP but API still sees addresses (Medium Privacy)
+- Local Electrs node provides full privacy (High Privacy)
 - All fetched data stored locally and encrypted
 
 ### Provenance System (Phase 3)
