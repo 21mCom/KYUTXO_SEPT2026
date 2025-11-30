@@ -1,4 +1,4 @@
-import { Database, FileText, Settings, Upload, Download, QrCode, Key, RefreshCw, Wallet, TrendingUp, ArrowDownUp, List, GitBranch, Repeat2, BarChart3, Server } from "lucide-react";
+import { Database, FileText, Settings, Upload, Download, QrCode, Key, RefreshCw, Wallet, TrendingUp, ArrowDownUp, List, GitBranch, Repeat2, BarChart3, Server, ClipboardList } from "lucide-react";
 import { SiBitcoin } from "react-icons/si";
 import {
   Sidebar,
@@ -59,6 +59,11 @@ const menuItems = [
     title: "Data Stats",
     url: "/data-stats",
     icon: BarChart3,
+  },
+  {
+    title: "Reports",
+    url: "/reports",
+    icon: ClipboardList,
   },
   {
     title: "QR Scanner",
