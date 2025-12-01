@@ -7,7 +7,7 @@ const router = Router();
 const upload = multer({ storage: multer.memoryStorage() });
 
 // Data directory for local file storage
-const DATA_DIR = process.env.KYBTC_DATA_DIR || path.join(process.cwd(), 'data');
+const DATA_DIR = process.env.KYUTXO_DATA_DIR || path.join(process.cwd(), 'data');
 const ATTACHMENTS_DIR = path.join(DATA_DIR, 'attachments');
 
 // Ensure attachments directory exists

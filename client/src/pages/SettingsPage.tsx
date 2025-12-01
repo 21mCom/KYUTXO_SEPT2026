@@ -298,7 +298,7 @@ export default function SettingsPage() {
       toast({
         variant: "destructive",
         title: "Invalid Backup",
-        description: "Could not read the backup file. Make sure it's a valid KYBTC backup.",
+        description: "Could not read the backup file. Make sure it's a valid KYUTXO backup.",
       });
       setRestoreFile(null);
     }
@@ -628,7 +628,7 @@ export default function SettingsPage() {
         <div>
           <h1 className="text-3xl font-bold mb-2">Settings</h1>
           <p className="text-muted-foreground">
-            Configure your KYBTC application preferences
+            Configure your KYUTXO application preferences
           </p>
         </div>
 
@@ -871,7 +871,7 @@ export default function SettingsPage() {
 
         <Card>
           <CardHeader>
-            <CardTitle>About KYBTC</CardTitle>
+            <CardTitle>About KYUTXO</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
             <div className="flex justify-between text-sm">

@@ -1,8 +1,8 @@
-# KYBTC - Bitcoin Metadata Manager
+# KYUTXO - Bitcoin Metadata Manager
 
 ## Overview
 
-KYBTC is a secure, offline-first encrypted desktop application designed for managing cryptocurrency metadata. It allows users to organize information about Bitcoin addresses and transactions, attach encrypted files, and manage custom vocabularies (tags, categories). The project prioritizes data privacy through **full encryption at rest**, password-protected access, and complete offline functionality, offering a robust solution for personal crypto data management.
+KYUTXO is a secure, offline-first encrypted desktop application designed for managing cryptocurrency metadata. It allows users to organize information about Bitcoin addresses and transactions, attach encrypted files, and manage custom vocabularies (tags, categories). The project prioritizes data privacy through **full encryption at rest**, password-protected access, and complete offline functionality, offering a robust solution for personal crypto data management.
 
 The project is currently in Phase 2, focusing on blockchain data import and transaction synchronization. Future ambitions include advanced provenance tracking, entity relationship mapping, and tax/compliance reporting.
 
@@ -12,7 +12,7 @@ Preferred communication style: Simple, everyday language.
 
 ## System Architecture
 
-KYBTC employs a robust, security-focused architecture. All data and attachments are secured with **password-based AES-256-GCM encryption**, deriving keys using PBKDF2.
+KYUTXO employs a robust, security-focused architecture. All data and attachments are secured with **password-based AES-256-GCM encryption**, deriving keys using PBKDF2.
 
 The frontend is built with **React 18, TypeScript, and Vite**, utilizing `shadcn/ui` and Tailwind CSS for a responsive, offline-first UI. State management is handled by TanStack Query and Dexie.js for IndexedDB interactions. **Electron** packages the application for cross-platform desktop deployment.
 
@@ -53,6 +53,32 @@ Key features include:
 
 *   **Electron:** Core framework for the desktop application.
 *   **electron-builder:** For packaging and distribution.
+
+#### Electron Security Hardening
+
+The Electron app implements comprehensive security measures:
+- **Content Security Policy (CSP)**: Restrictive headers set via session
+- **Context Isolation**: Enabled with sandboxed renderer process
+- **Node Integration Disabled**: Prevents direct Node.js access from renderer
+- **Remote Module Blocked**: Prevents remote content execution
+- **Navigation Blocking**: External URLs blocked, user redirected to browser
+
+#### Portable Mode
+
+KYUTXO supports portable USB drive deployment:
+- Create an empty file named `portable` in the app directory
+- Data will be stored in `KYUTXO_Data/` folder next to the executable
+- Without the portable marker, data is stored in standard system directories
+
+#### Building for Distribution
+
+Run the helper scripts to build:
+```bash
+./scripts/electron-dev.sh   # Development mode with hot reload
+./scripts/electron-build.sh # Production build
+```
+
+Note: For production Windows/macOS builds, convert `icon.png` to `.ico`/`.icns` formats.
 
 ### UI Dependencies
 

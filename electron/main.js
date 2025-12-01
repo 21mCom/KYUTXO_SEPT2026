@@ -1,4 +1,4 @@
-const { app, BrowserWindow, protocol, ipcMain } = require('electron');
+const { app, BrowserWindow, protocol, ipcMain, session } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const url = require('url');
@@ -8,9 +8,31 @@ let mainWindow;
 // Determine if running in development or production
 const isDev = process.env.NODE_ENV === 'development';
 
-// Get app data directory for storing files
-const appDataPath = app.getPath('userData');
-const dataDir = path.join(appDataPath, 'data');
+// Portable mode detection:
+// If a 'portable' file/folder exists next to the executable, use portable mode
+// This allows running from USB drives with all data stored alongside the app
+function isPortableMode() {
+  if (isDev) return false;
+  
+  const exePath = app.getPath('exe');
+  const exeDir = path.dirname(exePath);
+  const portableMarker = path.join(exeDir, 'portable');
+  const portableDataDir = path.join(exeDir, 'KYUTXO_Data');
+  
+  return fs.existsSync(portableMarker) || fs.existsSync(portableDataDir);
+}
+
+// Get data directory based on portable mode
+function getDataDirectory() {
+  if (isPortableMode()) {
+    const exeDir = path.dirname(app.getPath('exe'));
+    return path.join(exeDir, 'KYUTXO_Data');
+  }
+  return path.join(app.getPath('userData'), 'data');
+}
+
+const portableMode = isPortableMode();
+const dataDir = getDataDirectory();
 const attachmentsDir = path.join(dataDir, 'attachments');
 
 // Ensure data directories exist
@@ -34,10 +56,13 @@ function createWindow() {
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
+      sandbox: true,
+      webSecurity: true,
+      allowRunningInsecureContent: false,
       preload: path.join(__dirname, 'preload.js'),
     },
-    icon: path.join(__dirname, '../public/icon.png'),
-    title: 'KYBTC - Bitcoin Metadata Manager',
+    icon: path.join(__dirname, '../client/public/icon.png'),
+    title: 'KYUTXO - Bitcoin Metadata Manager',
     backgroundColor: '#1a1a2e',
     show: false,
   });
@@ -70,11 +95,19 @@ function createWindow() {
 
 // Handle file operations via IPC
 ipcMain.handle('get-app-data-path', () => {
-  return appDataPath;
+  return app.getPath('userData');
+});
+
+ipcMain.handle('get-data-path', () => {
+  return dataDir;
 });
 
 ipcMain.handle('get-attachments-path', () => {
   return attachmentsDir;
+});
+
+ipcMain.handle('is-portable-mode', () => {
+  return portableMode;
 });
 
 ipcMain.handle('save-attachment', async (event, { identifier, filename, data }) => {
@@ -134,7 +167,29 @@ ipcMain.handle('list-attachments', async (event, identifier) => {
   }
 });
 
-app.whenReady().then(createWindow);
+// Security: Set Content Security Policy
+app.whenReady().then(() => {
+  // Set CSP headers for production
+  if (!isDev) {
+    session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+      callback({
+        responseHeaders: {
+          ...details.responseHeaders,
+          'Content-Security-Policy': [
+            "default-src 'self'",
+            "script-src 'self'",
+            "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+            "font-src 'self' https://fonts.gstatic.com",
+            "img-src 'self' data: blob:",
+            "connect-src 'self' https://mempool.space https://blockstream.info",
+          ].join('; ')
+        }
+      });
+    });
+  }
+  
+  createWindow();
+});
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
@@ -148,8 +203,20 @@ app.on('activate', () => {
   }
 });
 
-// Security: prevent navigation to external sites
+// Security: Prevent new window creation
 app.on('web-contents-created', (event, contents) => {
+  // Block new windows
+  contents.setWindowOpenHandler(({ url }) => {
+    // Allow opening external links in default browser
+    if (url.startsWith('https://mempool.space') || 
+        url.startsWith('https://blockstream.info') ||
+        url.startsWith('https://')) {
+      require('electron').shell.openExternal(url);
+    }
+    return { action: 'deny' };
+  });
+
+  // Prevent navigation to external sites
   contents.on('will-navigate', (event, navigationUrl) => {
     const parsedUrl = new URL(navigationUrl);
     
@@ -159,4 +226,30 @@ app.on('web-contents-created', (event, contents) => {
       event.preventDefault();
     }
   });
+
+  // Disable webview creation
+  contents.on('will-attach-webview', (event, webPreferences, params) => {
+    event.preventDefault();
+  });
+});
+
+// Security: Disable remote module (deprecated but ensure it's off)
+app.on('remote-require', (event) => {
+  event.preventDefault();
+});
+
+app.on('remote-get-builtin', (event) => {
+  event.preventDefault();
+});
+
+app.on('remote-get-global', (event) => {
+  event.preventDefault();
+});
+
+app.on('remote-get-current-window', (event) => {
+  event.preventDefault();
+});
+
+app.on('remote-get-current-web-contents', (event) => {
+  event.preventDefault();
 });

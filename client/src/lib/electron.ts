@@ -2,10 +2,12 @@
 interface ElectronAPI {
   getAppDataPath: () => Promise<string>;
   getAttachmentsPath: () => Promise<string>;
+  getDataPath: () => Promise<string>;
   saveAttachment: (identifier: string, filename: string, data: ArrayBuffer) => Promise<{ success: boolean; path?: string; error?: string }>;
   readAttachment: (relativePath: string) => Promise<{ success: boolean; data?: ArrayBuffer; error?: string }>;
   deleteAttachment: (relativePath: string) => Promise<{ success: boolean; error?: string }>;
   listAttachments: (identifier: string) => Promise<{ success: boolean; files?: string[]; error?: string }>;
+  isPortableMode: () => Promise<boolean>;
   platform: string;
   isElectron: boolean;
 }

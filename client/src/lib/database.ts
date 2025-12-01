@@ -272,7 +272,7 @@ export interface NodeSettings {
   lastConnectionStatus?: string;
 }
 
-export class KYBTCDatabase extends Dexie {
+export class KYUTXODatabase extends Dexie {
   records!: Table<Record>;
   attachments!: Table<Attachment>;
   tags!: Table<Tag>;
@@ -291,7 +291,7 @@ export class KYBTCDatabase extends Dexie {
   nodeSettings!: Table<NodeSettings>;
 
   constructor() {
-    super('KYBTCDatabase');
+    super('KYUTXODatabase');
     
     // Version 12 adds nodeSettings table for blockchain API connection configuration
     this.version(12).stores({
@@ -532,7 +532,7 @@ export class KYBTCDatabase extends Dexie {
   }
 }
 
-export const db = new KYBTCDatabase();
+export const db = new KYUTXODatabase();
 
 // Initialize default settings
 db.on('ready', async () => {

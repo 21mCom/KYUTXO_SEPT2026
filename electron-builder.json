@@ -1,6 +1,6 @@
 {
-  "appId": "com.kybtc.app",
-  "productName": "KYBTC",
+  "appId": "com.kyutxo.app",
+  "productName": "KYUTXO",
   "directories": {
     "output": "release"
   },
@@ -17,16 +17,16 @@
   ],
   "win": {
     "target": ["nsis", "portable"],
-    "icon": "client/public/icon.ico"
+    "icon": "client/public/icon.png"
   },
   "mac": {
     "target": ["dmg", "zip"],
-    "icon": "client/public/icon.icns",
+    "icon": "client/public/icon.png",
     "category": "public.app-category.finance"
   },
   "linux": {
     "target": ["AppImage", "deb"],
-    "icon": "client/public/favicon.png",
+    "icon": "client/public/icon.png",
     "category": "Finance"
   },
   "nsis": {

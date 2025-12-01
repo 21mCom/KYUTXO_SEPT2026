@@ -1,4 +1,4 @@
-# KYBTC Bitcoin Metadata Manager - Design Guidelines
+# KYUTXO Bitcoin Metadata Manager - Design Guidelines
 
 ## Design Approach
 **System-Based Approach**: Drawing from Material Design and modern crypto dashboard patterns (Coinbase, Ledger Live) optimized for data-intensive applications with complex workflows. Focus on clarity, efficiency, and trust-building through systematic design.
@@ -34,7 +34,7 @@
 ## Core Component Library
 
 ### Navigation
-**Top Bar**: Fixed header with KYBTC logo (left), global search (center), user actions/settings (right) - h-16, border-b, backdrop-blur
+**Top Bar**: Fixed header with KYUTXO logo (left), global search (center), user actions/settings (right) - h-16, border-b, backdrop-blur
 **Sidebar**: Persistent left nav with icon+label items, collapsed state on mobile showing icons only
 
 ### Dashboard Layout

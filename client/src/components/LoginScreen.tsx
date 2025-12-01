@@ -63,7 +63,7 @@ export function LoginScreen() {
               <Shield className="h-10 w-10 text-primary" />
             </div>
           </div>
-          <CardTitle className="text-2xl">KYBTC Vault</CardTitle>
+          <CardTitle className="text-2xl">KYUTXO Vault</CardTitle>
           <CardDescription>
             {isInitialized
               ? 'Enter your password to unlock your encrypted vault.'

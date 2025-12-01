@@ -1,6 +1,6 @@
 {
-  "name": "KYBTC - Bitcoin Metadata Manager",
-  "short_name": "KYBTC",
+  "name": "KYUTXO - Bitcoin Metadata Manager",
+  "short_name": "KYUTXO",
   "description": "Secure offline-first Bitcoin metadata manager for addresses, transactions, and wallet records",
   "start_url": "/",
   "display": "standalone",

@@ -1,4 +1,4 @@
-// Cryptographic utilities for KYBTC
+// Cryptographic utilities for KYUTXO
 // Uses Web Crypto API for AES-256-GCM encryption
 
 const SALT_LENGTH = 16;

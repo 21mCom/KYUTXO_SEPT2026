@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // File system operations
   getAppDataPath: () => ipcRenderer.invoke('get-app-data-path'),
   getAttachmentsPath: () => ipcRenderer.invoke('get-attachments-path'),
+  getDataPath: () => ipcRenderer.invoke('get-data-path'),
   
   // Attachment operations
   saveAttachment: (identifier, filename, data) => 
@@ -16,6 +17,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('delete-attachment', relativePath),
   listAttachments: (identifier) => 
     ipcRenderer.invoke('list-attachments', identifier),
+  
+  // Portable mode support
+  isPortableMode: () => ipcRenderer.invoke('is-portable-mode'),
   
   // Platform information
   platform: process.platform,

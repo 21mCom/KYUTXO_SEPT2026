@@ -329,7 +329,7 @@ export default function ExportPage() {
         zip.file("tags.csv.encrypted", encryptedTagsCSV);
         zip.file("categories.csv.encrypted", encryptedCategoriesCSV);
         zip.file("attachments.csv.encrypted", encryptedAttachmentsCSV);
-        zip.file("README.txt", `KYBTC Encrypted Backup
+        zip.file("README.txt", `KYUTXO Encrypted Backup
 ========================
 Export Date: ${exportData.exportDate}
 Version: ${exportData.version}
@@ -354,7 +354,7 @@ They are stored separately in: ${attachmentsFolderPath}
         zip.file("tags.csv", tagsCSV);
         zip.file("categories.csv", categoriesCSV);
         zip.file("attachments.csv", attachmentsCSV);
-        zip.file("README.txt", `KYBTC Backup
+        zip.file("README.txt", `KYUTXO Backup
 ========================
 Export Date: ${exportData.exportDate}
 Version: ${exportData.version}
@@ -386,8 +386,8 @@ They are stored separately in: ${attachmentsFolderPath}
       setProgressMessage("Downloading...");
 
       const fileName = encrypted 
-        ? `kybtc-backup-encrypted-${dateStr}.zip`
-        : `kybtc-backup-${dateStr}.zip`;
+        ? `kyutxo-backup-encrypted-${dateStr}.zip`
+        : `kyutxo-backup-${dateStr}.zip`;
 
       const url = URL.createObjectURL(zipBlob);
       const link = document.createElement('a');
