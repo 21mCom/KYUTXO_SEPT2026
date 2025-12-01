@@ -7,8 +7,15 @@
   "files": [
     "dist/**/*",
     "electron/**/*",
-    "client/public/**/*"
+    "client/public/**/*",
+    "package.json"
   ],
+  "extraMetadata": {
+    "main": "electron/main.js",
+    "name": "kyutxo",
+    "description": "Secure Bitcoin metadata manager",
+    "author": "KYUTXO"
+  },
   "extraResources": [
     {
       "from": "client/public",
