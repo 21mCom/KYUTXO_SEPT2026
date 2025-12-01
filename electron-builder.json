@@ -16,8 +16,12 @@
     }
   ],
   "win": {
-    "target": ["nsis", "portable"],
-    "icon": "client/public/icon.png"
+    "target": ["portable"],
+    "icon": "client/public/icon.png",
+    "artifactName": "${productName}-${version}-Portable.${ext}"
+  },
+  "portable": {
+    "artifactName": "${productName}-${version}-Portable.${ext}"
   },
   "mac": {
     "target": ["dmg", "zip"],
@@ -25,28 +29,8 @@
     "category": "public.app-category.finance"
   },
   "linux": {
-    "target": ["AppImage", "deb"],
+    "target": ["AppImage"],
     "icon": "client/public/icon.png",
     "category": "Finance"
-  },
-  "nsis": {
-    "oneClick": false,
-    "allowToChangeInstallationDirectory": true,
-    "createDesktopShortcut": true,
-    "createStartMenuShortcut": true
-  },
-  "dmg": {
-    "contents": [
-      {
-        "x": 130,
-        "y": 220
-      },
-      {
-        "x": 410,
-        "y": 220,
-        "type": "link",
-        "path": "/Applications"
-      }
-    ]
   }
 }
