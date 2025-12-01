@@ -40,11 +40,18 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: List build output
+        run: |
+          echo "Listing release directory:"
+          dir release
+        shell: cmd
+
       - name: Upload Windows Portable
         uses: actions/upload-artifact@v4
         with:
           name: KYUTXO-Windows-Portable
-          path: release/*.exe
+          path: release/
+          if-no-files-found: error
           retention-days: 30
 
       - name: Create Release
