@@ -32,8 +32,8 @@ jobs:
       - name: Install Electron build tools
         run: npm install --save-dev electron electron-builder
 
-- name: Build frontend
-  run: npx vite build --base=./
+      - name: Build frontend
+        run: npx vite build --base=./
 
       - name: Build Windows Portable
         run: npx electron-builder --win portable --config electron-builder.json
