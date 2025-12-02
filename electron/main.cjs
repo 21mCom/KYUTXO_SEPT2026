@@ -83,9 +83,29 @@ function createWindow() {
     const appPath = app.getAppPath();
     const indexPath = path.join(appPath, 'dist', 'public', 'index.html');
     
+    // Open DevTools in production for debugging (remove after fixing)
+    mainWindow.webContents.openDevTools();
+    
     console.log('App path:', appPath);
     console.log('Looking for index at:', indexPath);
     console.log('File exists:', fs.existsSync(indexPath));
+    
+    // List what's in the app directory
+    try {
+      const appContents = fs.readdirSync(appPath);
+      console.log('App directory contents:', appContents);
+      
+      const distPath = path.join(appPath, 'dist');
+      if (fs.existsSync(distPath)) {
+        console.log('Dist contents:', fs.readdirSync(distPath));
+        const publicPath = path.join(distPath, 'public');
+        if (fs.existsSync(publicPath)) {
+          console.log('Public contents:', fs.readdirSync(publicPath));
+        }
+      }
+    } catch (e) {
+      console.log('Error listing directory:', e.message);
+    }
     
     if (fs.existsSync(indexPath)) {
       mainWindow.loadFile(indexPath);
@@ -98,14 +118,22 @@ function createWindow() {
       if (fs.existsSync(resourcePath)) {
         mainWindow.loadFile(resourcePath);
       } else {
-        // Show error page with debug info
-        mainWindow.loadURL(`data:text/html,<html><body style="background:#1a1a2e;color:white;padding:40px;font-family:sans-serif;">
-          <h1>KYUTXO - Loading Error</h1>
-          <p>Could not find the application files.</p>
-          <p><strong>App Path:</strong> ${appPath}</p>
-          <p><strong>Expected:</strong> ${indexPath}</p>
-          <p><strong>Resource Path:</strong> ${process.resourcesPath}</p>
-        </body></html>`);
+        // Create a simple HTML file to show debug info
+        const debugHtml = `<!DOCTYPE html>
+<html>
+<head><title>KYUTXO Debug</title></head>
+<body style="background:#1a1a2e;color:white;padding:40px;font-family:sans-serif;">
+  <h1>KYUTXO - Loading Error</h1>
+  <p>Could not find the application files.</p>
+  <p><strong>App Path:</strong> ${appPath}</p>
+  <p><strong>Expected:</strong> ${indexPath}</p>
+  <p><strong>Resource Path:</strong> ${process.resourcesPath}</p>
+  <p>Check DevTools console for more details.</p>
+</body>
+</html>`;
+        const debugPath = path.join(dataDir, 'debug.html');
+        fs.writeFileSync(debugPath, debugHtml);
+        mainWindow.loadFile(debugPath);
       }
     }
   }
