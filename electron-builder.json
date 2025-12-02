@@ -11,7 +11,7 @@
     "package.json"
   ],
   "extraMetadata": {
-    "main": "electron/main.js",
+    "main": "electron/main.cjs",
     "name": "kyutxo",
     "description": "Secure Bitcoin metadata manager",
     "author": "KYUTXO"

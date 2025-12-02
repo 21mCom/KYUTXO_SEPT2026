@@ -59,7 +59,7 @@ function createWindow() {
       sandbox: true,
       webSecurity: true,
       allowRunningInsecureContent: false,
-      preload: path.join(__dirname, 'preload.js'),
+      preload: path.join(__dirname, 'preload.cjs'),
     },
     icon: path.join(__dirname, '../client/public/icon.png'),
     title: 'KYUTXO - Bitcoin Metadata Manager',

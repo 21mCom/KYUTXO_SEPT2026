@@ -13,7 +13,7 @@ echo "Waiting for dev server to start..."
 sleep 5
 
 # Start Electron
-NODE_ENV=development npx electron electron/main.js
+NODE_ENV=development npx electron electron/main.cjs
 
 # Cleanup
 kill $DEV_PID 2>/dev/null
