@@ -79,13 +79,34 @@ function createWindow() {
     mainWindow.webContents.openDevTools();
   } else {
     // In production, load the built files
-    // Vite builds to dist/public/ (see vite.config.ts outDir)
-    const indexPath = path.join(__dirname, '../dist/public/index.html');
+    // Use app.getAppPath() for correct path in packaged apps
+    const appPath = app.getAppPath();
+    const indexPath = path.join(appPath, 'dist', 'public', 'index.html');
+    
+    console.log('App path:', appPath);
+    console.log('Looking for index at:', indexPath);
+    console.log('File exists:', fs.existsSync(indexPath));
+    
     if (fs.existsSync(indexPath)) {
       mainWindow.loadFile(indexPath);
     } else {
-      // Fallback to packaged location
-      mainWindow.loadFile(path.join(process.resourcesPath, 'dist/public/index.html'));
+      // Fallback: try resources path
+      const resourcePath = path.join(process.resourcesPath, 'app', 'dist', 'public', 'index.html');
+      console.log('Fallback path:', resourcePath);
+      console.log('Fallback exists:', fs.existsSync(resourcePath));
+      
+      if (fs.existsSync(resourcePath)) {
+        mainWindow.loadFile(resourcePath);
+      } else {
+        // Show error page with debug info
+        mainWindow.loadURL(`data:text/html,<html><body style="background:#1a1a2e;color:white;padding:40px;font-family:sans-serif;">
+          <h1>KYUTXO - Loading Error</h1>
+          <p>Could not find the application files.</p>
+          <p><strong>App Path:</strong> ${appPath}</p>
+          <p><strong>Expected:</strong> ${indexPath}</p>
+          <p><strong>Resource Path:</strong> ${process.resourcesPath}</p>
+        </body></html>`);
+      }
     }
   }
 
