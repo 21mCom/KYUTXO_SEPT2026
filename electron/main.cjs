@@ -79,12 +79,13 @@ function createWindow() {
     mainWindow.webContents.openDevTools();
   } else {
     // In production, load the built files
-    const indexPath = path.join(__dirname, '../dist/client/index.html');
+    // Vite builds to dist/public/ (see vite.config.ts outDir)
+    const indexPath = path.join(__dirname, '../dist/public/index.html');
     if (fs.existsSync(indexPath)) {
       mainWindow.loadFile(indexPath);
     } else {
       // Fallback to packaged location
-      mainWindow.loadFile(path.join(process.resourcesPath, 'dist/client/index.html'));
+      mainWindow.loadFile(path.join(process.resourcesPath, 'dist/public/index.html'));
     }
   }
 
