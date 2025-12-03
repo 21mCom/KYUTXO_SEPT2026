@@ -6,7 +6,29 @@ import { createProvider, createProviderFromSettings, parseTransaction, MINIMUM_C
 import { validateAddress } from './bitcoin';
 import { decryptRecords, isEncryptionReady, createRecordOrigin } from './encryptionFacade';
 
-export type SourceFilter = 'manual-only' | 'include-tx-import' | 'include-blockchain-sync' | 'all';
+// Legacy source filter type - kept for backwards compatibility
+export type SourceFilter = 'manual-only' | 'include-tx-import' | 'include-blockchain-sync' | 'all' | 'custom';
+
+// New granular source selection
+export interface SourceSelection {
+  selectedSources: Set<string>;  // Set of exact source strings to include
+  includeNoSource: boolean;      // Include records with no source field (manual entries)
+}
+
+// Source category for grouping in UI
+export interface SourceCategory {
+  id: string;
+  label: string;
+  sources: SourceInfo[];
+}
+
+// Individual source info
+export interface SourceInfo {
+  source: string;           // The actual source string (e.g., "Sparrow Wallet", "blockchain-sync")
+  displayName: string;      // User-friendly name
+  count: number;            // Number of addresses with this source
+  category: 'manual' | 'wallet-sync' | 'xpub' | 'blockchain-sync' | 'other';
+}
 
 export interface SyncProgress {
   phase: 'idle' | 'fetching-height' | 'syncing-addresses' | 'processing' | 'complete' | 'error';
@@ -33,6 +55,7 @@ export interface SyncResult {
 
 export interface SyncOptions {
   sourceFilter: SourceFilter;
+  sourceSelection?: SourceSelection;  // Used when sourceFilter is 'custom'
   maxDepth: number; // How many levels deep to sync (1 = only sync depth-0 addresses, 2 = sync depth-0 and discovered depth-1, etc.)
   specificRecordIds?: number[]; // If provided, only sync these specific records (for "Sync Deeper" on individual records)
 }
@@ -345,6 +368,12 @@ export class TransactionSyncService {
           
           // Apply source filter (for depth 0 records)
           if (currentDepth === 0) {
+            // Custom source selection mode
+            if (sourceFilter === 'custom' && options.sourceSelection) {
+              return matchesSourceSelection(r, options.sourceSelection);
+            }
+            
+            // Legacy filter modes
             switch (sourceFilter) {
               case 'manual-only':
                 if (r.source === 'blockchain-sync') return false;
@@ -702,3 +731,215 @@ export class TransactionSyncService {
 }
 
 export const transactionSyncService = new TransactionSyncService();
+
+// Helper function to scan all address records and categorize their sources
+export async function getAddressSources(): Promise<SourceCategory[]> {
+  const allRawRecords = await db.records.where('type').equals('address').toArray();
+  
+  let allRecords: Record[];
+  if (isEncryptionReady()) {
+    allRecords = await decryptRecords(allRawRecords);
+  } else {
+    allRecords = allRawRecords;
+  }
+  
+  // Count occurrences of each source
+  const sourceCounts = new Map<string, number>();
+  let noSourceCount = 0;
+  
+  for (const record of allRecords) {
+    const source = record.source;
+    if (!source || source === 'manual' || source === '') {
+      noSourceCount++;
+    } else {
+      sourceCounts.set(source, (sourceCounts.get(source) || 0) + 1);
+    }
+  }
+  
+  // Categorize each source
+  const sourceInfos: SourceInfo[] = [];
+  
+  // Add "No source / Manual" entry if there are any
+  if (noSourceCount > 0) {
+    sourceInfos.push({
+      source: '__no_source__',
+      displayName: 'Manual Entry (no source)',
+      count: noSourceCount,
+      category: 'manual',
+    });
+  }
+  
+  for (const [source, count] of Array.from(sourceCounts.entries())) {
+    let category: SourceInfo['category'] = 'other';
+    let displayName = source;
+    
+    // Categorize based on source patterns
+    if (source === 'blockchain-sync') {
+      category = 'blockchain-sync';
+      displayName = 'Blockchain Sync';
+    } else if (source.startsWith('tx-import:')) {
+      category = 'blockchain-sync';
+      displayName = source.replace('tx-import:', 'TX Import: ');
+    } else if (source.includes('xpub') || source.includes('zpub') || source.includes('ypub')) {
+      category = 'xpub';
+      displayName = source;
+    } else if (source.includes('Wallet') || source.includes('wallet')) {
+      category = 'wallet-sync';
+      displayName = source;
+    } else if (
+      source === 'Sparrow' || 
+      source === 'Trezor' || 
+      source === 'Ledger' || 
+      source === 'Electrum' ||
+      source === 'Blue Wallet' ||
+      source === 'Wasabi' ||
+      source === 'Samourai' ||
+      source === 'Specter' ||
+      source === 'Mycelium' ||
+      source.includes('BIP-329')
+    ) {
+      category = 'wallet-sync';
+      displayName = source;
+    } else {
+      // Try to infer category from common patterns
+      if (source.includes(';')) {
+        // Multiple sources merged - take the first one for categorization
+        category = 'wallet-sync';
+      } else {
+        category = 'other';
+      }
+    }
+    
+    sourceInfos.push({
+      source,
+      displayName,
+      count,
+      category,
+    });
+  }
+  
+  // Group by category
+  const categoryMap = new Map<string, SourceInfo[]>();
+  for (const info of sourceInfos) {
+    const existing = categoryMap.get(info.category) || [];
+    existing.push(info);
+    categoryMap.set(info.category, existing);
+  }
+  
+  // Build result with nice labels, sorted by count within each category
+  const categories: SourceCategory[] = [];
+  
+  const categoryLabels: { [key: string]: string } = {
+    'manual': 'Manual Entries',
+    'wallet-sync': 'Wallet Imports',
+    'xpub': 'xPub Derived',
+    'blockchain-sync': 'Blockchain Discovered',
+    'other': 'Other Sources',
+  };
+  
+  const categoryOrder = ['manual', 'wallet-sync', 'xpub', 'blockchain-sync', 'other'];
+  
+  for (const catId of categoryOrder) {
+    const sources = categoryMap.get(catId);
+    if (sources && sources.length > 0) {
+      // Sort by count descending
+      sources.sort((a, b) => b.count - a.count);
+      categories.push({
+        id: catId,
+        label: categoryLabels[catId] || catId,
+        sources,
+      });
+    }
+  }
+  
+  return categories;
+}
+
+// Helper to check if a record matches the source selection
+export function matchesSourceSelection(record: Record, selection: SourceSelection): boolean {
+  const source = record.source;
+  
+  // Check for no-source records
+  if (!source || source === 'manual' || source === '') {
+    return selection.includeNoSource;
+  }
+  
+  // Check if this exact source is selected
+  return selection.selectedSources.has(source);
+}
+
+// Convert legacy SourceFilter to SourceSelection (for backwards compatibility)
+export function legacyFilterToSelection(filter: SourceFilter, allSources: SourceCategory[]): SourceSelection {
+  const selection: SourceSelection = {
+    selectedSources: new Set<string>(),
+    includeNoSource: false,
+  };
+  
+  // Flatten all sources for easier lookup
+  const allSourceInfos: SourceInfo[] = [];
+  for (const cat of allSources) {
+    allSourceInfos.push(...cat.sources);
+  }
+  
+  switch (filter) {
+    case 'manual-only':
+      // Include manual, wallet-sync, xpub - exclude blockchain-sync and tx-import
+      for (const info of allSourceInfos) {
+        if (info.category === 'manual') {
+          if (info.source === '__no_source__') {
+            selection.includeNoSource = true;
+          } else {
+            selection.selectedSources.add(info.source);
+          }
+        } else if (info.category === 'wallet-sync' || info.category === 'xpub' || info.category === 'other') {
+          selection.selectedSources.add(info.source);
+        }
+        // Exclude blockchain-sync category
+      }
+      break;
+      
+    case 'include-tx-import':
+      // Include everything except blockchain-sync
+      for (const info of allSourceInfos) {
+        if (info.category === 'manual') {
+          if (info.source === '__no_source__') {
+            selection.includeNoSource = true;
+          } else {
+            selection.selectedSources.add(info.source);
+          }
+        } else if (info.category !== 'blockchain-sync' || info.source.startsWith('tx-import:')) {
+          selection.selectedSources.add(info.source);
+        }
+      }
+      break;
+      
+    case 'include-blockchain-sync':
+      // Include everything except tx-import
+      for (const info of allSourceInfos) {
+        if (info.category === 'manual') {
+          if (info.source === '__no_source__') {
+            selection.includeNoSource = true;
+          } else {
+            selection.selectedSources.add(info.source);
+          }
+        } else if (!info.source.startsWith('tx-import:')) {
+          selection.selectedSources.add(info.source);
+        }
+      }
+      break;
+      
+    case 'all':
+    case 'custom':
+      // Include everything
+      for (const info of allSourceInfos) {
+        if (info.source === '__no_source__') {
+          selection.includeNoSource = true;
+        } else {
+          selection.selectedSources.add(info.source);
+        }
+      }
+      break;
+  }
+  
+  return selection;
+}

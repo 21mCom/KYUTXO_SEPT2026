@@ -22,9 +22,13 @@ import {
   Loader2,
   Info,
   Server,
-  Settings
+  Settings,
+  ChevronDown,
+  ChevronRight
 } from "lucide-react";
-import { transactionSyncService, type SyncProgress, type SyncResult, type SourceFilter, type SyncOptions } from "@/lib/transaction-sync";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { transactionSyncService, type SyncProgress, type SyncResult, type SyncOptions, type SourceCategory, type SourceSelection, getAddressSources, matchesSourceSelection } from "@/lib/transaction-sync";
 import { db, type Record as DbRecord } from "@/lib/database";
 import { useNodeSettings } from "@/hooks/use-node-settings";
 import { getProviderDisplayName, getProviderPrivacyInfo } from "@/lib/blockchain-api";
@@ -54,31 +58,29 @@ export default function TransactionSync() {
   const [syncProgress, setSyncProgress] = useState<SyncProgress | null>(null);
   const [lastResult, setLastResult] = useState<SyncResult | null>(null);
   const [pendingReviewAddresses, setPendingReviewAddresses] = useState<DbRecord[]>([]);
-  const [sourceFilter, setSourceFilter] = useState<SourceFilter>('manual-only');
   const [maxDepth, setMaxDepth] = useState<number>(1);
   const [depthStats, setDepthStats] = useState<Map<number, number>>(new Map());
+  
+  // New granular source selection state
+  const [sourceCategories, setSourceCategories] = useState<SourceCategory[]>([]);
+  const [selectedSources, setSelectedSources] = useState<Set<string>>(new Set());
+  const [includeNoSource, setIncludeNoSource] = useState<boolean>(true);
+  const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set(['manual', 'wallet-sync', 'xpub']));
+
+  // Build current source selection from state
+  const currentSourceSelection = useCallback((): SourceSelection => {
+    return {
+      selectedSources,
+      includeNoSource,
+    };
+  }, [selectedSources, includeNoSource]);
 
   // Apply source filter to records for depth count calculation
-  const applySourceFilter = useCallback((records: DbRecord[], filter: SourceFilter): DbRecord[] => {
-    return records.filter(r => {
-      switch (filter) {
-        case 'manual-only':
-          if (r.source === 'blockchain-sync') return false;
-          if (r.source?.startsWith('tx-import:')) return false;
-          return true;
-        case 'include-tx-import':
-          if (r.source === 'blockchain-sync') return false;
-          return true;
-        case 'include-blockchain-sync':
-          if (r.source?.startsWith('tx-import:')) return false;
-          return true;
-        case 'all':
-          return true;
-        default:
-          return true;
-      }
-    });
-  }, []);
+  const applySourceFilter = useCallback((records: DbRecord[]): DbRecord[] => {
+    // Always use custom selection now
+    const selection = currentSourceSelection();
+    return records.filter(r => matchesSourceSelection(r, selection));
+  }, [currentSourceSelection]);
 
   const loadStats = useCallback(async () => {
     const s = await transactionSyncService.getStats();
@@ -88,10 +90,31 @@ export default function TransactionSync() {
     setPendingReviewAddresses(pending);
   }, []);
   
-  // Calculate depth stats based on source filter
-  const calculateDepthStats = useCallback(async (filter: SourceFilter) => {
+  // Load available sources and set initial selection
+  const loadSources = useCallback(async () => {
+    const categories = await getAddressSources();
+    setSourceCategories(categories);
+    
+    // By default, select all non-blockchain-sync sources
+    // Always include manual/no-source entries by default (matches legacy 'manual-only' behavior)
+    const newSelection = new Set<string>();
+    for (const cat of categories) {
+      for (const src of cat.sources) {
+        // Skip blockchain-sync and __no_source__ (handled separately)
+        if (cat.id !== 'blockchain-sync' && src.source !== '__no_source__') {
+          newSelection.add(src.source);
+        }
+      }
+    }
+    setSelectedSources(newSelection);
+    // Always include manual entries by default - this matches legacy 'manual-only' behavior
+    setIncludeNoSource(true);
+  }, []);
+  
+  // Calculate depth stats based on current source selection
+  const calculateDepthStats = useCallback(async () => {
     const allRecords = await db.records.where('type').equals('address').toArray();
-    const filteredRecords = applySourceFilter(allRecords, filter);
+    const filteredRecords = applySourceFilter(allRecords);
     
     const depths = new Map<number, number>();
     for (const record of filteredRecords) {
@@ -103,12 +126,13 @@ export default function TransactionSync() {
 
   useEffect(() => {
     loadStats();
-  }, [loadStats]);
+    loadSources();
+  }, [loadStats, loadSources]);
   
-  // Recalculate depth stats when source filter changes
+  // Recalculate depth stats when source selection changes
   useEffect(() => {
-    calculateDepthStats(sourceFilter);
-  }, [sourceFilter, calculateDepthStats]);
+    calculateDepthStats();
+  }, [selectedSources, includeNoSource, calculateDepthStats]);
 
   const handleSync = async () => {
     setIsSyncing(true);
@@ -133,7 +157,8 @@ export default function TransactionSync() {
 
     try {
       const options: SyncOptions = {
-        sourceFilter,
+        sourceFilter: 'custom',
+        sourceSelection: currentSourceSelection(),
         maxDepth,
       };
       const result = await transactionSyncService.syncWithDepth(options);
@@ -160,7 +185,8 @@ export default function TransactionSync() {
     } finally {
       setIsSyncing(false);
       await loadStats();
-      await calculateDepthStats(sourceFilter);
+      await loadSources();
+      await calculateDepthStats();
     }
   };
 
@@ -297,29 +323,157 @@ export default function TransactionSync() {
           <CardContent className="space-y-4">
             {/* Sync Controls Row */}
             <div className="grid gap-4 sm:grid-cols-2">
-              {/* Source Filter */}
+              {/* Source Selection */}
               <div className="space-y-2">
-                <Label htmlFor="source-filter">Address Source Filter</Label>
-                <Select
-                  value={sourceFilter}
-                  onValueChange={(value) => setSourceFilter(value as SourceFilter)}
-                  disabled={isSyncing}
-                >
-                  <SelectTrigger id="source-filter" className="w-full" data-testid="select-source-filter">
-                    <SelectValue placeholder="Select which addresses to sync" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="manual-only">Manual Only</SelectItem>
-                    <SelectItem value="include-tx-import">Include TX Import</SelectItem>
-                    <SelectItem value="include-blockchain-sync">Include Blockchain Sync</SelectItem>
-                    <SelectItem value="all">All Addresses</SelectItem>
-                  </SelectContent>
-                </Select>
+                <div className="flex items-center justify-between">
+                  <Label>Address Sources</Label>
+                  <div className="flex gap-2">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-6 px-2 text-xs"
+                      disabled={isSyncing}
+                      onClick={() => {
+                        const allSources = new Set<string>();
+                        for (const cat of sourceCategories) {
+                          for (const src of cat.sources) {
+                            if (src.source !== '__no_source__') {
+                              allSources.add(src.source);
+                            }
+                          }
+                        }
+                        setSelectedSources(allSources);
+                        setIncludeNoSource(true);
+                      }}
+                      data-testid="button-select-all-sources"
+                    >
+                      All
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-6 px-2 text-xs"
+                      disabled={isSyncing}
+                      onClick={() => {
+                        setSelectedSources(new Set());
+                        setIncludeNoSource(false);
+                      }}
+                      data-testid="button-clear-sources"
+                    >
+                      None
+                    </Button>
+                  </div>
+                </div>
+                
+                <ScrollArea className="h-48 border rounded-md p-2" data-testid="scroll-source-filter">
+                  {sourceCategories.length === 0 ? (
+                    <p className="text-sm text-muted-foreground text-center py-4">
+                      No address sources found
+                    </p>
+                  ) : (
+                    <div className="space-y-2">
+                      {sourceCategories.map((category) => {
+                        const allSelected = category.sources.every(s => 
+                          s.source === '__no_source__' ? includeNoSource : selectedSources.has(s.source)
+                        );
+                        const someSelected = category.sources.some(s => 
+                          s.source === '__no_source__' ? includeNoSource : selectedSources.has(s.source)
+                        );
+                        const isExpanded = expandedCategories.has(category.id);
+                        const totalCount = category.sources.reduce((sum, s) => sum + s.count, 0);
+                        
+                        return (
+                          <Collapsible
+                            key={category.id}
+                            open={isExpanded}
+                            onOpenChange={(open) => {
+                              const newExpanded = new Set(expandedCategories);
+                              if (open) {
+                                newExpanded.add(category.id);
+                              } else {
+                                newExpanded.delete(category.id);
+                              }
+                              setExpandedCategories(newExpanded);
+                            }}
+                          >
+                            <div className="flex items-center gap-2 py-1">
+                              <Checkbox
+                                checked={allSelected}
+                                disabled={isSyncing}
+                                onCheckedChange={(checked) => {
+                                  const newSelection = new Set(selectedSources);
+                                  for (const src of category.sources) {
+                                    if (src.source === '__no_source__') {
+                                      setIncludeNoSource(checked === true);
+                                    } else if (checked) {
+                                      newSelection.add(src.source);
+                                    } else {
+                                      newSelection.delete(src.source);
+                                    }
+                                  }
+                                  setSelectedSources(newSelection);
+                                }}
+                                className={someSelected && !allSelected ? "opacity-50" : ""}
+                                data-testid={`checkbox-category-${category.id}`}
+                              />
+                              <CollapsibleTrigger asChild>
+                                <button
+                                  className="flex items-center gap-1 text-sm font-medium flex-1 text-left hover-elevate rounded px-1"
+                                  data-testid={`button-toggle-category-${category.id}`}
+                                >
+                                  {isExpanded ? (
+                                    <ChevronDown className="h-4 w-4" />
+                                  ) : (
+                                    <ChevronRight className="h-4 w-4" />
+                                  )}
+                                  {category.label}
+                                  <Badge variant="secondary" className="ml-auto text-xs">
+                                    {totalCount}
+                                  </Badge>
+                                </button>
+                              </CollapsibleTrigger>
+                            </div>
+                            
+                            <CollapsibleContent>
+                              <div className="pl-6 space-y-1">
+                                {category.sources.map((src) => (
+                                  <div key={src.source} className="flex items-center gap-2 py-0.5">
+                                    <Checkbox
+                                      checked={src.source === '__no_source__' ? includeNoSource : selectedSources.has(src.source)}
+                                      disabled={isSyncing}
+                                      onCheckedChange={(checked) => {
+                                        if (src.source === '__no_source__') {
+                                          setIncludeNoSource(checked === true);
+                                        } else {
+                                          const newSelection = new Set(selectedSources);
+                                          if (checked) {
+                                            newSelection.add(src.source);
+                                          } else {
+                                            newSelection.delete(src.source);
+                                          }
+                                          setSelectedSources(newSelection);
+                                        }
+                                      }}
+                                      data-testid={`checkbox-source-${src.source.replace(/[^a-zA-Z0-9]/g, '-')}`}
+                                    />
+                                    <span className="text-sm truncate flex-1" title={src.displayName}>
+                                      {src.displayName}
+                                    </span>
+                                    <span className="text-xs text-muted-foreground">
+                                      {src.count}
+                                    </span>
+                                  </div>
+                                ))}
+                              </div>
+                            </CollapsibleContent>
+                          </Collapsible>
+                        );
+                      })}
+                    </div>
+                  )}
+                </ScrollArea>
                 <p className="text-xs text-muted-foreground">
-                  {sourceFilter === 'manual-only' && "Your entries, wallet imports, xPub"}
-                  {sourceFilter === 'include-tx-import' && "+ addresses from TX lookups"}
-                  {sourceFilter === 'include-blockchain-sync' && "+ addresses from previous syncs"}
-                  {sourceFilter === 'all' && "Syncs everything (caution!)"}
+                  {selectedSources.size + (includeNoSource ? 1 : 0)} source(s) selected
                 </p>
               </div>
 
