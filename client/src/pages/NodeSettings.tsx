@@ -301,16 +301,17 @@ export default function NodeSettings() {
   const hasPendingChanges = Object.keys(pendingChanges).length > 0;
   
   return (
-    <div className="p-4 md:p-6 space-y-6 max-w-3xl mx-auto">
-      <div>
-        <h1 className="text-2xl font-semibold flex items-center gap-2">
-          <Server className="h-6 w-6" />
-          Node Connection
-        </h1>
-        <p className="text-muted-foreground mt-1">
-          Configure how the app connects to the Bitcoin network for syncing transaction data
-        </p>
-      </div>
+    <div className="h-full overflow-y-auto">
+      <div className="p-4 md:p-6 space-y-6 pb-8 max-w-3xl mx-auto">
+        <div>
+          <h1 className="text-2xl font-semibold flex items-center gap-2">
+            <Server className="h-6 w-6" />
+            Node Connection
+          </h1>
+          <p className="text-muted-foreground mt-1">
+            Configure how the app connects to the Bitcoin network for syncing transaction data
+          </p>
+        </div>
       
       {/* Privacy Warning for Public APIs */}
       <Alert variant={privacyInfo.level === 'low' ? 'destructive' : privacyInfo.level === 'medium' ? 'default' : 'default'}>
@@ -615,6 +616,7 @@ export default function NodeSettings() {
           You have unsaved changes
         </p>
       )}
+      </div>
     </div>
   );
 }
