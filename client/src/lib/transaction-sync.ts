@@ -578,6 +578,22 @@ export class TransactionSyncService {
       return { recordId: existing.id, isNew: false };
     }
 
+    // Look up parent record to inherit context (but NOT owner - discovered addresses need review)
+    let parentWalletName: string | undefined;
+    let parentSeedName: string | undefined;
+    let parentWalletSoftware: string | undefined;
+    
+    if (discoveredFromRecordId) {
+      const parentRecord = await db.records.get(discoveredFromRecordId);
+      if (parentRecord) {
+        // Inherit context fields for classification help, but NOT owner
+        // (discovered addresses could be counterparties)
+        parentWalletName = parentRecord.walletName;
+        parentSeedName = parentRecord.seedName;
+        parentWalletSoftware = parentRecord.walletSoftware;
+      }
+    }
+
     const now = Date.now();
     const newRecordId = await db.records.add({
       type: 'address',
@@ -592,6 +608,10 @@ export class TransactionSyncService {
       discoveredInTxid,
       discoveredFromRecordId,
       addressImportance: 'blockchain-discovered', // Lowest importance tier for discovered addresses
+      // Inherit context from parent for classification help
+      walletName: parentWalletName,
+      seedName: parentSeedName,
+      walletSoftware: parentWalletSoftware,
       createdAt: now,
       updatedAt: now,
     });

@@ -172,6 +172,7 @@ export const myceliumAdapter: WalletAdapter = {
               inputString: addr,
               label: `From Mycelium TX`,
               source: `Mycelium (TX: ${txid.substring(0, 8)}...)`,
+              isInputAddress: true,
             });
           }
         }
@@ -213,6 +214,7 @@ export const myceliumAdapter: WalletAdapter = {
           inputString: destAddress,
           label: `From Mycelium TX`,
           source: `Mycelium (TX: ${txid.substring(0, 8)}...)`,
+          isInputAddress: true,
         });
       }
     }

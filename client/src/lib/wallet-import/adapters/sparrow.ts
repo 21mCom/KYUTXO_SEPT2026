@@ -163,6 +163,7 @@ export const sparrowAdapter: WalletAdapter = {
               inputString: addr,
               label: `From Sparrow TX`,
               source: `Sparrow Wallet (TX: ${txid.substring(0, 8)}...)`,
+              isInputAddress: true,
             });
           }
         }
@@ -177,6 +178,7 @@ export const sparrowAdapter: WalletAdapter = {
               label: addr.label || 'Sparrow Address',
               derivationPath: addr.derivationPath || addr.path,
               source: 'Sparrow Wallet',
+              isInputAddress: true,
             });
           }
         }
@@ -216,6 +218,7 @@ export const sparrowAdapter: WalletAdapter = {
           inputString: row['address'],
           label: `From Sparrow TX`,
           source: `Sparrow Wallet (TX: ${txid.substring(0, 8)}...)`,
+          isInputAddress: true,
         });
       }
     }

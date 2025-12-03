@@ -32,7 +32,32 @@ import { db, type CustomField } from "@/lib/database";
 import { Separator } from "@/components/ui/separator";
 
 type SortDirection = "asc" | "desc" | null;
-type SortColumn = "type" | "label" | "inputString" | "tags" | "categories" | "walletSoftware" | "seedName" | "privateKeyStatus" | "attachments" | "source" | string;
+type SortColumn = "type" | "label" | "inputString" | "tags" | "categories" | "walletSoftware" | "seedName" | "privateKeyStatus" | "attachments" | "source" | "owner" | string;
+
+// Format source field for display - strip timestamp suffixes
+function formatSourceDisplay(source?: string): string {
+  if (!source || source === '[encrypted]') return "-";
+  
+  // walletImport-Sparrow Wallet_2024-01-01_054834 -> Sparrow Wallet Import (2024-01-01)
+  const walletImportMatch = source.match(/^walletImport-(.+?)_(\d{4}-\d{2}-\d{2})_\d+$/);
+  if (walletImportMatch) {
+    return `${walletImportMatch[1]} Import (${walletImportMatch[2]})`;
+  }
+  
+  // Handle sources that might have multiple values separated by semicolons
+  // Clean each part individually
+  const parts = source.split('; ').map(part => {
+    const partMatch = part.match(/^walletImport-(.+?)_(\d{4}-\d{2}-\d{2})_\d+$/);
+    if (partMatch) {
+      return `${partMatch[1]} (${partMatch[2]})`;
+    }
+    return part;
+  });
+  
+  // Dedupe and join
+  const unique = Array.from(new Set(parts));
+  return unique.join('; ');
+}
 
 interface Record {
   id: string;
@@ -44,6 +69,8 @@ interface Record {
   walletSoftware?: string;
   seedName?: string;
   privateKeyStatus?: string;
+  owner?: string;
+  walletName?: string;
   source?: string;
   customFields?: { [key: string]: string };
   syncDepth?: number;
@@ -180,6 +207,14 @@ export function RecordTable({ records, onEdit, onDelete, onRowClick, onSyncDeepe
           aVal = (a.source || "").toLowerCase();
           bVal = (b.source || "").toLowerCase();
           break;
+        case "owner":
+          aVal = (a.owner || "").toLowerCase();
+          bVal = (b.owner || "").toLowerCase();
+          break;
+        case "walletName":
+          aVal = (a.walletName || "").toLowerCase();
+          bVal = (b.walletName || "").toLowerCase();
+          break;
         default:
           if (sortColumn.startsWith("custom_")) {
             const fieldSlug = sortColumn.replace("custom_", "");
@@ -277,6 +312,22 @@ export function RecordTable({ records, onEdit, onDelete, onRowClick, onSyncDeepe
                     data-testid="checkbox-col-source"
                   />
                   <span className="text-sm">Source</span>
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <Checkbox
+                    checked={tableColumns.owner}
+                    onCheckedChange={() => toggleTableColumn('owner')}
+                    data-testid="checkbox-col-owner"
+                  />
+                  <span className="text-sm">Owner</span>
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <Checkbox
+                    checked={tableColumns.walletName}
+                    onCheckedChange={() => toggleTableColumn('walletName')}
+                    data-testid="checkbox-col-walletname"
+                  />
+                  <span className="text-sm">Wallet Name</span>
                 </label>
               </div>
               {enabledCustomFields.length > 0 && (
@@ -390,6 +441,24 @@ export function RecordTable({ records, onEdit, onDelete, onRowClick, onSyncDeepe
                 onSort={handleSort}
               />
             )}
+            {tableColumns.owner && (
+              <SortableHeader
+                column="owner"
+                label="Owner"
+                currentSort={sortColumn}
+                direction={sortDirection}
+                onSort={handleSort}
+              />
+            )}
+            {tableColumns.walletName && (
+              <SortableHeader
+                column="walletName"
+                label="Wallet Name"
+                currentSort={sortColumn}
+                direction={sortDirection}
+                onSort={handleSort}
+              />
+            )}
             {enabledCustomFields.filter(f => customFieldColumns[f.slug]).map((field) => (
               <SortableHeader
                 key={field.slug}
@@ -415,6 +484,8 @@ export function RecordTable({ records, onEdit, onDelete, onRowClick, onSyncDeepe
                   (tableColumns.privateKeyStatus ? 1 : 0) + 
                   (tableColumns.hasAttachments ? 1 : 0) +
                   (tableColumns.source ? 1 : 0) +
+                  (tableColumns.owner ? 1 : 0) +
+                  (tableColumns.walletName ? 1 : 0) +
                   enabledCustomFields.filter(f => customFieldColumns[f.slug]).length
                 } 
                 className="h-24 text-center text-muted-foreground"
@@ -498,7 +569,17 @@ export function RecordTable({ records, onEdit, onDelete, onRowClick, onSyncDeepe
                 )}
                 {tableColumns.source && (
                   <TableCell className="text-sm text-muted-foreground">
-                    {record.source && record.source !== '[encrypted]' ? record.source : "-"}
+                    {formatSourceDisplay(record.source)}
+                  </TableCell>
+                )}
+                {tableColumns.owner && (
+                  <TableCell className="text-sm text-muted-foreground">
+                    {record.owner && record.owner !== '[encrypted]' ? record.owner : "-"}
+                  </TableCell>
+                )}
+                {tableColumns.walletName && (
+                  <TableCell className="text-sm text-muted-foreground">
+                    {record.walletName && record.walletName !== '[encrypted]' ? record.walletName : "-"}
                   </TableCell>
                 )}
                 {enabledCustomFields.filter(f => customFieldColumns[f.slug]).map((field) => {

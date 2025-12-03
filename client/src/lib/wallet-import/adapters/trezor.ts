@@ -177,6 +177,7 @@ export const trezorAdapter: WalletAdapter = {
               inputString: addr,
               label: `From Trezor TX`,
               source: `Trezor Suite (TX: ${txid.substring(0, 8)}...)`,
+              isInputAddress: true,
             });
           }
         }
@@ -222,6 +223,7 @@ export const trezorAdapter: WalletAdapter = {
           inputString: addr,
           label: `From Trezor TX`,
           source: `Trezor Suite (TX: ${txid.substring(0, 8)}...)`,
+          isInputAddress: true,
         });
       }
     }
