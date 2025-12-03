@@ -221,6 +221,20 @@ export default function SettingsPage() {
       await db.attachments.clear();
       await db.recordOrigins.clear();
       await db.customFields.clear();
+      
+      // Clear blockchain sync data
+      await db.blockchainTransactions.clear();
+      await db.transactionParticipants.clear();
+      await db.addressSyncState.clear();
+      
+      // Clear vocabulary tables
+      await db.owners.clear();
+      await db.walletNames.clear();
+      await db.seedNames.clear();
+      await db.walletSoftware.clear();
+      
+      // Clear price data
+      await db.priceData.clear();
 
       // Reset settings to defaults (but keep them)
       await db.settings.update('default', {
@@ -252,7 +266,7 @@ export default function SettingsPage() {
       
       toast({
         title: "Database Cleared",
-        description: "All records, tags, categories, and attachments have been deleted.",
+        description: "All records, blockchain data, vocabularies, and attachments have been deleted.",
       });
 
       // Reload the page to reset all state
