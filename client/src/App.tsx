@@ -29,6 +29,7 @@ import SettingsPage from "@/pages/SettingsPage";
 import NodeSettings from "@/pages/NodeSettings";
 import Reports from "@/pages/Reports";
 import LightningSpeculator from "@/pages/LightningSpeculator";
+import UTXOs from "@/pages/UTXOs";
 import NotFound from "@/pages/not-found";
 
 function AppRoutes() {
@@ -41,6 +42,7 @@ function AppRoutes() {
       <Route path="/price-import" component={PriceImport} />
       <Route path="/transaction-sync" component={TransactionSync} />
       <Route path="/transactions" component={Transactions} />
+      <Route path="/utxos" component={UTXOs} />
       <Route path="/lightning-speculator" component={LightningSpeculator} />
       <Route path="/provenance" component={Provenance} />
       <Route path="/address-reuse" component={AddressReuse} />

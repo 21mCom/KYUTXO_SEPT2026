@@ -1,4 +1,4 @@
-import { Database, FileText, Settings, Upload, Download, QrCode, Key, RefreshCw, Wallet, TrendingUp, ArrowDownUp, List, GitBranch, Repeat2, BarChart3, Server, ClipboardList, Zap } from "lucide-react";
+import { Database, FileText, Settings, Upload, Download, QrCode, Key, RefreshCw, Wallet, TrendingUp, ArrowDownUp, List, GitBranch, Repeat2, BarChart3, Server, ClipboardList, Zap, Coins } from "lucide-react";
 import { SiBitcoin } from "react-icons/si";
 import {
   Sidebar,
@@ -44,6 +44,11 @@ const menuItems = [
     title: "Transactions",
     url: "/transactions",
     icon: List,
+  },
+  {
+    title: "UTXOs",
+    url: "/utxos",
+    icon: Coins,
   },
   {
     title: "Lightning Speculator",
