@@ -194,6 +194,7 @@ export function createNewRecordData(
       index: 0, // No sequential numbering for wallet imports
       totalCount: 1,
       walletName: options.walletName,
+      recordId: parsed.inputString, // Use address/txid as the record ID
     });
     finalLabel = `${expandedPrefix}${finalLabel}`;
   }

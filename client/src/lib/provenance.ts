@@ -680,10 +680,10 @@ export function getImportanceTierInfo(importance: AddressImportance | undefined)
       };
     case 'wallet-import':
       return {
-        label: 'Label Import',
-        shortLabel: 'L',
+        label: 'Wallet Data Sync',
+        shortLabel: 'W',
         color: 'text-purple-600 dark:text-purple-400',
-        description: 'Imported from wallet software labels',
+        description: 'Imported from wallet software data',
       };
     case 'xpub-derived':
       return {

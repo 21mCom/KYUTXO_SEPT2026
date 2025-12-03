@@ -132,6 +132,7 @@ export default function ValueUpdaterPage() {
   const [editingUnusedField, setEditingUnusedField] = useState<FieldType | null>(null);
   const [editingUnusedValue, setEditingUnusedValue] = useState<string>("");
   const [newUnusedValue, setNewUnusedValue] = useState<string>("");
+  const [activeTab, setActiveTab] = useState<FieldType>('tags');
 
   const extractUniqueValues = (field: FieldType): UniqueValue[] => {
     const valueCounts = new Map<string, number>();
@@ -875,7 +876,7 @@ export default function ValueUpdaterPage() {
           </p>
         </div>
 
-        <Tabs defaultValue="tags">
+        <Tabs value={activeTab} onValueChange={(val) => setActiveTab(val as FieldType)}>
           <TabsList className="flex-wrap h-auto gap-1">
             {FIELD_CONFIGS.map((config) => {
               const Icon = config.icon;

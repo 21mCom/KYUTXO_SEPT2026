@@ -38,6 +38,9 @@ import { isEncryptionReady } from '@/lib/encryptionFacade';
 import { decryptTag, decryptCategory } from '@/lib/dbEncryption';
 import { getEncryptionKey } from '@/lib/encryptionFacade';
 import { useSeedNames, createSeedName, SEED_NAME_MAX_LENGTH } from '@/hooks/use-seed-names';
+import { useOwners, createOwner } from '@/hooks/use-owners';
+import { useWalletNames, createWalletName } from '@/hooks/use-wallet-names';
+import { useWalletSoftware, createWalletSoftware } from '@/hooks/use-wallet-software';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command';
 import { Check, ChevronsUpDown, Wallet } from 'lucide-react';
@@ -115,6 +118,30 @@ export default function WalletImport() {
     seedNameInput
   ].filter(Boolean)));
   
+  // Owner state
+  const [ownerOpen, setOwnerOpen] = useState(false);
+  const [newOwnerName, setNewOwnerName] = useState<string>('');
+  const { owners } = useOwners();
+  const allOwners = Array.from(new Set([
+    ...owners.map(o => o.name).filter(n => n && n !== '[encrypted]'),
+    ownerInput
+  ].filter(Boolean)));
+  
+  // Wallet name state
+  const [walletNameOpen, setWalletNameOpen] = useState(false);
+  const [newWalletNameValue, setNewWalletNameValue] = useState<string>('');
+  const { walletNames } = useWalletNames();
+  const allWalletNames = Array.from(new Set([
+    ...walletNames.map(wn => wn.name).filter(n => n && n !== '[encrypted]'),
+    walletNameInput
+  ].filter(Boolean)));
+  
+  // Wallet software state (with override capability)
+  const [walletSoftwareInput, setWalletSoftwareInput] = useState<string>('');
+  const [walletSoftwareOpen, setWalletSoftwareOpen] = useState(false);
+  const [newWalletSoftwareName, setNewWalletSoftwareName] = useState<string>('');
+  const { walletSoftware: existingWalletSoftware } = useWalletSoftware();
+  
   const addNewSeedName = async () => {
     if (!newSeedName.trim()) return;
     if (newSeedName.trim().length > SEED_NAME_MAX_LENGTH) {
@@ -138,6 +165,63 @@ export default function WalletImport() {
       });
     }
   };
+  
+  const addNewOwner = async () => {
+    if (!newOwnerName.trim()) return;
+    try {
+      await createOwner(newOwnerName.trim());
+      setOwnerInput(newOwnerName.trim());
+      setNewOwnerName('');
+      setOwnerOpen(false);
+    } catch (e) {
+      toast({
+        title: 'Error',
+        description: e instanceof Error ? e.message : 'Failed to add owner',
+        variant: 'destructive',
+      });
+    }
+  };
+  
+  const addNewWalletName = async () => {
+    if (!newWalletNameValue.trim()) return;
+    try {
+      await createWalletName(newWalletNameValue.trim());
+      setWalletNameInput(newWalletNameValue.trim());
+      setNewWalletNameValue('');
+      setWalletNameOpen(false);
+    } catch (e) {
+      toast({
+        title: 'Error',
+        description: e instanceof Error ? e.message : 'Failed to add wallet name',
+        variant: 'destructive',
+      });
+    }
+  };
+  
+  const addNewWalletSoftware = async () => {
+    if (!newWalletSoftwareName.trim()) return;
+    try {
+      await createWalletSoftware(newWalletSoftwareName.trim());
+      setWalletSoftwareInput(newWalletSoftwareName.trim());
+      setNewWalletSoftwareName('');
+      setWalletSoftwareOpen(false);
+    } catch (e) {
+      toast({
+        title: 'Error',
+        description: e instanceof Error ? e.message : 'Failed to add wallet software',
+        variant: 'destructive',
+      });
+    }
+  };
+  
+  // Build wallet software options: detected + existing + current input
+  const detectedWalletSoftware = getWalletName(selectedWalletType);
+  const allWalletSoftwareOptions = Array.from(new Set([
+    detectedWalletSoftware,
+    ...existingWalletSoftware.map(ws => ws.name).filter(n => n && n !== '[encrypted]'),
+    walletSoftwareInput
+  ].filter(Boolean)));
+  
   
   const encryptedTags = useLiveQuery(() => db.tags.toArray());
   const encryptedCategories = useLiveQuery(() => db.categories.toArray());
@@ -209,6 +293,11 @@ export default function WalletImport() {
       setSelectedWalletType(detection.walletType);
       setSelectedFileFormat(detection.fileFormat);
       
+      // Auto-set wallet software from detection only if not already set (preserves manual overrides)
+      if (detection.walletType !== 'unknown' && !walletSoftwareInput) {
+        setWalletSoftwareInput(getWalletName(detection.walletType));
+      }
+      
       toast({
         title: 'File loaded',
         description: detection.walletType !== 'unknown'
@@ -222,7 +311,7 @@ export default function WalletImport() {
         variant: 'destructive',
       });
     }
-  }, [toast]);
+  }, [toast, walletSoftwareInput]);
   
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
@@ -315,6 +404,7 @@ export default function WalletImport() {
     
     try {
       const sourceName = generateSourceName(selectedWalletType);
+      const effectiveWalletSoftware = walletSoftwareInput || getWalletName(selectedWalletType);
       const result = await executeImport(
         duplicateInfos,
         {
@@ -323,7 +413,7 @@ export default function WalletImport() {
           walletName: walletNameInput || undefined,
           defaultTags: selectedTags,
           defaultCategories: selectedCategories,
-          walletSoftware: getWalletName(selectedWalletType),
+          walletSoftware: effectiveWalletSoftware,
           seedName: seedNameInput || undefined,
           markInputsAsVerified,
           privateKeyStatus: privateKeyStatus || undefined,
@@ -364,6 +454,7 @@ export default function WalletImport() {
     setOwnerInput('');
     setWalletNameInput('');
     setSeedNameInput('');
+    setWalletSoftwareInput('');
     setSelectedTags([]);
     setSelectedCategories([]);
     setParsedRecords([]);
@@ -543,10 +634,11 @@ export default function WalletImport() {
               <ul className="list-disc list-inside ml-2 mt-1">
                 <li><code className="bg-muted px-1 rounded">[date]</code> Today's date (YYYY-MM-DD)</li>
                 <li><code className="bg-muted px-1 rounded">[wallet]</code> Wallet name from below</li>
+                <li><code className="bg-muted px-1 rounded">[id]</code> First 8 characters of address/txid</li>
               </ul>
               {labelPrefix && (
                 <p className="mt-2">
-                  Preview: <span className="font-mono">{expandLabelTokens(labelPrefix, { index: 0, totalCount: 1, walletName: walletNameInput || 'MyWallet' })}</span>
+                  Preview: <span className="font-mono">{expandLabelTokens(labelPrefix, { index: 0, totalCount: 1, walletName: walletNameInput || 'MyWallet', recordId: 'bc1qexample123456789' })}</span>
                 </p>
               )}
             </div>
@@ -560,14 +652,73 @@ export default function WalletImport() {
             </h5>
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label htmlFor="owner">Owner</Label>
-                <Input
-                  id="owner"
-                  value={ownerInput}
-                  onChange={(e) => setOwnerInput(e.target.value)}
-                  placeholder="e.g., Personal, Spouse"
-                  data-testid="input-owner"
-                />
+                <Label>Owner</Label>
+                <Popover open={ownerOpen} onOpenChange={setOwnerOpen}>
+                  <PopoverTrigger asChild>
+                    <Button
+                      variant="outline"
+                      role="combobox"
+                      aria-expanded={ownerOpen}
+                      className="w-full justify-between font-normal"
+                      data-testid="select-owner"
+                    >
+                      {ownerInput || "Select or add..."}
+                      <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-full p-0" align="start">
+                    <Command>
+                      <CommandInput 
+                        placeholder="Search or add new..." 
+                        value={newOwnerName}
+                        onValueChange={setNewOwnerName}
+                      />
+                      <CommandList>
+                        <CommandEmpty>
+                          {newOwnerName && (
+                            <Button
+                              variant="ghost"
+                              className="w-full justify-start"
+                              onClick={addNewOwner}
+                            >
+                              <Plus className="mr-2 h-4 w-4" />
+                              Add "{newOwnerName}"
+                            </Button>
+                          )}
+                        </CommandEmpty>
+                        <CommandGroup>
+                          {allOwners.map((name) => (
+                            <CommandItem
+                              key={name}
+                              value={name}
+                              onSelect={() => {
+                                setOwnerInput(name);
+                                setOwnerOpen(false);
+                              }}
+                            >
+                              <Check
+                                className={cn(
+                                  "mr-2 h-4 w-4",
+                                  ownerInput === name ? "opacity-100" : "opacity-0"
+                                )}
+                              />
+                              {name}
+                            </CommandItem>
+                          ))}
+                          {newOwnerName && !allOwners.some(n => n.toLowerCase() === newOwnerName.toLowerCase()) && (
+                            <CommandItem
+                              value={`create-${newOwnerName}`}
+                              onSelect={addNewOwner}
+                            >
+                              <Plus className="mr-2 h-4 w-4" />
+                              Add "{newOwnerName}"
+                            </CommandItem>
+                          )}
+                        </CommandGroup>
+                      </CommandList>
+                    </Command>
+                  </PopoverContent>
+                </Popover>
               </div>
               <div className="space-y-2">
                 <Label htmlFor="mark-verified" className="flex items-center gap-2">
@@ -671,20 +822,148 @@ export default function WalletImport() {
 
               <div className="space-y-2">
                 <Label>Wallet Software</Label>
-                <div className="h-9 px-3 py-2 rounded-md border bg-muted/50 text-sm text-muted-foreground flex items-center">
-                  {getWalletName(selectedWalletType)} (auto-detected)
-                </div>
+                <Popover open={walletSoftwareOpen} onOpenChange={setWalletSoftwareOpen}>
+                  <PopoverTrigger asChild>
+                    <Button
+                      variant="outline"
+                      role="combobox"
+                      aria-expanded={walletSoftwareOpen}
+                      className="w-full justify-between font-normal"
+                      data-testid="select-wallet-software"
+                    >
+                      {walletSoftwareInput || detectedWalletSoftware || "Select or add..."}
+                      <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-full p-0" align="start">
+                    <Command>
+                      <CommandInput 
+                        placeholder="Search or add new..." 
+                        value={newWalletSoftwareName}
+                        onValueChange={setNewWalletSoftwareName}
+                      />
+                      <CommandList>
+                        <CommandEmpty>
+                          {newWalletSoftwareName && (
+                            <Button
+                              variant="ghost"
+                              className="w-full justify-start"
+                              onClick={addNewWalletSoftware}
+                            >
+                              <Plus className="mr-2 h-4 w-4" />
+                              Add "{newWalletSoftwareName}"
+                            </Button>
+                          )}
+                        </CommandEmpty>
+                        <CommandGroup>
+                          {allWalletSoftwareOptions.map((name) => (
+                            <CommandItem
+                              key={name}
+                              value={name}
+                              onSelect={() => {
+                                setWalletSoftwareInput(name);
+                                setWalletSoftwareOpen(false);
+                              }}
+                            >
+                              <Check
+                                className={cn(
+                                  "mr-2 h-4 w-4",
+                                  (walletSoftwareInput || detectedWalletSoftware) === name ? "opacity-100" : "opacity-0"
+                                )}
+                              />
+                              {name}
+                              {name === detectedWalletSoftware && !walletSoftwareInput && (
+                                <span className="ml-2 text-xs text-muted-foreground">(detected)</span>
+                              )}
+                            </CommandItem>
+                          ))}
+                          {newWalletSoftwareName && !allWalletSoftwareOptions.some(n => n.toLowerCase() === newWalletSoftwareName.toLowerCase()) && (
+                            <CommandItem
+                              value={`create-${newWalletSoftwareName}`}
+                              onSelect={addNewWalletSoftware}
+                            >
+                              <Plus className="mr-2 h-4 w-4" />
+                              Add "{newWalletSoftwareName}"
+                            </CommandItem>
+                          )}
+                        </CommandGroup>
+                      </CommandList>
+                    </Command>
+                  </PopoverContent>
+                </Popover>
+                {!walletSoftwareInput && detectedWalletSoftware && (
+                  <p className="text-xs text-muted-foreground">Auto-detected from file. Select to override.</p>
+                )}
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="walletName">Wallet Name</Label>
-                <Input
-                  id="walletName"
-                  value={walletNameInput}
-                  onChange={(e) => setWalletNameInput(e.target.value)}
-                  placeholder="e.g., College Fund, Trading"
-                  data-testid="input-wallet-name"
-                />
+                <Label>Wallet Name</Label>
+                <Popover open={walletNameOpen} onOpenChange={setWalletNameOpen}>
+                  <PopoverTrigger asChild>
+                    <Button
+                      variant="outline"
+                      role="combobox"
+                      aria-expanded={walletNameOpen}
+                      className="w-full justify-between font-normal"
+                      data-testid="select-wallet-name"
+                    >
+                      {walletNameInput || "Select or add..."}
+                      <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-full p-0" align="start">
+                    <Command>
+                      <CommandInput 
+                        placeholder="Search or add new..." 
+                        value={newWalletNameValue}
+                        onValueChange={setNewWalletNameValue}
+                      />
+                      <CommandList>
+                        <CommandEmpty>
+                          {newWalletNameValue && (
+                            <Button
+                              variant="ghost"
+                              className="w-full justify-start"
+                              onClick={addNewWalletName}
+                            >
+                              <Plus className="mr-2 h-4 w-4" />
+                              Add "{newWalletNameValue}"
+                            </Button>
+                          )}
+                        </CommandEmpty>
+                        <CommandGroup>
+                          {allWalletNames.map((name) => (
+                            <CommandItem
+                              key={name}
+                              value={name}
+                              onSelect={() => {
+                                setWalletNameInput(name);
+                                setWalletNameOpen(false);
+                              }}
+                            >
+                              <Check
+                                className={cn(
+                                  "mr-2 h-4 w-4",
+                                  walletNameInput === name ? "opacity-100" : "opacity-0"
+                                )}
+                              />
+                              {name}
+                            </CommandItem>
+                          ))}
+                          {newWalletNameValue && !allWalletNames.some(n => n.toLowerCase() === newWalletNameValue.toLowerCase()) && (
+                            <CommandItem
+                              value={`create-${newWalletNameValue}`}
+                              onSelect={addNewWalletName}
+                            >
+                              <Plus className="mr-2 h-4 w-4" />
+                              Add "{newWalletNameValue}"
+                            </CommandItem>
+                          )}
+                        </CommandGroup>
+                      </CommandList>
+                    </Command>
+                  </PopoverContent>
+                </Popover>
               </div>
 
               <div className="space-y-2">
@@ -929,7 +1208,7 @@ export default function WalletImport() {
     <div className="flex-1 p-6 overflow-auto">
       <div className="max-w-4xl mx-auto">
         <div className="mb-8">
-          <h1 className="text-2xl font-bold">Label Import</h1>
+          <h1 className="text-2xl font-bold">Wallet Data Sync</h1>
           <p className="text-muted-foreground">
             Import labels and transaction history from popular Bitcoin wallet software
           </p>

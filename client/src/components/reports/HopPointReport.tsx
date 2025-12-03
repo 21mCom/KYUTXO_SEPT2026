@@ -291,7 +291,7 @@ export function HopPointReport() {
             <SelectContent>
               <SelectItem value="verified">Verified Only</SelectItem>
               <SelectItem value="manual">Manual & Above</SelectItem>
-              <SelectItem value="wallet-import">Label Import & Above</SelectItem>
+              <SelectItem value="wallet-import">Wallet Data Sync & Above</SelectItem>
               <SelectItem value="xpub-derived">XPUB Derived & Above</SelectItem>
               <SelectItem value="blockchain-discovered">Blockchain Discovered & Above</SelectItem>
             </SelectContent>

@@ -5,6 +5,7 @@
  * - [#] → Sequential number (1, 2, 3...) - auto-pads to match largest number
  * - [date] → Current date in YYYY-MM-DD format
  * - [wallet] → Wallet name value from the form
+ * - [id] → Record ID (first 8 chars of address/txid)
  * 
  * Example: "Savings-[#]" with 100 items → "Savings-001", "Savings-002", etc.
  */
@@ -14,6 +15,7 @@ export interface TokenContext {
   totalCount: number;
   walletName?: string;
   date?: Date;
+  recordId?: string;
 }
 
 /**
@@ -65,6 +67,9 @@ export function expandLabelTokens(template: string, context: TokenContext): stri
   // Replace [wallet] with wallet name (or empty string if not provided)
   result = result.replace(/\[wallet\]/gi, context.walletName || '');
   
+  // Replace [id] with first 8 characters of record ID (address/txid)
+  result = result.replace(/\[id\]/gi, context.recordId ? context.recordId.slice(0, 8) : '');
+  
   return result;
 }
 
@@ -73,7 +78,7 @@ export function expandLabelTokens(template: string, context: TokenContext): stri
  */
 export function hasTokens(template: string): boolean {
   if (!template) return false;
-  return /\[#\]|\[date\]|\[wallet\]/i.test(template);
+  return /\[#\]|\[date\]|\[wallet\]|\[id\]/i.test(template);
 }
 
 /**
@@ -123,4 +128,5 @@ export const AVAILABLE_TOKENS = [
   { token: '[#]', description: 'Sequential number (auto-pads: 01, 02... or 001, 002...)' },
   { token: '[date]', description: 'Today\'s date (YYYY-MM-DD)' },
   { token: '[wallet]', description: 'Wallet name from the form below' },
+  { token: '[id]', description: 'First 8 characters of address/transaction ID' },
 ];

@@ -152,7 +152,7 @@ export default function DataStats() {
   const importanceLabels: { [key: string]: string } = {
     'verified': 'Verified',
     'manual': 'Manual Entry',
-    'wallet-import': 'Label Import',
+    'wallet-import': 'Wallet Data Sync',
     'xpub-derived': 'xPub Derived',
     'blockchain-discovered': 'Blockchain Discovered',
     'pending-review': 'Pending Review',

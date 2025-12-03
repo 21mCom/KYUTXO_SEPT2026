@@ -26,7 +26,7 @@ const menuItems = [
     icon: Key,
   },
   {
-    title: "Label Import",
+    title: "Wallet Data Sync",
     url: "/wallet-import",
     icon: Wallet,
   },
