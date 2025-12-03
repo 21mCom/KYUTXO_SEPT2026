@@ -27,6 +27,7 @@ import ExportPage from "@/pages/ExportPage";
 import SettingsPage from "@/pages/SettingsPage";
 import NodeSettings from "@/pages/NodeSettings";
 import Reports from "@/pages/Reports";
+import LightningSpeculator from "@/pages/LightningSpeculator";
 import NotFound from "@/pages/not-found";
 
 function Router() {
@@ -39,6 +40,7 @@ function Router() {
       <Route path="/price-import" component={PriceImport} />
       <Route path="/transaction-sync" component={TransactionSync} />
       <Route path="/transactions" component={Transactions} />
+      <Route path="/lightning-speculator" component={LightningSpeculator} />
       <Route path="/provenance" component={Provenance} />
       <Route path="/address-reuse" component={AddressReuse} />
       <Route path="/data-stats" component={DataStats} />
