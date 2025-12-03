@@ -69,7 +69,7 @@ const IMPORTANCE_OPTIONS: { value: AddressImportance | 'all'; label: string }[] 
   { value: 'all', label: 'All Tiers' },
   { value: 'verified', label: 'Verified' },
   { value: 'manual', label: 'Manual' },
-  { value: 'wallet-import', label: 'Wallet Import' },
+  { value: 'wallet-import', label: 'Label Import' },
   { value: 'xpub-derived', label: 'xPub Derived' },
   { value: 'blockchain-discovered', label: 'Blockchain Discovered' },
   { value: 'pending-review', label: 'Pending Review' },

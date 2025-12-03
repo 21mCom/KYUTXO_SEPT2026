@@ -26,7 +26,7 @@ const menuItems = [
     icon: Key,
   },
   {
-    title: "Wallet Import",
+    title: "Label Import",
     url: "/wallet-import",
     icon: Wallet,
   },

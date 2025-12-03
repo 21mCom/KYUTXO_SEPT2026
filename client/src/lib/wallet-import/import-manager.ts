@@ -11,11 +11,51 @@ import type {
 } from './types';
 import { trezorAdapter } from './adapters/trezor';
 import { sparrowAdapter } from './adapters/sparrow';
+import { bip329Adapter } from './adapters/bip329';
 import { myceliumAdapter } from './adapters/mycelium';
 import { checkForDuplicates, mergeRecordData, createNewRecordData } from './merge-utils';
 import { createRecord, updateRecord, isEncryptionReady } from '../encryptionFacade';
 
+const PRIVATE_KEY_PATTERNS = [
+  /xprv[a-zA-Z0-9]{100,}/i,
+  /[5KL][1-9A-HJ-NP-Za-km-z]{50,52}/,
+  /"wif"\s*:/i,
+  /"privateKey"\s*:/i,
+  /"private_key"\s*:/i,
+  /"seed"\s*:\s*"[a-f0-9]{64,}"/i,
+  /"mnemonic"\s*:/i,
+  /-----BEGIN.*PRIVATE KEY-----/i,
+];
+
+export function scanForPrivateKeys(content: string): { hasPrivateKeys: boolean; warnings: string[] } {
+  const warnings: string[] = [];
+  
+  for (const pattern of PRIVATE_KEY_PATTERNS) {
+    if (pattern.test(content)) {
+      if (pattern.source.includes('xprv')) {
+        warnings.push('File appears to contain extended private keys (xprv)');
+      } else if (pattern.source.includes('wif') || pattern.source.includes('5KL')) {
+        warnings.push('File appears to contain WIF private keys');
+      } else if (pattern.source.includes('mnemonic')) {
+        warnings.push('File appears to contain mnemonic seed phrases');
+      } else if (pattern.source.includes('seed')) {
+        warnings.push('File appears to contain raw seed data');
+      } else if (pattern.source.includes('privateKey') || pattern.source.includes('private_key')) {
+        warnings.push('File appears to contain private key data');
+      } else {
+        warnings.push('File appears to contain private key material');
+      }
+    }
+  }
+  
+  return { 
+    hasPrivateKeys: warnings.length > 0, 
+    warnings: Array.from(new Set(warnings))
+  };
+}
+
 const adapters: WalletAdapter[] = [
+  bip329Adapter,
   trezorAdapter,
   sparrowAdapter,
   myceliumAdapter,
@@ -25,6 +65,7 @@ export function getWalletName(walletType: WalletType): string {
   switch (walletType) {
     case 'trezor': return 'Trezor Suite';
     case 'sparrow': return 'Sparrow Wallet';
+    case 'sparrow-bip329': return 'BIP-329 Labels (Sparrow)';
     case 'mycelium': return 'Mycelium';
     default: return 'Unknown Wallet';
   }

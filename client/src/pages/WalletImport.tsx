@@ -37,7 +37,7 @@ import { db } from '@/lib/database';
 import { isEncryptionReady } from '@/lib/encryptionFacade';
 import { decryptTag, decryptCategory } from '@/lib/dbEncryption';
 import { getEncryptionKey } from '@/lib/encryptionFacade';
-import { useSeedNames, createSeedName } from '@/hooks/use-seed-names';
+import { useSeedNames, createSeedName, SEED_NAME_MAX_LENGTH } from '@/hooks/use-seed-names';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command';
 import { Check, ChevronsUpDown, Wallet } from 'lucide-react';
@@ -49,6 +49,7 @@ import {
   executeImport,
   getSupportedWallets,
   getWalletName,
+  scanForPrivateKeys,
   type WalletType,
   type FileFormat,
   type ParsedRecord,
@@ -116,6 +117,14 @@ export default function WalletImport() {
   
   const addNewSeedName = async () => {
     if (!newSeedName.trim()) return;
+    if (newSeedName.trim().length > SEED_NAME_MAX_LENGTH) {
+      toast({
+        title: 'Seed name too long',
+        description: `Seed names are limited to ${SEED_NAME_MAX_LENGTH} characters to prevent accidental seed phrase entry`,
+        variant: 'destructive',
+      });
+      return;
+    }
     try {
       await createSeedName(newSeedName.trim());
       setSeedNameInput(newSeedName.trim());
@@ -180,6 +189,19 @@ export default function WalletImport() {
     
     try {
       const content = await file.text();
+      
+      const privateKeyScan = scanForPrivateKeys(content);
+      if (privateKeyScan.hasPrivateKeys) {
+        toast({
+          title: 'Security Warning - File Rejected',
+          description: `This file appears to contain private key material and cannot be imported. ${privateKeyScan.warnings.join('. ')}. Please use a transaction history or label export instead.`,
+          variant: 'destructive',
+        });
+        setFileName('');
+        setFileContent('');
+        return;
+      }
+      
       setFileContent(content);
       
       const detection = detectWalletType(content, file.name);
@@ -187,12 +209,11 @@ export default function WalletImport() {
       setSelectedWalletType(detection.walletType);
       setSelectedFileFormat(detection.fileFormat);
       
-      
       toast({
         title: 'File loaded',
         description: detection.walletType !== 'unknown'
           ? `Detected ${getWalletName(detection.walletType)} ${detection.fileFormat.toUpperCase()} export`
-          : 'Please select the wallet type manually',
+          : 'Please select the source type manually',
       });
     } catch (e) {
       toast({
@@ -207,8 +228,8 @@ export default function WalletImport() {
     onDrop,
     accept: {
       'text/csv': ['.csv'],
-      'application/json': ['.json'],
-      'text/plain': ['.txt'],
+      'application/json': ['.json', '.jsonl'],
+      'text/plain': ['.txt', '.jsonl'],
     },
     multiple: false,
   });
@@ -220,15 +241,15 @@ export default function WalletImport() {
       if (!fileContent) {
         toast({
           title: 'No file selected',
-          description: 'Please upload a wallet export file',
+          description: 'Please upload a label or transaction export file',
           variant: 'destructive',
         });
         return;
       }
       if (selectedWalletType === 'unknown') {
         toast({
-          title: 'Wallet type required',
-          description: 'Please select the wallet type',
+          title: 'Source type required',
+          description: 'Please select the source type',
           variant: 'destructive',
         });
         return;
@@ -392,6 +413,25 @@ export default function WalletImport() {
   
   const renderUploadStep = () => (
     <div className="space-y-6">
+      <Card className="border-amber-500/50 bg-amber-500/5">
+        <CardContent className="pt-4">
+          <div className="flex gap-3">
+            <ShieldCheck className="w-5 h-5 text-amber-500 flex-shrink-0 mt-0.5" />
+            <div className="text-sm space-y-2">
+              <p className="font-medium text-amber-700 dark:text-amber-400">Safe Export Instructions</p>
+              <ul className="text-muted-foreground space-y-1 list-disc list-inside">
+                <li><strong>Sparrow:</strong> Use File &rarr; Export Wallet &rarr; Wallet Labels (BIP-329 .jsonl)</li>
+                <li><strong>Trezor Suite:</strong> Use the transaction history CSV export</li>
+                <li><strong>Mycelium:</strong> Use the transaction history export</li>
+              </ul>
+              <p className="text-xs text-muted-foreground/80">
+                Never import wallet backup files. Files containing private keys will be rejected.
+              </p>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
       <div
         {...getRootProps()}
         className={`border-2 border-dashed rounded-lg p-12 text-center cursor-pointer transition-colors ${
@@ -402,10 +442,10 @@ export default function WalletImport() {
         <input {...getInputProps()} data-testid="input-file-upload" />
         <Upload className="w-12 h-12 mx-auto mb-4 text-muted-foreground" />
         <p className="text-lg font-medium mb-2">
-          {isDragActive ? 'Drop the file here' : 'Drag & drop wallet export file'}
+          {isDragActive ? 'Drop the file here' : 'Drag & drop label or transaction export file'}
         </p>
         <p className="text-sm text-muted-foreground">
-          Supports CSV and JSON exports from Trezor Suite, Sparrow Wallet, and Mycelium
+          Supports BIP-329 labels (.jsonl), CSV and JSON exports from Trezor Suite, Sparrow Wallet, and Mycelium
         </p>
       </div>
       
@@ -455,6 +495,7 @@ export default function WalletImport() {
                   <SelectContent>
                     <SelectItem value="csv">CSV</SelectItem>
                     <SelectItem value="json">JSON</SelectItem>
+                    <SelectItem value="jsonl">JSONL (BIP-329)</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -577,7 +618,8 @@ export default function WalletImport() {
                       <CommandInput 
                         placeholder="Search or add new..." 
                         value={newSeedName}
-                        onValueChange={setNewSeedName}
+                        onValueChange={(val) => setNewSeedName(val.slice(0, SEED_NAME_MAX_LENGTH))}
+                        maxLength={SEED_NAME_MAX_LENGTH}
                       />
                       <CommandList>
                         <CommandEmpty>
@@ -887,9 +929,9 @@ export default function WalletImport() {
     <div className="flex-1 p-6 overflow-auto">
       <div className="max-w-4xl mx-auto">
         <div className="mb-8">
-          <h1 className="text-2xl font-bold">Wallet Import</h1>
+          <h1 className="text-2xl font-bold">Label Import</h1>
           <p className="text-muted-foreground">
-            Import transaction history from popular Bitcoin wallet software
+            Import labels and transaction history from popular Bitcoin wallet software
           </p>
         </div>
         

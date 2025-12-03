@@ -43,6 +43,8 @@ import { cn } from "@/lib/utils";
 import { formatFileSize } from "@/lib/attachments";
 import { MultiSelectCombobox } from "@/components/ui/multi-select-combobox";
 import { createProvider, parseTransaction, type ParsedTransaction, MINIMUM_CONFIRMATIONS } from "@/lib/blockchain-api";
+import { useToast } from "@/hooks/use-toast";
+import { SEED_NAME_MAX_LENGTH } from "@/hooks/use-seed-names";
 
 interface ExistingRecord {
   id?: number;
@@ -128,6 +130,7 @@ export function RecordFormDialog({
     markAsVerified: false,
   });
 
+  const { toast } = useToast();
   const [formData, setFormData] = useState(initialData || getDefaultFormData());
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
@@ -359,11 +362,18 @@ export function RecordFormDialog({
   };
 
   const addNewSeedName = () => {
-    if (newSeedName.trim()) {
-      setFormData({ ...formData, seedName: newSeedName.trim() });
-      setNewSeedName("");
-      setSeedOpen(false);
+    if (!newSeedName.trim()) return;
+    if (newSeedName.trim().length > SEED_NAME_MAX_LENGTH) {
+      toast({
+        variant: "destructive",
+        title: "Seed name too long",
+        description: `Seed names are limited to ${SEED_NAME_MAX_LENGTH} characters to prevent accidental seed phrase entry`,
+      });
+      return;
     }
+    setFormData({ ...formData, seedName: newSeedName.trim() });
+    setNewSeedName("");
+    setSeedOpen(false);
   };
 
   const addNewWalletSoftware = () => {
@@ -793,7 +803,7 @@ export function RecordFormDialog({
                       <CommandInput 
                         placeholder="Search or add new..." 
                         value={newSeedName}
-                        onValueChange={setNewSeedName}
+                        onValueChange={(val) => setNewSeedName(val.slice(0, SEED_NAME_MAX_LENGTH))}
                       />
                       <CommandList>
                         <CommandEmpty>

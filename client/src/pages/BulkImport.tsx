@@ -60,6 +60,7 @@ import {
   type XpubInfo 
 } from "@/lib/xpub";
 import { expandLabelTokens, hasTokens, previewLabelTemplate, AVAILABLE_TOKENS } from "@/lib/label-tokens";
+import { SEED_NAME_MAX_LENGTH } from "@/hooks/use-seed-names";
 
 export default function BulkImport() {
   const [, navigate] = useLocation();
@@ -128,11 +129,18 @@ export default function BulkImport() {
     .filter(name => name && name !== "[encrypted]");
 
   const addNewSeedName = () => {
-    if (newSeedName.trim()) {
-      setSeedName(newSeedName.trim());
-      setSeedOpen(false);
-      setNewSeedName("");
+    if (!newSeedName.trim()) return;
+    if (newSeedName.trim().length > SEED_NAME_MAX_LENGTH) {
+      toast({
+        variant: "destructive",
+        title: "Seed name too long",
+        description: `Seed names are limited to ${SEED_NAME_MAX_LENGTH} characters to prevent accidental seed phrase entry`,
+      });
+      return;
     }
+    setSeedName(newSeedName.trim());
+    setSeedOpen(false);
+    setNewSeedName("");
   };
 
   const addNewWalletSoftware = () => {
@@ -974,7 +982,7 @@ export default function BulkImport() {
                             <CommandInput 
                               placeholder="Search or add new..." 
                               value={newSeedName}
-                              onValueChange={setNewSeedName}
+                              onValueChange={(val) => setNewSeedName(val.slice(0, SEED_NAME_MAX_LENGTH))}
                             />
                             <CommandList>
                               <CommandEmpty>

@@ -23,7 +23,8 @@ Data is stored locally using **Dexie.js (IndexedDB)** for structured data (recor
 Key features include:
 - **Data Model**: Records track ownership via `owner` and `walletName` fields.
 - **Duplicate Detection & Merge System**: Ensures data integrity by merging new metadata with existing records, prioritizing manual data.
-- **Wallet Import System**: Modular system for importing transaction history from various wallet software (e.g., Trezor, Sparrow) with intelligent duplicate detection and address verification.
+- **Label Import System**: Modular system for importing labels and transaction history from various wallet software (e.g., Trezor, Sparrow's BIP-329 exports) with intelligent duplicate detection and address verification. Renamed from "Wallet Import" to clarify that it imports labels/metadata only, not private keys. Includes a private key scanner that actively rejects files containing xprv, wif, keystore, or other sensitive data.
+- **Seed Name Protection**: Seed name fields are limited to 15 characters (centralized in `use-seed-names.ts` hook with `SEED_NAME_MAX_LENGTH`) to prevent accidental pasting of actual seed phrases (which are 12-24 words, far exceeding this limit).
 - **Address Verification System**: Explicitly confirms address ownership, with a tiered `addressImportance` system to prevent downgrading verified addresses.
 - **Historical Price Import System**: Allows importing and storing Bitcoin OHLCV price data from CSV files for future reporting.
 - **Transaction Sync System (Phase 2)**: Fetches blockchain data for tracked addresses from configurable sources (public APIs, custom Electrs, Tor) with privacy indicators. It only imports transactions with 5+ confirmations, intelligently matches addresses, and auto-creates "Pending Review" records for discovered addresses. It includes a depth-limited sync for exploring address relationships.

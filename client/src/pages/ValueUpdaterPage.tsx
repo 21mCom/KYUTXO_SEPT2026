@@ -8,7 +8,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useEncryptedRecords, useEncryptedTags, useEncryptedCategories } from "@/hooks/use-encrypted-records";
 import { useOwners } from "@/hooks/use-owners";
 import { useWalletNames } from "@/hooks/use-wallet-names";
-import { useSeedNames } from "@/hooks/use-seed-names";
+import { useSeedNames, SEED_NAME_MAX_LENGTH } from "@/hooks/use-seed-names";
 import { useWalletSoftware } from "@/hooks/use-wallet-software";
 import { 
   updateRecord, 
@@ -420,6 +420,14 @@ export default function ValueUpdaterPage() {
           await createWalletNameEntry(trimmedValue);
           break;
         case 'seedName':
+          if (trimmedValue.length > SEED_NAME_MAX_LENGTH) {
+            toast({
+              variant: "destructive",
+              title: "Seed name too long",
+              description: `Seed names are limited to ${SEED_NAME_MAX_LENGTH} characters to prevent accidental seed phrase entry`,
+            });
+            return;
+          }
           await createSeedNameEntry(trimmedValue);
           break;
         case 'walletSoftware':
@@ -551,6 +559,15 @@ export default function ValueUpdaterPage() {
           break;
         }
         case 'seedName': {
+          if (trimmedNewValue.length > SEED_NAME_MAX_LENGTH) {
+            toast({
+              variant: "destructive",
+              title: "Seed name too long",
+              description: `Seed names are limited to ${SEED_NAME_MAX_LENGTH} characters to prevent accidental seed phrase entry`,
+            });
+            setIsUpdating(false);
+            return;
+          }
           const seedName = seedNames.find(sn => sn.name === oldName);
           if (seedName?.id) {
             await updateSeedNameEntry(seedName.id, { name: trimmedNewValue });

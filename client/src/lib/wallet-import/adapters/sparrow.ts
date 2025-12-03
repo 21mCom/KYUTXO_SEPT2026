@@ -87,8 +87,7 @@ export const sparrowAdapter: WalletAdapter = {
       }
     }
     
-    const sparrowIndicators = ['sparrow', 'keystore', 'bip84', 'bip49'];
-    if (sparrowIndicators.some(i => lowerContent.includes(i))) {
+    if (lowerContent.includes('sparrow')) {
       if (content.trim().startsWith('{') || content.trim().startsWith('[')) {
         return { walletType: 'sparrow', fileFormat: 'json', confidence: 0.7 };
       }
@@ -105,7 +104,7 @@ export const sparrowAdapter: WalletAdapter = {
     
     try {
       const json = JSON.parse(content);
-      if (json.wallet || json.keystore || json.transactions) {
+      if (json.transactions || json.history) {
         return { walletType: 'sparrow', fileFormat: 'json', confidence: 0.5 };
       }
     } catch {
