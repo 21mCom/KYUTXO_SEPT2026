@@ -4,7 +4,7 @@
 import { db, type Record, type BlockchainTransaction, type TransactionParticipant, type AddressSyncState, type NodeSettings } from './database';
 import { createProvider, createProviderFromSettings, parseTransaction, MINIMUM_CONFIRMATIONS, type ProviderType, type ParsedTransaction, type BlockchainProvider } from './blockchain-api';
 import { validateAddress } from './bitcoin';
-import { decryptRecords, isEncryptionReady } from './encryptionFacade';
+import { decryptRecords, isEncryptionReady, createRecordOrigin } from './encryptionFacade';
 
 export type SourceFilter = 'manual-only' | 'include-tx-import' | 'include-blockchain-sync' | 'all';
 
@@ -615,6 +615,24 @@ export class TransactionSyncService {
       createdAt: now,
       updatedAt: now,
     });
+
+    // Create a record origin entry to track blockchain sync source
+    if (isEncryptionReady()) {
+      try {
+        await createRecordOrigin({
+          recordId: newRecordId,
+          originType: 'blockchain-sync',
+          source: 'blockchain-sync',
+          owner: 'Pending Review',
+          walletName: parentWalletName,
+          seedName: parentSeedName,
+          walletSoftware: parentWalletSoftware,
+        });
+      } catch (originError) {
+        console.error('[TransactionSync] Failed to create record origin:', originError);
+        // Don't fail the record creation if origin creation fails
+      }
+    }
 
     return { recordId: newRecordId, isNew: true };
   }

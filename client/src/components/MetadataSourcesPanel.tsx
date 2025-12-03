@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { format } from 'date-fns';
-import { ChevronDown, ChevronRight, History, Key, Upload, Edit3, Tag, FolderOpen, KeyRound } from 'lucide-react';
+import { ChevronDown, ChevronRight, History, Key, Upload, Edit3, Tag, FolderOpen, KeyRound, RefreshCw, Link2 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
@@ -19,13 +19,23 @@ const originTypeConfig: Record<RecordOriginType, { label: string; icon: typeof K
     variant: 'default',
   },
   'xpub-derived': {
-    label: 'xPub Derived',
+    label: 'xPub Import',
     icon: Key,
     variant: 'secondary',
   },
   'bulk-import': {
     label: 'Bulk Import',
     icon: Upload,
+    variant: 'outline',
+  },
+  'wallet-sync': {
+    label: 'Wallet Sync',
+    icon: RefreshCw,
+    variant: 'secondary',
+  },
+  'blockchain-sync': {
+    label: 'Blockchain Sync',
+    icon: Link2,
     variant: 'outline',
   },
 };

@@ -135,7 +135,7 @@ export interface WalletSoftware {
 }
 
 // Origin type for tracking how a record was added
-export type RecordOriginType = 'manual' | 'xpub-derived' | 'bulk-import';
+export type RecordOriginType = 'manual' | 'xpub-derived' | 'bulk-import' | 'wallet-sync' | 'blockchain-sync';
 
 // Record origin tracks where metadata came from (manual entry vs xpub import etc)
 export interface RecordOrigin {

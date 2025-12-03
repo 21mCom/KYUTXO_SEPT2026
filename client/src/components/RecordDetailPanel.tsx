@@ -72,6 +72,8 @@ interface RecordDetailPanelProps {
 
 function getImportanceBadgeVariant(importance?: AddressImportance): "default" | "secondary" | "outline" | "destructive" {
   switch (importance) {
+    case 'verified':
+      return 'default';
     case 'manual':
       return 'default';
     case 'wallet-import':
@@ -89,8 +91,10 @@ function getImportanceBadgeVariant(importance?: AddressImportance): "default" | 
 
 function getImportanceLabel(importance?: AddressImportance): string {
   switch (importance) {
-    case 'manual':
+    case 'verified':
       return 'Verified';
+    case 'manual':
+      return 'Manual Entry';
     case 'wallet-import':
       return 'Wallet Import';
     case 'xpub-derived':

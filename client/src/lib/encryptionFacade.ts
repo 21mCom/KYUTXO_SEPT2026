@@ -765,7 +765,7 @@ export async function getDecryptedRecordOrigins(recordId: number): Promise<Recor
 }
 
 // Merge metadata from multiple origins into a single record view
-// Priority: manual > xpub-derived > bulk-import
+// Priority: manual > wallet-sync > xpub-derived > bulk-import > blockchain-sync
 // Tags and categories are unioned (combined)
 export function mergeRecordWithOrigins(
   record: Record, 
@@ -773,11 +773,13 @@ export function mergeRecordWithOrigins(
 ): Record {
   if (origins.length === 0) return record;
   
-  // Sort by priority: manual first, then xpub-derived, then bulk-import
+  // Sort by priority: manual first, then wallet-sync, xpub-derived, bulk-import, blockchain-sync last
   const priorityOrder: { [key in RecordOriginType]: number } = {
     'manual': 0,
-    'xpub-derived': 1,
-    'bulk-import': 2,
+    'wallet-sync': 1,
+    'xpub-derived': 2,
+    'bulk-import': 3,
+    'blockchain-sync': 4,
   };
   
   const sortedOrigins = [...origins].sort(

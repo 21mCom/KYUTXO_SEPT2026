@@ -14,7 +14,7 @@ import { sparrowAdapter } from './adapters/sparrow';
 import { bip329Adapter } from './adapters/bip329';
 import { myceliumAdapter } from './adapters/mycelium';
 import { checkForDuplicates, mergeRecordData, createNewRecordData } from './merge-utils';
-import { createRecord, updateRecord, isEncryptionReady } from '../encryptionFacade';
+import { createRecord, updateRecord, isEncryptionReady, createRecordOrigin } from '../encryptionFacade';
 
 const PRIVATE_KEY_PATTERNS = [
   /xprv[a-zA-Z0-9]{100,}/i,
@@ -175,7 +175,29 @@ export async function executeImport(
           vault: options.vault,
         });
         
-        await createRecord(newRecordData);
+        const recordId = await createRecord(newRecordData);
+        
+        // Create record origin entry to track wallet sync source
+        try {
+          await createRecordOrigin({
+            recordId,
+            originType: 'wallet-sync',
+            source: options.sourceName,
+            label: newRecordData.label,
+            notes: newRecordData.notes,
+            tags: options.defaultTags,
+            categories: options.defaultCategories,
+            owner: options.owner,
+            walletName: options.walletName,
+            seedName: options.seedName,
+            walletSoftware: options.walletSoftware,
+            privateKeyStatus: options.privateKeyStatus,
+          });
+        } catch (originError) {
+          console.error('[WalletImport] Failed to create record origin:', originError);
+          // Don't fail the import if origin creation fails
+        }
+        
         result.newRecords++;
       } else if (existingRecord?.id) {
         const mergedData = mergeRecordData(existingRecord, parsedRecord, {
@@ -192,6 +214,27 @@ export async function executeImport(
         });
         
         await updateRecord(existingRecord.id, mergedData);
+        
+        // Create record origin entry to track wallet sync source for merged records
+        try {
+          await createRecordOrigin({
+            recordId: existingRecord.id,
+            originType: 'wallet-sync',
+            source: options.sourceName,
+            label: parsedRecord.label,
+            notes: parsedRecord.notes,
+            tags: options.defaultTags,
+            categories: options.defaultCategories,
+            owner: options.owner,
+            walletName: options.walletName,
+            seedName: options.seedName,
+            walletSoftware: options.walletSoftware,
+            privateKeyStatus: options.privateKeyStatus,
+          });
+        } catch (originError) {
+          console.error('[WalletImport] Failed to create record origin for merge:', originError);
+        }
+        
         result.updatedRecords++;
       } else {
         result.skippedRecords++;

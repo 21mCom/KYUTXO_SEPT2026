@@ -1,6 +1,6 @@
 import { useLiveQuery } from 'dexie-react-hooks';
 import { useState, useEffect } from 'react';
-import { db, type Record } from '@/lib/database';
+import { db, type Record, type RecordOriginType } from '@/lib/database';
 import { uploadAttachment, deleteAttachment } from '@/lib/attachments';
 import { useAuth } from '@/contexts/AuthContext';
 import { 
@@ -121,11 +121,18 @@ export async function createRecord(data: Omit<Record, 'id' | 'createdAt' | 'upda
     recordId = await facadeCreateRecord(recordWithDefaults) as number;
     
     // Create a RecordOrigin entry to track the source of metadata
-    // Determine origin type based on source field
-    const originType = data.source?.startsWith('tx-import:') ? 'manual' 
-      : data.source?.startsWith('xpub:') ? 'xpub-derived'
-      : data.source?.includes('bulk') || data.source?.includes('import') ? 'bulk-import'
-      : 'manual';
+    // Determine origin type based on source field and addressImportance
+    let originType: RecordOriginType = 'manual';
+    
+    if (data.source === 'blockchain-sync' || data.addressImportance === 'blockchain-discovered') {
+      originType = 'blockchain-sync';
+    } else if (data.source?.startsWith('walletImport-') || data.addressImportance === 'wallet-import') {
+      originType = 'wallet-sync';
+    } else if (data.addressImportance === 'xpub-derived' || data.xpub || data.derivationPath) {
+      originType = 'xpub-derived';
+    } else if (data.source?.includes('bulk') || data.source?.includes('import')) {
+      originType = 'bulk-import';
+    }
     
     try {
       await createRecordOrigin({
