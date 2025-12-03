@@ -37,6 +37,14 @@ export interface ParsedRecord {
   originalData?: { [key: string]: unknown };
 }
 
+export interface VaultMetadata {
+  isVaultXpub: boolean;
+  vaultName: string | null;
+  m: number | null;
+  n: number | null;
+  vaultNotes: string | null;
+}
+
 export interface ImportOptions {
   sourceName: string;
   owner?: string;
@@ -48,6 +56,7 @@ export interface ImportOptions {
   markInputsAsVerified?: boolean;
   privateKeyStatus?: string;
   labelPrefix?: string;
+  vault?: VaultMetadata;
 }
 
 export interface ImportResult {

@@ -272,6 +272,39 @@ export interface NodeSettings {
   lastConnectionStatus?: string;
 }
 
+// Derivation template for optional encrypted xpub storage
+// WARNING: Storing xpubs doesn't risk funds but reveals wallet structure and all addresses
+export interface DerivationTemplate {
+  id?: number;
+  // Master fingerprint (8 hex chars) to identify the seed without exposing it
+  fingerprint: string;
+  // Script type: P2WPKH (native segwit), P2PKH (legacy), P2SH-P2WPKH (wrapped segwit), P2TR (taproot)
+  scriptType: 'P2WPKH' | 'P2PKH' | 'P2SH-P2WPKH' | 'P2TR';
+  // Derivation path template, e.g., "m/84'/0'/0'" for native segwit
+  derivationPath: string;
+  // The extended public key (encrypted in encryptedPayload when encryption is enabled)
+  xpub?: string;
+  // Gap limit for address discovery (default 20)
+  gapLimit: number;
+  // Network: mainnet or testnet
+  network: 'mainnet' | 'testnet';
+  // Associated owner (from vocabulary)
+  owner?: string;
+  // Associated wallet name (from vocabulary)
+  walletName?: string;
+  // Associated seed name (from vocabulary)
+  seedName?: string;
+  // Optional notes about this template
+  notes?: string;
+  // Timestamps
+  createdAt: number;
+  updatedAt: number;
+  // Encrypted payload - contains xpub when encryption is enabled
+  encryptedPayload?: string;
+  // Flag to indicate if this record is encrypted
+  isEncrypted?: boolean;
+}
+
 export class KYUTXODatabase extends Dexie {
   records!: Table<Record>;
   attachments!: Table<Attachment>;
@@ -289,9 +322,31 @@ export class KYUTXODatabase extends Dexie {
   transactionParticipants!: Table<TransactionParticipant>;
   addressSyncState!: Table<AddressSyncState>;
   nodeSettings!: Table<NodeSettings>;
+  derivationTemplates!: Table<DerivationTemplate>;
 
   constructor() {
     super('KYUTXODatabase');
+    
+    // Version 13 adds derivationTemplates table for optional encrypted xpub storage
+    this.version(13).stores({
+      records: '++id, type, inputString, label, owner, *tags, *categories, createdAt, updatedAt, isEncrypted, chainType, syncDepth, addressImportance',
+      attachments: '++id, recordId, createdAt, isEncrypted',
+      tags: '++id, name, createdAt, isEncrypted',
+      categories: '++id, name, createdAt, isEncrypted',
+      owners: '++id, name, createdAt, isEncrypted',
+      walletNames: '++id, name, createdAt, isEncrypted',
+      seedNames: '++id, name, createdAt, isEncrypted',
+      walletSoftware: '++id, name, createdAt, isEncrypted',
+      recordOrigins: '++id, recordId, originType, createdAt, isEncrypted',
+      customFields: '++id, slug, enabled, createdAt',
+      settings: 'id',
+      priceData: '++id, [date+currency+asset], date, asset, currency, source, importedAt',
+      blockchainTransactions: '++id, &txid, blockHeight, blockTime, syncedAt',
+      transactionParticipants: '++id, txid, role, address, recordId',
+      addressSyncState: '++id, &address, recordId, lastSyncedAt',
+      nodeSettings: 'id',
+      derivationTemplates: '++id, fingerprint, scriptType, owner, walletName, seedName, createdAt, isEncrypted'
+    });
     
     // Version 12 adds nodeSettings table for blockchain API connection configuration
     this.version(12).stores({

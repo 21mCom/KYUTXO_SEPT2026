@@ -172,6 +172,7 @@ export async function executeImport(
           walletName: options.walletName,
           privateKeyStatus: options.privateKeyStatus,
           labelPrefix: options.labelPrefix,
+          vault: options.vault,
         });
         
         await createRecord(newRecordData);
@@ -187,6 +188,7 @@ export async function executeImport(
           owner: options.owner,
           walletName: options.walletName,
           privateKeyStatus: options.privateKeyStatus,
+          vault: options.vault,
         });
         
         await updateRecord(existingRecord.id, mergedData);

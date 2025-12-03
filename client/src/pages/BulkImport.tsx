@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { useLocation } from "wouter";
-import { Key, ChevronRight, ChevronLeft, Check, Loader2, Plus, X, ChevronDown, ChevronUp, AlertCircle, Info, ChevronsUpDown, ShieldCheck, Wallet } from "lucide-react";
+import { Key, ChevronRight, ChevronLeft, Check, Loader2, Plus, X, ChevronDown, ChevronUp, AlertCircle, AlertTriangle, Info, ChevronsUpDown, ShieldCheck, Wallet } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -46,8 +46,12 @@ import { MultiSelectCombobox } from "@/components/ui/multi-select-combobox";
 import { useEncryptedTags, useEncryptedCategories, createEncryptedTag, createEncryptedCategory } from "@/hooks/use-encrypted-records";
 import { useAuth } from "@/contexts/AuthContext";
 import { useRecords, createRecord } from "@/hooks/use-records";
-import { syncTagsToMaster, syncCategoriesToMaster, isEncryptionReady, findRecordByInputString, createRecordOrigin } from "@/lib/encryptionFacade";
+import { syncTagsToMaster, syncCategoriesToMaster, isEncryptionReady, findRecordByInputString, createRecordOrigin, saveDerivationTemplate } from "@/lib/encryptionFacade";
 import { updateRecord } from "@/hooks/use-records";
+import { useOwners, createOwner } from "@/hooks/use-owners";
+import { useWalletNames, createWalletName } from "@/hooks/use-wallet-names";
+import { useSeedNames, createSeedName } from "@/hooks/use-seed-names";
+import { useWalletSoftware, createWalletSoftware } from "@/hooks/use-wallet-software";
 import { 
   deriveDualChainAddresses,
   deriveDualChainAdvanced,
@@ -96,8 +100,12 @@ export default function BulkImport() {
   const [labelTemplate, setLabelTemplate] = useState("[wallet] [#]");
   const [seedOpen, setSeedOpen] = useState(false);
   const [walletOpen, setWalletOpen] = useState(false);
+  const [ownerOpen, setOwnerOpen] = useState(false);
+  const [walletNameOpen, setWalletNameOpen] = useState(false);
   const [newSeedName, setNewSeedName] = useState("");
   const [newWalletSoftware, setNewWalletSoftware] = useState("");
+  const [newOwner, setNewOwner] = useState("");
+  const [newWalletName, setNewWalletName] = useState("");
 
   // Vault metadata state
   const [isVaultXpub, setIsVaultXpub] = useState(false);
@@ -108,6 +116,9 @@ export default function BulkImport() {
   
   // Verified status
   const [markAsVerified, setMarkAsVerified] = useState(false);
+  
+  // Save template for future derivations (xpub storage)
+  const [saveTemplate, setSaveTemplate] = useState(false);
 
   const { tags } = useEncryptedTags();
   const { categories } = useEncryptedCategories();
@@ -115,10 +126,29 @@ export default function BulkImport() {
   const { encryptionKey } = useAuth();
   const { toast } = useToast();
 
-  const uniqueSeedNames = Array.from(new Set(records.map(r => r.seedName).filter((s): s is string => !!s)));
-  const uniqueWalletSoftware = Array.from(new Set(records.map(r => r.walletSoftware).filter((s): s is string => !!s)));
-  const allSeedNames = Array.from(new Set([...uniqueSeedNames, seedName].filter(Boolean)));
-  const allWalletSoftware = Array.from(new Set([...uniqueWalletSoftware, walletSoftware].filter(Boolean)));
+  // Use vocabulary hooks for dropdown options
+  const { owners: existingOwners } = useOwners();
+  const { walletNames: existingWalletNames } = useWalletNames();
+  const { seedNames: existingSeedNames } = useSeedNames();
+  const { walletSoftware: existingWalletSoftware } = useWalletSoftware();
+
+  // Build options from vocabulary tables
+  const allOwners = Array.from(new Set([
+    ...existingOwners.map(o => o.name).filter(n => n && n !== '[encrypted]'),
+    ownerInput
+  ].filter(Boolean)));
+  const allWalletNames = Array.from(new Set([
+    ...existingWalletNames.map(wn => wn.name).filter(n => n && n !== '[encrypted]'),
+    walletNameInput
+  ].filter(Boolean)));
+  const allSeedNames = Array.from(new Set([
+    ...existingSeedNames.map(sn => sn.name).filter(n => n && n !== '[encrypted]'),
+    seedName
+  ].filter(Boolean)));
+  const allWalletSoftware = Array.from(new Set([
+    ...existingWalletSoftware.map(ws => ws.name).filter(n => n && n !== '[encrypted]'),
+    walletSoftware
+  ].filter(Boolean)));
 
   const availableTags = tags
     .map(t => t.name)
@@ -128,7 +158,7 @@ export default function BulkImport() {
     .map(c => c.name)
     .filter(name => name && name !== "[encrypted]");
 
-  const addNewSeedName = () => {
+  const addNewSeedName = async () => {
     if (!newSeedName.trim()) return;
     if (newSeedName.trim().length > SEED_NAME_MAX_LENGTH) {
       toast({
@@ -138,16 +168,52 @@ export default function BulkImport() {
       });
       return;
     }
+    try {
+      await createSeedName(newSeedName.trim());
+    } catch (e) {
+      // Ignore "already exists" errors
+    }
     setSeedName(newSeedName.trim());
     setSeedOpen(false);
     setNewSeedName("");
   };
 
-  const addNewWalletSoftware = () => {
+  const addNewWalletSoftware = async () => {
     if (newWalletSoftware.trim()) {
+      try {
+        await createWalletSoftware(newWalletSoftware.trim());
+      } catch (e) {
+        // Ignore "already exists" errors
+      }
       setWalletSoftware(newWalletSoftware.trim());
       setWalletOpen(false);
       setNewWalletSoftware("");
+    }
+  };
+
+  const addNewOwner = async () => {
+    if (newOwner.trim()) {
+      try {
+        await createOwner(newOwner.trim());
+      } catch (e) {
+        // Ignore "already exists" errors
+      }
+      setOwnerInput(newOwner.trim());
+      setOwnerOpen(false);
+      setNewOwner("");
+    }
+  };
+
+  const addNewWalletNameEntry = async () => {
+    if (newWalletName.trim()) {
+      try {
+        await createWalletName(newWalletName.trim());
+      } catch (e) {
+        // Ignore "already exists" errors
+      }
+      setWalletNameInput(newWalletName.trim());
+      setWalletNameOpen(false);
+      setNewWalletName("");
     }
   };
 
@@ -482,6 +548,46 @@ export default function BulkImport() {
         }
       } catch (syncError) {
         console.error("Failed to sync tags/categories to master tables:", syncError);
+      }
+
+      // Save derivation template if requested
+      if (saveTemplate && xpubInfo) {
+        try {
+          if (isEncryptionReady()) {
+            // Extract fingerprint from xpub info (first 8 hex characters of parent fingerprint)
+            const fingerprint = xpubInfo.parentFingerprint || 'unknown';
+            
+            // Map BIP standard to script type
+            const scriptTypeMap: Record<string, 'P2WPKH' | 'P2PKH' | 'P2SH-P2WPKH' | 'P2TR'> = {
+              'BIP84': 'P2WPKH',
+              'BIP44': 'P2PKH',
+              'BIP49': 'P2SH-P2WPKH',
+              'BIP86': 'P2TR',
+            };
+            const scriptType = scriptTypeMap[xpubInfo.bipStandard] || 'P2WPKH';
+            
+            // Build derivation path from depth info
+            const derivationPath = xpubInfo.depth === 3 
+              ? `m/${xpubInfo.bipStandard === 'BIP84' ? '84' : xpubInfo.bipStandard === 'BIP49' ? '49' : xpubInfo.bipStandard === 'BIP86' ? '86' : '44'}'/0'/0'`
+              : `m/${xpubInfo.bipStandard === 'BIP84' ? '84' : xpubInfo.bipStandard === 'BIP49' ? '49' : xpubInfo.bipStandard === 'BIP86' ? '86' : '44'}'/0'/0'/0`;
+
+            await saveDerivationTemplate({
+              fingerprint,
+              scriptType,
+              derivationPath,
+              xpub,
+              gapLimit: Math.max(receiveEndIndex, changeEndIndex) + 1,
+              network: xpubInfo.network === 'mainnet' ? 'mainnet' : 'testnet',
+              owner: ownerInput || undefined,
+              walletName: walletNameInput || undefined,
+              seedName: seedName || undefined,
+              notes: notes || undefined,
+            });
+          }
+        } catch (templateError) {
+          console.error("Failed to save derivation template:", templateError);
+          // Don't fail the import, just log the error
+        }
       }
 
       // Build result message
@@ -924,14 +1030,73 @@ export default function BulkImport() {
                   </h5>
                   <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-2">
-                      <Label htmlFor="owner">Owner</Label>
-                      <Input
-                        id="owner"
-                        value={ownerInput}
-                        onChange={(e) => setOwnerInput(e.target.value)}
-                        placeholder="e.g., Personal, Company ABC"
-                        data-testid="input-owner"
-                      />
+                      <Label>Owner</Label>
+                      <Popover open={ownerOpen} onOpenChange={setOwnerOpen}>
+                        <PopoverTrigger asChild>
+                          <Button
+                            variant="outline"
+                            role="combobox"
+                            aria-expanded={ownerOpen}
+                            className="w-full justify-between font-normal"
+                            data-testid="select-owner"
+                          >
+                            {ownerInput || "Select or add..."}
+                            <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                          </Button>
+                        </PopoverTrigger>
+                        <PopoverContent className="w-full p-0" align="start">
+                          <Command>
+                            <CommandInput 
+                              placeholder="Search or add new..." 
+                              value={newOwner}
+                              onValueChange={setNewOwner}
+                            />
+                            <CommandList>
+                              <CommandEmpty>
+                                {newOwner && (
+                                  <Button
+                                    variant="ghost"
+                                    className="w-full justify-start"
+                                    onClick={addNewOwner}
+                                  >
+                                    <Plus className="mr-2 h-4 w-4" />
+                                    Add "{newOwner}"
+                                  </Button>
+                                )}
+                              </CommandEmpty>
+                              <CommandGroup>
+                                {allOwners.map((name) => (
+                                  <CommandItem
+                                    key={name}
+                                    value={name}
+                                    onSelect={() => {
+                                      setOwnerInput(name);
+                                      setOwnerOpen(false);
+                                    }}
+                                  >
+                                    <Check
+                                      className={cn(
+                                        "mr-2 h-4 w-4",
+                                        ownerInput === name ? "opacity-100" : "opacity-0"
+                                      )}
+                                    />
+                                    {name}
+                                  </CommandItem>
+                                ))}
+                                {newOwner && !allOwners.some(n => n.toLowerCase() === newOwner.toLowerCase()) && (
+                                  <CommandItem
+                                    value={`create-${newOwner}`}
+                                    onSelect={addNewOwner}
+                                  >
+                                    <Plus className="mr-2 h-4 w-4" />
+                                    Add "{newOwner}"
+                                  </CommandItem>
+                                )}
+                              </CommandGroup>
+                            </CommandList>
+                          </Command>
+                        </PopoverContent>
+                      </Popover>
                     </div>
                     <div className="space-y-2">
                       <Label htmlFor="mark-verified" className="flex items-center gap-2">
@@ -1103,14 +1268,73 @@ export default function BulkImport() {
                     </div>
 
                     <div className="space-y-2">
-                      <Label htmlFor="walletName">Wallet Name</Label>
-                      <Input
-                        id="walletName"
-                        value={walletNameInput}
-                        onChange={(e) => setWalletNameInput(e.target.value)}
-                        placeholder="e.g., College Fund, Trading"
-                        data-testid="input-wallet-name"
-                      />
+                      <Label>Wallet Name</Label>
+                      <Popover open={walletNameOpen} onOpenChange={setWalletNameOpen}>
+                        <PopoverTrigger asChild>
+                          <Button
+                            variant="outline"
+                            role="combobox"
+                            aria-expanded={walletNameOpen}
+                            className="w-full justify-between font-normal"
+                            data-testid="select-wallet-name"
+                          >
+                            {walletNameInput || "Select or add..."}
+                            <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                          </Button>
+                        </PopoverTrigger>
+                        <PopoverContent className="w-full p-0" align="start">
+                          <Command>
+                            <CommandInput 
+                              placeholder="Search or add new..." 
+                              value={newWalletName}
+                              onValueChange={setNewWalletName}
+                            />
+                            <CommandList>
+                              <CommandEmpty>
+                                {newWalletName && (
+                                  <Button
+                                    variant="ghost"
+                                    className="w-full justify-start"
+                                    onClick={addNewWalletNameEntry}
+                                  >
+                                    <Plus className="mr-2 h-4 w-4" />
+                                    Add "{newWalletName}"
+                                  </Button>
+                                )}
+                              </CommandEmpty>
+                              <CommandGroup>
+                                {allWalletNames.map((name) => (
+                                  <CommandItem
+                                    key={name}
+                                    value={name}
+                                    onSelect={() => {
+                                      setWalletNameInput(name);
+                                      setWalletNameOpen(false);
+                                    }}
+                                  >
+                                    <Check
+                                      className={cn(
+                                        "mr-2 h-4 w-4",
+                                        walletNameInput === name ? "opacity-100" : "opacity-0"
+                                      )}
+                                    />
+                                    {name}
+                                  </CommandItem>
+                                ))}
+                                {newWalletName && !allWalletNames.some(n => n.toLowerCase() === newWalletName.toLowerCase()) && (
+                                  <CommandItem
+                                    value={`create-${newWalletName}`}
+                                    onSelect={addNewWalletNameEntry}
+                                  >
+                                    <Plus className="mr-2 h-4 w-4" />
+                                    Add "{newWalletName}"
+                                  </CommandItem>
+                                )}
+                              </CommandGroup>
+                            </CommandList>
+                          </Command>
+                        </PopoverContent>
+                      </Popover>
                     </div>
 
                     <div className="space-y-2">
@@ -1168,6 +1392,44 @@ export default function BulkImport() {
                     searchPlaceholder="Search or add new category..."
                     testId="select-categories"
                   />
+                </div>
+
+                {/* Save Template Section */}
+                <div className="space-y-3 p-4 bg-amber-50 dark:bg-amber-950/30 rounded-lg border border-amber-200 dark:border-amber-800">
+                  <div className="flex items-start gap-3">
+                    <div className="pt-0.5">
+                      <Checkbox
+                        id="save-template"
+                        checked={saveTemplate}
+                        onCheckedChange={(checked) => setSaveTemplate(checked === true)}
+                        data-testid="checkbox-save-template"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <Label htmlFor="save-template" className="cursor-pointer font-medium">
+                        Save template for future derivations
+                      </Label>
+                      <p className="text-xs text-muted-foreground">
+                        Store this xpub (encrypted) to easily derive more addresses later without re-entering it.
+                      </p>
+                    </div>
+                  </div>
+                  
+                  {saveTemplate && (
+                    <div className="mt-3 p-3 bg-amber-100/50 dark:bg-amber-900/30 rounded border border-amber-300/50 dark:border-amber-700/50">
+                      <div className="flex items-start gap-2">
+                        <AlertTriangle className="h-4 w-4 text-amber-600 dark:text-amber-400 mt-0.5 shrink-0" />
+                        <div className="text-xs text-amber-800 dark:text-amber-300 space-y-1">
+                          <p className="font-medium">Privacy Note:</p>
+                          <p>
+                            Storing an xpub doesn't risk your funds (no private keys), but it does reveal 
+                            your wallet structure and all derived addresses. The xpub will be encrypted 
+                            with your password.
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
 

@@ -108,6 +108,13 @@ export default function WalletImport() {
   const [privateKeyStatus, setPrivateKeyStatus] = useState<string>('');
   const [labelPrefix, setLabelPrefix] = useState<string>('');
   
+  // Vault metadata state
+  const [isVaultImport, setIsVaultImport] = useState(false);
+  const [vaultName, setVaultName] = useState('');
+  const [vaultM, setVaultM] = useState<number | null>(null);
+  const [vaultN, setVaultN] = useState<number | null>(null);
+  const [vaultNotes, setVaultNotes] = useState('');
+  
   // Seed name state
   const [seedNameInput, setSeedNameInput] = useState<string>('');
   const [seedNameOpen, setSeedNameOpen] = useState(false);
@@ -418,6 +425,13 @@ export default function WalletImport() {
           markInputsAsVerified,
           privateKeyStatus: privateKeyStatus || undefined,
           labelPrefix: labelPrefix || undefined,
+          vault: isVaultImport ? {
+            isVaultXpub: true,
+            vaultName: vaultName || null,
+            m: vaultM,
+            n: vaultN,
+            vaultNotes: vaultNotes || null,
+          } : undefined,
         },
         (current, total, status) => {
           setImportProgress(Math.round((current / total) * 100));
@@ -465,6 +479,11 @@ export default function WalletImport() {
     setMarkInputsAsVerified(false);
     setPrivateKeyStatus('');
     setLabelPrefix('');
+    setIsVaultImport(false);
+    setVaultName('');
+    setVaultM(null);
+    setVaultN(null);
+    setVaultNotes('');
   };
   
   
@@ -986,6 +1005,83 @@ export default function WalletImport() {
             <p className="text-xs text-muted-foreground">
               Do you have the private keys to spend from these addresses?
             </p>
+          </div>
+
+          {/* Vault Metadata Section */}
+          <div className="space-y-3 p-4 bg-muted/30 rounded-lg border">
+            <div className="flex items-center justify-between">
+              <h5 className="font-medium text-sm flex items-center gap-2">
+                <ShieldCheck className="h-4 w-4" />
+                Multisig Vault (Optional)
+              </h5>
+              <Switch
+                id="is-vault"
+                checked={isVaultImport}
+                onCheckedChange={setIsVaultImport}
+                data-testid="switch-is-vault"
+              />
+            </div>
+            {isVaultImport && (
+              <div className="space-y-4 mt-3">
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="vault-name">Vault Name (optional)</Label>
+                    <Input
+                      id="vault-name"
+                      value={vaultName}
+                      onChange={(e) => setVaultName(e.target.value)}
+                      placeholder="e.g., Family Cold Vault"
+                      data-testid="input-vault-name"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>M-of-N Signature Requirement</Label>
+                    <div className="flex items-center gap-2">
+                      <Select
+                        value={vaultM?.toString() || ""}
+                        onValueChange={(value) => setVaultM(value ? parseInt(value) : null)}
+                      >
+                        <SelectTrigger className="w-20" data-testid="select-vault-m">
+                          <SelectValue placeholder="M" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15].map((num) => (
+                            <SelectItem key={num} value={num.toString()}>{num}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <span className="text-muted-foreground">of</span>
+                      <Select
+                        value={vaultN?.toString() || ""}
+                        onValueChange={(value) => setVaultN(value ? parseInt(value) : null)}
+                      >
+                        <SelectTrigger className="w-20" data-testid="select-vault-n">
+                          <SelectValue placeholder="N" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15].map((num) => (
+                            <SelectItem key={num} value={num.toString()}>{num}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    {vaultM && vaultN && vaultM > vaultN && (
+                      <p className="text-xs text-destructive">Required signatures (M) cannot exceed total keys (N)</p>
+                    )}
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="vault-notes">Vault Notes (optional)</Label>
+                  <Input
+                    id="vault-notes"
+                    value={vaultNotes}
+                    onChange={(e) => setVaultNotes(e.target.value)}
+                    placeholder="e.g., Cosigners: Alice, Bob, Carol"
+                    data-testid="input-vault-notes"
+                  />
+                </div>
+              </div>
+            )}
           </div>
           
           <div className="space-y-2">

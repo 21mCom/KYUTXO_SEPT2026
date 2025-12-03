@@ -31,6 +31,7 @@ export interface XpubInfo {
   isChainLevel: boolean;
   needsAdvancedMode: boolean;
   reason?: string;
+  parentFingerprint?: string;
 }
 
 export type XpubPrefix = 'xpub' | 'ypub' | 'zpub' | 'tpub' | 'upub' | 'vpub';
@@ -96,11 +97,23 @@ function getKeyDepth(extendedKey: string): number {
   }
 }
 
+function getParentFingerprint(extendedKey: string): string | undefined {
+  try {
+    const decoded = bs58check.decode(extendedKey);
+    // Parent fingerprint is bytes 5-8 (4 bytes after version and depth)
+    const fingerprint = decoded.slice(5, 9);
+    return Array.from(fingerprint).map(b => b.toString(16).padStart(2, '0')).join('');
+  } catch {
+    return undefined;
+  }
+}
+
 export function analyzeXpub(extendedKey: string): XpubInfo {
   const trimmed = extendedKey.trim();
   const prefix = getXpubPrefix(trimmed);
   const prefixInfo = PREFIX_TO_BIP[prefix];
   const depth = getKeyDepth(trimmed);
+  const parentFingerprint = getParentFingerprint(trimmed);
   
   const isAccountLevel = depth === 3;
   const isChainLevel = depth === 4;
@@ -141,6 +154,7 @@ export function analyzeXpub(extendedKey: string): XpubInfo {
     isChainLevel,
     needsAdvancedMode,
     reason,
+    parentFingerprint,
   };
 }
 

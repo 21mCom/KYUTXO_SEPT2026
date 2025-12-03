@@ -1,4 +1,4 @@
-import type { ParsedRecord, DuplicateInfo } from './types';
+import type { ParsedRecord, DuplicateInfo, VaultMetadata } from './types';
 import type { Record as DBRecord, AddressImportance } from '../database';
 import { findRecordByInputString, isEncryptionReady } from '../encryptionFacade';
 import { IMPORTANCE_TIERS } from '../provenance';
@@ -87,6 +87,7 @@ export function mergeRecordData(
     owner?: string;
     walletName?: string;
     privateKeyStatus?: string;
+    vault?: VaultMetadata;
   }
 ): Partial<DBRecord> {
   const existingTags = existing.tags || [];
@@ -149,6 +150,17 @@ export function mergeRecordData(
     result.addressImportance = newImportance;
   }
   
+  // Apply vault metadata if not already set (only for input addresses)
+  if (isInput && options.vault?.isVaultXpub && !existing.vault?.isVaultXpub) {
+    result.vault = {
+      isVaultXpub: options.vault.isVaultXpub,
+      vaultName: options.vault.vaultName,
+      m: options.vault.m,
+      n: options.vault.n,
+      vaultNotes: options.vault.vaultNotes,
+    };
+  }
+  
   return result;
 }
 
@@ -166,6 +178,7 @@ export function createNewRecordData(
     walletName?: string;
     privateKeyStatus?: string;
     labelPrefix?: string;
+    vault?: VaultMetadata;
   }
 ): Omit<DBRecord, 'id' | 'createdAt' | 'updatedAt'> {
   // Only apply tags/categories to input addresses (addresses you control)
@@ -199,7 +212,7 @@ export function createNewRecordData(
     finalLabel = `${expandedPrefix}${finalLabel}`;
   }
   
-  return {
+  const result: Omit<DBRecord, 'id' | 'createdAt' | 'updatedAt'> = {
     type: parsed.type,
     inputString: parsed.inputString,
     label: finalLabel,
@@ -217,6 +230,19 @@ export function createNewRecordData(
     walletName: isInput ? options.walletName : undefined,
     privateKeyStatus: isInput ? options.privateKeyStatus : undefined,
   };
+  
+  // Apply vault metadata (only for input addresses)
+  if (isInput && options.vault?.isVaultXpub) {
+    result.vault = {
+      isVaultXpub: options.vault.isVaultXpub,
+      vaultName: options.vault.vaultName,
+      m: options.vault.m,
+      n: options.vault.n,
+      vaultNotes: options.vault.vaultNotes,
+    };
+  }
+  
+  return result;
 }
 
 export function getImportSummary(duplicateInfos: DuplicateInfo[]): {

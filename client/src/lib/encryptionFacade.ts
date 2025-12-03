@@ -2,7 +2,8 @@
 // Provides encryption-aware CRUD operations while maintaining compatibility
 // with existing Dexie live queries
 
-import { db, type Record, type Attachment, type Tag, type Category, type RecordOrigin, type RecordOriginType, type Owner, type WalletName, type SeedName, type WalletSoftware } from './database';
+import { db, type Record, type Attachment, type Tag, type Category, type RecordOrigin, type RecordOriginType, type Owner, type WalletName, type SeedName, type WalletSoftware, type DerivationTemplate } from './database';
+import { encrypt } from './crypto';
 import { 
   encryptRecord, 
   decryptRecord, 
@@ -54,6 +55,133 @@ function getKey(): CryptoKey {
   return _encryptionKey;
 }
 
+// ============ VOCABULARY SYNC ============
+
+// Sync record vocabulary values to their respective tables
+// This ensures any owner, walletName, seedName, or walletSoftware values
+// used in records are also available as vocabulary options
+async function syncRecordVocabulary(
+  data: Partial<Record>,
+  key: CryptoKey
+): Promise<void> {
+  const syncTasks: Promise<void>[] = [];
+
+  // Sync owner
+  if (data.owner && data.owner !== 'Unknown' && data.owner !== '[encrypted]') {
+    syncTasks.push((async () => {
+      const owners = await db.owners.toArray();
+      const decryptedNames = await Promise.all(
+        owners.map(async (o) => {
+          if (o.isEncrypted) {
+            try {
+              const decrypted = await decryptOwner(o, key);
+              return decrypted.name;
+            } catch {
+              return null;
+            }
+          }
+          return o.name;
+        })
+      );
+      const exists = decryptedNames.some(
+        (name) => name && name.toLowerCase() === data.owner!.toLowerCase()
+      );
+      if (!exists) {
+        const owner: Owner = { name: data.owner!, createdAt: Date.now() };
+        const encrypted = await encryptOwner(owner, key);
+        await db.owners.add(encrypted);
+      }
+    })());
+  }
+
+  // Sync walletName
+  if (data.walletName && data.walletName !== '[encrypted]') {
+    syncTasks.push((async () => {
+      const walletNames = await db.walletNames.toArray();
+      const decryptedNames = await Promise.all(
+        walletNames.map(async (wn) => {
+          if (wn.isEncrypted) {
+            try {
+              const decrypted = await decryptWalletName(wn, key);
+              return decrypted.name;
+            } catch {
+              return null;
+            }
+          }
+          return wn.name;
+        })
+      );
+      const exists = decryptedNames.some(
+        (name) => name && name.toLowerCase() === data.walletName!.toLowerCase()
+      );
+      if (!exists) {
+        const walletName: WalletName = { name: data.walletName!, createdAt: Date.now() };
+        const encrypted = await encryptWalletName(walletName, key);
+        await db.walletNames.add(encrypted);
+      }
+    })());
+  }
+
+  // Sync seedName
+  if (data.seedName && data.seedName !== '[encrypted]') {
+    syncTasks.push((async () => {
+      const seedNames = await db.seedNames.toArray();
+      const decryptedNames = await Promise.all(
+        seedNames.map(async (sn) => {
+          if (sn.isEncrypted) {
+            try {
+              const decrypted = await decryptSeedName(sn, key);
+              return decrypted.name;
+            } catch {
+              return null;
+            }
+          }
+          return sn.name;
+        })
+      );
+      const exists = decryptedNames.some(
+        (name) => name && name.toLowerCase() === data.seedName!.toLowerCase()
+      );
+      if (!exists) {
+        const seedName: SeedName = { name: data.seedName!, createdAt: Date.now() };
+        const encrypted = await encryptSeedName(seedName, key);
+        await db.seedNames.add(encrypted);
+      }
+    })());
+  }
+
+  // Sync walletSoftware
+  if (data.walletSoftware && data.walletSoftware !== '[encrypted]') {
+    syncTasks.push((async () => {
+      const walletSoftwareList = await db.walletSoftware.toArray();
+      const decryptedNames = await Promise.all(
+        walletSoftwareList.map(async (ws) => {
+          if (ws.isEncrypted) {
+            try {
+              const decrypted = await decryptWalletSoftware(ws, key);
+              return decrypted.name;
+            } catch {
+              return null;
+            }
+          }
+          return ws.name;
+        })
+      );
+      const exists = decryptedNames.some(
+        (name) => name && name.toLowerCase() === data.walletSoftware!.toLowerCase()
+      );
+      if (!exists) {
+        const walletSoftware: WalletSoftware = { name: data.walletSoftware!, createdAt: Date.now() };
+        const encrypted = await encryptWalletSoftware(walletSoftware, key);
+        await db.walletSoftware.add(encrypted);
+      }
+    })());
+  }
+
+  // Run all sync tasks in parallel
+  await Promise.all(syncTasks);
+}
+
 // ============ RECORD OPERATIONS ============
 
 // Create a new record (encrypted)
@@ -70,6 +198,11 @@ export async function createRecord(
   };
 
   console.log(`[createRecord] Creating record: type=${data.type}, inputString=${data.inputString?.substring(0, 20)}...`);
+  
+  // Sync vocabulary values to their tables (in background, don't block record creation)
+  syncRecordVocabulary(data, key).catch((err) => {
+    console.warn('[createRecord] Vocabulary sync failed:', err);
+  });
   
   const encrypted = await encryptRecord(record, key);
   const id = await db.records.add(encrypted);
@@ -110,6 +243,11 @@ export async function updateRecord(
     id,
     updatedAt: Date.now(),
   };
+
+  // Sync vocabulary values to their tables (in background, don't block record update)
+  syncRecordVocabulary(updates, key).catch((err) => {
+    console.warn('[updateRecord] Vocabulary sync failed:', err);
+  });
 
   // Encrypt and save
   const encrypted = await encryptRecord(updated, key);
@@ -762,4 +900,63 @@ export async function syncCategoriesToMaster(categoryNames: string[]): Promise<v
       existingNames.add(trimmedName.toLowerCase());
     }
   }
+}
+
+// ============ DERIVATION TEMPLATE HELPERS ============
+
+// Save a derivation template (xpub) for future address derivations
+// The xpub is stored encrypted for privacy
+export async function saveDerivationTemplate(template: {
+  fingerprint: string;
+  scriptType: 'P2WPKH' | 'P2PKH' | 'P2SH-P2WPKH' | 'P2TR';
+  derivationPath: string;
+  xpub: string;
+  gapLimit: number;
+  network: 'mainnet' | 'testnet';
+  owner?: string;
+  walletName?: string;
+  seedName?: string;
+  notes?: string;
+}): Promise<number> {
+  const key = getKey();
+  
+  const now = Date.now();
+  const derivationTemplate: DerivationTemplate = {
+    fingerprint: template.fingerprint,
+    scriptType: template.scriptType,
+    derivationPath: template.derivationPath,
+    xpub: template.xpub,
+    gapLimit: template.gapLimit,
+    network: template.network,
+    owner: template.owner,
+    walletName: template.walletName,
+    seedName: template.seedName,
+    notes: template.notes,
+    createdAt: now,
+    updatedAt: now,
+  };
+  
+  // Encrypt the sensitive payload (xpub and notes)
+  const sensitivePayload = JSON.stringify({
+    xpub: derivationTemplate.xpub,
+    notes: derivationTemplate.notes,
+    owner: derivationTemplate.owner,
+    walletName: derivationTemplate.walletName,
+    seedName: derivationTemplate.seedName,
+  });
+  
+  const encryptedPayload = await encrypt(sensitivePayload, key);
+  
+  const encryptedTemplate: DerivationTemplate = {
+    ...derivationTemplate,
+    xpub: '[encrypted]',
+    notes: derivationTemplate.notes ? '[encrypted]' : undefined,
+    owner: derivationTemplate.owner ? '[encrypted]' : undefined,
+    walletName: derivationTemplate.walletName ? '[encrypted]' : undefined,
+    seedName: derivationTemplate.seedName ? '[encrypted]' : undefined,
+    encryptedPayload,
+    isEncrypted: true,
+  };
+  
+  return await db.derivationTemplates.add(encryptedTemplate);
 }
