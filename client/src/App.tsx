@@ -11,7 +11,7 @@ import { RecordPreviewProvider } from "@/contexts/RecordPreviewContext";
 import { LoginScreen } from "@/components/LoginScreen";
 import { Button } from "@/components/ui/button";
 import { LogOut } from "lucide-react";
-import { useHashLocation } from "@/lib/hashLocation";
+import { useAdaptiveLocation } from "@/lib/hashLocation";
 import Dashboard from "@/pages/Dashboard";
 import ValueUpdaterPage from "@/pages/ValueUpdaterPage";
 import BulkImport from "@/pages/BulkImport";
@@ -65,7 +65,7 @@ function AuthenticatedApp() {
   };
 
   return (
-    <Router hook={useHashLocation}>
+    <Router hook={useAdaptiveLocation}>
       <RecordPreviewProvider>
         <SidebarProvider style={style as React.CSSProperties}>
           <div className="flex h-screen w-full">
