@@ -1,4 +1,5 @@
-import { Edit, Paperclip, Wallet as WalletIcon, User, Upload, QrCode } from "lucide-react";
+import { Edit, Paperclip, Wallet as WalletIcon, User, Upload, QrCode, Key, GitBranch, ArrowDownLeft, ArrowUpRight, Shield, ChevronDown, ChevronRight, Link2, Layers, FileInput, ExternalLink } from "lucide-react";
+import { Link } from "wouter";
 import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -9,6 +10,11 @@ import { RecordTypeBadge } from "./RecordTypeBadge";
 import { AttachmentList } from "./AttachmentList";
 import { AttachmentUpload } from "./AttachmentUpload";
 import { MetadataSourcesPanel } from "./MetadataSourcesPanel";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import {
   Sheet,
   SheetContent,
@@ -21,8 +27,15 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import type { Attachment } from "@/lib/database";
+import type { Attachment, VaultMetadata, AddressImportance, ChainType } from "@/lib/database";
 import QRCode from "qrcode";
+
+interface CustomFieldDef {
+  id?: number;
+  name: string;
+  slug: string;
+  enabled: boolean;
+}
 
 interface RecordDetailPanelProps {
   open: boolean;
@@ -40,15 +53,85 @@ interface RecordDetailPanelProps {
     walletSoftware?: string;
     owner?: string;
     walletName?: string;
+    privateKeyStatus?: string;
+    source?: string;
+    derivationPath?: string;
+    chainType?: ChainType;
+    vault?: VaultMetadata;
+    addressImportance?: AddressImportance;
+    customFields?: { [slug: string]: string };
+    syncDepth?: number;
+    maxSyncedDepth?: number;
+    discoveredInTxid?: string;
+    discoveredFromRecordId?: number;
   };
   attachments?: Attachment[];
   onAttachmentsChange?: () => void;
+  customFieldDefs?: CustomFieldDef[];
 }
 
-export function RecordDetailPanel({ open, onClose, onEdit, record, attachments = [], onAttachmentsChange }: RecordDetailPanelProps) {
+function getImportanceBadgeVariant(importance?: AddressImportance): "default" | "secondary" | "outline" | "destructive" {
+  switch (importance) {
+    case 'manual':
+      return 'default';
+    case 'wallet-import':
+      return 'secondary';
+    case 'xpub-derived':
+      return 'secondary';
+    case 'blockchain-discovered':
+      return 'outline';
+    case 'pending-review':
+      return 'destructive';
+    default:
+      return 'outline';
+  }
+}
+
+function getImportanceLabel(importance?: AddressImportance): string {
+  switch (importance) {
+    case 'manual':
+      return 'Verified';
+    case 'wallet-import':
+      return 'Wallet Import';
+    case 'xpub-derived':
+      return 'XPUB Derived';
+    case 'blockchain-discovered':
+      return 'Blockchain Discovered';
+    case 'pending-review':
+      return 'Pending Review';
+    default:
+      return 'Unknown';
+  }
+}
+
+function getSourceLabel(source?: string): string {
+  switch (source) {
+    case 'manual':
+      return 'Manual Entry';
+    case 'wallet-import':
+      return 'Wallet Import';
+    case 'xpub-import':
+      return 'XPUB Import';
+    case 'blockchain-sync':
+      return 'Blockchain Sync';
+    default:
+      return source || 'Unknown';
+  }
+}
+
+export function RecordDetailPanel({ 
+  open, 
+  onClose, 
+  onEdit, 
+  record, 
+  attachments = [], 
+  onAttachmentsChange,
+  customFieldDefs = [],
+}: RecordDetailPanelProps) {
   const [showUpload, setShowUpload] = useState(false);
   const [qrDialogOpen, setQrDialogOpen] = useState(false);
   const [qrCodeDataUrl, setQrCodeDataUrl] = useState<string | null>(null);
+  const [technicalOpen, setTechnicalOpen] = useState(false);
 
   useEffect(() => {
     if (qrDialogOpen && record?.inputString) {
@@ -77,6 +160,14 @@ export function RecordDetailPanel({ open, onClose, onEdit, record, attachments =
     setQrDialogOpen(true);
   };
 
+  const hasWalletInfo = record.seedName || record.walletSoftware || record.derivationPath || record.chainType || record.privateKeyStatus;
+  const hasVaultInfo = record.vault?.isVaultXpub;
+  const hasBlockchainDiscoveryInfo = record.syncDepth !== undefined || record.discoveredInTxid || record.discoveredFromRecordId !== undefined;
+  
+  const customFieldsToShow = customFieldDefs.filter(
+    def => def.enabled && record.customFields?.[def.slug]
+  );
+
   return (
     <>
     <Sheet open={open} onOpenChange={onClose}>
@@ -85,7 +176,27 @@ export function RecordDetailPanel({ open, onClose, onEdit, record, attachments =
           <div className="flex items-start justify-between gap-4">
             <div className="flex-1 min-w-0">
               <SheetTitle className="text-xl mb-2">{record.label}</SheetTitle>
-              <RecordTypeBadge type={record.type} />
+              <div className="flex flex-wrap items-center gap-2">
+                <RecordTypeBadge type={record.type} />
+                {record.addressImportance && (
+                  <Badge 
+                    variant={getImportanceBadgeVariant(record.addressImportance)}
+                    data-testid="badge-importance"
+                  >
+                    <Shield className="h-3 w-3 mr-1" />
+                    {getImportanceLabel(record.addressImportance)}
+                  </Badge>
+                )}
+                {record.chainType && (
+                  <Badge variant="outline" data-testid="badge-chain-type">
+                    {record.chainType === 'receive' ? (
+                      <><ArrowDownLeft className="h-3 w-3 mr-1" />Receive</>
+                    ) : (
+                      <><ArrowUpRight className="h-3 w-3 mr-1" />Change</>
+                    )}
+                  </Badge>
+                )}
+              </div>
             </div>
             <div className="flex gap-1">
               <Button size="icon" variant="ghost" onClick={onEdit} data-testid="button-edit-panel">
@@ -125,24 +236,19 @@ export function RecordDetailPanel({ open, onClose, onEdit, record, attachments =
               </div>
             )}
 
-            <Separator />
-
-            {record.seedName && (
+            {record.source && (
               <div>
                 <h4 className="text-sm font-medium mb-2 flex items-center gap-2">
-                  <WalletIcon className="h-4 w-4" />
-                  Seed Name
+                  <FileInput className="h-4 w-4" />
+                  Source
                 </h4>
-                <p className="text-sm" data-testid="text-seed-detail">{record.seedName}</p>
+                <Badge variant="outline" data-testid="text-source-detail">
+                  {getSourceLabel(record.source)}
+                </Badge>
               </div>
             )}
 
-            {record.walletSoftware && (
-              <div>
-                <h4 className="text-sm font-medium mb-2">Wallet Software</h4>
-                <p className="text-sm" data-testid="text-wallet-detail">{record.walletSoftware}</p>
-              </div>
-            )}
+            <Separator />
 
             {record.owner && (
               <div>
@@ -162,6 +268,99 @@ export function RecordDetailPanel({ open, onClose, onEdit, record, attachments =
                 </h4>
                 <p className="text-sm" data-testid="text-walletname-detail">{record.walletName}</p>
               </div>
+            )}
+
+            {hasWalletInfo && (
+              <>
+                {record.seedName && (
+                  <div>
+                    <h4 className="text-sm font-medium mb-2 flex items-center gap-2">
+                      <Key className="h-4 w-4" />
+                      Seed Name
+                    </h4>
+                    <p className="text-sm" data-testid="text-seed-detail">{record.seedName}</p>
+                  </div>
+                )}
+
+                {record.walletSoftware && (
+                  <div>
+                    <h4 className="text-sm font-medium mb-2">Wallet Software</h4>
+                    <p className="text-sm" data-testid="text-wallet-detail">{record.walletSoftware}</p>
+                  </div>
+                )}
+
+                {record.derivationPath && (
+                  <div>
+                    <h4 className="text-sm font-medium mb-2 flex items-center gap-2">
+                      <GitBranch className="h-4 w-4" />
+                      Derivation Path
+                    </h4>
+                    <code className="text-sm bg-muted px-2 py-1 rounded" data-testid="text-derivation-detail">
+                      {record.derivationPath}
+                    </code>
+                  </div>
+                )}
+
+                {record.privateKeyStatus && (
+                  <div>
+                    <h4 className="text-sm font-medium mb-2 flex items-center gap-2">
+                      <Shield className="h-4 w-4" />
+                      Private Key Status
+                    </h4>
+                    <p className="text-sm" data-testid="text-privatekey-detail">{record.privateKeyStatus}</p>
+                  </div>
+                )}
+              </>
+            )}
+
+            {hasVaultInfo && record.vault && (
+              <div className="p-3 bg-muted/50 rounded-lg space-y-2">
+                <h4 className="text-sm font-medium flex items-center gap-2">
+                  <Layers className="h-4 w-4" />
+                  Multisig Vault
+                </h4>
+                {record.vault.vaultName && (
+                  <div>
+                    <span className="text-xs text-muted-foreground">Vault Name:</span>
+                    <p className="text-sm" data-testid="text-vault-name">{record.vault.vaultName}</p>
+                  </div>
+                )}
+                {record.vault.m && record.vault.n && (
+                  <div>
+                    <span className="text-xs text-muted-foreground">Quorum:</span>
+                    <p className="text-sm" data-testid="text-vault-quorum">
+                      {record.vault.m} of {record.vault.n} signatures required
+                    </p>
+                  </div>
+                )}
+                {record.vault.vaultNotes && (
+                  <div>
+                    <span className="text-xs text-muted-foreground">Notes:</span>
+                    <p className="text-sm text-muted-foreground whitespace-pre-wrap" data-testid="text-vault-notes">
+                      {record.vault.vaultNotes}
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {customFieldsToShow.length > 0 && (
+              <>
+                <Separator />
+                <div>
+                  <h4 className="text-sm font-medium mb-3">Custom Fields</h4>
+                  <div className="space-y-3">
+                    {customFieldsToShow.map(field => (
+                      <div key={field.slug}>
+                        <span className="text-xs text-muted-foreground">{field.name}</span>
+                        <p className="text-sm" data-testid={`text-custom-${field.slug}`}>
+                          {record.customFields?.[field.slug]}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </>
             )}
 
             {record.tags.length > 0 && (
@@ -191,6 +390,55 @@ export function RecordDetailPanel({ open, onClose, onEdit, record, attachments =
             )}
 
             <MetadataSourcesPanel recordId={Number(record.id)} />
+
+            {hasBlockchainDiscoveryInfo && (
+              <Collapsible open={technicalOpen} onOpenChange={setTechnicalOpen}>
+                <CollapsibleTrigger asChild>
+                  <Button variant="ghost" className="w-full justify-between px-0" data-testid="button-toggle-technical">
+                    <span className="text-sm font-medium flex items-center gap-2">
+                      <Link2 className="h-4 w-4" />
+                      Blockchain Discovery Info
+                    </span>
+                    {technicalOpen ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                  </Button>
+                </CollapsibleTrigger>
+                <CollapsibleContent className="space-y-3 pt-2">
+                  {record.syncDepth !== undefined && (
+                    <div>
+                      <span className="text-xs text-muted-foreground">Sync Depth</span>
+                      <p className="text-sm" data-testid="text-sync-depth">
+                        {record.syncDepth === 0 ? 'Root (manually added)' : `Depth ${record.syncDepth}`}
+                      </p>
+                    </div>
+                  )}
+                  {record.maxSyncedDepth !== undefined && record.maxSyncedDepth >= 0 && (
+                    <div>
+                      <span className="text-xs text-muted-foreground">Max Synced Depth</span>
+                      <p className="text-sm" data-testid="text-max-synced-depth">{record.maxSyncedDepth}</p>
+                    </div>
+                  )}
+                  {record.discoveredInTxid && (
+                    <div>
+                      <span className="text-xs text-muted-foreground">Discovered in Transaction</span>
+                      <BitcoinAddressDisplay address={record.discoveredInTxid} truncate={true} />
+                    </div>
+                  )}
+                  {record.discoveredFromRecordId !== undefined && (
+                    <div>
+                      <span className="text-xs text-muted-foreground">Discovered From Record</span>
+                      <Link 
+                        href={`/records?id=${record.discoveredFromRecordId}`}
+                        className="flex items-center gap-1 text-sm text-primary hover:underline"
+                        data-testid="link-discovered-from"
+                      >
+                        Record #{record.discoveredFromRecordId}
+                        <ExternalLink className="h-3 w-3" />
+                      </Link>
+                    </div>
+                  )}
+                </CollapsibleContent>
+              </Collapsible>
+            )}
 
             <Separator />
 

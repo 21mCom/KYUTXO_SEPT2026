@@ -801,6 +801,7 @@ export default function Dashboard() {
             setSelectedRecordAttachments(attachments);
           }
         }}
+        customFieldDefs={enabledCustomFields}
       />
 
       <RecordFormDialog

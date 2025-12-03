@@ -1,6 +1,6 @@
-import { createContext, useContext, useState, useCallback, type ReactNode } from "react";
+import { createContext, useContext, useState, useCallback, useEffect, type ReactNode } from "react";
 import { useLocation } from "wouter";
-import { db, type Record as DbRecord, type Attachment } from "@/lib/database";
+import { db, type Record as DbRecord, type Attachment, type VaultMetadata, type AddressImportance, type ChainType, type CustomField } from "@/lib/database";
 import { decryptRecords, isEncryptionReady } from "@/lib/encryptionFacade";
 import { RecordDetailPanel } from "@/components/RecordDetailPanel";
 import { useToast } from "@/hooks/use-toast";
@@ -27,6 +27,17 @@ interface RecordForPanel {
   walletSoftware?: string;
   owner?: string;
   walletName?: string;
+  privateKeyStatus?: string;
+  source?: string;
+  derivationPath?: string;
+  chainType?: ChainType;
+  vault?: VaultMetadata;
+  addressImportance?: AddressImportance;
+  customFields?: { [slug: string]: string };
+  syncDepth?: number;
+  maxSyncedDepth?: number;
+  discoveredInTxid?: string;
+  discoveredFromRecordId?: number;
 }
 
 export function RecordPreviewProvider({ children }: { children: ReactNode }) {
@@ -36,6 +47,20 @@ export function RecordPreviewProvider({ children }: { children: ReactNode }) {
   const [isLoading, setIsLoading] = useState(false);
   const [record, setRecord] = useState<RecordForPanel | null>(null);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [customFieldDefs, setCustomFieldDefs] = useState<CustomField[]>([]);
+
+  // Load custom field definitions once
+  useEffect(() => {
+    const loadCustomFields = async () => {
+      try {
+        const fields = await db.customFields.toArray();
+        setCustomFieldDefs(fields);
+      } catch (error) {
+        console.error('[RecordPreview] Failed to load custom fields:', error);
+      }
+    };
+    loadCustomFields();
+  }, []);
 
   const loadAttachments = useCallback(async (recordId: number, inputString: string) => {
     try {
@@ -87,6 +112,17 @@ export function RecordPreviewProvider({ children }: { children: ReactNode }) {
         walletSoftware: decryptedRecord.walletSoftware || undefined,
         owner: decryptedRecord.owner || undefined,
         walletName: decryptedRecord.walletName || undefined,
+        privateKeyStatus: decryptedRecord.privateKeyStatus || undefined,
+        source: decryptedRecord.source || undefined,
+        derivationPath: decryptedRecord.derivationPath || undefined,
+        chainType: decryptedRecord.chainType || undefined,
+        vault: decryptedRecord.vault || undefined,
+        addressImportance: decryptedRecord.addressImportance || undefined,
+        customFields: decryptedRecord.customFields || undefined,
+        syncDepth: decryptedRecord.syncDepth,
+        maxSyncedDepth: decryptedRecord.maxSyncedDepth,
+        discoveredInTxid: decryptedRecord.discoveredInTxid || undefined,
+        discoveredFromRecordId: decryptedRecord.discoveredFromRecordId,
       };
 
       setRecord(panelRecord);
@@ -140,6 +176,17 @@ export function RecordPreviewProvider({ children }: { children: ReactNode }) {
         walletSoftware: decryptedRecord.walletSoftware || undefined,
         owner: decryptedRecord.owner || undefined,
         walletName: decryptedRecord.walletName || undefined,
+        privateKeyStatus: decryptedRecord.privateKeyStatus || undefined,
+        source: decryptedRecord.source || undefined,
+        derivationPath: decryptedRecord.derivationPath || undefined,
+        chainType: decryptedRecord.chainType || undefined,
+        vault: decryptedRecord.vault || undefined,
+        addressImportance: decryptedRecord.addressImportance || undefined,
+        customFields: decryptedRecord.customFields || undefined,
+        syncDepth: decryptedRecord.syncDepth,
+        maxSyncedDepth: decryptedRecord.maxSyncedDepth,
+        discoveredInTxid: decryptedRecord.discoveredInTxid || undefined,
+        discoveredFromRecordId: decryptedRecord.discoveredFromRecordId,
       };
 
       setRecord(panelRecord);
@@ -186,6 +233,7 @@ export function RecordPreviewProvider({ children }: { children: ReactNode }) {
         record={record ?? undefined}
         attachments={attachments}
         onAttachmentsChange={handleAttachmentsChange}
+        customFieldDefs={customFieldDefs}
       />
     </RecordPreviewContext.Provider>
   );

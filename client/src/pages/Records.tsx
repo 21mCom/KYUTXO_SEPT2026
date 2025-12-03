@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { ArrowLeft, Search as SearchIcon } from "lucide-react";
-import { db, type Record as DbRecord } from "@/lib/database";
+import { db, type Record as DbRecord, type VaultMetadata, type AddressImportance, type ChainType, type CustomField } from "@/lib/database";
 import { decryptRecords, isEncryptionReady } from "@/lib/encryptionFacade";
 import { RecordTable } from "@/components/RecordTable";
 import { RecordDetailPanel } from "@/components/RecordDetailPanel";
@@ -24,6 +24,14 @@ interface ConvertedRecord {
   privateKeyStatus?: string;
   source?: string;
   customFields?: { [key: string]: string };
+  derivationPath?: string;
+  chainType?: ChainType;
+  vault?: VaultMetadata;
+  addressImportance?: AddressImportance;
+  syncDepth?: number;
+  maxSyncedDepth?: number;
+  discoveredInTxid?: string;
+  discoveredFromRecordId?: number;
 }
 
 export default function Records() {
@@ -35,6 +43,7 @@ export default function Records() {
   const [searchQuery, setSearchQuery] = useState("");
   const [urlSearchQuery, setUrlSearchQuery] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [customFieldDefs, setCustomFieldDefs] = useState<CustomField[]>([]);
 
   // Parse query parameters from location - store them for later application
   useEffect(() => {
@@ -69,11 +78,15 @@ export default function Records() {
     }
   }, [urlSearchQuery, records.length, isLoading]);
 
-  // Load records
+  // Load records and custom field definitions
   useEffect(() => {
     const loadRecords = async () => {
       setIsLoading(true);
       try {
+        // Load custom field definitions
+        const fields = await db.customFields.toArray();
+        setCustomFieldDefs(fields);
+        
         const rawRecords = await db.records.toArray();
         let decrypted: DbRecord[];
         
@@ -98,6 +111,14 @@ export default function Records() {
           privateKeyStatus: r.privateKeyStatus,
           source: r.source,
           customFields: r.customFields,
+          derivationPath: r.derivationPath,
+          chainType: r.chainType,
+          vault: r.vault,
+          addressImportance: r.addressImportance,
+          syncDepth: r.syncDepth,
+          maxSyncedDepth: r.maxSyncedDepth,
+          discoveredInTxid: r.discoveredInTxid,
+          discoveredFromRecordId: r.discoveredFromRecordId,
         }));
         
         setRecords(convertedRecords);
@@ -162,6 +183,7 @@ export default function Records() {
             open={true}
             record={selectedRecord}
             onClose={() => navigate("/records")}
+            customFieldDefs={customFieldDefs}
           />
         </div>
       </div>
@@ -248,6 +270,7 @@ export default function Records() {
                 open={true}
                 record={selectedRecord}
                 onClose={() => setSelectedRecordId(null)}
+                customFieldDefs={customFieldDefs}
               />
             </div>
           )}
