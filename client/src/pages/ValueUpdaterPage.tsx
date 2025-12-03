@@ -129,6 +129,9 @@ export default function ValueUpdaterPage() {
   const [deleteTarget, setDeleteTarget] = useState<{ field: FieldType; value: string; count: number } | null>(null);
   const [newItemField, setNewItemField] = useState<FieldType | null>(null);
   const [newItemValue, setNewItemValue] = useState<string>("");
+  const [editingUnusedField, setEditingUnusedField] = useState<FieldType | null>(null);
+  const [editingUnusedValue, setEditingUnusedValue] = useState<string>("");
+  const [newUnusedValue, setNewUnusedValue] = useState<string>("");
 
   const extractUniqueValues = (field: FieldType): UniqueValue[] => {
     const valueCounts = new Map<string, number>();
@@ -503,6 +506,85 @@ export default function ValueUpdaterPage() {
     }
   };
 
+  const handleUpdateUnused = async (field: FieldType, oldName: string, newName: string) => {
+    if (!newName.trim() || newName.trim() === oldName) {
+      setEditingUnusedField(null);
+      setEditingUnusedValue("");
+      setNewUnusedValue("");
+      return;
+    }
+
+    const config = FIELD_CONFIGS.find(f => f.key === field);
+    if (!config?.hasMasterList) return;
+
+    setIsUpdating(true);
+    const trimmedNewValue = newName.trim();
+    
+    try {
+      switch (field) {
+        case 'tags': {
+          const tag = tags.find(t => t.name === oldName);
+          if (tag?.id) {
+            await updateTag(tag.id, { name: trimmedNewValue });
+          }
+          break;
+        }
+        case 'categories': {
+          const category = categories.find(c => c.name === oldName);
+          if (category?.id) {
+            await updateCategory(category.id, { name: trimmedNewValue });
+          }
+          break;
+        }
+        case 'owner': {
+          const owner = owners.find(o => o.name === oldName);
+          if (owner?.id) {
+            await updateOwner(owner.id, { name: trimmedNewValue });
+          }
+          break;
+        }
+        case 'walletName': {
+          const walletName = walletNames.find(wn => wn.name === oldName);
+          if (walletName?.id) {
+            await updateWalletNameEntry(walletName.id, { name: trimmedNewValue });
+          }
+          break;
+        }
+        case 'seedName': {
+          const seedName = seedNames.find(sn => sn.name === oldName);
+          if (seedName?.id) {
+            await updateSeedNameEntry(seedName.id, { name: trimmedNewValue });
+          }
+          break;
+        }
+        case 'walletSoftware': {
+          const ws = walletSoftware.find(w => w.name === oldName);
+          if (ws?.id) {
+            await updateWalletSoftwareEntry(ws.id, { name: trimmedNewValue });
+          }
+          break;
+        }
+      }
+      
+      toast({
+        title: `${config.label} Renamed`,
+        description: `"${oldName}" renamed to "${trimmedNewValue}"`,
+      });
+      
+      setEditingUnusedField(null);
+      setEditingUnusedValue("");
+      setNewUnusedValue("");
+    } catch (error) {
+      toast({
+        variant: "destructive",
+        title: "Update Failed",
+        description: error instanceof Error ? error.message : "Failed to update item",
+      });
+    } finally {
+      setIsUpdating(false);
+    }
+  };
+
   const isLoading = recordsLoading || tagsLoading || categoriesLoading || ownersLoading || walletNamesLoading || seedNamesLoading || walletSoftwareLoading;
 
   const renderFieldSection = (config: FieldConfig) => {
@@ -676,15 +758,72 @@ export default function ValueUpdaterPage() {
                         className="flex items-center justify-between p-2 rounded-md bg-muted/20"
                         data-testid={`row-unused-${config.key}-${name}`}
                       >
-                        <span className="text-sm text-muted-foreground">{name}</span>
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          onClick={() => handleDeleteUnused(config.key, name)}
-                          data-testid={`button-delete-unused-${config.key}-${name}`}
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
+                        {editingUnusedField === config.key && editingUnusedValue === name ? (
+                          <div className="flex gap-2 flex-1">
+                            <Input
+                              value={newUnusedValue}
+                              onChange={(e) => setNewUnusedValue(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                  handleUpdateUnused(config.key, name, newUnusedValue);
+                                } else if (e.key === 'Escape') {
+                                  setEditingUnusedField(null);
+                                  setEditingUnusedValue("");
+                                  setNewUnusedValue("");
+                                }
+                              }}
+                              autoFocus
+                              disabled={isUpdating}
+                              data-testid={`input-edit-unused-${config.key}-${name}`}
+                            />
+                            <Button
+                              size="sm"
+                              onClick={() => handleUpdateUnused(config.key, name, newUnusedValue)}
+                              disabled={isUpdating}
+                              data-testid={`button-save-unused-${config.key}-${name}`}
+                            >
+                              {isUpdating ? <RefreshCw className="h-4 w-4 animate-spin" /> : "Save"}
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => {
+                                setEditingUnusedField(null);
+                                setEditingUnusedValue("");
+                                setNewUnusedValue("");
+                              }}
+                              disabled={isUpdating}
+                            >
+                              Cancel
+                            </Button>
+                          </div>
+                        ) : (
+                          <>
+                            <span className="text-sm text-muted-foreground">{name}</span>
+                            <div className="flex gap-1">
+                              <Button
+                                size="icon"
+                                variant="ghost"
+                                onClick={() => {
+                                  setEditingUnusedField(config.key);
+                                  setEditingUnusedValue(name);
+                                  setNewUnusedValue(name);
+                                }}
+                                data-testid={`button-edit-unused-${config.key}-${name}`}
+                              >
+                                <Edit className="h-4 w-4" />
+                              </Button>
+                              <Button
+                                size="icon"
+                                variant="ghost"
+                                onClick={() => handleDeleteUnused(config.key, name)}
+                                data-testid={`button-delete-unused-${config.key}-${name}`}
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            </div>
+                          </>
+                        )}
                       </div>
                     ))}
                   </div>
