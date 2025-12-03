@@ -58,26 +58,57 @@ export default function TransactionSync() {
   const [maxDepth, setMaxDepth] = useState<number>(1);
   const [depthStats, setDepthStats] = useState<Map<number, number>>(new Map());
 
+  // Apply source filter to records for depth count calculation
+  const applySourceFilter = useCallback((records: DbRecord[], filter: SourceFilter): DbRecord[] => {
+    return records.filter(r => {
+      switch (filter) {
+        case 'manual-only':
+          if (r.source === 'blockchain-sync') return false;
+          if (r.source?.startsWith('tx-import:')) return false;
+          return true;
+        case 'include-tx-import':
+          if (r.source === 'blockchain-sync') return false;
+          return true;
+        case 'include-blockchain-sync':
+          if (r.source?.startsWith('tx-import:')) return false;
+          return true;
+        case 'all':
+          return true;
+        default:
+          return true;
+      }
+    });
+  }, []);
+
   const loadStats = useCallback(async () => {
     const s = await transactionSyncService.getStats();
     setStats(s);
     
     const pending = await transactionSyncService.getPendingReviewAddresses();
     setPendingReviewAddresses(pending);
-    
-    // Count addresses by depth
+  }, []);
+  
+  // Calculate depth stats based on source filter
+  const calculateDepthStats = useCallback(async (filter: SourceFilter) => {
     const allRecords = await db.records.where('type').equals('address').toArray();
+    const filteredRecords = applySourceFilter(allRecords, filter);
+    
     const depths = new Map<number, number>();
-    for (const record of allRecords) {
+    for (const record of filteredRecords) {
       const depth = record.syncDepth ?? 0;
       depths.set(depth, (depths.get(depth) ?? 0) + 1);
     }
     setDepthStats(depths);
-  }, []);
+  }, [applySourceFilter]);
 
   useEffect(() => {
     loadStats();
   }, [loadStats]);
+  
+  // Recalculate depth stats when source filter changes
+  useEffect(() => {
+    calculateDepthStats(sourceFilter);
+  }, [sourceFilter, calculateDepthStats]);
 
   const handleSync = async () => {
     setIsSyncing(true);
@@ -129,6 +160,7 @@ export default function TransactionSync() {
     } finally {
       setIsSyncing(false);
       await loadStats();
+      await calculateDepthStats(sourceFilter);
     }
   };
 
@@ -317,7 +349,7 @@ export default function TransactionSync() {
                     <SelectValue placeholder="Select sync depth" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="1">1 level (your addresses only)</SelectItem>
+                    <SelectItem value="1">1 level (added manually, wallet sync or via xpubs)</SelectItem>
                     <SelectItem value="2">2 levels (+ first-hop addresses)</SelectItem>
                     <SelectItem value="3">3 levels (+ second-hop addresses)</SelectItem>
                   </SelectContent>

@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { Plus, Grid3x3, List, ChevronLeft, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { SearchBar } from "@/components/SearchBar";
@@ -22,6 +22,9 @@ import { getRecordAttachments } from "@/lib/attachments";
 import type { Record } from "@/lib/database";
 import type { Attachment } from "@/lib/database";
 
+type SortDirection = "asc" | "desc" | null;
+type SortColumn = "type" | "label" | "inputString" | "tags" | "categories" | "walletSoftware" | "seedName" | "privateKeyStatus" | "attachments" | "source" | "owner" | "walletName" | string;
+
 export default function Dashboard() {
   const [search, setSearch] = useState("");
   const [view, setView] = useState<"grid" | "table">("table");
@@ -37,6 +40,8 @@ export default function Dashboard() {
   const [filteredRecords, setFilteredRecords] = useState<Record[]>([]);
   const [currentPage, setCurrentPage] = useState(1);
   const ITEMS_PER_PAGE = 50;
+  const [sortColumn, setSortColumn] = useState<SortColumn | null>(null);
+  const [sortDirection, setSortDirection] = useState<SortDirection>(null);
   const [selectedRecordId, setSelectedRecordId] = useState<number | undefined>();
   const [selectedRecordAttachments, setSelectedRecordAttachments] = useState<Attachment[]>([]);
   const [showDetail, setShowDetail] = useState(false);
@@ -119,14 +124,100 @@ export default function Dashboard() {
   useEffect(() => {
     setCurrentPage(1);
   }, [search, filter]);
+  
+  // Handle sort column clicks from RecordTable
+  const handleSort = (column: SortColumn) => {
+    if (sortColumn === column) {
+      if (sortDirection === "asc") {
+        setSortDirection("desc");
+      } else if (sortDirection === "desc") {
+        setSortColumn(null);
+        setSortDirection(null);
+      } else {
+        setSortDirection("asc");
+      }
+    } else {
+      setSortColumn(column);
+      setSortDirection("asc");
+    }
+  };
+  
+  // Sort filtered records BEFORE pagination
+  const sortedFilteredRecords = useMemo(() => {
+    if (!sortColumn || !sortDirection) {
+      return filteredRecords; // Already sorted by updatedAt from filter effect
+    }
+    
+    return [...filteredRecords].sort((a, b) => {
+      let aVal: string | number = "";
+      let bVal: string | number = "";
 
-  // Pagination calculations
-  const totalPages = Math.max(1, Math.ceil(filteredRecords.length / ITEMS_PER_PAGE));
+      switch (sortColumn) {
+        case "type":
+          aVal = a.type;
+          bVal = b.type;
+          break;
+        case "label":
+          aVal = a.label.toLowerCase();
+          bVal = b.label.toLowerCase();
+          break;
+        case "inputString":
+          aVal = a.inputString.toLowerCase();
+          bVal = b.inputString.toLowerCase();
+          break;
+        case "tags":
+          aVal = (a.tags[0] || "").toLowerCase();
+          bVal = (b.tags[0] || "").toLowerCase();
+          break;
+        case "categories":
+          aVal = ((a.categories || [])[0] || "").toLowerCase();
+          bVal = ((b.categories || [])[0] || "").toLowerCase();
+          break;
+        case "walletSoftware":
+          aVal = (a.walletSoftware || "").toLowerCase();
+          bVal = (b.walletSoftware || "").toLowerCase();
+          break;
+        case "seedName":
+          aVal = (a.seedName || "").toLowerCase();
+          bVal = (b.seedName || "").toLowerCase();
+          break;
+        case "privateKeyStatus":
+          aVal = (a.privateKeyStatus || "").toLowerCase();
+          bVal = (b.privateKeyStatus || "").toLowerCase();
+          break;
+        case "source":
+          aVal = (a.source || "").toLowerCase();
+          bVal = (b.source || "").toLowerCase();
+          break;
+        case "owner":
+          aVal = (a.owner || "").toLowerCase();
+          bVal = (b.owner || "").toLowerCase();
+          break;
+        case "walletName":
+          aVal = (a.walletName || "").toLowerCase();
+          bVal = (b.walletName || "").toLowerCase();
+          break;
+        default:
+          if (sortColumn.startsWith("custom_")) {
+            const fieldSlug = sortColumn.replace("custom_", "");
+            aVal = (a.customFields?.[fieldSlug] || "").toLowerCase();
+            bVal = (b.customFields?.[fieldSlug] || "").toLowerCase();
+          }
+      }
+
+      if (aVal < bVal) return sortDirection === "asc" ? -1 : 1;
+      if (aVal > bVal) return sortDirection === "asc" ? 1 : -1;
+      return 0;
+    });
+  }, [filteredRecords, sortColumn, sortDirection]);
+
+  // Pagination calculations - using sorted records
+  const totalPages = Math.max(1, Math.ceil(sortedFilteredRecords.length / ITEMS_PER_PAGE));
   // Clamp currentPage to valid range
   const safePage = Math.min(currentPage, totalPages);
   const startIndex = (safePage - 1) * ITEMS_PER_PAGE;
   const endIndex = startIndex + ITEMS_PER_PAGE;
-  const paginatedRecords = filteredRecords.slice(startIndex, endIndex);
+  const paginatedRecords = sortedFilteredRecords.slice(startIndex, endIndex);
   
   // Auto-correct page if it's out of bounds (e.g., after filter changes)
   useEffect(() => {
@@ -742,6 +833,9 @@ export default function Dashboard() {
                 onEdit={(id) => handleEditRecord(Number(id))}
                 onDelete={(id) => handleDeleteRecord(Number(id))}
                 onSyncDeeper={(id) => handleSyncDeeper(Number(id))}
+                externalSortColumn={sortColumn}
+                externalSortDirection={sortDirection}
+                onSortChange={handleSort}
               />
             )}
 

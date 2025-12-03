@@ -83,6 +83,10 @@ interface RecordTableProps {
   onDelete?: (id: string) => void;
   onRowClick?: (id: string) => void;
   onSyncDeeper?: (id: string) => void;
+  // Controlled sort props - when provided, sorting is managed by parent
+  externalSortColumn?: SortColumn | null;
+  externalSortDirection?: SortDirection;
+  onSortChange?: (column: SortColumn) => void;
 }
 
 interface SortableHeaderProps {
@@ -119,12 +123,30 @@ function SortableHeader({ column, label, currentSort, direction, onSort, classNa
   );
 }
 
-export function RecordTable({ records, onEdit, onDelete, onRowClick, onSyncDeeper }: RecordTableProps) {
+export function RecordTable({ 
+  records, 
+  onEdit, 
+  onDelete, 
+  onRowClick, 
+  onSyncDeeper,
+  externalSortColumn,
+  externalSortDirection,
+  onSortChange,
+}: RecordTableProps) {
   const { tableColumns, customFieldColumns } = useSettings();
   const { enabledCustomFields } = useCustomFields();
   const [attachmentCounts, setAttachmentCounts] = useState<Map<string, number>>(new Map());
-  const [sortColumn, setSortColumn] = useState<SortColumn | null>(null);
-  const [sortDirection, setSortDirection] = useState<SortDirection>(null);
+  
+  // Internal sort state - used when external sort is not provided
+  const [internalSortColumn, setInternalSortColumn] = useState<SortColumn | null>(null);
+  const [internalSortDirection, setInternalSortDirection] = useState<SortDirection>(null);
+  
+  // Use external sort if provided, otherwise use internal
+  // Exception: attachments column is always handled internally (needs attachment counts)
+  const isExternallyControlled = onSortChange !== undefined;
+  const isInternalAttachmentSort = isExternallyControlled && internalSortColumn === "attachments";
+  const sortColumn = isInternalAttachmentSort ? internalSortColumn : (isExternallyControlled ? (externalSortColumn ?? null) : internalSortColumn);
+  const sortDirection = isInternalAttachmentSort ? internalSortDirection : (isExternallyControlled ? (externalSortDirection ?? null) : internalSortDirection);
 
   useEffect(() => {
     const loadAttachmentCounts = async () => {
@@ -142,23 +164,43 @@ export function RecordTable({ records, onEdit, onDelete, onRowClick, onSyncDeepe
   }, [records]);
 
   const handleSort = (column: SortColumn) => {
-    if (sortColumn === column) {
-      if (sortDirection === "asc") {
-        setSortDirection("desc");
-      } else if (sortDirection === "desc") {
-        setSortColumn(null);
-        setSortDirection(null);
+    // Attachments sorting requires attachment counts which are only available here
+    // So always handle it internally even when externally controlled
+    const shouldHandleInternally = !isExternallyControlled || column === "attachments";
+    
+    if (shouldHandleInternally) {
+      // Internal sort logic
+      if (internalSortColumn === column) {
+        if (internalSortDirection === "asc") {
+          setInternalSortDirection("desc");
+        } else if (internalSortDirection === "desc") {
+          setInternalSortColumn(null);
+          setInternalSortDirection(null);
+        } else {
+          setInternalSortDirection("asc");
+        }
       } else {
-        setSortDirection("asc");
+        setInternalSortColumn(column);
+        setInternalSortDirection("asc");
       }
     } else {
-      setSortColumn(column);
-      setSortDirection("asc");
+      // Parent handles the sort logic for non-attachment columns
+      onSortChange!(column);
     }
   };
 
   const sortedRecords = useMemo(() => {
-    if (!sortColumn || !sortDirection) {
+    // When externally controlled, parent already sorted records
+    // Exception: attachments sorting is always internal since it needs attachment counts
+    if (isExternallyControlled && internalSortColumn !== "attachments") {
+      return records;
+    }
+    
+    // Internal sorting - for non-external control or attachments column
+    const activeColumn = isExternallyControlled ? internalSortColumn : sortColumn;
+    const activeDirection = isExternallyControlled ? internalSortDirection : sortDirection;
+    
+    if (!activeColumn || !activeDirection) {
       return records;
     }
 
@@ -166,7 +208,7 @@ export function RecordTable({ records, onEdit, onDelete, onRowClick, onSyncDeepe
       let aVal: string | number = "";
       let bVal: string | number = "";
 
-      switch (sortColumn) {
+      switch (activeColumn) {
         case "type":
           aVal = a.type;
           bVal = b.type;
@@ -216,18 +258,18 @@ export function RecordTable({ records, onEdit, onDelete, onRowClick, onSyncDeepe
           bVal = (b.walletName || "").toLowerCase();
           break;
         default:
-          if (sortColumn.startsWith("custom_")) {
-            const fieldSlug = sortColumn.replace("custom_", "");
+          if (activeColumn.startsWith("custom_")) {
+            const fieldSlug = activeColumn.replace("custom_", "");
             aVal = (a.customFields?.[fieldSlug] || "").toLowerCase();
             bVal = (b.customFields?.[fieldSlug] || "").toLowerCase();
           }
       }
 
-      if (aVal < bVal) return sortDirection === "asc" ? -1 : 1;
-      if (aVal > bVal) return sortDirection === "asc" ? 1 : -1;
+      if (aVal < bVal) return activeDirection === "asc" ? -1 : 1;
+      if (aVal > bVal) return activeDirection === "asc" ? 1 : -1;
       return 0;
     });
-  }, [records, sortColumn, sortDirection, attachmentCounts]);
+  }, [records, sortColumn, sortDirection, attachmentCounts, isExternallyControlled, internalSortColumn, internalSortDirection]);
 
   const getPrivateKeyBadge = (status?: string) => {
     if (!status) return null;
