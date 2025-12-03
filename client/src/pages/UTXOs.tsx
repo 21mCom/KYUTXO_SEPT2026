@@ -593,7 +593,11 @@ export default function UTXOs() {
                     mode="single"
                     selected={selectedDate}
                     onSelect={setSelectedDate}
-                    disabled={(date) => date > new Date()}
+                    disabled={(date) => date > new Date() || date < new Date(2009, 0, 3)}
+                    captionLayout="dropdown-buttons"
+                    fromYear={2009}
+                    toYear={new Date().getFullYear()}
+                    defaultMonth={selectedDate || new Date()}
                     initialFocus
                   />
                 </PopoverContent>
