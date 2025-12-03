@@ -47,8 +47,17 @@ import {
   encryptTag, 
   encryptCategory, 
   encryptAttachment,
+  encryptOwner,
+  encryptWalletName,
+  encryptSeedName,
+  encryptWalletSoftware,
+  encryptDerivationTemplate,
   decryptTag,
   decryptCategory,
+  decryptOwner,
+  decryptWalletName,
+  decryptSeedName,
+  decryptWalletSoftware,
 } from "@/lib/dbEncryption";
 import JSZip from "jszip";
 
@@ -373,7 +382,19 @@ export default function SettingsPage() {
       setRestoreProgress(30);
       setRestoreMessage("Processing data...");
 
-      const { records, tags, categories, attachments, recordOrigins, customFields: backupCustomFields } = data;
+      const { 
+        records, 
+        tags, 
+        categories, 
+        attachments, 
+        recordOrigins, 
+        customFields: backupCustomFields,
+        owners = [],
+        walletNames = [],
+        seedNames = [],
+        walletSoftware = [],
+        derivationTemplates = [],
+      } = data;
 
       // If replace mode, clear existing data first
       if (restoreMode === "replace") {
@@ -386,6 +407,11 @@ export default function SettingsPage() {
         await db.attachments.clear();
         await db.recordOrigins.clear();
         await db.customFields.clear();
+        await db.owners.clear();
+        await db.walletNames.clear();
+        await db.seedNames.clear();
+        await db.walletSoftware.clear();
+        await db.derivationTemplates.clear();
       }
 
       setRestoreProgress(50);
@@ -596,12 +622,210 @@ export default function SettingsPage() {
         }
       }
 
+      setRestoreProgress(92);
+      setRestoreMessage("Restoring vocabulary items...");
+
+      let vocabularyAdded = 0;
+
+      // Track existing vocabulary names for merge mode
+      let existingOwnerNames = new Set<string>();
+      let existingWalletNameNames = new Set<string>();
+      let existingSeedNameNames = new Set<string>();
+      let existingWalletSoftwareNames = new Set<string>();
+      
+      if (restoreMode === "merge") {
+        const existingOwners = await db.owners.toArray();
+        for (const owner of existingOwners) {
+          if (owner.isEncrypted && owner.encryptedPayload) {
+            try {
+              const decrypted = await decryptOwner(owner, currentKey);
+              existingOwnerNames.add(decrypted.name);
+            } catch {
+              existingOwnerNames.add(owner.name);
+            }
+          } else {
+            existingOwnerNames.add(owner.name);
+          }
+        }
+        
+        const existingWalletNames = await db.walletNames.toArray();
+        for (const wn of existingWalletNames) {
+          if (wn.isEncrypted && wn.encryptedPayload) {
+            try {
+              const decrypted = await decryptWalletName(wn, currentKey);
+              existingWalletNameNames.add(decrypted.name);
+            } catch {
+              existingWalletNameNames.add(wn.name);
+            }
+          } else {
+            existingWalletNameNames.add(wn.name);
+          }
+        }
+        
+        const existingSeedNames = await db.seedNames.toArray();
+        for (const sn of existingSeedNames) {
+          if (sn.isEncrypted && sn.encryptedPayload) {
+            try {
+              const decrypted = await decryptSeedName(sn, currentKey);
+              existingSeedNameNames.add(decrypted.name);
+            } catch {
+              existingSeedNameNames.add(sn.name);
+            }
+          } else {
+            existingSeedNameNames.add(sn.name);
+          }
+        }
+        
+        const existingWalletSoftware = await db.walletSoftware.toArray();
+        for (const ws of existingWalletSoftware) {
+          if (ws.isEncrypted && ws.encryptedPayload) {
+            try {
+              const decrypted = await decryptWalletSoftware(ws, currentKey);
+              existingWalletSoftwareNames.add(decrypted.name);
+            } catch {
+              existingWalletSoftwareNames.add(ws.name);
+            }
+          } else {
+            existingWalletSoftwareNames.add(ws.name);
+          }
+        }
+      }
+
+      // Restore owners
+      if (owners && owners.length > 0) {
+        for (const owner of owners) {
+          const { id, encryptedPayload, isEncrypted, ...ownerData } = owner;
+          const ownerName = ownerData.name || "";
+          
+          if (restoreMode === "merge" && existingOwnerNames.has(ownerName)) {
+            continue;
+          }
+          
+          const newOwner = {
+            name: ownerName,
+            createdAt: ownerData.createdAt || Date.now(),
+          };
+          
+          const encrypted = await encryptOwner(newOwner as any, currentKey);
+          await db.owners.add(encrypted);
+          vocabularyAdded++;
+        }
+      }
+
+      // Restore wallet names
+      if (walletNames && walletNames.length > 0) {
+        for (const wn of walletNames) {
+          const { id, encryptedPayload, isEncrypted, ...wnData } = wn;
+          const wnName = wnData.name || "";
+          
+          if (restoreMode === "merge" && existingWalletNameNames.has(wnName)) {
+            continue;
+          }
+          
+          const newWalletName = {
+            name: wnName,
+            createdAt: wnData.createdAt || Date.now(),
+          };
+          
+          const encrypted = await encryptWalletName(newWalletName as any, currentKey);
+          await db.walletNames.add(encrypted);
+          vocabularyAdded++;
+        }
+      }
+
+      // Restore seed names
+      if (seedNames && seedNames.length > 0) {
+        for (const sn of seedNames) {
+          const { id, encryptedPayload, isEncrypted, ...snData } = sn;
+          const snName = snData.name || "";
+          
+          if (restoreMode === "merge" && existingSeedNameNames.has(snName)) {
+            continue;
+          }
+          
+          const newSeedName = {
+            name: snName,
+            createdAt: snData.createdAt || Date.now(),
+          };
+          
+          const encrypted = await encryptSeedName(newSeedName as any, currentKey);
+          await db.seedNames.add(encrypted);
+          vocabularyAdded++;
+        }
+      }
+
+      // Restore wallet software
+      if (walletSoftware && walletSoftware.length > 0) {
+        for (const ws of walletSoftware) {
+          const { id, encryptedPayload, isEncrypted, ...wsData } = ws;
+          const wsName = wsData.name || "";
+          
+          if (restoreMode === "merge" && existingWalletSoftwareNames.has(wsName)) {
+            continue;
+          }
+          
+          const newWalletSoftware = {
+            name: wsName,
+            createdAt: wsData.createdAt || Date.now(),
+          };
+          
+          const encrypted = await encryptWalletSoftware(newWalletSoftware as any, currentKey);
+          await db.walletSoftware.add(encrypted);
+          vocabularyAdded++;
+        }
+      }
+
+      setRestoreProgress(96);
+      setRestoreMessage("Restoring derivation templates...");
+
+      let templatesAdded = 0;
+
+      // Restore derivation templates
+      if (derivationTemplates && derivationTemplates.length > 0) {
+        // Track existing templates by fingerprint+scriptType for merge mode
+        let existingTemplateKeys = new Set<string>();
+        if (restoreMode === "merge") {
+          const existingTemplates = await db.derivationTemplates.toArray();
+          for (const t of existingTemplates) {
+            existingTemplateKeys.add(`${t.fingerprint}:${t.scriptType}`);
+          }
+        }
+        
+        for (const template of derivationTemplates) {
+          const { id, encryptedPayload, isEncrypted, ...templateData } = template;
+          const templateKey = `${templateData.fingerprint}:${templateData.scriptType}`;
+          
+          if (restoreMode === "merge" && existingTemplateKeys.has(templateKey)) {
+            continue;
+          }
+          
+          const newTemplate = {
+            fingerprint: templateData.fingerprint || "unknown",
+            scriptType: templateData.scriptType || "P2WPKH",
+            derivationPath: templateData.derivationPath || "m/84'/0'/0'",
+            xpub: templateData.xpub,
+            gapLimit: templateData.gapLimit || 20,
+            network: templateData.network || "mainnet",
+            owner: templateData.owner,
+            walletName: templateData.walletName,
+            seedName: templateData.seedName,
+            notes: templateData.notes,
+            createdAt: templateData.createdAt || Date.now(),
+            updatedAt: templateData.updatedAt || Date.now(),
+          };
+          
+          const encrypted = await encryptDerivationTemplate(newTemplate as any, currentKey);
+          await db.derivationTemplates.add(encrypted);
+          templatesAdded++;
+        }
+      }
+
       setRestoreProgress(100);
       setRestoreMessage("Restore complete!");
 
       const message = restoreMode === "merge"
-        ? `Added ${recordsAdded} records (${recordsSkipped} skipped), ${tagsAdded} tags, ${categoriesAdded} categories.`
-        : `Restored ${recordsAdded} records, ${tagsAdded} tags, ${categoriesAdded} categories.`;
+        ? `Added ${recordsAdded} records (${recordsSkipped} skipped), ${tagsAdded} tags, ${categoriesAdded} categories, ${vocabularyAdded} vocabulary items, ${templatesAdded} templates.`
+        : `Restored ${recordsAdded} records, ${tagsAdded} tags, ${categoriesAdded} categories, ${vocabularyAdded} vocabulary items, ${templatesAdded} templates.`;
 
       toast({
         title: "Restore Successful",

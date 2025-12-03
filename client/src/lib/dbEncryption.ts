@@ -2,7 +2,7 @@
 // Handles encryption/decryption of record data in IndexedDB
 
 import { encrypt, decrypt } from './crypto';
-import { db, type Record, type Attachment, type Tag, type Category, type RecordOrigin, type Owner, type WalletName, type SeedName, type WalletSoftware } from './database';
+import { db, type Record, type Attachment, type Tag, type Category, type RecordOrigin, type Owner, type WalletName, type SeedName, type WalletSoftware, type DerivationTemplate } from './database';
 
 // Fields to encrypt for each record type
 const RECORD_SENSITIVE_FIELDS: (keyof Record)[] = [
@@ -457,5 +457,51 @@ export async function decryptWalletSoftware(walletSoftware: WalletSoftware, key:
   } catch (error) {
     console.error('Failed to decrypt wallet software:', error);
     throw new Error('Failed to decrypt wallet software.');
+  }
+}
+
+export async function encryptDerivationTemplate(template: DerivationTemplate, key: CryptoKey): Promise<DerivationTemplate> {
+  const sensitivePayload = JSON.stringify({
+    xpub: template.xpub,
+    notes: template.notes,
+    owner: template.owner,
+    walletName: template.walletName,
+    seedName: template.seedName,
+  });
+  
+  const encryptedPayload = await encrypt(sensitivePayload, key);
+  
+  return {
+    ...template,
+    xpub: '[encrypted]',
+    notes: template.notes ? '[encrypted]' : undefined,
+    owner: template.owner ? '[encrypted]' : undefined,
+    walletName: template.walletName ? '[encrypted]' : undefined,
+    seedName: template.seedName ? '[encrypted]' : undefined,
+    encryptedPayload,
+    isEncrypted: true,
+  };
+}
+
+export async function decryptDerivationTemplate(template: DerivationTemplate, key: CryptoKey): Promise<DerivationTemplate> {
+  if (!template.isEncrypted || !template.encryptedPayload) {
+    return template;
+  }
+  try {
+    const decryptedJson = await decrypt(template.encryptedPayload, key);
+    const { xpub, notes, owner, walletName, seedName } = JSON.parse(decryptedJson);
+    return {
+      ...template,
+      xpub,
+      notes,
+      owner,
+      walletName,
+      seedName,
+      encryptedPayload: undefined,
+      isEncrypted: false,
+    };
+  } catch (error) {
+    console.error('Failed to decrypt derivation template:', error);
+    throw new Error('Failed to decrypt derivation template.');
   }
 }

@@ -34,6 +34,11 @@ interface ExportData {
     attachments: any[];
     recordOrigins: any[];
     customFields: CustomFieldDef[];
+    owners: any[];
+    walletNames: any[];
+    seedNames: any[];
+    walletSoftware: any[];
+    derivationTemplates: any[];
   };
 }
 
@@ -169,6 +174,66 @@ function generateAttachmentsCSV(attachments: any[]): string {
   return [headers.join(","), ...rows].join("\n");
 }
 
+function generateOwnersCSV(owners: any[]): string {
+  const headers = ["id", "name", "createdAt"];
+  const rows = owners.map((owner) => [
+    escapeCSVField(owner.id),
+    escapeCSVField(owner.name),
+    escapeCSVField(owner.createdAt ? new Date(owner.createdAt).toISOString() : ""),
+  ].join(","));
+  return [headers.join(","), ...rows].join("\n");
+}
+
+function generateWalletNamesCSV(walletNames: any[]): string {
+  const headers = ["id", "name", "createdAt"];
+  const rows = walletNames.map((wn) => [
+    escapeCSVField(wn.id),
+    escapeCSVField(wn.name),
+    escapeCSVField(wn.createdAt ? new Date(wn.createdAt).toISOString() : ""),
+  ].join(","));
+  return [headers.join(","), ...rows].join("\n");
+}
+
+function generateSeedNamesCSV(seedNames: any[]): string {
+  const headers = ["id", "name", "createdAt"];
+  const rows = seedNames.map((sn) => [
+    escapeCSVField(sn.id),
+    escapeCSVField(sn.name),
+    escapeCSVField(sn.createdAt ? new Date(sn.createdAt).toISOString() : ""),
+  ].join(","));
+  return [headers.join(","), ...rows].join("\n");
+}
+
+function generateWalletSoftwareCSV(walletSoftware: any[]): string {
+  const headers = ["id", "name", "createdAt"];
+  const rows = walletSoftware.map((ws) => [
+    escapeCSVField(ws.id),
+    escapeCSVField(ws.name),
+    escapeCSVField(ws.createdAt ? new Date(ws.createdAt).toISOString() : ""),
+  ].join(","));
+  return [headers.join(","), ...rows].join("\n");
+}
+
+function generateDerivationTemplatesCSV(templates: any[]): string {
+  const headers = ["id", "fingerprint", "scriptType", "derivationPath", "xpub", "gapLimit", "network", "owner", "walletName", "seedName", "notes", "createdAt", "updatedAt"];
+  const rows = templates.map((t) => [
+    escapeCSVField(t.id),
+    escapeCSVField(t.fingerprint),
+    escapeCSVField(t.scriptType),
+    escapeCSVField(t.derivationPath),
+    escapeCSVField(t.xpub),
+    escapeCSVField(t.gapLimit),
+    escapeCSVField(t.network),
+    escapeCSVField(t.owner),
+    escapeCSVField(t.walletName),
+    escapeCSVField(t.seedName),
+    escapeCSVField(t.notes),
+    escapeCSVField(t.createdAt ? new Date(t.createdAt).toISOString() : ""),
+    escapeCSVField(t.updatedAt ? new Date(t.updatedAt).toISOString() : ""),
+  ].join(","));
+  return [headers.join(","), ...rows].join("\n");
+}
+
 export default function ExportPage() {
   const [encrypted, setEncrypted] = useState(false);
   const [password, setPassword] = useState("");
@@ -182,6 +247,8 @@ export default function ExportPage() {
   const [attachmentCount, setAttachmentCount] = useState(0);
   const [tagCount, setTagCount] = useState(0);
   const [categoryCount, setCategoryCount] = useState(0);
+  const [vocabularyCount, setVocabularyCount] = useState(0);
+  const [derivationTemplateCount, setDerivationTemplateCount] = useState(0);
 
   const { encryptionKey } = useAuth();
   const { toast } = useToast();
@@ -197,10 +264,17 @@ export default function ExportPage() {
         const attachments = await db.attachments.count();
         const tags = await db.tags.count();
         const categories = await db.categories.count();
+        const owners = await db.owners.count();
+        const walletNames = await db.walletNames.count();
+        const seedNames = await db.seedNames.count();
+        const walletSoftware = await db.walletSoftware.count();
+        const derivationTemplates = await db.derivationTemplates.count();
         setRecordCount(records);
         setAttachmentCount(attachments);
         setTagCount(tags);
         setCategoryCount(categories);
+        setVocabularyCount(owners + walletNames + seedNames + walletSoftware);
+        setDerivationTemplateCount(derivationTemplates);
       } catch (error) {
         console.error("Failed to load counts:", error);
       }
@@ -256,6 +330,11 @@ export default function ExportPage() {
       const rawAttachments = await db.attachments.toArray();
       const rawOrigins = await db.recordOrigins.toArray();
       const rawCustomFields = await db.customFields.toArray();
+      const rawOwners = await db.owners.toArray();
+      const rawWalletNames = await db.walletNames.toArray();
+      const rawSeedNames = await db.seedNames.toArray();
+      const rawWalletSoftware = await db.walletSoftware.toArray();
+      const rawDerivationTemplates = await db.derivationTemplates.toArray();
 
       setProgress(20);
       setProgressMessage("Decrypting data...");
@@ -267,6 +346,11 @@ export default function ExportPage() {
       const categories = await Promise.all(rawCategories.map(decryptRecord));
       const attachments = await Promise.all(rawAttachments.map(decryptRecord));
       const recordOrigins = await Promise.all(rawOrigins.map(decryptRecord));
+      const owners = await Promise.all(rawOwners.map(decryptRecord));
+      const walletNames = await Promise.all(rawWalletNames.map(decryptRecord));
+      const seedNames = await Promise.all(rawSeedNames.map(decryptRecord));
+      const walletSoftware = await Promise.all(rawWalletSoftware.map(decryptRecord));
+      const derivationTemplates = await Promise.all(rawDerivationTemplates.map(decryptRecord));
 
       setProgress(50);
       setProgressMessage("Generating CSV files...");
@@ -277,17 +361,27 @@ export default function ExportPage() {
       const cleanAttachments = attachments.map(({ encryptedPayload, isEncrypted, ...a }) => a);
       const cleanOrigins = recordOrigins.map(({ encryptedPayload, isEncrypted, ...o }) => o);
       const customFields = rawCustomFields as CustomFieldDef[];
+      const cleanOwners = owners.map(({ encryptedPayload, isEncrypted, ...o }) => o);
+      const cleanWalletNames = walletNames.map(({ encryptedPayload, isEncrypted, ...w }) => w);
+      const cleanSeedNames = seedNames.map(({ encryptedPayload, isEncrypted, ...s }) => s);
+      const cleanWalletSoftware = walletSoftware.map(({ encryptedPayload, isEncrypted, ...w }) => w);
+      const cleanDerivationTemplates = derivationTemplates.map(({ encryptedPayload, isEncrypted, ...d }) => d);
 
       const recordsCSV = generateRecordsCSV(cleanRecords, cleanAttachments, customFields);
       const tagsCSV = generateTagsCSV(cleanTags);
       const categoriesCSV = generateCategoriesCSV(cleanCategories);
       const attachmentsCSV = generateAttachmentsCSV(cleanAttachments);
+      const ownersCSV = generateOwnersCSV(cleanOwners);
+      const walletNamesCSV = generateWalletNamesCSV(cleanWalletNames);
+      const seedNamesCSV = generateSeedNamesCSV(cleanSeedNames);
+      const walletSoftwareCSV = generateWalletSoftwareCSV(cleanWalletSoftware);
+      const derivationTemplatesCSV = generateDerivationTemplatesCSV(cleanDerivationTemplates);
 
       setProgress(65);
       setProgressMessage("Creating ZIP archive...");
 
       const exportData: ExportData = {
-        version: "1.0.0",
+        version: "2.0.0",
         exportDate: new Date().toISOString(),
         encrypted: encrypted,
         data: {
@@ -297,6 +391,11 @@ export default function ExportPage() {
           attachments: cleanAttachments,
           recordOrigins: cleanOrigins,
           customFields: customFields,
+          owners: cleanOwners,
+          walletNames: cleanWalletNames,
+          seedNames: cleanSeedNames,
+          walletSoftware: cleanWalletSoftware,
+          derivationTemplates: cleanDerivationTemplates,
         },
       };
 
@@ -315,6 +414,11 @@ export default function ExportPage() {
         const encryptedTagsCSV = await encrypt(tagsCSV, exportKey);
         const encryptedCategoriesCSV = await encrypt(categoriesCSV, exportKey);
         const encryptedAttachmentsCSV = await encrypt(attachmentsCSV, exportKey);
+        const encryptedOwnersCSV = await encrypt(ownersCSV, exportKey);
+        const encryptedWalletNamesCSV = await encrypt(walletNamesCSV, exportKey);
+        const encryptedSeedNamesCSV = await encrypt(seedNamesCSV, exportKey);
+        const encryptedWalletSoftwareCSV = await encrypt(walletSoftwareCSV, exportKey);
+        const encryptedDerivationTemplatesCSV = await encrypt(derivationTemplatesCSV, exportKey);
 
         const encryptedExport = {
           version: exportData.version,
@@ -329,6 +433,11 @@ export default function ExportPage() {
         zip.file("tags.csv.encrypted", encryptedTagsCSV);
         zip.file("categories.csv.encrypted", encryptedCategoriesCSV);
         zip.file("attachments.csv.encrypted", encryptedAttachmentsCSV);
+        zip.file("owners.csv.encrypted", encryptedOwnersCSV);
+        zip.file("wallet_names.csv.encrypted", encryptedWalletNamesCSV);
+        zip.file("seed_names.csv.encrypted", encryptedSeedNamesCSV);
+        zip.file("wallet_software.csv.encrypted", encryptedWalletSoftwareCSV);
+        zip.file("derivation_templates.csv.encrypted", encryptedDerivationTemplatesCSV);
         zip.file("README.txt", `KYUTXO Encrypted Backup
 ========================
 Export Date: ${exportData.exportDate}
@@ -343,6 +452,11 @@ Files:
 - tags.csv.encrypted: Encrypted tags list
 - categories.csv.encrypted: Encrypted categories list
 - attachments.csv.encrypted: Encrypted attachment metadata
+- owners.csv.encrypted: Encrypted owners vocabulary
+- wallet_names.csv.encrypted: Encrypted wallet names vocabulary
+- seed_names.csv.encrypted: Encrypted seed names vocabulary
+- wallet_software.csv.encrypted: Encrypted wallet software vocabulary
+- derivation_templates.csv.encrypted: Encrypted derivation templates
 
 Note: File attachments are NOT included in this backup.
 They are stored separately in: ${attachmentsFolderPath}
@@ -354,6 +468,11 @@ They are stored separately in: ${attachmentsFolderPath}
         zip.file("tags.csv", tagsCSV);
         zip.file("categories.csv", categoriesCSV);
         zip.file("attachments.csv", attachmentsCSV);
+        zip.file("owners.csv", ownersCSV);
+        zip.file("wallet_names.csv", walletNamesCSV);
+        zip.file("seed_names.csv", seedNamesCSV);
+        zip.file("wallet_software.csv", walletSoftwareCSV);
+        zip.file("derivation_templates.csv", derivationTemplatesCSV);
         zip.file("README.txt", `KYUTXO Backup
 ========================
 Export Date: ${exportData.exportDate}
@@ -367,6 +486,11 @@ Files:
 - tags.csv: Tags list
 - categories.csv: Categories list
 - attachments.csv: Attachment metadata
+- owners.csv: Owners vocabulary
+- wallet_names.csv: Wallet names vocabulary
+- seed_names.csv: Seed names vocabulary
+- wallet_software.csv: Wallet software vocabulary
+- derivation_templates.csv: Derivation templates
 
 Note: File attachments are NOT included in this backup.
 They are stored separately in: ${attachmentsFolderPath}
@@ -553,6 +677,11 @@ They are stored separately in: ${attachmentsFolderPath}
                 <li><code className="text-xs bg-muted px-1 rounded">tags.csv</code> - Tags list</li>
                 <li><code className="text-xs bg-muted px-1 rounded">categories.csv</code> - Categories list</li>
                 <li><code className="text-xs bg-muted px-1 rounded">attachments.csv</code> - Attachment metadata</li>
+                <li><code className="text-xs bg-muted px-1 rounded">owners.csv</code> - Owners vocabulary</li>
+                <li><code className="text-xs bg-muted px-1 rounded">wallet_names.csv</code> - Wallet names vocabulary</li>
+                <li><code className="text-xs bg-muted px-1 rounded">seed_names.csv</code> - Seed names vocabulary</li>
+                <li><code className="text-xs bg-muted px-1 rounded">wallet_software.csv</code> - Wallet software vocabulary</li>
+                <li><code className="text-xs bg-muted px-1 rounded">derivation_templates.csv</code> - Derivation templates</li>
               </ul>
             </div>
           </CardContent>
@@ -574,6 +703,14 @@ They are stored separately in: ${attachmentsFolderPath}
             <div className="flex justify-between text-sm">
               <span className="text-muted-foreground">Total Categories</span>
               <span className="font-medium" data-testid="text-category-count">{categoryCount}</span>
+            </div>
+            <div className="flex justify-between text-sm">
+              <span className="text-muted-foreground">Vocabulary Items</span>
+              <span className="font-medium" data-testid="text-vocabulary-count">{vocabularyCount}</span>
+            </div>
+            <div className="flex justify-between text-sm">
+              <span className="text-muted-foreground">Derivation Templates</span>
+              <span className="font-medium" data-testid="text-template-count">{derivationTemplateCount}</span>
             </div>
             <div className="flex justify-between text-sm">
               <span className="text-muted-foreground">Total Attachments</span>
