@@ -43,6 +43,82 @@ import {
   getProviderPrivacyInfo 
 } from "@/lib/blockchain-api";
 
+type UrlClassification = 'local' | 'onion' | 'public' | 'unknown';
+
+function classifyUrl(url: string | undefined): UrlClassification {
+  if (!url || url.trim() === '') return 'unknown';
+  
+  try {
+    const parsed = new URL(url.trim());
+    const hostname = parsed.hostname.toLowerCase();
+    
+    // Check for .onion addresses (Tor hidden services)
+    if (hostname.endsWith('.onion')) {
+      return 'onion';
+    }
+    
+    // Check for localhost
+    if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1') {
+      return 'local';
+    }
+    
+    // Check for .local domains (mDNS/Bonjour)
+    if (hostname.endsWith('.local')) {
+      return 'local';
+    }
+    
+    // Check for private/RFC1918 IP addresses
+    const ipv4Match = hostname.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+    if (ipv4Match) {
+      const [, a, b] = ipv4Match.map(Number);
+      // 10.0.0.0/8
+      if (a === 10) return 'local';
+      // 172.16.0.0/12
+      if (a === 172 && b >= 16 && b <= 31) return 'local';
+      // 192.168.0.0/16
+      if (a === 192 && b === 168) return 'local';
+      // 169.254.0.0/16 (link-local)
+      if (a === 169 && b === 254) return 'local';
+    }
+    
+    return 'public';
+  } catch {
+    return 'unknown';
+  }
+}
+
+function getTorAvailability(providerType: NodeProviderType, customUrl?: string): {
+  available: boolean;
+  reason?: string;
+  autoEnable?: boolean;
+} {
+  // Built-in providers always support Tor (they have .onion endpoints)
+  if (providerType === 'mempool-space' || providerType === 'blockstream') {
+    return { available: true };
+  }
+  
+  // Custom providers depend on the URL
+  const classification = classifyUrl(customUrl);
+  
+  switch (classification) {
+    case 'local':
+      return { 
+        available: false, 
+        reason: 'Tor cannot route to local/private network addresses. Use direct connection for LAN nodes.' 
+      };
+    case 'onion':
+      return { 
+        available: true, 
+        autoEnable: true 
+      };
+    case 'public':
+      return { available: true };
+    case 'unknown':
+    default:
+      return { available: true };
+  }
+}
+
 const PROVIDER_OPTIONS: { value: NodeProviderType; label: string; description: string }[] = [
   { 
     value: 'mempool-space', 
@@ -92,16 +168,40 @@ export default function NodeSettings() {
   const privacyInfo = getProviderPrivacyInfo(currentSettings.providerType, currentSettings.useTor);
   
   const handleProviderChange = (value: NodeProviderType) => {
+    const newCustomUrl = value.startsWith('custom-') ? pendingChanges.customUrl || currentSettings.customUrl : undefined;
+    const torInfo = getTorAvailability(value, newCustomUrl);
+    
     setPendingChanges(prev => ({ 
       ...prev, 
       providerType: value,
-      customUrl: value.startsWith('custom-') ? prev.customUrl || currentSettings.customUrl : undefined,
+      customUrl: newCustomUrl,
+      // Preserve useTor, but disable if not available for new provider
+      useTor: torInfo.available ? (prev.useTor ?? currentSettings.useTor ?? false) : false,
     }));
     setTestResult(null);
   };
   
   const handleCustomUrlChange = (url: string) => {
-    setPendingChanges(prev => ({ ...prev, customUrl: url }));
+    const torInfo = getTorAvailability(currentSettings.providerType, url);
+    
+    setPendingChanges(prev => {
+      let newUseTor = prev.useTor ?? currentSettings.useTor ?? false;
+      
+      // Auto-enable Tor for .onion URLs
+      if (torInfo.autoEnable) {
+        newUseTor = true;
+      }
+      // Disable Tor if URL is local
+      if (!torInfo.available) {
+        newUseTor = false;
+      }
+      
+      return { 
+        ...prev, 
+        customUrl: url,
+        useTor: newUseTor,
+      };
+    });
     setTestResult(null);
   };
   
@@ -291,61 +391,86 @@ export default function NodeSettings() {
       </Card>
       
       {/* Tor Settings */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base flex items-center gap-2">
-            <Shield className="h-4 w-4" />
-            Tor / Privacy Settings
-          </CardTitle>
-          <CardDescription>
-            Route connections through Tor for enhanced privacy
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="flex items-center justify-between">
-            <div className="space-y-0.5">
-              <Label htmlFor="useTor" className="font-medium">Use Tor</Label>
-              <p className="text-sm text-muted-foreground">
-                Connect via Tor hidden services (.onion addresses)
-              </p>
-            </div>
-            <Switch
-              id="useTor"
-              checked={currentSettings.useTor}
-              onCheckedChange={handleTorToggle}
-              data-testid="switch-use-tor"
-            />
-          </div>
-          
-          {currentSettings.useTor && (
-            <>
-              <Separator />
-              <div className="space-y-2">
-                <Label htmlFor="torProxy">Tor SOCKS Proxy</Label>
-                <Input
-                  id="torProxy"
-                  placeholder="socks5h://127.0.0.1:9050"
-                  value={currentSettings.torProxyUrl || ''}
-                  onChange={(e) => setPendingChanges(prev => ({ ...prev, torProxyUrl: e.target.value }))}
-                  data-testid="input-tor-proxy"
+      {(() => {
+        const torInfo = getTorAvailability(currentSettings.providerType, currentSettings.customUrl);
+        const urlClassification = hasCustomProvider ? classifyUrl(currentSettings.customUrl) : null;
+        
+        return (
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base flex items-center gap-2">
+                <Shield className="h-4 w-4" />
+                Tor / Privacy Settings
+              </CardTitle>
+              <CardDescription>
+                Route connections through Tor for enhanced privacy
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <Label htmlFor="useTor" className={`font-medium ${!torInfo.available ? 'text-muted-foreground' : ''}`}>
+                    Use Tor
+                    {urlClassification === 'onion' && (
+                      <Badge variant="outline" className="ml-2 text-xs bg-green-50 dark:bg-green-950 text-green-700 dark:text-green-300 border-green-200 dark:border-green-800">
+                        Required for .onion
+                      </Badge>
+                    )}
+                  </Label>
+                  <p className="text-sm text-muted-foreground">
+                    {torInfo.available 
+                      ? "Connect via Tor hidden services (.onion addresses)"
+                      : torInfo.reason
+                    }
+                  </p>
+                </div>
+                <Switch
+                  id="useTor"
+                  checked={currentSettings.useTor ?? false}
+                  onCheckedChange={handleTorToggle}
+                  disabled={!torInfo.available}
+                  data-testid="switch-use-tor"
                 />
-                <p className="text-xs text-muted-foreground">
-                  SOCKS5 proxy URL for Tor. Default: socks5h://127.0.0.1:9050
-                </p>
               </div>
               
-              <Alert>
-                <Info className="h-4 w-4" />
-                <AlertTitle>Tor Requirements</AlertTitle>
-                <AlertDescription>
-                  Tor must be running on your system. The app will route requests through the SOCKS proxy.
-                  Use .onion addresses for maximum privacy.
-                </AlertDescription>
-              </Alert>
-            </>
-          )}
-        </CardContent>
-      </Card>
+              {/* Show hint for custom providers without URL */}
+              {hasCustomProvider && !currentSettings.customUrl && (
+                <p className="text-xs text-muted-foreground italic">
+                  Enter a server URL above to configure Tor availability
+                </p>
+              )}
+              
+              {currentSettings.useTor && (
+                <>
+                  <Separator />
+                  <div className="space-y-2">
+                    <Label htmlFor="torProxy">Tor SOCKS Proxy</Label>
+                    <Input
+                      id="torProxy"
+                      placeholder="socks5h://127.0.0.1:9050"
+                      value={currentSettings.torProxyUrl || ''}
+                      onChange={(e) => setPendingChanges(prev => ({ ...prev, torProxyUrl: e.target.value }))}
+                      data-testid="input-tor-proxy"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      SOCKS5 proxy URL for Tor. Default: socks5h://127.0.0.1:9050
+                    </p>
+                  </div>
+                  
+                  <Alert>
+                    <Info className="h-4 w-4" />
+                    <AlertTitle>Tor Requirements</AlertTitle>
+                    <AlertDescription>
+                      Tor must be running on your system. The app will route requests through the SOCKS proxy.
+                      {urlClassification !== 'onion' && " Use .onion addresses for maximum privacy."}
+                    </AlertDescription>
+                  </Alert>
+                </>
+              )}
+            </CardContent>
+          </Card>
+        );
+      })()}
       
       {/* Connection Settings */}
       <Card>
