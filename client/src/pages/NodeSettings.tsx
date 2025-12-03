@@ -200,14 +200,6 @@ export default function NodeSettings() {
   
   const hasPendingChanges = Object.keys(pendingChanges).length > 0;
   
-  if (isLoading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-      </div>
-    );
-  }
-  
   return (
     <div className="p-4 md:p-6 space-y-6 max-w-3xl mx-auto">
       <div>
