@@ -138,8 +138,10 @@ export function mergeRecordData(
     amount: existing.amount ?? incoming.amount,
     date: existing.date ?? incoming.date,
     source: mergedSource,
-    walletSoftware: existing.walletSoftware || options.walletSoftware,
-    seedName: existing.seedName || options.seedName,
+    // Only apply wallet-origin metadata to input addresses (user-controlled)
+    // Third-party outputs should not inherit seed/wallet info
+    walletSoftware: existing.walletSoftware || (isInput ? options.walletSoftware : undefined),
+    seedName: existing.seedName || (isInput ? options.seedName : undefined),
     owner: existing.owner || (isInput ? options.owner : undefined),
     walletName: existing.walletName || (isInput ? options.walletName : undefined),
     privateKeyStatus: existing.privateKeyStatus || (isInput ? options.privateKeyStatus : undefined),
@@ -222,9 +224,11 @@ export function createNewRecordData(
     tags: isInput ? (options.defaultTags || []) : [],
     categories: isInput ? (options.defaultCategories || []) : [],
     source: options.sourceName,
-    walletSoftware: options.walletSoftware,
-    seedName: options.seedName,
-    derivationPath: parsed.derivationPath,
+    // Only apply wallet-origin metadata to input addresses (user-controlled)
+    // Third-party outputs should not inherit seed/wallet/derivation info
+    walletSoftware: isInput ? options.walletSoftware : undefined,
+    seedName: isInput ? options.seedName : undefined,
+    derivationPath: isInput ? parsed.derivationPath : undefined,
     addressImportance: importance,
     owner: isInput ? options.owner : 'Unknown',
     walletName: isInput ? options.walletName : undefined,
