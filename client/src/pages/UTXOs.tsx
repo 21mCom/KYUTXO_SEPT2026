@@ -1,8 +1,8 @@
-import { useState, useMemo, useEffect, useRef } from "react";
+import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { format } from "date-fns";
 import { Link } from "wouter";
-import { db, BlockchainTransaction, TransactionParticipant, Record as DbRecord } from "@/lib/database";
+import { db, BlockchainTransaction, TransactionParticipant, Record as DbRecord, PriceData } from "@/lib/database";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -24,27 +24,65 @@ import {
   ArrowUp,
   ArrowDown,
   ChevronLeft,
-  ChevronRight
+  ChevronRight,
+  ChevronDown,
+  ChevronRight as ChevronRightIcon,
+  Copy,
+  Check,
+  TrendingUp,
+  TrendingDown
 } from "lucide-react";
 import { SiBitcoin } from "react-icons/si";
-import { decryptRecords, isEncryptionReady } from "@/lib/encryptionFacade";
+import { decryptRecords, isEncryptionReady, getDecryptedOwners, getDecryptedWalletNames, getDecryptedTags, getDecryptedCategories } from "@/lib/encryptionFacade";
 import { cn } from "@/lib/utils";
+import { UTXODetailPanel } from "@/components/UTXODetailPanel";
 
 const ITEMS_PER_PAGE = 50;
+const SETTINGS_KEY = "kyutxo-utxos-settings";
+
+interface UTXOSettings {
+  displayUnit: "btc" | "sats";
+  sortColumn: SortColumn;
+  sortDirection: SortDirection;
+  ownerFilter: string;
+  walletFilter: string;
+  tagFilter: string;
+  categoryFilter: string;
+}
+
+const DEFAULT_SETTINGS: UTXOSettings = {
+  displayUnit: "btc",
+  sortColumn: "date",
+  sortDirection: "desc",
+  ownerFilter: "all",
+  walletFilter: "all",
+  tagFilter: "all",
+  categoryFilter: "all"
+};
+
+function loadSettings(): UTXOSettings {
+  try {
+    const stored = localStorage.getItem(SETTINGS_KEY);
+    if (stored) {
+      return { ...DEFAULT_SETTINGS, ...JSON.parse(stored) };
+    }
+  } catch {
+    // Ignore parse errors
+  }
+  return DEFAULT_SETTINGS;
+}
+
+function saveSettings(settings: Partial<UTXOSettings>) {
+  try {
+    const current = loadSettings();
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify({ ...current, ...settings }));
+  } catch {
+    // Ignore storage errors
+  }
+}
 
 function satsToBtc(sats: number): string {
   return (sats / 100_000_000).toFixed(8);
-}
-
-function formatSats(sats: number): string {
-  if (sats >= 100_000_000) {
-    return `${satsToBtc(sats)} BTC`;
-  } else if (sats >= 1_000_000) {
-    return `${(sats / 1_000_000).toFixed(2)}M sats`;
-  } else if (sats >= 1_000) {
-    return `${(sats / 1_000).toFixed(1)}k sats`;
-  }
-  return `${sats.toLocaleString()} sats`;
 }
 
 function truncateAddress(addr: string): string {
@@ -54,6 +92,16 @@ function truncateAddress(addr: string): string {
 
 function truncateTxid(txid: string): string {
   return `${txid.slice(0, 8)}...${txid.slice(-8)}`;
+}
+
+function formatUsdValue(value: number | undefined): string {
+  if (value === undefined) return "-";
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  }).format(value);
 }
 
 interface UTXO {
@@ -70,22 +118,53 @@ interface UTXO {
   walletName?: string;
   tags?: string[];
   categories?: string[];
+  valueAtReceipt?: number;
+  priceAtReceipt?: number;
 }
 
-type SortColumn = "amount" | "date" | "address" | "owner" | "wallet";
+interface AddressGroup {
+  address: string;
+  totalSats: number;
+  utxos: UTXO[];
+  earliestDate: number;
+  latestDate: number;
+  recordId?: number;
+  label?: string;
+  owner?: string;
+  walletName?: string;
+  tags?: string[];
+  categories?: string[];
+  totalValueAtReceipt?: number;
+  totalCurrentValue?: number;
+  gain?: number;
+  gainPercent?: number;
+}
+
+type SortColumn = "amount" | "date" | "address" | "gain";
 type SortDirection = "asc" | "desc";
 
 export default function UTXOs() {
+  const initialSettings = useMemo(() => loadSettings(), []);
+  
   const [search, setSearch] = useState("");
   const [selectedDate, setSelectedDate] = useState<Date | undefined>(undefined);
-  const [ownerFilter, setOwnerFilter] = useState<string>("all");
-  const [walletFilter, setWalletFilter] = useState<string>("all");
-  const [tagFilter, setTagFilter] = useState<string>("all");
-  const [categoryFilter, setCategoryFilter] = useState<string>("all");
-  const [sortColumn, setSortColumn] = useState<SortColumn>("date");
-  const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
+  const [ownerFilter, setOwnerFilter] = useState<string>(initialSettings.ownerFilter);
+  const [walletFilter, setWalletFilter] = useState<string>(initialSettings.walletFilter);
+  const [tagFilter, setTagFilter] = useState<string>(initialSettings.tagFilter);
+  const [categoryFilter, setCategoryFilter] = useState<string>(initialSettings.categoryFilter);
+  const [sortColumn, setSortColumn] = useState<SortColumn>(initialSettings.sortColumn);
+  const [sortDirection, setSortDirection] = useState<SortDirection>(initialSettings.sortDirection);
   const [currentPage, setCurrentPage] = useState(1);
-  const [displayUnit, setDisplayUnit] = useState<"btc" | "sats">("btc");
+  const [displayUnit, setDisplayUnit] = useState<"btc" | "sats">(initialSettings.displayUnit);
+  const [expandedAddresses, setExpandedAddresses] = useState<Set<string>>(new Set());
+  const [copiedTxid, setCopiedTxid] = useState<string | null>(null);
+  const [selectedUtxo, setSelectedUtxo] = useState<UTXO | null>(null);
+  const [detailPanelOpen, setDetailPanelOpen] = useState(false);
+
+  // Save settings when they change
+  useEffect(() => {
+    saveSettings({ displayUnit, sortColumn, sortDirection, ownerFilter, walletFilter, tagFilter, categoryFilter });
+  }, [displayUnit, sortColumn, sortDirection, ownerFilter, walletFilter, tagFilter, categoryFilter]);
 
   const transactions = useLiveQuery(
     () => db.blockchainTransactions.toArray(),
@@ -97,8 +176,12 @@ export default function UTXOs() {
     []
   );
 
+  // Only load non-discovered addresses (syncDepth === 0 or undefined)
   const rawRecords = useLiveQuery(
-    () => db.records.where('type').equals('address').toArray(),
+    () => db.records
+      .where('type').equals('address')
+      .filter(record => record.syncDepth === undefined || record.syncDepth === 0)
+      .toArray(),
     []
   );
 
@@ -107,25 +190,39 @@ export default function UTXOs() {
     []
   );
 
-  const owners = useLiveQuery(
-    () => db.owners.toArray(),
+  // Load price data for value calculations
+  const priceData = useLiveQuery(
+    () => db.priceData.where('asset').equals('BTC').and(p => p.currency === 'USD').toArray(),
     []
   );
 
-  const walletNames = useLiveQuery(
-    () => db.walletNames.toArray(),
-    []
-  );
+  // Load vocabulary items for filter dropdowns
+  const [owners, setOwners] = useState<string[]>([]);
+  const [walletNames, setWalletNames] = useState<string[]>([]);
+  const [tags, setTags] = useState<string[]>([]);
+  const [categories, setCategories] = useState<string[]>([]);
+  const [vocabLoaded, setVocabLoaded] = useState(false);
 
-  const tags = useLiveQuery(
-    () => db.tags.toArray(),
-    []
-  );
-
-  const categories = useLiveQuery(
-    () => db.categories.toArray(),
-    []
-  );
+  useEffect(() => {
+    const loadVocabulary = async () => {
+      try {
+        const [decryptedOwners, decryptedWalletNames, decryptedTags, decryptedCategories] = await Promise.all([
+          getDecryptedOwners(),
+          getDecryptedWalletNames(),
+          getDecryptedTags(),
+          getDecryptedCategories()
+        ]);
+        setOwners(decryptedOwners.map(o => o.name).filter(Boolean).sort());
+        setWalletNames(decryptedWalletNames.map(w => w.name).filter(Boolean).sort());
+        setTags(decryptedTags.map(t => t.name).filter(Boolean).sort());
+        setCategories(decryptedCategories.map(c => c.name).filter(Boolean).sort());
+        setVocabLoaded(true);
+      } catch (error) {
+        console.error('Failed to load vocabulary:', error);
+      }
+    };
+    loadVocabulary();
+  }, []);
 
   const [decryptedRecords, setDecryptedRecords] = useState<DbRecord[]>([]);
   const decryptRequestId = useRef(0);
@@ -176,10 +273,32 @@ export default function UTXOs() {
     return map;
   }, [transactions]);
 
+  // Create price lookup map by date
+  const priceByDate = useMemo(() => {
+    const map = new Map<string, number>();
+    priceData?.forEach(p => {
+      map.set(p.date, p.close);
+    });
+    return map;
+  }, [priceData]);
+
+  // Get latest price date and value
+  const latestPrice = useMemo(() => {
+    if (!priceData || priceData.length === 0) return null;
+    const sorted = [...priceData].sort((a, b) => b.date.localeCompare(a.date));
+    return { date: sorted[0].date, price: sorted[0].close };
+  }, [priceData]);
+
   const lastSyncTime = useMemo(() => {
     if (!addressSyncState || addressSyncState.length === 0) return null;
     return Math.max(...addressSyncState.map(s => s.lastSyncedAt));
   }, [addressSyncState]);
+
+  // Get price for a specific timestamp
+  const getPriceForTimestamp = useCallback((timestamp: number): number | undefined => {
+    const date = format(new Date(timestamp * 1000), 'yyyy-MM-dd');
+    return priceByDate.get(date);
+  }, [priceByDate]);
 
   const utxos = useMemo(() => {
     if (!participants || !transactions) return [];
@@ -237,6 +356,13 @@ export default function UTXOs() {
 
       const record = addressToRecord.get(output.address);
       
+      // Only include UTXOs for addresses we have records for (non-discovered)
+      if (!record) continue;
+      
+      const priceAtReceipt = getPriceForTimestamp(blockTime);
+      const btcAmount = output.amount / 100_000_000;
+      const valueAtReceipt = priceAtReceipt !== undefined ? btcAmount * priceAtReceipt : undefined;
+      
       result.push({
         id: `${output.txid}:${output.vout ?? 0}`,
         txid: output.txid,
@@ -251,132 +377,157 @@ export default function UTXOs() {
         walletName: record?.walletName,
         tags: record?.tags,
         categories: record?.categories,
+        valueAtReceipt,
+        priceAtReceipt
       });
     }
 
     return result;
-  }, [participants, transactions, txidToTx, addressToRecord, selectedDate]);
+  }, [participants, transactions, txidToTx, addressToRecord, selectedDate, getPriceForTimestamp]);
 
-  const uniqueOwners = useMemo(() => {
-    const set = new Set<string>();
-    utxos.forEach(u => {
-      if (u.owner) set.add(u.owner);
+  // Group UTXOs by address
+  const addressGroups = useMemo(() => {
+    const groups = new Map<string, AddressGroup>();
+    
+    utxos.forEach(utxo => {
+      const existing = groups.get(utxo.address);
+      
+      if (existing) {
+        existing.totalSats += utxo.amountSats;
+        existing.utxos.push(utxo);
+        existing.earliestDate = Math.min(existing.earliestDate, utxo.blockTime);
+        existing.latestDate = Math.max(existing.latestDate, utxo.blockTime);
+        if (utxo.valueAtReceipt !== undefined) {
+          existing.totalValueAtReceipt = (existing.totalValueAtReceipt || 0) + utxo.valueAtReceipt;
+        }
+      } else {
+        groups.set(utxo.address, {
+          address: utxo.address,
+          totalSats: utxo.amountSats,
+          utxos: [utxo],
+          earliestDate: utxo.blockTime,
+          latestDate: utxo.blockTime,
+          recordId: utxo.recordId,
+          label: utxo.label,
+          owner: utxo.owner,
+          walletName: utxo.walletName,
+          tags: utxo.tags,
+          categories: utxo.categories,
+          totalValueAtReceipt: utxo.valueAtReceipt
+        });
+      }
     });
-    return Array.from(set).sort();
-  }, [utxos]);
 
-  const uniqueWallets = useMemo(() => {
-    const set = new Set<string>();
-    utxos.forEach(u => {
-      if (u.walletName) set.add(u.walletName);
+    // Calculate current values and gains
+    const groupsArray = Array.from(groups.values());
+    groupsArray.forEach(group => {
+      if (latestPrice) {
+        const btcAmount = group.totalSats / 100_000_000;
+        group.totalCurrentValue = btcAmount * latestPrice.price;
+        
+        if (group.totalValueAtReceipt !== undefined) {
+          group.gain = group.totalCurrentValue - group.totalValueAtReceipt;
+          group.gainPercent = group.totalValueAtReceipt > 0 
+            ? ((group.totalCurrentValue - group.totalValueAtReceipt) / group.totalValueAtReceipt) * 100
+            : undefined;
+        }
+      }
     });
-    return Array.from(set).sort();
-  }, [utxos]);
 
-  const uniqueTags = useMemo(() => {
-    const set = new Set<string>();
-    utxos.forEach(u => {
-      u.tags?.forEach(t => set.add(t));
-    });
-    return Array.from(set).sort();
-  }, [utxos]);
+    return groupsArray;
+  }, [utxos, latestPrice]);
 
-  const uniqueCategories = useMemo(() => {
-    const set = new Set<string>();
-    utxos.forEach(u => {
-      u.categories?.forEach(c => set.add(c));
-    });
-    return Array.from(set).sort();
-  }, [utxos]);
-
-  const filteredUtxos = useMemo(() => {
-    let filtered = utxos;
+  const filteredGroups = useMemo(() => {
+    let filtered = addressGroups;
 
     if (ownerFilter !== "all") {
       if (ownerFilter === "unassigned") {
-        filtered = filtered.filter(u => !u.owner);
+        filtered = filtered.filter(g => !g.owner);
       } else {
-        filtered = filtered.filter(u => u.owner === ownerFilter);
+        filtered = filtered.filter(g => g.owner === ownerFilter);
       }
     }
 
     if (walletFilter !== "all") {
       if (walletFilter === "unassigned") {
-        filtered = filtered.filter(u => !u.walletName);
+        filtered = filtered.filter(g => !g.walletName);
       } else {
-        filtered = filtered.filter(u => u.walletName === walletFilter);
+        filtered = filtered.filter(g => g.walletName === walletFilter);
       }
     }
 
     if (tagFilter !== "all") {
       if (tagFilter === "unassigned") {
-        filtered = filtered.filter(u => !u.tags || u.tags.length === 0);
+        filtered = filtered.filter(g => !g.tags || g.tags.length === 0);
       } else {
-        filtered = filtered.filter(u => u.tags?.includes(tagFilter));
+        filtered = filtered.filter(g => g.tags?.includes(tagFilter));
       }
     }
 
     if (categoryFilter !== "all") {
       if (categoryFilter === "unassigned") {
-        filtered = filtered.filter(u => !u.categories || u.categories.length === 0);
+        filtered = filtered.filter(g => !g.categories || g.categories.length === 0);
       } else {
-        filtered = filtered.filter(u => u.categories?.includes(categoryFilter));
+        filtered = filtered.filter(g => g.categories?.includes(categoryFilter));
       }
     }
 
     if (search.trim()) {
       const q = search.toLowerCase();
-      filtered = filtered.filter(u =>
-        u.address.toLowerCase().includes(q) ||
-        u.txid.toLowerCase().includes(q) ||
-        u.label?.toLowerCase().includes(q) ||
-        u.owner?.toLowerCase().includes(q) ||
-        u.walletName?.toLowerCase().includes(q) ||
-        u.tags?.some(t => t.toLowerCase().includes(q)) ||
-        u.categories?.some(c => c.toLowerCase().includes(q))
+      filtered = filtered.filter(g =>
+        g.address.toLowerCase().includes(q) ||
+        g.label?.toLowerCase().includes(q) ||
+        g.owner?.toLowerCase().includes(q) ||
+        g.walletName?.toLowerCase().includes(q) ||
+        g.tags?.some(t => t.toLowerCase().includes(q)) ||
+        g.categories?.some(c => c.toLowerCase().includes(q)) ||
+        g.utxos.some(u => u.txid.toLowerCase().includes(q))
       );
     }
 
     return filtered;
-  }, [utxos, ownerFilter, walletFilter, tagFilter, categoryFilter, search]);
+  }, [addressGroups, ownerFilter, walletFilter, tagFilter, categoryFilter, search]);
 
-  const sortedUtxos = useMemo(() => {
-    const sorted = [...filteredUtxos];
+  const sortedGroups = useMemo(() => {
+    const sorted = [...filteredGroups];
     
     sorted.sort((a, b) => {
       let cmp = 0;
       switch (sortColumn) {
         case "amount":
-          cmp = a.amountSats - b.amountSats;
+          cmp = a.totalSats - b.totalSats;
           break;
         case "date":
-          cmp = a.blockTime - b.blockTime;
+          cmp = a.latestDate - b.latestDate;
           break;
         case "address":
           cmp = a.address.localeCompare(b.address);
           break;
-        case "owner":
-          cmp = (a.owner || "").localeCompare(b.owner || "");
-          break;
-        case "wallet":
-          cmp = (a.walletName || "").localeCompare(b.walletName || "");
+        case "gain":
+          const gainA = a.gain ?? 0;
+          const gainB = b.gain ?? 0;
+          cmp = gainA - gainB;
           break;
       }
       return sortDirection === "asc" ? cmp : -cmp;
     });
 
     return sorted;
-  }, [filteredUtxos, sortColumn, sortDirection]);
+  }, [filteredGroups, sortColumn, sortDirection]);
 
-  const totalPages = Math.max(1, Math.ceil(sortedUtxos.length / ITEMS_PER_PAGE));
+  const totalPages = Math.max(1, Math.ceil(sortedGroups.length / ITEMS_PER_PAGE));
   const safePage = Math.min(currentPage, totalPages);
-  const paginatedUtxos = sortedUtxos.slice(
+  const paginatedGroups = sortedGroups.slice(
     (safePage - 1) * ITEMS_PER_PAGE,
     safePage * ITEMS_PER_PAGE
   );
 
-  const totalSats = filteredUtxos.reduce((sum, u) => sum + u.amountSats, 0);
-  const utxoCount = filteredUtxos.length;
+  const totalSats = filteredGroups.reduce((sum, g) => sum + g.totalSats, 0);
+  const totalUtxoCount = filteredGroups.reduce((sum, g) => sum + g.utxos.length, 0);
+  const totalAddressCount = filteredGroups.length;
+  const totalValueAtReceipt = filteredGroups.reduce((sum, g) => sum + (g.totalValueAtReceipt || 0), 0);
+  const totalCurrentValue = filteredGroups.reduce((sum, g) => sum + (g.totalCurrentValue || 0), 0);
+  const totalGain = totalCurrentValue - totalValueAtReceipt;
 
   const handleSort = (column: SortColumn) => {
     if (sortColumn === column) {
@@ -403,6 +554,33 @@ export default function UTXOs() {
   useEffect(() => {
     setCurrentPage(1);
   }, [search, ownerFilter, walletFilter, tagFilter, categoryFilter, selectedDate]);
+
+  const toggleExpanded = (address: string) => {
+    setExpandedAddresses(prev => {
+      const next = new Set(prev);
+      if (next.has(address)) {
+        next.delete(address);
+      } else {
+        next.add(address);
+      }
+      return next;
+    });
+  };
+
+  const copyTxid = async (txid: string) => {
+    try {
+      await navigator.clipboard.writeText(txid);
+      setCopiedTxid(txid);
+      setTimeout(() => setCopiedTxid(null), 2000);
+    } catch {
+      // Ignore clipboard errors
+    }
+  };
+
+  const openUtxoDetail = (utxo: UTXO) => {
+    setSelectedUtxo(utxo);
+    setDetailPanelOpen(true);
+  };
 
   const SortableHeader = ({ column, label }: { column: SortColumn; label: string }) => (
     <TableHead>
@@ -433,11 +611,11 @@ export default function UTXOs() {
           UTXOs
         </h1>
         <p className="text-muted-foreground mt-1">
-          View unspent transaction outputs with filters and historical snapshots
+          View unspent transaction outputs grouped by address
         </p>
       </div>
 
-      <div className="flex items-center gap-2 text-sm text-muted-foreground flex-none">
+      <div className="flex items-center gap-2 text-sm text-muted-foreground flex-none flex-wrap">
         <AlertCircle className="h-4 w-4" />
         <span>
           Data based on last transaction sync
@@ -453,14 +631,19 @@ export default function UTXOs() {
             Sync now
           </Button>
         </Link>
+        {latestPrice && (
+          <span className="ml-4 text-xs">
+            Price data as of {format(new Date(latestPrice.date), "MMM d, yyyy")}
+          </span>
+        )}
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-2 flex-none">
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4 flex-none">
         <Card>
           <CardHeader className="pb-2">
-            <CardDescription>Total UTXOs</CardDescription>
+            <CardDescription>Addresses / UTXOs</CardDescription>
             <CardTitle className="text-2xl" data-testid="text-utxo-count">
-              {utxoCount.toLocaleString()}
+              {totalAddressCount.toLocaleString()} / {totalUtxoCount.toLocaleString()}
             </CardTitle>
           </CardHeader>
         </Card>
@@ -481,8 +664,28 @@ export default function UTXOs() {
                 onClick={() => setDisplayUnit(u => u === "btc" ? "sats" : "btc")}
                 data-testid="button-toggle-unit"
               >
-                {displayUnit === "btc" ? "Show sats" : "Show BTC"}
+                {displayUnit === "btc" ? "sats" : "BTC"}
               </Button>
+            </CardTitle>
+          </CardHeader>
+        </Card>
+        <Card>
+          <CardHeader className="pb-2">
+            <CardDescription>Cost Basis</CardDescription>
+            <CardTitle className="text-xl" data-testid="text-cost-basis">
+              {totalValueAtReceipt > 0 ? formatUsdValue(totalValueAtReceipt) : "-"}
+            </CardTitle>
+          </CardHeader>
+        </Card>
+        <Card>
+          <CardHeader className="pb-2">
+            <CardDescription>Unrealized Gain/Loss</CardDescription>
+            <CardTitle className={cn(
+              "text-xl flex items-center gap-1",
+              totalGain > 0 ? "text-green-600 dark:text-green-400" : totalGain < 0 ? "text-red-600 dark:text-red-400" : ""
+            )} data-testid="text-total-gain">
+              {totalGain > 0 ? <TrendingUp className="h-4 w-4" /> : totalGain < 0 ? <TrendingDown className="h-4 w-4" /> : null}
+              {totalValueAtReceipt > 0 ? formatUsdValue(totalGain) : "-"}
             </CardTitle>
           </CardHeader>
         </Card>
@@ -517,7 +720,7 @@ export default function UTXOs() {
                 <SelectContent>
                   <SelectItem value="all">All Owners</SelectItem>
                   <SelectItem value="unassigned">Unassigned</SelectItem>
-                  {uniqueOwners.map(owner => (
+                  {owners.map(owner => (
                     <SelectItem key={owner} value={owner}>{owner}</SelectItem>
                   ))}
                 </SelectContent>
@@ -533,7 +736,7 @@ export default function UTXOs() {
                 <SelectContent>
                   <SelectItem value="all">All Wallets</SelectItem>
                   <SelectItem value="unassigned">Unassigned</SelectItem>
-                  {uniqueWallets.map(wallet => (
+                  {walletNames.map(wallet => (
                     <SelectItem key={wallet} value={wallet}>{wallet}</SelectItem>
                   ))}
                 </SelectContent>
@@ -549,7 +752,7 @@ export default function UTXOs() {
                 <SelectContent>
                   <SelectItem value="all">All Tags</SelectItem>
                   <SelectItem value="unassigned">No Tags</SelectItem>
-                  {uniqueTags.map(tag => (
+                  {tags.map(tag => (
                     <SelectItem key={tag} value={tag}>{tag}</SelectItem>
                   ))}
                 </SelectContent>
@@ -565,7 +768,7 @@ export default function UTXOs() {
                 <SelectContent>
                   <SelectItem value="all">All Categories</SelectItem>
                   <SelectItem value="unassigned">No Category</SelectItem>
-                  {uniqueCategories.map(cat => (
+                  {categories.map(cat => (
                     <SelectItem key={cat} value={cat}>{cat}</SelectItem>
                   ))}
                 </SelectContent>
@@ -642,9 +845,9 @@ export default function UTXOs() {
           <CardHeader className="pb-2 flex-none">
             <div className="flex items-center justify-between">
               <CardTitle className="text-base">
-                {filteredUtxos.length === utxos.length 
-                  ? `${utxoCount} UTXOs` 
-                  : `${filteredUtxos.length} of ${utxos.length} UTXOs`}
+                {filteredGroups.length === addressGroups.length 
+                  ? `${totalAddressCount} addresses (${totalUtxoCount} UTXOs)` 
+                  : `${filteredGroups.length} of ${addressGroups.length} addresses`}
               </CardTitle>
               <div className="flex items-center gap-2">
                 <Button
@@ -676,7 +879,7 @@ export default function UTXOs() {
               <div className="flex items-center justify-center h-32">
                 <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary" />
               </div>
-            ) : paginatedUtxos.length === 0 ? (
+            ) : paginatedGroups.length === 0 ? (
               <div className="flex flex-col items-center justify-center h-32 text-muted-foreground">
                 <Coins className="h-8 w-8 mb-2 opacity-50" />
                 <p>No UTXOs found</p>
@@ -690,78 +893,164 @@ export default function UTXOs() {
               <Table>
                 <TableHeader className="sticky top-0 bg-card z-10">
                   <TableRow>
+                    <TableHead className="w-8"></TableHead>
                     <SortableHeader column="address" label="Address" />
-                    <SortableHeader column="amount" label="Amount" />
-                    <SortableHeader column="date" label="Received" />
-                    <SortableHeader column="owner" label="Owner" />
-                    <SortableHeader column="wallet" label="Wallet" />
-                    <TableHead>Txid</TableHead>
+                    <SortableHeader column="amount" label="UTXO Value" />
+                    <SortableHeader column="date" label="Date" />
+                    <TableHead>Value at Receipt</TableHead>
+                    <TableHead>Current Value</TableHead>
+                    <SortableHeader column="gain" label="Gain/Loss" />
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {paginatedUtxos.map((utxo) => (
-                    <TableRow key={utxo.id} data-testid={`row-utxo-${utxo.id}`}>
-                      <TableCell className="font-mono text-sm">
-                        <div className="flex flex-col gap-1">
-                          <span title={utxo.address}>{truncateAddress(utxo.address)}</span>
-                          {utxo.label && (
-                            <span className="text-xs text-muted-foreground">{utxo.label}</span>
+                  {paginatedGroups.flatMap((group) => {
+                    const isExpanded = expandedAddresses.has(group.address);
+                    const rows = [
+                      <TableRow 
+                        key={`group-${group.address}`} 
+                        className="cursor-pointer hover-elevate" 
+                        onClick={() => toggleExpanded(group.address)}
+                        data-testid={`row-address-${group.address.slice(0, 8)}`}
+                      >
+                        <TableCell className="w-8">
+                          {isExpanded ? (
+                            <ChevronDown className="h-4 w-4" />
+                          ) : (
+                            <ChevronRightIcon className="h-4 w-4" />
                           )}
-                        </div>
-                      </TableCell>
-                      <TableCell className="font-mono">
-                        {displayUnit === "btc" ? (
-                          <span>{satsToBtc(utxo.amountSats)} BTC</span>
-                        ) : (
-                          <span>{utxo.amountSats.toLocaleString()} sats</span>
-                        )}
-                      </TableCell>
-                      <TableCell className="text-sm">
-                        <div className="flex flex-col">
-                          <span>{format(new Date(utxo.blockTime * 1000), "MMM d, yyyy")}</span>
-                          <span className="text-xs text-muted-foreground">
-                            Block {utxo.blockHeight.toLocaleString()}
-                          </span>
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        {utxo.owner ? (
-                          <Badge variant="secondary">{utxo.owner}</Badge>
-                        ) : (
-                          <span className="text-muted-foreground text-sm">-</span>
-                        )}
-                      </TableCell>
-                      <TableCell>
-                        {utxo.walletName ? (
-                          <Badge variant="outline">{utxo.walletName}</Badge>
-                        ) : (
-                          <span className="text-muted-foreground text-sm">-</span>
-                        )}
-                      </TableCell>
-                      <TableCell className="font-mono text-sm">
-                        <div className="flex items-center gap-1">
-                          <span title={utxo.txid}>{truncateTxid(utxo.txid)}</span>
-                          <span className="text-muted-foreground">:{utxo.vout}</span>
-                          <a
-                            href={`https://mempool.space/tx/${utxo.txid}`}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="ml-1 text-muted-foreground hover:text-primary"
-                            onClick={(e) => e.stopPropagation()}
-                            data-testid={`link-external-${utxo.txid.slice(0, 8)}`}
+                        </TableCell>
+                        <TableCell className="font-mono text-sm">
+                          <div className="flex flex-col gap-1">
+                            <span title={group.address}>{truncateAddress(group.address)}</span>
+                            {group.label && (
+                              <span className="text-xs text-muted-foreground">{group.label}</span>
+                            )}
+                            {group.utxos.length > 1 && (
+                              <Badge variant="secondary" className="w-fit text-xs">
+                                {group.utxos.length} UTXOs
+                              </Badge>
+                            )}
+                          </div>
+                        </TableCell>
+                        <TableCell className="font-mono">
+                          {displayUnit === "btc" ? (
+                            <span>{satsToBtc(group.totalSats)} BTC</span>
+                          ) : (
+                            <span>{group.totalSats.toLocaleString()} sats</span>
+                          )}
+                        </TableCell>
+                        <TableCell className="text-sm">
+                          <div className="flex flex-col">
+                            <span>{format(new Date(group.latestDate * 1000), "MMM d, yyyy")}</span>
+                            {group.earliestDate !== group.latestDate && (
+                              <span className="text-xs text-muted-foreground">
+                                From {format(new Date(group.earliestDate * 1000), "MMM d, yyyy")}
+                              </span>
+                            )}
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          {formatUsdValue(group.totalValueAtReceipt)}
+                        </TableCell>
+                        <TableCell>
+                          {formatUsdValue(group.totalCurrentValue)}
+                        </TableCell>
+                        <TableCell>
+                          {group.gain !== undefined ? (
+                            <div className={cn(
+                              "flex items-center gap-1",
+                              group.gain > 0 ? "text-green-600 dark:text-green-400" : group.gain < 0 ? "text-red-600 dark:text-red-400" : ""
+                            )}>
+                              {group.gain > 0 ? <TrendingUp className="h-3 w-3" /> : group.gain < 0 ? <TrendingDown className="h-3 w-3" /> : null}
+                              <span>{formatUsdValue(group.gain)}</span>
+                              {group.gainPercent !== undefined && (
+                                <span className="text-xs">({group.gainPercent > 0 ? '+' : ''}{group.gainPercent.toFixed(1)}%)</span>
+                              )}
+                            </div>
+                          ) : (
+                            <span className="text-muted-foreground">-</span>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    ];
+
+                    if (isExpanded) {
+                      group.utxos.forEach((utxo, idx) => {
+                        rows.push(
+                          <TableRow 
+                            key={`utxo-${utxo.id}`} 
+                            className="bg-muted/30 cursor-pointer hover-elevate" 
+                            onClick={() => openUtxoDetail(utxo)}
+                            data-testid={`row-utxo-${utxo.id}`}
                           >
-                            <ExternalLink className="h-3 w-3" />
-                          </a>
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  ))}
+                            <TableCell></TableCell>
+                            <TableCell colSpan={2} className="font-mono text-sm">
+                              <div className="flex items-center gap-2 pl-4">
+                                <span className="text-muted-foreground text-xs">{idx + 1}.</span>
+                                <span title={utxo.txid}>{truncateTxid(utxo.txid)}:{utxo.vout}</span>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-6 w-6"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    copyTxid(utxo.txid);
+                                  }}
+                                  data-testid={`button-copy-${utxo.txid.slice(0, 8)}`}
+                                >
+                                  {copiedTxid === utxo.txid ? (
+                                    <Check className="h-3 w-3 text-green-500" />
+                                  ) : (
+                                    <Copy className="h-3 w-3" />
+                                  )}
+                                </Button>
+                                <a
+                                  href={`https://mempool.space/tx/${utxo.txid}`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-muted-foreground hover:text-primary"
+                                  onClick={(e) => e.stopPropagation()}
+                                  data-testid={`link-external-${utxo.txid.slice(0, 8)}`}
+                                >
+                                  <ExternalLink className="h-3 w-3" />
+                                </a>
+                                <span className="ml-2">
+                                  {displayUnit === "btc" ? (
+                                    <span>{satsToBtc(utxo.amountSats)} BTC</span>
+                                  ) : (
+                                    <span>{utxo.amountSats.toLocaleString()} sats</span>
+                                  )}
+                                </span>
+                              </div>
+                            </TableCell>
+                            <TableCell className="text-sm text-muted-foreground">
+                              {format(new Date(utxo.blockTime * 1000), "MMM d, yyyy")}
+                            </TableCell>
+                            <TableCell className="text-muted-foreground">
+                              {formatUsdValue(utxo.valueAtReceipt)}
+                            </TableCell>
+                            <TableCell></TableCell>
+                            <TableCell></TableCell>
+                          </TableRow>
+                        );
+                      });
+                    }
+
+                    return rows;
+                  })}
                 </TableBody>
               </Table>
             )}
           </CardContent>
         </Card>
       </div>
+
+      <UTXODetailPanel
+        open={detailPanelOpen}
+        onClose={() => setDetailPanelOpen(false)}
+        utxo={selectedUtxo}
+        latestPrice={latestPrice}
+      />
     </div>
   );
 }
