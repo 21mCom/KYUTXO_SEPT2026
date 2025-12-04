@@ -25,7 +25,8 @@ import {
   PanelLeft, 
   LayoutGrid,
   LayoutDashboard,
-  Upload
+  Upload,
+  History
 } from "lucide-react";
 import { SiBitcoin } from "react-icons/si";
 import {
@@ -87,6 +88,7 @@ const navGroups: NavGroup[] = [
       { title: "Address Reuse", url: "/address-reuse", icon: Repeat2 },
       { title: "Provenance", url: "/provenance", icon: GitBranch },
       { title: "Flow Visualizer", url: "/flow-visualizer", icon: Network },
+      { title: "UTXO History", url: "/utxo-history", icon: History },
       { title: "Data Stats", url: "/data-stats", icon: BarChart3 },
       { title: "Reports", url: "/reports", icon: ClipboardList },
       { title: "Lightning", url: "/lightning-speculator", icon: Zap },
