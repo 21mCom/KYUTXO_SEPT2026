@@ -233,23 +233,29 @@ export default function Transactions() {
     });
   };
 
-  // Stats
-  const totalTxCount = transactions?.length ?? 0;
-  const totalVolume = transactionsWithParticipants.reduce((sum, tx) => sum + tx.totalOutputValue, 0);
-  const totalFees = transactionsWithParticipants.reduce((sum, tx) => sum + tx.fee, 0);
-
-  // Get linked address count
-  const linkedAddressCount = useMemo(() => {
+  // Stats - calculated from filtered transactions to reflect toggle state
+  const stats = useMemo(() => {
+    const txCount = filteredTransactions.length;
+    const volume = filteredTransactions.reduce((sum, tx) => sum + tx.totalOutputValue, 0);
+    const fees = filteredTransactions.reduce((sum, tx) => sum + tx.fee, 0);
+    
+    // Get linked address count from filtered transactions
     const linkedAddresses = new Set<string>();
-    transactionsWithParticipants.forEach(tx => {
+    filteredTransactions.forEach(tx => {
       [...tx.inputs, ...tx.outputs].forEach(p => {
         if (addressToRecord.has(p.address)) {
           linkedAddresses.add(p.address);
         }
       });
     });
-    return linkedAddresses.size;
-  }, [transactionsWithParticipants, addressToRecord]);
+    
+    return {
+      txCount,
+      volume,
+      fees,
+      linkedAddressCount: linkedAddresses.size
+    };
+  }, [filteredTransactions, addressToRecord]);
 
   const isLoading = !transactions || !participants;
 
@@ -268,7 +274,7 @@ export default function Transactions() {
           <CardHeader className="pb-2">
             <CardDescription>Total Transactions</CardDescription>
             <CardTitle className="text-2xl" data-testid="text-total-transactions">
-              {totalTxCount}
+              {stats.txCount}
             </CardTitle>
           </CardHeader>
         </Card>
@@ -277,7 +283,7 @@ export default function Transactions() {
           <CardHeader className="pb-2">
             <CardDescription>Total Volume</CardDescription>
             <CardTitle className="text-2xl" data-testid="text-total-volume">
-              {satsToBtc(totalVolume)} BTC
+              {satsToBtc(stats.volume)} BTC
             </CardTitle>
           </CardHeader>
         </Card>
@@ -286,7 +292,7 @@ export default function Transactions() {
           <CardHeader className="pb-2">
             <CardDescription>Total Fees Paid</CardDescription>
             <CardTitle className="text-2xl" data-testid="text-total-fees">
-              {formatSats(totalFees)}
+              {formatSats(stats.fees)}
             </CardTitle>
           </CardHeader>
         </Card>
@@ -295,7 +301,7 @@ export default function Transactions() {
           <CardHeader className="pb-2">
             <CardDescription>Linked Addresses</CardDescription>
             <CardTitle className="text-2xl" data-testid="text-linked-addresses">
-              {linkedAddressCount}
+              {stats.linkedAddressCount}
             </CardTitle>
           </CardHeader>
         </Card>
