@@ -16,12 +16,20 @@ Preferred communication style: Simple, everyday language.
 - Reorganized flat menu into 6 collapsible groups for better organization
 - **Overview**: Records, Nudgie (always expanded)
 - **Data**: Transactions, UTXOs (always expanded)
-- **Analysis**: Address Reuse, Provenance, Data Stats, Reports, Lightning
+- **Analysis**: Address Reuse, Provenance, Flow Visualizer, Data Stats, Reports, Lightning
 - **Import / Export**: Address Importer, Wallet Data Sync, Price Import, Transaction Sync, QR Scanner
 - **System**: Backup, Node Connection, Value Updater, Settings
 - **Dev Tools**: UI Assets, Icons Ref, Nav Patterns, Grouped Sidebar, Flow Visualizations
 - Groups auto-expand when navigating to items within them
 - Sub-items indented and use same font size as group headers for clear visual hierarchy
+
+**Bitcoin Flow Visualizer** (`/flow-visualizer`):
+- Interactive UTXO provenance tracing tool with 3 visualization tabs
+- Search bar (INP-3) to enter Bitcoin address for tracing
+- Hop depth slider (PRG-2, 1-10 hops) to control trace depth
+- **Sankey Diagram**: Visual flow bands showing BTC moving between addresses (width = value)
+- **Timeline Swimlanes**: UTXOs organized by time with hop indicators and owner badges
+- **Line Chart** (CHT-1): Cumulative balance over time with transaction amounts
 
 ## System Architecture
 
