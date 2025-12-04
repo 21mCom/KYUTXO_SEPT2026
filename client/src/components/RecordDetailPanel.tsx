@@ -166,7 +166,9 @@ export function RecordDetailPanel({
 
   const hasWalletInfo = record.seedName || record.walletSoftware || record.derivationPath || record.chainType || record.privateKeyStatus;
   const hasVaultInfo = record.vault?.isVaultXpub;
-  const hasBlockchainDiscoveryInfo = record.syncDepth !== undefined || record.discoveredInTxid || record.discoveredFromRecordId !== undefined;
+  // Only show discovery info section for addresses discovered at deeper levels (syncDepth > 0)
+  // or that have specific discovery metadata (discovered in transaction or from another record)
+  const hasBlockchainDiscoveryInfo = (record.syncDepth !== undefined && record.syncDepth > 0) || record.discoveredInTxid || record.discoveredFromRecordId !== undefined;
   
   const customFieldsToShow = customFieldDefs.filter(
     def => def.enabled && record.customFields?.[def.slug]
@@ -407,18 +409,16 @@ export function RecordDetailPanel({
                   </Button>
                 </CollapsibleTrigger>
                 <CollapsibleContent className="space-y-3 pt-2">
-                  {record.syncDepth !== undefined && (
+                  {record.syncDepth !== undefined && record.syncDepth > 0 && (
                     <div>
-                      <span className="text-xs text-muted-foreground">Sync Depth</span>
+                      <span className="text-xs text-muted-foreground">Discovery Depth</span>
                       <p className="text-sm" data-testid="text-sync-depth">
-                        {record.syncDepth === 0 ? 'Root (manually added)' : `Depth ${record.syncDepth}`}
+                        {record.syncDepth === 1 
+                          ? 'First hop (directly connected to your addresses)' 
+                          : record.syncDepth === 2
+                            ? 'Second hop (2 transactions from your addresses)'
+                            : `${record.syncDepth} hops from your addresses`}
                       </p>
-                    </div>
-                  )}
-                  {record.maxSyncedDepth !== undefined && record.maxSyncedDepth >= 0 && (
-                    <div>
-                      <span className="text-xs text-muted-foreground">Max Synced Depth</span>
-                      <p className="text-sm" data-testid="text-max-synced-depth">{record.maxSyncedDepth}</p>
                     </div>
                   )}
                   {record.discoveredInTxid && (

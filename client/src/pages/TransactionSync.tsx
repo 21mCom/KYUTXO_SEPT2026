@@ -28,8 +28,8 @@ import {
 } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { transactionSyncService, type SyncProgress, type SyncResult, type SyncOptions, type SourceCategory, type SourceSelection, getAddressSources, matchesSourceSelection } from "@/lib/transaction-sync";
-import { db, type Record as DbRecord } from "@/lib/database";
+import { transactionSyncService, type SyncProgress, type SyncResult, type SyncOptions, type SourceCategory, type SourceSelection, getAddressSources } from "@/lib/transaction-sync";
+import { type Record as DbRecord } from "@/lib/database";
 import { useNodeSettings } from "@/hooks/use-node-settings";
 import { getProviderDisplayName, getProviderPrivacyInfo } from "@/lib/blockchain-api";
 import { Link } from "wouter";
@@ -59,7 +59,6 @@ export default function TransactionSync() {
   const [lastResult, setLastResult] = useState<SyncResult | null>(null);
   const [pendingReviewAddresses, setPendingReviewAddresses] = useState<DbRecord[]>([]);
   const [maxDepth, setMaxDepth] = useState<number>(1);
-  const [depthStats, setDepthStats] = useState<Map<number, number>>(new Map());
   
   // New granular source selection state
   const [sourceCategories, setSourceCategories] = useState<SourceCategory[]>([]);
@@ -74,13 +73,6 @@ export default function TransactionSync() {
       includeNoSource,
     };
   }, [selectedSources, includeNoSource]);
-
-  // Apply source filter to records for depth count calculation
-  const applySourceFilter = useCallback((records: DbRecord[]): DbRecord[] => {
-    // Always use custom selection now
-    const selection = currentSourceSelection();
-    return records.filter(r => matchesSourceSelection(r, selection));
-  }, [currentSourceSelection]);
 
   const loadStats = useCallback(async () => {
     const s = await transactionSyncService.getStats();
@@ -115,29 +107,11 @@ export default function TransactionSync() {
     // Always include manual entries by default - this matches legacy 'manual-only' behavior
     setIncludeNoSource(true);
   }, []);
-  
-  // Calculate depth stats based on current source selection
-  const calculateDepthStats = useCallback(async () => {
-    const allRecords = await db.records.where('type').equals('address').toArray();
-    const filteredRecords = applySourceFilter(allRecords);
-    
-    const depths = new Map<number, number>();
-    for (const record of filteredRecords) {
-      const depth = record.syncDepth ?? 0;
-      depths.set(depth, (depths.get(depth) ?? 0) + 1);
-    }
-    setDepthStats(depths);
-  }, [applySourceFilter]);
 
   useEffect(() => {
     loadStats();
     loadSources();
   }, [loadStats, loadSources]);
-  
-  // Recalculate depth stats when source selection changes
-  useEffect(() => {
-    calculateDepthStats();
-  }, [selectedSources, includeNoSource, calculateDepthStats]);
 
   const handleSync = async () => {
     setIsSyncing(true);
@@ -191,7 +165,6 @@ export default function TransactionSync() {
       setIsSyncing(false);
       await loadStats();
       await loadSources();
-      await calculateDepthStats();
     }
   };
 
@@ -559,22 +532,6 @@ export default function TransactionSync() {
               </div>
             </div>
 
-            {/* Depth Stats */}
-            {depthStats.size > 0 && (
-              <div className="flex flex-wrap gap-2 pt-2">
-                {Array.from(depthStats.entries())
-                  .sort((a, b) => a[0] - b[0])
-                  .map(([depth, count]) => (
-                    <Badge 
-                      key={depth} 
-                      variant={depth === 0 ? "default" : "secondary"}
-                      className="text-xs"
-                    >
-                      Depth {depth}: {count} addresses
-                    </Badge>
-                  ))}
-              </div>
-            )}
             {isSyncing && syncProgress && (
               <div className="space-y-3">
                 <div className="flex items-center justify-between text-sm">
