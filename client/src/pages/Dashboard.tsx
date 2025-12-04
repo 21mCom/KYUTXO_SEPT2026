@@ -9,7 +9,7 @@ import { RecordTable } from "@/components/RecordTable";
 import { RecordDetailPanel } from "@/components/RecordDetailPanel";
 import { RecordFormDialog, type TransactionAddresses } from "@/components/RecordFormDialog";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { useRecords, createRecord, createRecordWithAttachments, updateRecord, deleteRecord, searchRecords, filterRecords } from "@/hooks/use-records";
+import { useFilteredRecords, createRecord, createRecordWithAttachments, updateRecord, deleteRecord, searchRecords, filterRecords } from "@/hooks/use-records";
 import { useEncryptedTags, useEncryptedCategories } from "@/hooks/use-encrypted-records";
 import { useOwners } from "@/hooks/use-owners";
 import { useWalletNames } from "@/hooks/use-wallet-names";
@@ -52,9 +52,10 @@ export default function Dashboard() {
   const [uploadProgress, setUploadProgress] = useState<{ current: number; total: number } | null>(null);
   
   // Smart filtering: exclude blockchain-discovered records by default for performance
+  // This filters at the DATABASE level, avoiding loading/decrypting records we don't need
   const [includeBlockchainDiscovered, setIncludeBlockchainDiscovered] = useState(false);
 
-  const { records, isLoading } = useRecords();
+  const { records, isLoading, blockchainDiscoveredCount } = useFilteredRecords(includeBlockchainDiscovered);
   const { tags } = useEncryptedTags();
   const { categories } = useEncryptedCategories();
   const { owners } = useOwners();
@@ -79,31 +80,11 @@ export default function Dashboard() {
     loadAttachments();
   }, [selectedRecordId]);
 
-  // Count blockchain-discovered records for toggle label
-  const blockchainDiscoveredCount = useMemo(() => {
-    return records.filter(r => 
-      r.addressImportance === 'blockchain-discovered' || 
-      r.addressImportance === 'pending-review'
-    ).length;
-  }, [records]);
-
   // Apply search and filters
+  // Note: blockchain-discovered filtering is now done at the DATABASE level via useFilteredRecords
   useEffect(() => {
     const applyFilters = async () => {
       let results = [...records];
-
-      // Apply smart filtering: exclude blockchain-discovered records by default
-      if (!includeBlockchainDiscovered) {
-        results = results.filter(r => {
-          // Keep non-address records (transactions, other)
-          if (r.type !== 'address') return true;
-          // Keep addresses that are user-curated (not blockchain-discovered or pending-review)
-          // Also keep legacy records with no addressImportance set
-          const importance = r.addressImportance;
-          if (!importance) return true; // Legacy records without importance tier
-          return importance !== 'blockchain-discovered' && importance !== 'pending-review';
-        });
-      }
 
       // Apply type filter
       if (filter.type && filter.type !== "all") {
