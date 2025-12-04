@@ -183,9 +183,41 @@ export default function UTXOs() {
     []
   );
 
-  // Load all address records (filtering happens after decryption based on toggle)
+  // Load address records with DATABASE-level filtering based on toggle
+  // Only load and decrypt records we actually need
   const rawRecords = useLiveQuery(
-    () => db.records.where('type').equals('address').toArray(),
+    async () => {
+      if (includeBlockchainDiscovered) {
+        // Load all address records
+        return db.records.where('type').equals('address').toArray();
+      } else {
+        // Filter at database level - only load user-curated records
+        const curatedRecords = await db.records
+          .where('addressImportance')
+          .anyOf(USER_CURATED_TIERS)
+          .and(r => r.type === 'address')
+          .toArray();
+        
+        // Also include legacy records with null addressImportance
+        const legacyRecords = await db.records
+          .filter(r => r.type === 'address' && !r.addressImportance)
+          .toArray();
+        
+        return [...curatedRecords, ...legacyRecords];
+      }
+    },
+    [includeBlockchainDiscovered]
+  );
+  
+  // Count blockchain-discovered records for toggle badge
+  const blockchainDiscoveredCount = useLiveQuery(
+    async () => {
+      const allRecords = await db.records.where('type').equals('address').toArray();
+      return allRecords.filter(r => {
+        const importance = r.addressImportance;
+        return importance && !USER_CURATED_TIERS.includes(importance);
+      }).length;
+    },
     []
   );
 
@@ -474,11 +506,6 @@ export default function UTXOs() {
     return groupsArray;
   }, [utxos, latestPrice]);
 
-  // Count blockchain-discovered address groups (for toggle badge)
-  const blockchainDiscoveredCount = useMemo(() => {
-    return addressGroups.filter(g => !userCuratedAddresses.has(g.address)).length;
-  }, [addressGroups, userCuratedAddresses]);
-
   const filteredGroups = useMemo(() => {
     let filtered = addressGroups;
 
@@ -668,7 +695,7 @@ export default function UTXOs() {
             setIncludeBlockchainDiscovered(checked);
             setCurrentPage(1);
           }}
-          hiddenCount={blockchainDiscoveredCount}
+          hiddenCount={blockchainDiscoveredCount ?? 0}
         />
       </div>
 
