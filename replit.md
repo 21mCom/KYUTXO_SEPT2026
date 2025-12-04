@@ -35,7 +35,14 @@ Key features include:
 - **Reports System**: Self-contained reporting features in `/client/src/components/reports/`:
   - **Source of Funds Report**: Shows acquisition history, cost basis from historical price data, current valuation, and unrealized gain/loss. Internal transfers (same owner) are flagged as non-taxable for capital gains purposes.
   - **Hop-Point Detection Report**: Identifies unclassified addresses that connect known addresses, with confidence scoring to suggest classification (likely own wallet vs. counterparty).
-- **Nudgie (Transaction Labeling To-Do)**: A workflow page for systematically labeling unlabeled transactions from user-inputted sources. Features Dashboard view (progress stats, smart groupings into self-transfers/known-counterparties/unknowns, expandable transaction list) and Focus view (one-at-a-time labeling with full address context). Includes source filtering (manual, xpub-import, wallet-import, blockchain-sync 0-hop) and quick-label buttons for common cases like self-transfers.
+- **Nudgie (Transaction Labeling To-Do)**: A workflow page for systematically labeling unlabeled transactions from user-inputted sources. Features Dashboard view (progress stats, smart groupings into self-transfers/known-counterparties/unknowns, expandable transaction list) and Focus view (one-at-a-time labeling with full address context). Includes source filtering (manual, xpub-import, wallet-import, blockchain-sync 0-hop) and quick-label buttons for common cases like self-transfers. Both views support transaction classification metadata fields.
+- **Transaction Classification Metadata (Database v15)**: Tax-neutral fact-recording system for transaction metadata:
+  - `flowType`: Direction of funds (received, sent, self-transfer, consolidation)
+  - `acquisitionMethod`: How funds were received (purchase, mining, staking, airdrop, gift, payment, other) - only shown when flowType is 'received'
+  - `dispositionType`: How funds were disposed (sale, payment, gift, donation, fee, lost, other) - only shown when flowType is 'sent'
+  - `costBasisUsd`: User-provided actual cost in USD (encrypted field) with prompt to attach proof documents
+  - `counterpartyType`: Classification of the other party (exchange, individual, business, unknown)
+  - These fields are tax-neutral facts for record-keeping only; no tax treatment calculations or jurisdiction-specific advice. Available in RecordFormDialog and Nudgie labeling workflows.
 - **Provenance System (Phase 3)**: A future feature for tracing the flow of funds between addresses using BFS-based pathfinding, an address importance hierarchy, and an interactive Address Explorer.
 
 ## External Dependencies
