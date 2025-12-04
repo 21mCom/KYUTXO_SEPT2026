@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useRef } from "react";
+import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { format } from "date-fns";
 import { db, BlockchainTransaction, TransactionParticipant, Record } from "@/lib/database";
@@ -13,7 +13,15 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useToast } from "@/hooks/use-toast";
+import { useTags } from "@/hooks/use-tags";
+import { useCategories } from "@/hooks/use-categories";
+import { useOwners } from "@/hooks/use-owners";
+import { useWalletNames } from "@/hooks/use-wallet-names";
+import { useSeedNames } from "@/hooks/use-seed-names";
+import { useWalletSoftware } from "@/hooks/use-wallet-software";
+import { RecordFormDialog } from "@/components/RecordFormDialog";
 import { 
   ArrowDownLeft, 
   ArrowUpRight,
@@ -30,7 +38,17 @@ import {
   Circle,
   Users,
   HelpCircle,
-  Sparkles
+  Sparkles,
+  Pencil,
+  Tag,
+  Folder,
+  User,
+  Wallet,
+  Key,
+  Shield,
+  GitBranch,
+  FileText,
+  Lock
 } from "lucide-react";
 
 const USER_CURATED_TIERS = ['verified', 'manual', 'wallet-import', 'xpub-derived'];
@@ -80,7 +98,16 @@ export default function Nudgie() {
   const [expandedTxs, setExpandedTxs] = useState<Set<string>>(new Set());
   const [labelInputs, setLabelInputs] = useState<Map<string, string>>(new Map());
   const [savingTxids, setSavingTxids] = useState<Set<string>>(new Set());
+  const [editingRecord, setEditingRecord] = useState<Record | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const { toast } = useToast();
+
+  const { tags } = useTags();
+  const { categories } = useCategories();
+  const { owners } = useOwners();
+  const { walletNames } = useWalletNames();
+  const { seedNames } = useSeedNames();
+  const { walletSoftware } = useWalletSoftware();
 
   const transactions = useLiveQuery(
     () => db.blockchainTransactions.orderBy('blockTime').reverse().toArray(),
@@ -390,33 +417,229 @@ export default function Nudgie() {
 
   const focusTransaction = transactionsWithContext[focusIndex];
 
-  const renderAddressCard = (addr: TransactionWithContext['yourAddresses'][0], isYours: boolean) => (
-    <div 
-      key={`${addr.address}-${addr.role}`}
-      className={`p-3 rounded-md border ${isYours ? 'bg-primary/5 border-primary/20' : 'bg-muted/50 border-muted'}`}
-    >
-      <div className="flex items-center justify-between gap-2 mb-1">
-        <div className="flex items-center gap-2">
-          {addr.role === 'input' ? (
-            <ArrowUpRight className="h-3 w-3 text-destructive" />
-          ) : (
-            <ArrowDownLeft className="h-3 w-3 text-green-600" />
-          )}
-          <span className="font-mono text-xs">{truncate(addr.address)}</span>
+  const handleEditAddress = (record: Record) => {
+    setEditingRecord(record);
+  };
+
+  const handleSaveEdit = async (data: any, _files: File[] = []) => {
+    if (!editingRecord?.id) return;
+    
+    setIsSubmitting(true);
+    try {
+      let addressImportance = editingRecord.addressImportance;
+      if (data.markAsVerified || data.addressImportance === 'verified') {
+        addressImportance = 'verified';
+      } else if (data.addressImportance) {
+        addressImportance = data.addressImportance;
+      }
+
+      await updateRecord(editingRecord.id, {
+        inputString: data.inputString,
+        label: data.label || '',
+        notes: data.notes || '',
+        tags: data.tags || [],
+        categories: data.categories || [],
+        owner: data.owner || '',
+        walletName: data.walletName || '',
+        seedName: data.seedName || '',
+        walletSoftware: data.walletSoftware || '',
+        privateKeyStatus: data.privateKeyStatus || '',
+        addressImportance,
+        customFields: data.customFields || {},
+      });
+      toast({ title: "Saved", description: "Address updated successfully" });
+      setEditingRecord(null);
+    } catch (error) {
+      console.error('Failed to update record:', error);
+      toast({ title: "Error", description: "Failed to update address", variant: "destructive" });
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const uniqueSeedNames = Array.from(new Set([
+    ...seedNames.map(s => s.name).filter(n => n && n !== '[encrypted]'),
+    ...decryptedAddressRecords.map(r => r.seedName).filter((s): s is string => !!s)
+  ]));
+  const uniqueWalletSoftware = Array.from(new Set([
+    ...walletSoftware.map(w => w.name).filter(n => n && n !== '[encrypted]'),
+    ...decryptedAddressRecords.map(r => r.walletSoftware).filter((s): s is string => !!s)
+  ]));
+  const uniqueOwners = Array.from(new Set([
+    ...owners.map(o => o.name).filter(n => n && n !== '[encrypted]'),
+    ...decryptedAddressRecords.map(r => r.owner).filter((s): s is string => !!s)
+  ]));
+  const uniqueWalletNames = Array.from(new Set([
+    ...walletNames.map(w => w.name).filter(n => n && n !== '[encrypted]'),
+    ...decryptedAddressRecords.map(r => r.walletName).filter((s): s is string => !!s)
+  ]));
+
+  const renderAddressCard = (addr: TransactionWithContext['yourAddresses'][0], isYours: boolean) => {
+    const r = addr.record;
+    const hasMetadata = r && (r.label || r.owner || r.walletName || r.seedName || r.walletSoftware || 
+                              r.derivationPath || r.privateKeyStatus || (r.tags && r.tags.length > 0) || 
+                              (r.categories && r.categories.length > 0) || r.notes || r.vault);
+    
+    return (
+      <div 
+        key={`${addr.address}-${addr.role}`}
+        className={`p-3 rounded-md border ${isYours ? 'bg-primary/5 border-primary/20' : 'bg-muted/50 border-muted'}`}
+      >
+        <div className="flex items-center justify-between gap-2 mb-2">
+          <div className="flex items-center gap-2 min-w-0 flex-1">
+            {addr.role === 'input' ? (
+              <ArrowUpRight className="h-3 w-3 text-destructive flex-shrink-0" />
+            ) : (
+              <ArrowDownLeft className="h-3 w-3 text-green-600 flex-shrink-0" />
+            )}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="font-mono text-xs truncate cursor-help">{truncate(addr.address)}</span>
+              </TooltipTrigger>
+              <TooltipContent className="font-mono text-xs">
+                {addr.address}
+              </TooltipContent>
+            </Tooltip>
+          </div>
+          <div className="flex items-center gap-1 flex-shrink-0">
+            <span className="text-xs font-medium">{formatSats(addr.amount)}</span>
+            {r && (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-6 w-6"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleEditAddress(r);
+                }}
+                data-testid={`button-edit-address-${addr.address.slice(0, 8)}`}
+              >
+                <Pencil className="h-3 w-3" />
+              </Button>
+            )}
+          </div>
         </div>
-        <span className="text-xs font-medium">{formatSats(addr.amount)}</span>
+
+        {r ? (
+          <div className="text-xs space-y-1.5">
+            {r.label && (
+              <div className="font-medium text-foreground">{r.label}</div>
+            )}
+            
+            <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-muted-foreground">
+              {r.owner && (
+                <div className="flex items-center gap-1">
+                  <User className="h-3 w-3 flex-shrink-0" />
+                  <span className="truncate">{r.owner}</span>
+                </div>
+              )}
+              {r.walletName && (
+                <div className="flex items-center gap-1">
+                  <Wallet className="h-3 w-3 flex-shrink-0" />
+                  <span className="truncate">{r.walletName}</span>
+                </div>
+              )}
+              {r.seedName && (
+                <div className="flex items-center gap-1">
+                  <Key className="h-3 w-3 flex-shrink-0" />
+                  <span className="truncate">{r.seedName}</span>
+                </div>
+              )}
+              {r.walletSoftware && (
+                <div className="flex items-center gap-1">
+                  <FileText className="h-3 w-3 flex-shrink-0" />
+                  <span className="truncate">{r.walletSoftware}</span>
+                </div>
+              )}
+              {r.derivationPath && (
+                <div className="flex items-center gap-1">
+                  <GitBranch className="h-3 w-3 flex-shrink-0" />
+                  <span className="font-mono truncate">{r.derivationPath}</span>
+                </div>
+              )}
+              {r.chainType && (
+                <div className="flex items-center gap-1">
+                  <span className="text-muted-foreground">{r.chainType === 'receive' ? 'Receive' : 'Change'}</span>
+                </div>
+              )}
+              {r.privateKeyStatus && (
+                <div className="flex items-center gap-1">
+                  <Lock className="h-3 w-3 flex-shrink-0" />
+                  <span className="truncate">{r.privateKeyStatus}</span>
+                </div>
+              )}
+              {r.addressImportance && (
+                <div className="flex items-center gap-1">
+                  <Shield className="h-3 w-3 flex-shrink-0" />
+                  <span className="truncate capitalize">{r.addressImportance.replace('-', ' ')}</span>
+                </div>
+              )}
+            </div>
+
+            {r.vault && r.vault.isVaultXpub && (
+              <div className="mt-1 p-1.5 bg-amber-500/10 rounded text-amber-600 dark:text-amber-400">
+                <div className="flex items-center gap-1 font-medium">
+                  <Shield className="h-3 w-3" />
+                  Multisig {r.vault.m && r.vault.n ? `(${r.vault.m}-of-${r.vault.n})` : ''}
+                </div>
+                {r.vault.vaultName && <div className="ml-4">{r.vault.vaultName}</div>}
+                {r.vault.vaultNotes && <div className="ml-4 text-[10px] opacity-80">{r.vault.vaultNotes}</div>}
+              </div>
+            )}
+
+            {r.xpub && (
+              <div className="mt-1 text-[10px] text-muted-foreground/60">
+                <span className="font-mono">{truncate(r.xpub, 12, 8)}</span>
+              </div>
+            )}
+
+            {r.customFields && Object.keys(r.customFields).length > 0 && (
+              <div className="mt-1 grid grid-cols-2 gap-x-2 gap-y-0.5 text-[10px] text-muted-foreground">
+                {Object.entries(r.customFields).map(([key, value]) => (
+                  value && (
+                    <div key={key} className="truncate">
+                      <span className="opacity-60">{key}:</span> {value}
+                    </div>
+                  )
+                ))}
+              </div>
+            )}
+
+            {((r.tags && r.tags.length > 0) || (r.categories && r.categories.length > 0)) && (
+              <div className="flex flex-wrap gap-1 mt-1">
+                {r.tags?.map((tag, i) => (
+                  <Badge key={`tag-${i}`} variant="outline" className="text-[10px] h-4 px-1">
+                    <Tag className="h-2 w-2 mr-0.5" />
+                    {tag}
+                  </Badge>
+                ))}
+                {r.categories?.map((cat, i) => (
+                  <Badge key={`cat-${i}`} variant="secondary" className="text-[10px] h-4 px-1">
+                    <Folder className="h-2 w-2 mr-0.5" />
+                    {cat}
+                  </Badge>
+                ))}
+              </div>
+            )}
+
+            {r.notes && (
+              <div className="mt-1 p-1.5 bg-muted/50 rounded text-muted-foreground italic">
+                {r.notes.length > 100 ? `${r.notes.slice(0, 100)}...` : r.notes}
+              </div>
+            )}
+
+            {r.source && (
+              <div className="text-[10px] text-muted-foreground/60 mt-1">
+                Source: {r.source}
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="text-xs text-muted-foreground italic">Unknown address</div>
+        )}
       </div>
-      {addr.record ? (
-        <div className="text-xs text-muted-foreground space-y-0.5">
-          {addr.record.label && <div className="font-medium text-foreground">{addr.record.label}</div>}
-          {addr.record.owner && <div>Owner: {addr.record.owner}</div>}
-          {addr.record.walletName && <div>Wallet: {addr.record.walletName}</div>}
-        </div>
-      ) : (
-        <div className="text-xs text-muted-foreground italic">Unknown address</div>
-      )}
-    </div>
-  );
+    );
+  };
 
   const renderTransactionCard = (tx: TransactionWithContext, compact = false) => {
     const isExpanded = expandedTxs.has(tx.txid);
@@ -901,6 +1124,34 @@ export default function Nudgie() {
 
         {viewMode === 'dashboard' ? renderDashboardView() : renderFocusView()}
       </div>
+
+      <RecordFormDialog
+        open={editingRecord !== null}
+        onClose={() => setEditingRecord(null)}
+        onSave={handleSaveEdit}
+        initialData={editingRecord ? {
+          inputString: editingRecord.inputString,
+          label: editingRecord.label || '',
+          type: editingRecord.type,
+          notes: editingRecord.notes || '',
+          tags: editingRecord.tags || [],
+          categories: editingRecord.categories || [],
+          seedName: editingRecord.seedName || '',
+          walletSoftware: editingRecord.walletSoftware || '',
+          owner: editingRecord.owner || '',
+          walletName: editingRecord.walletName || '',
+          privateKeyStatus: editingRecord.privateKeyStatus || '',
+          addressImportance: editingRecord.addressImportance,
+          customFields: editingRecord.customFields || {},
+        } : undefined}
+        isSubmitting={isSubmitting}
+        availableSeedNames={uniqueSeedNames}
+        availableWalletSoftware={uniqueWalletSoftware}
+        availableOwners={uniqueOwners}
+        availableWalletNames={uniqueWalletNames}
+        availableTags={tags.map(t => t.name).filter(n => n && n !== '[encrypted]')}
+        availableCategories={categories.map(c => c.name).filter(n => n && n !== '[encrypted]')}
+      />
     </div>
   );
 }
