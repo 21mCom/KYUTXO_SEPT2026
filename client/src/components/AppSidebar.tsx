@@ -86,6 +86,7 @@ const navGroups: NavGroup[] = [
     items: [
       { title: "Address Reuse", url: "/address-reuse", icon: Repeat2 },
       { title: "Provenance", url: "/provenance", icon: GitBranch },
+      { title: "Flow Visualizer", url: "/flow-visualizer", icon: Network },
       { title: "Data Stats", url: "/data-stats", icon: BarChart3 },
       { title: "Reports", url: "/reports", icon: ClipboardList },
       { title: "Lightning", url: "/lightning-speculator", icon: Zap },
