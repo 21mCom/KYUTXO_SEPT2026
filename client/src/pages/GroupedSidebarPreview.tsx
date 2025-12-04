@@ -6,19 +6,24 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { 
-  LayoutDashboard,
-  ClipboardList,
   Database,
-  Wallet,
-  ArrowLeftRight,
+  Sparkles,
+  List,
   Coins,
   Repeat2,
+  GitBranch,
   BarChart3,
+  ClipboardList,
   Zap,
-  Upload,
+  Key,
+  Wallet,
+  TrendingUp,
+  ArrowDownUp,
+  QrCode,
+  RefreshCw,
   Download,
-  Settings,
   Server,
+  Settings,
   Wrench,
   Palette,
   Shapes,
@@ -30,7 +35,11 @@ import {
   X,
   PanelLeftClose,
   Eye,
-  EyeOff
+  EyeOff,
+  LayoutGrid,
+  LayoutDashboard,
+  Upload,
+  Hammer
 } from "lucide-react";
 import { SiBitcoin } from "react-icons/si";
 
@@ -56,8 +65,8 @@ const navGroups: NavGroup[] = [
     icon: LayoutDashboard,
     defaultOpen: true,
     items: [
-      { title: "Dashboard", url: "/dashboard", icon: LayoutDashboard },
-      { title: "Nudgie", url: "/nudgie", icon: ClipboardList, badge: "Workflow" },
+      { title: "Records", url: "/", icon: Database },
+      { title: "Nudgie", url: "/nudgie", icon: Sparkles, badge: "Workflow" },
     ]
   },
   {
@@ -66,9 +75,7 @@ const navGroups: NavGroup[] = [
     icon: Database,
     defaultOpen: true,
     items: [
-      { title: "Records", url: "/records", icon: Database },
-      { title: "Addresses", url: "/addresses", icon: Wallet },
-      { title: "Transactions", url: "/transactions", icon: ArrowLeftRight },
+      { title: "Transactions", url: "/transactions", icon: List },
       { title: "UTXOs", url: "/utxos", icon: Coins },
     ]
   },
@@ -79,18 +86,32 @@ const navGroups: NavGroup[] = [
     defaultOpen: false,
     items: [
       { title: "Address Reuse", url: "/address-reuse", icon: Repeat2 },
-      { title: "Reports", url: "/reports", icon: BarChart3 },
-      { title: "Lightning", url: "/lightning", icon: Zap, badge: "Beta" },
+      { title: "Provenance", url: "/provenance", icon: GitBranch },
+      { title: "Data Stats", url: "/data-stats", icon: BarChart3 },
+      { title: "Reports", url: "/reports", icon: ClipboardList },
+      { title: "Lightning", url: "/lightning-speculator", icon: Zap, badge: "Beta" },
     ]
   },
   {
-    id: "import-export",
-    title: "Import / Export",
+    id: "import",
+    title: "Import",
     icon: Upload,
     defaultOpen: false,
     items: [
-      { title: "Import", url: "/import", icon: Upload },
-      { title: "Export", url: "/export", icon: Download },
+      { title: "Address Importer", url: "/import", icon: Key },
+      { title: "Wallet Data Sync", url: "/wallet-import", icon: Wallet },
+      { title: "Price Import", url: "/price-import", icon: TrendingUp },
+      { title: "Transaction Sync", url: "/transaction-sync", icon: ArrowDownUp },
+    ]
+  },
+  {
+    id: "tools",
+    title: "Tools",
+    icon: Hammer,
+    defaultOpen: false,
+    items: [
+      { title: "QR Scanner", url: "/scanner", icon: QrCode },
+      { title: "Value Updater", url: "/value-updater", icon: RefreshCw },
     ]
   },
   {
@@ -99,8 +120,9 @@ const navGroups: NavGroup[] = [
     icon: Settings,
     defaultOpen: false,
     items: [
+      { title: "Backup", url: "/export", icon: Download },
+      { title: "Node Connection", url: "/node-settings", icon: Server },
       { title: "Settings", url: "/settings", icon: Settings },
-      { title: "Node Settings", url: "/node-settings", icon: Server },
     ]
   },
   {
@@ -112,6 +134,7 @@ const navGroups: NavGroup[] = [
       { title: "UI Assets", url: "/dev/ui-assets", icon: Palette },
       { title: "Icons Reference", url: "/dev/icons", icon: Shapes },
       { title: "Nav Patterns", url: "/dev/nav-patterns", icon: PanelLeft },
+      { title: "Grouped Sidebar", url: "/dev/grouped-sidebar", icon: LayoutGrid },
       { title: "Flow Visualizations", url: "/dev/flow-viz", icon: Network },
     ]
   },
@@ -121,7 +144,7 @@ export default function GroupedSidebarPreview() {
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>(
     Object.fromEntries(navGroups.map(g => [g.id, g.defaultOpen ?? false]))
   );
-  const [activeItem, setActiveItem] = useState("/dashboard");
+  const [activeItem, setActiveItem] = useState("/");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [showDevTools, setShowDevTools] = useState(true);
 
@@ -209,14 +232,17 @@ export default function GroupedSidebarPreview() {
               <CardDescription>Click groups to expand/collapse, click items to select</CardDescription>
             </CardHeader>
             <CardContent className="p-0">
-              <div className="border-t flex h-[500px]">
+              <div className="border-t flex h-[560px]">
                 <div className={`bg-sidebar border-r transition-all duration-200 ${sidebarCollapsed ? 'w-14' : 'w-64'} flex flex-col`}>
                   <div className="p-3 border-b flex items-center gap-2">
                     <div className="w-8 h-8 rounded bg-primary flex items-center justify-center flex-shrink-0">
                       <SiBitcoin className="h-5 w-5 text-primary-foreground" />
                     </div>
                     {!sidebarCollapsed && (
-                      <span className="font-semibold text-sm">KYUTXO</span>
+                      <div className="flex flex-col">
+                        <span className="font-bold text-sm">KYBTC</span>
+                        <span className="text-xs text-muted-foreground">Bitcoin Manager</span>
+                      </div>
                     )}
                   </div>
                   
@@ -347,63 +373,90 @@ export default function GroupedSidebarPreview() {
 
             <Card>
               <CardHeader>
+                <CardTitle className="text-lg">Group Summary</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-3 text-sm">
+                  <div className="flex items-start gap-2">
+                    <LayoutDashboard className="h-4 w-4 text-muted-foreground mt-0.5" />
+                    <div>
+                      <span className="font-medium">Overview</span>
+                      <span className="text-muted-foreground"> - Main views and workflows</span>
+                    </div>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <Database className="h-4 w-4 text-muted-foreground mt-0.5" />
+                    <div>
+                      <span className="font-medium">Data</span>
+                      <span className="text-muted-foreground"> - Transaction and UTXO lists</span>
+                    </div>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <BarChart3 className="h-4 w-4 text-muted-foreground mt-0.5" />
+                    <div>
+                      <span className="font-medium">Analysis</span>
+                      <span className="text-muted-foreground"> - Reports and pattern detection</span>
+                    </div>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <Upload className="h-4 w-4 text-muted-foreground mt-0.5" />
+                    <div>
+                      <span className="font-medium">Import</span>
+                      <span className="text-muted-foreground"> - Bring data into the app</span>
+                    </div>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <Hammer className="h-4 w-4 text-muted-foreground mt-0.5" />
+                    <div>
+                      <span className="font-medium">Tools</span>
+                      <span className="text-muted-foreground"> - Utilities (QR, value updates)</span>
+                    </div>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <Settings className="h-4 w-4 text-muted-foreground mt-0.5" />
+                    <div>
+                      <span className="font-medium">System</span>
+                      <span className="text-muted-foreground"> - Backup, nodes, settings</span>
+                    </div>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <Wrench className="h-4 w-4 text-muted-foreground mt-0.5" />
+                    <div>
+                      <span className="font-medium">Dev Tools</span>
+                      <span className="text-muted-foreground"> - Hidden in production</span>
+                    </div>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
                 <CardTitle className="text-lg">Key Features</CardTitle>
               </CardHeader>
               <CardContent>
                 <ul className="space-y-2 text-sm">
                   <li className="flex items-start gap-2">
                     <Check className="h-4 w-4 text-green-500 mt-0.5 flex-shrink-0" />
-                    <span><strong>Collapsible groups</strong> - Users can hide sections they don't need</span>
+                    <span><strong>7 logical groups</strong> vs flat list of 18 items</span>
                   </li>
                   <li className="flex items-start gap-2">
                     <Check className="h-4 w-4 text-green-500 mt-0.5 flex-shrink-0" />
-                    <span><strong>Remembers state</strong> - Group open/closed state persists</span>
+                    <span><strong>Collapsible</strong> - Hide sections you don't use</span>
                   </li>
                   <li className="flex items-start gap-2">
                     <Check className="h-4 w-4 text-green-500 mt-0.5 flex-shrink-0" />
-                    <span><strong>Icon-only mode</strong> - Collapse sidebar for more content space</span>
+                    <span><strong>Icon-only mode</strong> - More content space</span>
                   </li>
                   <li className="flex items-start gap-2">
                     <Check className="h-4 w-4 text-green-500 mt-0.5 flex-shrink-0" />
-                    <span><strong>Logical grouping</strong> - Related items together (Data, Analysis, etc.)</span>
+                    <span><strong>Dev Tools hidden</strong> - Toggle off for production</span>
                   </li>
                   <li className="flex items-start gap-2">
                     <Check className="h-4 w-4 text-green-500 mt-0.5 flex-shrink-0" />
-                    <span><strong>Dev Tools hidden</strong> - Can be toggled off for production</span>
-                  </li>
-                  <li className="flex items-start gap-2">
-                    <Check className="h-4 w-4 text-green-500 mt-0.5 flex-shrink-0" />
-                    <span><strong>Badges</strong> - Mark items as Beta, Workflow, New, etc.</span>
+                    <span><strong>Badges</strong> - Mark Beta, Workflow, etc.</span>
                   </li>
                 </ul>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-lg">Comparison</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="grid grid-cols-2 gap-4 text-sm">
-                  <div>
-                    <p className="font-medium mb-2 text-muted-foreground">Current (Flat)</p>
-                    <ul className="space-y-1">
-                      <li>• 15+ items in one list</li>
-                      <li>• Must scroll to see all</li>
-                      <li>• No visual hierarchy</li>
-                      <li>• Dev tools always visible</li>
-                    </ul>
-                  </div>
-                  <div>
-                    <p className="font-medium mb-2">Proposed (Grouped)</p>
-                    <ul className="space-y-1">
-                      <li>• 6 logical groups</li>
-                      <li>• Collapse unused sections</li>
-                      <li>• Clear visual hierarchy</li>
-                      <li>• Dev tools can be hidden</li>
-                    </ul>
-                  </div>
-                </div>
               </CardContent>
             </Card>
           </div>
