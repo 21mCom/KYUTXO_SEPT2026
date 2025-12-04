@@ -38,8 +38,7 @@ import {
   EyeOff,
   LayoutGrid,
   LayoutDashboard,
-  Upload,
-  Hammer
+  Upload
 } from "lucide-react";
 import { SiBitcoin } from "react-icons/si";
 
@@ -93,8 +92,8 @@ const navGroups: NavGroup[] = [
     ]
   },
   {
-    id: "import",
-    title: "Import",
+    id: "import-export",
+    title: "Import / Export",
     icon: Upload,
     defaultOpen: false,
     items: [
@@ -102,16 +101,7 @@ const navGroups: NavGroup[] = [
       { title: "Wallet Data Sync", url: "/wallet-import", icon: Wallet },
       { title: "Price Import", url: "/price-import", icon: TrendingUp },
       { title: "Transaction Sync", url: "/transaction-sync", icon: ArrowDownUp },
-    ]
-  },
-  {
-    id: "tools",
-    title: "Tools",
-    icon: Hammer,
-    defaultOpen: false,
-    items: [
       { title: "QR Scanner", url: "/scanner", icon: QrCode },
-      { title: "Value Updater", url: "/value-updater", icon: RefreshCw },
     ]
   },
   {
@@ -122,6 +112,7 @@ const navGroups: NavGroup[] = [
     items: [
       { title: "Backup", url: "/export", icon: Download },
       { title: "Node Connection", url: "/node-settings", icon: Server },
+      { title: "Value Updater", url: "/value-updater", icon: RefreshCw },
       { title: "Settings", url: "/settings", icon: Settings },
     ]
   },
@@ -401,29 +392,22 @@ export default function GroupedSidebarPreview() {
                   <div className="flex items-start gap-2">
                     <Upload className="h-4 w-4 text-muted-foreground mt-0.5" />
                     <div>
-                      <span className="font-medium">Import</span>
-                      <span className="text-muted-foreground"> - Bring data into the app</span>
-                    </div>
-                  </div>
-                  <div className="flex items-start gap-2">
-                    <Hammer className="h-4 w-4 text-muted-foreground mt-0.5" />
-                    <div>
-                      <span className="font-medium">Tools</span>
-                      <span className="text-muted-foreground"> - Utilities (QR, value updates)</span>
+                      <span className="font-medium">Import / Export</span>
+                      <span className="text-muted-foreground"> - Data import and QR scanning</span>
                     </div>
                   </div>
                   <div className="flex items-start gap-2">
                     <Settings className="h-4 w-4 text-muted-foreground mt-0.5" />
                     <div>
                       <span className="font-medium">System</span>
-                      <span className="text-muted-foreground"> - Backup, nodes, settings</span>
+                      <span className="text-muted-foreground"> - Backup, nodes, utilities, settings</span>
                     </div>
                   </div>
                   <div className="flex items-start gap-2">
                     <Wrench className="h-4 w-4 text-muted-foreground mt-0.5" />
                     <div>
                       <span className="font-medium">Dev Tools</span>
-                      <span className="text-muted-foreground"> - Hidden in production</span>
+                      <span className="text-muted-foreground"> - Development utilities</span>
                     </div>
                   </div>
                 </div>
@@ -438,7 +422,7 @@ export default function GroupedSidebarPreview() {
                 <ul className="space-y-2 text-sm">
                   <li className="flex items-start gap-2">
                     <Check className="h-4 w-4 text-green-500 mt-0.5 flex-shrink-0" />
-                    <span><strong>7 logical groups</strong> vs flat list of 18 items</span>
+                    <span><strong>6 logical groups</strong> vs flat list of 18 items</span>
                   </li>
                   <li className="flex items-start gap-2">
                     <Check className="h-4 w-4 text-green-500 mt-0.5 flex-shrink-0" />
