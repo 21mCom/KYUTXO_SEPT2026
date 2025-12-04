@@ -13,7 +13,7 @@ import {
   ACQUISITION_METHOD_OPTIONS,
   DISPOSITION_TYPE_OPTIONS,
 } from "@/lib/database";
-import { decryptRecords, updateRecord, createRecord } from "@/lib/encryptionFacade";
+import { decryptRecords, updateRecord, createRecord, getDecryptedTags, getDecryptedCategories, isEncryptionReady } from "@/lib/encryptionFacade";
 import { uploadAttachment } from "@/lib/attachments";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -31,6 +31,7 @@ import { MultiSelectCombobox } from "@/components/ui/multi-select-combobox";
 import { useToast } from "@/hooks/use-toast";
 import { useTags } from "@/hooks/use-tags";
 import { useCategories } from "@/hooks/use-categories";
+import type { Tag as TagType, Category as CategoryType } from "@/lib/database";
 import { useOwners } from "@/hooks/use-owners";
 import { useWalletNames } from "@/hooks/use-wallet-names";
 import { useSeedNames } from "@/hooks/use-seed-names";
@@ -55,7 +56,7 @@ import {
   HelpCircle,
   Sparkles,
   Pencil,
-  Tag,
+  Tag as TagIcon,
   Folder,
   User,
   Wallet,
@@ -177,6 +178,8 @@ export default function Nudgie() {
 
   const [decryptedAddressRecords, setDecryptedAddressRecords] = useState<Record[]>([]);
   const [decryptedTransactionRecords, setDecryptedTransactionRecords] = useState<Record[]>([]);
+  const [decryptedTags, setDecryptedTags] = useState<TagType[]>([]);
+  const [decryptedCategories, setDecryptedCategories] = useState<CategoryType[]>([]);
   const decryptRequestId = useRef(0);
 
   useEffect(() => {
@@ -205,6 +208,33 @@ export default function Nudgie() {
     
     decrypt();
   }, [rawAddressRecords, rawTransactionRecords]);
+
+  // Decrypt tags and categories vocabulary items
+  useEffect(() => {
+    // Only attempt decryption if encryption is ready (vault is unlocked)
+    if (!isEncryptionReady()) {
+      // When locked, fall back to raw data (which may show '[encrypted]' placeholders)
+      setDecryptedTags(tags);
+      setDecryptedCategories(categories);
+      return;
+    }
+    
+    const decryptVocabulary = async () => {
+      try {
+        const [dTags, dCategories] = await Promise.all([
+          getDecryptedTags(),
+          getDecryptedCategories()
+        ]);
+        setDecryptedTags(dTags);
+        setDecryptedCategories(dCategories);
+      } catch {
+        // Fallback to raw data if decryption fails
+        setDecryptedTags(tags);
+        setDecryptedCategories(categories);
+      }
+    };
+    decryptVocabulary();
+  }, [tags, categories]);
 
   const addressToRecord = useMemo(() => {
     const map = new Map<string, Record>();
@@ -411,13 +441,13 @@ export default function Nudgie() {
   };
 
   const availableTagNames = useMemo(() => 
-    tags.map(t => t.name).filter(n => n && n !== '[encrypted]'),
-    [tags]
+    decryptedTags.map(t => t.name).filter(n => n && n !== '[encrypted]'),
+    [decryptedTags]
   );
 
   const availableCategoryNames = useMemo(() => 
-    categories.map(c => c.name).filter(n => n && n !== '[encrypted]'),
-    [categories]
+    decryptedCategories.map(c => c.name).filter(n => n && n !== '[encrypted]'),
+    [decryptedCategories]
   );
 
   const handleSaveTransaction = async (tx: TransactionWithContext) => {
@@ -786,7 +816,7 @@ export default function Nudgie() {
               <div className="flex flex-wrap gap-1 mt-1">
                 {r.tags?.map((tag, i) => (
                   <Badge key={`tag-${i}`} variant="outline" className="text-[10px] h-4 px-1">
-                    <Tag className="h-2 w-2 mr-0.5" />
+                    <TagIcon className="h-2 w-2 mr-0.5" />
                     {tag}
                   </Badge>
                 ))}
@@ -1728,8 +1758,8 @@ export default function Nudgie() {
         availableWalletSoftware={uniqueWalletSoftware}
         availableOwners={uniqueOwners}
         availableWalletNames={uniqueWalletNames}
-        availableTags={tags.map(t => t.name).filter(n => n && n !== '[encrypted]')}
-        availableCategories={categories.map(c => c.name).filter(n => n && n !== '[encrypted]')}
+        availableTags={availableTagNames}
+        availableCategories={availableCategoryNames}
       />
     </div>
   );
