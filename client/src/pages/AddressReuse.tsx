@@ -5,8 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { Switch } from "@/components/ui/switch";
-import { Label } from "@/components/ui/label";
+import { BlockchainToggle } from "@/components/BlockchainToggle";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -483,11 +482,18 @@ export default function AddressReuse() {
     <ScrollArea className="h-full">
       <div className="p-6 space-y-6">
         <div className="flex flex-col gap-4">
-          <div>
-            <h1 className="text-2xl font-bold" data-testid="text-page-title">Address Reuse</h1>
-            <p className="text-muted-foreground mt-1">
-              Addresses that received funds multiple times or had change routed back to them
-            </p>
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <h1 className="text-2xl font-bold" data-testid="text-page-title">Address Reuse</h1>
+              <p className="text-muted-foreground mt-1">
+                Addresses that received funds multiple times or had change routed back to them
+              </p>
+            </div>
+            <BlockchainToggle
+              checked={includeBlockchainDiscovered}
+              onCheckedChange={setIncludeBlockchainDiscovered}
+              hiddenCount={totalBlockchainDiscovered}
+            />
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -541,35 +547,6 @@ export default function AddressReuse() {
               </CardContent>
             </Card>
           </div>
-        </div>
-
-        {/* Data scope toggle */}
-        <div className="flex items-center justify-between p-3 rounded-lg border bg-muted/30">
-          <div className="flex items-center gap-3">
-            <span className="text-sm font-medium">Your Addresses</span>
-            <span className="text-sm text-muted-foreground">|</span>
-            <div className="flex items-center gap-2">
-              <Switch
-                id="include-blockchain-discovered"
-                checked={includeBlockchainDiscovered}
-                onCheckedChange={setIncludeBlockchainDiscovered}
-                data-testid="switch-include-blockchain"
-              />
-              <Label htmlFor="include-blockchain-discovered" className="text-sm cursor-pointer">
-                Include blockchain-discovered
-              </Label>
-              {totalBlockchainDiscovered > 0 && (
-                <Badge variant="secondary" className="text-xs">
-                  +{totalBlockchainDiscovered.toLocaleString()}
-                </Badge>
-              )}
-            </div>
-          </div>
-          {!includeBlockchainDiscovered && totalBlockchainDiscovered > 0 && (
-            <span className="text-xs text-muted-foreground">
-              Analyzing only manually added and imported addresses
-            </span>
-          )}
         </div>
 
         {/* Filters Section */}

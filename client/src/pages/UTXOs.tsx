@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
-import { Switch } from "@/components/ui/switch";
+import { BlockchainToggle } from "@/components/BlockchainToggle";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Calendar } from "@/components/ui/calendar";
@@ -31,8 +31,7 @@ import {
   Copy,
   Check,
   TrendingUp,
-  TrendingDown,
-  Users
+  TrendingDown
 } from "lucide-react";
 import { SiBitcoin } from "react-icons/si";
 import { decryptRecords, isEncryptionReady, getDecryptedOwners, getDecryptedWalletNames, getDecryptedTags, getDecryptedCategories } from "@/lib/encryptionFacade";
@@ -653,14 +652,24 @@ export default function UTXOs() {
 
   return (
     <div className="flex flex-col h-full overflow-hidden p-4 gap-4">
-      <div className="flex-none">
-        <h1 className="text-2xl font-bold flex items-center gap-2" data-testid="text-page-title">
-          <Coins className="h-6 w-6" />
-          UTXOs
-        </h1>
-        <p className="text-muted-foreground mt-1">
-          View unspent transaction outputs grouped by address
-        </p>
+      <div className="flex-none flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold flex items-center gap-2" data-testid="text-page-title">
+            <Coins className="h-6 w-6" />
+            UTXOs
+          </h1>
+          <p className="text-muted-foreground mt-1">
+            View unspent transaction outputs grouped by address
+          </p>
+        </div>
+        <BlockchainToggle
+          checked={includeBlockchainDiscovered}
+          onCheckedChange={(checked) => {
+            setIncludeBlockchainDiscovered(checked);
+            setCurrentPage(1);
+          }}
+          hiddenCount={blockchainDiscoveredCount}
+        />
       </div>
 
       <div className="flex items-center gap-2 text-sm text-muted-foreground flex-none flex-wrap">
@@ -744,41 +753,6 @@ export default function UTXOs() {
             </CardTitle>
           </CardHeader>
         </Card>
-      </div>
-
-      {/* Smart filter toggle for blockchain-discovered addresses */}
-      <div className="flex items-center justify-between p-3 rounded-lg border bg-muted/30 flex-none">
-        <div className="flex items-center gap-3">
-          <div className="flex items-center gap-2">
-            <Users className="h-4 w-4 text-muted-foreground" />
-            <span className="text-sm font-medium">Your Addresses</span>
-          </div>
-          <span className="text-sm text-muted-foreground">|</span>
-          <div className="flex items-center gap-2">
-            <Switch
-              id="include-blockchain-utxos"
-              checked={includeBlockchainDiscovered}
-              onCheckedChange={(checked) => {
-                setIncludeBlockchainDiscovered(checked);
-                setCurrentPage(1);
-              }}
-              data-testid="switch-include-blockchain"
-            />
-            <Label htmlFor="include-blockchain-utxos" className="text-sm cursor-pointer">
-              Include blockchain-discovered
-            </Label>
-            {blockchainDiscoveredCount > 0 && (
-              <Badge variant="secondary" className="text-xs">
-                +{blockchainDiscoveredCount.toLocaleString()}
-              </Badge>
-            )}
-          </div>
-        </div>
-        {!includeBlockchainDiscovered && blockchainDiscoveredCount > 0 && (
-          <span className="text-xs text-muted-foreground">
-            Showing UTXOs from your addresses only
-          </span>
-        )}
       </div>
 
       <Card className="flex-none">

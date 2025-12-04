@@ -6,8 +6,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { Switch } from "@/components/ui/switch";
-import { Label } from "@/components/ui/label";
+import { BlockchainToggle } from "@/components/BlockchainToggle";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { 
   ChevronLeft, 
@@ -21,8 +20,7 @@ import {
   Clock,
   Hash,
   Zap,
-  Link as LinkIcon,
-  Users
+  Link as LinkIcon
 } from "lucide-react";
 import { decryptRecords } from "@/lib/encryptionFacade";
 
@@ -261,11 +259,21 @@ export default function Transactions() {
 
   return (
     <div className="flex flex-col h-full overflow-hidden p-4 gap-4">
-      <div className="flex-none">
-        <h1 className="text-2xl font-bold" data-testid="text-page-title">Blockchain Transactions</h1>
-        <p className="text-muted-foreground mt-1">
-          View synced transaction data with amounts, fees, and linked addresses
-        </p>
+      <div className="flex-none flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold" data-testid="text-page-title">Blockchain Transactions</h1>
+          <p className="text-muted-foreground mt-1">
+            View synced transaction data with amounts, fees, and linked addresses
+          </p>
+        </div>
+        <BlockchainToggle
+          checked={includeBlockchainDiscovered}
+          onCheckedChange={(checked) => {
+            setIncludeBlockchainDiscovered(checked);
+            setCurrentPage(1);
+          }}
+          hiddenCount={blockchainOnlyTxCount}
+        />
       </div>
 
       {/* Stats Overview */}
@@ -320,41 +328,6 @@ export default function Transactions() {
           className="pl-10"
           data-testid="input-search"
         />
-      </div>
-
-      {/* Smart filter toggle for blockchain-discovered addresses */}
-      <div className="flex items-center justify-between p-3 rounded-lg border bg-muted/30 flex-none">
-        <div className="flex items-center gap-3">
-          <div className="flex items-center gap-2">
-            <Users className="h-4 w-4 text-muted-foreground" />
-            <span className="text-sm font-medium">Your Transactions</span>
-          </div>
-          <span className="text-sm text-muted-foreground">|</span>
-          <div className="flex items-center gap-2">
-            <Switch
-              id="include-blockchain-tx"
-              checked={includeBlockchainDiscovered}
-              onCheckedChange={(checked) => {
-                setIncludeBlockchainDiscovered(checked);
-                setCurrentPage(1);
-              }}
-              data-testid="switch-include-blockchain"
-            />
-            <Label htmlFor="include-blockchain-tx" className="text-sm cursor-pointer">
-              Include blockchain-only
-            </Label>
-            {blockchainOnlyTxCount > 0 && (
-              <Badge variant="secondary" className="text-xs">
-                +{blockchainOnlyTxCount.toLocaleString()}
-              </Badge>
-            )}
-          </div>
-        </div>
-        {!includeBlockchainDiscovered && blockchainOnlyTxCount > 0 && (
-          <span className="text-xs text-muted-foreground">
-            Showing transactions involving your addresses
-          </span>
-        )}
       </div>
 
       {/* Transaction List */}

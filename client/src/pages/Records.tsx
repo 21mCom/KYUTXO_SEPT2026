@@ -3,10 +3,8 @@ import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Switch } from "@/components/ui/switch";
-import { Label } from "@/components/ui/label";
-import { Badge } from "@/components/ui/badge";
-import { ArrowLeft, Search as SearchIcon, Database, Users } from "lucide-react";
+import { ArrowLeft, Search as SearchIcon, Database } from "lucide-react";
+import { BlockchainToggle } from "@/components/BlockchainToggle";
 import { db, subscribeToDbChanges, type Record as DbRecord, type VaultMetadata, type AddressImportance, type ChainType, type CustomField } from "@/lib/database";
 import { decryptRecords, isEncryptionReady } from "@/lib/encryptionFacade";
 import { RecordTable } from "@/components/RecordTable";
@@ -345,7 +343,7 @@ export default function Records() {
         </div>
 
         <div className="flex flex-col gap-4">
-          <div className="flex items-end gap-4">
+          <div className="flex items-center gap-4">
             <div className="flex-1">
               <label htmlFor="search" className="text-sm font-medium">
                 Search Records
@@ -362,38 +360,13 @@ export default function Records() {
                 />
               </div>
             </div>
-          </div>
-          
-          {/* Smart filter toggle */}
-          <div className="flex items-center justify-between p-3 rounded-lg border bg-muted/30">
-            <div className="flex items-center gap-3">
-              <div className="flex items-center gap-2">
-                <Users className="h-4 w-4 text-muted-foreground" />
-                <span className="text-sm font-medium">Your Records</span>
-              </div>
-              <span className="text-sm text-muted-foreground">|</span>
-              <div className="flex items-center gap-2">
-                <Switch
-                  id="include-blockchain"
-                  checked={includeBlockchainDiscovered}
-                  onCheckedChange={setIncludeBlockchainDiscovered}
-                  data-testid="switch-include-blockchain"
-                />
-                <Label htmlFor="include-blockchain" className="text-sm cursor-pointer">
-                  Include blockchain-discovered
-                </Label>
-                {totalBlockchainDiscovered > 0 && (
-                  <Badge variant="secondary" className="text-xs">
-                    +{totalBlockchainDiscovered.toLocaleString()}
-                  </Badge>
-                )}
-              </div>
+            <div className="pt-6">
+              <BlockchainToggle
+                checked={includeBlockchainDiscovered}
+                onCheckedChange={setIncludeBlockchainDiscovered}
+                hiddenCount={totalBlockchainDiscovered}
+              />
             </div>
-            {!includeBlockchainDiscovered && totalBlockchainDiscovered > 0 && (
-              <span className="text-xs text-muted-foreground">
-                Showing only manually added and imported records
-              </span>
-            )}
           </div>
         </div>
 
