@@ -3,6 +3,7 @@ import { useLiveQuery } from "dexie-react-hooks";
 import { format } from "date-fns";
 import { db, BlockchainTransaction, TransactionParticipant, Record } from "@/lib/database";
 import { decryptRecords, updateRecord, createRecord } from "@/lib/encryptionFacade";
+import { uploadAttachment } from "@/lib/attachments";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -14,6 +15,8 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Label } from "@/components/ui/label";
+import { MultiSelectCombobox } from "@/components/ui/multi-select-combobox";
 import { useToast } from "@/hooks/use-toast";
 import { useTags } from "@/hooks/use-tags";
 import { useCategories } from "@/hooks/use-categories";
@@ -21,6 +24,7 @@ import { useOwners } from "@/hooks/use-owners";
 import { useWalletNames } from "@/hooks/use-wallet-names";
 import { useSeedNames } from "@/hooks/use-seed-names";
 import { useWalletSoftware } from "@/hooks/use-wallet-software";
+import { useCustomFields } from "@/hooks/use-settings";
 import { RecordFormDialog } from "@/components/RecordFormDialog";
 import { 
   ArrowDownLeft, 
@@ -48,7 +52,10 @@ import {
   Shield,
   GitBranch,
   FileText,
-  Lock
+  Lock,
+  Upload,
+  X,
+  File as FileIcon
 } from "lucide-react";
 
 const USER_CURATED_TIERS = ['verified', 'manual', 'wallet-import', 'xpub-derived'];
@@ -97,9 +104,16 @@ export default function Nudgie() {
   const [focusIndex, setFocusIndex] = useState(0);
   const [expandedTxs, setExpandedTxs] = useState<Set<string>>(new Set());
   const [labelInputs, setLabelInputs] = useState<Map<string, string>>(new Map());
+  const [notesInputs, setNotesInputs] = useState<Map<string, string>>(new Map());
+  const [tagsInputs, setTagsInputs] = useState<Map<string, string[]>>(new Map());
+  const [categoriesInputs, setCategoriesInputs] = useState<Map<string, string[]>>(new Map());
+  const [filesInputs, setFilesInputs] = useState<Map<string, File[]>>(new Map());
+  const [customFieldsInputs, setCustomFieldsInputs] = useState<Map<string, { [slug: string]: string }>>(new Map());
   const [savingTxids, setSavingTxids] = useState<Set<string>>(new Set());
   const [editingRecord, setEditingRecord] = useState<Record | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<{ current: number; total: number } | null>(null);
+  const fileInputRefs = useRef<Map<string, HTMLInputElement | null>>(new Map());
   const { toast } = useToast();
 
   const { tags } = useTags();
@@ -108,6 +122,7 @@ export default function Nudgie() {
   const { walletNames } = useWalletNames();
   const { seedNames } = useSeedNames();
   const { walletSoftware } = useWalletSoftware();
+  const { enabledCustomFields } = useCustomFields();
 
   const transactions = useLiveQuery(
     () => db.blockchainTransactions.orderBy('blockTime').reverse().toArray(),
@@ -317,42 +332,148 @@ export default function Nudgie() {
     setLabelInputs(prev => new Map(prev).set(txid, value));
   };
 
-  const handleSaveLabel = async (tx: TransactionWithContext) => {
+  const handleNotesChange = (txid: string, value: string) => {
+    setNotesInputs(prev => new Map(prev).set(txid, value));
+  };
+
+  const handleTagsChange = (txid: string, value: string[]) => {
+    setTagsInputs(prev => new Map(prev).set(txid, value));
+  };
+
+  const handleCategoriesChange = (txid: string, value: string[]) => {
+    setCategoriesInputs(prev => new Map(prev).set(txid, value));
+  };
+
+  const handleCustomFieldChange = (txid: string, slug: string, value: string) => {
+    setCustomFieldsInputs(prev => {
+      const next = new Map(prev);
+      const existing = next.get(txid) || {};
+      next.set(txid, { ...existing, [slug]: value });
+      return next;
+    });
+  };
+
+  const handleFileSelect = (txid: string, e: React.ChangeEvent<HTMLInputElement>) => {
+    const newFiles = Array.from(e.target.files || []);
+    if (newFiles.length > 0) {
+      setFilesInputs(prev => {
+        const next = new Map(prev);
+        const existing = next.get(txid) || [];
+        next.set(txid, [...existing, ...newFiles]);
+        return next;
+      });
+    }
+  };
+
+  const removeFile = (txid: string, index: number) => {
+    setFilesInputs(prev => {
+      const next = new Map(prev);
+      const existing = next.get(txid) || [];
+      next.set(txid, existing.filter((_, i) => i !== index));
+      return next;
+    });
+  };
+
+  const formatFileSize = (bytes: number): string => {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  };
+
+  const clearTxFormData = (txid: string) => {
+    setLabelInputs(prev => { const next = new Map(prev); next.delete(txid); return next; });
+    setNotesInputs(prev => { const next = new Map(prev); next.delete(txid); return next; });
+    setTagsInputs(prev => { const next = new Map(prev); next.delete(txid); return next; });
+    setCategoriesInputs(prev => { const next = new Map(prev); next.delete(txid); return next; });
+    setFilesInputs(prev => { const next = new Map(prev); next.delete(txid); return next; });
+    setCustomFieldsInputs(prev => { const next = new Map(prev); next.delete(txid); return next; });
+  };
+
+  const availableTagNames = useMemo(() => 
+    tags.map(t => t.name).filter(n => n && n !== '[encrypted]'),
+    [tags]
+  );
+
+  const availableCategoryNames = useMemo(() => 
+    categories.map(c => c.name).filter(n => n && n !== '[encrypted]'),
+    [categories]
+  );
+
+  const handleSaveTransaction = async (tx: TransactionWithContext) => {
     const label = labelInputs.get(tx.txid) || '';
     if (!label.trim()) {
       toast({ title: "Label required", description: "Please enter a label for this transaction", variant: "destructive" });
       return;
     }
 
+    const notes = notesInputs.get(tx.txid) || '';
+    const txTags = tagsInputs.get(tx.txid) || [];
+    const txCategories = categoriesInputs.get(tx.txid) || [];
+    const files = filesInputs.get(tx.txid) || [];
+    const customFields = customFieldsInputs.get(tx.txid) || {};
+
     setSavingTxids(prev => new Set(prev).add(tx.txid));
 
     try {
+      let recordId: number;
+
       if (tx.existingRecordId) {
-        await updateRecord(tx.existingRecordId, { label: label.trim() });
+        await updateRecord(tx.existingRecordId, { 
+          label: label.trim(),
+          notes: notes.trim(),
+          tags: txTags,
+          categories: txCategories,
+          customFields,
+        });
+        recordId = tx.existingRecordId;
       } else {
-        const { createRecord } = await import('@/lib/encryptionFacade');
-        await createRecord({
+        recordId = await createRecord({
           type: 'transaction',
           inputString: tx.txid,
           label: label.trim(),
-          tags: [],
-          categories: []
+          notes: notes.trim(),
+          tags: txTags,
+          categories: txCategories,
+          customFields,
         });
       }
 
-      toast({ title: "Saved", description: "Transaction labeled successfully" });
-      setLabelInputs(prev => {
-        const next = new Map(prev);
-        next.delete(tx.txid);
-        return next;
-      });
+      if (files.length > 0) {
+        setUploadProgress({ current: 0, total: files.length });
+        let uploadedCount = 0;
+        for (let i = 0; i < files.length; i++) {
+          try {
+            await uploadAttachment(recordId, files[i], tx.txid);
+            uploadedCount++;
+          } catch (error) {
+            console.error(`Failed to upload ${files[i].name}:`, error);
+          }
+          setUploadProgress({ current: i + 1, total: files.length });
+        }
+        setUploadProgress(null);
+        
+        if (uploadedCount < files.length) {
+          toast({ 
+            title: "Partial Success", 
+            description: `Transaction saved with ${uploadedCount}/${files.length} files uploaded`,
+            variant: "default" 
+          });
+        } else {
+          toast({ title: "Saved", description: `Transaction saved with ${uploadedCount} file(s)` });
+        }
+      } else {
+        toast({ title: "Saved", description: "Transaction labeled successfully" });
+      }
+
+      clearTxFormData(tx.txid);
 
       if (viewMode === 'focus') {
         setFocusIndex(prev => Math.max(0, Math.min(prev, transactionsWithContext.length - 2)));
       }
     } catch (error) {
-      console.error('Failed to save label:', error);
-      toast({ title: "Error", description: "Failed to save label", variant: "destructive" });
+      console.error('Failed to save transaction:', error);
+      toast({ title: "Error", description: "Failed to save transaction", variant: "destructive" });
+      setUploadProgress(null);
     } finally {
       setSavingTxids(prev => {
         const next = new Set(prev);
@@ -371,7 +492,6 @@ export default function Nudgie() {
       if (tx.existingRecordId) {
         await updateRecord(tx.existingRecordId, { label: quickLabel });
       } else {
-        const { createRecord } = await import('@/lib/encryptionFacade');
         await createRecord({
           type: 'transaction',
           inputString: tx.txid,
@@ -382,11 +502,7 @@ export default function Nudgie() {
       }
 
       toast({ title: "Saved", description: `Labeled as "${quickLabel}"` });
-      setLabelInputs(prev => {
-        const next = new Map(prev);
-        next.delete(tx.txid);
-        return next;
-      });
+      clearTxFormData(tx.txid);
 
       if (viewMode === 'focus') {
         setFocusIndex(prev => Math.max(0, Math.min(prev, transactionsWithContext.length - 2)));
@@ -731,7 +847,7 @@ export default function Nudgie() {
             </div>
 
             {!compact && (
-              <div className="mt-3 space-y-2">
+              <div className="mt-3 space-y-3">
                 <div className="flex gap-2">
                   <Input
                     placeholder="Enter a label for this transaction..."
@@ -740,22 +856,18 @@ export default function Nudgie() {
                     className="flex-1"
                     disabled={isSaving}
                     data-testid={`input-label-${tx.txid}`}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' && currentLabel.trim()) {
-                        handleSaveLabel(tx);
-                      }
-                    }}
                   />
                   <Button 
-                    onClick={() => handleSaveLabel(tx)} 
+                    onClick={() => handleSaveTransaction(tx)} 
                     disabled={isSaving || !currentLabel.trim()}
                     data-testid={`button-save-${tx.txid}`}
                   >
                     {isSaving ? 'Saving...' : 'Save'}
                   </Button>
                 </div>
+
                 {tx.groupType === 'self-transfer' && (
-                  <div className="flex gap-2">
+                  <div className="flex gap-2 flex-wrap">
                     <Button 
                       variant="outline" 
                       size="sm"
@@ -775,6 +887,107 @@ export default function Nudgie() {
                     >
                       Consolidation
                     </Button>
+                  </div>
+                )}
+
+                <Textarea
+                  placeholder="Notes (optional)..."
+                  value={notesInputs.get(tx.txid) || ''}
+                  onChange={(e) => handleNotesChange(tx.txid, e.target.value)}
+                  disabled={isSaving}
+                  rows={2}
+                  className="text-sm"
+                  data-testid={`input-notes-${tx.txid}`}
+                />
+
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <Label className="text-xs text-muted-foreground mb-1 block">Tags</Label>
+                    <MultiSelectCombobox
+                      values={tagsInputs.get(tx.txid) || []}
+                      onChange={(vals) => handleTagsChange(tx.txid, vals)}
+                      options={availableTagNames}
+                      onAddNew={(val) => handleTagsChange(tx.txid, [...(tagsInputs.get(tx.txid) || []), val])}
+                      placeholder="Tags..."
+                      searchPlaceholder="Search or add..."
+                      disabled={isSaving}
+                      testId={`select-tags-${tx.txid}`}
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-xs text-muted-foreground mb-1 block">Categories</Label>
+                    <MultiSelectCombobox
+                      values={categoriesInputs.get(tx.txid) || []}
+                      onChange={(vals) => handleCategoriesChange(tx.txid, vals)}
+                      options={availableCategoryNames}
+                      onAddNew={(val) => handleCategoriesChange(tx.txid, [...(categoriesInputs.get(tx.txid) || []), val])}
+                      placeholder="Categories..."
+                      searchPlaceholder="Search or add..."
+                      disabled={isSaving}
+                      testId={`select-categories-${tx.txid}`}
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <Label className="text-xs text-muted-foreground mb-1 block">Attachments</Label>
+                  <input
+                    type="file"
+                    multiple
+                    ref={(el) => fileInputRefs.current.set(tx.txid, el)}
+                    onChange={(e) => handleFileSelect(tx.txid, e)}
+                    className="hidden"
+                    id={`file-select-${tx.txid}`}
+                    disabled={isSaving}
+                  />
+                  <label
+                    htmlFor={`file-select-${tx.txid}`}
+                    className={`flex items-center justify-center gap-2 border border-dashed rounded-md p-2 cursor-pointer transition-colors text-sm ${
+                      isSaving ? "opacity-50 cursor-not-allowed" : "hover:bg-muted/50"
+                    }`}
+                  >
+                    <Upload className="h-4 w-4 text-muted-foreground" />
+                    <span className="text-muted-foreground">Add files</span>
+                  </label>
+                  {(filesInputs.get(tx.txid) || []).length > 0 && (
+                    <div className="flex flex-wrap gap-1 mt-1">
+                      {(filesInputs.get(tx.txid) || []).map((file, idx) => (
+                        <Badge key={idx} variant="secondary" className="text-xs gap-1">
+                          <FileIcon className="h-3 w-3" />
+                          {file.name.length > 15 ? `${file.name.slice(0, 12)}...` : file.name}
+                          <button 
+                            onClick={() => removeFile(tx.txid, idx)}
+                            className="ml-1 hover:text-destructive"
+                            disabled={isSaving}
+                          >
+                            <X className="h-3 w-3" />
+                          </button>
+                        </Badge>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {enabledCustomFields.length > 0 && (
+                  <div className="grid grid-cols-2 gap-2">
+                    {enabledCustomFields.map((field) => (
+                      <div key={field.slug}>
+                        <Label className="text-xs text-muted-foreground mb-1 block">{field.name}</Label>
+                        <Input
+                          value={(customFieldsInputs.get(tx.txid) || {})[field.slug] || ''}
+                          onChange={(e) => handleCustomFieldChange(tx.txid, field.slug, e.target.value)}
+                          disabled={isSaving}
+                          className="h-8 text-sm"
+                          data-testid={`input-custom-${field.slug}-${tx.txid}`}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {uploadProgress && (
+                  <div className="text-xs text-muted-foreground">
+                    Uploading files... {uploadProgress.current}/{uploadProgress.total}
                   </div>
                 )}
               </div>
@@ -1041,7 +1254,7 @@ export default function Nudgie() {
 
             <div className="border-t pt-4">
               <h4 className="font-medium mb-3">Label this transaction</h4>
-              <div className="space-y-3">
+              <div className="space-y-4">
                 <Input
                   placeholder="Enter a descriptive label..."
                   value={currentLabel}
@@ -1049,11 +1262,6 @@ export default function Nudgie() {
                   disabled={isSaving}
                   className="text-lg"
                   data-testid="input-focus-label"
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && currentLabel.trim()) {
-                      handleSaveLabel(tx);
-                    }
-                  }}
                 />
                 
                 {tx.groupType === 'self-transfer' && (
@@ -1086,13 +1294,128 @@ export default function Nudgie() {
                   </div>
                 )}
 
+                <div>
+                  <Label className="text-sm font-medium mb-2 block">Notes</Label>
+                  <Textarea
+                    placeholder="Add any additional context or details..."
+                    value={notesInputs.get(tx.txid) || ''}
+                    onChange={(e) => handleNotesChange(tx.txid, e.target.value)}
+                    disabled={isSaving}
+                    rows={3}
+                    data-testid="input-focus-notes"
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <Label className="text-sm font-medium mb-2 block">Tags</Label>
+                    <MultiSelectCombobox
+                      values={tagsInputs.get(tx.txid) || []}
+                      onChange={(vals) => handleTagsChange(tx.txid, vals)}
+                      options={availableTagNames}
+                      onAddNew={(val) => handleTagsChange(tx.txid, [...(tagsInputs.get(tx.txid) || []), val])}
+                      placeholder="Select or add tags..."
+                      searchPlaceholder="Search or add new..."
+                      disabled={isSaving}
+                      testId="select-focus-tags"
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-sm font-medium mb-2 block">Categories</Label>
+                    <MultiSelectCombobox
+                      values={categoriesInputs.get(tx.txid) || []}
+                      onChange={(vals) => handleCategoriesChange(tx.txid, vals)}
+                      options={availableCategoryNames}
+                      onAddNew={(val) => handleCategoriesChange(tx.txid, [...(categoriesInputs.get(tx.txid) || []), val])}
+                      placeholder="Select or add categories..."
+                      searchPlaceholder="Search or add new..."
+                      disabled={isSaving}
+                      testId="select-focus-categories"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <Label className="text-sm font-medium mb-2 block">Attachments</Label>
+                  <input
+                    type="file"
+                    multiple
+                    ref={(el) => fileInputRefs.current.set(`focus-${tx.txid}`, el)}
+                    onChange={(e) => handleFileSelect(tx.txid, e)}
+                    className="hidden"
+                    id={`file-select-focus-${tx.txid}`}
+                    disabled={isSaving}
+                  />
+                  <label
+                    htmlFor={`file-select-focus-${tx.txid}`}
+                    className={`flex items-center justify-center gap-2 border-2 border-dashed rounded-md p-4 cursor-pointer transition-colors ${
+                      isSaving ? "opacity-50 cursor-not-allowed" : "hover:bg-muted/50"
+                    }`}
+                  >
+                    <Upload className="h-5 w-5 text-muted-foreground" />
+                    <span className="text-muted-foreground">Click to attach receipts, invoices, or other files</span>
+                  </label>
+                  {(filesInputs.get(tx.txid) || []).length > 0 && (
+                    <div className="flex flex-wrap gap-2 mt-2">
+                      {(filesInputs.get(tx.txid) || []).map((file, idx) => (
+                        <div
+                          key={idx}
+                          className="flex items-center gap-2 p-2 bg-muted rounded-md"
+                        >
+                          <FileIcon className="h-4 w-4 text-muted-foreground" />
+                          <div className="min-w-0">
+                            <p className="text-sm font-medium truncate max-w-[150px]">{file.name}</p>
+                            <p className="text-xs text-muted-foreground">{formatFileSize(file.size)}</p>
+                          </div>
+                          <Button
+                            type="button"
+                            size="icon"
+                            variant="ghost"
+                            onClick={() => removeFile(tx.txid, idx)}
+                            disabled={isSaving}
+                            className="h-6 w-6"
+                          >
+                            <X className="h-3 w-3" />
+                          </Button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {enabledCustomFields.length > 0 && (
+                  <div>
+                    <Label className="text-sm font-medium mb-2 block">Custom Fields</Label>
+                    <div className="grid grid-cols-2 gap-4">
+                      {enabledCustomFields.map((field) => (
+                        <div key={field.slug}>
+                          <Label className="text-xs text-muted-foreground mb-1 block">{field.name}</Label>
+                          <Input
+                            value={(customFieldsInputs.get(tx.txid) || {})[field.slug] || ''}
+                            onChange={(e) => handleCustomFieldChange(tx.txid, field.slug, e.target.value)}
+                            disabled={isSaving}
+                            data-testid={`input-focus-custom-${field.slug}`}
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {uploadProgress && (
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <Progress value={(uploadProgress.current / uploadProgress.total) * 100} className="flex-1 h-2" />
+                    <span>Uploading {uploadProgress.current}/{uploadProgress.total}</span>
+                  </div>
+                )}
+
                 <Button 
-                  onClick={() => handleSaveLabel(tx)} 
+                  onClick={() => handleSaveTransaction(tx)} 
                   disabled={isSaving || !currentLabel.trim()}
                   className="w-full"
                   data-testid="button-focus-save"
                 >
-                  {isSaving ? 'Saving...' : 'Save Label & Continue'}
+                  {isSaving ? 'Saving...' : 'Save & Continue'}
                   <ChevronRight className="h-4 w-4 ml-2" />
                 </Button>
               </div>
