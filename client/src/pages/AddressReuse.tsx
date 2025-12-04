@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Skeleton } from "@/components/ui/skeleton";
 import { 
   Select,
   SelectContent,
@@ -29,7 +30,8 @@ import {
   AlertTriangle,
   Filter,
   Edit,
-  X
+  X,
+  Loader2
 } from "lucide-react";
 import { decryptRecords, updateRecord } from "@/lib/encryptionFacade";
 import { useToast } from "@/hooks/use-toast";
@@ -99,6 +101,11 @@ export default function AddressReuse() {
   const { categories } = useCategories();
   const { seedNames } = useSeedNames();
   const { walletSoftware } = useWalletSoftware();
+  
+  // Processing state for deferred computation
+  const [isProcessing, setIsProcessing] = useState(true);
+  const [reusedAddresses, setReusedAddresses] = useState<AddressReuseInfo[]>([]);
+  const processingRef = useRef(0);
 
   const transactions = useLiveQuery(
     () => db.blockchainTransactions.toArray(),
@@ -158,95 +165,113 @@ export default function AddressReuse() {
     return map;
   }, [transactions]);
 
-  const reusedAddresses = useMemo(() => {
-    if (!participants) return [];
+  // Deferred processing to prevent page freeze
+  useEffect(() => {
+    if (!participants) {
+      setIsProcessing(true);
+      return;
+    }
+    
+    processingRef.current += 1;
+    const thisProcessingId = processingRef.current;
+    setIsProcessing(true);
+    
+    // Defer heavy computation to allow UI to render first
+    const timeoutId = setTimeout(() => {
+      if (thisProcessingId !== processingRef.current) return;
+      
+      // Build address map tracking input/output txids
+      const addressMap = new Map<string, {
+        inputTxids: Set<string>;
+        outputTxids: Set<string>;
+      }>();
 
-    // Build address map tracking input/output txids
-    const addressMap = new Map<string, {
-      inputTxids: Set<string>;
-      outputTxids: Set<string>;
-    }>();
-
-    participants.forEach(p => {
-      if (!addressMap.has(p.address)) {
-        addressMap.set(p.address, { inputTxids: new Set(), outputTxids: new Set() });
-      }
-      const entry = addressMap.get(p.address)!;
-      if (p.role === 'input') {
-        entry.inputTxids.add(p.txid);
-      } else {
-        entry.outputTxids.add(p.txid);
-      }
-    });
-
-    const result: AddressReuseInfo[] = [];
-
-    addressMap.forEach((data, address) => {
-      // Find transactions where address appears as BOTH input and output (change-to-self)
-      const selfChangeTxids: string[] = [];
-      data.inputTxids.forEach(txid => {
-        if (data.outputTxids.has(txid)) {
-          selfChangeTxids.push(txid);
+      participants.forEach(p => {
+        if (!addressMap.has(p.address)) {
+          addressMap.set(p.address, { inputTxids: new Set(), outputTxids: new Set() });
+        }
+        const entry = addressMap.get(p.address)!;
+        if (p.role === 'input') {
+          entry.inputTxids.add(p.txid);
+        } else {
+          entry.outputTxids.add(p.txid);
         }
       });
-      
-      const hasSelfChange = selfChangeTxids.length > 0;
-      const hasMultiReceive = data.outputTxids.size >= 2;
-      
-      // Only flag as reuse if: received 2+ times OR has change-to-self
-      if (!hasMultiReceive && !hasSelfChange) {
-        return; // Not reuse - skip this address
-      }
-      
-      // Determine reuse reason
-      let reuseReason: ReuseReason;
-      if (hasMultiReceive && hasSelfChange) {
-        reuseReason = 'both';
-      } else if (hasMultiReceive) {
-        reuseReason = 'multi-receive';
-      } else {
-        reuseReason = 'change-to-self';
-      }
 
-      const allTxids = new Set([...Array.from(data.inputTxids), ...Array.from(data.outputTxids)]);
-      const transactions: AddressReuseInfo['transactions'] = [];
-      
-      allTxids.forEach(txid => {
-        const blockTime = txidToBlockTime.get(txid) || 0;
-        const isInput = data.inputTxids.has(txid);
-        const isOutput = data.outputTxids.has(txid);
-        const isSelfChange = isInput && isOutput;
+      const result: AddressReuseInfo[] = [];
+
+      addressMap.forEach((data, address) => {
+        // Find transactions where address appears as BOTH input and output (change-to-self)
+        const selfChangeTxids: string[] = [];
+        data.inputTxids.forEach(txid => {
+          if (data.outputTxids.has(txid)) {
+            selfChangeTxids.push(txid);
+          }
+        });
         
-        if (isOutput) {
-          transactions.push({ txid, blockTime, role: 'output', isSelfChange });
+        const hasSelfChange = selfChangeTxids.length > 0;
+        const hasMultiReceive = data.outputTxids.size >= 2;
+        
+        // Only flag as reuse if: received 2+ times OR has change-to-self
+        if (!hasMultiReceive && !hasSelfChange) {
+          return; // Not reuse - skip this address
         }
-        if (isInput) {
-          transactions.push({ txid, blockTime, role: 'input', isSelfChange });
+        
+        // Determine reuse reason
+        let reuseReason: ReuseReason;
+        if (hasMultiReceive && hasSelfChange) {
+          reuseReason = 'both';
+        } else if (hasMultiReceive) {
+          reuseReason = 'multi-receive';
+        } else {
+          reuseReason = 'change-to-self';
         }
+
+        const allTxids = new Set([...Array.from(data.inputTxids), ...Array.from(data.outputTxids)]);
+        const txList: AddressReuseInfo['transactions'] = [];
+        
+        allTxids.forEach(txid => {
+          const blockTime = txidToBlockTime.get(txid) || 0;
+          const isInput = data.inputTxids.has(txid);
+          const isOutput = data.outputTxids.has(txid);
+          const isSelfChange = isInput && isOutput;
+          
+          if (isOutput) {
+            txList.push({ txid, blockTime, role: 'output', isSelfChange });
+          }
+          if (isInput) {
+            txList.push({ txid, blockTime, role: 'input', isSelfChange });
+          }
+        });
+
+        txList.sort((a, b) => b.blockTime - a.blockTime);
+
+        result.push({
+          address,
+          totalCount: allTxids.size,
+          inputCount: data.inputTxids.size,
+          outputCount: data.outputTxids.size,
+          reuseReason,
+          selfChangeTxids,
+          transactions: txList,
+          record: addressToRecord.get(address),
+        });
       });
 
-      transactions.sort((a, b) => b.blockTime - a.blockTime);
-
-      result.push({
-        address,
-        totalCount: allTxids.size,
-        inputCount: data.inputTxids.size,
-        outputCount: data.outputTxids.size,
-        reuseReason,
-        selfChangeTxids,
-        transactions,
-        record: addressToRecord.get(address),
+      // Sort by most recent transaction activity first (for default view)
+      result.sort((a, b) => {
+        const aLatest = a.transactions[0]?.blockTime || 0;
+        const bLatest = b.transactions[0]?.blockTime || 0;
+        return bLatest - aLatest;
       });
-    });
 
-    // Sort by most recent transaction activity first (for default view)
-    result.sort((a, b) => {
-      const aLatest = a.transactions[0]?.blockTime || 0;
-      const bLatest = b.transactions[0]?.blockTime || 0;
-      return bLatest - aLatest;
-    });
-
-    return result;
+      if (thisProcessingId === processingRef.current) {
+        setReusedAddresses(result);
+        setIsProcessing(false);
+      }
+    }, 50); // Small delay to let the UI render first
+    
+    return () => clearTimeout(timeoutId);
   }, [participants, txidToBlockTime, addressToRecord]);
 
   // Split into YOUR addresses (with records) vs OTHER addresses (counterparties)
@@ -437,7 +462,11 @@ export default function AddressReuse() {
               <CardContent>
                 <div className="flex items-center gap-2">
                   <AlertTriangle className="h-5 w-5 text-amber-500" />
-                  <span className="text-2xl font-bold" data-testid="text-reused-count">{totalReusedAddresses}</span>
+                  {isProcessing ? (
+                    <Skeleton className="h-8 w-12" />
+                  ) : (
+                    <span className="text-2xl font-bold" data-testid="text-reused-count">{totalReusedAddresses}</span>
+                  )}
                 </div>
               </CardContent>
             </Card>
@@ -449,7 +478,11 @@ export default function AddressReuse() {
               <CardContent>
                 <div className="flex items-center gap-2">
                   <ArrowDownLeft className="h-5 w-5 text-amber-600" />
-                  <span className="text-2xl font-bold" data-testid="text-multi-receive-count">{multiReceiveCount}</span>
+                  {isProcessing ? (
+                    <Skeleton className="h-8 w-12" />
+                  ) : (
+                    <span className="text-2xl font-bold" data-testid="text-multi-receive-count">{multiReceiveCount}</span>
+                  )}
                 </div>
                 <p className="text-xs text-muted-foreground mt-1">Received funds 2+ times</p>
               </CardContent>
@@ -462,7 +495,11 @@ export default function AddressReuse() {
               <CardContent>
                 <div className="flex items-center gap-2">
                   <Repeat2 className="h-5 w-5 text-orange-500" />
-                  <span className="text-2xl font-bold" data-testid="text-change-to-self-count">{changeToSelfCount}</span>
+                  {isProcessing ? (
+                    <Skeleton className="h-8 w-12" />
+                  ) : (
+                    <span className="text-2xl font-bold" data-testid="text-change-to-self-count">{changeToSelfCount}</span>
+                  )}
                 </div>
                 <p className="text-xs text-muted-foreground mt-1">Change sent back to same address</p>
               </CardContent>
@@ -596,7 +633,15 @@ export default function AddressReuse() {
               </div>
             </div>
 
-            {filteredAddresses.length === 0 ? (
+            {isProcessing ? (
+              <div className="text-center py-12 text-muted-foreground">
+                <div className="space-y-3">
+                  <Loader2 className="h-8 w-8 mx-auto animate-spin" />
+                  <p>Analyzing transaction data...</p>
+                  <p className="text-sm">This may take a moment for large datasets</p>
+                </div>
+              </div>
+            ) : filteredAddresses.length === 0 ? (
               <div className="text-center py-12 text-muted-foreground">
                 {yourReusedAddresses.length === 0 ? (
                   <div className="space-y-2">
