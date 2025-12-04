@@ -33,6 +33,7 @@ import UTXOs from "@/pages/UTXOs";
 import Nudgie from "@/pages/Nudgie";
 import UIAssets from "@/pages/UIAssets";
 import IconsReference from "@/pages/IconsReference";
+import NavigationPatterns from "@/pages/NavigationPatterns";
 import FlowVisualizations from "@/pages/FlowVisualizations";
 import NotFound from "@/pages/not-found";
 
@@ -60,6 +61,7 @@ function AppRoutes() {
       <Route path="/reports" component={Reports} />
       <Route path="/dev/ui-assets" component={UIAssets} />
       <Route path="/dev/icons" component={IconsReference} />
+      <Route path="/dev/nav-patterns" component={NavigationPatterns} />
       <Route path="/dev/flow-viz" component={FlowVisualizations} />
       <Route component={NotFound} />
     </Switch>
