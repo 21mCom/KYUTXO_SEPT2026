@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { useLocation } from "wouter";
 import { useDropzone } from "react-dropzone";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
@@ -42,7 +42,7 @@ export default function PriceImport() {
   const loadExistingDataInfo = useCallback(async (targetAsset: string, targetCurrency: string) => {
     const existing = await db.priceData
       .where('asset').equals(targetAsset)
-      .and(p => p.currency === targetCurrency)
+      .filter(p => p.currency === targetCurrency)
       .toArray();
     
     setExistingCount(existing.length);
@@ -54,6 +54,10 @@ export default function PriceImport() {
       setExistingDateRange(null);
     }
   }, []);
+
+  useEffect(() => {
+    loadExistingDataInfo(asset, currency);
+  }, [loadExistingDataInfo, asset, currency]);
   
   const onDrop = useCallback(async (acceptedFiles: File[]) => {
     if (acceptedFiles.length === 0) return;
@@ -100,7 +104,6 @@ export default function PriceImport() {
   const handleClearFile = () => {
     setFile(null);
     setParseResult(null);
-    setExistingCount(null);
   };
   
   const handleImport = async () => {
@@ -281,6 +284,33 @@ export default function PriceImport() {
               </CardContent>
             </Card>
 
+            {/* Existing Data Summary */}
+            {existingCount !== null && existingCount > 0 && (
+              <Card>
+                <CardHeader className="pb-3">
+                  <CardTitle className="flex items-center gap-2 text-lg">
+                    <Database className="h-5 w-5" />
+                    Current Price Data
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="flex flex-col gap-1 text-sm">
+                    <div className="flex items-center gap-2">
+                      <Badge variant="outline">{asset}/{currency}</Badge>
+                      <span className="text-muted-foreground">
+                        {existingCount.toLocaleString()} records
+                      </span>
+                    </div>
+                    {existingDateRange && (
+                      <p className="text-muted-foreground">
+                        Date range: <span className="font-medium text-foreground">{formatDate(existingDateRange.first)}</span> to <span className="font-medium text-foreground">{formatDate(existingDateRange.last)}</span>
+                      </p>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+
             {/* File Upload */}
             <Card>
               <CardHeader>
@@ -384,28 +414,16 @@ export default function PriceImport() {
               )}
             </Card>
             
-            {/* Existing Data Management */}
+            {/* Data Management */}
             {existingCount !== null && existingCount > 0 && (
               <Card>
-                <CardHeader>
-                  <CardTitle className="flex items-center gap-2">
-                    <Database className="h-5 w-5" />
-                    Existing Price Data
+                <CardHeader className="pb-3">
+                  <CardTitle className="flex items-center gap-2 text-lg">
+                    <Trash2 className="h-5 w-5" />
+                    Data Management
                   </CardTitle>
-                  <CardDescription>
-                    You have {existingCount} {asset}/{currency} price records stored.
-                    Importing will update existing dates and add new ones.
-                  </CardDescription>
                 </CardHeader>
-                <CardContent className="space-y-4">
-                  {existingDateRange && (
-                    <div className="p-3 rounded-lg bg-muted/50 text-sm">
-                      <span className="text-muted-foreground">Current coverage: </span>
-                      <span className="font-medium">
-                        {formatDate(existingDateRange.first)} to {formatDate(existingDateRange.last)}
-                      </span>
-                    </div>
-                  )}
+                <CardContent>
                   <Button 
                     variant="destructive" 
                     onClick={handleDeleteAllPriceData}
