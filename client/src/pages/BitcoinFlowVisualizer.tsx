@@ -5,6 +5,7 @@ import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Slider } from "@/components/ui/slider";
+import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -44,6 +45,7 @@ const generateLineChartData = (nodes: FlowNode[]) => {
 export default function BitcoinFlowVisualizer() {
   const [searchAddress, setSearchAddress] = useState("");
   const [hopDepth, setHopDepth] = useState([3]);
+  const [allowBlockchainApi, setAllowBlockchainApi] = useState(false);
   const { flowData, isLoading, error, dataSource, fetchFlow } = useFlowData();
 
   const lineChartData = useMemo(() => {
@@ -53,7 +55,7 @@ export default function BitcoinFlowVisualizer() {
 
   const handleSearch = () => {
     if (!searchAddress.trim()) return;
-    fetchFlow(searchAddress.trim(), hopDepth[0]);
+    fetchFlow(searchAddress.trim(), hopDepth[0], allowBlockchainApi);
   };
 
   const getNodeColor = (type: string) => {
@@ -117,7 +119,7 @@ export default function BitcoinFlowVisualizer() {
                 </div>
               </div>
 
-              <div className="w-full md:w-64 space-y-2">
+              <div className="w-full md:w-48 space-y-2">
                 <Label className="text-xs font-medium flex items-center gap-1">
                   <GitBranch className="h-3 w-3" />
                   Hop Depth
@@ -137,11 +139,32 @@ export default function BitcoinFlowVisualizer() {
                   </Badge>
                 </div>
               </div>
+
+              <div className="w-full md:w-auto space-y-2">
+                <Label className="text-xs font-medium flex items-center gap-1">
+                  <Globe className="h-3 w-3" />
+                  Query Blockchain API
+                </Label>
+                <div className="flex items-center gap-2">
+                  <Switch
+                    checked={allowBlockchainApi}
+                    onCheckedChange={setAllowBlockchainApi}
+                    data-testid="switch-blockchain-api"
+                  />
+                  <span className="text-xs text-muted-foreground">
+                    {allowBlockchainApi ? "Enabled" : "Local only"}
+                  </span>
+                </div>
+              </div>
             </div>
 
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
               <Info className="h-3 w-3" />
-              <span>Traces transaction history to show where funds came from and where they went.</span>
+              <span>
+                {allowBlockchainApi 
+                  ? "Will query blockchain API if no local data exists. Uses your configured node settings."
+                  : "Only searches local synced records. Enable API to fetch from blockchain."}
+              </span>
             </div>
           </CardContent>
         </Card>

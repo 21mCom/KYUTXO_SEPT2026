@@ -50,7 +50,7 @@ export interface UseFlowDataResult {
   isLoading: boolean;
   error: string | null;
   dataSource: 'local' | 'blockchain' | null;
-  fetchFlow: (address: string, hopDepth: number) => Promise<void>;
+  fetchFlow: (address: string, hopDepth: number, allowBlockchainFallback?: boolean) => Promise<void>;
 }
 
 // Convert satoshis to BTC
@@ -316,7 +316,7 @@ export function useFlowData(): UseFlowDataResult {
     };
   };
 
-  const fetchFlow = useCallback(async (address: string, hopDepth: number) => {
+  const fetchFlow = useCallback(async (address: string, hopDepth: number, allowBlockchainFallback: boolean = true) => {
     setIsLoading(true);
     setError(null);
     setFlowData(null);
@@ -342,7 +342,15 @@ export function useFlowData(): UseFlowDataResult {
         return;
       }
 
-      // No local data - fetch from blockchain API
+      // No local data found
+      if (!allowBlockchainFallback) {
+        // User disabled blockchain API - show message instead of error
+        console.log('[FlowData] No local data and blockchain fallback disabled');
+        setError('No local data found for this address. Enable "Query Blockchain API" to fetch from external sources, or sync this address first using Transaction Sync.');
+        return;
+      }
+
+      // Fetch from blockchain API
       console.log('[FlowData] No local data found, fetching from blockchain...');
       const blockchainData = await fetchFromBlockchain(address, hopDepth);
       setFlowData(blockchainData);
