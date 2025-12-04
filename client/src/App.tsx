@@ -30,6 +30,7 @@ import NodeSettings from "@/pages/NodeSettings";
 import Reports from "@/pages/Reports";
 import LightningSpeculator from "@/pages/LightningSpeculator";
 import UTXOs from "@/pages/UTXOs";
+import Nudgie from "@/pages/Nudgie";
 import NotFound from "@/pages/not-found";
 
 function AppRoutes() {
@@ -43,6 +44,7 @@ function AppRoutes() {
       <Route path="/transaction-sync" component={TransactionSync} />
       <Route path="/transactions" component={Transactions} />
       <Route path="/utxos" component={UTXOs} />
+      <Route path="/nudgie" component={Nudgie} />
       <Route path="/lightning-speculator" component={LightningSpeculator} />
       <Route path="/provenance" component={Provenance} />
       <Route path="/address-reuse" component={AddressReuse} />
