@@ -343,23 +343,6 @@ export default function AddressReuse() {
     return { yourReusedAddresses: yours, otherReusedAddresses: others };
   }, [reusedAddresses]);
 
-  // Unique owners and wallet names from reused addresses for filter dropdowns
-  const uniqueOwners = useMemo(() => {
-    const ownersSet = new Set<string>();
-    yourReusedAddresses.forEach(item => {
-      if (item.record?.owner) ownersSet.add(item.record.owner);
-    });
-    return Array.from(ownersSet).sort();
-  }, [yourReusedAddresses]);
-
-  const uniqueWalletNames = useMemo(() => {
-    const walletNamesSet = new Set<string>();
-    yourReusedAddresses.forEach(item => {
-      if (item.record?.walletName) walletNamesSet.add(item.record.walletName);
-    });
-    return Array.from(walletNamesSet).sort();
-  }, [yourReusedAddresses]);
-
   // Apply all filters
   const filteredAddresses = useMemo(() => {
     let result = yourReusedAddresses;
@@ -645,8 +628,8 @@ export default function AddressReuse() {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">All Owners</SelectItem>
-                    {uniqueOwners.map(owner => (
-                      <SelectItem key={owner} value={owner}>{owner}</SelectItem>
+                    {owners.map(owner => (
+                      <SelectItem key={owner.id} value={owner.name}>{owner.name}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
@@ -661,8 +644,8 @@ export default function AddressReuse() {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">All Wallets</SelectItem>
-                    {uniqueWalletNames.map(wallet => (
-                      <SelectItem key={wallet} value={wallet}>{wallet}</SelectItem>
+                    {walletNames.map(wallet => (
+                      <SelectItem key={wallet.id} value={wallet.name}>{wallet.name}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
