@@ -1,4 +1,4 @@
-import { Database, FileText, Settings, Upload, Download, QrCode, Key, RefreshCw, Wallet, TrendingUp, ArrowDownUp, List, GitBranch, Repeat2, BarChart3, Server, ClipboardList, Zap, Coins, Sparkles } from "lucide-react";
+import { Database, FileText, Settings, Upload, Download, QrCode, Key, RefreshCw, Wallet, TrendingUp, ArrowDownUp, List, GitBranch, Repeat2, BarChart3, Server, ClipboardList, Zap, Coins, Sparkles, Wrench, Palette, Network, ChevronDown } from "lucide-react";
 import { SiBitcoin } from "react-icons/si";
 import {
   Sidebar,
@@ -12,7 +12,9 @@ import {
   SidebarHeader,
   SidebarFooter,
 } from "@/components/ui/sidebar";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Link, useLocation } from "wouter";
+import { useState } from "react";
 
 const menuItems = [
   {
@@ -107,8 +109,24 @@ const menuItems = [
   },
 ];
 
+const devToolsItems = [
+  {
+    title: "UI Assets",
+    url: "/dev/ui-assets",
+    icon: Palette,
+  },
+  {
+    title: "Flow Visualizations",
+    url: "/dev/flow-viz",
+    icon: Network,
+  },
+];
+
 export function AppSidebar() {
   const [location] = useLocation();
+  const [devToolsOpen, setDevToolsOpen] = useState(
+    location.startsWith("/dev/")
+  );
 
   return (
     <Sidebar>
@@ -139,6 +157,36 @@ export function AppSidebar() {
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
+        
+        <Collapsible open={devToolsOpen} onOpenChange={setDevToolsOpen}>
+          <SidebarGroup>
+            <CollapsibleTrigger asChild>
+              <SidebarGroupLabel className="cursor-pointer flex items-center justify-between hover-elevate rounded-md px-2 py-1" data-testid="link-dev-tools">
+                <span className="flex items-center gap-2">
+                  <Wrench className="h-4 w-4" />
+                  Dev Tools
+                </span>
+                <ChevronDown className={`h-4 w-4 transition-transform ${devToolsOpen ? "rotate-180" : ""}`} />
+              </SidebarGroupLabel>
+            </CollapsibleTrigger>
+            <CollapsibleContent>
+              <SidebarGroupContent>
+                <SidebarMenu>
+                  {devToolsItems.map((item) => (
+                    <SidebarMenuItem key={item.title}>
+                      <SidebarMenuButton asChild isActive={location === item.url} data-testid={`link-${item.title.toLowerCase().replace(/\s+/g, '-')}`}>
+                        <Link href={item.url}>
+                          <item.icon />
+                          <span>{item.title}</span>
+                        </Link>
+                      </SidebarMenuButton>
+                    </SidebarMenuItem>
+                  ))}
+                </SidebarMenu>
+              </SidebarGroupContent>
+            </CollapsibleContent>
+          </SidebarGroup>
+        </Collapsible>
       </SidebarContent>
       <SidebarFooter className="p-4">
         <div className="text-xs text-muted-foreground">
