@@ -60,6 +60,19 @@ interface TransactionWithParticipants extends BlockchainTransaction {
 
 // User-curated importance tiers (exclude blockchain-discovered and pending-review by default)
 const USER_CURATED_TIERS = ['verified', 'manual', 'wallet-import', 'xpub-derived'];
+const ALL_TIERS = ['verified', 'manual', 'wallet-import', 'xpub-derived', 'blockchain-discovered', 'pending-review'];
+
+// Helper to check if a record is blockchain-discovered
+function isBlockchainDiscovered(record: Record): boolean {
+  if (record.addressImportance === 'blockchain-discovered' || 
+      record.addressImportance === 'pending-review') {
+    return true;
+  }
+  if (record.syncDepth !== undefined && record.syncDepth > 0) {
+    return true;
+  }
+  return false;
+}
 
 export default function Transactions() {
   const [search, setSearch] = useState("");
@@ -67,6 +80,7 @@ export default function Transactions() {
   const [expandedTxs, setExpandedTxs] = useState<Set<string>>(new Set());
   
   // Smart filtering: exclude transactions only involving blockchain-discovered addresses
+  // This filters at the DATABASE level, avoiding loading/decrypting records we don't need
   const [includeBlockchainDiscovered, setIncludeBlockchainDiscovered] = useState(false);
 
   // Fetch all transactions
@@ -81,9 +95,38 @@ export default function Transactions() {
     []
   );
 
-  // Fetch all records for linking
+  // Fetch records with DATABASE-level filtering based on toggle
+  // Only load and decrypt records we actually need
   const rawRecords = useLiveQuery(
-    () => db.records.toArray(),
+    async () => {
+      if (includeBlockchainDiscovered) {
+        // Load all address records
+        return db.records.filter(r => r.type === 'address').toArray();
+      } else {
+        // Filter at database level - only load user-curated records
+        const curatedRecords = await db.records
+          .where('addressImportance')
+          .anyOf(USER_CURATED_TIERS)
+          .and(r => r.type === 'address')
+          .toArray();
+        
+        // Also include legacy records with null addressImportance
+        const legacyRecords = await db.records
+          .filter(r => r.type === 'address' && !r.addressImportance)
+          .toArray();
+        
+        return [...curatedRecords, ...legacyRecords];
+      }
+    },
+    [includeBlockchainDiscovered]
+  );
+  
+  // Count blockchain-discovered records for toggle badge
+  const blockchainDiscoveredCount = useLiveQuery(
+    async () => {
+      const allRecords = await db.records.filter(r => r.type === 'address').toArray();
+      return allRecords.filter(r => isBlockchainDiscovered(r)).length;
+    },
     []
   );
 
