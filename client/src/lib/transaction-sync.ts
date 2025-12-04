@@ -24,10 +24,11 @@ export interface SourceCategory {
 
 // Individual source info
 export interface SourceInfo {
-  source: string;           // The actual source string (e.g., "Sparrow Wallet", "blockchain-sync")
+  source: string;           // The display/grouped source name (e.g., "Sparrow Wallet", "NamaDompet")
   displayName: string;      // User-friendly name
   count: number;            // Number of addresses with this source
   category: 'manual' | 'wallet-sync' | 'xpub' | 'blockchain-sync' | 'other';
+  rawSources?: string[];    // All raw source strings that map to this grouped source (e.g., ["NamaDompet (0/0)", "NamaDompet (0/1)"])
 }
 
 export interface SyncProgress {
@@ -732,6 +733,21 @@ export class TransactionSyncService {
 
 export const transactionSyncService = new TransactionSyncService();
 
+// Extract base wallet name from sources that contain derivation paths
+// e.g., "NamaDompet (0/1)" -> "NamaDompet", "Sparrow (m/84'/0'/0'/0/5)" -> "Sparrow"
+function extractBaseWalletName(source: string): string {
+  // Match patterns like "Name (derivation)" where derivation contains:
+  // - Numbers, slashes, apostrophes for BIP paths: m/84'/0'/0'/0/5
+  // - Uppercase M for some path notations
+  // - Hyphens, commas, spaces in descriptors
+  // Common patterns: (0/1), (m/84'/0'/0'/0/5), (0/0), (M/49H/0H/0H), etc.
+  const match = source.match(/^(.+?)\s*\([0-9mM/'hH,\s\-]+\)$/);
+  if (match) {
+    return match[1].trim();
+  }
+  return source;
+}
+
 // Helper function to scan all address records and categorize their sources
 export async function getAddressSources(): Promise<SourceCategory[]> {
   const allRawRecords = await db.records.where('type').equals('address').toArray();
@@ -743,8 +759,9 @@ export async function getAddressSources(): Promise<SourceCategory[]> {
     allRecords = allRawRecords;
   }
   
-  // Count occurrences of each source
-  const sourceCounts = new Map<string, number>();
+  // First pass: count raw sources and track which base names they map to
+  const rawSourceCounts = new Map<string, number>();
+  const baseNameToRawSources = new Map<string, Set<string>>();
   let noSourceCount = 0;
   
   for (const record of allRecords) {
@@ -752,7 +769,36 @@ export async function getAddressSources(): Promise<SourceCategory[]> {
     if (!source || source === 'manual' || source === '') {
       noSourceCount++;
     } else {
-      sourceCounts.set(source, (sourceCounts.get(source) || 0) + 1);
+      rawSourceCounts.set(source, (rawSourceCounts.get(source) || 0) + 1);
+      
+      // Track base name grouping
+      const baseName = extractBaseWalletName(source);
+      if (!baseNameToRawSources.has(baseName)) {
+        baseNameToRawSources.set(baseName, new Set());
+      }
+      baseNameToRawSources.get(baseName)!.add(source);
+    }
+  }
+  
+  // Second pass: group sources by base name when multiple derivation variants exist
+  // Each grouped source will have 'rawSources' property listing all the underlying sources
+  const groupedSourceCounts = new Map<string, { count: number; rawSources: string[] }>();
+  
+  for (const [baseName, rawSources] of Array.from(baseNameToRawSources.entries())) {
+    const rawSourcesArray = Array.from(rawSources);
+    
+    // If there are multiple sources with the same base name (derivation variants), group them
+    if (rawSourcesArray.length > 1) {
+      let totalCount = 0;
+      for (const rawSource of rawSourcesArray) {
+        totalCount += rawSourceCounts.get(rawSource) || 0;
+      }
+      groupedSourceCounts.set(baseName, { count: totalCount, rawSources: rawSourcesArray });
+    } else {
+      // Single source, use it directly
+      const rawSource = rawSourcesArray[0];
+      const count = rawSourceCounts.get(rawSource) || 0;
+      groupedSourceCounts.set(rawSource, { count, rawSources: [rawSource] });
     }
   }
   
@@ -766,26 +812,20 @@ export async function getAddressSources(): Promise<SourceCategory[]> {
       displayName: 'Manual Entry (no source)',
       count: noSourceCount,
       category: 'manual',
+      rawSources: ['__no_source__'],
     });
   }
   
-  for (const [source, count] of Array.from(sourceCounts.entries())) {
-    let category: SourceInfo['category'] = 'other';
-    let displayName = source;
-    
-    // Categorize based on source patterns
+  // Helper to categorize a source string
+  const categorizeSource = (source: string): SourceInfo['category'] => {
     if (source === 'blockchain-sync') {
-      category = 'blockchain-sync';
-      displayName = 'Blockchain Sync';
+      return 'blockchain-sync';
     } else if (source.startsWith('tx-import:')) {
-      category = 'blockchain-sync';
-      displayName = source.replace('tx-import:', 'TX Import: ');
+      return 'blockchain-sync';
     } else if (source.includes('xpub') || source.includes('zpub') || source.includes('ypub')) {
-      category = 'xpub';
-      displayName = source;
+      return 'xpub';
     } else if (source.includes('Wallet') || source.includes('wallet')) {
-      category = 'wallet-sync';
-      displayName = source;
+      return 'wallet-sync';
     } else if (
       source === 'Sparrow' || 
       source === 'Trezor' || 
@@ -796,25 +836,46 @@ export async function getAddressSources(): Promise<SourceCategory[]> {
       source === 'Samourai' ||
       source === 'Specter' ||
       source === 'Mycelium' ||
-      source.includes('BIP-329')
+      source.includes('BIP-329') ||
+      source.includes(';')  // Multiple sources merged
     ) {
-      category = 'wallet-sync';
-      displayName = source;
-    } else {
-      // Try to infer category from common patterns
-      if (source.includes(';')) {
-        // Multiple sources merged - take the first one for categorization
-        category = 'wallet-sync';
-      } else {
-        category = 'other';
-      }
+      return 'wallet-sync';
+    }
+    // Sources with derivation paths in parentheses are likely wallet imports
+    // e.g., "NamaDompet (0/1)", "MyWallet (m/84'/0'/0'/0/5)"
+    if (/\([0-9mM/'hH,\s\-]+\)$/.test(source)) {
+      return 'wallet-sync';
+    }
+    return 'other';
+  };
+  
+  for (const [displaySource, { count, rawSources }] of Array.from(groupedSourceCounts.entries())) {
+    let displayName = displaySource;
+    
+    // Categorize based on raw sources first - use first raw source to determine category
+    // This preserves category even when sources are grouped by base name (e.g., "NamaDompet" from "NamaDompet (0/1)")
+    const representativeSource = rawSources[0];
+    let category = categorizeSource(representativeSource);
+    
+    // Also check the display source in case it matches known patterns
+    const displayCategory = categorizeSource(displaySource);
+    if (displayCategory !== 'other') {
+      category = displayCategory;
+    }
+    
+    // Set display name for special cases
+    if (displaySource === 'blockchain-sync') {
+      displayName = 'Blockchain Sync';
+    } else if (displaySource.startsWith('tx-import:')) {
+      displayName = displaySource.replace('tx-import:', 'TX Import: ');
     }
     
     sourceInfos.push({
-      source,
+      source: displaySource,  // Use the display/grouped name as the key
       displayName,
       count,
       category,
+      rawSources,  // Store all raw sources that map to this grouped source
     });
   }
   

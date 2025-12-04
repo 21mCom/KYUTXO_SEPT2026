@@ -97,12 +97,17 @@ export default function TransactionSync() {
     
     // By default, select all non-blockchain-sync sources
     // Always include manual/no-source entries by default (matches legacy 'manual-only' behavior)
+    // IMPORTANT: Store the RAW sources (e.g., "NamaDompet (0/1)") not grouped names
     const newSelection = new Set<string>();
     for (const cat of categories) {
       for (const src of cat.sources) {
         // Skip blockchain-sync and __no_source__ (handled separately)
         if (cat.id !== 'blockchain-sync' && src.source !== '__no_source__') {
-          newSelection.add(src.source);
+          // Add all raw sources that map to this grouped source
+          const rawSources = src.rawSources || [src.source];
+          for (const raw of rawSources) {
+            newSelection.add(raw);
+          }
         }
       }
     }
@@ -338,7 +343,11 @@ export default function TransactionSync() {
                         for (const cat of sourceCategories) {
                           for (const src of cat.sources) {
                             if (src.source !== '__no_source__') {
-                              allSources.add(src.source);
+                              // Add all raw sources, not just the grouped display name
+                              const rawSources = src.rawSources || [src.source];
+                              for (const raw of rawSources) {
+                                allSources.add(raw);
+                              }
                             }
                           }
                         }
@@ -373,12 +382,17 @@ export default function TransactionSync() {
                   ) : (
                     <div className="space-y-2">
                       {sourceCategories.map((category) => {
-                        const allSelected = category.sources.every(s => 
-                          s.source === '__no_source__' ? includeNoSource : selectedSources.has(s.source)
-                        );
-                        const someSelected = category.sources.some(s => 
-                          s.source === '__no_source__' ? includeNoSource : selectedSources.has(s.source)
-                        );
+                        // Check if all raw sources for this category are selected
+                        const allSelected = category.sources.every(s => {
+                          if (s.source === '__no_source__') return includeNoSource;
+                          const rawSources = s.rawSources || [s.source];
+                          return rawSources.every(raw => selectedSources.has(raw));
+                        });
+                        const someSelected = category.sources.some(s => {
+                          if (s.source === '__no_source__') return includeNoSource;
+                          const rawSources = s.rawSources || [s.source];
+                          return rawSources.some(raw => selectedSources.has(raw));
+                        });
                         const isExpanded = expandedCategories.has(category.id);
                         const totalCount = category.sources.reduce((sum, s) => sum + s.count, 0);
                         
@@ -401,17 +415,32 @@ export default function TransactionSync() {
                                 checked={allSelected}
                                 disabled={isSyncing}
                                 onCheckedChange={(checked) => {
-                                  const newSelection = new Set(selectedSources);
+                                  // Handle no-source separately since it uses its own state
                                   for (const src of category.sources) {
                                     if (src.source === '__no_source__') {
                                       setIncludeNoSource(checked === true);
-                                    } else if (checked) {
-                                      newSelection.add(src.source);
-                                    } else {
-                                      newSelection.delete(src.source);
+                                      break;
                                     }
                                   }
-                                  setSelectedSources(newSelection);
+                                  
+                                  // Use functional update to ensure new Set reference triggers re-render
+                                  setSelectedSources(prev => {
+                                    const newSelection = new Set(prev);
+                                    for (const src of category.sources) {
+                                      if (src.source !== '__no_source__') {
+                                        // Add/remove all raw sources for this grouped source
+                                        const rawSources = src.rawSources || [src.source];
+                                        for (const raw of rawSources) {
+                                          if (checked) {
+                                            newSelection.add(raw);
+                                          } else {
+                                            newSelection.delete(raw);
+                                          }
+                                        }
+                                      }
+                                    }
+                                    return newSelection;
+                                  });
                                 }}
                                 className={someSelected && !allSelected ? "opacity-50" : ""}
                                 data-testid={`checkbox-category-${category.id}`}
@@ -436,34 +465,48 @@ export default function TransactionSync() {
                             
                             <CollapsibleContent>
                               <div className="pl-6 space-y-1">
-                                {category.sources.map((src) => (
-                                  <div key={src.source} className="flex items-center gap-2 py-0.5">
-                                    <Checkbox
-                                      checked={src.source === '__no_source__' ? includeNoSource : selectedSources.has(src.source)}
-                                      disabled={isSyncing}
-                                      onCheckedChange={(checked) => {
-                                        if (src.source === '__no_source__') {
-                                          setIncludeNoSource(checked === true);
-                                        } else {
-                                          const newSelection = new Set(selectedSources);
-                                          if (checked) {
-                                            newSelection.add(src.source);
+                                {category.sources.map((src) => {
+                                  // Check if all raw sources for this grouped source are selected
+                                  const rawSources = src.rawSources || [src.source];
+                                  const isChecked = src.source === '__no_source__' 
+                                    ? includeNoSource 
+                                    : rawSources.every(raw => selectedSources.has(raw));
+                                  
+                                  return (
+                                    <div key={src.source} className="flex items-center gap-2 py-0.5">
+                                      <Checkbox
+                                        checked={isChecked}
+                                        disabled={isSyncing}
+                                        onCheckedChange={(checked) => {
+                                          if (src.source === '__no_source__') {
+                                            setIncludeNoSource(checked === true);
                                           } else {
-                                            newSelection.delete(src.source);
+                                            // Use functional update to ensure new Set reference triggers re-render
+                                            setSelectedSources(prev => {
+                                              const newSelection = new Set(prev);
+                                              // Add/remove all raw sources for this grouped source
+                                              for (const raw of rawSources) {
+                                                if (checked) {
+                                                  newSelection.add(raw);
+                                                } else {
+                                                  newSelection.delete(raw);
+                                                }
+                                              }
+                                              return newSelection;
+                                            });
                                           }
-                                          setSelectedSources(newSelection);
-                                        }
-                                      }}
-                                      data-testid={`checkbox-source-${src.source.replace(/[^a-zA-Z0-9]/g, '-')}`}
-                                    />
-                                    <span className="text-sm truncate flex-1" title={src.displayName}>
-                                      {src.displayName}
-                                    </span>
-                                    <span className="text-xs text-muted-foreground">
-                                      {src.count}
-                                    </span>
-                                  </div>
-                                ))}
+                                        }}
+                                        data-testid={`checkbox-source-${src.source.replace(/[^a-zA-Z0-9]/g, '-')}`}
+                                      />
+                                      <span className="text-sm truncate flex-1" title={src.displayName}>
+                                        {src.displayName}
+                                      </span>
+                                      <span className="text-xs text-muted-foreground">
+                                        {src.count}
+                                      </span>
+                                    </div>
+                                  );
+                                })}
                               </div>
                             </CollapsibleContent>
                           </Collapsible>
