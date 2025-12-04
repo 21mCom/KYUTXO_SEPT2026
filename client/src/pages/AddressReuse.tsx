@@ -1,11 +1,12 @@
 import { useState, useMemo, useEffect, useRef } from "react";
-import { useLiveQuery } from "dexie-react-hooks";
 import { format } from "date-fns";
-import { db, BlockchainTransaction, TransactionParticipant, Record, AddressImportance } from "@/lib/database";
+import { db, Record, AddressImportance } from "@/lib/database";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -77,6 +78,10 @@ const IMPORTANCE_OPTIONS: { value: AddressImportance | 'all'; label: string }[] 
   { value: 'pending-review', label: 'Pending Review' },
 ];
 
+// User-curated importance tiers (exclude blockchain-discovered and pending-review by default)
+const USER_CURATED_TIERS: AddressImportance[] = ['verified', 'manual', 'wallet-import', 'xpub-derived'];
+const ALL_TIERS: AddressImportance[] = ['verified', 'manual', 'wallet-import', 'xpub-derived', 'blockchain-discovered', 'pending-review'];
+
 export default function AddressReuse() {
   const [search, setSearch] = useState("");
   const [expandedAddresses, setExpandedAddresses] = useState<Set<string>>(new Set());
@@ -105,174 +110,231 @@ export default function AddressReuse() {
   // Processing state for deferred computation
   const [isProcessing, setIsProcessing] = useState(true);
   const [reusedAddresses, setReusedAddresses] = useState<AddressReuseInfo[]>([]);
-  const processingRef = useRef(0);
-
-  const transactions = useLiveQuery(
-    () => db.blockchainTransactions.toArray(),
-    []
-  );
-
-  const participants = useLiveQuery(
-    () => db.transactionParticipants.toArray(),
-    []
-  );
-
-  const rawRecords = useLiveQuery(
-    () => db.records.where('type').equals('address').toArray(),
-    []
-  );
-
   const [decryptedRecords, setDecryptedRecords] = useState<Record[]>([]);
-  const decryptRequestId = useRef(0);
+  const [addressToRecord, setAddressToRecord] = useState<Map<string, Record>>(new Map());
+  const processingRef = useRef(0);
+  
+  // Toggle for including blockchain-discovered addresses
+  const [includeBlockchainDiscovered, setIncludeBlockchainDiscovered] = useState(false);
+  const [totalBlockchainDiscovered, setTotalBlockchainDiscovered] = useState(0);
+  
+  // Track database changes to trigger reloads
+  const changeVersionRef = useRef(0);
+  const [dbChangeSignal, setDbChangeSignal] = useState(0);
   
   useEffect(() => {
-    if (!rawRecords) return;
+    // Subscribe to Dexie changes - fires after transactions commit
+    // Note: Dexie change events receive an array of IDatabaseChange objects
+    const handler = (changes: any) => {
+      // Check if any change affects records or transactionParticipants
+      const changesArray = Array.isArray(changes) ? changes : changes?.changes || [];
+      const hasRelevantChanges = changesArray.some(
+        (change: any) => change.table === 'records' || change.table === 'transactionParticipants'
+      );
+      if (hasRelevantChanges || changesArray.length === 0) {
+        // Trigger reload - if we can't determine the table, reload anyway
+        changeVersionRef.current += 1;
+        setDbChangeSignal(changeVersionRef.current);
+      }
+    };
     
-    decryptRequestId.current += 1;
-    const thisRequestId = decryptRequestId.current;
-    
-    const decrypt = async () => {
+    db.on('changes', handler);
+    return () => {
+      db.on('changes').unsubscribe(handler);
+    };
+  }, []);
+
+  // Load and process data based on filter settings
+  useEffect(() => {
+    const loadAndProcess = async () => {
+      processingRef.current += 1;
+      const thisProcessingId = processingRef.current;
+      setIsProcessing(true);
+      
       try {
-        const decrypted = await decryptRecords(rawRecords);
-        if (thisRequestId === decryptRequestId.current) {
-          setDecryptedRecords(decrypted);
+        // Count blockchain-discovered addresses for toggle label
+        const blockchainCount = await db.records
+          .where('addressImportance')
+          .anyOf(['blockchain-discovered', 'pending-review'])
+          .and(r => r.type === 'address')
+          .count();
+        setTotalBlockchainDiscovered(blockchainCount);
+        
+        // Step 1: Load address records based on filter setting
+        // Also include records with null/undefined addressImportance (legacy data)
+        const tiersToLoad = includeBlockchainDiscovered ? ALL_TIERS : USER_CURATED_TIERS;
+        
+        // First get indexed records
+        let curatedRecords = await db.records
+          .where('addressImportance')
+          .anyOf(tiersToLoad)
+          .and(r => r.type === 'address')
+          .toArray();
+        
+        // Also include legacy records with null addressImportance (treat as manual)
+        const legacyRecords = await db.records
+          .filter(r => r.type === 'address' && !r.addressImportance)
+          .toArray();
+        curatedRecords = [...curatedRecords, ...legacyRecords];
+        
+        if (thisProcessingId !== processingRef.current) return;
+        
+        // Decrypt records
+        let decrypted: Record[];
+        try {
+          decrypted = await decryptRecords(curatedRecords);
+        } catch {
+          decrypted = curatedRecords;
         }
-      } catch {
-        if (thisRequestId === decryptRequestId.current) {
-          setDecryptedRecords(prev => prev.length === 0 ? rawRecords : prev);
+        
+        if (thisProcessingId !== processingRef.current) return;
+        
+        setDecryptedRecords(decrypted);
+        
+        // Build address map from records
+        const addrToRecord = new Map<string, Record>();
+        const addressSet = new Set<string>();
+        decrypted.forEach(record => {
+          if (record.inputString) {
+            addrToRecord.set(record.inputString, record);
+            addressSet.add(record.inputString);
+          }
+        });
+        setAddressToRecord(addrToRecord);
+        
+        if (addressSet.size === 0) {
+          setReusedAddresses([]);
+          setIsProcessing(false);
+          return;
+        }
+        
+        // Step 2: Load only participants for addresses we care about
+        // Use indexed query on address field
+        const addressArray = Array.from(addressSet);
+        const relevantParticipants = await db.transactionParticipants
+          .where('address')
+          .anyOf(addressArray)
+          .toArray();
+        
+        if (thisProcessingId !== processingRef.current) return;
+        
+        // Step 3: Get unique txids from relevant participants and load only those transactions
+        const relevantTxids = new Set<string>();
+        relevantParticipants.forEach(p => relevantTxids.add(p.txid));
+        
+        const txidToBlockTime = new Map<string, number>();
+        if (relevantTxids.size > 0) {
+          // Batch load only the transactions we need using indexed query
+          const transactions = await db.blockchainTransactions
+            .where('txid')
+            .anyOf(Array.from(relevantTxids))
+            .toArray();
+          transactions.forEach(tx => {
+            txidToBlockTime.set(tx.txid, tx.blockTime);
+          });
+        }
+        
+        if (thisProcessingId !== processingRef.current) return;
+        
+        // Step 4: Build address map tracking input/output txids (only for our addresses)
+        const addressMap = new Map<string, {
+          inputTxids: Set<string>;
+          outputTxids: Set<string>;
+        }>();
+
+        relevantParticipants.forEach(p => {
+          if (!addressMap.has(p.address)) {
+            addressMap.set(p.address, { inputTxids: new Set(), outputTxids: new Set() });
+          }
+          const entry = addressMap.get(p.address)!;
+          if (p.role === 'input') {
+            entry.inputTxids.add(p.txid);
+          } else {
+            entry.outputTxids.add(p.txid);
+          }
+        });
+
+        const result: AddressReuseInfo[] = [];
+
+        addressMap.forEach((data, address) => {
+          // Find transactions where address appears as BOTH input and output (change-to-self)
+          const selfChangeTxids: string[] = [];
+          data.inputTxids.forEach(txid => {
+            if (data.outputTxids.has(txid)) {
+              selfChangeTxids.push(txid);
+            }
+          });
+          
+          const hasSelfChange = selfChangeTxids.length > 0;
+          const hasMultiReceive = data.outputTxids.size >= 2;
+          
+          // Only flag as reuse if: received 2+ times OR has change-to-self
+          if (!hasMultiReceive && !hasSelfChange) {
+            return; // Not reuse - skip this address
+          }
+          
+          // Determine reuse reason
+          let reuseReason: ReuseReason;
+          if (hasMultiReceive && hasSelfChange) {
+            reuseReason = 'both';
+          } else if (hasMultiReceive) {
+            reuseReason = 'multi-receive';
+          } else {
+            reuseReason = 'change-to-self';
+          }
+
+          const allTxids = new Set([...Array.from(data.inputTxids), ...Array.from(data.outputTxids)]);
+          const txList: AddressReuseInfo['transactions'] = [];
+          
+          allTxids.forEach(txid => {
+            const blockTime = txidToBlockTime.get(txid) || 0;
+            const isInput = data.inputTxids.has(txid);
+            const isOutput = data.outputTxids.has(txid);
+            const isSelfChange = isInput && isOutput;
+            
+            if (isOutput) {
+              txList.push({ txid, blockTime, role: 'output', isSelfChange });
+            }
+            if (isInput) {
+              txList.push({ txid, blockTime, role: 'input', isSelfChange });
+            }
+          });
+
+          txList.sort((a, b) => b.blockTime - a.blockTime);
+
+          result.push({
+            address,
+            totalCount: allTxids.size,
+            inputCount: data.inputTxids.size,
+            outputCount: data.outputTxids.size,
+            reuseReason,
+            selfChangeTxids,
+            transactions: txList,
+            record: addrToRecord.get(address),
+          });
+        });
+
+        // Sort by most recent transaction activity first (for default view)
+        result.sort((a, b) => {
+          const aLatest = a.transactions[0]?.blockTime || 0;
+          const bLatest = b.transactions[0]?.blockTime || 0;
+          return bLatest - aLatest;
+        });
+
+        if (thisProcessingId === processingRef.current) {
+          setReusedAddresses(result);
+          setIsProcessing(false);
+        }
+      } catch (error) {
+        console.error('[AddressReuse] Failed to load data:', error);
+        if (thisProcessingId === processingRef.current) {
+          setIsProcessing(false);
         }
       }
     };
     
-    decrypt();
-  }, [rawRecords]);
-
-  const addressToRecord = useMemo(() => {
-    const map = new Map<string, Record>();
-    decryptedRecords.forEach(record => {
-      if (record.inputString) {
-        map.set(record.inputString, record);
-      }
-    });
-    return map;
-  }, [decryptedRecords]);
-
-  const txidToBlockTime = useMemo(() => {
-    const map = new Map<string, number>();
-    transactions?.forEach(tx => {
-      map.set(tx.txid, tx.blockTime);
-    });
-    return map;
-  }, [transactions]);
-
-  // Deferred processing to prevent page freeze
-  useEffect(() => {
-    if (!participants) {
-      setIsProcessing(true);
-      return;
-    }
-    
-    processingRef.current += 1;
-    const thisProcessingId = processingRef.current;
-    setIsProcessing(true);
-    
-    // Defer heavy computation to allow UI to render first
-    const timeoutId = setTimeout(() => {
-      if (thisProcessingId !== processingRef.current) return;
-      
-      // Build address map tracking input/output txids
-      const addressMap = new Map<string, {
-        inputTxids: Set<string>;
-        outputTxids: Set<string>;
-      }>();
-
-      participants.forEach(p => {
-        if (!addressMap.has(p.address)) {
-          addressMap.set(p.address, { inputTxids: new Set(), outputTxids: new Set() });
-        }
-        const entry = addressMap.get(p.address)!;
-        if (p.role === 'input') {
-          entry.inputTxids.add(p.txid);
-        } else {
-          entry.outputTxids.add(p.txid);
-        }
-      });
-
-      const result: AddressReuseInfo[] = [];
-
-      addressMap.forEach((data, address) => {
-        // Find transactions where address appears as BOTH input and output (change-to-self)
-        const selfChangeTxids: string[] = [];
-        data.inputTxids.forEach(txid => {
-          if (data.outputTxids.has(txid)) {
-            selfChangeTxids.push(txid);
-          }
-        });
-        
-        const hasSelfChange = selfChangeTxids.length > 0;
-        const hasMultiReceive = data.outputTxids.size >= 2;
-        
-        // Only flag as reuse if: received 2+ times OR has change-to-self
-        if (!hasMultiReceive && !hasSelfChange) {
-          return; // Not reuse - skip this address
-        }
-        
-        // Determine reuse reason
-        let reuseReason: ReuseReason;
-        if (hasMultiReceive && hasSelfChange) {
-          reuseReason = 'both';
-        } else if (hasMultiReceive) {
-          reuseReason = 'multi-receive';
-        } else {
-          reuseReason = 'change-to-self';
-        }
-
-        const allTxids = new Set([...Array.from(data.inputTxids), ...Array.from(data.outputTxids)]);
-        const txList: AddressReuseInfo['transactions'] = [];
-        
-        allTxids.forEach(txid => {
-          const blockTime = txidToBlockTime.get(txid) || 0;
-          const isInput = data.inputTxids.has(txid);
-          const isOutput = data.outputTxids.has(txid);
-          const isSelfChange = isInput && isOutput;
-          
-          if (isOutput) {
-            txList.push({ txid, blockTime, role: 'output', isSelfChange });
-          }
-          if (isInput) {
-            txList.push({ txid, blockTime, role: 'input', isSelfChange });
-          }
-        });
-
-        txList.sort((a, b) => b.blockTime - a.blockTime);
-
-        result.push({
-          address,
-          totalCount: allTxids.size,
-          inputCount: data.inputTxids.size,
-          outputCount: data.outputTxids.size,
-          reuseReason,
-          selfChangeTxids,
-          transactions: txList,
-          record: addressToRecord.get(address),
-        });
-      });
-
-      // Sort by most recent transaction activity first (for default view)
-      result.sort((a, b) => {
-        const aLatest = a.transactions[0]?.blockTime || 0;
-        const bLatest = b.transactions[0]?.blockTime || 0;
-        return bLatest - aLatest;
-      });
-
-      if (thisProcessingId === processingRef.current) {
-        setReusedAddresses(result);
-        setIsProcessing(false);
-      }
-    }, 50); // Small delay to let the UI render first
-    
-    return () => clearTimeout(timeoutId);
-  }, [participants, txidToBlockTime, addressToRecord]);
+    loadAndProcess();
+  }, [includeBlockchainDiscovered, dbChangeSignal]);
 
   // Split into YOUR addresses (with records) vs OTHER addresses (counterparties)
   const { yourReusedAddresses, otherReusedAddresses } = useMemo(() => {
@@ -505,6 +567,35 @@ export default function AddressReuse() {
               </CardContent>
             </Card>
           </div>
+        </div>
+
+        {/* Data scope toggle */}
+        <div className="flex items-center justify-between p-3 rounded-lg border bg-muted/30">
+          <div className="flex items-center gap-3">
+            <span className="text-sm font-medium">Your Addresses</span>
+            <span className="text-sm text-muted-foreground">|</span>
+            <div className="flex items-center gap-2">
+              <Switch
+                id="include-blockchain-discovered"
+                checked={includeBlockchainDiscovered}
+                onCheckedChange={setIncludeBlockchainDiscovered}
+                data-testid="switch-include-blockchain"
+              />
+              <Label htmlFor="include-blockchain-discovered" className="text-sm cursor-pointer">
+                Include blockchain-discovered
+              </Label>
+              {totalBlockchainDiscovered > 0 && (
+                <Badge variant="secondary" className="text-xs">
+                  +{totalBlockchainDiscovered.toLocaleString()}
+                </Badge>
+              )}
+            </div>
+          </div>
+          {!includeBlockchainDiscovered && totalBlockchainDiscovered > 0 && (
+            <span className="text-xs text-muted-foreground">
+              Analyzing only manually added and imported addresses
+            </span>
+          )}
         </div>
 
         {/* Filters Section */}

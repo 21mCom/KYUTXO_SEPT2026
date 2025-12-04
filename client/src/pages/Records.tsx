@@ -1,13 +1,20 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { ArrowLeft, Search as SearchIcon } from "lucide-react";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
+import { Badge } from "@/components/ui/badge";
+import { ArrowLeft, Search as SearchIcon, Database, Users } from "lucide-react";
 import { db, type Record as DbRecord, type VaultMetadata, type AddressImportance, type ChainType, type CustomField } from "@/lib/database";
 import { decryptRecords, isEncryptionReady } from "@/lib/encryptionFacade";
 import { RecordTable } from "@/components/RecordTable";
 import { RecordDetailPanel } from "@/components/RecordDetailPanel";
+
+// User-curated importance tiers (exclude blockchain-discovered and pending-review by default)
+const USER_CURATED_TIERS: AddressImportance[] = ['verified', 'manual', 'wallet-import', 'xpub-derived'];
+const ALL_TIERS: AddressImportance[] = ['verified', 'manual', 'wallet-import', 'xpub-derived', 'blockchain-discovered', 'pending-review'];
 
 interface ConvertedRecord {
   id: string;
@@ -44,6 +51,37 @@ export default function Records() {
   const [urlSearchQuery, setUrlSearchQuery] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [customFieldDefs, setCustomFieldDefs] = useState<CustomField[]>([]);
+  
+  // Filter state: by default, only show user-curated records (not blockchain-discovered)
+  const [includeBlockchainDiscovered, setIncludeBlockchainDiscovered] = useState(false);
+  const [totalBlockchainDiscovered, setTotalBlockchainDiscovered] = useState(0);
+  
+  // Track database changes to trigger reloads
+  const changeVersionRef = useRef(0);
+  const [dbChangeSignal, setDbChangeSignal] = useState(0);
+  
+  useEffect(() => {
+    // Subscribe to Dexie changes - fires after transactions commit
+    // Note: Dexie change events receive an array of IDatabaseChange objects
+    const handler = (changes: any) => {
+      // Check if any change affects the records table
+      // The change object can have different structures depending on Dexie version
+      const changesArray = Array.isArray(changes) ? changes : changes?.changes || [];
+      const hasRecordChanges = changesArray.some(
+        (change: any) => change.table === 'records'
+      );
+      if (hasRecordChanges || changesArray.length === 0) {
+        // Trigger reload - if we can't determine the table, reload anyway
+        changeVersionRef.current += 1;
+        setDbChangeSignal(changeVersionRef.current);
+      }
+    };
+    
+    db.on('changes', handler);
+    return () => {
+      db.on('changes').unsubscribe(handler);
+    };
+  }, []);
 
   // Parse query parameters from location - store them for later application
   useEffect(() => {
@@ -78,7 +116,7 @@ export default function Records() {
     }
   }, [urlSearchQuery, records.length, isLoading]);
 
-  // Load records and custom field definitions
+  // Load records and custom field definitions with smart filtering
   useEffect(() => {
     const loadRecords = async () => {
       setIsLoading(true);
@@ -87,7 +125,48 @@ export default function Records() {
         const fields = await db.customFields.toArray();
         setCustomFieldDefs(fields);
         
-        const rawRecords = await db.records.toArray();
+        // Count blockchain-discovered records for the toggle label
+        const blockchainCount = await db.records
+          .where('addressImportance')
+          .anyOf(['blockchain-discovered', 'pending-review'])
+          .count();
+        setTotalBlockchainDiscovered(blockchainCount);
+        
+        // Query only the relevant importance tiers based on filter setting
+        // Use indexed queries for performance - avoid full table scans
+        let rawRecords: DbRecord[];
+        
+        if (includeBlockchainDiscovered) {
+          // Load all records
+          rawRecords = await db.records.toArray();
+        } else {
+          // Strategy: Use indexed queries only to avoid full table scans
+          // 1. Get address records with user-curated importance tiers (indexed)
+          const curatedAddresses = await db.records
+            .where('addressImportance')
+            .anyOf(USER_CURATED_TIERS)
+            .toArray();
+          
+          // 2. Get legacy address records with null/undefined addressImportance (treat as manual)
+          const legacyAddresses = await db.records
+            .filter(r => r.type === 'address' && !r.addressImportance)
+            .toArray();
+          
+          // 3. Get all transaction records (indexed by type)
+          const transactions = await db.records
+            .where('type')
+            .equals('transaction')
+            .toArray();
+          
+          // 4. Get all "other" type records (indexed by type)
+          const otherRecords = await db.records
+            .where('type')
+            .equals('other')
+            .toArray();
+          
+          rawRecords = [...curatedAddresses, ...legacyAddresses, ...transactions, ...otherRecords];
+        }
+        
         let decrypted: DbRecord[];
         
         if (isEncryptionReady()) {
@@ -130,7 +209,7 @@ export default function Records() {
     };
     
     loadRecords();
-  }, []);
+  }, [includeBlockchainDiscovered, dbChangeSignal]);
 
   // Filter records based on search query
   useEffect(() => {
@@ -151,8 +230,70 @@ export default function Records() {
     setFilteredRecords(filtered);
   }, [records, searchQuery]);
 
+  // State for directly-loaded record (when accessed by URL but not in filtered view)
+  const [directLoadedRecord, setDirectLoadedRecord] = useState<ConvertedRecord | null>(null);
+  
+  // Load specific record by ID if accessed via URL but not in filtered view
+  useEffect(() => {
+    if (!selectedRecordId || isLoading) return;
+    
+    // Check if record is already in the filtered list
+    const existingRecord = records.find(r => r.id === selectedRecordId);
+    if (existingRecord) {
+      setDirectLoadedRecord(null);
+      return;
+    }
+    
+    // Record not in current view - load it directly
+    const loadRecord = async () => {
+      try {
+        const record = await db.records.get(parseInt(selectedRecordId));
+        if (!record) return;
+        
+        let decrypted: DbRecord[];
+        if (isEncryptionReady()) {
+          decrypted = await decryptRecords([record]);
+        } else {
+          decrypted = [record];
+        }
+        
+        if (decrypted.length > 0) {
+          const r = decrypted[0];
+          setDirectLoadedRecord({
+            id: String(r.id),
+            type: r.type as "address" | "transaction" | "other",
+            inputString: r.inputString,
+            label: r.label,
+            notes: r.notes,
+            tags: r.tags || [],
+            categories: r.categories || [],
+            seedName: r.seedName,
+            walletSoftware: r.walletSoftware,
+            owner: r.owner,
+            walletName: r.walletName,
+            privateKeyStatus: r.privateKeyStatus,
+            source: r.source,
+            customFields: r.customFields,
+            derivationPath: r.derivationPath,
+            chainType: r.chainType,
+            vault: r.vault,
+            addressImportance: r.addressImportance,
+            syncDepth: r.syncDepth,
+            maxSyncedDepth: r.maxSyncedDepth,
+            discoveredInTxid: r.discoveredInTxid,
+            discoveredFromRecordId: r.discoveredFromRecordId,
+          });
+        }
+      } catch (error) {
+        console.error('[Records] Failed to load specific record:', error);
+      }
+    };
+    
+    loadRecord();
+  }, [selectedRecordId, records, isLoading]);
+  
   const selectedRecord = selectedRecordId 
-    ? records.find(r => r.id === selectedRecordId)
+    ? (records.find(r => r.id === selectedRecordId) || directLoadedRecord)
     : null;
 
   // If viewing a specific record by ID, show detail-focused view
@@ -213,22 +354,56 @@ export default function Records() {
           </div>
         </div>
 
-        <div className="flex items-end gap-4">
-          <div className="flex-1">
-            <label htmlFor="search" className="text-sm font-medium">
-              Search Records
-            </label>
-            <div className="mt-2 relative">
-              <SearchIcon className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-              <Input
-                id="search"
-                placeholder="Search by label, address, owner, wallet, or notes..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="pl-10"
-                data-testid="input-search"
-              />
+        <div className="flex flex-col gap-4">
+          <div className="flex items-end gap-4">
+            <div className="flex-1">
+              <label htmlFor="search" className="text-sm font-medium">
+                Search Records
+              </label>
+              <div className="mt-2 relative">
+                <SearchIcon className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <Input
+                  id="search"
+                  placeholder="Search by label, address, owner, wallet, or notes..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="pl-10"
+                  data-testid="input-search"
+                />
+              </div>
             </div>
+          </div>
+          
+          {/* Smart filter toggle */}
+          <div className="flex items-center justify-between p-3 rounded-lg border bg-muted/30">
+            <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2">
+                <Users className="h-4 w-4 text-muted-foreground" />
+                <span className="text-sm font-medium">Your Records</span>
+              </div>
+              <span className="text-sm text-muted-foreground">|</span>
+              <div className="flex items-center gap-2">
+                <Switch
+                  id="include-blockchain"
+                  checked={includeBlockchainDiscovered}
+                  onCheckedChange={setIncludeBlockchainDiscovered}
+                  data-testid="switch-include-blockchain"
+                />
+                <Label htmlFor="include-blockchain" className="text-sm cursor-pointer">
+                  Include blockchain-discovered
+                </Label>
+                {totalBlockchainDiscovered > 0 && (
+                  <Badge variant="secondary" className="text-xs">
+                    +{totalBlockchainDiscovered.toLocaleString()}
+                  </Badge>
+                )}
+              </div>
+            </div>
+            {!includeBlockchainDiscovered && totalBlockchainDiscovered > 0 && (
+              <span className="text-xs text-muted-foreground">
+                Showing only manually added and imported records
+              </span>
+            )}
           </div>
         </div>
 
