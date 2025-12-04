@@ -745,43 +745,6 @@ db.on('ready', async () => {
     }
   }
   
-  // REPAIR: Ensure all records have addressImportance set for compound index compatibility
-  // This runs on every database open to catch any records that slipped through migrations
-  try {
-    const recordsWithoutImportance = await db.records
-      .filter(r => !r.addressImportance)
-      .toArray();
-    
-    if (recordsWithoutImportance.length > 0) {
-      console.log(`[Database] Repairing ${recordsWithoutImportance.length} records missing addressImportance`);
-      
-      for (const record of recordsWithoutImportance) {
-        if (!record.id) continue;
-        
-        let addressImportance: AddressImportance;
-        
-        // Transaction and 'other' types default to 'manual'
-        if (record.type === 'transaction' || record.type === 'other') {
-          addressImportance = 'manual';
-        } else if ((record.syncDepth !== undefined && record.syncDepth > 0) || 
-                   record.source === 'blockchain-sync') {
-          addressImportance = 'blockchain-discovered';
-        } else if (record.source?.startsWith('walletImport-')) {
-          addressImportance = 'wallet-import';
-        } else if (record.source === 'xpub-import' || record.xpub || record.derivationPath) {
-          addressImportance = 'xpub-derived';
-        } else {
-          addressImportance = 'manual';
-        }
-        
-        await db.records.update(record.id, { addressImportance });
-      }
-      
-      console.log(`[Database] Repair complete - all records now have addressImportance`);
-    }
-  } catch (repairError) {
-    console.error('[Database] Failed to repair addressImportance:', repairError);
-  }
 });
 
 // Simple database change notification system
