@@ -809,14 +809,36 @@ export default function AddressReuse() {
 
         {/* Info about counterparty addresses */}
         {otherReusedAddresses.length > 0 && (
-          <div className="text-sm text-muted-foreground bg-muted/50 p-4 rounded-lg">
-            <p>
-              <span className="font-medium">Note:</span> {otherReusedAddresses.length.toLocaleString()} other addresses 
-              (counterparties, exchanges, etc.) also appear in multiple of your transactions but are not shown here 
-              since they're not addresses you control.
-            </p>
-          </div>
+          <Card className="border-muted">
+            <CardContent className="pt-4">
+              <p className="text-sm text-muted-foreground">
+                <span className="font-medium">Note:</span> {otherReusedAddresses.length.toLocaleString()} other addresses 
+                (counterparties, exchanges, etc.) also appear in multiple of your transactions but are not shown here 
+                since they're not addresses you control.
+              </p>
+            </CardContent>
+          </Card>
         )}
+
+        {/* How it works */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <AlertTriangle className="h-5 w-5" />
+              Why Address Reuse Matters
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="text-sm text-muted-foreground space-y-2">
+            <p>
+              Reusing Bitcoin addresses reduces privacy by linking your transactions together on the blockchain.
+              Anyone can see that the same person controls funds at a reused address.
+            </p>
+            <p>
+              <strong>Multi-receive</strong> means an address received funds more than once. 
+              <strong>Change-to-self</strong> means change was sent back to the same address used as input.
+            </p>
+          </CardContent>
+        </Card>
       </div>
       
       {/* Record Edit Dialog */}

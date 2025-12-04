@@ -5,7 +5,6 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
@@ -16,9 +15,6 @@ import {
   Check,
   AlertCircle,
   Clock,
-  Wallet,
-  ArrowDownUp,
-  ExternalLink,
   Loader2,
   Info,
   Server,
@@ -29,7 +25,6 @@ import {
 import { Checkbox } from "@/components/ui/checkbox";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { transactionSyncService, type SyncProgress, type SyncResult, type SyncOptions, type SourceCategory, type SourceSelection, type SourceInfo, getAddressSources } from "@/lib/transaction-sync";
-import { type Record as DbRecord } from "@/lib/database";
 import { useNodeSettings } from "@/hooks/use-node-settings";
 import { getProviderDisplayName, getProviderPrivacyInfo } from "@/lib/blockchain-api";
 import { Link } from "wouter";
@@ -57,7 +52,6 @@ export default function TransactionSync() {
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncProgress, setSyncProgress] = useState<SyncProgress | null>(null);
   const [lastResult, setLastResult] = useState<SyncResult | null>(null);
-  const [pendingReviewAddresses, setPendingReviewAddresses] = useState<DbRecord[]>([]);
   const [maxDepth, setMaxDepth] = useState<number>(1);
   
   // New granular source selection state
@@ -80,9 +74,6 @@ export default function TransactionSync() {
   const loadStats = useCallback(async () => {
     const s = await transactionSyncService.getStats();
     setStats(s);
-    
-    const pending = await transactionSyncService.getPendingReviewAddresses();
-    setPendingReviewAddresses(pending);
   }, []);
   
   // Load available sources and set initial selection
@@ -508,14 +499,14 @@ export default function TransactionSync() {
                     </div>
                   )}
                 </ScrollArea>
-                <div className="flex items-center justify-between text-xs text-muted-foreground">
-                  <span>{selectedSources.size + (includeNoSource ? 1 : 0)} source(s) selected</span>
-                  {filteredAddressCount !== null && (
+                {filteredAddressCount !== null && (
+                  <div className="text-xs text-muted-foreground">
                     <Badge variant="secondary" className="font-medium">
-                      {filteredAddressCount} root address{filteredAddressCount !== 1 ? 'es' : ''}
+                      {filteredAddressCount} address{filteredAddressCount !== 1 ? 'es' : ''}
                     </Badge>
-                  )}
-                </div>
+                    {' '}will be synced based on current selection
+                  </div>
+                )}
               </div>
 
               {/* Depth Control */}
@@ -636,102 +627,23 @@ export default function TransactionSync() {
           </CardFooter>
         </Card>
 
-        {/* Pending Review */}
-        {pendingReviewAddresses.length > 0 && (
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Wallet className="h-5 w-5" />
-                Pending Review
-                <Badge variant="secondary">{pendingReviewAddresses.length}</Badge>
-              </CardTitle>
-              <CardDescription>
-                Addresses discovered through transaction sync that need identification
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <ScrollArea className="h-64">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Address</TableHead>
-                      <TableHead>Added</TableHead>
-                      <TableHead className="w-20"></TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {pendingReviewAddresses.slice(0, 20).map((record) => (
-                      <TableRow key={record.id}>
-                        <TableCell className="font-mono text-sm">
-                          {record.inputString.substring(0, 12)}...{record.inputString.substring(record.inputString.length - 8)}
-                        </TableCell>
-                        <TableCell className="text-muted-foreground text-sm">
-                          {formatDistanceToNow(record.createdAt, { addSuffix: true })}
-                        </TableCell>
-                        <TableCell>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => {
-                              window.open(`https://mempool.space/address/${record.inputString}`, '_blank');
-                            }}
-                            data-testid={`button-view-address-${record.id}`}
-                          >
-                            <ExternalLink className="h-4 w-4" />
-                          </Button>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-                {pendingReviewAddresses.length > 20 && (
-                  <p className="text-center text-sm text-muted-foreground py-2">
-                    ...and {pendingReviewAddresses.length - 20} more
-                  </p>
-                )}
-              </ScrollArea>
-            </CardContent>
-            <CardFooter>
-              <p className="text-sm text-muted-foreground">
-                Edit these addresses from the main Records view to assign owners and labels
-              </p>
-            </CardFooter>
-          </Card>
-        )}
-
         {/* How it works */}
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
-              <ArrowDownUp className="h-5 w-5" />
+              <Info className="h-5 w-5" />
               How It Works
             </CardTitle>
           </CardHeader>
-          <CardContent className="space-y-3 text-sm">
-            <div className="flex gap-3">
-              <Badge variant="outline" className="shrink-0">1</Badge>
-              <p>All addresses in your database are synced: manually added, imported from wallets, or derived from xPubs</p>
-            </div>
-            <div className="flex gap-3">
-              <Badge variant="outline" className="shrink-0">2</Badge>
-              <p>Sync queries mempool.space for transaction history of each address</p>
-            </div>
-            <div className="flex gap-3">
-              <Badge variant="outline" className="shrink-0">3</Badge>
-              <p>Only transactions with 5+ confirmations are imported (considered settled)</p>
-            </div>
-            <div className="flex gap-3">
-              <Badge variant="outline" className="shrink-0">4</Badge>
-              <p>Transaction details are stored locally: block time, fees, inputs, and outputs</p>
-            </div>
-            <div className="flex gap-3">
-              <Badge variant="outline" className="shrink-0">5</Badge>
-              <p>Unknown addresses in transactions are created as "Pending Review" for you to identify</p>
-            </div>
-            <div className="flex gap-3">
-              <Badge variant="outline" className="shrink-0">6</Badge>
-              <p>Run sync periodically to catch new transactions</p>
-            </div>
+          <CardContent className="text-sm text-muted-foreground space-y-2">
+            <p>
+              Fetches transaction history for your selected addresses from the configured blockchain API. 
+              Only confirmed transactions (5+ confirmations) are imported.
+            </p>
+            <p>
+              New addresses discovered in transactions are automatically added as "Unknown" for later review. 
+              Use deeper sync levels to trace connected addresses.
+            </p>
           </CardContent>
         </Card>
       </div>
