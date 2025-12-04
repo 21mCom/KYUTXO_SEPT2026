@@ -35,6 +35,7 @@ Key features include:
 - **Reports System**: Self-contained reporting features in `/client/src/components/reports/`:
   - **Source of Funds Report**: Shows acquisition history, cost basis from historical price data, current valuation, and unrealized gain/loss. Internal transfers (same owner) are flagged as non-taxable for capital gains purposes.
   - **Hop-Point Detection Report**: Identifies unclassified addresses that connect known addresses, with confidence scoring to suggest classification (likely own wallet vs. counterparty).
+- **Nudgie (Transaction Labeling To-Do)**: A workflow page for systematically labeling unlabeled transactions from user-inputted sources. Features Dashboard view (progress stats, smart groupings into self-transfers/known-counterparties/unknowns, expandable transaction list) and Focus view (one-at-a-time labeling with full address context). Includes source filtering (manual, xpub-import, wallet-import, blockchain-sync 0-hop) and quick-label buttons for common cases like self-transfers.
 - **Provenance System (Phase 3)**: A future feature for tracing the flow of funds between addresses using BFS-based pathfinding, an address importance hierarchy, and an interactive Address Explorer.
 
 ## External Dependencies
