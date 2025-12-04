@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { format } from "date-fns";
 import { db, BlockchainTransaction, TransactionParticipant, Record } from "@/lib/database";
-import { decryptRecords, updateRecord } from "@/lib/encryptionFacade";
+import { decryptRecords, updateRecord, createRecord } from "@/lib/encryptionFacade";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -422,18 +422,19 @@ export default function Nudgie() {
   };
 
   const handleSaveEdit = async (data: any, _files: File[] = []) => {
-    if (!editingRecord?.id) return;
+    if (!editingRecord) return;
     
     setIsSubmitting(true);
     try {
-      let addressImportance = editingRecord.addressImportance;
+      let addressImportance = editingRecord.addressImportance || 'pending-review';
       if (data.markAsVerified || data.addressImportance === 'verified') {
         addressImportance = 'verified';
       } else if (data.addressImportance) {
         addressImportance = data.addressImportance;
       }
 
-      await updateRecord(editingRecord.id, {
+      const recordData = {
+        type: 'address' as const,
         inputString: data.inputString,
         label: data.label || '',
         notes: data.notes || '',
@@ -446,12 +447,20 @@ export default function Nudgie() {
         privateKeyStatus: data.privateKeyStatus || '',
         addressImportance,
         customFields: data.customFields || {},
-      });
-      toast({ title: "Saved", description: "Address updated successfully" });
+        source: editingRecord.source || 'manual',
+      };
+
+      if (editingRecord.id) {
+        await updateRecord(editingRecord.id, recordData);
+        toast({ title: "Saved", description: "Address updated successfully" });
+      } else {
+        await createRecord(recordData);
+        toast({ title: "Created", description: "Address record created successfully" });
+      }
       setEditingRecord(null);
     } catch (error) {
-      console.error('Failed to update record:', error);
-      toast({ title: "Error", description: "Failed to update address", variant: "destructive" });
+      console.error('Failed to save record:', error);
+      toast({ title: "Error", description: "Failed to save address", variant: "destructive" });
     } finally {
       setIsSubmitting(false);
     }
@@ -473,6 +482,22 @@ export default function Nudgie() {
     ...walletNames.map(w => w.name).filter(n => n && n !== '[encrypted]'),
     ...decryptedAddressRecords.map(r => r.walletName).filter((s): s is string => !!s)
   ]));
+
+  const handleCreateAddressRecord = async (address: string) => {
+    const now = Date.now();
+    const newRecord: Record = {
+      type: 'address',
+      inputString: address,
+      label: '',
+      tags: [],
+      categories: [],
+      source: 'manual',
+      addressImportance: 'pending-review',
+      createdAt: now,
+      updatedAt: now,
+    };
+    setEditingRecord(newRecord);
+  };
 
   const renderAddressCard = (addr: TransactionWithContext['yourAddresses'][0], isYours: boolean) => {
     const r = addr.record;
@@ -503,24 +528,26 @@ export default function Nudgie() {
           </div>
           <div className="flex items-center gap-1 flex-shrink-0">
             <span className="text-xs font-medium">{formatSats(addr.amount)}</span>
-            {r && (
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-6 w-6"
-                onClick={(e) => {
-                  e.stopPropagation();
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6"
+              onClick={(e) => {
+                e.stopPropagation();
+                if (r) {
                   handleEditAddress(r);
-                }}
-                data-testid={`button-edit-address-${addr.address.slice(0, 8)}`}
-              >
-                <Pencil className="h-3 w-3" />
-              </Button>
-            )}
+                } else {
+                  handleCreateAddressRecord(addr.address);
+                }
+              }}
+              data-testid={`button-edit-address-${addr.address.slice(0, 8)}`}
+            >
+              <Pencil className="h-3 w-3" />
+            </Button>
           </div>
         </div>
 
-        {r ? (
+        {r && hasMetadata ? (
           <div className="text-xs space-y-1.5">
             {r.label && (
               <div className="font-medium text-foreground">{r.label}</div>
@@ -634,9 +661,7 @@ export default function Nudgie() {
               </div>
             )}
           </div>
-        ) : (
-          <div className="text-xs text-muted-foreground italic">Unknown address</div>
-        )}
+        ) : null}
       </div>
     );
   };
