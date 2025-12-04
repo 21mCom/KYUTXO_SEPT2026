@@ -192,7 +192,10 @@ export default function UTXOs() {
 
   // Load price data for value calculations
   const priceData = useLiveQuery(
-    () => db.priceData.where('asset').equals('BTC').and(p => p.currency === 'USD').toArray(),
+    () => db.priceData
+      .where('asset').equals('BTC')
+      .filter(p => p.currency === 'USD')
+      .toArray(),
     []
   );
 
@@ -631,9 +634,16 @@ export default function UTXOs() {
             Sync now
           </Button>
         </Link>
-        {latestPrice && (
+        {latestPrice ? (
           <span className="ml-4 text-xs">
             Price data as of {format(new Date(latestPrice.date), "MMM d, yyyy")}
+          </span>
+        ) : (
+          <span className="ml-4 text-xs text-amber-600 dark:text-amber-400">
+            No price data -
+            <Link href="/settings/price-import" className="ml-1 text-primary hover:underline" data-testid="link-import-prices">
+              Import price history
+            </Link>
           </span>
         )}
       </div>
