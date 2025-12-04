@@ -1,9 +1,7 @@
 import { useState, useEffect, useMemo } from "react";
-import { Plus, Grid3x3, List, ChevronLeft, ChevronRight, Users } from "lucide-react";
+import { Plus, Grid3x3, List, ChevronLeft, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Switch } from "@/components/ui/switch";
-import { Label } from "@/components/ui/label";
-import { Badge } from "@/components/ui/badge";
+import { BlockchainToggle } from "@/components/BlockchainToggle";
 import { SearchBar } from "@/components/SearchBar";
 import { FilterBar } from "@/components/FilterBar";
 import { RecordCard } from "@/components/RecordCard";
@@ -792,6 +790,11 @@ export default function Dashboard() {
             className="max-w-md"
           />
           <div className="flex items-center gap-2">
+            <BlockchainToggle
+              checked={includeBlockchainDiscovered}
+              onCheckedChange={setIncludeBlockchainDiscovered}
+              hiddenCount={blockchainDiscoveredCount}
+            />
             <Tabs value={view} onValueChange={(v) => setView(v as "grid" | "table")}>
               <TabsList>
                 <TabsTrigger value="table" data-testid="button-view-table">
@@ -816,38 +819,6 @@ export default function Dashboard() {
           availableCategories={categories.map(c => c.name).filter(n => n && n !== '[encrypted]')}
           tableColumns={settings?.tableColumns}
         />
-        
-        {/* Smart filter toggle for blockchain-discovered records */}
-        <div className="flex items-center justify-between p-3 rounded-lg border bg-muted/30">
-          <div className="flex items-center gap-3">
-            <div className="flex items-center gap-2">
-              <Users className="h-4 w-4 text-muted-foreground" />
-              <span className="text-sm font-medium">Your Addresses</span>
-            </div>
-            <span className="text-sm text-muted-foreground">|</span>
-            <div className="flex items-center gap-2">
-              <Switch
-                id="include-blockchain"
-                checked={includeBlockchainDiscovered}
-                onCheckedChange={setIncludeBlockchainDiscovered}
-                data-testid="switch-include-blockchain"
-              />
-              <Label htmlFor="include-blockchain" className="text-sm cursor-pointer">
-                Include blockchain-discovered
-              </Label>
-              {blockchainDiscoveredCount > 0 && (
-                <Badge variant="secondary" className="text-xs">
-                  +{blockchainDiscoveredCount.toLocaleString()}
-                </Badge>
-              )}
-            </div>
-          </div>
-          {!includeBlockchainDiscovered && blockchainDiscoveredCount > 0 && (
-            <span className="text-xs text-muted-foreground">
-              Showing only manually added and imported records
-            </span>
-          )}
-        </div>
       </div>
 
       <div className="flex-1 overflow-auto p-4">
