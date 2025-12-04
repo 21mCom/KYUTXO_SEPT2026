@@ -1,4 +1,4 @@
-import { Database, FileText, Settings, Upload, Download, QrCode, Key, RefreshCw, Wallet, TrendingUp, ArrowDownUp, List, GitBranch, Repeat2, BarChart3, Server, ClipboardList, Zap, Coins, Sparkles, Wrench, Palette, Network, ChevronDown } from "lucide-react";
+import { Database, FileText, Settings, Upload, Download, QrCode, Key, RefreshCw, Wallet, TrendingUp, ArrowDownUp, List, GitBranch, Repeat2, BarChart3, Server, ClipboardList, Zap, Coins, Sparkles, Wrench, Palette, Network, ChevronDown, Shapes } from "lucide-react";
 import { SiBitcoin } from "react-icons/si";
 import {
   Sidebar,
@@ -114,6 +114,11 @@ const devToolsItems = [
     title: "UI Assets",
     url: "/dev/ui-assets",
     icon: Palette,
+  },
+  {
+    title: "Icons Reference",
+    url: "/dev/icons",
+    icon: Shapes,
   },
   {
     title: "Flow Visualizations",
