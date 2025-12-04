@@ -7,103 +7,22 @@ import { Badge } from "@/components/ui/badge";
 import { Slider } from "@/components/ui/slider";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { 
   LineChart, Line, XAxis, YAxis, CartesianGrid, 
   ResponsiveContainer, Tooltip as RechartsTooltip, Legend
 } from "recharts";
 import { 
   Search, Info, GitBranch, Clock, TrendingUp, 
-  ArrowRight, Circle, ChevronRight
+  ArrowRight, Loader2, Database, Globe, AlertCircle
 } from "lucide-react";
 import { SiBitcoin } from "react-icons/si";
+import { useFlowData, type FlowNode } from "@/hooks/use-flow-data";
 
-interface UTXONode {
-  id: string;
-  address: string;
-  amount: number;
-  timestamp: string;
-  hop: number;
-  type: "input" | "selected" | "output";
-  owner?: string;
-  txid?: string;
-}
-
-interface FlowLink {
-  source: string;
-  target: string;
-  value: number;
-}
-
-const generateMockData = (address: string, hopDepth: number): { nodes: UTXONode[], links: FlowLink[] } => {
-  const nodes: UTXONode[] = [];
-  const links: FlowLink[] = [];
-  
-  const selectedNode: UTXONode = {
-    id: "selected",
-    address: address || "bc1q...x7k3",
-    amount: 0.8,
-    timestamp: "2024-01-16",
-    hop: 0,
-    type: "selected",
-    owner: "My Wallet"
-  };
-  nodes.push(selectedNode);
-
-  for (let h = 1; h <= hopDepth; h++) {
-    const inputCount = Math.max(1, Math.floor(Math.random() * 3) + 1);
-    for (let i = 0; i < inputCount; i++) {
-      const inputId = `input-${h}-${i}`;
-      nodes.push({
-        id: inputId,
-        address: `bc1q...${String.fromCharCode(97 + h)}${i}`,
-        amount: Number((Math.random() * 0.5 + 0.1).toFixed(4)),
-        timestamp: `2024-01-${String(16 - h).padStart(2, '0')}`,
-        hop: -h,
-        type: "input",
-        owner: h === 1 ? ["Coinbase", "Kraken", "Unknown"][i % 3] : undefined
-      });
-      
-      const targetId = h === 1 ? "selected" : `input-${h-1}-0`;
-      links.push({ source: inputId, target: targetId, value: nodes[nodes.length - 1].amount });
-    }
-
-    const outputCount = Math.max(1, Math.floor(Math.random() * 3) + 1);
-    for (let o = 0; o < outputCount; o++) {
-      const outputId = `output-${h}-${o}`;
-      nodes.push({
-        id: outputId,
-        address: `bc1q...${String.fromCharCode(120 - h)}${o}`,
-        amount: Number((Math.random() * 0.4 + 0.05).toFixed(4)),
-        timestamp: `2024-01-${String(16 + h).padStart(2, '0')}`,
-        hop: h,
-        type: "output",
-        owner: h === 1 ? ["Exchange", "My Wallet", "Merchant"][o % 3] : undefined
-      });
-      
-      const sourceId = h === 1 ? "selected" : `output-${h-1}-0`;
-      links.push({ source: sourceId, target: outputId, value: nodes[nodes.length - 1].amount });
-    }
-  }
-
-  return { nodes, links };
-};
-
-const generateTimelineData = (nodes: UTXONode[]) => {
-  return nodes
+const generateLineChartData = (nodes: FlowNode[]) => {
+  const sortedNodes = [...nodes]
     .filter(n => n.type !== "selected")
-    .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
-    .map(node => ({
-      ...node,
-      date: new Date(node.timestamp).getTime(),
-      label: `${node.address} (${node.amount} BTC)`
-    }));
-};
-
-const generateLineChartData = (nodes: UTXONode[]) => {
-  const sortedNodes = [...nodes].sort((a, b) => 
-    new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
-  );
+    .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
   
   let runningBalance = 0;
   return sortedNodes.map(node => {
@@ -114,7 +33,7 @@ const generateLineChartData = (nodes: UTXONode[]) => {
     }
     return {
       date: node.timestamp,
-      balance: Number(runningBalance.toFixed(4)),
+      balance: Number(runningBalance.toFixed(8)),
       amount: node.amount,
       type: node.type,
       address: node.address
@@ -125,24 +44,16 @@ const generateLineChartData = (nodes: UTXONode[]) => {
 export default function BitcoinFlowVisualizer() {
   const [searchAddress, setSearchAddress] = useState("");
   const [hopDepth, setHopDepth] = useState([3]);
-  const [isSearching, setIsSearching] = useState(false);
-  const [hasSearched, setHasSearched] = useState(false);
+  const { flowData, isLoading, error, dataSource, fetchFlow } = useFlowData();
 
-  const { nodes, links } = useMemo(() => {
-    if (!hasSearched) return { nodes: [], links: [] };
-    return generateMockData(searchAddress, hopDepth[0]);
-  }, [searchAddress, hopDepth, hasSearched]);
-
-  const timelineData = useMemo(() => generateTimelineData(nodes), [nodes]);
-  const lineChartData = useMemo(() => generateLineChartData(nodes), [nodes]);
+  const lineChartData = useMemo(() => {
+    if (!flowData) return [];
+    return generateLineChartData(flowData.nodes);
+  }, [flowData]);
 
   const handleSearch = () => {
     if (!searchAddress.trim()) return;
-    setIsSearching(true);
-    setTimeout(() => {
-      setIsSearching(false);
-      setHasSearched(true);
-    }, 500);
+    fetchFlow(searchAddress.trim(), hopDepth[0]);
   };
 
   const getNodeColor = (type: string) => {
@@ -154,9 +65,9 @@ export default function BitcoinFlowVisualizer() {
     }
   };
 
-  const inputNodes = nodes.filter(n => n.type === "input");
-  const outputNodes = nodes.filter(n => n.type === "output");
-  const selectedNode = nodes.find(n => n.type === "selected");
+  const inputNodes = flowData?.nodes.filter(n => n.type === "input") || [];
+  const outputNodes = flowData?.nodes.filter(n => n.type === "output") || [];
+  const selectedNode = flowData?.nodes.find(n => n.type === "selected");
 
   return (
     <ScrollArea className="h-full">
@@ -177,7 +88,7 @@ export default function BitcoinFlowVisualizer() {
               <div className="flex-1 space-y-2">
                 <Label htmlFor="address-search" className="text-xs font-medium flex items-center gap-1">
                   <Search className="h-3 w-3" />
-                  Bitcoin Address (INP-3: Search)
+                  Bitcoin Address
                 </Label>
                 <div className="flex gap-2">
                   <Input
@@ -191,10 +102,17 @@ export default function BitcoinFlowVisualizer() {
                   />
                   <Button 
                     onClick={handleSearch} 
-                    disabled={!searchAddress.trim() || isSearching}
+                    disabled={!searchAddress.trim() || isLoading}
                     data-testid="button-search"
                   >
-                    {isSearching ? "Searching..." : "Trace"}
+                    {isLoading ? (
+                      <>
+                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                        Tracing...
+                      </>
+                    ) : (
+                      "Trace"
+                    )}
                   </Button>
                 </div>
               </div>
@@ -202,7 +120,7 @@ export default function BitcoinFlowVisualizer() {
               <div className="w-full md:w-64 space-y-2">
                 <Label className="text-xs font-medium flex items-center gap-1">
                   <GitBranch className="h-3 w-3" />
-                  Hop Depth (PRG-2: Slider)
+                  Hop Depth
                 </Label>
                 <div className="flex items-center gap-4">
                   <Slider
@@ -223,12 +141,38 @@ export default function BitcoinFlowVisualizer() {
 
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
               <Info className="h-3 w-3" />
-              <span>Hop depth controls how many transaction levels to trace before and after the target address.</span>
+              <span>Traces transaction history to show where funds came from and where they went.</span>
             </div>
           </CardContent>
         </Card>
 
-        {hasSearched && (
+        {error && (
+          <Alert variant="destructive">
+            <AlertCircle className="h-4 w-4" />
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        )}
+
+        {dataSource && (
+          <div className="flex items-center gap-2 text-sm">
+            {dataSource === 'local' ? (
+              <Badge variant="outline" className="gap-1">
+                <Database className="h-3 w-3" />
+                Data from local database
+              </Badge>
+            ) : (
+              <Badge variant="outline" className="gap-1">
+                <Globe className="h-3 w-3" />
+                Data from blockchain API
+              </Badge>
+            )}
+            <span className="text-muted-foreground">
+              Found {inputNodes.length} inputs, {outputNodes.length} outputs
+            </span>
+          </div>
+        )}
+
+        {flowData && (
           <Tabs defaultValue="sankey" className="space-y-4">
             <TabsList className="grid w-full grid-cols-3" data-testid="tabs-visualization">
               <TabsTrigger value="sankey" className="flex items-center gap-2" data-testid="tab-sankey">
@@ -270,13 +214,15 @@ export default function BitcoinFlowVisualizer() {
                         </linearGradient>
                       </defs>
 
-                      {inputNodes.slice(0, 5).map((node, i) => {
-                        const y = 50 + i * 70;
-                        const height = Math.max(20, node.amount * 80);
+                      {inputNodes.slice(0, 6).map((node, i) => {
+                        const totalNodes = Math.min(inputNodes.length, 6);
+                        const spacing = 350 / (totalNodes + 1);
+                        const y = spacing * (i + 1);
+                        const height = Math.max(20, Math.min(40, node.amount * 80));
                         return (
                           <g key={node.id}>
                             <path
-                              d={`M 120 ${y} C 250 ${y}, 280 200, 350 ${180 + (i - 2) * 15}`}
+                              d={`M 120 ${y} C 250 ${y}, 280 200, 350 ${180 + (i - totalNodes/2) * 20}`}
                               fill="none"
                               stroke="url(#inputGrad)"
                               strokeWidth={height / 3}
@@ -295,7 +241,7 @@ export default function BitcoinFlowVisualizer() {
                               {node.address}
                             </text>
                             <text x="70" y={y + 18} textAnchor="middle" className="fill-muted-foreground text-xs">
-                              {node.amount} BTC
+                              {node.amount.toFixed(4)} BTC
                             </text>
                           </g>
                         );
@@ -316,18 +262,20 @@ export default function BitcoinFlowVisualizer() {
                             SELECTED
                           </text>
                           <text x="400" y="215" textAnchor="middle" className="fill-primary-foreground text-xs font-mono">
-                            {selectedNode.amount} BTC
+                            {selectedNode.amount.toFixed(4)} BTC
                           </text>
                         </g>
                       )}
 
-                      {outputNodes.slice(0, 5).map((node, i) => {
-                        const y = 50 + i * 70;
-                        const height = Math.max(20, node.amount * 80);
+                      {outputNodes.slice(0, 6).map((node, i) => {
+                        const totalNodes = Math.min(outputNodes.length, 6);
+                        const spacing = 350 / (totalNodes + 1);
+                        const y = spacing * (i + 1);
+                        const height = Math.max(20, Math.min(40, node.amount * 80));
                         return (
                           <g key={node.id}>
                             <path
-                              d={`M 450 ${200 + (i - 2) * 15} C 520 ${200 + (i - 2) * 15}, 550 ${y}, 680 ${y}`}
+                              d={`M 450 ${200 + (i - totalNodes/2) * 20} C 520 ${200 + (i - totalNodes/2) * 20}, 550 ${y}, 680 ${y}`}
                               fill="none"
                               stroke="url(#outputGrad)"
                               strokeWidth={height / 3}
@@ -346,7 +294,7 @@ export default function BitcoinFlowVisualizer() {
                               {node.address}
                             </text>
                             <text x="730" y={y + 18} textAnchor="middle" className="fill-muted-foreground text-xs">
-                              {node.amount} BTC
+                              {node.amount.toFixed(4)} BTC
                             </text>
                           </g>
                         );
@@ -367,6 +315,12 @@ export default function BitcoinFlowVisualizer() {
                         <span>Outputs ({outputNodes.length})</span>
                       </div>
                     </div>
+
+                    {inputNodes.length > 6 || outputNodes.length > 6 ? (
+                      <div className="absolute bottom-4 right-4 text-xs text-muted-foreground">
+                        Showing top 6 of each. {inputNodes.length + outputNodes.length} total addresses.
+                      </div>
+                    ) : null}
                   </div>
                 </CardContent>
               </Card>
@@ -396,7 +350,7 @@ export default function BitcoinFlowVisualizer() {
                     
                     <ScrollArea className="h-[400px]">
                       <div className="space-y-1">
-                        {inputNodes.map((node, i) => (
+                        {inputNodes.map((node) => (
                           <div 
                             key={node.id}
                             className="flex items-center gap-2 px-2 py-2 rounded hover-elevate text-sm"
@@ -406,20 +360,21 @@ export default function BitcoinFlowVisualizer() {
                               {node.hop}
                             </Badge>
                             <div className="w-24 text-xs text-muted-foreground">{node.timestamp}</div>
-                            <div className="w-32 font-mono text-xs truncate">{node.address}</div>
+                            <div className="w-32 font-mono text-xs truncate" title={node.address}>{node.address}</div>
                             <div className="flex-1 flex items-center gap-1">
                               <div 
                                 className="h-4 rounded"
                                 style={{ 
-                                  width: `${Math.max(20, node.amount * 150)}px`,
+                                  width: `${Math.max(20, Math.min(150, node.amount * 150))}px`,
                                   background: getNodeColor(node.type)
                                 }}
                               />
                               <ArrowRight className="h-3 w-3 text-muted-foreground" />
                             </div>
-                            <div className="w-24 text-right font-mono text-xs">{node.amount} BTC</div>
+                            <div className="w-24 text-right font-mono text-xs">{node.amount.toFixed(4)} BTC</div>
                             <div className="w-24 text-right">
                               {node.owner && <Badge variant="secondary" className="text-xs">{node.owner}</Badge>}
+                              {node.isLabeled && !node.owner && <Badge variant="outline" className="text-xs">Labeled</Badge>}
                             </div>
                           </div>
                         ))}
@@ -428,7 +383,7 @@ export default function BitcoinFlowVisualizer() {
                           <div className="flex items-center gap-2 px-2 py-3 rounded bg-primary/10 border border-primary/20">
                             <Badge className="w-8 justify-center text-xs">0</Badge>
                             <div className="w-24 text-xs">{selectedNode.timestamp}</div>
-                            <div className="w-32 font-mono text-xs font-bold truncate">{selectedNode.address}</div>
+                            <div className="w-32 font-mono text-xs font-bold truncate" title={selectedNode.address}>{selectedNode.address}</div>
                             <div className="flex-1 flex items-center gap-1">
                               <div 
                                 className="h-6 rounded flex items-center justify-center text-xs text-primary-foreground font-medium"
@@ -440,14 +395,14 @@ export default function BitcoinFlowVisualizer() {
                                 SELECTED
                               </div>
                             </div>
-                            <div className="w-24 text-right font-mono text-sm font-bold">{selectedNode.amount} BTC</div>
+                            <div className="w-24 text-right font-mono text-sm font-bold">{selectedNode.amount.toFixed(4)} BTC</div>
                             <div className="w-24 text-right">
-                              <Badge>{selectedNode.owner}</Badge>
+                              {selectedNode.owner && <Badge>{selectedNode.owner}</Badge>}
                             </div>
                           </div>
                         )}
 
-                        {outputNodes.map((node, i) => (
+                        {outputNodes.map((node) => (
                           <div 
                             key={node.id}
                             className="flex items-center gap-2 px-2 py-2 rounded hover-elevate text-sm"
@@ -457,20 +412,21 @@ export default function BitcoinFlowVisualizer() {
                               +{node.hop}
                             </Badge>
                             <div className="w-24 text-xs text-muted-foreground">{node.timestamp}</div>
-                            <div className="w-32 font-mono text-xs truncate">{node.address}</div>
+                            <div className="w-32 font-mono text-xs truncate" title={node.address}>{node.address}</div>
                             <div className="flex-1 flex items-center gap-1">
                               <ArrowRight className="h-3 w-3 text-muted-foreground" />
                               <div 
                                 className="h-4 rounded"
                                 style={{ 
-                                  width: `${Math.max(20, node.amount * 150)}px`,
+                                  width: `${Math.max(20, Math.min(150, node.amount * 150))}px`,
                                   background: getNodeColor(node.type)
                                 }}
                               />
                             </div>
-                            <div className="w-24 text-right font-mono text-xs">{node.amount} BTC</div>
+                            <div className="w-24 text-right font-mono text-xs">{node.amount.toFixed(4)} BTC</div>
                             <div className="w-24 text-right">
                               {node.owner && <Badge variant="secondary" className="text-xs">{node.owner}</Badge>}
+                              {node.isLabeled && !node.owner && <Badge variant="outline" className="text-xs">Labeled</Badge>}
                             </div>
                           </div>
                         ))}
@@ -494,66 +450,76 @@ export default function BitcoinFlowVisualizer() {
                 </CardHeader>
                 <CardContent>
                   <div className="h-[400px]">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <LineChart data={lineChartData} margin={{ top: 20, right: 30, left: 20, bottom: 20 }}>
-                        <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
-                        <XAxis 
-                          dataKey="date" 
-                          className="text-xs"
-                          tick={{ fill: 'hsl(var(--muted-foreground))' }}
-                        />
-                        <YAxis 
-                          className="text-xs"
-                          tick={{ fill: 'hsl(var(--muted-foreground))' }}
-                          tickFormatter={(v) => `${v} BTC`}
-                        />
-                        <RechartsTooltip 
-                          contentStyle={{ 
-                            background: 'hsl(var(--card))',
-                            border: '1px solid hsl(var(--border))',
-                            borderRadius: '8px'
-                          }}
-                          labelStyle={{ color: 'hsl(var(--foreground))' }}
-                          formatter={(value: number, name: string) => [
-                            `${value} BTC`,
-                            name === "balance" ? "Balance" : "Amount"
-                          ]}
-                        />
-                        <Legend />
-                        <Line 
-                          type="monotone" 
-                          dataKey="balance" 
-                          stroke="hsl(var(--primary))" 
-                          strokeWidth={2}
-                          dot={{ fill: 'hsl(var(--primary))', strokeWidth: 2 }}
-                          activeDot={{ r: 6, fill: 'hsl(var(--primary))' }}
-                          name="Cumulative Balance"
-                        />
-                        <Line 
-                          type="monotone" 
-                          dataKey="amount" 
-                          stroke="hsl(var(--chart-2))" 
-                          strokeWidth={1}
-                          strokeDasharray="5 5"
-                          dot={{ fill: 'hsl(var(--chart-2))', strokeWidth: 1, r: 3 }}
-                          name="Transaction Amount"
-                        />
-                      </LineChart>
-                    </ResponsiveContainer>
+                    {lineChartData.length > 0 ? (
+                      <ResponsiveContainer width="100%" height="100%">
+                        <LineChart data={lineChartData} margin={{ top: 20, right: 30, left: 20, bottom: 20 }}>
+                          <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
+                          <XAxis 
+                            dataKey="date" 
+                            className="text-xs"
+                            tick={{ fill: 'hsl(var(--muted-foreground))' }}
+                          />
+                          <YAxis 
+                            className="text-xs"
+                            tick={{ fill: 'hsl(var(--muted-foreground))' }}
+                            tickFormatter={(v) => `${v.toFixed(4)} BTC`}
+                          />
+                          <RechartsTooltip 
+                            contentStyle={{ 
+                              background: 'hsl(var(--card))',
+                              border: '1px solid hsl(var(--border))',
+                              borderRadius: '8px'
+                            }}
+                            labelStyle={{ color: 'hsl(var(--foreground))' }}
+                            formatter={(value: number, name: string) => [
+                              `${value.toFixed(8)} BTC`,
+                              name === "balance" ? "Balance" : "Amount"
+                            ]}
+                          />
+                          <Legend />
+                          <Line 
+                            type="monotone" 
+                            dataKey="balance" 
+                            stroke="hsl(var(--primary))" 
+                            strokeWidth={2}
+                            dot={{ fill: 'hsl(var(--primary))', strokeWidth: 2 }}
+                            activeDot={{ r: 6, fill: 'hsl(var(--primary))' }}
+                            name="Cumulative Balance"
+                          />
+                          <Line 
+                            type="monotone" 
+                            dataKey="amount" 
+                            stroke="hsl(var(--chart-2))" 
+                            strokeWidth={1}
+                            strokeDasharray="5 5"
+                            dot={{ fill: 'hsl(var(--chart-2))', strokeWidth: 1, r: 3 }}
+                            name="Transaction Amount"
+                          />
+                        </LineChart>
+                      </ResponsiveContainer>
+                    ) : (
+                      <div className="h-full flex items-center justify-center text-muted-foreground">
+                        No time-series data available
+                      </div>
+                    )}
                   </div>
 
-                  <div className="mt-4 grid grid-cols-3 gap-4 text-center">
+                  <div className="mt-4 grid grid-cols-4 gap-4 text-center">
                     <div className="p-3 rounded-lg bg-muted/30">
-                      <div className="text-2xl font-bold text-chart-1">{inputNodes.length}</div>
-                      <div className="text-xs text-muted-foreground">Input UTXOs</div>
-                    </div>
-                    <div className="p-3 rounded-lg bg-primary/10">
-                      <div className="text-2xl font-bold">{selectedNode?.amount || 0} BTC</div>
-                      <div className="text-xs text-muted-foreground">Selected Value</div>
+                      <div className="text-2xl font-bold text-chart-1">{flowData?.stats.inputCount || 0}</div>
+                      <div className="text-xs text-muted-foreground">Input Addresses</div>
                     </div>
                     <div className="p-3 rounded-lg bg-muted/30">
-                      <div className="text-2xl font-bold text-chart-2">{outputNodes.length}</div>
-                      <div className="text-xs text-muted-foreground">Output UTXOs</div>
+                      <div className="text-lg font-bold text-chart-1">{flowData?.stats.totalInputValue.toFixed(4) || 0} BTC</div>
+                      <div className="text-xs text-muted-foreground">Total Received</div>
+                    </div>
+                    <div className="p-3 rounded-lg bg-muted/30">
+                      <div className="text-lg font-bold text-chart-2">{flowData?.stats.totalOutputValue.toFixed(4) || 0} BTC</div>
+                      <div className="text-xs text-muted-foreground">Total Sent</div>
+                    </div>
+                    <div className="p-3 rounded-lg bg-muted/30">
+                      <div className="text-2xl font-bold text-chart-2">{flowData?.stats.outputCount || 0}</div>
+                      <div className="text-xs text-muted-foreground">Output Addresses</div>
                     </div>
                   </div>
                 </CardContent>
@@ -562,14 +528,26 @@ export default function BitcoinFlowVisualizer() {
           </Tabs>
         )}
 
-        {!hasSearched && (
+        {!flowData && !isLoading && !error && (
           <Card className="border-dashed">
             <CardContent className="py-12 text-center">
               <SiBitcoin className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
               <h3 className="text-lg font-medium mb-2">Enter an Address to Begin</h3>
               <p className="text-sm text-muted-foreground max-w-md mx-auto">
                 Enter a Bitcoin address above and click "Trace" to visualize its UTXO flow. 
-                Adjust the hop depth to control how many transaction levels to explore.
+                Data will be fetched from local records first, or from the blockchain API if not synced.
+              </p>
+            </CardContent>
+          </Card>
+        )}
+
+        {isLoading && (
+          <Card>
+            <CardContent className="py-12 text-center">
+              <Loader2 className="h-12 w-12 mx-auto text-primary animate-spin mb-4" />
+              <h3 className="text-lg font-medium mb-2">Tracing Transaction Flow...</h3>
+              <p className="text-sm text-muted-foreground">
+                Fetching transaction history and building flow visualization
               </p>
             </CardContent>
           </Card>
