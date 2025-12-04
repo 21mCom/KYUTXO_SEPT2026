@@ -10,6 +10,19 @@ The project is currently in Phase 2, focusing on blockchain data import and tran
 
 Preferred communication style: Simple, everyday language.
 
+## Recent Changes (December 2025)
+
+**Navigation Sidebar Refactor:**
+- Reorganized flat menu into 6 collapsible groups for better organization
+- **Overview**: Records, Nudgie (always expanded)
+- **Data**: Transactions, UTXOs (always expanded)
+- **Analysis**: Address Reuse, Provenance, Data Stats, Reports, Lightning
+- **Import / Export**: Address Importer, Wallet Data Sync, Price Import, Transaction Sync, QR Scanner
+- **System**: Backup, Node Connection, Value Updater, Settings
+- **Dev Tools**: UI Assets, Icons Ref, Nav Patterns, Grouped Sidebar, Flow Visualizations
+- Groups auto-expand when navigating to items within them
+- Sub-items indented and use same font size as group headers for clear visual hierarchy
+
 ## System Architecture
 
 KYUTXO employs a robust, security-focused architecture. All data and attachments are secured with **password-based AES-256-GCM encryption**, deriving keys using PBKDF2.

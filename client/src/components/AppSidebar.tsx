@@ -193,7 +193,7 @@ export function AppSidebar() {
           <ChevronDown className={`h-3 w-3 transition-transform duration-200 ${openGroups[group.id] ? "" : "-rotate-90"}`} />
         </CollapsibleTrigger>
         <CollapsibleContent>
-          <SidebarGroupContent className="mt-1">
+          <SidebarGroupContent className="mt-1 pl-2">
             <SidebarMenu>
               {group.items.map((item) => (
                 <SidebarMenuItem key={item.url}>
@@ -201,6 +201,7 @@ export function AppSidebar() {
                     asChild 
                     isActive={location === item.url} 
                     data-testid={`link-${item.title.toLowerCase().replace(/\s+/g, '-')}`}
+                    className="text-xs"
                   >
                     <Link href={item.url}>
                       <item.icon className="h-4 w-4" />
