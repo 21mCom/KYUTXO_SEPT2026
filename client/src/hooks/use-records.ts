@@ -209,10 +209,28 @@ export function useRecord(id: number | undefined) {
 // Create a new record (uses encryption facade)
 // Also creates a RecordOrigin entry to track metadata provenance
 export async function createRecord(data: Omit<Record, 'id' | 'createdAt' | 'updatedAt'>) {
+  // Ensure addressImportance is set for compound index compatibility
+  let addressImportance = data.addressImportance;
+  if (!addressImportance) {
+    if (data.type === 'transaction' || data.type === 'other') {
+      addressImportance = 'manual';
+    } else if ((data.syncDepth !== undefined && data.syncDepth > 0) || 
+               data.source === 'blockchain-sync') {
+      addressImportance = 'blockchain-discovered';
+    } else if (data.source?.startsWith('walletImport-')) {
+      addressImportance = 'wallet-import';
+    } else if (data.source === 'xpub-import' || data.xpub || data.derivationPath) {
+      addressImportance = 'xpub-derived';
+    } else {
+      addressImportance = 'manual';
+    }
+  }
+  
   // Ensure syncDepth and maxSyncedDepth are set for new records
   // Manual/imported records are at depth 0, and haven't been synced (-1)
   const recordWithDefaults = {
     ...data,
+    addressImportance,
     syncDepth: data.syncDepth ?? 0,
     maxSyncedDepth: data.maxSyncedDepth ?? -1,
   };

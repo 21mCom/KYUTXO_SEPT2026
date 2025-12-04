@@ -114,8 +114,27 @@ export async function createEncryptedRecord(
   encryptionKey: CryptoKey
 ): Promise<number> {
   const now = Date.now();
+  
+  // Ensure addressImportance is set for compound index compatibility
+  let addressImportance = data.addressImportance;
+  if (!addressImportance) {
+    if (data.type === 'transaction' || data.type === 'other') {
+      addressImportance = 'manual';
+    } else if ((data.syncDepth !== undefined && data.syncDepth > 0) || 
+               data.source === 'blockchain-sync') {
+      addressImportance = 'blockchain-discovered';
+    } else if (data.source?.startsWith('walletImport-')) {
+      addressImportance = 'wallet-import';
+    } else if (data.source === 'xpub-import' || data.xpub || data.derivationPath) {
+      addressImportance = 'xpub-derived';
+    } else {
+      addressImportance = 'manual';
+    }
+  }
+  
   const record: Record = {
     ...data,
+    addressImportance,
     createdAt: now,
     updatedAt: now,
   };
@@ -133,8 +152,27 @@ export async function createEncryptedRecordWithAttachments(
   onProgress?: (current: number, total: number) => void
 ): Promise<{ recordId: number; uploadedCount: number; failedCount: number }> {
   const now = Date.now();
+  
+  // Ensure addressImportance is set for compound index compatibility
+  let addressImportance = data.addressImportance;
+  if (!addressImportance) {
+    if (data.type === 'transaction' || data.type === 'other') {
+      addressImportance = 'manual';
+    } else if ((data.syncDepth !== undefined && data.syncDepth > 0) || 
+               data.source === 'blockchain-sync') {
+      addressImportance = 'blockchain-discovered';
+    } else if (data.source?.startsWith('walletImport-')) {
+      addressImportance = 'wallet-import';
+    } else if (data.source === 'xpub-import' || data.xpub || data.derivationPath) {
+      addressImportance = 'xpub-derived';
+    } else {
+      addressImportance = 'manual';
+    }
+  }
+  
   const record: Record = {
     ...data,
+    addressImportance,
     createdAt: now,
     updatedAt: now,
   };

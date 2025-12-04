@@ -2,7 +2,7 @@
 // Provides encryption-aware CRUD operations while maintaining compatibility
 // with existing Dexie live queries
 
-import { db, notifyDbChange, type Record, type Attachment, type Tag, type Category, type RecordOrigin, type RecordOriginType, type Owner, type WalletName, type SeedName, type WalletSoftware, type DerivationTemplate } from './database';
+import { db, notifyDbChange, type Record, type Attachment, type Tag, type Category, type RecordOrigin, type RecordOriginType, type Owner, type WalletName, type SeedName, type WalletSoftware, type DerivationTemplate, type AddressImportance } from './database';
 import { encrypt } from './crypto';
 import { 
   encryptRecord, 
@@ -191,8 +191,27 @@ export async function createRecord(
   const key = getKey();
   const now = Date.now();
   
+  // Ensure addressImportance is always set for compound index compatibility
+  // Default to 'manual' if not specified (user-entered data)
+  let addressImportance = data.addressImportance;
+  if (!addressImportance) {
+    // Infer from source if available, otherwise default to 'manual'
+    if (data.syncDepth !== undefined && data.syncDepth > 0) {
+      addressImportance = 'blockchain-discovered';
+    } else if (data.source === 'blockchain-sync') {
+      addressImportance = 'blockchain-discovered';
+    } else if (data.source?.startsWith('walletImport-')) {
+      addressImportance = 'wallet-import';
+    } else if (data.source === 'xpub-import' || data.xpub || data.derivationPath) {
+      addressImportance = 'xpub-derived';
+    } else {
+      addressImportance = 'manual';
+    }
+  }
+  
   const record: Record = {
     ...data,
+    addressImportance,
     createdAt: now,
     updatedAt: now,
   };

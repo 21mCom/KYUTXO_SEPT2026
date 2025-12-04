@@ -348,29 +348,48 @@ export class KYUTXODatabase extends Dexie {
       nodeSettings: 'id',
       derivationTemplates: '++id, fingerprint, scriptType, owner, walletName, seedName, createdAt, isEncrypted'
     }).upgrade(async tx => {
-      // Migration: Backfill addressImportance for all records that don't have it
-      // This enables fully indexed queries without table scans
+      // Migration: Backfill addressImportance for ALL records
+      // This enables fully indexed queries using compound index [type+addressImportance]
+      // Every record MUST have addressImportance set after this migration
       return tx.table('records').toCollection().modify(record => {
-        // Skip records that already have addressImportance set
-        if (record.addressImportance) return;
-        
-        // Only address records need addressImportance
-        if (record.type !== 'address') return;
-        
-        // Determine addressImportance based on source, syncDepth, and other fields
-        if (record.syncDepth !== undefined && record.syncDepth > 0) {
-          // Discovered via blockchain sync
-          record.addressImportance = 'blockchain-discovered';
-        } else if (record.source === 'blockchain-sync') {
-          record.addressImportance = 'blockchain-discovered';
-        } else if (record.source?.startsWith('walletImport-')) {
-          record.addressImportance = 'wallet-import';
-        } else if (record.source === 'xpub-import' || record.xpub || record.derivationPath) {
-          record.addressImportance = 'xpub-derived';
-        } else {
-          // Default to 'manual' for legacy records without clear provenance
-          record.addressImportance = 'manual';
+        // Skip records that already have a valid addressImportance set
+        if (record.addressImportance && 
+            ['verified', 'manual', 'wallet-import', 'xpub-derived', 'blockchain-discovered', 'pending-review'].includes(record.addressImportance)) {
+          return;
         }
+        
+        // Transaction and 'other' type records don't use addressImportance in filtering
+        // but we still assign 'manual' for compound index compatibility
+        if (record.type === 'transaction' || record.type === 'other') {
+          record.addressImportance = 'manual';
+          return;
+        }
+        
+        // For address records, infer importance based on provenance heuristics
+        // Priority order: syncDepth > source field > xpub/derivationPath > default
+        
+        // 1. Blockchain-discovered: has syncDepth > 0 or source indicates blockchain sync
+        if ((record.syncDepth !== undefined && record.syncDepth > 0) || 
+            record.source === 'blockchain-sync') {
+          record.addressImportance = 'blockchain-discovered';
+          return;
+        }
+        
+        // 2. Wallet-import: source starts with 'walletImport-'
+        if (record.source?.startsWith('walletImport-')) {
+          record.addressImportance = 'wallet-import';
+          return;
+        }
+        
+        // 3. XPUB-derived: has xpub, derivationPath, or source is 'xpub-import'
+        if (record.source === 'xpub-import' || record.xpub || record.derivationPath) {
+          record.addressImportance = 'xpub-derived';
+          return;
+        }
+        
+        // 4. Default: all other records are treated as manually entered
+        // This ensures NO record has undefined addressImportance after migration
+        record.addressImportance = 'manual';
       });
     });
     
@@ -724,6 +743,44 @@ db.on('ready', async () => {
     if (Object.keys(updates).length > 0) {
       await db.settings.update('default', updates);
     }
+  }
+  
+  // REPAIR: Ensure all records have addressImportance set for compound index compatibility
+  // This runs on every database open to catch any records that slipped through migrations
+  try {
+    const recordsWithoutImportance = await db.records
+      .filter(r => !r.addressImportance)
+      .toArray();
+    
+    if (recordsWithoutImportance.length > 0) {
+      console.log(`[Database] Repairing ${recordsWithoutImportance.length} records missing addressImportance`);
+      
+      for (const record of recordsWithoutImportance) {
+        if (!record.id) continue;
+        
+        let addressImportance: AddressImportance;
+        
+        // Transaction and 'other' types default to 'manual'
+        if (record.type === 'transaction' || record.type === 'other') {
+          addressImportance = 'manual';
+        } else if ((record.syncDepth !== undefined && record.syncDepth > 0) || 
+                   record.source === 'blockchain-sync') {
+          addressImportance = 'blockchain-discovered';
+        } else if (record.source?.startsWith('walletImport-')) {
+          addressImportance = 'wallet-import';
+        } else if (record.source === 'xpub-import' || record.xpub || record.derivationPath) {
+          addressImportance = 'xpub-derived';
+        } else {
+          addressImportance = 'manual';
+        }
+        
+        await db.records.update(record.id, { addressImportance });
+      }
+      
+      console.log(`[Database] Repair complete - all records now have addressImportance`);
+    }
+  } catch (repairError) {
+    console.error('[Database] Failed to repair addressImportance:', repairError);
   }
 });
 

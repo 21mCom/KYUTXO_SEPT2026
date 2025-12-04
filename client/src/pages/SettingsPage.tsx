@@ -441,6 +441,24 @@ export default function SettingsPage() {
             continue;
           }
 
+          // Ensure addressImportance is set for compound index compatibility
+          let addressImportance = recordData.addressImportance;
+          if (!addressImportance) {
+            const recType = recordData.type || "address";
+            if (recType === 'transaction' || recType === 'other') {
+              addressImportance = 'manual';
+            } else if ((recordData.syncDepth !== undefined && recordData.syncDepth > 0) || 
+                       recordData.source === 'blockchain-sync') {
+              addressImportance = 'blockchain-discovered';
+            } else if (recordData.source?.startsWith('walletImport-')) {
+              addressImportance = 'wallet-import';
+            } else if (recordData.source === 'xpub-import' || recordData.xpub || recordData.derivationPath) {
+              addressImportance = 'xpub-derived';
+            } else {
+              addressImportance = 'manual';
+            }
+          }
+          
           // Create a new record object with required fields
           const newRecord = {
             type: recordData.type || "address",
@@ -459,6 +477,10 @@ export default function SettingsPage() {
             walletName: recordData.walletName,
             source: recordData.source,
             customFields: recordData.customFields,
+            addressImportance,
+            syncDepth: recordData.syncDepth,
+            xpub: recordData.xpub,
+            derivationPath: recordData.derivationPath,
             createdAt: recordData.createdAt || Date.now(),
             updatedAt: recordData.updatedAt || Date.now(),
           };
