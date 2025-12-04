@@ -679,3 +679,26 @@ db.on('ready', async () => {
     }
   }
 });
+
+// Simple database change notification system
+// Components can subscribe to be notified when data changes
+type ChangeListener = (tables: string[]) => void;
+const changeListeners: Set<ChangeListener> = new Set();
+
+export function subscribeToDbChanges(listener: ChangeListener): () => void {
+  changeListeners.add(listener);
+  return () => {
+    changeListeners.delete(listener);
+  };
+}
+
+export function notifyDbChange(tables: string | string[]): void {
+  const tableArray = Array.isArray(tables) ? tables : [tables];
+  changeListeners.forEach(listener => {
+    try {
+      listener(tableArray);
+    } catch (e) {
+      console.error('Error in database change listener:', e);
+    }
+  });
+}

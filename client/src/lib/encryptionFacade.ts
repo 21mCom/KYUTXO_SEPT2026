@@ -2,7 +2,7 @@
 // Provides encryption-aware CRUD operations while maintaining compatibility
 // with existing Dexie live queries
 
-import { db, type Record, type Attachment, type Tag, type Category, type RecordOrigin, type RecordOriginType, type Owner, type WalletName, type SeedName, type WalletSoftware, type DerivationTemplate } from './database';
+import { db, notifyDbChange, type Record, type Attachment, type Tag, type Category, type RecordOrigin, type RecordOriginType, type Owner, type WalletName, type SeedName, type WalletSoftware, type DerivationTemplate } from './database';
 import { encrypt } from './crypto';
 import { 
   encryptRecord, 
@@ -207,6 +207,9 @@ export async function createRecord(
   const encrypted = await encryptRecord(record, key);
   const id = await db.records.add(encrypted);
   
+  // Notify listeners of the change
+  notifyDbChange('records');
+  
   console.log(`[createRecord] Record created with id=${id}`);
   
   // Verify the record was saved
@@ -252,6 +255,9 @@ export async function updateRecord(
   // Encrypt and save
   const encrypted = await encryptRecord(updated, key);
   await db.records.put(encrypted);
+  
+  // Notify listeners of the change
+  notifyDbChange('records');
 }
 
 // Delete a record and its attachments
@@ -279,6 +285,9 @@ export async function deleteRecord(id: number): Promise<void> {
 
   await db.attachments.where('recordId').equals(id).delete();
   await db.records.delete(id);
+  
+  // Notify listeners of the change
+  notifyDbChange('records');
 }
 
 // Decrypt a single record (for detail/edit views)

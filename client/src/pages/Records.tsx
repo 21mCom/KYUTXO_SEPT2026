@@ -7,7 +7,7 @@ import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { ArrowLeft, Search as SearchIcon, Database, Users } from "lucide-react";
-import { db, type Record as DbRecord, type VaultMetadata, type AddressImportance, type ChainType, type CustomField } from "@/lib/database";
+import { db, subscribeToDbChanges, type Record as DbRecord, type VaultMetadata, type AddressImportance, type ChainType, type CustomField } from "@/lib/database";
 import { decryptRecords, isEncryptionReady } from "@/lib/encryptionFacade";
 import { RecordTable } from "@/components/RecordTable";
 import { RecordDetailPanel } from "@/components/RecordDetailPanel";
@@ -61,26 +61,16 @@ export default function Records() {
   const [dbChangeSignal, setDbChangeSignal] = useState(0);
   
   useEffect(() => {
-    // Subscribe to Dexie changes - fires after transactions commit
-    // Note: Dexie change events receive an array of IDatabaseChange objects
-    const handler = (changes: any) => {
+    // Subscribe to database changes
+    const unsubscribe = subscribeToDbChanges((tables) => {
       // Check if any change affects the records table
-      // The change object can have different structures depending on Dexie version
-      const changesArray = Array.isArray(changes) ? changes : changes?.changes || [];
-      const hasRecordChanges = changesArray.some(
-        (change: any) => change.table === 'records'
-      );
-      if (hasRecordChanges || changesArray.length === 0) {
-        // Trigger reload - if we can't determine the table, reload anyway
+      if (tables.includes('records') || tables.length === 0) {
         changeVersionRef.current += 1;
         setDbChangeSignal(changeVersionRef.current);
       }
-    };
+    });
     
-    db.on('changes', handler);
-    return () => {
-      db.on('changes').unsubscribe(handler);
-    };
+    return unsubscribe;
   }, []);
 
   // Parse query parameters from location - store them for later application

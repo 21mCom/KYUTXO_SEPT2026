@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import { format } from "date-fns";
-import { db, Record, AddressImportance } from "@/lib/database";
+import { db, Record, AddressImportance, subscribeToDbChanges } from "@/lib/database";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -123,25 +123,16 @@ export default function AddressReuse() {
   const [dbChangeSignal, setDbChangeSignal] = useState(0);
   
   useEffect(() => {
-    // Subscribe to Dexie changes - fires after transactions commit
-    // Note: Dexie change events receive an array of IDatabaseChange objects
-    const handler = (changes: any) => {
+    // Subscribe to database changes
+    const unsubscribe = subscribeToDbChanges((tables) => {
       // Check if any change affects records or transactionParticipants
-      const changesArray = Array.isArray(changes) ? changes : changes?.changes || [];
-      const hasRelevantChanges = changesArray.some(
-        (change: any) => change.table === 'records' || change.table === 'transactionParticipants'
-      );
-      if (hasRelevantChanges || changesArray.length === 0) {
-        // Trigger reload - if we can't determine the table, reload anyway
+      if (tables.includes('records') || tables.includes('transactionParticipants') || tables.length === 0) {
         changeVersionRef.current += 1;
         setDbChangeSignal(changeVersionRef.current);
       }
-    };
+    });
     
-    db.on('changes', handler);
-    return () => {
-      db.on('changes').unsubscribe(handler);
-    };
+    return unsubscribe;
   }, []);
 
   // Load and process data based on filter settings

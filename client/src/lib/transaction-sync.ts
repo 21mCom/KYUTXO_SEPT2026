@@ -1,7 +1,7 @@
 // Transaction Sync Service
 // Syncs blockchain transaction data for addresses in the local database
 
-import { db, type Record, type BlockchainTransaction, type TransactionParticipant, type AddressSyncState, type NodeSettings } from './database';
+import { db, notifyDbChange, type Record, type BlockchainTransaction, type TransactionParticipant, type AddressSyncState, type NodeSettings } from './database';
 import { createProvider, createProviderFromSettings, parseTransaction, MINIMUM_CONFIRMATIONS, type ProviderType, type ParsedTransaction, type BlockchainProvider } from './blockchain-api';
 import { validateAddress } from './bitcoin';
 import { decryptRecords, isEncryptionReady, createRecordOrigin } from './encryptionFacade';
@@ -596,6 +596,11 @@ export class TransactionSyncService {
       });
     }
 
+    // Notify listeners of transaction and participant changes (once per sync operation)
+    if (stats.imported > 0) {
+      notifyDbChange(['transactionParticipants', 'blockchainTransactions']);
+    }
+
     return stats;
   }
 
@@ -648,6 +653,9 @@ export class TransactionSyncService {
       createdAt: now,
       updatedAt: now,
     });
+
+    // Notify listeners of the change
+    notifyDbChange('records');
 
     // Create a record origin entry to track blockchain sync source
     if (isEncryptionReady()) {
