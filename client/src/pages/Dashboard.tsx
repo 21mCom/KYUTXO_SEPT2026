@@ -1,6 +1,9 @@
 import { useState, useEffect, useMemo } from "react";
-import { Plus, Grid3x3, List, ChevronLeft, ChevronRight } from "lucide-react";
+import { Plus, Grid3x3, List, ChevronLeft, ChevronRight, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
+import { Badge } from "@/components/ui/badge";
 import { SearchBar } from "@/components/SearchBar";
 import { FilterBar } from "@/components/FilterBar";
 import { RecordCard } from "@/components/RecordCard";
@@ -49,6 +52,9 @@ export default function Dashboard() {
   const [editingRecord, setEditingRecord] = useState<Record | undefined>();
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<{ current: number; total: number } | null>(null);
+  
+  // Smart filtering: exclude blockchain-discovered records by default for performance
+  const [includeBlockchainDiscovered, setIncludeBlockchainDiscovered] = useState(false);
 
   const { records, isLoading } = useRecords();
   const { tags } = useEncryptedTags();
@@ -75,10 +81,31 @@ export default function Dashboard() {
     loadAttachments();
   }, [selectedRecordId]);
 
+  // Count blockchain-discovered records for toggle label
+  const blockchainDiscoveredCount = useMemo(() => {
+    return records.filter(r => 
+      r.addressImportance === 'blockchain-discovered' || 
+      r.addressImportance === 'pending-review'
+    ).length;
+  }, [records]);
+
   // Apply search and filters
   useEffect(() => {
     const applyFilters = async () => {
       let results = [...records];
+
+      // Apply smart filtering: exclude blockchain-discovered records by default
+      if (!includeBlockchainDiscovered) {
+        results = results.filter(r => {
+          // Keep non-address records (transactions, other)
+          if (r.type !== 'address') return true;
+          // Keep addresses that are user-curated (not blockchain-discovered or pending-review)
+          // Also keep legacy records with no addressImportance set
+          const importance = r.addressImportance;
+          if (!importance) return true; // Legacy records without importance tier
+          return importance !== 'blockchain-discovered' && importance !== 'pending-review';
+        });
+      }
 
       // Apply type filter
       if (filter.type && filter.type !== "all") {
@@ -118,12 +145,12 @@ export default function Dashboard() {
     };
 
     applyFilters();
-  }, [search, filter, records]);
+  }, [search, filter, records, includeBlockchainDiscovered]);
 
   // Reset to page 1 when filters change
   useEffect(() => {
     setCurrentPage(1);
-  }, [search, filter]);
+  }, [search, filter, includeBlockchainDiscovered]);
   
   // Handle sort column clicks from RecordTable
   const handleSort = (column: SortColumn) => {
@@ -789,6 +816,38 @@ export default function Dashboard() {
           availableCategories={categories.map(c => c.name).filter(n => n && n !== '[encrypted]')}
           tableColumns={settings?.tableColumns}
         />
+        
+        {/* Smart filter toggle for blockchain-discovered records */}
+        <div className="flex items-center justify-between p-3 rounded-lg border bg-muted/30">
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2">
+              <Users className="h-4 w-4 text-muted-foreground" />
+              <span className="text-sm font-medium">Your Addresses</span>
+            </div>
+            <span className="text-sm text-muted-foreground">|</span>
+            <div className="flex items-center gap-2">
+              <Switch
+                id="include-blockchain"
+                checked={includeBlockchainDiscovered}
+                onCheckedChange={setIncludeBlockchainDiscovered}
+                data-testid="switch-include-blockchain"
+              />
+              <Label htmlFor="include-blockchain" className="text-sm cursor-pointer">
+                Include blockchain-discovered
+              </Label>
+              {blockchainDiscoveredCount > 0 && (
+                <Badge variant="secondary" className="text-xs">
+                  +{blockchainDiscoveredCount.toLocaleString()}
+                </Badge>
+              )}
+            </div>
+          </div>
+          {!includeBlockchainDiscovered && blockchainDiscoveredCount > 0 && (
+            <span className="text-xs text-muted-foreground">
+              Showing only manually added and imported records
+            </span>
+          )}
+        </div>
       </div>
 
       <div className="flex-1 overflow-auto p-4">
