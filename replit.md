@@ -30,6 +30,9 @@ Preferred communication style: Simple, everyday language.
 - **Sankey Diagram**: Visual flow bands showing BTC moving between addresses (width = value)
 - **Timeline Swimlanes**: UTXOs organized by time with hop indicators and owner badges
 - **Line Chart** (CHT-1): Cumulative balance over time with transaction amounts
+- **Data Source Prioritization**: Uses `useFlowData` hook that first checks local provenance data (from synced transactions in IndexedDB), then falls back to blockchain API when no local data exists
+- **Data Source Indicator**: Shows badge indicating whether data came from "Local Database" or "Blockchain API"
+- **Stats Display**: Shows input/output counts and total BTC values flowing through the address
 
 ## System Architecture
 
