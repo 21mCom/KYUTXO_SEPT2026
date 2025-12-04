@@ -6,6 +6,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { 
   ChevronLeft, 
@@ -19,7 +21,8 @@ import {
   Clock,
   Hash,
   Zap,
-  Link as LinkIcon
+  Link as LinkIcon,
+  Users
 } from "lucide-react";
 import { decryptRecords } from "@/lib/encryptionFacade";
 
@@ -57,10 +60,16 @@ interface TransactionWithParticipants extends BlockchainTransaction {
   totalOutputValue: number;
 }
 
+// User-curated importance tiers (exclude blockchain-discovered and pending-review by default)
+const USER_CURATED_TIERS = ['verified', 'manual', 'wallet-import', 'xpub-derived'];
+
 export default function Transactions() {
   const [search, setSearch] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
   const [expandedTxs, setExpandedTxs] = useState<Set<string>>(new Set());
+  
+  // Smart filtering: exclude transactions only involving blockchain-discovered addresses
+  const [includeBlockchainDiscovered, setIncludeBlockchainDiscovered] = useState(false);
 
   // Fetch all transactions
   const transactions = useLiveQuery(
@@ -147,25 +156,63 @@ export default function Transactions() {
     });
   }, [transactions, participants]);
 
-  // Filter by search
-  const filteredTransactions = useMemo(() => {
-    if (!search.trim()) return transactionsWithParticipants;
-    
-    const searchLower = search.toLowerCase();
-    return transactionsWithParticipants.filter(tx => {
-      // Search in txid
-      if (tx.txid.toLowerCase().includes(searchLower)) return true;
-      // Search in participant addresses
-      const allAddresses = [...tx.inputs, ...tx.outputs].map(p => p.address);
-      if (allAddresses.some(addr => addr.toLowerCase().includes(searchLower))) return true;
-      // Search in linked record labels
-      const linkedRecords = [...tx.inputs, ...tx.outputs]
-        .map(p => addressToRecord.get(p.address))
-        .filter(Boolean);
-      if (linkedRecords.some(r => r?.label?.toLowerCase().includes(searchLower))) return true;
-      return false;
+  // Build set of user-curated addresses (for filtering transactions)
+  const userCuratedAddresses = useMemo(() => {
+    const set = new Set<string>();
+    decryptedRecords.forEach(record => {
+      if (record.type === 'address' && record.inputString) {
+        const importance = record.addressImportance;
+        // Include if no importance set (legacy) or if user-curated tier
+        if (!importance || USER_CURATED_TIERS.includes(importance)) {
+          set.add(record.inputString);
+        }
+      }
     });
-  }, [transactionsWithParticipants, search, addressToRecord]);
+    return set;
+  }, [decryptedRecords]);
+
+  // Count transactions that only involve blockchain-discovered addresses
+  const blockchainOnlyTxCount = useMemo(() => {
+    return transactionsWithParticipants.filter(tx => {
+      const allAddresses = [...tx.inputs, ...tx.outputs].map(p => p.address);
+      // Transaction only involves blockchain-discovered if NONE of its addresses are user-curated
+      return !allAddresses.some(addr => userCuratedAddresses.has(addr));
+    }).length;
+  }, [transactionsWithParticipants, userCuratedAddresses]);
+
+  // Filter by search and blockchain-discovered toggle
+  const filteredTransactions = useMemo(() => {
+    let results = transactionsWithParticipants;
+    
+    // Apply smart filtering: only show transactions involving user-curated addresses
+    if (!includeBlockchainDiscovered) {
+      results = results.filter(tx => {
+        const allAddresses = [...tx.inputs, ...tx.outputs].map(p => p.address);
+        // Keep transaction if at least one address is user-curated
+        return allAddresses.some(addr => userCuratedAddresses.has(addr));
+      });
+    }
+    
+    // Apply search filter
+    if (search.trim()) {
+      const searchLower = search.toLowerCase();
+      results = results.filter(tx => {
+        // Search in txid
+        if (tx.txid.toLowerCase().includes(searchLower)) return true;
+        // Search in participant addresses
+        const allAddresses = [...tx.inputs, ...tx.outputs].map(p => p.address);
+        if (allAddresses.some(addr => addr.toLowerCase().includes(searchLower))) return true;
+        // Search in linked record labels
+        const linkedRecords = [...tx.inputs, ...tx.outputs]
+          .map(p => addressToRecord.get(p.address))
+          .filter(Boolean);
+        if (linkedRecords.some(r => r?.label?.toLowerCase().includes(searchLower))) return true;
+        return false;
+      });
+    }
+    
+    return results;
+  }, [transactionsWithParticipants, search, addressToRecord, includeBlockchainDiscovered, userCuratedAddresses]);
 
   // Pagination
   const totalPages = Math.max(1, Math.ceil(filteredTransactions.length / ITEMS_PER_PAGE));
@@ -267,6 +314,41 @@ export default function Transactions() {
           className="pl-10"
           data-testid="input-search"
         />
+      </div>
+
+      {/* Smart filter toggle for blockchain-discovered addresses */}
+      <div className="flex items-center justify-between p-3 rounded-lg border bg-muted/30 flex-none">
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2">
+            <Users className="h-4 w-4 text-muted-foreground" />
+            <span className="text-sm font-medium">Your Transactions</span>
+          </div>
+          <span className="text-sm text-muted-foreground">|</span>
+          <div className="flex items-center gap-2">
+            <Switch
+              id="include-blockchain-tx"
+              checked={includeBlockchainDiscovered}
+              onCheckedChange={(checked) => {
+                setIncludeBlockchainDiscovered(checked);
+                setCurrentPage(1);
+              }}
+              data-testid="switch-include-blockchain"
+            />
+            <Label htmlFor="include-blockchain-tx" className="text-sm cursor-pointer">
+              Include blockchain-only
+            </Label>
+            {blockchainOnlyTxCount > 0 && (
+              <Badge variant="secondary" className="text-xs">
+                +{blockchainOnlyTxCount.toLocaleString()}
+              </Badge>
+            )}
+          </div>
+        </div>
+        {!includeBlockchainDiscovered && blockchainOnlyTxCount > 0 && (
+          <span className="text-xs text-muted-foreground">
+            Showing transactions involving your addresses
+          </span>
+        )}
       </div>
 
       {/* Transaction List */}

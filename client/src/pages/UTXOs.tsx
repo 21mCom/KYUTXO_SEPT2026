@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Calendar } from "@/components/ui/calendar";
@@ -30,7 +31,8 @@ import {
   Copy,
   Check,
   TrendingUp,
-  TrendingDown
+  TrendingDown,
+  Users
 } from "lucide-react";
 import { SiBitcoin } from "react-icons/si";
 import { decryptRecords, isEncryptionReady, getDecryptedOwners, getDecryptedWalletNames, getDecryptedTags, getDecryptedCategories } from "@/lib/encryptionFacade";
@@ -143,6 +145,9 @@ interface AddressGroup {
 type SortColumn = "amount" | "date" | "address" | "gain";
 type SortDirection = "asc" | "desc";
 
+// User-curated importance tiers (exclude blockchain-discovered and pending-review by default)
+const USER_CURATED_TIERS = ['verified', 'manual', 'wallet-import', 'xpub-derived'];
+
 export default function UTXOs() {
   const initialSettings = useMemo(() => loadSettings(), []);
   
@@ -160,6 +165,9 @@ export default function UTXOs() {
   const [copiedTxid, setCopiedTxid] = useState<string | null>(null);
   const [selectedUtxo, setSelectedUtxo] = useState<UTXO | null>(null);
   const [detailPanelOpen, setDetailPanelOpen] = useState(false);
+  
+  // Smart filtering: exclude blockchain-discovered addresses by default
+  const [includeBlockchainDiscovered, setIncludeBlockchainDiscovered] = useState(false);
 
   // Save settings when they change
   useEffect(() => {
@@ -176,12 +184,9 @@ export default function UTXOs() {
     []
   );
 
-  // Only load non-discovered addresses (syncDepth === 0 or undefined)
+  // Load all address records (filtering happens after decryption based on toggle)
   const rawRecords = useLiveQuery(
-    () => db.records
-      .where('type').equals('address')
-      .filter(record => record.syncDepth === undefined || record.syncDepth === 0)
-      .toArray(),
+    () => db.records.where('type').equals('address').toArray(),
     []
   );
 
@@ -266,6 +271,36 @@ export default function UTXOs() {
       }
     });
     return map;
+  }, [decryptedRecords]);
+
+  // Build set of user-curated addresses (for filtering UTXOs)
+  const userCuratedAddresses = useMemo(() => {
+    const set = new Set<string>();
+    decryptedRecords.forEach(record => {
+      if (record.type === 'address' && record.inputString) {
+        const importance = record.addressImportance;
+        // Include if no importance set (legacy) or if user-curated tier
+        if (!importance || USER_CURATED_TIERS.includes(importance)) {
+          set.add(record.inputString);
+        }
+      }
+    });
+    return set;
+  }, [decryptedRecords]);
+
+  // Count blockchain-discovered addresses that have UTXOs
+  const blockchainDiscoveredWithUtxos = useMemo(() => {
+    const set = new Set<string>();
+    decryptedRecords.forEach(record => {
+      if (record.type === 'address' && record.inputString) {
+        const importance = record.addressImportance;
+        // Only count blockchain-discovered and pending-review tiers
+        if (importance && !USER_CURATED_TIERS.includes(importance)) {
+          set.add(record.inputString);
+        }
+      }
+    });
+    return set;
   }, [decryptedRecords]);
 
   const txidToTx = useMemo(() => {
@@ -440,8 +475,18 @@ export default function UTXOs() {
     return groupsArray;
   }, [utxos, latestPrice]);
 
+  // Count blockchain-discovered address groups (for toggle badge)
+  const blockchainDiscoveredCount = useMemo(() => {
+    return addressGroups.filter(g => !userCuratedAddresses.has(g.address)).length;
+  }, [addressGroups, userCuratedAddresses]);
+
   const filteredGroups = useMemo(() => {
     let filtered = addressGroups;
+
+    // Apply smart filtering: only show user-curated addresses by default
+    if (!includeBlockchainDiscovered) {
+      filtered = filtered.filter(g => userCuratedAddresses.has(g.address));
+    }
 
     if (ownerFilter !== "all") {
       if (ownerFilter === "unassigned") {
@@ -489,7 +534,7 @@ export default function UTXOs() {
     }
 
     return filtered;
-  }, [addressGroups, ownerFilter, walletFilter, tagFilter, categoryFilter, search]);
+  }, [addressGroups, ownerFilter, walletFilter, tagFilter, categoryFilter, search, includeBlockchainDiscovered, userCuratedAddresses]);
 
   const sortedGroups = useMemo(() => {
     const sorted = [...filteredGroups];
@@ -699,6 +744,41 @@ export default function UTXOs() {
             </CardTitle>
           </CardHeader>
         </Card>
+      </div>
+
+      {/* Smart filter toggle for blockchain-discovered addresses */}
+      <div className="flex items-center justify-between p-3 rounded-lg border bg-muted/30 flex-none">
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2">
+            <Users className="h-4 w-4 text-muted-foreground" />
+            <span className="text-sm font-medium">Your Addresses</span>
+          </div>
+          <span className="text-sm text-muted-foreground">|</span>
+          <div className="flex items-center gap-2">
+            <Switch
+              id="include-blockchain-utxos"
+              checked={includeBlockchainDiscovered}
+              onCheckedChange={(checked) => {
+                setIncludeBlockchainDiscovered(checked);
+                setCurrentPage(1);
+              }}
+              data-testid="switch-include-blockchain"
+            />
+            <Label htmlFor="include-blockchain-utxos" className="text-sm cursor-pointer">
+              Include blockchain-discovered
+            </Label>
+            {blockchainDiscoveredCount > 0 && (
+              <Badge variant="secondary" className="text-xs">
+                +{blockchainDiscoveredCount.toLocaleString()}
+              </Badge>
+            )}
+          </div>
+        </div>
+        {!includeBlockchainDiscovered && blockchainDiscoveredCount > 0 && (
+          <span className="text-xs text-muted-foreground">
+            Showing UTXOs from your addresses only
+          </span>
+        )}
       </div>
 
       <Card className="flex-none">
