@@ -396,7 +396,10 @@ export class TransactionSyncService {
           return true;
         });
         
-        console.log(`[TransactionSync] Found ${addressRecords.length} addresses at depth ${currentDepth} to sync`);
+        console.log(`[TransactionSync] Found ${addressRecords.length} addresses at depth ${currentDepth} to sync (filter: ${sourceFilter})`);
+        if (sourceFilter === 'custom' && options.sourceSelection) {
+          console.log(`[TransactionSync] Custom filter active - ${options.sourceSelection.selectedSources.size} source(s) selected, includeNoSource: ${options.sourceSelection.includeNoSource}`);
+        }
 
         if (addressRecords.length === 0) {
           continue; // No addresses at this depth, move to next
@@ -728,6 +731,69 @@ export class TransactionSyncService {
       .where('owner')
       .equals('Pending Review')
       .toArray();
+  }
+
+  /**
+   * Get count of depth-0 addresses that match the current filter options.
+   * This shows how many root addresses will be synced based on selection.
+   * Note: Additional addresses may be discovered during sync at higher depths.
+   */
+  async getFilteredAddressCount(options: SyncOptions): Promise<number> {
+    const { sourceFilter, sourceSelection } = options;
+    
+    const allRawRecords = await db.records.where('type').equals('address').toArray();
+    
+    let allRecords: Record[];
+    if (isEncryptionReady()) {
+      allRecords = await decryptRecords(allRawRecords);
+    } else {
+      allRecords = allRawRecords;
+    }
+    
+    // Count only depth-0 addresses that match the filter
+    // These are the root addresses controlled by the source filter
+    let count = 0;
+    
+    for (const r of allRecords) {
+      if (r.type !== 'address') continue;
+      if (!r.id) continue;
+      
+      // Only count depth-0 (root) addresses 
+      const recordDepth = r.syncDepth ?? 0;
+      if (recordDepth !== 0) continue;
+      
+      // Apply source filter using the shared helper
+      if (sourceFilter === 'custom' && sourceSelection) {
+        if (!matchesSourceSelection(r, sourceSelection)) {
+          continue;
+        }
+      } else {
+        // Legacy filter modes
+        switch (sourceFilter) {
+          case 'manual-only':
+            if (r.source === 'blockchain-sync') continue;
+            if (r.source?.startsWith('tx-import:')) continue;
+            break;
+          case 'include-tx-import':
+            if (r.source === 'blockchain-sync') continue;
+            break;
+          case 'include-blockchain-sync':
+            if (r.source?.startsWith('tx-import:')) continue;
+            break;
+          case 'all':
+          default:
+            break;
+        }
+      }
+      
+      // Validate address format
+      const validation = validateAddress(r.inputString);
+      if (validation.isValid) {
+        count++;
+      }
+    }
+    
+    return count;
   }
 }
 

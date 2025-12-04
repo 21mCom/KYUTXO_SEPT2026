@@ -28,7 +28,7 @@ import {
 } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { transactionSyncService, type SyncProgress, type SyncResult, type SyncOptions, type SourceCategory, type SourceSelection, getAddressSources } from "@/lib/transaction-sync";
+import { transactionSyncService, type SyncProgress, type SyncResult, type SyncOptions, type SourceCategory, type SourceSelection, type SourceInfo, getAddressSources } from "@/lib/transaction-sync";
 import { type Record as DbRecord } from "@/lib/database";
 import { useNodeSettings } from "@/hooks/use-node-settings";
 import { getProviderDisplayName, getProviderPrivacyInfo } from "@/lib/blockchain-api";
@@ -65,6 +65,9 @@ export default function TransactionSync() {
   const [selectedSources, setSelectedSources] = useState<Set<string>>(new Set());
   const [includeNoSource, setIncludeNoSource] = useState<boolean>(true);
   const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set(['manual', 'wallet-sync', 'xpub']));
+  
+  // Filtered count based on current selection
+  const [filteredAddressCount, setFilteredAddressCount] = useState<number | null>(null);
 
   // Build current source selection from state
   const currentSourceSelection = useCallback((): SourceSelection => {
@@ -112,6 +115,23 @@ export default function TransactionSync() {
     loadStats();
     loadSources();
   }, [loadStats, loadSources]);
+
+  // Update filtered address count whenever selection changes
+  useEffect(() => {
+    const updateFilteredCount = async () => {
+      const options: SyncOptions = {
+        sourceFilter: 'custom',
+        sourceSelection: {
+          selectedSources,
+          includeNoSource,
+        },
+        maxDepth,
+      };
+      const count = await transactionSyncService.getFilteredAddressCount(options);
+      setFilteredAddressCount(count);
+    };
+    updateFilteredCount();
+  }, [selectedSources, includeNoSource, maxDepth]);
 
   const handleSync = async () => {
     setIsSyncing(true);
@@ -233,32 +253,32 @@ export default function TransactionSync() {
           </AlertDescription>
         </Alert>
 
-        {/* Stats Overview (Global Totals) */}
+        {/* Stats Overview (Database Totals) */}
         <div className="grid gap-4 sm:grid-cols-3">
           <Card>
             <CardHeader className="pb-2">
-              <CardDescription>Total Addresses (All Sources)</CardDescription>
+              <CardDescription>Database Addresses</CardDescription>
               <CardTitle className="text-2xl" data-testid="text-total-addresses">
                 {stats?.totalAddresses ?? '-'}
               </CardTitle>
             </CardHeader>
             <CardContent>
               <p className="text-xs text-muted-foreground">
-                {stats?.syncedAddresses ?? 0} previously synced
+                Total across all wallets ({stats?.syncedAddresses ?? 0} synced)
               </p>
             </CardContent>
           </Card>
           
           <Card>
             <CardHeader className="pb-2">
-              <CardDescription>Transactions Found</CardDescription>
+              <CardDescription>Database Transactions</CardDescription>
               <CardTitle className="text-2xl" data-testid="text-total-transactions">
                 {stats?.totalTransactions ?? '-'}
               </CardTitle>
             </CardHeader>
             <CardContent>
               <p className="text-xs text-muted-foreground">
-                With 5+ confirmations
+                Previously synced (5+ confirmations)
               </p>
             </CardContent>
           </Card>
@@ -488,9 +508,14 @@ export default function TransactionSync() {
                     </div>
                   )}
                 </ScrollArea>
-                <p className="text-xs text-muted-foreground">
-                  {selectedSources.size + (includeNoSource ? 1 : 0)} source(s) selected
-                </p>
+                <div className="flex items-center justify-between text-xs text-muted-foreground">
+                  <span>{selectedSources.size + (includeNoSource ? 1 : 0)} source(s) selected</span>
+                  {filteredAddressCount !== null && (
+                    <Badge variant="secondary" className="font-medium">
+                      {filteredAddressCount} root address{filteredAddressCount !== 1 ? 'es' : ''}
+                    </Badge>
+                  )}
+                </div>
               </div>
 
               {/* Depth Control */}
