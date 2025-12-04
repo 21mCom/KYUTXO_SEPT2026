@@ -27,7 +27,22 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import type { Attachment, VaultMetadata, AddressImportance, ChainType } from "@/lib/database";
+import type { 
+  Attachment, 
+  VaultMetadata, 
+  AddressImportance, 
+  ChainType,
+  FlowType,
+  AcquisitionMethod,
+  DispositionType,
+  CounterpartyType,
+} from "@/lib/database";
+import { 
+  FLOW_TYPE_OPTIONS,
+  ACQUISITION_METHOD_OPTIONS,
+  DISPOSITION_TYPE_OPTIONS,
+  COUNTERPARTY_TYPE_OPTIONS,
+} from "@/lib/database";
 import QRCode from "qrcode";
 
 interface CustomFieldDef {
@@ -64,6 +79,13 @@ interface RecordDetailPanelProps {
     maxSyncedDepth?: number;
     discoveredInTxid?: string;
     discoveredFromRecordId?: number;
+    // Transaction metadata
+    flowType?: FlowType;
+    acquisitionMethod?: AcquisitionMethod;
+    dispositionType?: DispositionType;
+    costBasisUsd?: number;
+    // Address metadata
+    counterpartyType?: CounterpartyType;
   };
   attachments?: Attachment[];
   onAttachmentsChange?: () => void;
@@ -347,6 +369,63 @@ export function RecordDetailPanel({
                     </p>
                   </div>
                 )}
+              </div>
+            )}
+
+            {/* Transaction Metadata Section */}
+            {record.type === 'transaction' && (record.flowType || record.acquisitionMethod || record.dispositionType || record.costBasisUsd !== undefined) && (
+              <div className="p-3 bg-muted/50 rounded-lg space-y-2">
+                <h4 className="text-sm font-medium flex items-center gap-2">
+                  <ArrowUpRight className="h-4 w-4" />
+                  Transaction Details
+                </h4>
+                {record.flowType && (
+                  <div>
+                    <span className="text-xs text-muted-foreground">Flow Type:</span>
+                    <p className="text-sm" data-testid="text-flow-type">
+                      {FLOW_TYPE_OPTIONS.find(o => o.value === record.flowType)?.label || record.flowType}
+                    </p>
+                  </div>
+                )}
+                {record.acquisitionMethod && (
+                  <div>
+                    <span className="text-xs text-muted-foreground">Acquisition Method:</span>
+                    <p className="text-sm" data-testid="text-acquisition-method">
+                      {ACQUISITION_METHOD_OPTIONS.find(o => o.value === record.acquisitionMethod)?.label || record.acquisitionMethod}
+                    </p>
+                  </div>
+                )}
+                {record.dispositionType && (
+                  <div>
+                    <span className="text-xs text-muted-foreground">Disposition Type:</span>
+                    <p className="text-sm" data-testid="text-disposition-type">
+                      {DISPOSITION_TYPE_OPTIONS.find(o => o.value === record.dispositionType)?.label || record.dispositionType}
+                    </p>
+                  </div>
+                )}
+                {record.costBasisUsd !== undefined && record.costBasisUsd !== null && (
+                  <div>
+                    <span className="text-xs text-muted-foreground">
+                      {record.flowType === 'received' ? 'Cost Basis:' : 'Disposal Value:'}
+                    </span>
+                    <p className="text-sm font-medium" data-testid="text-cost-basis">
+                      ${record.costBasisUsd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Address Counterparty Type */}
+            {record.type === 'address' && record.counterpartyType && (
+              <div>
+                <h4 className="text-sm font-medium mb-2 flex items-center gap-2">
+                  <User className="h-4 w-4" />
+                  Counterparty Type
+                </h4>
+                <Badge variant="outline" data-testid="badge-counterparty-type">
+                  {COUNTERPARTY_TYPE_OPTIONS.find(o => o.value === record.counterpartyType)?.label || record.counterpartyType}
+                </Badge>
               </div>
             )}
 

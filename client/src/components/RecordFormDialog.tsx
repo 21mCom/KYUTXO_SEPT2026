@@ -18,7 +18,19 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { X, Upload, File as FileIcon, Loader2, Plus, Check, ChevronsUpDown, AlertTriangle, Download, ArrowDownLeft, ArrowUpRight, Info, ExternalLink, ShieldCheck, Wallet } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
-import type { AddressImportance } from "@/lib/database";
+import type { 
+  AddressImportance, 
+  FlowType, 
+  AcquisitionMethod, 
+  DispositionType, 
+  CounterpartyType 
+} from "@/lib/database";
+import { 
+  FLOW_TYPE_OPTIONS, 
+  ACQUISITION_METHOD_OPTIONS, 
+  DISPOSITION_TYPE_OPTIONS, 
+  COUNTERPARTY_TYPE_OPTIONS 
+} from "@/lib/database";
 import {
   Select,
   SelectContent,
@@ -128,6 +140,13 @@ export function RecordFormDialog({
     customFields: {} as { [slug: string]: string },
     addressImportance: undefined as AddressImportance | undefined,
     markAsVerified: false,
+    // Transaction-specific metadata
+    flowType: undefined as FlowType | undefined,
+    acquisitionMethod: undefined as AcquisitionMethod | undefined,
+    dispositionType: undefined as DispositionType | undefined,
+    costBasisUsd: undefined as number | undefined,
+    // Address-specific metadata
+    counterpartyType: undefined as CounterpartyType | undefined,
   });
 
   const { toast } = useToast();
@@ -638,6 +657,142 @@ export function RecordFormDialog({
               data-testid="input-notes"
             />
           </div>
+
+          {/* Transaction Metadata Section */}
+          {formData.type === "transaction" && (
+            <div className="space-y-3 p-4 bg-muted/30 rounded-lg border">
+              <h5 className="font-medium text-sm flex items-center gap-2">
+                <ArrowUpRight className="h-4 w-4" />
+                Transaction Details
+              </h5>
+              
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label>Flow Type</Label>
+                  <Select
+                    value={formData.flowType || ""}
+                    onValueChange={(value) => {
+                      setFormData({ 
+                        ...formData, 
+                        flowType: value as FlowType,
+                        // Clear both conditional fields when flow type changes
+                        // Only the relevant one will be shown based on new flow type
+                        acquisitionMethod: undefined,
+                        dispositionType: undefined,
+                      });
+                    }}
+                    disabled={isSubmitting}
+                  >
+                    <SelectTrigger data-testid="select-flow-type">
+                      <SelectValue placeholder="Select flow type..." />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {FLOW_TYPE_OPTIONS.map((opt) => (
+                        <SelectItem key={opt.value} value={opt.value}>
+                          {opt.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {formData.flowType === 'received' && (
+                  <div className="space-y-2">
+                    <Label>Acquisition Method</Label>
+                    <Select
+                      value={formData.acquisitionMethod || ""}
+                      onValueChange={(value) => setFormData({ ...formData, acquisitionMethod: value as AcquisitionMethod })}
+                      disabled={isSubmitting}
+                    >
+                      <SelectTrigger data-testid="select-acquisition-method">
+                        <SelectValue placeholder="How did you acquire this?" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {ACQUISITION_METHOD_OPTIONS.map((opt) => (
+                          <SelectItem key={opt.value} value={opt.value}>
+                            {opt.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
+
+                {formData.flowType === 'sent' && (
+                  <div className="space-y-2">
+                    <Label>Disposition Type</Label>
+                    <Select
+                      value={formData.dispositionType || ""}
+                      onValueChange={(value) => setFormData({ ...formData, dispositionType: value as DispositionType })}
+                      disabled={isSubmitting}
+                    >
+                      <SelectTrigger data-testid="select-disposition-type">
+                        <SelectValue placeholder="Why was this sent?" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {DISPOSITION_TYPE_OPTIONS.map((opt) => (
+                          <SelectItem key={opt.value} value={opt.value}>
+                            {opt.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
+              </div>
+
+              {(formData.flowType === 'received' || formData.flowType === 'sent') && (
+                <div className="space-y-2">
+                  <Label htmlFor="costBasisUsd">
+                    {formData.flowType === 'received' ? 'Cost Basis (USD)' : 'Disposal Value (USD)'}
+                  </Label>
+                  <Input
+                    id="costBasisUsd"
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={formData.costBasisUsd || ""}
+                    onChange={(e) => setFormData({ 
+                      ...formData, 
+                      costBasisUsd: e.target.value ? parseFloat(e.target.value) : undefined 
+                    })}
+                    placeholder={formData.flowType === 'received' ? "What you paid in USD" : "Value received in USD"}
+                    disabled={isSubmitting}
+                    data-testid="input-cost-basis"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Optional. If left blank, historical market price data will be used. Consider attaching a receipt or screenshot as proof.
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Address Counterparty Type */}
+          {formData.type === "address" && (
+            <div className="space-y-2">
+              <Label>Counterparty Type</Label>
+              <Select
+                value={formData.counterpartyType || ""}
+                onValueChange={(value) => setFormData({ ...formData, counterpartyType: value as CounterpartyType })}
+                disabled={isSubmitting}
+              >
+                <SelectTrigger data-testid="select-counterparty-type">
+                  <SelectValue placeholder="What type of entity is this?" />
+                </SelectTrigger>
+                <SelectContent>
+                  {COUNTERPARTY_TYPE_OPTIONS.map((opt) => (
+                    <SelectItem key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                Classify this address as exchange, individual, business, etc.
+              </p>
+            </div>
+          )}
 
           <div className="space-y-2">
             <Label>Tags</Label>

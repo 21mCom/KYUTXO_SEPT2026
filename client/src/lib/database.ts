@@ -13,6 +13,86 @@ export type AddressImportance =
   | 'blockchain-discovered' // Auto-discovered from blockchain sync
   | 'pending-review';       // Awaiting user review
 
+// Flow type for transactions - fundamental direction/purpose
+export type FlowType = 
+  | 'received'        // Incoming funds from external source
+  | 'sent'            // Outgoing payment to external party
+  | 'self-transfer'   // Between your own wallets
+  | 'consolidation';  // Combining UTXOs for efficiency
+
+export const FLOW_TYPE_OPTIONS: { value: FlowType; label: string }[] = [
+  { value: 'received', label: 'Received' },
+  { value: 'sent', label: 'Sent' },
+  { value: 'self-transfer', label: 'Self-Transfer' },
+  { value: 'consolidation', label: 'Consolidation' },
+];
+
+// Acquisition method for incoming transactions (received funds)
+export type AcquisitionMethod = 
+  | 'purchase'              // Bought with fiat or other crypto
+  | 'mining'                // Mining reward
+  | 'staking'               // Staking/interest reward
+  | 'airdrop'               // Free distribution
+  | 'fork'                  // From a chain fork
+  | 'gift-received'         // Gift from someone
+  | 'inheritance'           // Inherited
+  | 'salary'                // Payment for employment
+  | 'payment-for-services'  // Payment for freelance/business services
+  | 'loan'                  // Borrowed funds (repayment expected)
+  | 'unknown';              // Needs research
+
+export const ACQUISITION_METHOD_OPTIONS: { value: AcquisitionMethod; label: string }[] = [
+  { value: 'purchase', label: 'Purchase' },
+  { value: 'mining', label: 'Mining' },
+  { value: 'staking', label: 'Staking/Interest' },
+  { value: 'airdrop', label: 'Airdrop' },
+  { value: 'fork', label: 'Fork' },
+  { value: 'gift-received', label: 'Gift Received' },
+  { value: 'inheritance', label: 'Inheritance' },
+  { value: 'salary', label: 'Salary' },
+  { value: 'payment-for-services', label: 'Payment for Services' },
+  { value: 'loan', label: 'Loan Received' },
+  { value: 'unknown', label: 'Unknown' },
+];
+
+// Disposition type for outgoing transactions (sent funds)
+export type DispositionType = 
+  | 'sale'            // Sold for fiat or other crypto
+  | 'payment'         // Payment for goods/services
+  | 'gift-given'      // Gift to someone
+  | 'donation'        // Charitable donation
+  | 'theft-loss'      // Stolen or lost
+  | 'loan-repayment'  // Repaying borrowed funds
+  | 'unknown';        // Needs research
+
+export const DISPOSITION_TYPE_OPTIONS: { value: DispositionType; label: string }[] = [
+  { value: 'sale', label: 'Sale' },
+  { value: 'payment', label: 'Payment' },
+  { value: 'gift-given', label: 'Gift Given' },
+  { value: 'donation', label: 'Donation' },
+  { value: 'theft-loss', label: 'Theft/Loss' },
+  { value: 'loan-repayment', label: 'Loan Repayment' },
+  { value: 'unknown', label: 'Unknown' },
+];
+
+// Counterparty type for external addresses (not your own)
+export type CounterpartyType = 
+  | 'exchange'        // Cryptocurrency exchange
+  | 'individual'      // Personal contact
+  | 'business'        // Merchant or employer
+  | 'mining-pool'     // Mining pool payout address
+  | 'mixer'           // Mixing service (Wasabi, JoinMarket, etc.)
+  | 'unknown';        // Unidentified address
+
+export const COUNTERPARTY_TYPE_OPTIONS: { value: CounterpartyType; label: string }[] = [
+  { value: 'exchange', label: 'Exchange' },
+  { value: 'individual', label: 'Individual' },
+  { value: 'business', label: 'Business' },
+  { value: 'mining-pool', label: 'Mining Pool' },
+  { value: 'mixer', label: 'Mixer/CoinJoin' },
+  { value: 'unknown', label: 'Unknown' },
+];
+
 // Vault metadata for multisig XPUB-derived addresses
 export interface VaultMetadata {
   isVaultXpub: boolean;
@@ -63,6 +143,21 @@ export interface Record {
   discoveredFromRecordId?: number;
   // Importance tier for filtering provenance views and prioritization
   addressImportance?: AddressImportance;
+  
+  // === Transaction-specific metadata fields ===
+  // Flow type: direction/purpose of the transaction
+  flowType?: FlowType;
+  // Acquisition method: how funds were acquired (for received transactions)
+  acquisitionMethod?: AcquisitionMethod;
+  // Disposition type: purpose of outgoing funds (for sent transactions)
+  dispositionType?: DispositionType;
+  // User-provided cost basis in USD (overrides historical price data when set)
+  costBasisUsd?: number;
+  
+  // === Address-specific metadata fields ===
+  // Counterparty type: classification of external addresses
+  counterpartyType?: CounterpartyType;
+  
   createdAt: number;
   updatedAt: number;
   // Encrypted payload - contains the sensitive data when encryption is enabled
@@ -326,6 +421,29 @@ export class KYUTXODatabase extends Dexie {
 
   constructor() {
     super('KYUTXODatabase');
+    
+    // Version 15 adds transaction/address metadata fields: flowType, acquisitionMethod, 
+    // dispositionType, costBasisUsd, counterpartyType
+    // No new indexes needed - these are optional metadata fields stored on records
+    this.version(15).stores({
+      records: '++id, type, inputString, label, owner, *tags, *categories, createdAt, updatedAt, isEncrypted, chainType, syncDepth, addressImportance, [type+addressImportance], flowType',
+      attachments: '++id, recordId, createdAt, isEncrypted',
+      tags: '++id, name, createdAt, isEncrypted',
+      categories: '++id, name, createdAt, isEncrypted',
+      owners: '++id, name, createdAt, isEncrypted',
+      walletNames: '++id, name, createdAt, isEncrypted',
+      seedNames: '++id, name, createdAt, isEncrypted',
+      walletSoftware: '++id, name, createdAt, isEncrypted',
+      recordOrigins: '++id, recordId, originType, createdAt, isEncrypted',
+      customFields: '++id, slug, enabled, createdAt',
+      settings: 'id',
+      priceData: '++id, [date+currency+asset], date, asset, currency, source, importedAt',
+      blockchainTransactions: '++id, &txid, blockHeight, blockTime, syncedAt',
+      transactionParticipants: '++id, txid, role, address, recordId',
+      addressSyncState: '++id, &address, recordId, lastSyncedAt',
+      nodeSettings: 'id',
+      derivationTemplates: '++id, fingerprint, scriptType, owner, walletName, seedName, createdAt, isEncrypted'
+    });
     
     // Version 14 adds compound index [type+addressImportance] for efficient filtering
     // Also backfills addressImportance for all legacy records

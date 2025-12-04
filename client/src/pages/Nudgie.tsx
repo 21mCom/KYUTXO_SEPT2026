@@ -1,7 +1,18 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { format } from "date-fns";
-import { db, BlockchainTransaction, TransactionParticipant, Record } from "@/lib/database";
+import { 
+  db, 
+  BlockchainTransaction, 
+  TransactionParticipant, 
+  Record,
+  FlowType,
+  AcquisitionMethod,
+  DispositionType,
+  FLOW_TYPE_OPTIONS,
+  ACQUISITION_METHOD_OPTIONS,
+  DISPOSITION_TYPE_OPTIONS,
+} from "@/lib/database";
 import { decryptRecords, updateRecord, createRecord } from "@/lib/encryptionFacade";
 import { uploadAttachment } from "@/lib/attachments";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -109,6 +120,11 @@ export default function Nudgie() {
   const [categoriesInputs, setCategoriesInputs] = useState<Map<string, string[]>>(new Map());
   const [filesInputs, setFilesInputs] = useState<Map<string, File[]>>(new Map());
   const [customFieldsInputs, setCustomFieldsInputs] = useState<Map<string, { [slug: string]: string }>>(new Map());
+  // Transaction metadata inputs
+  const [flowTypeInputs, setFlowTypeInputs] = useState<Map<string, FlowType | undefined>>(new Map());
+  const [acquisitionMethodInputs, setAcquisitionMethodInputs] = useState<Map<string, AcquisitionMethod | undefined>>(new Map());
+  const [dispositionTypeInputs, setDispositionTypeInputs] = useState<Map<string, DispositionType | undefined>>(new Map());
+  const [costBasisInputs, setCostBasisInputs] = useState<Map<string, number | undefined>>(new Map());
   const [savingTxids, setSavingTxids] = useState<Set<string>>(new Set());
   const [editingRecord, setEditingRecord] = useState<Record | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -387,6 +403,11 @@ export default function Nudgie() {
     setCategoriesInputs(prev => { const next = new Map(prev); next.delete(txid); return next; });
     setFilesInputs(prev => { const next = new Map(prev); next.delete(txid); return next; });
     setCustomFieldsInputs(prev => { const next = new Map(prev); next.delete(txid); return next; });
+    // Clear transaction metadata fields
+    setFlowTypeInputs(prev => { const next = new Map(prev); next.delete(txid); return next; });
+    setAcquisitionMethodInputs(prev => { const next = new Map(prev); next.delete(txid); return next; });
+    setDispositionTypeInputs(prev => { const next = new Map(prev); next.delete(txid); return next; });
+    setCostBasisInputs(prev => { const next = new Map(prev); next.delete(txid); return next; });
   };
 
   const availableTagNames = useMemo(() => 
@@ -411,6 +432,11 @@ export default function Nudgie() {
     const txCategories = categoriesInputs.get(tx.txid) || [];
     const files = filesInputs.get(tx.txid) || [];
     const customFields = customFieldsInputs.get(tx.txid) || {};
+    // Transaction metadata fields
+    const flowType = flowTypeInputs.get(tx.txid);
+    const acquisitionMethod = acquisitionMethodInputs.get(tx.txid);
+    const dispositionType = dispositionTypeInputs.get(tx.txid);
+    const costBasisUsd = costBasisInputs.get(tx.txid);
 
     setSavingTxids(prev => new Set(prev).add(tx.txid));
 
@@ -424,6 +450,10 @@ export default function Nudgie() {
           tags: txTags,
           categories: txCategories,
           customFields,
+          flowType,
+          acquisitionMethod,
+          dispositionType,
+          costBasisUsd,
         });
         recordId = tx.existingRecordId;
       } else {
@@ -435,6 +465,10 @@ export default function Nudgie() {
           tags: txTags,
           categories: txCategories,
           customFields,
+          flowType,
+          acquisitionMethod,
+          dispositionType,
+          costBasisUsd,
         });
       }
 
@@ -900,6 +934,105 @@ export default function Nudgie() {
                   data-testid={`input-notes-${tx.txid}`}
                 />
 
+                {/* Transaction Metadata Section */}
+                <div className="p-3 bg-muted/30 rounded-lg border space-y-2">
+                  <h5 className="font-medium text-xs flex items-center gap-1.5 text-muted-foreground">
+                    <ArrowUpRight className="h-3 w-3" />
+                    Transaction Details
+                  </h5>
+                  
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <Label className="text-xs text-muted-foreground mb-1 block">Flow Type</Label>
+                      <Select
+                        value={flowTypeInputs.get(tx.txid) || ""}
+                        onValueChange={(value) => {
+                          const newFlowType = value as FlowType;
+                          setFlowTypeInputs(prev => new Map(prev).set(tx.txid, newFlowType));
+                          // Clear both conditional fields when flow type changes
+                          // Only the relevant one will be shown based on new flow type
+                          setAcquisitionMethodInputs(prev => { const next = new Map(prev); next.delete(tx.txid); return next; });
+                          setDispositionTypeInputs(prev => { const next = new Map(prev); next.delete(tx.txid); return next; });
+                        }}
+                        disabled={isSaving}
+                      >
+                        <SelectTrigger className="h-8 text-sm" data-testid={`select-flow-type-${tx.txid}`}>
+                          <SelectValue placeholder="Select..." />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {FLOW_TYPE_OPTIONS.map((opt) => (
+                            <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    {flowTypeInputs.get(tx.txid) === 'received' && (
+                      <div>
+                        <Label className="text-xs text-muted-foreground mb-1 block">Acquisition Method</Label>
+                        <Select
+                          value={acquisitionMethodInputs.get(tx.txid) || ""}
+                          onValueChange={(value) => setAcquisitionMethodInputs(prev => new Map(prev).set(tx.txid, value as AcquisitionMethod))}
+                          disabled={isSaving}
+                        >
+                          <SelectTrigger className="h-8 text-sm" data-testid={`select-acquisition-${tx.txid}`}>
+                            <SelectValue placeholder="How acquired?" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {ACQUISITION_METHOD_OPTIONS.map((opt) => (
+                              <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    )}
+
+                    {flowTypeInputs.get(tx.txid) === 'sent' && (
+                      <div>
+                        <Label className="text-xs text-muted-foreground mb-1 block">Disposition Type</Label>
+                        <Select
+                          value={dispositionTypeInputs.get(tx.txid) || ""}
+                          onValueChange={(value) => setDispositionTypeInputs(prev => new Map(prev).set(tx.txid, value as DispositionType))}
+                          disabled={isSaving}
+                        >
+                          <SelectTrigger className="h-8 text-sm" data-testid={`select-disposition-${tx.txid}`}>
+                            <SelectValue placeholder="Why sent?" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {DISPOSITION_TYPE_OPTIONS.map((opt) => (
+                              <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    )}
+                  </div>
+
+                  {(flowTypeInputs.get(tx.txid) === 'received' || flowTypeInputs.get(tx.txid) === 'sent') && (
+                    <div>
+                      <Label className="text-xs text-muted-foreground mb-1 block">
+                        {flowTypeInputs.get(tx.txid) === 'received' ? 'Cost Basis (USD)' : 'Disposal Value (USD)'}
+                      </Label>
+                      <Input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        value={costBasisInputs.get(tx.txid) || ""}
+                        onChange={(e) => setCostBasisInputs(prev => 
+                          new Map(prev).set(tx.txid, e.target.value ? parseFloat(e.target.value) : undefined)
+                        )}
+                        placeholder={flowTypeInputs.get(tx.txid) === 'received' ? "What you paid" : "Value received"}
+                        disabled={isSaving}
+                        className="h-8 text-sm"
+                        data-testid={`input-cost-basis-${tx.txid}`}
+                      />
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Optional. Attach a receipt as proof.
+                      </p>
+                    </div>
+                  )}
+                </div>
+
                 <div className="grid grid-cols-2 gap-2">
                   <div>
                     <Label className="text-xs text-muted-foreground mb-1 block">Tags</Label>
@@ -1304,6 +1437,104 @@ export default function Nudgie() {
                     rows={3}
                     data-testid="input-focus-notes"
                   />
+                </div>
+
+                {/* Transaction Metadata Section */}
+                <div className="p-4 bg-muted/30 rounded-lg border space-y-3">
+                  <h5 className="font-medium text-sm flex items-center gap-2">
+                    <ArrowUpRight className="h-4 w-4" />
+                    Transaction Details
+                  </h5>
+                  
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <Label className="text-sm font-medium mb-2 block">Flow Type</Label>
+                      <Select
+                        value={flowTypeInputs.get(tx.txid) || ""}
+                        onValueChange={(value) => {
+                          const newFlowType = value as FlowType;
+                          setFlowTypeInputs(prev => new Map(prev).set(tx.txid, newFlowType));
+                          // Clear both conditional fields when flow type changes
+                          // Only the relevant one will be shown based on new flow type
+                          setAcquisitionMethodInputs(prev => { const next = new Map(prev); next.delete(tx.txid); return next; });
+                          setDispositionTypeInputs(prev => { const next = new Map(prev); next.delete(tx.txid); return next; });
+                        }}
+                        disabled={isSaving}
+                      >
+                        <SelectTrigger data-testid="select-focus-flow-type">
+                          <SelectValue placeholder="Select flow type..." />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {FLOW_TYPE_OPTIONS.map((opt) => (
+                            <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    {flowTypeInputs.get(tx.txid) === 'received' && (
+                      <div>
+                        <Label className="text-sm font-medium mb-2 block">Acquisition Method</Label>
+                        <Select
+                          value={acquisitionMethodInputs.get(tx.txid) || ""}
+                          onValueChange={(value) => setAcquisitionMethodInputs(prev => new Map(prev).set(tx.txid, value as AcquisitionMethod))}
+                          disabled={isSaving}
+                        >
+                          <SelectTrigger data-testid="select-focus-acquisition">
+                            <SelectValue placeholder="How did you acquire this?" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {ACQUISITION_METHOD_OPTIONS.map((opt) => (
+                              <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    )}
+
+                    {flowTypeInputs.get(tx.txid) === 'sent' && (
+                      <div>
+                        <Label className="text-sm font-medium mb-2 block">Disposition Type</Label>
+                        <Select
+                          value={dispositionTypeInputs.get(tx.txid) || ""}
+                          onValueChange={(value) => setDispositionTypeInputs(prev => new Map(prev).set(tx.txid, value as DispositionType))}
+                          disabled={isSaving}
+                        >
+                          <SelectTrigger data-testid="select-focus-disposition">
+                            <SelectValue placeholder="Why was this sent?" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {DISPOSITION_TYPE_OPTIONS.map((opt) => (
+                              <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    )}
+                  </div>
+
+                  {(flowTypeInputs.get(tx.txid) === 'received' || flowTypeInputs.get(tx.txid) === 'sent') && (
+                    <div>
+                      <Label className="text-sm font-medium mb-2 block">
+                        {flowTypeInputs.get(tx.txid) === 'received' ? 'Cost Basis (USD)' : 'Disposal Value (USD)'}
+                      </Label>
+                      <Input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        value={costBasisInputs.get(tx.txid) || ""}
+                        onChange={(e) => setCostBasisInputs(prev => 
+                          new Map(prev).set(tx.txid, e.target.value ? parseFloat(e.target.value) : undefined)
+                        )}
+                        placeholder={flowTypeInputs.get(tx.txid) === 'received' ? "What you paid in USD" : "Value received in USD"}
+                        disabled={isSaving}
+                        data-testid="input-focus-cost-basis"
+                      />
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Optional. If left blank, historical market price data will be used. Attach a receipt as proof.
+                      </p>
+                    </div>
+                  )}
                 </div>
 
                 <div className="grid grid-cols-2 gap-4">

@@ -15,6 +15,7 @@ const RECORD_SENSITIVE_FIELDS: (keyof Record)[] = [
   'walletName',
   'source',
   'customFields',
+  'costBasisUsd', // Financial data - user-provided cost basis
 ];
 
 const ATTACHMENT_SENSITIVE_FIELDS: (keyof Attachment)[] = [
@@ -62,6 +63,7 @@ export async function encryptRecord(record: Record, key: CryptoKey): Promise<Rec
     walletName: undefined,
     source: undefined,
     customFields: undefined,
+    costBasisUsd: undefined, // Encrypted financial data
     // Add encryption metadata
     encryptedPayload,
     isEncrypted: true,
