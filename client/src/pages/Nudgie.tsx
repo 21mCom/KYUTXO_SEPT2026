@@ -94,10 +94,18 @@ export default function Nudgie() {
 
   const rawAddressRecords = useLiveQuery(
     async () => {
-      return db.records
-        .where('[type+addressImportance]')
-        .anyOf(USER_CURATED_TIERS.map(tier => ['address', tier]))
-        .toArray();
+      const [curatedRecords, blockchainRecords] = await Promise.all([
+        db.records
+          .where('[type+addressImportance]')
+          .anyOf(USER_CURATED_TIERS.map(tier => ['address', tier]))
+          .toArray(),
+        db.records
+          .where('[type+addressImportance]')
+          .anyOf([['address', 'blockchain-discovered'], ['address', 'pending-review']])
+          .filter(r => r.syncDepth === 0 || r.syncDepth === undefined)
+          .toArray()
+      ]);
+      return [...curatedRecords, ...blockchainRecords];
     },
     []
   );
@@ -313,7 +321,7 @@ export default function Nudgie() {
       });
 
       if (viewMode === 'focus') {
-        setFocusIndex(prev => Math.min(prev, transactionsWithContext.length - 2));
+        setFocusIndex(prev => Math.max(0, Math.min(prev, transactionsWithContext.length - 2)));
       }
     } catch (error) {
       console.error('Failed to save label:', error);
@@ -354,7 +362,7 @@ export default function Nudgie() {
       });
 
       if (viewMode === 'focus') {
-        setFocusIndex(prev => Math.min(prev, transactionsWithContext.length - 2));
+        setFocusIndex(prev => Math.max(0, Math.min(prev, transactionsWithContext.length - 2)));
       }
     } catch (error) {
       console.error('Failed to save label:', error);
