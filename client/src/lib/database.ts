@@ -327,6 +327,53 @@ export class KYUTXODatabase extends Dexie {
   constructor() {
     super('KYUTXODatabase');
     
+    // Version 14 adds compound index [type+addressImportance] for efficient filtering
+    // Also backfills addressImportance for all legacy records
+    this.version(14).stores({
+      records: '++id, type, inputString, label, owner, *tags, *categories, createdAt, updatedAt, isEncrypted, chainType, syncDepth, addressImportance, [type+addressImportance]',
+      attachments: '++id, recordId, createdAt, isEncrypted',
+      tags: '++id, name, createdAt, isEncrypted',
+      categories: '++id, name, createdAt, isEncrypted',
+      owners: '++id, name, createdAt, isEncrypted',
+      walletNames: '++id, name, createdAt, isEncrypted',
+      seedNames: '++id, name, createdAt, isEncrypted',
+      walletSoftware: '++id, name, createdAt, isEncrypted',
+      recordOrigins: '++id, recordId, originType, createdAt, isEncrypted',
+      customFields: '++id, slug, enabled, createdAt',
+      settings: 'id',
+      priceData: '++id, [date+currency+asset], date, asset, currency, source, importedAt',
+      blockchainTransactions: '++id, &txid, blockHeight, blockTime, syncedAt',
+      transactionParticipants: '++id, txid, role, address, recordId',
+      addressSyncState: '++id, &address, recordId, lastSyncedAt',
+      nodeSettings: 'id',
+      derivationTemplates: '++id, fingerprint, scriptType, owner, walletName, seedName, createdAt, isEncrypted'
+    }).upgrade(async tx => {
+      // Migration: Backfill addressImportance for all records that don't have it
+      // This enables fully indexed queries without table scans
+      return tx.table('records').toCollection().modify(record => {
+        // Skip records that already have addressImportance set
+        if (record.addressImportance) return;
+        
+        // Only address records need addressImportance
+        if (record.type !== 'address') return;
+        
+        // Determine addressImportance based on source, syncDepth, and other fields
+        if (record.syncDepth !== undefined && record.syncDepth > 0) {
+          // Discovered via blockchain sync
+          record.addressImportance = 'blockchain-discovered';
+        } else if (record.source === 'blockchain-sync') {
+          record.addressImportance = 'blockchain-discovered';
+        } else if (record.source?.startsWith('walletImport-')) {
+          record.addressImportance = 'wallet-import';
+        } else if (record.source === 'xpub-import' || record.xpub || record.derivationPath) {
+          record.addressImportance = 'xpub-derived';
+        } else {
+          // Default to 'manual' for legacy records without clear provenance
+          record.addressImportance = 'manual';
+        }
+      });
+    });
+    
     // Version 13 adds derivationTemplates table for optional encrypted xpub storage
     this.version(13).stores({
       records: '++id, type, inputString, label, owner, *tags, *categories, createdAt, updatedAt, isEncrypted, chainType, syncDepth, addressImportance',

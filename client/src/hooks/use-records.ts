@@ -60,51 +60,63 @@ export function useRecords() {
   };
 }
 
-// Helper to check if a record is blockchain-discovered
-// Uses addressImportance or falls back to syncDepth check
-function isBlockchainDiscovered(record: Record): boolean {
-  if (record.addressImportance === 'blockchain-discovered' || 
-      record.addressImportance === 'pending-review') {
-    return true;
-  }
-  // Fallback: syncDepth > 0 indicates discovered via blockchain sync
-  if (record.syncDepth !== undefined && record.syncDepth > 0) {
-    return true;
-  }
-  return false;
-}
+// User-curated importance tiers (records that should NOT be hidden when toggle is off)
+const USER_CURATED_TIERS: string[] = ['verified', 'manual', 'wallet-import', 'xpub-derived'];
+// Blockchain-discovered importance tiers
+const BLOCKCHAIN_DISCOVERED_TIERS: string[] = ['blockchain-discovered', 'pending-review'];
 
-// Hook to get filtered records with database-level filtering
-// This filters BEFORE loading and decrypting, significantly reducing workload
+// Hook to get filtered records with TRUE database-level filtering
+// Uses compound index [type+addressImportance] for zero-scan queries
 export function useFilteredRecords(includeBlockchainDiscovered: boolean) {
   const { encryptionKey } = useAuth();
   const [decryptedRecords, setDecryptedRecords] = useState<Record[]>([]);
   const [isDecrypting, setIsDecrypting] = useState(false);
   const [blockchainDiscoveredCount, setBlockchainDiscoveredCount] = useState(0);
   
-  // Get raw records from database with filtering at query level
-  // addressImportance and syncDepth are NOT encrypted, so we can filter on them
+  // Get raw records using compound index [type+addressImportance]
+  // After v14 migration, all records have addressImportance set, enabling pure indexed queries
   const rawRecords = useLiveQuery(
     async () => {
       if (includeBlockchainDiscovered) {
-        // Load all records
+        // Load all records when toggle is on
         return db.records.orderBy('updatedAt').reverse().toArray();
       } else {
-        // Filter out blockchain-discovered records at the database level
-        // This avoids loading and decrypting records we don't need
-        const allRecords = await db.records.orderBy('updatedAt').reverse().toArray();
-        return allRecords.filter(r => !isBlockchainDiscovered(r));
+        // Use compound index for efficient filtering without table scans
+        // 1. Get address records with user-curated importance (indexed)
+        const curatedAddresses = await db.records
+          .where('[type+addressImportance]')
+          .anyOf(USER_CURATED_TIERS.map(tier => ['address', tier]))
+          .toArray();
+        
+        // 2. Get all transaction records (indexed by type)
+        const transactions = await db.records
+          .where('type')
+          .equals('transaction')
+          .toArray();
+        
+        // 3. Get all other type records (indexed by type)
+        const otherRecords = await db.records
+          .where('type')
+          .equals('other')
+          .toArray();
+        
+        // Combine results (no dedup needed - distinct queries)
+        const combined = [...curatedAddresses, ...transactions, ...otherRecords];
+        combined.sort((a, b) => b.updatedAt - a.updatedAt);
+        return combined;
       }
     },
     [includeBlockchainDiscovered]
   );
   
-  // Get count of blockchain-discovered records (for badge display)
-  // This is a lightweight query that doesn't decrypt anything
+  // Get count of blockchain-discovered records using compound index
   const countResult = useLiveQuery(
     async () => {
-      const allRecords = await db.records.toArray();
-      return allRecords.filter(r => isBlockchainDiscovered(r)).length;
+      // Use compound index for efficient count
+      return db.records
+        .where('[type+addressImportance]')
+        .anyOf(BLOCKCHAIN_DISCOVERED_TIERS.map(tier => ['address', tier]))
+        .count();
     },
     []
   );

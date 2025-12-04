@@ -183,40 +183,31 @@ export default function UTXOs() {
     []
   );
 
-  // Load address records with DATABASE-level filtering based on toggle
-  // Only load and decrypt records we actually need
+  // Load address records using compound index [type+addressImportance] for zero-scan filtering
+  // After v14 migration, all records have addressImportance set
   const rawRecords = useLiveQuery(
     async () => {
       if (includeBlockchainDiscovered) {
-        // Load all address records
+        // Load all address records using type index
         return db.records.where('type').equals('address').toArray();
       } else {
-        // Filter at database level - only load user-curated records
-        const curatedRecords = await db.records
-          .where('addressImportance')
-          .anyOf(USER_CURATED_TIERS)
-          .and(r => r.type === 'address')
+        // Use compound index for efficient filtering without table scans
+        return db.records
+          .where('[type+addressImportance]')
+          .anyOf(USER_CURATED_TIERS.map(tier => ['address', tier]))
           .toArray();
-        
-        // Also include legacy records with null addressImportance
-        const legacyRecords = await db.records
-          .filter(r => r.type === 'address' && !r.addressImportance)
-          .toArray();
-        
-        return [...curatedRecords, ...legacyRecords];
       }
     },
     [includeBlockchainDiscovered]
   );
   
-  // Count blockchain-discovered records for toggle badge
+  // Count blockchain-discovered records using compound index
   const blockchainDiscoveredCount = useLiveQuery(
     async () => {
-      const allRecords = await db.records.where('type').equals('address').toArray();
-      return allRecords.filter(r => {
-        const importance = r.addressImportance;
-        return importance && !USER_CURATED_TIERS.includes(importance);
-      }).length;
+      return db.records
+        .where('[type+addressImportance]')
+        .anyOf([['address', 'blockchain-discovered'], ['address', 'pending-review']])
+        .count();
     },
     []
   );
