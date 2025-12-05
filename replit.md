@@ -31,6 +31,11 @@ Preferred communication style: Simple, everyday language.
   - Multiple actions can be chained and execute in sequence
 - **Preview Panel**: Shows count and sample of records that will be affected
 - **Undo Capability**: Stores snapshot before applying, allows single-click undo
+- **Optimized Batch Processing**: Uses `bulkUpdateRecords()` for near-instant updates on hundreds of records
+  - Parallel encryption (chunks of 8) with controlled concurrency
+  - Single Dexie bulkPut transaction for atomic writes
+  - Batch vocabulary sync after all updates complete
+- Combobox-style input allows creating new vocabulary values while showing existing suggestions
 - Located under Data > Bulk Editor in sidebar
 
 **Branding & UI Updates:**
