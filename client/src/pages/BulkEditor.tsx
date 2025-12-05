@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef } from "react";
+import { useState, useMemo, useRef, useEffect } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -477,9 +477,17 @@ export default function BulkEditor() {
     const [open, setOpen] = useState(false);
     const [inputValue, setInputValue] = useState(value);
     
-    // Filter options based on input
-    const filteredOptions = options.filter(opt => 
-      opt.label.toLowerCase().includes(inputValue.toLowerCase())
+    // Sync inputValue when value prop changes (e.g., reset or undo)
+    useEffect(() => {
+      setInputValue(value);
+    }, [value]);
+    
+    // Filter options based on input - use fresh options from props
+    const filteredOptions = useMemo(() => 
+      options.filter(opt => 
+        opt.label.toLowerCase().includes(inputValue.toLowerCase())
+      ),
+      [options, inputValue]
     );
     
     // Show "create new" option if input doesn't match any existing option
@@ -588,9 +596,13 @@ export default function BulkEditor() {
     }
     
     // For vocabulary fields (select/array with suggestions), use Combobox
+    // Key includes hash of option values to force re-render when vocabulary data changes (encrypted → decrypted)
     if ((fieldDef.type === 'select' || fieldDef.type === 'array') && fieldDef.vocabularyKey) {
+      // Create a simple hash from option values to detect content changes
+      const optionsHash = options.map(o => o.value).join('|').slice(0, 100);
       return (
         <ComboboxInput
+          key={`${fieldKey}-${optionsHash}`}
           fieldKey={fieldKey as string}
           value={value}
           onChange={onChange}
@@ -987,36 +999,163 @@ export default function BulkEditor() {
         </CardContent>
       </Card>
       
-      {/* Confirmation Dialog */}
+      {/* Confirmation Dialog - Detailed Review */}
       <AlertDialog open={showConfirmDialog} onOpenChange={setShowConfirmDialog}>
-        <AlertDialogContent>
+        <AlertDialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
           <AlertDialogHeader>
-            <AlertDialogTitle>Confirm Bulk Edit</AlertDialogTitle>
-            <AlertDialogDescription className="space-y-2">
-              <p>
-                You are about to apply <strong>{actions.length}</strong> action{actions.length !== 1 ? 's' : ''} to{' '}
-                <strong>{matchingRecords.length}</strong> record{matchingRecords.length !== 1 ? 's' : ''}.
-              </p>
-              <div className="bg-muted p-3 rounded-lg space-y-1 text-sm">
-                {actions.map((action, i) => {
-                  const fieldDef = FIELD_DEFS.find(f => f.key === action.field);
-                  return (
-                    <div key={action.id}>
-                      {i + 1}. <strong>{action.type.toUpperCase()}</strong> {fieldDef?.label}
-                      {action.type !== 'clear' && ` = "${action.value}"`}
-                    </div>
-                  );
-                })}
+            <AlertDialogTitle className="flex items-center gap-2">
+              <CheckCircle2 className="h-5 w-5 text-primary" />
+              Review & Confirm Changes
+            </AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-4 text-left">
+                {/* Summary Stats */}
+                <div className="flex items-center gap-4 p-3 bg-muted/50 rounded-lg">
+                  <div className="text-center px-4 py-2 border-r">
+                    <div className="text-2xl font-bold text-primary">{matchingRecords.length}</div>
+                    <div className="text-xs text-muted-foreground">Record{matchingRecords.length !== 1 ? 's' : ''}</div>
+                  </div>
+                  <div className="text-center px-4 py-2">
+                    <div className="text-2xl font-bold text-primary">{actions.length}</div>
+                    <div className="text-xs text-muted-foreground">Action{actions.length !== 1 ? 's' : ''}</div>
+                  </div>
+                </div>
+                
+                {/* Actions Summary */}
+                <div>
+                  <h4 className="font-medium mb-2 text-sm text-foreground">Changes to Apply:</h4>
+                  <div className="bg-muted rounded-lg p-3 space-y-2">
+                    {actions.map((action, i) => {
+                      const fieldDef = FIELD_DEFS.find(f => f.key === action.field);
+                      const actionLabels: { [key: string]: string } = {
+                        'set': 'Set',
+                        'add': 'Add to',
+                        'remove': 'Remove from',
+                        'clear': 'Clear',
+                      };
+                      return (
+                        <div key={action.id} className="flex items-start gap-2 text-sm">
+                          <Badge variant="outline" className="shrink-0 text-xs">
+                            {i + 1}
+                          </Badge>
+                          <div>
+                            <span className="font-medium">{actionLabels[action.type]}</span>{' '}
+                            <span className="text-muted-foreground">{fieldDef?.label}</span>
+                            {action.type !== 'clear' && (
+                              <span className="text-primary"> → "{action.value}"</span>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+                
+                {/* Preview of Changes */}
+                <div>
+                  <h4 className="font-medium mb-2 text-sm text-foreground">Preview of Affected Records:</h4>
+                  <div className="border rounded-lg max-h-[200px] overflow-auto">
+                    <table className="w-full text-sm">
+                      <thead className="bg-muted/50 sticky top-0">
+                        <tr>
+                          <th className="text-left p-2 font-medium">Record</th>
+                          {actions.map(action => {
+                            const fieldDef = FIELD_DEFS.find(f => f.key === action.field);
+                            return (
+                              <th key={action.id} className="text-left p-2 font-medium">
+                                {fieldDef?.label}
+                              </th>
+                            );
+                          })}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {matchingRecords.slice(0, 5).map((record, idx) => (
+                          <tr key={record.id} className={idx % 2 === 0 ? 'bg-background' : 'bg-muted/20'}>
+                            <td className="p-2 font-mono text-xs truncate max-w-[150px]">
+                              {record.inputString?.substring(0, 20)}...
+                            </td>
+                            {actions.map(action => {
+                              const currentValue = record[action.field];
+                              const displayCurrent = Array.isArray(currentValue) 
+                                ? (currentValue as string[]).join(', ') || '(empty)'
+                                : (currentValue as string) || '(empty)';
+                              
+                              // Compute new value
+                              let newValue = displayCurrent;
+                              if (action.type === 'set') {
+                                newValue = action.value || '(empty)';
+                              } else if (action.type === 'clear') {
+                                newValue = '(empty)';
+                              } else if (action.type === 'add' && Array.isArray(currentValue)) {
+                                const arr = (currentValue as string[]) || [];
+                                newValue = arr.includes(action.value) 
+                                  ? arr.join(', ')
+                                  : [...arr, action.value].join(', ');
+                              } else if (action.type === 'remove' && Array.isArray(currentValue)) {
+                                const arr = (currentValue as string[]).filter(v => v !== action.value);
+                                newValue = arr.join(', ') || '(empty)';
+                              }
+                              
+                              const changed = displayCurrent !== newValue;
+                              
+                              return (
+                                <td key={action.id} className="p-2">
+                                  {changed ? (
+                                    <div className="space-y-1">
+                                      <div className="text-muted-foreground line-through text-xs truncate max-w-[100px]">
+                                        {displayCurrent}
+                                      </div>
+                                      <div className="text-primary font-medium text-xs truncate max-w-[100px]">
+                                        {newValue}
+                                      </div>
+                                    </div>
+                                  ) : (
+                                    <span className="text-muted-foreground text-xs">
+                                      {displayCurrent}
+                                    </span>
+                                  )}
+                                </td>
+                              );
+                            })}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    {matchingRecords.length > 5 && (
+                      <div className="text-center text-xs text-muted-foreground py-2 bg-muted/30 border-t">
+                        ...and {matchingRecords.length - 5} more record{matchingRecords.length - 5 !== 1 ? 's' : ''}
+                      </div>
+                    )}
+                  </div>
+                </div>
+                
+                {/* Undo notice */}
+                <div className="flex items-center gap-2 text-sm text-muted-foreground bg-muted/30 p-3 rounded-lg">
+                  <Undo2 className="h-4 w-4 shrink-0" />
+                  <span>You can undo this action immediately after it completes.</span>
+                </div>
               </div>
-              <p className="text-sm text-muted-foreground">
-                You can undo this action after it completes.
-              </p>
             </AlertDialogDescription>
           </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel data-testid="button-cancel-confirm">Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={applyChanges} data-testid="button-confirm-apply">
-              Apply Changes
+          <AlertDialogFooter className="flex-row gap-2 sm:justify-between">
+            <AlertDialogCancel data-testid="button-cancel-confirm" className="mt-0">
+              <X className="h-4 w-4 mr-2" />
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction 
+              onClick={applyChanges} 
+              data-testid="button-confirm-apply"
+              disabled={isApplying}
+            >
+              {isApplying ? (
+                "Applying..."
+              ) : (
+                <>
+                  <CheckCircle2 className="h-4 w-4 mr-2" />
+                  Confirm & Apply
+                </>
+              )}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
