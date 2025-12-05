@@ -224,7 +224,7 @@ export function AppSidebar() {
         <div className="flex items-center gap-2">
           <SiBitcoin className="h-8 w-8 text-primary" />
           <div className="flex flex-col">
-            <span className="font-bold text-lg tracking-tight">KYBTC</span>
+            <span className="font-bold text-lg tracking-tight">KYUTXO</span>
             <span className="text-xs text-muted-foreground">Bitcoin Manager</span>
           </div>
         </div>
