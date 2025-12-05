@@ -9,31 +9,67 @@ let mainWindow;
 const isDev = process.env.NODE_ENV === 'development';
 
 // Portable mode detection:
-// If a 'portable' file/folder exists next to the executable, use portable mode
-// This allows running from USB drives with all data stored alongside the app
+// electron-builder sets PORTABLE_EXECUTABLE_DIR for portable builds
+// Also check for 'portable' marker file or KYUTXO_Data folder next to executable
+function getPortableDir() {
+  // electron-builder portable mode sets this env var to the folder containing the .exe
+  if (process.env.PORTABLE_EXECUTABLE_DIR) {
+    return process.env.PORTABLE_EXECUTABLE_DIR;
+  }
+  
+  // Fallback: check next to the executable
+  try {
+    const exePath = app.getPath('exe');
+    return path.dirname(exePath);
+  } catch (e) {
+    return null;
+  }
+}
+
 function isPortableMode() {
   if (isDev) return false;
   
-  const exePath = app.getPath('exe');
-  const exeDir = path.dirname(exePath);
-  const portableMarker = path.join(exeDir, 'portable');
-  const portableDataDir = path.join(exeDir, 'KYUTXO_Data');
+  // Check for electron-builder's portable mode env var
+  if (process.env.PORTABLE_EXECUTABLE_DIR) {
+    console.log('[KYUTXO] Portable mode detected via PORTABLE_EXECUTABLE_DIR:', process.env.PORTABLE_EXECUTABLE_DIR);
+    return true;
+  }
   
-  return fs.existsSync(portableMarker) || fs.existsSync(portableDataDir);
+  // Fallback: check for marker file or data directory
+  const portableDir = getPortableDir();
+  if (!portableDir) return false;
+  
+  const portableMarker = path.join(portableDir, 'portable');
+  const portableDataDir = path.join(portableDir, 'KYUTXO_Data');
+  
+  const hasMarker = fs.existsSync(portableMarker);
+  const hasDataDir = fs.existsSync(portableDataDir);
+  
+  if (hasMarker || hasDataDir) {
+    console.log('[KYUTXO] Portable mode detected via marker/data folder in:', portableDir);
+    return true;
+  }
+  
+  return false;
 }
 
 // Get data directory based on portable mode
 function getDataDirectory() {
   if (isPortableMode()) {
-    const exeDir = path.dirname(app.getPath('exe'));
-    return path.join(exeDir, 'KYUTXO_Data');
+    const portableDir = getPortableDir();
+    const dataPath = path.join(portableDir, 'KYUTXO_Data');
+    console.log('[KYUTXO] Using portable data directory:', dataPath);
+    return dataPath;
   }
-  return path.join(app.getPath('userData'), 'data');
+  const userDataPath = path.join(app.getPath('userData'), 'data');
+  console.log('[KYUTXO] Using standard data directory:', userDataPath);
+  return userDataPath;
 }
 
-const portableMode = isPortableMode();
-const dataDir = getDataDirectory();
-const attachmentsDir = path.join(dataDir, 'attachments');
+// These must be initialized after app is ready for accurate paths
+let portableMode = false;
+let dataDir = '';
+let attachmentsDir = '';
 
 // Ensure data directories exist
 function ensureDirectories() {
@@ -45,7 +81,15 @@ function ensureDirectories() {
   }
 }
 
+function initializePaths() {
+  portableMode = isPortableMode();
+  dataDir = getDataDirectory();
+  attachmentsDir = path.join(dataDir, 'attachments');
+  console.log('[KYUTXO] Paths initialized - Portable:', portableMode, 'Data:', dataDir, 'Attachments:', attachmentsDir);
+}
+
 function createWindow() {
+  initializePaths();
   ensureDirectories();
 
   mainWindow = new BrowserWindow({
