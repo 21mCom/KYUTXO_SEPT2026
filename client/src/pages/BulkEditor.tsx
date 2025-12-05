@@ -42,7 +42,7 @@ import { useWalletSoftware } from "@/hooks/use-wallet-software";
 import { useTags } from "@/hooks/use-tags";
 import { useCategories } from "@/hooks/use-categories";
 import { useToast } from "@/hooks/use-toast";
-import { updateRecord } from "@/lib/encryptionFacade";
+import { updateRecord, bulkUpdateRecords } from "@/lib/encryptionFacade";
 import type { 
   Record, 
   AddressImportance, 
@@ -311,7 +311,7 @@ export default function BulkEditor() {
       return a.value.trim() !== '';
     });
   
-  // Apply actions to matching records
+  // Apply actions to matching records (optimized batch processing)
   const applyChanges = async () => {
     if (!isValidSetup || matchingRecords.length === 0) return;
     
@@ -325,86 +325,83 @@ export default function BulkEditor() {
         description: `Bulk edit: ${actions.length} action(s) on ${matchingRecords.length} record(s)`,
       };
       
-      let successCount = 0;
-      let errorCount = 0;
+      // Step 1: Compute all updates in memory
+      const bulkUpdates: Array<{ id: number; changes: Partial<Record> }> = [];
       
       for (const record of matchingRecords) {
-        try {
-          // Build the update object
-          const updates: Partial<Record> = {};
-          const beforeState: Partial<Record> = {};
+        // Build the update object for this record
+        const updates: Partial<Record> = {};
+        const beforeState: Partial<Record> = {};
+        
+        for (const action of actions) {
+          const fieldDef = FIELD_DEFS.find(f => f.key === action.field);
+          if (!fieldDef) continue;
           
-          for (const action of actions) {
-            const fieldDef = FIELD_DEFS.find(f => f.key === action.field);
-            if (!fieldDef) continue;
-            
-            // Store before state for undo (only store original value, not intermediate)
-            if (!(action.field in beforeState)) {
-              beforeState[action.field] = record[action.field] as any;
-            }
-            
-            if (fieldDef.type === 'array') {
-              // Use the accumulated value if already modified, otherwise use original
-              const currentArray = (action.field in updates) 
-                ? ((updates as any)[action.field] as string[] || [])
-                : ((record[action.field] as string[] | undefined) || []);
-              
-              switch (action.type) {
-                case 'add':
-                  if (!currentArray.includes(action.value)) {
-                    (updates as any)[action.field] = [...currentArray, action.value];
-                  } else {
-                    // Preserve current state even if value already exists
-                    (updates as any)[action.field] = currentArray;
-                  }
-                  break;
-                case 'remove':
-                  (updates as any)[action.field] = currentArray.filter(v => v !== action.value);
-                  break;
-                case 'set':
-                  (updates as any)[action.field] = action.value ? [action.value] : [];
-                  break;
-                case 'clear':
-                  (updates as any)[action.field] = [];
-                  break;
-              }
-            } else {
-              // Use the accumulated value if already modified, otherwise use original
-              const currentValue = (action.field in updates)
-                ? (updates as any)[action.field]
-                : (record[action.field] as string | undefined) || '';
-              
-              switch (action.type) {
-                case 'set':
-                  (updates as any)[action.field] = action.value;
-                  break;
-                case 'clear':
-                  (updates as any)[action.field] = '';
-                  break;
-                default:
-                  // add/remove not valid for non-array fields, preserve current
-                  (updates as any)[action.field] = currentValue;
-                  break;
-              }
-            }
+          // Store before state for undo (only store original value, not intermediate)
+          if (!(action.field in beforeState)) {
+            beforeState[action.field] = record[action.field] as any;
           }
           
-          // Save snapshot for undo
-          snapshot.recordSnapshots.push({
-            id: record.id!,
-            before: beforeState,
-          });
-          
-          // Apply the update
-          if (Object.keys(updates).length > 0) {
-            await updateRecord(record.id!, updates);
-            successCount++;
+          if (fieldDef.type === 'array') {
+            // Use the accumulated value if already modified, otherwise use original
+            const currentArray = (action.field in updates) 
+              ? ((updates as any)[action.field] as string[] || [])
+              : ((record[action.field] as string[] | undefined) || []);
+            
+            switch (action.type) {
+              case 'add':
+                if (!currentArray.includes(action.value)) {
+                  (updates as any)[action.field] = [...currentArray, action.value];
+                } else {
+                  // Preserve current state even if value already exists
+                  (updates as any)[action.field] = currentArray;
+                }
+                break;
+              case 'remove':
+                (updates as any)[action.field] = currentArray.filter(v => v !== action.value);
+                break;
+              case 'set':
+                (updates as any)[action.field] = action.value ? [action.value] : [];
+                break;
+              case 'clear':
+                (updates as any)[action.field] = [];
+                break;
+            }
+          } else {
+            // Use the accumulated value if already modified, otherwise use original
+            const currentValue = (action.field in updates)
+              ? (updates as any)[action.field]
+              : (record[action.field] as string | undefined) || '';
+            
+            switch (action.type) {
+              case 'set':
+                (updates as any)[action.field] = action.value;
+                break;
+              case 'clear':
+                (updates as any)[action.field] = '';
+                break;
+              default:
+                // add/remove not valid for non-array fields, preserve current
+                (updates as any)[action.field] = currentValue;
+                break;
+            }
           }
-        } catch (error) {
-          console.error(`Failed to update record ${record.id}:`, error);
-          errorCount++;
+        }
+        
+        // Add to undo snapshot
+        snapshot.recordSnapshots.push({
+          id: record.id!,
+          before: beforeState,
+        });
+        
+        // Add to bulk updates if there are changes
+        if (Object.keys(updates).length > 0) {
+          bulkUpdates.push({ id: record.id!, changes: updates });
         }
       }
+      
+      // Step 2: Apply all updates in a single batch operation
+      const { successCount, errorCount } = await bulkUpdateRecords(bulkUpdates);
       
       // Store undo snapshot
       setLastUndo(snapshot);
@@ -430,23 +427,20 @@ export default function BulkEditor() {
     }
   };
   
-  // Undo last bulk edit
+  // Undo last bulk edit (also uses batch processing)
   const undoChanges = async () => {
     if (!lastUndo) return;
     
     setIsApplying(true);
     
     try {
-      let successCount = 0;
+      // Convert undo snapshots to bulk update format
+      const undoUpdates = lastUndo.recordSnapshots.map(snapshot => ({
+        id: snapshot.id,
+        changes: snapshot.before,
+      }));
       
-      for (const snapshot of lastUndo.recordSnapshots) {
-        try {
-          await updateRecord(snapshot.id, snapshot.before);
-          successCount++;
-        } catch (error) {
-          console.error(`Failed to undo record ${snapshot.id}:`, error);
-        }
-      }
+      const { successCount } = await bulkUpdateRecords(undoUpdates);
       
       toast({
         title: "Undo Complete",

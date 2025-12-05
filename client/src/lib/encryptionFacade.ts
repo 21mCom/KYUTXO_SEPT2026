@@ -428,7 +428,7 @@ async function batchSyncVocabulary(
       }
       
       const toAdd: Owner[] = [];
-      for (const name of values.owners) {
+      for (const name of Array.from(values.owners)) {
         if (!existingNames.has(name.toLowerCase())) {
           toAdd.push({ name, createdAt: Date.now() });
         }
@@ -458,7 +458,7 @@ async function batchSyncVocabulary(
       }
       
       const toAdd: WalletName[] = [];
-      for (const name of values.walletNames) {
+      for (const name of Array.from(values.walletNames)) {
         if (!existingNames.has(name.toLowerCase())) {
           toAdd.push({ name, createdAt: Date.now() });
         }
@@ -488,7 +488,7 @@ async function batchSyncVocabulary(
       }
       
       const toAdd: SeedName[] = [];
-      for (const name of values.seedNames) {
+      for (const name of Array.from(values.seedNames)) {
         if (!existingNames.has(name.toLowerCase())) {
           toAdd.push({ name, createdAt: Date.now() });
         }
@@ -518,7 +518,7 @@ async function batchSyncVocabulary(
       }
       
       const toAdd: WalletSoftware[] = [];
-      for (const name of values.walletSoftware) {
+      for (const name of Array.from(values.walletSoftware)) {
         if (!existingNames.has(name.toLowerCase())) {
           toAdd.push({ name, createdAt: Date.now() });
         }
