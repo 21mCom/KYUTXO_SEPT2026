@@ -279,6 +279,261 @@ export async function updateRecord(
   notifyDbChange('records');
 }
 
+// Batch update multiple records at once (optimized for bulk operations)
+// This is much faster than calling updateRecord() in a loop
+export async function bulkUpdateRecords(
+  updates: Array<{ id: number; changes: Partial<Record> }>
+): Promise<{ successCount: number; errorCount: number }> {
+  const key = getKey();
+  const now = Date.now();
+  
+  if (updates.length === 0) {
+    return { successCount: 0, errorCount: 0 };
+  }
+  
+  console.log(`[bulkUpdateRecords] Processing ${updates.length} records...`);
+  const startTime = performance.now();
+  
+  // Step 1: Fetch all records we need to update
+  const ids = updates.map(u => u.id);
+  const existingRecords = await db.records.where('id').anyOf(ids).toArray();
+  
+  // Create a map for quick lookup
+  const existingMap = new Map<number, Record>();
+  for (const record of existingRecords) {
+    existingMap.set(record.id!, record);
+  }
+  
+  // Step 2: Decrypt all records in parallel
+  const decryptedRecords = await Promise.all(
+    existingRecords.map(async (record) => {
+      if (record.isEncrypted) {
+        return await decryptRecord(record, key);
+      }
+      return record;
+    })
+  );
+  
+  // Create decrypted map for quick lookup
+  const decryptedMap = new Map<number, Record>();
+  for (const record of decryptedRecords) {
+    decryptedMap.set(record.id!, record);
+  }
+  
+  // Step 3: Compute all updated records in memory
+  const recordsToSave: Record[] = [];
+  const allChanges: Partial<Record>[] = [];
+  let errorCount = 0;
+  
+  for (const { id, changes } of updates) {
+    const decrypted = decryptedMap.get(id);
+    if (!decrypted) {
+      console.warn(`[bulkUpdateRecords] Record ${id} not found, skipping`);
+      errorCount++;
+      continue;
+    }
+    
+    // Merge changes
+    const updated: Record = {
+      ...decrypted,
+      ...changes,
+      id,
+      updatedAt: now,
+    };
+    
+    recordsToSave.push(updated);
+    allChanges.push(changes);
+  }
+  
+  // Step 4: Encrypt all records in parallel with concurrency limit
+  const CONCURRENCY_LIMIT = 8;
+  const encryptedRecords: Record[] = [];
+  
+  for (let i = 0; i < recordsToSave.length; i += CONCURRENCY_LIMIT) {
+    const batch = recordsToSave.slice(i, i + CONCURRENCY_LIMIT);
+    const encryptedBatch = await Promise.all(
+      batch.map(record => encryptRecord(record, key))
+    );
+    encryptedRecords.push(...encryptedBatch);
+  }
+  
+  // Step 5: Write all records in a single transaction
+  await db.transaction('rw', db.records, async () => {
+    await db.records.bulkPut(encryptedRecords);
+  });
+  
+  // Step 6: Batch sync vocabulary (collect unique values, add once)
+  const vocabularyValues = {
+    owners: new Set<string>(),
+    walletNames: new Set<string>(),
+    seedNames: new Set<string>(),
+    walletSoftware: new Set<string>(),
+  };
+  
+  for (const changes of allChanges) {
+    if (changes.owner && changes.owner !== 'Unknown' && changes.owner !== '[encrypted]') {
+      vocabularyValues.owners.add(changes.owner);
+    }
+    if (changes.walletName && changes.walletName !== '[encrypted]') {
+      vocabularyValues.walletNames.add(changes.walletName);
+    }
+    if (changes.seedName && changes.seedName !== '[encrypted]') {
+      vocabularyValues.seedNames.add(changes.seedName);
+    }
+    if (changes.walletSoftware && changes.walletSoftware !== '[encrypted]') {
+      vocabularyValues.walletSoftware.add(changes.walletSoftware);
+    }
+  }
+  
+  // Sync vocabulary in background (don't block)
+  batchSyncVocabulary(vocabularyValues, key).catch((err) => {
+    console.warn('[bulkUpdateRecords] Vocabulary sync failed:', err);
+  });
+  
+  // Step 7: Notify listeners once
+  notifyDbChange('records');
+  
+  const duration = performance.now() - startTime;
+  console.log(`[bulkUpdateRecords] Completed: ${encryptedRecords.length} records in ${duration.toFixed(0)}ms (${(duration / encryptedRecords.length).toFixed(1)}ms/record)`);
+  
+  return { successCount: encryptedRecords.length, errorCount };
+}
+
+// Batch sync vocabulary values (used by bulk operations)
+async function batchSyncVocabulary(
+  values: {
+    owners: Set<string>;
+    walletNames: Set<string>;
+    seedNames: Set<string>;
+    walletSoftware: Set<string>;
+  },
+  key: CryptoKey
+): Promise<void> {
+  const tasks: Promise<void>[] = [];
+  
+  // Sync owners
+  if (values.owners.size > 0) {
+    tasks.push((async () => {
+      const existing = await db.owners.toArray();
+      const existingNames = new Set<string>();
+      for (const o of existing) {
+        if (o.isEncrypted) {
+          try {
+            const decrypted = await decryptOwner(o, key);
+            existingNames.add(decrypted.name.toLowerCase());
+          } catch { /* ignore */ }
+        } else {
+          existingNames.add(o.name.toLowerCase());
+        }
+      }
+      
+      const toAdd: Owner[] = [];
+      for (const name of values.owners) {
+        if (!existingNames.has(name.toLowerCase())) {
+          toAdd.push({ name, createdAt: Date.now() });
+        }
+      }
+      
+      if (toAdd.length > 0) {
+        const encrypted = await Promise.all(toAdd.map(o => encryptOwner(o, key)));
+        await db.owners.bulkAdd(encrypted);
+      }
+    })());
+  }
+  
+  // Sync wallet names
+  if (values.walletNames.size > 0) {
+    tasks.push((async () => {
+      const existing = await db.walletNames.toArray();
+      const existingNames = new Set<string>();
+      for (const wn of existing) {
+        if (wn.isEncrypted) {
+          try {
+            const decrypted = await decryptWalletName(wn, key);
+            existingNames.add(decrypted.name.toLowerCase());
+          } catch { /* ignore */ }
+        } else {
+          existingNames.add(wn.name.toLowerCase());
+        }
+      }
+      
+      const toAdd: WalletName[] = [];
+      for (const name of values.walletNames) {
+        if (!existingNames.has(name.toLowerCase())) {
+          toAdd.push({ name, createdAt: Date.now() });
+        }
+      }
+      
+      if (toAdd.length > 0) {
+        const encrypted = await Promise.all(toAdd.map(wn => encryptWalletName(wn, key)));
+        await db.walletNames.bulkAdd(encrypted);
+      }
+    })());
+  }
+  
+  // Sync seed names
+  if (values.seedNames.size > 0) {
+    tasks.push((async () => {
+      const existing = await db.seedNames.toArray();
+      const existingNames = new Set<string>();
+      for (const sn of existing) {
+        if (sn.isEncrypted) {
+          try {
+            const decrypted = await decryptSeedName(sn, key);
+            existingNames.add(decrypted.name.toLowerCase());
+          } catch { /* ignore */ }
+        } else {
+          existingNames.add(sn.name.toLowerCase());
+        }
+      }
+      
+      const toAdd: SeedName[] = [];
+      for (const name of values.seedNames) {
+        if (!existingNames.has(name.toLowerCase())) {
+          toAdd.push({ name, createdAt: Date.now() });
+        }
+      }
+      
+      if (toAdd.length > 0) {
+        const encrypted = await Promise.all(toAdd.map(sn => encryptSeedName(sn, key)));
+        await db.seedNames.bulkAdd(encrypted);
+      }
+    })());
+  }
+  
+  // Sync wallet software
+  if (values.walletSoftware.size > 0) {
+    tasks.push((async () => {
+      const existing = await db.walletSoftware.toArray();
+      const existingNames = new Set<string>();
+      for (const ws of existing) {
+        if (ws.isEncrypted) {
+          try {
+            const decrypted = await decryptWalletSoftware(ws, key);
+            existingNames.add(decrypted.name.toLowerCase());
+          } catch { /* ignore */ }
+        } else {
+          existingNames.add(ws.name.toLowerCase());
+        }
+      }
+      
+      const toAdd: WalletSoftware[] = [];
+      for (const name of values.walletSoftware) {
+        if (!existingNames.has(name.toLowerCase())) {
+          toAdd.push({ name, createdAt: Date.now() });
+        }
+      }
+      
+      if (toAdd.length > 0) {
+        const encrypted = await Promise.all(toAdd.map(ws => encryptWalletSoftware(ws, key)));
+        await db.walletSoftware.bulkAdd(encrypted);
+      }
+    })());
+  }
+  
+  await Promise.all(tasks);
+}
+
 // Delete a record and its attachments
 export async function deleteRecord(id: number): Promise<void> {
   // Delete associated attachments first
