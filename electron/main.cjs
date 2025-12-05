@@ -125,11 +125,17 @@ ipcMain.handle('save-attachment', async (event, { identifier, filename, data }) 
       fs.mkdirSync(recordDir, { recursive: true });
     }
     
-    const filePath = path.join(recordDir, filename);
+    // Add 3-character random suffix to prevent overwrites
+    const randomSuffix = Math.random().toString(36).substring(2, 5);
+    const ext = path.extname(filename);
+    const baseName = path.basename(filename, ext);
+    const uniqueFilename = `${baseName}_${randomSuffix}${ext}`;
+    
+    const filePath = path.join(recordDir, uniqueFilename);
     const buffer = Buffer.from(data);
     fs.writeFileSync(filePath, buffer);
     
-    return { success: true, path: path.join(sanitizedIdentifier, filename) };
+    return { success: true, path: path.join(sanitizedIdentifier, uniqueFilename) };
   } catch (error) {
     return { success: false, error: error.message };
   }

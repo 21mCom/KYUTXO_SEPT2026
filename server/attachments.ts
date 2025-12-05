@@ -60,10 +60,12 @@ router.post('/upload', upload.single('file'), async (req: Request, res) => {
     const attachmentDir = path.join(ATTACHMENTS_DIR, sanitizedId);
     await ensureDir(attachmentDir);
 
-    // Create unique filename with timestamp
-    const timestamp = Date.now();
+    // Create unique filename with 3-char random suffix to prevent overwrites
+    const randomSuffix = Math.random().toString(36).substring(2, 5);
     const safeFilename = file.originalname.replace(/[<>:"/\\|?*]/g, '_');
-    const filename = `${timestamp}-${safeFilename}`;
+    const ext = path.extname(safeFilename);
+    const baseName = path.basename(safeFilename, ext);
+    const filename = `${baseName}_${randomSuffix}${ext}`;
     const filePath = path.join(attachmentDir, filename);
     
     // Write file to local filesystem
