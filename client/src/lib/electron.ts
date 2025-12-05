@@ -7,6 +7,9 @@ interface ElectronAPI {
   readAttachment: (relativePath: string) => Promise<{ success: boolean; data?: ArrayBuffer; error?: string }>;
   deleteAttachment: (relativePath: string) => Promise<{ success: boolean; error?: string }>;
   listAttachments: (identifier: string) => Promise<{ success: boolean; files?: string[]; error?: string }>;
+  // Backup/restore operations
+  listAllAttachments: () => Promise<{ success: boolean; files?: string[]; error?: string }>;
+  writeAttachment: (relativePath: string, data: ArrayBuffer) => Promise<{ success: boolean; error?: string }>;
   isPortableMode: () => Promise<boolean>;
   platform: string;
   isElectron: boolean;

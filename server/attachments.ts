@@ -86,6 +86,77 @@ router.post('/upload', upload.single('file'), async (req: Request, res) => {
   }
 });
 
+// List ALL attachments recursively (for backup) - MUST be before wildcard routes
+router.get('/list-all', async (req, res) => {
+  try {
+    await ensureDir(ATTACHMENTS_DIR);
+    
+    const result: string[] = [];
+    
+    try {
+      const entries = await fs.readdir(ATTACHMENTS_DIR, { withFileTypes: true });
+      
+      for (const entry of entries) {
+        if (entry.isDirectory()) {
+          const subDir = path.join(ATTACHMENTS_DIR, entry.name);
+          const files = await fs.readdir(subDir);
+          
+          for (const file of files) {
+            // Return relative paths like "identifier/filename.ext"
+            result.push(path.join(entry.name, file));
+          }
+        }
+      }
+    } catch (error) {
+      // Directory doesn't exist yet - return empty
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        return res.json({ success: true, files: [] });
+      }
+      throw error;
+    }
+    
+    res.json({ success: true, files: result });
+  } catch (error) {
+    console.error('List all attachments error:', error);
+    res.status(500).json({ error: error instanceof Error ? error.message : 'List failed' });
+  }
+});
+
+// Write attachment from backup (for restore) - MUST be before wildcard routes
+router.post('/write', upload.single('file'), async (req: Request, res) => {
+  try {
+    const file = (req as any).file;
+    if (!file) {
+      return res.status(400).json({ error: 'No file provided' });
+    }
+
+    const { relativePath } = req.body;
+    
+    if (!relativePath) {
+      return res.status(400).json({ error: 'Relative path is required' });
+    }
+
+    // Security check: ensure path stays within ATTACHMENTS_DIR
+    const filePath = path.join(ATTACHMENTS_DIR, relativePath);
+    const resolvedPath = path.resolve(filePath);
+    if (!resolvedPath.startsWith(path.resolve(ATTACHMENTS_DIR))) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    // Create directory if needed
+    const dir = path.dirname(filePath);
+    await ensureDir(dir);
+    
+    // Write file
+    await fs.writeFile(filePath, file.buffer);
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Write attachment error:', error);
+    res.status(500).json({ error: error instanceof Error ? error.message : 'Write failed' });
+  }
+});
+
 // Download attachment
 router.get('/download/:path(*)', async (req, res) => {
   try {

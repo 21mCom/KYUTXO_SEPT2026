@@ -208,6 +208,69 @@ ipcMain.handle('list-attachments', async (event, identifier) => {
   }
 });
 
+// List ALL attachments recursively (for backup)
+ipcMain.handle('list-all-attachments', async () => {
+  try {
+    const result = [];
+    
+    if (!fs.existsSync(attachmentsDir)) {
+      return { success: true, files: [] };
+    }
+    
+    // Get all subdirectories (record identifiers)
+    const entries = fs.readdirSync(attachmentsDir, { withFileTypes: true });
+    
+    for (const entry of entries) {
+      if (entry.isDirectory()) {
+        const subDir = path.join(attachmentsDir, entry.name);
+        const files = fs.readdirSync(subDir);
+        
+        for (const file of files) {
+          // Return relative paths like "identifier/filename.ext"
+          result.push(path.join(entry.name, file));
+        }
+      }
+    }
+    
+    return { success: true, files: result };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+// Write attachment from backup (for restore)
+ipcMain.handle('write-attachment', async (event, { relativePath, data }) => {
+  try {
+    // Security: Validate relative path doesn't contain path traversal
+    if (!relativePath || relativePath.includes('..') || path.isAbsolute(relativePath)) {
+      return { success: false, error: 'Invalid relative path' };
+    }
+    
+    const filePath = path.join(attachmentsDir, relativePath);
+    
+    // Security: Ensure resolved path is within attachmentsDir
+    const resolvedPath = path.resolve(filePath);
+    const resolvedAttachmentsDir = path.resolve(attachmentsDir);
+    if (!resolvedPath.startsWith(resolvedAttachmentsDir + path.sep) && resolvedPath !== resolvedAttachmentsDir) {
+      return { success: false, error: 'Path traversal detected' };
+    }
+    
+    const dir = path.dirname(filePath);
+    
+    // Create directory if needed
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    
+    const buffer = Buffer.from(data);
+    fs.writeFileSync(filePath, buffer);
+    
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
 // Security: Set Content Security Policy
 app.whenReady().then(() => {
   // Set CSP headers for production

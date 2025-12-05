@@ -12,7 +12,15 @@ Preferred communication style: Simple, everyday language.
 
 ## Recent Changes (December 2025)
 
-**Fully Portable Database (Latest):**
+**Complete Attachment Backup System (Latest):**
+- Backup ZIP files now include all attachment files (previously only metadata was backed up)
+- Export process: Lists all attachments via `listAllAttachments` IPC/API, reads each file, adds to `attachments/` folder in ZIP
+- Restore process: Extracts files from `attachments/` folder in ZIP, writes via `writeAttachment` IPC/API
+- Works in both Electron (IPC handlers in main.cjs) and Web modes (API endpoints in server/attachments.ts)
+- UI updated to show green checkmark indicating "Attachments are included in backup"
+- Backup version bumped to 2.1.0 to reflect new format
+
+**Fully Portable Database:**
 - Database now stored in `KYUTXO_Data/IndexedDB/` instead of AppData/Roaming
 - All browser storage (IndexedDB, localStorage, cookies) redirected to portable folder via `app.setPath('userData', dataDir)` **before app.whenReady()**
 - Self-contained: copy entire folder (exe + KYUTXO_Data) to back up or move to another machine

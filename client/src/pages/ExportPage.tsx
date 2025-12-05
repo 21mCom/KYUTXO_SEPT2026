@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Download, Lock, FileJson, AlertCircle, CheckCircle2, FolderOpen, FileSpreadsheet } from "lucide-react";
+import { Download, Lock, FileJson, AlertCircle, CheckCircle2, FolderOpen, FileSpreadsheet, Paperclip } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -11,8 +11,39 @@ import { useToast } from "@/hooks/use-toast";
 import { db, type Record } from "@/lib/database";
 import { useAuth } from "@/contexts/AuthContext";
 import { decrypt, encrypt, deriveKey, generateSalt, bufferToBase64 } from "@/lib/crypto";
-import { isElectron } from "@/lib/electron";
+import { isElectron, getElectronAPI } from "@/lib/electron";
 import JSZip from "jszip";
+
+// Helper to list all attachment files
+async function listAllAttachmentFiles(): Promise<string[]> {
+  if (isElectron()) {
+    const api = getElectronAPI();
+    const result = await api.listAllAttachments();
+    return result.success ? (result.files || []) : [];
+  } else {
+    const response = await fetch('/api/attachments/list-all');
+    if (response.ok) {
+      const data = await response.json();
+      return data.success ? (data.files || []) : [];
+    }
+    return [];
+  }
+}
+
+// Helper to read an attachment file
+async function readAttachmentFile(relativePath: string): Promise<ArrayBuffer | null> {
+  if (isElectron()) {
+    const api = getElectronAPI();
+    const result = await api.readAttachment(relativePath);
+    return result.success ? (result.data || null) : null;
+  } else {
+    const response = await fetch(`/api/attachments/download/attachments/${relativePath}`);
+    if (response.ok) {
+      return await response.arrayBuffer();
+    }
+    return null;
+  }
+}
 
 interface CustomFieldDef {
   id?: number;
@@ -377,11 +408,28 @@ export default function ExportPage() {
       const walletSoftwareCSV = generateWalletSoftwareCSV(cleanWalletSoftware);
       const derivationTemplatesCSV = generateDerivationTemplatesCSV(cleanDerivationTemplates);
 
+      setProgress(55);
+      setProgressMessage("Gathering attachment files...");
+
+      // List and read all attachment files
+      const attachmentFilePaths = await listAllAttachmentFiles();
+      const attachmentFiles: { path: string; data: ArrayBuffer }[] = [];
+      
+      for (let i = 0; i < attachmentFilePaths.length; i++) {
+        const filePath = attachmentFilePaths[i];
+        setProgressMessage(`Reading attachment ${i + 1} of ${attachmentFilePaths.length}...`);
+        
+        const fileData = await readAttachmentFile(filePath);
+        if (fileData) {
+          attachmentFiles.push({ path: filePath, data: fileData });
+        }
+      }
+
       setProgress(65);
       setProgressMessage("Creating ZIP archive...");
 
       const exportData: ExportData = {
-        version: "2.0.0",
+        version: "2.1.0",
         exportDate: new Date().toISOString(),
         encrypted: encrypted,
         data: {
@@ -401,6 +449,12 @@ export default function ExportPage() {
 
       const zip = new JSZip();
       const dateStr = new Date().toISOString().split('T')[0];
+      
+      // Add attachment files to ZIP under attachments/ folder
+      const attachmentsFolder = zip.folder("attachments");
+      for (const file of attachmentFiles) {
+        attachmentsFolder?.file(file.path, file.data);
+      }
 
       if (encrypted) {
         setProgress(75);
@@ -457,9 +511,11 @@ Files:
 - seed_names.csv.encrypted: Encrypted seed names vocabulary
 - wallet_software.csv.encrypted: Encrypted wallet software vocabulary
 - derivation_templates.csv.encrypted: Encrypted derivation templates
+- attachments/: Folder containing ${attachmentFiles.length} attachment file(s)
 
-Note: File attachments are NOT included in this backup.
-They are stored separately in: ${attachmentsFolderPath}
+Note: Attachment files are included in this backup and are already 
+encrypted at rest (AES-256-GCM). They will be restored automatically 
+when you import this backup.
 `);
 
       } else {
@@ -491,9 +547,11 @@ Files:
 - seed_names.csv: Seed names vocabulary
 - wallet_software.csv: Wallet software vocabulary
 - derivation_templates.csv: Derivation templates
+- attachments/: Folder containing ${attachmentFiles.length} attachment file(s)
 
-Note: File attachments are NOT included in this backup.
-They are stored separately in: ${attachmentsFolderPath}
+Note: Attachment files are included in this backup and are already 
+encrypted at rest (AES-256-GCM). They will be restored automatically 
+when you import this backup.
 `);
       }
 
@@ -682,6 +740,7 @@ They are stored separately in: ${attachmentsFolderPath}
                 <li><code className="text-xs bg-muted px-1 rounded">seed_names.csv</code> - Seed names vocabulary</li>
                 <li><code className="text-xs bg-muted px-1 rounded">wallet_software.csv</code> - Wallet software vocabulary</li>
                 <li><code className="text-xs bg-muted px-1 rounded">derivation_templates.csv</code> - Derivation templates</li>
+                <li><code className="text-xs bg-muted px-1 rounded">attachments/</code> - Folder containing all attachment files</li>
               </ul>
             </div>
           </CardContent>
@@ -731,21 +790,22 @@ They are stored separately in: ${attachmentsFolderPath}
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
-                <FolderOpen className="h-5 w-5" />
+                <Paperclip className="h-5 w-5" />
                 File Attachments
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
-              <p className="text-sm text-muted-foreground">
-                File attachments are stored separately and are not included in this backup. 
-                To backup your attachments, manually copy the attachments folder:
-              </p>
-              <div className="p-3 bg-muted rounded-lg font-mono text-sm break-all" data-testid="text-attachments-path">
-                {attachmentsFolderPath}
+              <div className="flex items-center gap-2 text-sm text-green-600 dark:text-green-400">
+                <CheckCircle2 className="h-4 w-4" />
+                <span className="font-medium">Attachments are included in backup</span>
               </div>
+              <p className="text-sm text-muted-foreground">
+                All {attachmentCount} attachment file(s) will be exported to the <code className="bg-muted px-1 rounded">attachments/</code> folder 
+                in the ZIP file and automatically restored when you import this backup.
+              </p>
               <p className="text-xs text-muted-foreground">
-                In the desktop app, this will be inside your user data folder. 
-                Attachment files are encrypted and can only be read by the application.
+                Attachment files are encrypted at rest with AES-256-GCM and can only be 
+                read by the application with your password.
               </p>
             </CardContent>
           </Card>

@@ -1,5 +1,6 @@
 import { useState, useRef } from "react";
-import { Moon, Eye, Database, Plus, Trash2, Pencil, AlertTriangle, Upload, RefreshCw, Loader2 } from "lucide-react";
+import { Moon, Eye, Database, Plus, Trash2, Pencil, AlertTriangle, Upload, RefreshCw, Loader2, Paperclip } from "lucide-react";
+import { isElectron, getElectronAPI } from "@/lib/electron";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
@@ -622,6 +623,61 @@ export default function SettingsPage() {
         }
       }
 
+      // Restore attachment files from ZIP
+      setRestoreProgress(85);
+      setRestoreMessage("Restoring attachment files...");
+      
+      let attachmentFilesRestored = 0;
+      let attachmentFilesErrors = 0;
+      const attachmentsFolder = zip.folder("attachments");
+      if (attachmentsFolder) {
+        const filePromises: Promise<void>[] = [];
+        
+        attachmentsFolder.forEach((relativePath, file) => {
+          if (!file.dir) {
+            filePromises.push((async () => {
+              try {
+                const fileData = await file.async("arraybuffer");
+                
+                if (isElectron()) {
+                  const api = getElectronAPI();
+                  const result = await api.writeAttachment(relativePath, fileData);
+                  if (!result.success) {
+                    console.error(`Failed to restore attachment file ${relativePath}:`, result.error);
+                    attachmentFilesErrors++;
+                    return;
+                  }
+                } else {
+                  // Web mode: use API endpoint
+                  const formData = new FormData();
+                  formData.append('file', new Blob([fileData]));
+                  formData.append('relativePath', relativePath);
+                  
+                  const response = await fetch('/api/attachments/write', {
+                    method: 'POST',
+                    body: formData,
+                  });
+                  
+                  if (!response.ok) {
+                    const errorData = await response.json().catch(() => ({}));
+                    console.error(`Failed to restore attachment file ${relativePath}:`, errorData.error || response.statusText);
+                    attachmentFilesErrors++;
+                    return;
+                  }
+                }
+                
+                attachmentFilesRestored++;
+              } catch (err) {
+                console.error(`Failed to restore attachment file ${relativePath}:`, err);
+                attachmentFilesErrors++;
+              }
+            })());
+          }
+        });
+        
+        await Promise.all(filePromises);
+      }
+
       setRestoreProgress(90);
       setRestoreMessage("Restoring custom fields...");
 
@@ -845,9 +901,17 @@ export default function SettingsPage() {
       setRestoreProgress(100);
       setRestoreMessage("Restore complete!");
 
+      let attachmentFilesMsg = "";
+      if (attachmentFilesRestored > 0 && attachmentFilesErrors === 0) {
+        attachmentFilesMsg = `, ${attachmentFilesRestored} attachment files`;
+      } else if (attachmentFilesRestored > 0 && attachmentFilesErrors > 0) {
+        attachmentFilesMsg = `, ${attachmentFilesRestored} attachment files (${attachmentFilesErrors} failed)`;
+      } else if (attachmentFilesErrors > 0) {
+        attachmentFilesMsg = ` (${attachmentFilesErrors} attachment files failed)`;
+      }
       const message = restoreMode === "merge"
-        ? `Added ${recordsAdded} records (${recordsSkipped} skipped), ${tagsAdded} tags, ${categoriesAdded} categories, ${vocabularyAdded} vocabulary items, ${templatesAdded} templates.`
-        : `Restored ${recordsAdded} records, ${tagsAdded} tags, ${categoriesAdded} categories, ${vocabularyAdded} vocabulary items, ${templatesAdded} templates.`;
+        ? `Added ${recordsAdded} records (${recordsSkipped} skipped), ${tagsAdded} tags, ${categoriesAdded} categories, ${vocabularyAdded} vocabulary items, ${templatesAdded} templates${attachmentFilesMsg}.`
+        : `Restored ${recordsAdded} records, ${tagsAdded} tags, ${categoriesAdded} categories, ${vocabularyAdded} vocabulary items, ${templatesAdded} templates${attachmentFilesMsg}.`;
 
       toast({
         title: "Restore Successful",
