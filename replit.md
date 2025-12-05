@@ -18,6 +18,21 @@ Preferred communication style: Simple, everyday language.
 - Self-contained: copy entire folder (exe + KYUTXO_Data) to back up or move to another machine
 - Updated INSTALL-USB.md with new folder structure
 
+**Bulk Editor** (`/bulk-editor`):
+- Powerful batch editing system for updating multiple records at once
+- **Filter Builder**: Find records by field/operator/value criteria with AND/OR logic
+  - Supports all record fields: Owner, Wallet Name, Tags, Categories, Type, Source, etc.
+  - Operators: equals, not equals, contains, starts with, is empty, is not empty
+- **Action Builder**: Define changes to apply to matching records
+  - Set: Replace field value
+  - Add: Append to array fields (tags, categories)
+  - Remove: Remove from array fields
+  - Clear: Set field to empty
+  - Multiple actions can be chained and execute in sequence
+- **Preview Panel**: Shows count and sample of records that will be affected
+- **Undo Capability**: Stores snapshot before applying, allows single-click undo
+- Located under Data > Bulk Editor in sidebar
+
 **Branding & UI Updates:**
 - Replaced Bitcoin logo with new KYUTXO network circuit board logo (orange)
 - Changed header text from "KYBTC" to "KYUTXO"
@@ -25,7 +40,7 @@ Preferred communication style: Simple, everyday language.
 **Navigation Sidebar Refactor:**
 - Reorganized flat menu into 6 collapsible groups for better organization
 - **Overview**: Records, Nudgie (always expanded)
-- **Data**: Transactions, UTXOs (always expanded)
+- **Data**: Transactions, UTXOs, Bulk Editor (always expanded)
 - **Analysis**: Address Reuse, Provenance, Flow Visualizer, Data Stats, Reports, Lightning
 - **Import / Export**: Address Importer, Wallet Data Sync, Price Import, Transaction Sync, QR Scanner
 - **System**: Backup, Node Connection, Value Updater, Settings

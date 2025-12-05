@@ -25,7 +25,8 @@ import {
   PanelLeft, 
   LayoutGrid,
   LayoutDashboard,
-  Upload
+  Upload,
+  Layers
 } from "lucide-react";
 import logoUrl from "@assets/foot_1764929618997.png";
 import {
@@ -76,6 +77,7 @@ const navGroups: NavGroup[] = [
     items: [
       { title: "Transactions", url: "/transactions", icon: List },
       { title: "UTXOs", url: "/utxos", icon: Coins },
+      { title: "Bulk Editor", url: "/bulk-editor", icon: Layers },
     ]
   },
   {

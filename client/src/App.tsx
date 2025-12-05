@@ -37,6 +37,7 @@ import NavigationPatterns from "@/pages/NavigationPatterns";
 import GroupedSidebarPreview from "@/pages/GroupedSidebarPreview";
 import FlowVisualizations from "@/pages/FlowVisualizations";
 import BitcoinFlowVisualizer from "@/pages/BitcoinFlowVisualizer";
+import BulkEditor from "@/pages/BulkEditor";
 import NotFound from "@/pages/not-found";
 
 function AppRoutes() {
@@ -67,6 +68,7 @@ function AppRoutes() {
       <Route path="/dev/grouped-sidebar" component={GroupedSidebarPreview} />
       <Route path="/dev/flow-viz" component={FlowVisualizations} />
       <Route path="/flow-visualizer" component={BitcoinFlowVisualizer} />
+      <Route path="/bulk-editor" component={BulkEditor} />
       <Route component={NotFound} />
     </Switch>
   );
