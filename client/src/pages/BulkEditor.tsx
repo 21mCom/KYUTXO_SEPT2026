@@ -150,11 +150,13 @@ interface ActionDef {
   value: string;
 }
 
-// Undo snapshot
+// Undo snapshot - stores details about what was changed for clear undo messaging
 interface UndoSnapshot {
   timestamp: number;
   recordSnapshots: { id: number; before: Partial<Record> }[];
   description: string;
+  recordCount: number;
+  actionsApplied: { type: ActionType; field: string; value?: string }[];
 }
 
 export default function BulkEditor() {
@@ -318,11 +320,17 @@ export default function BulkEditor() {
     setIsApplying(true);
     
     try {
-      // Create undo snapshot
+      // Create undo snapshot with detailed info for clear undo messaging
       const snapshot: UndoSnapshot = {
         timestamp: Date.now(),
         recordSnapshots: [],
         description: `Bulk edit: ${actions.length} action(s) on ${matchingRecords.length} record(s)`,
+        recordCount: matchingRecords.length,
+        actionsApplied: actions.map(a => ({
+          type: a.type,
+          field: FIELD_DEFS.find(f => f.key === a.field)?.label || a.field as string,
+          value: a.type !== 'clear' ? a.value : undefined,
+        })),
       };
       
       // Step 1: Compute all updates in memory
@@ -647,15 +655,58 @@ export default function BulkEditor() {
           </div>
           
           {lastUndo && (
-            <Button 
-              variant="outline" 
-              onClick={undoChanges}
-              disabled={isApplying}
-              data-testid="button-undo"
-            >
-              <Undo2 className="h-4 w-4 mr-2" />
-              Undo Last Edit
-            </Button>
+            <Popover>
+              <PopoverTrigger asChild>
+                <Button 
+                  variant="outline" 
+                  disabled={isApplying}
+                  data-testid="button-undo"
+                >
+                  <Undo2 className="h-4 w-4 mr-2" />
+                  Undo Available
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="w-80" align="end">
+                <div className="space-y-3">
+                  <div>
+                    <h4 className="font-medium text-sm">Undo Last Bulk Edit</h4>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      This will restore {lastUndo.recordCount} record{lastUndo.recordCount !== 1 ? 's' : ''} to their previous state.
+                    </p>
+                  </div>
+                  
+                  <div className="text-xs space-y-1">
+                    <div className="font-medium text-muted-foreground">Actions that were applied:</div>
+                    {lastUndo.actionsApplied.map((action, i) => (
+                      <div key={i} className="flex items-center gap-2 pl-2">
+                        <Badge variant="outline" className="text-xs shrink-0">
+                          {action.type === 'set' ? 'Set' : 
+                           action.type === 'add' ? 'Add' : 
+                           action.type === 'remove' ? 'Remove' : 'Clear'}
+                        </Badge>
+                        <span>{action.field}</span>
+                        {action.value && <span className="text-muted-foreground">= "{action.value}"</span>}
+                      </div>
+                    ))}
+                  </div>
+                  
+                  <div className="text-xs text-muted-foreground">
+                    Performed {new Date(lastUndo.timestamp).toLocaleTimeString()}
+                  </div>
+                  
+                  <div className="flex justify-end gap-2 pt-2 border-t">
+                    <Button 
+                      size="sm" 
+                      onClick={undoChanges}
+                      disabled={isApplying}
+                    >
+                      <Undo2 className="h-3 w-3 mr-1" />
+                      Undo Changes
+                    </Button>
+                  </div>
+                </div>
+              </PopoverContent>
+            </Popover>
           )}
         </div>
       
@@ -671,20 +722,28 @@ export default function BulkEditor() {
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          {/* Logic toggle */}
+          {/* Logic toggle with clear explanation */}
           {conditions.length > 1 && (
-            <div className="flex items-center gap-3 p-3 bg-muted/50 rounded-lg">
-              <Label className="text-sm">Match records where:</Label>
-              <div className="flex items-center gap-2">
-                <span className={!useAndLogic ? "font-medium" : "text-muted-foreground"}>ANY</span>
-                <Switch
-                  checked={useAndLogic}
-                  onCheckedChange={setUseAndLogic}
-                  data-testid="switch-logic"
-                />
-                <span className={useAndLogic ? "font-medium" : "text-muted-foreground"}>ALL</span>
+            <div className="p-3 bg-muted/50 rounded-lg space-y-2">
+              <div className="flex items-center gap-3 flex-wrap">
+                <Label className="text-sm">Match records where:</Label>
+                <div className="flex items-center gap-2">
+                  <span className={!useAndLogic ? "font-medium" : "text-muted-foreground"}>ANY</span>
+                  <Switch
+                    checked={useAndLogic}
+                    onCheckedChange={setUseAndLogic}
+                    data-testid="switch-logic"
+                  />
+                  <span className={useAndLogic ? "font-medium" : "text-muted-foreground"}>ALL</span>
+                </div>
+                <span className="text-sm text-muted-foreground">conditions match</span>
               </div>
-              <span className="text-sm text-muted-foreground">conditions match</span>
+              <p className="text-xs text-muted-foreground">
+                {useAndLogic 
+                  ? "ALL mode: Records must match every condition below (narrower results)"
+                  : "ANY mode: Records need to match just one condition below (broader results)"
+                }
+              </p>
             </div>
           )}
           
@@ -796,10 +855,33 @@ export default function BulkEditor() {
             Step 2: Define Changes
           </CardTitle>
           <CardDescription>
-            What changes should be applied to matching records?
+            What changes should be applied to matching records? Actions run in order from top to bottom.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
+          {/* Action Examples - collapsible help section */}
+          <div className="text-xs text-muted-foreground bg-muted/30 p-3 rounded-lg space-y-2">
+            <div className="font-medium text-foreground">How actions work:</div>
+            <div className="grid gap-1.5">
+              <div>
+                <Badge variant="outline" className="text-xs mr-2">Add</Badge>
+                <span>Keeps existing values, adds new one. <span className="text-muted-foreground/70 italic">Ex: Tags [Work] + Add "Personal" = [Work, Personal]</span></span>
+              </div>
+              <div>
+                <Badge variant="outline" className="text-xs mr-2">Set</Badge>
+                <span>Replaces value completely. <span className="text-muted-foreground/70 italic">Ex: Tags [Work, Old] + Set "New" = [New]</span></span>
+              </div>
+              <div>
+                <Badge variant="outline" className="text-xs mr-2">Remove</Badge>
+                <span>Removes specific value, keeps others. <span className="text-muted-foreground/70 italic">Ex: Tags [Work, Personal] + Remove "Work" = [Personal]</span></span>
+              </div>
+              <div>
+                <Badge variant="outline" className="text-xs mr-2">Clear</Badge>
+                <span>Removes all values from field. <span className="text-muted-foreground/70 italic">Ex: Tags [Work, Personal] + Clear = [ ]</span></span>
+              </div>
+            </div>
+          </div>
+          
           {/* Actions */}
           <div className="space-y-3">
             {actions.map((action, index) => {
@@ -1133,7 +1215,7 @@ export default function BulkEditor() {
                 {/* Undo notice */}
                 <div className="flex items-center gap-2 text-sm text-muted-foreground bg-muted/30 p-3 rounded-lg">
                   <Undo2 className="h-4 w-4 shrink-0" />
-                  <span>You can undo this action immediately after it completes.</span>
+                  <span>After applying, an "Undo Available" button will appear at the top. Click it to see details and restore records.</span>
                 </div>
               </div>
             </AlertDialogDescription>
