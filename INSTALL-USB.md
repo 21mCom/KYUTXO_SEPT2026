@@ -53,8 +53,13 @@ E:\KYUTXO\
 ├── KYUTXO-1.0.0-Portable.exe
 ├── portable
 └── KYUTXO_Data\
-    └── (your encrypted data)
+    ├── IndexedDB\           ← Your encrypted database
+    ├── Local Storage\       ← App settings
+    ├── attachments\         ← Your encrypted file attachments
+    └── (other Chromium data)
 ```
+
+**Everything is self-contained** - just copy the entire folder to back up or move to another machine.
 
 ## Security Tips
 

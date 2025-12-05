@@ -8,68 +8,61 @@ let mainWindow;
 // Determine if running in development or production
 const isDev = process.env.NODE_ENV === 'development';
 
-// Portable mode detection:
-// electron-builder sets PORTABLE_EXECUTABLE_DIR for portable builds
-// Also check for 'portable' marker file or KYUTXO_Data folder next to executable
+// ============================================================================
+// PORTABLE MODE SETUP - Must happen BEFORE app.whenReady()
+// This ensures IndexedDB, localStorage, and all browser storage goes to USB
+// ============================================================================
+
+// Get portable directory from electron-builder env var
 function getPortableDir() {
-  // electron-builder portable mode sets this env var to the folder containing the .exe
   if (process.env.PORTABLE_EXECUTABLE_DIR) {
     return process.env.PORTABLE_EXECUTABLE_DIR;
   }
-  
-  // Fallback: check next to the executable
-  try {
-    const exePath = app.getPath('exe');
-    return path.dirname(exePath);
-  } catch (e) {
-    return null;
-  }
+  return null;
 }
 
-function isPortableMode() {
+// Check for portable mode early (before app is ready)
+function checkPortableMode() {
   if (isDev) return false;
   
-  // Check for electron-builder's portable mode env var
+  // electron-builder sets this for portable builds
   if (process.env.PORTABLE_EXECUTABLE_DIR) {
-    console.log('[KYUTXO] Portable mode detected via PORTABLE_EXECUTABLE_DIR:', process.env.PORTABLE_EXECUTABLE_DIR);
-    return true;
-  }
-  
-  // Fallback: check for marker file or data directory
-  const portableDir = getPortableDir();
-  if (!portableDir) return false;
-  
-  const portableMarker = path.join(portableDir, 'portable');
-  const portableDataDir = path.join(portableDir, 'KYUTXO_Data');
-  
-  const hasMarker = fs.existsSync(portableMarker);
-  const hasDataDir = fs.existsSync(portableDataDir);
-  
-  if (hasMarker || hasDataDir) {
-    console.log('[KYUTXO] Portable mode detected via marker/data folder in:', portableDir);
     return true;
   }
   
   return false;
 }
 
-// Get data directory based on portable mode
-function getDataDirectory() {
-  if (isPortableMode()) {
-    const portableDir = getPortableDir();
-    const dataPath = path.join(portableDir, 'KYUTXO_Data');
-    console.log('[KYUTXO] Using portable data directory:', dataPath);
-    return dataPath;
-  }
-  const userDataPath = path.join(app.getPath('userData'), 'data');
-  console.log('[KYUTXO] Using standard data directory:', userDataPath);
-  return userDataPath;
-}
-
-// These must be initialized after app is ready for accurate paths
-let portableMode = false;
+// Initialize portable mode IMMEDIATELY (before app.whenReady)
+const portableMode = checkPortableMode();
 let dataDir = '';
 let attachmentsDir = '';
+
+if (portableMode) {
+  const portableDir = getPortableDir();
+  dataDir = path.join(portableDir, 'KYUTXO_Data');
+  attachmentsDir = path.join(dataDir, 'attachments');
+  
+  // Create data directory if it doesn't exist
+  if (!fs.existsSync(dataDir)) {
+    fs.mkdirSync(dataDir, { recursive: true });
+  }
+  
+  // CRITICAL: Set userData path BEFORE app is ready
+  // This makes IndexedDB, localStorage, cookies, etc. all go to the portable folder
+  app.setPath('userData', dataDir);
+  
+  console.log('[KYUTXO] PORTABLE MODE ENABLED');
+  console.log('[KYUTXO] Portable directory:', portableDir);
+  console.log('[KYUTXO] Data directory:', dataDir);
+  console.log('[KYUTXO] userData path set to:', app.getPath('userData'));
+} else {
+  // Standard mode - use default userData location
+  dataDir = path.join(app.getPath('userData'), 'data');
+  attachmentsDir = path.join(dataDir, 'attachments');
+  console.log('[KYUTXO] STANDARD MODE');
+  console.log('[KYUTXO] Data directory:', dataDir);
+}
 
 // Ensure data directories exist
 function ensureDirectories() {
@@ -81,15 +74,7 @@ function ensureDirectories() {
   }
 }
 
-function initializePaths() {
-  portableMode = isPortableMode();
-  dataDir = getDataDirectory();
-  attachmentsDir = path.join(dataDir, 'attachments');
-  console.log('[KYUTXO] Paths initialized - Portable:', portableMode, 'Data:', dataDir, 'Attachments:', attachmentsDir);
-}
-
 function createWindow() {
-  initializePaths();
   ensureDirectories();
 
   mainWindow = new BrowserWindow({
