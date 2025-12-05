@@ -12,6 +12,16 @@ Preferred communication style: Simple, everyday language.
 
 ## Recent Changes (December 2025)
 
+**Fully Portable Database (Latest):**
+- Database now stored in `KYUTXO_Data/IndexedDB/` instead of AppData/Roaming
+- All browser storage (IndexedDB, localStorage, cookies) redirected to portable folder via `app.setPath('userData', dataDir)` **before app.whenReady()**
+- Self-contained: copy entire folder (exe + KYUTXO_Data) to back up or move to another machine
+- Updated INSTALL-USB.md with new folder structure
+
+**Branding & UI Updates:**
+- Replaced Bitcoin logo with new KYUTXO network circuit board logo (orange)
+- Changed header text from "KYBTC" to "KYUTXO"
+
 **Navigation Sidebar Refactor:**
 - Reorganized flat menu into 6 collapsible groups for better organization
 - **Overview**: Records, Nudgie (always expanded)

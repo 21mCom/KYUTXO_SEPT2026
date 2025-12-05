@@ -27,7 +27,7 @@ import {
   LayoutDashboard,
   Upload
 } from "lucide-react";
-import { SiBitcoin } from "react-icons/si";
+import logoUrl from "@assets/foot_1764929618997.png";
 import {
   Sidebar,
   SidebarContent,
@@ -222,7 +222,7 @@ export function AppSidebar() {
     <Sidebar>
       <SidebarHeader className="p-4">
         <div className="flex items-center gap-2">
-          <SiBitcoin className="h-8 w-8 text-primary" />
+          <img src={logoUrl} alt="KYUTXO" className="h-8 w-8" />
           <div className="flex flex-col">
             <span className="font-bold text-lg tracking-tight">KYUTXO</span>
             <span className="text-xs text-muted-foreground">Bitcoin Manager</span>
