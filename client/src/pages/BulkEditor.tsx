@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useRef } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -9,6 +9,8 @@ import { Separator } from "@/components/ui/separator";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Switch } from "@/components/ui/switch";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { 
   AlertDialog,
   AlertDialogAction,
@@ -28,7 +30,9 @@ import {
   AlertTriangle,
   CheckCircle2,
   X,
-  Undo2
+  Undo2,
+  ChevronsUpDown,
+  Check
 } from "lucide-react";
 import { useRecords } from "@/hooks/use-records";
 import { useOwners } from "@/hooks/use-owners";
@@ -462,7 +466,104 @@ export default function BulkEditor() {
     }
   };
   
-  // Render field value input (text or select)
+  // Combobox component for vocabulary fields - allows typing new values OR selecting existing
+  const ComboboxInput = ({ 
+    fieldKey, 
+    value, 
+    onChange, 
+    options, 
+    placeholder 
+  }: { 
+    fieldKey: string;
+    value: string; 
+    onChange: (v: string) => void; 
+    options: { value: string; label: string }[];
+    placeholder: string;
+  }) => {
+    const [open, setOpen] = useState(false);
+    const [inputValue, setInputValue] = useState(value);
+    
+    // Filter options based on input
+    const filteredOptions = options.filter(opt => 
+      opt.label.toLowerCase().includes(inputValue.toLowerCase())
+    );
+    
+    // Show "create new" option if input doesn't match any existing option
+    const showCreateNew = inputValue.trim() !== '' && 
+      !options.some(opt => opt.value.toLowerCase() === inputValue.toLowerCase());
+    
+    return (
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger asChild>
+          <Button
+            variant="outline"
+            role="combobox"
+            aria-expanded={open}
+            className="w-[180px] justify-between font-normal"
+            data-testid={`combobox-value-${fieldKey}`}
+          >
+            <span className="truncate">
+              {value || placeholder}
+            </span>
+            <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent className="w-[220px] p-0" align="start">
+          <Command shouldFilter={false}>
+            <CommandInput 
+              placeholder={`Type or search...`}
+              value={inputValue}
+              onValueChange={setInputValue}
+              data-testid={`input-combobox-${fieldKey}`}
+            />
+            <CommandList>
+              {filteredOptions.length === 0 && !showCreateNew && (
+                <CommandEmpty>No options found.</CommandEmpty>
+              )}
+              {showCreateNew && (
+                <CommandGroup heading="Create new">
+                  <CommandItem
+                    value={`create:${inputValue}`}
+                    onSelect={() => {
+                      onChange(inputValue.trim());
+                      setOpen(false);
+                    }}
+                    data-testid={`option-create-new-${fieldKey}`}
+                  >
+                    <Plus className="mr-2 h-4 w-4" />
+                    Create "{inputValue.trim()}"
+                  </CommandItem>
+                </CommandGroup>
+              )}
+              {filteredOptions.length > 0 && (
+                <CommandGroup heading="Existing values">
+                  {filteredOptions.map(opt => (
+                    <CommandItem
+                      key={opt.value}
+                      value={opt.value}
+                      onSelect={() => {
+                        onChange(opt.value);
+                        setInputValue(opt.value);
+                        setOpen(false);
+                      }}
+                      data-testid={`option-${fieldKey}-${opt.value}`}
+                    >
+                      <Check 
+                        className={`mr-2 h-4 w-4 ${value === opt.value ? 'opacity-100' : 'opacity-0'}`} 
+                      />
+                      {opt.label}
+                    </CommandItem>
+                  ))}
+                </CommandGroup>
+              )}
+            </CommandList>
+          </Command>
+        </PopoverContent>
+      </Popover>
+    );
+  };
+  
+  // Render field value input (text, select, or combobox)
   const renderValueInput = (
     fieldKey: keyof Record, 
     value: string, 
@@ -474,7 +575,8 @@ export default function BulkEditor() {
     
     const options = getFieldOptions(fieldDef);
     
-    if (options.length > 0) {
+    // For enum fields (fixed options), use Select
+    if (fieldDef.type === 'enum' && options.length > 0) {
       return (
         <Select value={value} onValueChange={onChange}>
           <SelectTrigger className="w-[180px]" data-testid={`select-value-${fieldKey}`}>
@@ -491,6 +593,20 @@ export default function BulkEditor() {
       );
     }
     
+    // For vocabulary fields (select/array with suggestions), use Combobox
+    if ((fieldDef.type === 'select' || fieldDef.type === 'array') && fieldDef.vocabularyKey) {
+      return (
+        <ComboboxInput
+          fieldKey={fieldKey as string}
+          value={value}
+          onChange={onChange}
+          options={options}
+          placeholder={placeholder}
+        />
+      );
+    }
+    
+    // For text fields, use plain Input
     return (
       <Input
         value={value}
@@ -511,30 +627,31 @@ export default function BulkEditor() {
   }
   
   return (
-    <div className="container mx-auto p-6 max-w-6xl space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold flex items-center gap-2">
-            <Edit3 className="h-6 w-6" />
-            Bulk Editor
-          </h1>
-          <p className="text-muted-foreground mt-1">
-            Find and update multiple records at once
-          </p>
+    <div className="h-full overflow-auto">
+      <div className="container mx-auto p-6 max-w-6xl space-y-6 pb-12">
+        <div className="flex items-center justify-between flex-wrap gap-2">
+          <div>
+            <h1 className="text-2xl font-bold flex items-center gap-2">
+              <Edit3 className="h-6 w-6" />
+              Bulk Editor
+            </h1>
+            <p className="text-muted-foreground mt-1">
+              Find and update multiple records at once
+            </p>
+          </div>
+          
+          {lastUndo && (
+            <Button 
+              variant="outline" 
+              onClick={undoChanges}
+              disabled={isApplying}
+              data-testid="button-undo"
+            >
+              <Undo2 className="h-4 w-4 mr-2" />
+              Undo Last Edit
+            </Button>
+          )}
         </div>
-        
-        {lastUndo && (
-          <Button 
-            variant="outline" 
-            onClick={undoChanges}
-            disabled={isApplying}
-            data-testid="button-undo"
-          >
-            <Undo2 className="h-4 w-4 mr-2" />
-            Undo Last Edit
-          </Button>
-        )}
-      </div>
       
       {/* Step 1: Filter Builder */}
       <Card>
@@ -910,6 +1027,7 @@ export default function BulkEditor() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+      </div>
     </div>
   );
 }
