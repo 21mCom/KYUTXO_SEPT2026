@@ -34,8 +34,23 @@ import {
   PanelLeftClose,
   PanelLeft,
   MoreHorizontal,
-  Check
+  Check,
+  Copy,
+  ExternalLink,
+  Eye,
+  Edit,
+  Hash,
+  Pencil,
+  Info,
+  Tag,
+  Link2
 } from "lucide-react";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 
 interface PatternOption {
   id: string;
@@ -67,11 +82,24 @@ const layoutPatterns: PatternOption[] = [
   { id: "LAY-4", title: "Dashboard Grid", description: "Card-based grid with optional sidebar", tags: ["dashboard", "widgets"] },
 ];
 
+const quickActionPatterns: PatternOption[] = [
+  { id: "QA-1", title: "Hover Card Preview", description: "Hover over address/txid to see quick preview with metadata", tags: ["no-click", "fast", "preview"] },
+  { id: "QA-2", title: "Click Popover", description: "Click address/txid for small popover with view/edit/copy actions", tags: ["minimal", "context-menu"] },
+  { id: "QA-3", title: "Inline Expand", description: "Click to expand details inline below the address/txid", tags: ["no-modal", "inline"] },
+  { id: "QA-4", title: "Side Sheet Panel", description: "Click opens slide-in panel from right with full details", tags: ["detail-view", "non-blocking"] },
+  { id: "QA-5", title: "Modal Dialog", description: "Click opens centered modal with full edit form", tags: ["focused", "full-edit"] },
+  { id: "QA-6", title: "Dropdown Actions", description: "Right-click or icon menu with View/Edit/Copy/Explorer actions", tags: ["power-user", "context-menu"] },
+];
+
+const SAMPLE_ADDRESS = "bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh";
+const SAMPLE_TXID = "a1075db55d416d3ca199f55b6084e2115b9345e16c5cf302fc80e9d5fbf5d48d";
+
 export default function NavigationPatterns() {
   const [selectedPatterns, setSelectedPatterns] = useState<string[]>([]);
   const [demoSidebarCollapsed, setDemoSidebarCollapsed] = useState(false);
   const [demoGroupsOpen, setDemoGroupsOpen] = useState<Record<string, boolean>>({ main: true, data: false, settings: false });
   const [activeTab, setActiveTab] = useState("dashboard");
+  const [inlineExpanded, setInlineExpanded] = useState<string | null>(null);
 
   const togglePattern = (id: string) => {
     setSelectedPatterns(prev => 
@@ -93,13 +121,435 @@ export default function NavigationPatterns() {
           </p>
         </div>
 
-        <Tabs defaultValue="sidebars" className="w-full">
+        <Tabs defaultValue="quick-actions" className="w-full">
           <TabsList>
+            <TabsTrigger value="quick-actions" data-testid="tab-quick-actions">Quick Actions</TabsTrigger>
             <TabsTrigger value="sidebars" data-testid="tab-sidebars">Sidebars</TabsTrigger>
             <TabsTrigger value="headers" data-testid="tab-headers">Headers</TabsTrigger>
             <TabsTrigger value="layouts" data-testid="tab-layouts">Layouts</TabsTrigger>
             <TabsTrigger value="demos" data-testid="tab-demos">Interactive Demos</TabsTrigger>
           </TabsList>
+
+          <TabsContent value="quick-actions" className="space-y-6 mt-6">
+            <div className="space-y-2 mb-6">
+              <p className="text-sm text-muted-foreground">
+                These patterns demonstrate different ways to quickly view and edit address/transaction metadata without navigating away from the current page. 
+                Especially important for the portable desktop app where opening multiple browser tabs isn't available.
+              </p>
+            </div>
+
+            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+              {quickActionPatterns.map((pattern) => (
+                <Card key={pattern.id} className={selectedPatterns.includes(pattern.id) ? "ring-2 ring-primary" : ""}>
+                  <CardHeader className="pb-2">
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <Badge variant="outline" className="mb-2">{pattern.id}</Badge>
+                        <CardTitle className="text-lg">{pattern.title}</CardTitle>
+                      </div>
+                      <Button 
+                        size="sm" 
+                        variant={selectedPatterns.includes(pattern.id) ? "default" : "outline"}
+                        onClick={() => togglePattern(pattern.id)}
+                        data-testid={`button-select-${pattern.id.toLowerCase()}`}
+                      >
+                        {selectedPatterns.includes(pattern.id) ? <Check className="h-4 w-4 mr-1" /> : null}
+                        {selectedPatterns.includes(pattern.id) ? "Selected" : "Select"}
+                      </Button>
+                    </div>
+                    <CardDescription>{pattern.description}</CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="flex gap-1 flex-wrap">
+                      {pattern.tags.map(tag => (
+                        <Badge key={tag} variant="secondary" className="text-xs">{tag}</Badge>
+                      ))}
+                    </div>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Interactive Quick Action Demos</CardTitle>
+                <CardDescription>Try each pattern to see how it works. Sample addresses and txids are shown below.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-8">
+                {/* QA-1: Hover Card Preview */}
+                <div className="space-y-3">
+                  <div className="flex items-center gap-2">
+                    <Badge variant="outline">QA-1</Badge>
+                    <span className="font-medium">Hover Card Preview</span>
+                  </div>
+                  <p className="text-sm text-muted-foreground">Hover over the address to see a preview card with metadata.</p>
+                  <div className="p-4 bg-muted/30 rounded-md border">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm text-muted-foreground">Address:</span>
+                      <HoverCard>
+                        <HoverCardTrigger asChild>
+                          <Button variant="link" className="h-auto p-0 font-mono text-sm" data-testid="hover-card-address">
+                            {SAMPLE_ADDRESS.slice(0, 12)}...{SAMPLE_ADDRESS.slice(-8)}
+                          </Button>
+                        </HoverCardTrigger>
+                        <HoverCardContent className="w-80" align="start">
+                          <div className="space-y-3">
+                            <div className="flex items-center gap-2">
+                              <Wallet className="h-4 w-4 text-primary" />
+                              <span className="font-semibold">Address Details</span>
+                            </div>
+                            <div className="space-y-2 text-sm">
+                              <div className="flex justify-between">
+                                <span className="text-muted-foreground">Owner</span>
+                                <span>Personal Wallet</span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span className="text-muted-foreground">Wallet</span>
+                                <span>Main Savings</span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span className="text-muted-foreground">Tags</span>
+                                <div className="flex gap-1">
+                                  <Badge variant="secondary" className="text-xs">cold-storage</Badge>
+                                </div>
+                              </div>
+                              <div className="flex justify-between">
+                                <span className="text-muted-foreground">Balance</span>
+                                <span className="font-mono">0.5432 BTC</span>
+                              </div>
+                            </div>
+                            <Separator />
+                            <div className="flex gap-2">
+                              <Button size="sm" variant="outline" className="flex-1">
+                                <Eye className="h-3 w-3 mr-1" /> View
+                              </Button>
+                              <Button size="sm" variant="outline" className="flex-1">
+                                <Edit className="h-3 w-3 mr-1" /> Edit
+                              </Button>
+                            </div>
+                          </div>
+                        </HoverCardContent>
+                      </HoverCard>
+                    </div>
+                  </div>
+                </div>
+
+                <Separator />
+
+                {/* QA-2: Click Popover */}
+                <div className="space-y-3">
+                  <div className="flex items-center gap-2">
+                    <Badge variant="outline">QA-2</Badge>
+                    <span className="font-medium">Click Popover</span>
+                  </div>
+                  <p className="text-sm text-muted-foreground">Click the txid for a small popover with quick actions.</p>
+                  <div className="p-4 bg-muted/30 rounded-md border">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm text-muted-foreground">TxID:</span>
+                      <Popover>
+                        <PopoverTrigger asChild>
+                          <Button variant="link" className="h-auto p-0 font-mono text-sm" data-testid="click-popover-txid">
+                            {SAMPLE_TXID.slice(0, 16)}...
+                          </Button>
+                        </PopoverTrigger>
+                        <PopoverContent className="w-64" align="start">
+                          <div className="space-y-3">
+                            <div className="flex items-center gap-2">
+                              <Hash className="h-4 w-4 text-primary" />
+                              <span className="text-sm font-semibold">Transaction</span>
+                            </div>
+                            <div className="space-y-1">
+                              <Button variant="ghost" size="sm" className="w-full justify-start" data-testid="button-popover-view">
+                                <Eye className="h-4 w-4 mr-2" /> View Details
+                              </Button>
+                              <Button variant="ghost" size="sm" className="w-full justify-start" data-testid="button-popover-edit">
+                                <Pencil className="h-4 w-4 mr-2" /> Edit Labels
+                              </Button>
+                              <Button variant="ghost" size="sm" className="w-full justify-start" data-testid="button-popover-copy">
+                                <Copy className="h-4 w-4 mr-2" /> Copy TxID
+                              </Button>
+                              <Button variant="ghost" size="sm" className="w-full justify-start" data-testid="button-popover-explorer">
+                                <ExternalLink className="h-4 w-4 mr-2" /> Open in Explorer
+                              </Button>
+                            </div>
+                          </div>
+                        </PopoverContent>
+                      </Popover>
+                    </div>
+                  </div>
+                </div>
+
+                <Separator />
+
+                {/* QA-3: Inline Expand */}
+                <div className="space-y-3">
+                  <div className="flex items-center gap-2">
+                    <Badge variant="outline">QA-3</Badge>
+                    <span className="font-medium">Inline Expand</span>
+                  </div>
+                  <p className="text-sm text-muted-foreground">Click to expand details inline below the address.</p>
+                  <div className="p-4 bg-muted/30 rounded-md border">
+                    <div className="space-y-2">
+                      <div 
+                        className="flex items-center gap-2 cursor-pointer hover-elevate rounded p-2 -m-2"
+                        onClick={() => setInlineExpanded(inlineExpanded === 'demo' ? null : 'demo')}
+                        data-testid="inline-expand-trigger"
+                      >
+                        {inlineExpanded === 'demo' ? (
+                          <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                        ) : (
+                          <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                        )}
+                        <span className="text-sm text-muted-foreground">Address:</span>
+                        <span className="font-mono text-sm">{SAMPLE_ADDRESS.slice(0, 12)}...{SAMPLE_ADDRESS.slice(-8)}</span>
+                      </div>
+                      
+                      {inlineExpanded === 'demo' && (
+                        <div className="ml-6 p-3 bg-card border rounded-md space-y-3">
+                          <div className="grid grid-cols-2 gap-2 text-sm">
+                            <div>
+                              <span className="text-muted-foreground">Owner:</span>
+                              <span className="ml-2">Personal</span>
+                            </div>
+                            <div>
+                              <span className="text-muted-foreground">Wallet:</span>
+                              <span className="ml-2">Main</span>
+                            </div>
+                            <div>
+                              <span className="text-muted-foreground">Type:</span>
+                              <span className="ml-2">Receive</span>
+                            </div>
+                            <div>
+                              <span className="text-muted-foreground">Status:</span>
+                              <Badge variant="secondary" className="ml-2 text-xs">Verified</Badge>
+                            </div>
+                          </div>
+                          <div className="flex gap-2">
+                            <Button size="sm" variant="outline" data-testid="button-inline-edit">
+                              <Edit className="h-3 w-3 mr-1" /> Edit
+                            </Button>
+                            <Button size="sm" variant="ghost" data-testid="button-inline-copy">
+                              <Copy className="h-3 w-3 mr-1" /> Copy
+                            </Button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                <Separator />
+
+                {/* QA-4: Side Sheet Panel */}
+                <div className="space-y-3">
+                  <div className="flex items-center gap-2">
+                    <Badge variant="outline">QA-4</Badge>
+                    <span className="font-medium">Side Sheet Panel</span>
+                  </div>
+                  <p className="text-sm text-muted-foreground">Click to open a slide-in panel from the right with full details.</p>
+                  <div className="p-4 bg-muted/30 rounded-md border">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm text-muted-foreground">Address:</span>
+                      <Sheet>
+                        <SheetTrigger asChild>
+                          <Button variant="link" className="h-auto p-0 font-mono text-sm" data-testid="sheet-trigger-address">
+                            {SAMPLE_ADDRESS.slice(0, 12)}...{SAMPLE_ADDRESS.slice(-8)}
+                          </Button>
+                        </SheetTrigger>
+                        <SheetContent className="sm:max-w-lg">
+                          <SheetHeader>
+                            <SheetTitle className="flex items-center gap-2">
+                              <Wallet className="h-5 w-5" />
+                              Address Details
+                            </SheetTitle>
+                          </SheetHeader>
+                          <div className="mt-6 space-y-6">
+                            <div className="space-y-4">
+                              <div>
+                                <label className="text-sm font-medium text-muted-foreground">Full Address</label>
+                                <div className="flex items-center gap-2 mt-1">
+                                  <code className="flex-1 p-2 bg-muted rounded text-xs font-mono break-all">{SAMPLE_ADDRESS}</code>
+                                  <Button size="icon" variant="ghost" data-testid="button-sheet-copy">
+                                    <Copy className="h-4 w-4" />
+                                  </Button>
+                                </div>
+                              </div>
+                              
+                              <div className="grid grid-cols-2 gap-4">
+                                <div>
+                                  <label className="text-sm font-medium text-muted-foreground">Owner</label>
+                                  <p className="mt-1">Personal Wallet</p>
+                                </div>
+                                <div>
+                                  <label className="text-sm font-medium text-muted-foreground">Wallet Name</label>
+                                  <p className="mt-1">Main Savings</p>
+                                </div>
+                              </div>
+
+                              <div>
+                                <label className="text-sm font-medium text-muted-foreground">Tags</label>
+                                <div className="flex gap-2 mt-1 flex-wrap">
+                                  <Badge variant="secondary">cold-storage</Badge>
+                                  <Badge variant="secondary">long-term</Badge>
+                                  <Button size="sm" variant="ghost" className="h-6">
+                                    <Plus className="h-3 w-3" />
+                                  </Button>
+                                </div>
+                              </div>
+
+                              <div>
+                                <label className="text-sm font-medium text-muted-foreground">Notes</label>
+                                <p className="mt-1 text-sm">Main cold storage address for long-term holdings.</p>
+                              </div>
+                            </div>
+
+                            <Separator />
+
+                            <div className="flex gap-2">
+                              <Button className="flex-1" data-testid="button-sheet-edit">
+                                <Edit className="h-4 w-4 mr-2" /> Edit Record
+                              </Button>
+                              <Button variant="outline" data-testid="button-sheet-explorer">
+                                <ExternalLink className="h-4 w-4 mr-2" /> Explorer
+                              </Button>
+                            </div>
+                          </div>
+                        </SheetContent>
+                      </Sheet>
+                    </div>
+                  </div>
+                </div>
+
+                <Separator />
+
+                {/* QA-5: Modal Dialog */}
+                <div className="space-y-3">
+                  <div className="flex items-center gap-2">
+                    <Badge variant="outline">QA-5</Badge>
+                    <span className="font-medium">Modal Dialog</span>
+                  </div>
+                  <p className="text-sm text-muted-foreground">Click to open a centered modal with full edit form.</p>
+                  <div className="p-4 bg-muted/30 rounded-md border">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm text-muted-foreground">TxID:</span>
+                      <Dialog>
+                        <DialogTrigger asChild>
+                          <Button variant="link" className="h-auto p-0 font-mono text-sm" data-testid="modal-trigger-txid">
+                            {SAMPLE_TXID.slice(0, 16)}...
+                          </Button>
+                        </DialogTrigger>
+                        <DialogContent className="sm:max-w-xl">
+                          <DialogHeader>
+                            <DialogTitle className="flex items-center gap-2">
+                              <Hash className="h-5 w-5" />
+                              Edit Transaction
+                            </DialogTitle>
+                          </DialogHeader>
+                          <div className="space-y-4 mt-4">
+                            <div>
+                              <label className="text-sm font-medium">Transaction ID</label>
+                              <code className="block p-2 bg-muted rounded text-xs font-mono mt-1 break-all">{SAMPLE_TXID}</code>
+                            </div>
+                            
+                            <div className="grid grid-cols-2 gap-4">
+                              <div>
+                                <label className="text-sm font-medium">Flow Type</label>
+                                <div className="mt-1 p-2 bg-muted rounded text-sm">Received</div>
+                              </div>
+                              <div>
+                                <label className="text-sm font-medium">Counterparty Type</label>
+                                <div className="mt-1 p-2 bg-muted rounded text-sm">Exchange</div>
+                              </div>
+                            </div>
+
+                            <div>
+                              <label className="text-sm font-medium">Label</label>
+                              <div className="mt-1 p-2 bg-muted rounded text-sm">BTC purchase from Coinbase</div>
+                            </div>
+
+                            <div>
+                              <label className="text-sm font-medium">Notes</label>
+                              <div className="mt-1 p-2 bg-muted rounded text-sm min-h-[60px]">Purchased during the dip. Cost basis: $42,500</div>
+                            </div>
+
+                            <div className="flex gap-2 justify-end">
+                              <Button variant="outline" data-testid="button-modal-cancel">Cancel</Button>
+                              <Button data-testid="button-modal-save">Save Changes</Button>
+                            </div>
+                          </div>
+                        </DialogContent>
+                      </Dialog>
+                    </div>
+                  </div>
+                </div>
+
+                <Separator />
+
+                {/* QA-6: Dropdown Actions */}
+                <div className="space-y-3">
+                  <div className="flex items-center gap-2">
+                    <Badge variant="outline">QA-6</Badge>
+                    <span className="font-medium">Dropdown Actions</span>
+                  </div>
+                  <p className="text-sm text-muted-foreground">Click the menu icon for a dropdown with View/Edit/Copy/Explorer actions.</p>
+                  <div className="p-4 bg-muted/30 rounded-md border">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm text-muted-foreground">Address:</span>
+                      <span className="font-mono text-sm">{SAMPLE_ADDRESS.slice(0, 12)}...{SAMPLE_ADDRESS.slice(-8)}</span>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button size="icon" variant="ghost" className="h-7 w-7" data-testid="dropdown-trigger">
+                            <MoreHorizontal className="h-4 w-4" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          <DropdownMenuItem data-testid="dropdown-item-view">
+                            <Eye className="h-4 w-4 mr-2" /> View Details
+                          </DropdownMenuItem>
+                          <DropdownMenuItem data-testid="dropdown-item-edit">
+                            <Pencil className="h-4 w-4 mr-2" /> Edit Record
+                          </DropdownMenuItem>
+                          <DropdownMenuItem data-testid="dropdown-item-tag">
+                            <Tag className="h-4 w-4 mr-2" /> Add Tag
+                          </DropdownMenuItem>
+                          <DropdownMenuItem data-testid="dropdown-item-copy">
+                            <Copy className="h-4 w-4 mr-2" /> Copy Address
+                          </DropdownMenuItem>
+                          <DropdownMenuItem data-testid="dropdown-item-explorer">
+                            <ExternalLink className="h-4 w-4 mr-2" /> Open in Explorer
+                          </DropdownMenuItem>
+                          <DropdownMenuItem data-testid="dropdown-item-provenance">
+                            <Link2 className="h-4 w-4 mr-2" /> Trace Provenance
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </div>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Recommended Combination</CardTitle>
+                <CardDescription>Best practice for KYUTXO portable app</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <p className="text-sm">
+                  For the portable desktop app without browser tabs, we recommend combining:
+                </p>
+                <ul className="list-disc list-inside text-sm space-y-2 text-muted-foreground">
+                  <li><strong className="text-foreground">QA-1 (Hover Card)</strong> - Quick preview on hover for scanning data</li>
+                  <li><strong className="text-foreground">QA-4 (Side Sheet)</strong> - Full details without leaving context</li>
+                  <li><strong className="text-foreground">QA-6 (Dropdown)</strong> - Power-user actions menu</li>
+                </ul>
+                <p className="text-sm text-muted-foreground">
+                  This combination provides: instant preview (hover), detailed view (side sheet), and quick actions (dropdown) - 
+                  all without navigating away from the current page or needing multiple tabs.
+                </p>
+              </CardContent>
+            </Card>
+          </TabsContent>
 
           <TabsContent value="sidebars" className="space-y-6 mt-6">
             <div className="grid gap-4 md:grid-cols-2">
