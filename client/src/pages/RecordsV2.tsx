@@ -7,33 +7,23 @@ import { Badge } from "@/components/ui/badge";
 import { 
   ArrowLeft, 
   Search as SearchIcon, 
-  Database, 
   Hash, 
   ExternalLink, 
-  AlertCircle,
   Copy,
   Eye,
   Pencil,
-  Tag,
   Link2,
-  MoreHorizontal,
-  Wallet,
-  ChevronRight,
-  X
+  Wallet
 } from "lucide-react";
 import { BlockchainToggle } from "@/components/BlockchainToggle";
 import { db, subscribeToDbChanges, type Record as DbRecord, type VaultMetadata, type AddressImportance, type ChainType, type CustomField, type BlockchainTransaction, type TransactionParticipant } from "@/lib/database";
 import { decryptRecords, isEncryptionReady } from "@/lib/encryptionFacade";
 import { RecordTypeBadge } from "@/components/RecordTypeBadge";
-import { BitcoinAddressDisplay } from "@/components/BitcoinAddressDisplay";
-import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Separator } from "@/components/ui/separator";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { useToast } from "@/hooks/use-toast";
 
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
 import {
   Table,
   TableBody,
@@ -410,7 +400,7 @@ export default function RecordsV2() {
               <Badge variant="outline" className="text-xs">V2 Quick Actions</Badge>
             </div>
             <p className="text-muted-foreground">
-              Hover for preview, click row for details, use menu for actions
+              Hover over addresses for quick preview, click any row for full details
             </p>
           </div>
         </div>
@@ -529,7 +519,6 @@ export default function RecordsV2() {
                       <TableHead>Address / TxID</TableHead>
                       <TableHead>Owner</TableHead>
                       <TableHead>Tags</TableHead>
-                      <TableHead className="w-[50px]"></TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -559,7 +548,7 @@ export default function RecordsV2() {
                                   : record.inputString}
                               </button>
                             </HoverCardTrigger>
-                            <HoverCardContent className="w-80" align="start">
+                            <HoverCardContent className="w-80 bg-popover border shadow-lg" align="start">
                               <div className="space-y-3">
                                 <div className="flex items-center gap-2">
                                   <Wallet className="h-4 w-4 text-primary" />
@@ -646,74 +635,6 @@ export default function RecordsV2() {
                               <Badge variant="outline" className="text-xs">+{record.tags.length - 2}</Badge>
                             )}
                           </div>
-                        </TableCell>
-                        <TableCell>
-                          <DropdownMenu>
-                            <DropdownMenuTrigger asChild>
-                              <Button 
-                                size="icon" 
-                                variant="ghost" 
-                                className="h-8 w-8"
-                                onClick={(e) => e.stopPropagation()}
-                                data-testid={`dropdown-trigger-${record.id}`}
-                              >
-                                <MoreHorizontal className="h-4 w-4" />
-                              </Button>
-                            </DropdownMenuTrigger>
-                            <DropdownMenuContent align="end">
-                              <DropdownMenuItem 
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handleViewDetails(record);
-                                }}
-                                data-testid={`dropdown-view-${record.id}`}
-                              >
-                                <Eye className="h-4 w-4 mr-2" /> View Details
-                              </DropdownMenuItem>
-                              <DropdownMenuItem 
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handleEditRecord(record);
-                                }}
-                                data-testid={`dropdown-edit-${record.id}`}
-                              >
-                                <Pencil className="h-4 w-4 mr-2" /> Edit Record
-                              </DropdownMenuItem>
-                              <DropdownMenuSeparator />
-                              <DropdownMenuItem 
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handleCopyAddress(record.inputString);
-                                }}
-                                data-testid={`dropdown-copy-${record.id}`}
-                              >
-                                <Copy className="h-4 w-4 mr-2" /> Copy {record.type === 'transaction' ? 'TxID' : 'Address'}
-                              </DropdownMenuItem>
-                              <DropdownMenuItem 
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handleOpenExplorer(record);
-                                }}
-                                data-testid={`dropdown-explorer-${record.id}`}
-                              >
-                                <ExternalLink className="h-4 w-4 mr-2" /> Open in Explorer
-                              </DropdownMenuItem>
-                              {record.type === 'address' && (
-                                <>
-                                  <DropdownMenuSeparator />
-                                  <DropdownMenuItem 
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      navigate(`/flow-visualizer?address=${record.inputString}`);
-                                    }}
-                                    data-testid={`dropdown-trace-${record.id}`}
-                                  >
-                                    <Link2 className="h-4 w-4 mr-2" /> Trace Provenance
-                                  </DropdownMenuItem>
-                                </>
-                              )}
-                            </DropdownMenuContent>
-                          </DropdownMenu>
                         </TableCell>
                       </TableRow>
                     ))}
