@@ -9,10 +9,8 @@ import {
   Search as SearchIcon, 
   Hash, 
   ExternalLink, 
-  Copy,
   Eye,
   Pencil,
-  Link2,
   Wallet
 } from "lucide-react";
 import { BlockchainToggle } from "@/components/BlockchainToggle";
@@ -23,7 +21,7 @@ import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/hooks/use-toast";
 
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
-import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { RecordDetailPanel } from "@/components/RecordDetailPanel";
 import {
   Table,
   TableBody,
@@ -548,7 +546,7 @@ export default function RecordsV2() {
                                   : record.inputString}
                               </button>
                             </HoverCardTrigger>
-                            <HoverCardContent className="w-80 bg-card border shadow-lg" align="start" style={{ backgroundColor: 'hsl(var(--card))' }}>
+                            <HoverCardContent className="w-80 border shadow-lg bg-white dark:bg-zinc-900" align="start">
                               <div className="space-y-3">
                                 <div className="flex items-center gap-2">
                                   <Wallet className="h-4 w-4 text-primary" />
@@ -646,158 +644,17 @@ export default function RecordsV2() {
         </Card>
       </div>
 
-      <Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
-        <SheetContent className="sm:max-w-lg overflow-y-auto">
-          <SheetHeader>
-            <SheetTitle className="flex items-center gap-2">
-              {selectedRecord?.type === 'address' ? (
-                <Wallet className="h-5 w-5" />
-              ) : (
-                <Hash className="h-5 w-5" />
-              )}
-              {selectedRecord?.type === 'address' ? 'Address' : 'Transaction'} Details
-            </SheetTitle>
-          </SheetHeader>
-          
-          {selectedRecord && (
-            <div className="mt-6 space-y-6">
-              <div className="space-y-4">
-                <div>
-                  <label className="text-sm font-medium text-muted-foreground">Full {selectedRecord.type === 'transaction' ? 'TxID' : 'Address'}</label>
-                  <div className="flex items-center gap-2 mt-1">
-                    <code className="flex-1 p-2 bg-muted rounded text-xs font-mono break-all">{selectedRecord.inputString}</code>
-                    <Button 
-                      size="icon" 
-                      variant="ghost"
-                      onClick={() => handleCopyAddress(selectedRecord.inputString)}
-                      data-testid="button-sheet-copy"
-                    >
-                      <Copy className="h-4 w-4" />
-                    </Button>
-                  </div>
-                </div>
-
-                <div>
-                  <label className="text-sm font-medium text-muted-foreground">Label</label>
-                  <p className="mt-1">{selectedRecord.label || "-"}</p>
-                </div>
-                
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="text-sm font-medium text-muted-foreground">Owner</label>
-                    <p className="mt-1">{selectedRecord.owner || "Unknown"}</p>
-                  </div>
-                  <div>
-                    <label className="text-sm font-medium text-muted-foreground">Wallet Name</label>
-                    <p className="mt-1">{selectedRecord.walletName || "-"}</p>
-                  </div>
-                </div>
-
-                {selectedRecord.seedName && (
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <label className="text-sm font-medium text-muted-foreground">Seed Name</label>
-                      <p className="mt-1">{selectedRecord.seedName}</p>
-                    </div>
-                    <div>
-                      <label className="text-sm font-medium text-muted-foreground">Wallet Software</label>
-                      <p className="mt-1">{selectedRecord.walletSoftware || "-"}</p>
-                    </div>
-                  </div>
-                )}
-
-                {selectedRecord.derivationPath && (
-                  <div>
-                    <label className="text-sm font-medium text-muted-foreground">Derivation Path</label>
-                    <code className="block mt-1 p-2 bg-muted rounded text-xs font-mono">{selectedRecord.derivationPath}</code>
-                  </div>
-                )}
-
-                <div>
-                  <label className="text-sm font-medium text-muted-foreground">Importance</label>
-                  <div className="mt-1">
-                    <Badge variant={getImportanceBadgeVariant(selectedRecord.addressImportance)}>
-                      {formatAddressImportance(selectedRecord.addressImportance)}
-                    </Badge>
-                  </div>
-                </div>
-
-                {selectedRecord.tags.length > 0 && (
-                  <div>
-                    <label className="text-sm font-medium text-muted-foreground">Tags</label>
-                    <div className="flex gap-2 mt-1 flex-wrap">
-                      {selectedRecord.tags.map((tag) => (
-                        <Badge key={tag} variant="secondary">{tag}</Badge>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {selectedRecord.categories.length > 0 && (
-                  <div>
-                    <label className="text-sm font-medium text-muted-foreground">Categories</label>
-                    <div className="flex gap-2 mt-1 flex-wrap">
-                      {selectedRecord.categories.map((cat) => (
-                        <Badge key={cat} variant="outline">{cat}</Badge>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {selectedRecord.notes && (
-                  <div>
-                    <label className="text-sm font-medium text-muted-foreground">Notes</label>
-                    <p className="mt-1 text-sm whitespace-pre-wrap">{selectedRecord.notes}</p>
-                  </div>
-                )}
-
-                {selectedRecord.source && (
-                  <div>
-                    <label className="text-sm font-medium text-muted-foreground">Source</label>
-                    <p className="mt-1 text-sm">{selectedRecord.source}</p>
-                  </div>
-                )}
-              </div>
-
-              <Separator />
-
-              <div className="flex gap-2">
-                <Button 
-                  className="flex-1"
-                  onClick={() => {
-                    setSheetOpen(false);
-                    handleEditRecord(selectedRecord);
-                  }}
-                  data-testid="button-sheet-edit"
-                >
-                  <Pencil className="h-4 w-4 mr-2" /> Edit Record
-                </Button>
-                <Button 
-                  variant="outline"
-                  onClick={() => handleOpenExplorer(selectedRecord)}
-                  data-testid="button-sheet-explorer"
-                >
-                  <ExternalLink className="h-4 w-4 mr-2" /> Explorer
-                </Button>
-              </div>
-
-              {selectedRecord.type === 'address' && (
-                <Button 
-                  variant="outline" 
-                  className="w-full"
-                  onClick={() => {
-                    setSheetOpen(false);
-                    navigate(`/flow-visualizer?address=${selectedRecord.inputString}`);
-                  }}
-                  data-testid="button-sheet-trace"
-                >
-                  <Link2 className="h-4 w-4 mr-2" /> Trace Provenance
-                </Button>
-              )}
-            </div>
-          )}
-        </SheetContent>
-      </Sheet>
+      <RecordDetailPanel
+        open={sheetOpen}
+        record={selectedRecord || undefined}
+        onClose={() => setSheetOpen(false)}
+        onEdit={() => {
+          if (selectedRecord) {
+            setSheetOpen(false);
+            handleEditRecord(selectedRecord);
+          }
+        }}
+      />
     </div>
   );
 }
