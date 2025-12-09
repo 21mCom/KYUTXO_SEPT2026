@@ -548,7 +548,7 @@ export default function RecordsV2() {
                                   : record.inputString}
                               </button>
                             </HoverCardTrigger>
-                            <HoverCardContent className="w-80 bg-popover border shadow-lg" align="start">
+                            <HoverCardContent className="w-80 bg-card border shadow-lg" align="start" style={{ backgroundColor: 'hsl(var(--card))' }}>
                               <div className="space-y-3">
                                 <div className="flex items-center gap-2">
                                   <Wallet className="h-4 w-4 text-primary" />
