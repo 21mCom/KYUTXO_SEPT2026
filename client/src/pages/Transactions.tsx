@@ -23,6 +23,7 @@ import {
   Link as LinkIcon
 } from "lucide-react";
 import { decryptRecords } from "@/lib/encryptionFacade";
+import { ClickableAddress } from "@/components/ClickableAddress";
 
 const ITEMS_PER_PAGE = 25;
 
@@ -457,9 +458,10 @@ export default function Transactions() {
                                   data-testid={`participant-input-${idx}`}
                                 >
                                   <div className="flex items-center justify-between gap-2">
-                                    <code className="font-mono text-xs truncate flex-1">
-                                      {truncate(input.address)}
-                                    </code>
+                                    <ClickableAddress 
+                                      address={input.address} 
+                                      className="text-xs truncate flex-1"
+                                    />
                                     <span className="font-mono text-xs font-medium whitespace-nowrap">
                                       {formatSats(input.amount)}
                                     </span>
@@ -494,9 +496,10 @@ export default function Transactions() {
                                   data-testid={`participant-output-${idx}`}
                                 >
                                   <div className="flex items-center justify-between gap-2">
-                                    <code className="font-mono text-xs truncate flex-1">
-                                      {truncate(output.address)}
-                                    </code>
+                                    <ClickableAddress 
+                                      address={output.address} 
+                                      className="text-xs truncate flex-1"
+                                    />
                                     <span className="font-mono text-xs font-medium whitespace-nowrap">
                                       {formatSats(output.amount)}
                                     </span>
