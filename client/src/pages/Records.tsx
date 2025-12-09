@@ -10,6 +10,7 @@ import { db, subscribeToDbChanges, type Record as DbRecord, type VaultMetadata, 
 import { decryptRecords, isEncryptionReady } from "@/lib/encryptionFacade";
 import { RecordTable } from "@/components/RecordTable";
 import { RecordDetailPanel } from "@/components/RecordDetailPanel";
+import { ClickableAddress } from "@/components/ClickableAddress";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 
 // User-curated importance tiers (exclude blockchain-discovered and pending-review by default)
@@ -507,9 +508,10 @@ export default function Records() {
                   data-testid={`tx-result-${tx.txid.slice(0, 8)}`}
                 >
                   <div className="flex items-center justify-between gap-2 mb-2">
-                    <code className="text-sm font-mono truncate flex-1">
-                      {tx.txid.slice(0, 16)}...{tx.txid.slice(-16)}
-                    </code>
+                    <ClickableAddress 
+                      address={tx.txid}
+                      className="flex-1 min-w-0"
+                    />
                     <div className="flex items-center gap-2">
                       <Badge variant="secondary" className="text-xs">
                         Block {tx.blockHeight.toLocaleString()}

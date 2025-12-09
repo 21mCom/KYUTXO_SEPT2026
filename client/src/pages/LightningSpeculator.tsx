@@ -9,6 +9,7 @@ import {
   getClassificationBadgeVariant
 } from "@/lib/lightning-detection";
 import { decryptRecords } from "@/lib/encryptionFacade";
+import { ClickableAddress } from "@/components/ClickableAddress";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -363,9 +364,10 @@ export default function LightningSpeculator() {
                                 {getClassificationIcon(result.classification)}
                                 <div>
                                   <div className="flex items-center gap-2">
-                                    <code className="font-mono text-sm">
-                                      {truncate(result.txid)}
-                                    </code>
+                                    <ClickableAddress 
+                                      address={result.txid}
+                                      className="flex-1 min-w-0"
+                                    />
                                     <Badge variant={getClassificationBadgeVariant(result.classification)}>
                                       {getClassificationLabel(result.classification)}
                                     </Badge>
@@ -438,9 +440,10 @@ export default function LightningSpeculator() {
                                         key={`${input.address}-${idx}`}
                                         className="flex items-center justify-between text-sm bg-muted/50 rounded px-2 py-1"
                                       >
-                                        <code className="font-mono text-xs">
-                                          {truncate(input.address, 10, 6)}
-                                        </code>
+                                        <ClickableAddress 
+                                          address={input.address}
+                                          className="text-xs flex-1 min-w-0"
+                                        />
                                         <span className="text-muted-foreground">
                                           {formatSats(input.amount)}
                                         </span>
@@ -460,9 +463,10 @@ export default function LightningSpeculator() {
                                         key={`${output.address}-${idx}`}
                                         className="flex items-center justify-between text-sm bg-muted/50 rounded px-2 py-1"
                                       >
-                                        <code className="font-mono text-xs">
-                                          {truncate(output.address, 10, 6)}
-                                        </code>
+                                        <ClickableAddress 
+                                          address={output.address}
+                                          className="text-xs flex-1 min-w-0"
+                                        />
                                         <span className="text-muted-foreground">
                                           {formatSats(output.amount)}
                                         </span>
