@@ -8,16 +8,13 @@ import {
   ArrowLeft, 
   Search as SearchIcon, 
   Hash, 
-  ExternalLink, 
-  Copy
+  ExternalLink
 } from "lucide-react";
 import { BlockchainToggle } from "@/components/BlockchainToggle";
 import { db, subscribeToDbChanges, type Record as DbRecord, type VaultMetadata, type AddressImportance, type ChainType, type CustomField, type BlockchainTransaction, type TransactionParticipant } from "@/lib/database";
 import { decryptRecords, isEncryptionReady } from "@/lib/encryptionFacade";
 import { RecordTypeBadge } from "@/components/RecordTypeBadge";
-import { useToast } from "@/hooks/use-toast";
 
-import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
 import { RecordDetailPanel } from "@/components/RecordDetailPanel";
 import {
   Table,
@@ -83,7 +80,6 @@ function getImportanceBadgeVariant(importance?: AddressImportance): "default" | 
 
 export default function RecordsV2() {
   const [location, navigate] = useLocation();
-  const { toast } = useToast();
   
   const [records, setRecords] = useState<ConvertedRecord[]>([]);
   const [filteredRecords, setFilteredRecords] = useState<ConvertedRecord[]>([]);
@@ -343,29 +339,6 @@ export default function RecordsV2() {
     }
   }, [records, searchQuery]);
 
-  const handleCopyAddress = async (address: string) => {
-    try {
-      await navigator.clipboard.writeText(address);
-      toast({
-        title: "Copied",
-        description: "Address copied to clipboard",
-      });
-    } catch (error) {
-      toast({
-        title: "Error",
-        description: "Failed to copy address",
-        variant: "destructive",
-      });
-    }
-  };
-
-  const handleOpenExplorer = (record: ConvertedRecord) => {
-    const baseUrl = record.type === 'transaction' 
-      ? `https://mempool.space/tx/` 
-      : `https://mempool.space/address/`;
-    window.open(`${baseUrl}${record.inputString}`, '_blank');
-  };
-
   const handleViewDetails = (record: ConvertedRecord) => {
     setSelectedRecord(record);
     setSheetOpen(true);
@@ -395,7 +368,7 @@ export default function RecordsV2() {
               <Badge variant="outline" className="text-xs">V2 Quick Actions</Badge>
             </div>
             <p className="text-muted-foreground">
-              Hover over addresses for quick preview, click any row for full details
+              Click any row to view full details
             </p>
           </div>
         </div>
@@ -531,41 +504,14 @@ export default function RecordsV2() {
                           {record.label || "-"}
                         </TableCell>
                         <TableCell>
-                          <HoverCard openDelay={200} closeDelay={100}>
-                            <HoverCardTrigger asChild>
-                              <span
-                                className="font-mono text-sm cursor-pointer hover:text-primary transition-colors"
-                                data-testid={`hover-trigger-${record.id}`}
-                              >
-                                {record.inputString.length > 20 
-                                  ? `${record.inputString.slice(0, 10)}...${record.inputString.slice(-8)}`
-                                  : record.inputString}
-                              </span>
-                            </HoverCardTrigger>
-                            <HoverCardContent 
-                              className="w-auto max-w-md p-3 border shadow-lg bg-white dark:bg-zinc-900" 
-                              align="start"
-                              sideOffset={5}
-                            >
-                              <div className="flex items-center gap-2">
-                                <code className="font-mono text-xs break-all select-all">
-                                  {record.inputString}
-                                </code>
-                                <Button 
-                                  size="icon" 
-                                  variant="ghost"
-                                  className="h-7 w-7 shrink-0"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    handleCopyAddress(record.inputString);
-                                  }}
-                                  data-testid={`hover-copy-${record.id}`}
-                                >
-                                  <Copy className="h-3.5 w-3.5" />
-                                </Button>
-                              </div>
-                            </HoverCardContent>
-                          </HoverCard>
+                          <span
+                            className="font-mono text-sm"
+                            data-testid={`address-${record.id}`}
+                          >
+                            {record.inputString.length > 20 
+                              ? `${record.inputString.slice(0, 10)}...${record.inputString.slice(-8)}`
+                              : record.inputString}
+                          </span>
                         </TableCell>
                         <TableCell>
                           <span className="text-sm">{record.owner || "-"}</span>
