@@ -37,6 +37,7 @@ import { SiBitcoin } from "react-icons/si";
 import { decryptRecords, isEncryptionReady, getDecryptedOwners, getDecryptedWalletNames, getDecryptedTags, getDecryptedCategories } from "@/lib/encryptionFacade";
 import { cn } from "@/lib/utils";
 import { UTXODetailPanel } from "@/components/UTXODetailPanel";
+import { ClickableAddress } from "@/components/ClickableAddress";
 
 const ITEMS_PER_PAGE = 50;
 const SETTINGS_KEY = "kyutxo-utxos-settings";
@@ -1001,9 +1002,12 @@ export default function UTXOs() {
                             <ChevronRightIcon className="h-4 w-4" />
                           )}
                         </TableCell>
-                        <TableCell className="font-mono text-sm">
+                        <TableCell>
                           <div className="flex flex-col gap-1">
-                            <span title={group.address}>{truncateAddress(group.address)}</span>
+                            <ClickableAddress 
+                              address={group.address} 
+                              className="text-sm"
+                            />
                             {group.label && (
                               <span className="text-xs text-muted-foreground">{group.label}</span>
                             )}

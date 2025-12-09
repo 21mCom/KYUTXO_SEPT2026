@@ -38,6 +38,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useOwners } from "@/hooks/use-owners";
 import { useWalletNames } from "@/hooks/use-wallet-names";
 import { RecordFormDialog } from "@/components/RecordFormDialog";
+import { ClickableAddress } from "@/components/ClickableAddress";
 import { useTags } from "@/hooks/use-tags";
 import { useCategories } from "@/hooks/use-categories";
 import { useSeedNames } from "@/hooks/use-seed-names";
@@ -724,9 +725,10 @@ export default function AddressReuse() {
                                   {item.record.label}
                                 </span>
                               )}
-                              <span className="font-mono text-sm text-muted-foreground truncate">
-                                {truncate(item.address, 10, 10)}
-                              </span>
+                              <ClickableAddress 
+                                address={item.address} 
+                                className="text-sm text-muted-foreground"
+                              />
                             </div>
                           </div>
 

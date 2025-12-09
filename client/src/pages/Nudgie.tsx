@@ -38,6 +38,7 @@ import { useSeedNames } from "@/hooks/use-seed-names";
 import { useWalletSoftware } from "@/hooks/use-wallet-software";
 import { useCustomFields } from "@/hooks/use-settings";
 import { RecordFormDialog } from "@/components/RecordFormDialog";
+import { ClickableAddress } from "@/components/ClickableAddress";
 import { 
   ArrowDownLeft, 
   ArrowUpRight,
@@ -697,14 +698,10 @@ export default function Nudgie() {
             ) : (
               <ArrowDownLeft className="h-3 w-3 text-green-600 flex-shrink-0" />
             )}
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span className="font-mono text-xs truncate cursor-help">{truncate(addr.address)}</span>
-              </TooltipTrigger>
-              <TooltipContent className="font-mono text-xs">
-                {addr.address}
-              </TooltipContent>
-            </Tooltip>
+            <ClickableAddress 
+              address={addr.address} 
+              className="text-xs truncate"
+            />
           </div>
           <div className="flex items-center gap-1 flex-shrink-0">
             <span className="text-xs font-medium">{formatSats(addr.amount)}</span>
