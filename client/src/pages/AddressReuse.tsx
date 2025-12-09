@@ -44,11 +44,6 @@ import { useCategories } from "@/hooks/use-categories";
 import { useSeedNames } from "@/hooks/use-seed-names";
 import { useWalletSoftware } from "@/hooks/use-wallet-software";
 
-function truncate(str: string, start = 8, end = 8): string {
-  if (str.length <= start + end + 3) return str;
-  return `${str.slice(0, start)}...${str.slice(-end)}`;
-}
-
 type ReuseReason = 'multi-receive' | 'change-to-self' | 'both';
 
 interface AddressReuseInfo {

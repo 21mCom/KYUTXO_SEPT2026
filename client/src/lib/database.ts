@@ -439,7 +439,7 @@ export class KYUTXODatabase extends Dexie {
       settings: 'id',
       priceData: '++id, [date+currency+asset], date, asset, currency, source, importedAt',
       blockchainTransactions: '++id, &txid, blockHeight, blockTime, syncedAt',
-      transactionParticipants: '++id, txid, role, address, recordId',
+      transactionParticipants: '++id, [txid+role], txid, role, address, recordId',
       addressSyncState: '++id, &address, recordId, lastSyncedAt',
       nodeSettings: 'id',
       derivationTemplates: '++id, fingerprint, scriptType, owner, walletName, seedName, createdAt, isEncrypted'
@@ -461,7 +461,7 @@ export class KYUTXODatabase extends Dexie {
       settings: 'id',
       priceData: '++id, [date+currency+asset], date, asset, currency, source, importedAt',
       blockchainTransactions: '++id, &txid, blockHeight, blockTime, syncedAt',
-      transactionParticipants: '++id, txid, role, address, recordId',
+      transactionParticipants: '++id, [txid+role], txid, role, address, recordId',
       addressSyncState: '++id, &address, recordId, lastSyncedAt',
       nodeSettings: 'id',
       derivationTemplates: '++id, fingerprint, scriptType, owner, walletName, seedName, createdAt, isEncrypted'
@@ -526,7 +526,7 @@ export class KYUTXODatabase extends Dexie {
       settings: 'id',
       priceData: '++id, [date+currency+asset], date, asset, currency, source, importedAt',
       blockchainTransactions: '++id, &txid, blockHeight, blockTime, syncedAt',
-      transactionParticipants: '++id, txid, role, address, recordId',
+      transactionParticipants: '++id, [txid+role], txid, role, address, recordId',
       addressSyncState: '++id, &address, recordId, lastSyncedAt',
       nodeSettings: 'id',
       derivationTemplates: '++id, fingerprint, scriptType, owner, walletName, seedName, createdAt, isEncrypted'
@@ -547,7 +547,7 @@ export class KYUTXODatabase extends Dexie {
       settings: 'id',
       priceData: '++id, [date+currency+asset], date, asset, currency, source, importedAt',
       blockchainTransactions: '++id, &txid, blockHeight, blockTime, syncedAt',
-      transactionParticipants: '++id, txid, role, address, recordId',
+      transactionParticipants: '++id, [txid+role], txid, role, address, recordId',
       addressSyncState: '++id, &address, recordId, lastSyncedAt',
       nodeSettings: 'id'
     });
@@ -567,7 +567,7 @@ export class KYUTXODatabase extends Dexie {
       settings: 'id',
       priceData: '++id, [date+currency+asset], date, asset, currency, source, importedAt',
       blockchainTransactions: '++id, &txid, blockHeight, blockTime, syncedAt',
-      transactionParticipants: '++id, txid, role, address, recordId',
+      transactionParticipants: '++id, [txid+role], txid, role, address, recordId',
       addressSyncState: '++id, &address, recordId, lastSyncedAt'
     });
     
@@ -583,7 +583,7 @@ export class KYUTXODatabase extends Dexie {
       settings: 'id',
       priceData: '++id, [date+currency+asset], date, asset, currency, source, importedAt',
       blockchainTransactions: '++id, &txid, blockHeight, blockTime, syncedAt',
-      transactionParticipants: '++id, txid, role, address, recordId',
+      transactionParticipants: '++id, [txid+role], txid, role, address, recordId',
       addressSyncState: '++id, &address, recordId, lastSyncedAt'
     }).upgrade(tx => {
       return tx.table('records').toCollection().modify((record: any) => {
@@ -627,7 +627,7 @@ export class KYUTXODatabase extends Dexie {
       settings: 'id',
       priceData: '++id, [date+currency+asset], date, asset, currency, source, importedAt',
       blockchainTransactions: '++id, &txid, blockHeight, blockTime, syncedAt',
-      transactionParticipants: '++id, txid, role, address, recordId',
+      transactionParticipants: '++id, [txid+role], txid, role, address, recordId',
       addressSyncState: '++id, &address, recordId, lastSyncedAt'
     }).upgrade(async (tx) => {
       // Fix: Reset maxSyncedDepth to -1 for records that haven't actually been synced
@@ -667,7 +667,7 @@ export class KYUTXODatabase extends Dexie {
       settings: 'id',
       priceData: '++id, [date+currency+asset], date, asset, currency, source, importedAt',
       blockchainTransactions: '++id, &txid, blockHeight, blockTime, syncedAt',
-      transactionParticipants: '++id, txid, role, address, recordId',
+      transactionParticipants: '++id, [txid+role], txid, role, address, recordId',
       addressSyncState: '++id, &address, recordId, lastSyncedAt'
     }).upgrade(tx => {
       // Migration: set syncDepth=0 for existing manually-entered addresses
@@ -694,7 +694,7 @@ export class KYUTXODatabase extends Dexie {
       settings: 'id',
       priceData: '++id, [date+currency+asset], date, asset, currency, source, importedAt',
       blockchainTransactions: '++id, &txid, blockHeight, blockTime, syncedAt',
-      transactionParticipants: '++id, txid, role, address, recordId',
+      transactionParticipants: '++id, [txid+role], txid, role, address, recordId',
       addressSyncState: '++id, &address, recordId, lastSyncedAt'
     }).upgrade(tx => {
       // No data migration needed - new tables are empty

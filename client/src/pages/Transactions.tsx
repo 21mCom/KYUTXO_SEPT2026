@@ -46,12 +46,6 @@ function formatSats(sats: number | undefined): string {
   return `${sats} sats`;
 }
 
-// Truncate txid/address for display
-function truncate(str: string, start = 8, end = 8): string {
-  if (str.length <= start + end + 3) return str;
-  return `${str.slice(0, start)}...${str.slice(-end)}`;
-}
-
 interface TransactionWithParticipants extends BlockchainTransaction {
   inputs: TransactionParticipant[];
   outputs: TransactionParticipant[];
