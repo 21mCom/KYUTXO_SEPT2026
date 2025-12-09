@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import { SiBitcoin } from "react-icons/si";
 import { useFlowData, type FlowNode } from "@/hooks/use-flow-data";
+import { ClickableAddress } from "@/components/ClickableAddress";
 
 const generateLineChartData = (nodes: FlowNode[]) => {
   const sortedNodes = [...nodes]
@@ -383,7 +384,10 @@ export default function BitcoinFlowVisualizer() {
                               {node.hop}
                             </Badge>
                             <div className="w-24 text-xs text-muted-foreground">{node.timestamp}</div>
-                            <div className="w-32 font-mono text-xs truncate" title={node.address}>{node.address}</div>
+                            <ClickableAddress 
+                              address={node.address} 
+                              className="w-32 text-xs truncate"
+                            />
                             <div className="flex-1 flex items-center gap-1">
                               <div 
                                 className="h-4 rounded"
@@ -406,7 +410,10 @@ export default function BitcoinFlowVisualizer() {
                           <div className="flex items-center gap-2 px-2 py-3 rounded bg-primary/10 border border-primary/20">
                             <Badge className="w-8 justify-center text-xs">0</Badge>
                             <div className="w-24 text-xs">{selectedNode.timestamp}</div>
-                            <div className="w-32 font-mono text-xs font-bold truncate" title={selectedNode.address}>{selectedNode.address}</div>
+                            <ClickableAddress 
+                              address={selectedNode.address} 
+                              className="w-32 text-xs font-bold truncate"
+                            />
                             <div className="flex-1 flex items-center gap-1">
                               <div 
                                 className="h-6 rounded flex items-center justify-center text-xs text-primary-foreground font-medium"
@@ -435,7 +442,10 @@ export default function BitcoinFlowVisualizer() {
                               +{node.hop}
                             </Badge>
                             <div className="w-24 text-xs text-muted-foreground">{node.timestamp}</div>
-                            <div className="w-32 font-mono text-xs truncate" title={node.address}>{node.address}</div>
+                            <ClickableAddress 
+                              address={node.address} 
+                              className="w-32 text-xs truncate"
+                            />
                             <div className="flex-1 flex items-center gap-1">
                               <ArrowRight className="h-3 w-3 text-muted-foreground" />
                               <div 
