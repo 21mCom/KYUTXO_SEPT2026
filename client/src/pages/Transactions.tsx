@@ -392,9 +392,10 @@ export default function Transactions() {
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2">
                             <Hash className="h-4 w-4 text-muted-foreground flex-shrink-0" />
-                            <code className="text-sm font-mono truncate" data-testid={`text-txid-${tx.txid.slice(0, 8)}`}>
-                              {truncate(tx.txid, 12, 12)}
-                            </code>
+                            <ClickableAddress 
+                              address={tx.txid} 
+                              className="flex-1 min-w-0"
+                            />
                             <a
                               href={`https://mempool.space/tx/${tx.txid}`}
                               target="_blank"

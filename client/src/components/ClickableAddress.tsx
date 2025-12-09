@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useLocation } from "wouter";
 import { db, type Record as DbRecord, type ChainType, type AddressImportance, type VaultMetadata, type FlowType, type AcquisitionMethod, type DispositionType, type CounterpartyType } from "@/lib/database";
 import { decryptRecords, isEncryptionReady } from "@/lib/encryptionFacade";
@@ -6,10 +6,7 @@ import { RecordDetailPanel } from "./RecordDetailPanel";
 
 interface ClickableAddressProps {
   address: string;
-  truncate?: boolean;
-  truncateLength?: number;
   className?: string;
-  showFullOnHover?: boolean;
 }
 
 interface ConvertedRecord {
@@ -44,19 +41,43 @@ interface ConvertedRecord {
 
 export function ClickableAddress({ 
   address, 
-  truncate = true, 
-  truncateLength = 20,
   className = "",
-  showFullOnHover = false
 }: ClickableAddressProps) {
   const [, navigate] = useLocation();
   const [isOpen, setIsOpen] = useState(false);
   const [record, setRecord] = useState<ConvertedRecord | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [hasMetadata, setHasMetadata] = useState(false);
 
-  const displayAddress = truncate && address.length > truncateLength
-    ? `${address.slice(0, 10)}...${address.slice(-8)}`
-    : address;
+  useEffect(() => {
+    if (!address) return;
+    
+    const checkMetadata = async () => {
+      try {
+        const dbRecord = await db.records
+          .where('inputString')
+          .equals(address)
+          .first();
+        
+        if (dbRecord) {
+          const hasLabel = Boolean(dbRecord.label && dbRecord.label.length > 0);
+          const hasNotes = Boolean(dbRecord.notes && dbRecord.notes.length > 0);
+          const hasTags = Boolean(dbRecord.tags && dbRecord.tags.length > 0);
+          const hasCategories = Boolean(dbRecord.categories && dbRecord.categories.length > 0);
+          const hasOwner = Boolean(dbRecord.owner && dbRecord.owner.length > 0);
+          const hasWalletName = Boolean(dbRecord.walletName && dbRecord.walletName.length > 0);
+          
+          setHasMetadata(hasLabel || hasNotes || hasTags || hasCategories || hasOwner || hasWalletName);
+        } else {
+          setHasMetadata(false);
+        }
+      } catch {
+        setHasMetadata(false);
+      }
+    };
+    
+    checkMetadata();
+  }, [address]);
 
   const handleClick = async (e: React.MouseEvent) => {
     e.preventDefault();
@@ -128,15 +149,13 @@ export function ClickableAddress({
 
   return (
     <>
-      <button
+      <span
         onClick={handleClick}
-        className={`font-mono text-sm text-left hover:text-primary hover:underline transition-colors cursor-pointer ${className}`}
-        title={showFullOnHover ? address : undefined}
-        disabled={isLoading}
+        className={`font-mono text-sm text-left inline-block max-w-full overflow-hidden text-ellipsis whitespace-nowrap ${hasMetadata ? 'font-bold' : ''} ${className}`}
         data-testid={`clickable-address-${address.slice(0, 8)}`}
       >
-        {isLoading ? "..." : displayAddress}
-      </button>
+        {isLoading ? "..." : address}
+      </span>
       
       <RecordDetailPanel
         open={isOpen}
