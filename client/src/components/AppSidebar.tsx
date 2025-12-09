@@ -127,6 +127,7 @@ const devToolsGroup: NavGroup = {
   icon: Wrench,
   defaultOpen: false,
   items: [
+    { title: "Records V2", url: "/records-v2", icon: Database },
     { title: "UI Assets", url: "/dev/ui-assets", icon: Palette },
     { title: "Icons Reference", url: "/dev/icons", icon: Shapes },
     { title: "Nav Patterns", url: "/dev/nav-patterns", icon: PanelLeft },
@@ -146,7 +147,7 @@ export function AppSidebar() {
       state[group.id] = hasActiveItem || (group.defaultOpen ?? false);
     });
     
-    const devToolsActive = location.startsWith("/dev/");
+    const devToolsActive = location.startsWith("/dev/") || location === "/records-v2";
     state[devToolsGroup.id] = devToolsActive || (devToolsGroup.defaultOpen ?? false);
     
     return state;
@@ -165,7 +166,7 @@ export function AppSidebar() {
         }
       });
       
-      const devToolsActive = location.startsWith("/dev/");
+      const devToolsActive = location.startsWith("/dev/") || location === "/records-v2";
       if (devToolsActive && !prev[devToolsGroup.id]) {
         newState[devToolsGroup.id] = true;
       }

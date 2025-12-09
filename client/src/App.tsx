@@ -23,6 +23,7 @@ import Provenance from "@/pages/Provenance";
 import AddressReuse from "@/pages/AddressReuse";
 import DataStats from "@/pages/DataStats";
 import Records from "@/pages/Records";
+import RecordsV2 from "@/pages/RecordsV2";
 import QRScanner from "@/pages/QRScanner";
 import ExportPage from "@/pages/ExportPage";
 import SettingsPage from "@/pages/SettingsPage";
@@ -57,6 +58,7 @@ function AppRoutes() {
       <Route path="/address-reuse" component={AddressReuse} />
       <Route path="/data-stats" component={DataStats} />
       <Route path="/records" component={Records} />
+      <Route path="/records-v2" component={RecordsV2} />
       <Route path="/scanner" component={QRScanner} />
       <Route path="/export" component={ExportPage} />
       <Route path="/settings" component={SettingsPage} />
