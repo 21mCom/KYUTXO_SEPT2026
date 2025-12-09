@@ -9,15 +9,12 @@ import {
   Search as SearchIcon, 
   Hash, 
   ExternalLink, 
-  Eye,
-  Pencil,
-  Wallet
+  Copy
 } from "lucide-react";
 import { BlockchainToggle } from "@/components/BlockchainToggle";
 import { db, subscribeToDbChanges, type Record as DbRecord, type VaultMetadata, type AddressImportance, type ChainType, type CustomField, type BlockchainTransaction, type TransactionParticipant } from "@/lib/database";
 import { decryptRecords, isEncryptionReady } from "@/lib/encryptionFacade";
 import { RecordTypeBadge } from "@/components/RecordTypeBadge";
-import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/hooks/use-toast";
 
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
@@ -534,89 +531,38 @@ export default function RecordsV2() {
                           {record.label || "-"}
                         </TableCell>
                         <TableCell>
-                          <HoverCard>
+                          <HoverCard openDelay={200} closeDelay={100}>
                             <HoverCardTrigger asChild>
-                              <button
-                                className="font-mono text-sm text-left hover:text-primary transition-colors"
-                                onClick={(e) => e.stopPropagation()}
+                              <span
+                                className="font-mono text-sm cursor-pointer hover:text-primary transition-colors"
                                 data-testid={`hover-trigger-${record.id}`}
                               >
                                 {record.inputString.length > 20 
                                   ? `${record.inputString.slice(0, 10)}...${record.inputString.slice(-8)}`
                                   : record.inputString}
-                              </button>
+                              </span>
                             </HoverCardTrigger>
-                            <HoverCardContent className="w-80 border shadow-lg bg-white dark:bg-zinc-900" align="start">
-                              <div className="space-y-3">
-                                <div className="flex items-center gap-2">
-                                  <Wallet className="h-4 w-4 text-primary" />
-                                  <span className="font-semibold">Quick Preview</span>
-                                  <Badge variant={getImportanceBadgeVariant(record.addressImportance)} className="text-xs ml-auto">
-                                    {formatAddressImportance(record.addressImportance)}
-                                  </Badge>
-                                </div>
-                                <div className="space-y-2 text-sm">
-                                  <div className="flex justify-between">
-                                    <span className="text-muted-foreground">Owner</span>
-                                    <span>{record.owner || "Unknown"}</span>
-                                  </div>
-                                  <div className="flex justify-between">
-                                    <span className="text-muted-foreground">Wallet</span>
-                                    <span>{record.walletName || "-"}</span>
-                                  </div>
-                                  {record.seedName && (
-                                    <div className="flex justify-between">
-                                      <span className="text-muted-foreground">Seed</span>
-                                      <span>{record.seedName}</span>
-                                    </div>
-                                  )}
-                                  {record.tags.length > 0 && (
-                                    <div className="flex justify-between items-start">
-                                      <span className="text-muted-foreground">Tags</span>
-                                      <div className="flex gap-1 flex-wrap justify-end max-w-[150px]">
-                                        {record.tags.slice(0, 3).map((tag) => (
-                                          <Badge key={tag} variant="secondary" className="text-xs">{tag}</Badge>
-                                        ))}
-                                        {record.tags.length > 3 && (
-                                          <Badge variant="outline" className="text-xs">+{record.tags.length - 3}</Badge>
-                                        )}
-                                      </div>
-                                    </div>
-                                  )}
-                                  {record.notes && (
-                                    <div className="pt-2 border-t">
-                                      <span className="text-muted-foreground text-xs">Notes:</span>
-                                      <p className="text-xs mt-1 line-clamp-2">{record.notes}</p>
-                                    </div>
-                                  )}
-                                </div>
-                                <Separator />
-                                <div className="flex gap-2">
-                                  <Button 
-                                    size="sm" 
-                                    variant="outline" 
-                                    className="flex-1"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      handleViewDetails(record);
-                                    }}
-                                    data-testid={`hover-view-${record.id}`}
-                                  >
-                                    <Eye className="h-3 w-3 mr-1" /> View
-                                  </Button>
-                                  <Button 
-                                    size="sm" 
-                                    variant="outline" 
-                                    className="flex-1"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      handleEditRecord(record);
-                                    }}
-                                    data-testid={`hover-edit-${record.id}`}
-                                  >
-                                    <Pencil className="h-3 w-3 mr-1" /> Edit
-                                  </Button>
-                                </div>
+                            <HoverCardContent 
+                              className="w-auto max-w-md p-3 border shadow-lg bg-white dark:bg-zinc-900" 
+                              align="start"
+                              sideOffset={5}
+                            >
+                              <div className="flex items-center gap-2">
+                                <code className="font-mono text-xs break-all select-all">
+                                  {record.inputString}
+                                </code>
+                                <Button 
+                                  size="icon" 
+                                  variant="ghost"
+                                  className="h-7 w-7 shrink-0"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleCopyAddress(record.inputString);
+                                  }}
+                                  data-testid={`hover-copy-${record.id}`}
+                                >
+                                  <Copy className="h-3.5 w-3.5" />
+                                </Button>
                               </div>
                             </HoverCardContent>
                           </HoverCard>
