@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, useCallback, useEffect, type ReactNode } from "react";
 import { useLocation } from "wouter";
-import { db, type Record as DbRecord, type Attachment, type VaultMetadata, type AddressImportance, type ChainType, type CustomField } from "@/lib/database";
+import { db, type Record as DbRecord, type Attachment, type VaultMetadata, type AddressImportance, type ChainType, type CustomField, type FlowType, type AcquisitionMethod, type DispositionType, type CounterpartyType } from "@/lib/database";
 import { decryptRecords, isEncryptionReady } from "@/lib/encryptionFacade";
 import { RecordDetailPanel } from "@/components/RecordDetailPanel";
 import { useToast } from "@/hooks/use-toast";
@@ -38,6 +38,13 @@ interface RecordForPanel {
   maxSyncedDepth?: number;
   discoveredInTxid?: string;
   discoveredFromRecordId?: number;
+  // Transaction classification metadata
+  flowType?: FlowType;
+  acquisitionMethod?: AcquisitionMethod;
+  dispositionType?: DispositionType;
+  costBasisUsd?: number;
+  // Address counterparty metadata
+  counterpartyType?: CounterpartyType;
 }
 
 export function RecordPreviewProvider({ children }: { children: ReactNode }) {
@@ -123,6 +130,13 @@ export function RecordPreviewProvider({ children }: { children: ReactNode }) {
         maxSyncedDepth: decryptedRecord.maxSyncedDepth,
         discoveredInTxid: decryptedRecord.discoveredInTxid || undefined,
         discoveredFromRecordId: decryptedRecord.discoveredFromRecordId,
+        // Transaction classification metadata
+        flowType: decryptedRecord.flowType || undefined,
+        acquisitionMethod: decryptedRecord.acquisitionMethod || undefined,
+        dispositionType: decryptedRecord.dispositionType || undefined,
+        costBasisUsd: decryptedRecord.costBasisUsd,
+        // Address counterparty metadata
+        counterpartyType: decryptedRecord.counterpartyType || undefined,
       };
 
       setRecord(panelRecord);
@@ -187,6 +201,13 @@ export function RecordPreviewProvider({ children }: { children: ReactNode }) {
         maxSyncedDepth: decryptedRecord.maxSyncedDepth,
         discoveredInTxid: decryptedRecord.discoveredInTxid || undefined,
         discoveredFromRecordId: decryptedRecord.discoveredFromRecordId,
+        // Transaction classification metadata
+        flowType: decryptedRecord.flowType || undefined,
+        acquisitionMethod: decryptedRecord.acquisitionMethod || undefined,
+        dispositionType: decryptedRecord.dispositionType || undefined,
+        costBasisUsd: decryptedRecord.costBasisUsd,
+        // Address counterparty metadata
+        counterpartyType: decryptedRecord.counterpartyType || undefined,
       };
 
       setRecord(panelRecord);
