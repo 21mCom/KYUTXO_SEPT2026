@@ -33,10 +33,10 @@ jobs:
         run: npm run build
 
       - name: Build Electron app
-        run: npm run electron:build
+        run: npx electron-builder --config electron-builder.json --win
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: kyutxo-windows
-          path: dist/*.exe
+          path: release/*.exe
