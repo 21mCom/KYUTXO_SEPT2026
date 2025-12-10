@@ -62,8 +62,6 @@
     "dexie-react-hooks": "^4.2.0",
     "drizzle-orm": "^0.39.1",
     "drizzle-zod": "^0.7.0",
-    "electron": "^39.2.3",
-    "electron-builder": "^26.0.12",
     "embla-carousel-react": "^8.6.0",
     "express": "^4.21.2",
     "express-session": "^1.18.1",
@@ -100,6 +98,9 @@
     "zod-validation-error": "^3.4.0"
   },
   "devDependencies": {
+    "@replit/vite-plugin-cartographer": "^0.4.4",
+    "electron": "^39.2.3",
+    "electron-builder": "^26.0.12",
     "@replit/vite-plugin-cartographer": "^0.4.4",
     "@replit/vite-plugin-dev-banner": "^0.1.1",
     "@replit/vite-plugin-runtime-error-modal": "^0.0.3",
