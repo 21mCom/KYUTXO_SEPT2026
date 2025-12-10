@@ -15,6 +15,56 @@ interface RecordPreviewContextType {
 
 const RecordPreviewContext = createContext<RecordPreviewContextType | null>(null);
 
+// Priority ranking for addressImportance - higher number = better priority
+const IMPORTANCE_PRIORITY: { [key: string]: number } = {
+  'verified': 6,
+  'manual': 5,
+  'wallet-import': 4,
+  'xpub-derived': 3,
+  'blockchain-discovered': 2,
+  'pending-review': 1,
+};
+
+// Score a record based on metadata richness - used to select best record when duplicates exist
+function scoreRecordMetadata(record: DbRecord): number {
+  let score = 0;
+  
+  // Priority based on addressImportance
+  if (record.addressImportance) {
+    score += (IMPORTANCE_PRIORITY[record.addressImportance] || 0) * 100;
+  }
+  
+  // Prefer non-blockchain-sync sources
+  if (record.source && record.source !== 'blockchain-sync') {
+    score += 50;
+  }
+  
+  // Score based on metadata presence
+  if (record.label && record.label !== 'Unlabeled' && record.label !== '') score += 10;
+  if (record.owner && record.owner !== 'Pending Review') score += 10;
+  if (record.walletName) score += 10;
+  if (record.seedName) score += 10;
+  if (record.walletSoftware) score += 5;
+  if (record.notes) score += 5;
+  if (record.tags && record.tags.length > 0) score += 5;
+  if (record.categories && record.categories.length > 0) score += 5;
+  if (record.derivationPath) score += 5;
+  if (record.counterpartyType) score += 5;
+  
+  return score;
+}
+
+// Select the best record from a list of duplicates based on metadata richness
+function selectBestRecord(records: DbRecord[]): DbRecord {
+  if (records.length === 1) return records[0];
+  
+  return records.reduce((best, current) => {
+    const bestScore = scoreRecordMetadata(best);
+    const currentScore = scoreRecordMetadata(current);
+    return currentScore > bestScore ? current : best;
+  });
+}
+
 interface RecordForPanel {
   id: string;
   type: "address" | "transaction" | "other";
@@ -170,13 +220,16 @@ export function RecordPreviewProvider({ children }: { children: ReactNode }) {
         return;
       }
 
-      let decryptedRecord: DbRecord;
+      // Decrypt all records, then select the best one based on metadata richness
+      let decryptedRecords: DbRecord[];
       if (isEncryptionReady()) {
-        const decrypted = await decryptRecords(rawRecords);
-        decryptedRecord = decrypted[0];
+        decryptedRecords = await decryptRecords(rawRecords);
       } else {
-        decryptedRecord = rawRecords[0];
+        decryptedRecords = rawRecords;
       }
+      
+      // Select the record with the richest metadata (prefer wallet-import over blockchain-sync)
+      const decryptedRecord = selectBestRecord(decryptedRecords);
 
       const panelRecord: RecordForPanel = {
         id: String(decryptedRecord.id),
