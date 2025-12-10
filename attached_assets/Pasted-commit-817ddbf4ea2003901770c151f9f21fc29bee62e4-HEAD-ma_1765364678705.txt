@@ -1,0 +1,51 @@
+commit 817ddbf4ea2003901770c151f9f21fc29bee62e4 (HEAD -> main, gitsafe-backup/main)
+Author: balibule <44541060-balibule@users.noreply.replit.com>
+Date:   Tue Dec 9 03:02:33 2025 +0000
+
+    Saved progress at the end of the loop
+    
+    Replit-Commit-Author: Agent
+    Replit-Commit-Session-Id: 040b7a99-bfb5-4e25-bf54-10bc692ee29c
+    Replit-Commit-Checkpoint-Type: full_checkpoint
+    Replit-Commit-Event-Id: 9ebb1cc6-0d1f-4f10-a18b-7efc2557ddbc
+    Replit-Commit-Screenshot-Url: https://storage.googleapis.com/screenshot-production-us-central1/63ebd98e-fd50-4c32-a367-58f9ec62787c/040b7a99-bfb5-4e25-bf54-10bc692ee29c/7W2YS1E
+    Replit-Helium-Checkpoint-Created: true
+
+commit 357fcd5fcedadbded4187f860d34c879436eb5c6
+Author: balibule <44541060-balibule@users.noreply.replit.com>
+Date:   Tue Dec 9 03:01:54 2025 +0000
+
+    Update database schema to include new compound index for transaction participants
+    
+    Adds version 16 to the Dexie database schema, introducing a compound index `[txid+role]` on the `transactionParticipants` table for improved query performance. This change targets efficient retrieval of transaction data based on transaction ID and role.
+    
+    Replit-Commit-Author: Agent
+    Replit-Commit-Session-Id: 040b7a99-bfb5-4e25-bf54-10bc692ee29c
+    Replit-Commit-Checkpoint-Type: intermediate_checkpoint
+    Replit-Commit-Event-Id: ccd6228e-77d1-44d2-a7a0-1eb7b4487933
+    Replit-Commit-Screenshot-Url: https://storage.googleapis.com/screenshot-production-us-central1/63ebd98e-fd50-4c32-a367-58f9ec62787c/040b7a99-bfb5-4e25-bf54-10bc692ee29c/7W2YS1E
+    Replit-Helium-Checkpoint-Created: true
+
+commit 1daeeb50e54d2ab9353ef0c6528e2264e42e601e
+Author: balibule <44541060-balibule@users.noreply.replit.com>
+Date:   Tue Dec 9 02:57:25 2025 +0000
+
+    Improve data organization by adding a new index to participant transactions
+    
+    Adds a compound index `[txid+role]` to the `transactionParticipants` table across multiple versions of the database schema and removes unused `truncate` helper functions from `AddressReuse.tsx` and `Transactions.tsx`.
+    
+    Replit-Commit-Author: Agent
+    Replit-Commit-Session-Id: 040b7a99-bfb5-4e25-bf54-10bc692ee29c
+    Replit-Commit-Checkpoint-Type: intermediate_checkpoint
+    Replit-Commit-Event-Id: 31ccb5da-486f-47fe-bcf0-204be5ca095e
+    Replit-Commit-Screenshot-Url: https://storage.googleapis.com/screenshot-production-us-central1/63ebd98e-fd50-4c32-a367-58f9ec62787c/040b7a99-bfb5-4e25-bf54-10bc692ee29c/7W2YS1E
+    Replit-Helium-Checkpoint-Created: true
+
+commit b0ce0756d1b0f1a0e82511dae5b1ec30e8ccc218
+Author: balibule <44541060-balibule@users.noreply.replit.com>
+Date:   Tue Dec 9 02:54:54 2025 +0000
+
+    Update addresses and transaction IDs to be clickable and responsive
+    
+    Replaces truncated text displays of addresses and transaction IDs with a new ClickableAddress component across multiple pages, ensuring they are fully displayed when space permits and remain clickable.
+:
