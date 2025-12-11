@@ -15,11 +15,12 @@ import {
 } from "recharts";
 import { 
   Search, Info, GitBranch, Clock, TrendingUp, 
-  ArrowRight, Loader2, Database, Globe, AlertCircle
+  ArrowRight, Loader2, Database, Globe, AlertCircle, Route
 } from "lucide-react";
 import { SiBitcoin } from "react-icons/si";
 import { useFlowData, type FlowNode } from "@/hooks/use-flow-data";
 import { ClickableAddress } from "@/components/ClickableAddress";
+import { HopPathExplorer } from "@/components/HopPathExplorer";
 
 const generateLineChartData = (nodes: FlowNode[]) => {
   const sortedNodes = [...nodes]
@@ -213,14 +214,18 @@ export default function BitcoinFlowVisualizer() {
 
         {flowData && (
           <Tabs defaultValue="sankey" className="space-y-4">
-            <TabsList className="grid w-full grid-cols-3" data-testid="tabs-visualization">
+            <TabsList className="grid w-full grid-cols-4" data-testid="tabs-visualization">
               <TabsTrigger value="sankey" className="flex items-center gap-2" data-testid="tab-sankey">
                 <GitBranch className="h-4 w-4" />
-                Sankey Diagram
+                Sankey
               </TabsTrigger>
               <TabsTrigger value="timeline" className="flex items-center gap-2" data-testid="tab-timeline">
                 <Clock className="h-4 w-4" />
-                Timeline Swimlanes
+                Timeline
+              </TabsTrigger>
+              <TabsTrigger value="hoppath" className="flex items-center gap-2" data-testid="tab-hoppath">
+                <Route className="h-4 w-4" />
+                Hop Path
               </TabsTrigger>
               <TabsTrigger value="linechart" className="flex items-center gap-2" data-testid="tab-linechart">
                 <TrendingUp className="h-4 w-4" />
@@ -541,6 +546,19 @@ export default function BitcoinFlowVisualizer() {
                   </div>
                 </CardContent>
               </Card>
+            </TabsContent>
+
+            <TabsContent value="hoppath" className="space-y-4">
+              <HopPathExplorer
+                nodes={flowData.nodes}
+                links={flowData.links}
+                centerAddress={searchAddress}
+                isLoading={isLoading}
+                onExploreAddress={(address) => {
+                  setSearchAddress(address);
+                  fetchFlow(address, hopDepth[0], allowBlockchainApi);
+                }}
+              />
             </TabsContent>
 
             <TabsContent value="linechart" className="space-y-4">

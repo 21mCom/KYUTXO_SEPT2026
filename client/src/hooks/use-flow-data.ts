@@ -69,6 +69,7 @@ export function useFlowData(): UseFlowDataResult {
   const [dataSource, setDataSource] = useState<'local' | 'blockchain' | null>(null);
 
   // Convert local provenance data to flow format
+  // Preserves multi-hop structure by using edge relationships
   const convertLocalDataToFlow = (
     address: string,
     result: AddressExplorationResult
@@ -77,11 +78,15 @@ export function useFlowData(): UseFlowDataResult {
     const links: FlowLink[] = [];
     let nodeIdCounter = 0;
 
+    // Map address to node ID for link resolution
+    const addressToNodeId = new Map<string, string>();
+    addressToNodeId.set(address, 'selected');
+
     // Add the selected (center) node
     const centerNode: FlowNode = {
       id: 'selected',
       address: address,
-      amount: 0, // Will be calculated from edges
+      amount: 0,
       timestamp: new Date().toISOString().split('T')[0],
       hop: 0,
       type: 'selected',
@@ -90,19 +95,22 @@ export function useFlowData(): UseFlowDataResult {
       isLabeled: result.centerNode?.isLabeled || false,
     };
 
-    // Calculate center value from edges
     let centerInputValue = 0;
     let centerOutputValue = 0;
 
-    // Process incoming connections (inputs)
-    result.incoming.forEach((conn: ConnectionNode) => {
-      const nodeId = `input-${nodeIdCounter++}`;
-      
-      // Calculate total value from edges
-      const totalValue = conn.edges.reduce((sum: number, e: TransactionEdge) => sum + e.amount, 0);
-      centerInputValue += totalValue;
+    // First pass: create all nodes and map addresses
+    // Sort by hop distance so closer nodes are created first
+    const sortedIncoming = [...result.incoming].sort((a, b) => a.hopDistance - b.hopDistance);
+    const sortedOutgoing = [...result.outgoing].sort((a, b) => a.hopDistance - b.hopDistance);
 
-      // Use the earliest edge timestamp
+    // Create incoming nodes
+    sortedIncoming.forEach((conn: ConnectionNode) => {
+      const nodeId = `input-${nodeIdCounter++}`;
+      addressToNodeId.set(conn.address, nodeId);
+      
+      const totalValue = conn.edges.reduce((sum: number, e: TransactionEdge) => sum + e.amount, 0);
+      if (conn.hopDistance === 1) centerInputValue += totalValue;
+
       const earliestEdge = conn.edges.reduce((earliest: TransactionEdge, e: TransactionEdge) => 
         e.blockTime < earliest.blockTime ? e : earliest, conn.edges[0]);
 
@@ -118,24 +126,15 @@ export function useFlowData(): UseFlowDataResult {
         label: conn.label,
         isLabeled: conn.isLabeled,
       });
-
-      // Add links from each edge
-      conn.edges.forEach((edge: TransactionEdge) => {
-        links.push({
-          source: nodeId,
-          target: 'selected',
-          value: satsToBtc(edge.amount),
-          txid: edge.txid,
-        });
-      });
     });
 
-    // Process outgoing connections (outputs)
-    result.outgoing.forEach((conn: ConnectionNode) => {
+    // Create outgoing nodes
+    sortedOutgoing.forEach((conn: ConnectionNode) => {
       const nodeId = `output-${nodeIdCounter++}`;
+      addressToNodeId.set(conn.address, nodeId);
       
       const totalValue = conn.edges.reduce((sum: number, e: TransactionEdge) => sum + e.amount, 0);
-      centerOutputValue += totalValue;
+      if (conn.hopDistance === 1) centerOutputValue += totalValue;
 
       const latestEdge = conn.edges.reduce((latest: TransactionEdge, e: TransactionEdge) => 
         e.blockTime > latest.blockTime ? e : latest, conn.edges[0]);
@@ -152,11 +151,53 @@ export function useFlowData(): UseFlowDataResult {
         label: conn.label,
         isLabeled: conn.isLabeled,
       });
+    });
 
+    // Second pass: create links using actual edge relationships
+    // For incoming: edge.toAddress is the destination (closer to center)
+    sortedIncoming.forEach((conn: ConnectionNode) => {
+      const sourceId = addressToNodeId.get(conn.address)!;
+      
       conn.edges.forEach((edge: TransactionEdge) => {
+        // For incoming flow, fromAddress sends to toAddress
+        // The target should be the node closer to center
+        const targetAddress = edge.toAddress;
+        let targetId = addressToNodeId.get(targetAddress);
+        
+        // If target not found, it's likely the center address
+        if (!targetId && targetAddress === address) {
+          targetId = 'selected';
+        } else if (!targetId) {
+          // Target might be an intermediate hop we have
+          targetId = 'selected'; // Fallback to center
+        }
+
         links.push({
-          source: 'selected',
-          target: nodeId,
+          source: sourceId,
+          target: targetId,
+          value: satsToBtc(edge.amount),
+          txid: edge.txid,
+        });
+      });
+    });
+
+    // For outgoing: edge.fromAddress is the source (closer to center)
+    sortedOutgoing.forEach((conn: ConnectionNode) => {
+      const targetId = addressToNodeId.get(conn.address)!;
+      
+      conn.edges.forEach((edge: TransactionEdge) => {
+        const sourceAddress = edge.fromAddress;
+        let sourceId = addressToNodeId.get(sourceAddress);
+        
+        if (!sourceId && sourceAddress === address) {
+          sourceId = 'selected';
+        } else if (!sourceId) {
+          sourceId = 'selected';
+        }
+
+        links.push({
+          source: sourceId,
+          target: targetId,
           value: satsToBtc(edge.amount),
           txid: edge.txid,
         });
