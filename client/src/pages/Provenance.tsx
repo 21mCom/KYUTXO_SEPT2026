@@ -76,6 +76,7 @@ import {
 import { db, type Record as DbRecord, type AddressImportance } from "@/lib/database";
 import { decryptRecords, isEncryptionReady } from "@/lib/encryptionFacade";
 import { formatDistanceToNow, format } from "date-fns";
+import { ContinuityProof } from "@/components/ContinuityProof";
 
 const ALL_IMPORTANCE_TIERS: AddressImportance[] = [
   'verified', 'manual', 'wallet-import', 'xpub-derived', 'blockchain-discovered', 'pending-review'
@@ -994,6 +995,11 @@ export default function Provenance() {
             )}
           </CardContent>
         </Card>
+        {/* Continuity Proof Section */}
+        <ContinuityProof 
+          selectedAddress={explorerAddress.trim() || undefined}
+          onAddressSelect={(address) => setExplorerAddress(address)}
+        />
       </div>
       
       {/* Upgrade Dialog */}

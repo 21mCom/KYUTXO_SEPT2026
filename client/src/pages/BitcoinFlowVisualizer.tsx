@@ -59,7 +59,16 @@ export default function BitcoinFlowVisualizer() {
     fetchFlow(searchAddress.trim(), hopDepth[0], allowBlockchainApi);
   };
 
-  const getNodeColor = (type: string) => {
+  const getNodeColor = (type: string, isOwned?: boolean) => {
+    // Owned addresses get green-tinted colors, external get default
+    if (isOwned) {
+      switch (type) {
+        case "input": return "hsl(142, 76%, 36%)"; // Green for owned inputs
+        case "selected": return "hsl(var(--primary))";
+        case "output": return "hsl(142, 76%, 36%)"; // Green for owned outputs  
+        default: return "hsl(var(--muted))";
+      }
+    }
     switch (type) {
       case "input": return "hsl(var(--chart-1))";
       case "selected": return "hsl(var(--primary))";
@@ -71,6 +80,12 @@ export default function BitcoinFlowVisualizer() {
   const inputNodes = flowData?.nodes.filter(n => n.type === "input") || [];
   const outputNodes = flowData?.nodes.filter(n => n.type === "output") || [];
   const selectedNode = flowData?.nodes.find(n => n.type === "selected");
+  
+  // Count owned vs external
+  const ownedInputs = inputNodes.filter(n => n.isLabeled || n.owner);
+  const externalInputs = inputNodes.filter(n => !n.isLabeled && !n.owner);
+  const ownedOutputs = outputNodes.filter(n => n.isLabeled || n.owner);
+  const externalOutputs = outputNodes.filter(n => !n.isLabeled && !n.owner);
 
   return (
     <ScrollArea className="h-full">
@@ -236,6 +251,14 @@ export default function BitcoinFlowVisualizer() {
                           <stop offset="0%" stopColor="hsl(var(--primary))" stopOpacity="0.6" />
                           <stop offset="100%" stopColor="hsl(var(--chart-2))" stopOpacity="0.8" />
                         </linearGradient>
+                        <linearGradient id="ownedInputGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+                          <stop offset="0%" stopColor="hsl(142, 76%, 36%)" stopOpacity="0.9" />
+                          <stop offset="100%" stopColor="hsl(var(--primary))" stopOpacity="0.7" />
+                        </linearGradient>
+                        <linearGradient id="ownedOutputGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+                          <stop offset="0%" stopColor="hsl(var(--primary))" stopOpacity="0.7" />
+                          <stop offset="100%" stopColor="hsl(142, 76%, 36%)" stopOpacity="0.9" />
+                        </linearGradient>
                       </defs>
 
                       {inputNodes.slice(0, 6).map((node, i) => {
@@ -243,14 +266,15 @@ export default function BitcoinFlowVisualizer() {
                         const spacing = 350 / (totalNodes + 1);
                         const y = spacing * (i + 1);
                         const height = Math.max(20, Math.min(40, node.amount * 80));
+                        const isOwned = node.isLabeled || !!node.owner;
                         return (
                           <g key={node.id}>
                             <path
                               d={`M 120 ${y} C 250 ${y}, 280 200, 350 ${180 + (i - totalNodes/2) * 20}`}
                               fill="none"
-                              stroke="url(#inputGrad)"
+                              stroke={isOwned ? "url(#ownedInputGrad)" : "url(#inputGrad)"}
                               strokeWidth={height / 3}
-                              opacity="0.6"
+                              opacity={isOwned ? "0.8" : "0.6"}
                             />
                             <rect
                               x="20"
@@ -258,9 +282,21 @@ export default function BitcoinFlowVisualizer() {
                               width="100"
                               height={height}
                               rx="4"
-                              fill="hsl(var(--chart-1))"
-                              opacity="0.8"
+                              fill={isOwned ? "hsl(142, 76%, 36%)" : "hsl(var(--chart-1))"}
+                              opacity={isOwned ? "0.95" : "0.8"}
                             />
+                            {isOwned && (
+                              <rect
+                                x="20"
+                                y={y - height/2}
+                                width="100"
+                                height={height}
+                                rx="4"
+                                fill="none"
+                                stroke="hsl(142, 76%, 50%)"
+                                strokeWidth="2"
+                              />
+                            )}
                             <text x="70" y={y + 4} textAnchor="middle" className="fill-current text-xs font-mono">
                               {node.address}
                             </text>
@@ -296,14 +332,15 @@ export default function BitcoinFlowVisualizer() {
                         const spacing = 350 / (totalNodes + 1);
                         const y = spacing * (i + 1);
                         const height = Math.max(20, Math.min(40, node.amount * 80));
+                        const isOwned = node.isLabeled || !!node.owner;
                         return (
                           <g key={node.id}>
                             <path
                               d={`M 450 ${200 + (i - totalNodes/2) * 20} C 520 ${200 + (i - totalNodes/2) * 20}, 550 ${y}, 680 ${y}`}
                               fill="none"
-                              stroke="url(#outputGrad)"
+                              stroke={isOwned ? "url(#ownedOutputGrad)" : "url(#outputGrad)"}
                               strokeWidth={height / 3}
-                              opacity="0.6"
+                              opacity={isOwned ? "0.8" : "0.6"}
                             />
                             <rect
                               x="680"
@@ -311,9 +348,21 @@ export default function BitcoinFlowVisualizer() {
                               width="100"
                               height={height}
                               rx="4"
-                              fill="hsl(var(--chart-2))"
-                              opacity="0.8"
+                              fill={isOwned ? "hsl(142, 76%, 36%)" : "hsl(var(--chart-2))"}
+                              opacity={isOwned ? "0.95" : "0.8"}
                             />
+                            {isOwned && (
+                              <rect
+                                x="680"
+                                y={y - height/2}
+                                width="100"
+                                height={height}
+                                rx="4"
+                                fill="none"
+                                stroke="hsl(142, 76%, 50%)"
+                                strokeWidth="2"
+                              />
+                            )}
                             <text x="730" y={y + 4} textAnchor="middle" className="fill-current text-xs font-mono">
                               {node.address}
                             </text>
@@ -325,19 +374,37 @@ export default function BitcoinFlowVisualizer() {
                       })}
                     </svg>
 
-                    <div className="absolute bottom-4 left-4 flex items-center gap-4 text-xs">
-                      <div className="flex items-center gap-1">
-                        <div className="w-3 h-3 rounded" style={{ background: "hsl(var(--chart-1))" }} />
-                        <span>Inputs ({inputNodes.length})</span>
+                    <div className="absolute bottom-4 left-4 flex flex-col gap-2 text-xs">
+                      <div className="flex items-center gap-4">
+                        <div className="flex items-center gap-1">
+                          <div className="w-3 h-3 rounded" style={{ background: "hsl(var(--chart-1))" }} />
+                          <span>Inputs ({inputNodes.length})</span>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <div className="w-3 h-3 rounded" style={{ background: "hsl(var(--primary))" }} />
+                          <span>Selected</span>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <div className="w-3 h-3 rounded" style={{ background: "hsl(var(--chart-2))" }} />
+                          <span>Outputs ({outputNodes.length})</span>
+                        </div>
                       </div>
-                      <div className="flex items-center gap-1">
-                        <div className="w-3 h-3 rounded" style={{ background: "hsl(var(--primary))" }} />
-                        <span>Selected</span>
-                      </div>
-                      <div className="flex items-center gap-1">
-                        <div className="w-3 h-3 rounded" style={{ background: "hsl(var(--chart-2))" }} />
-                        <span>Outputs ({outputNodes.length})</span>
-                      </div>
+                      {(ownedInputs.length > 0 || ownedOutputs.length > 0) && (
+                        <div className="flex items-center gap-4 border-t pt-2 mt-1">
+                          <div className="flex items-center gap-1">
+                            <div className="w-3 h-3 rounded border-2" style={{ background: "hsl(142, 76%, 36%)", borderColor: "hsl(142, 76%, 50%)" }} />
+                            <span className="text-green-600 dark:text-green-400 font-medium">
+                              Owned ({ownedInputs.length + ownedOutputs.length})
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <div className="w-3 h-3 rounded opacity-70" style={{ background: "hsl(var(--muted-foreground))" }} />
+                            <span className="text-muted-foreground">
+                              External ({externalInputs.length + externalOutputs.length})
+                            </span>
+                          </div>
+                        </div>
+                      )}
                     </div>
 
                     {inputNodes.length > 6 || outputNodes.length > 6 ? (
@@ -374,37 +441,40 @@ export default function BitcoinFlowVisualizer() {
                     
                     <ScrollArea className="h-[400px]">
                       <div className="space-y-1">
-                        {inputNodes.map((node) => (
-                          <div 
-                            key={node.id}
-                            className="flex items-center gap-2 px-2 py-2 rounded hover-elevate text-sm"
-                            data-testid={`timeline-row-${node.id}`}
-                          >
-                            <Badge variant="outline" className="w-8 justify-center text-xs">
-                              {node.hop}
-                            </Badge>
-                            <div className="w-24 text-xs text-muted-foreground">{node.timestamp}</div>
-                            <ClickableAddress 
-                              address={node.address} 
-                              className="w-32 text-xs truncate"
-                            />
-                            <div className="flex-1 flex items-center gap-1">
-                              <div 
-                                className="h-4 rounded"
-                                style={{ 
-                                  width: `${Math.max(20, Math.min(150, node.amount * 150))}px`,
-                                  background: getNodeColor(node.type)
-                                }}
+                        {inputNodes.map((node) => {
+                          const isOwned = node.isLabeled || !!node.owner;
+                          return (
+                            <div 
+                              key={node.id}
+                              className={`flex items-center gap-2 px-2 py-2 rounded hover-elevate text-sm ${isOwned ? 'bg-green-500/5 border-l-2 border-green-500' : ''}`}
+                              data-testid={`timeline-row-${node.id}`}
+                            >
+                              <Badge variant="outline" className="w-8 justify-center text-xs">
+                                {node.hop}
+                              </Badge>
+                              <div className="w-24 text-xs text-muted-foreground">{node.timestamp}</div>
+                              <ClickableAddress 
+                                address={node.address} 
+                                className="w-32 text-xs truncate"
                               />
-                              <ArrowRight className="h-3 w-3 text-muted-foreground" />
+                              <div className="flex-1 flex items-center gap-1">
+                                <div 
+                                  className="h-4 rounded"
+                                  style={{ 
+                                    width: `${Math.max(20, Math.min(150, node.amount * 150))}px`,
+                                    background: getNodeColor(node.type, isOwned)
+                                  }}
+                                />
+                                <ArrowRight className="h-3 w-3 text-muted-foreground" />
+                              </div>
+                              <div className="w-24 text-right font-mono text-xs">{node.amount.toFixed(4)} BTC</div>
+                              <div className="w-24 text-right">
+                                {node.owner && <Badge className="text-xs bg-green-600">{node.owner}</Badge>}
+                                {node.isLabeled && !node.owner && <Badge variant="outline" className="text-xs border-green-500 text-green-600">Owned</Badge>}
+                              </div>
                             </div>
-                            <div className="w-24 text-right font-mono text-xs">{node.amount.toFixed(4)} BTC</div>
-                            <div className="w-24 text-right">
-                              {node.owner && <Badge variant="secondary" className="text-xs">{node.owner}</Badge>}
-                              {node.isLabeled && !node.owner && <Badge variant="outline" className="text-xs">Labeled</Badge>}
-                            </div>
-                          </div>
-                        ))}
+                          );
+                        })}
 
                         {selectedNode && (
                           <div className="flex items-center gap-2 px-2 py-3 rounded bg-primary/10 border border-primary/20">
@@ -432,37 +502,40 @@ export default function BitcoinFlowVisualizer() {
                           </div>
                         )}
 
-                        {outputNodes.map((node) => (
-                          <div 
-                            key={node.id}
-                            className="flex items-center gap-2 px-2 py-2 rounded hover-elevate text-sm"
-                            data-testid={`timeline-row-${node.id}`}
-                          >
-                            <Badge variant="outline" className="w-8 justify-center text-xs">
-                              +{node.hop}
-                            </Badge>
-                            <div className="w-24 text-xs text-muted-foreground">{node.timestamp}</div>
-                            <ClickableAddress 
-                              address={node.address} 
-                              className="w-32 text-xs truncate"
-                            />
-                            <div className="flex-1 flex items-center gap-1">
-                              <ArrowRight className="h-3 w-3 text-muted-foreground" />
-                              <div 
-                                className="h-4 rounded"
-                                style={{ 
-                                  width: `${Math.max(20, Math.min(150, node.amount * 150))}px`,
-                                  background: getNodeColor(node.type)
-                                }}
+                        {outputNodes.map((node) => {
+                          const isOwned = node.isLabeled || !!node.owner;
+                          return (
+                            <div 
+                              key={node.id}
+                              className={`flex items-center gap-2 px-2 py-2 rounded hover-elevate text-sm ${isOwned ? 'bg-green-500/5 border-l-2 border-green-500' : ''}`}
+                              data-testid={`timeline-row-${node.id}`}
+                            >
+                              <Badge variant="outline" className="w-8 justify-center text-xs">
+                                +{node.hop}
+                              </Badge>
+                              <div className="w-24 text-xs text-muted-foreground">{node.timestamp}</div>
+                              <ClickableAddress 
+                                address={node.address} 
+                                className="w-32 text-xs truncate"
                               />
+                              <div className="flex-1 flex items-center gap-1">
+                                <ArrowRight className="h-3 w-3 text-muted-foreground" />
+                                <div 
+                                  className="h-4 rounded"
+                                  style={{ 
+                                    width: `${Math.max(20, Math.min(150, node.amount * 150))}px`,
+                                    background: getNodeColor(node.type, isOwned)
+                                  }}
+                                />
+                              </div>
+                              <div className="w-24 text-right font-mono text-xs">{node.amount.toFixed(4)} BTC</div>
+                              <div className="w-24 text-right">
+                                {node.owner && <Badge className="text-xs bg-green-600">{node.owner}</Badge>}
+                                {node.isLabeled && !node.owner && <Badge variant="outline" className="text-xs border-green-500 text-green-600">Owned</Badge>}
+                              </div>
                             </div>
-                            <div className="w-24 text-right font-mono text-xs">{node.amount.toFixed(4)} BTC</div>
-                            <div className="w-24 text-right">
-                              {node.owner && <Badge variant="secondary" className="text-xs">{node.owner}</Badge>}
-                              {node.isLabeled && !node.owner && <Badge variant="outline" className="text-xs">Labeled</Badge>}
-                            </div>
-                          </div>
-                        ))}
+                          );
+                        })}
                       </div>
                     </ScrollArea>
                   </div>

@@ -367,6 +367,127 @@ export interface NodeSettings {
   lastConnectionStatus?: string;
 }
 
+// === UTXO Lineage Tracking for AML/SOF ===
+
+// Confidence tier for lineage links (higher = more reliable)
+export type LineageConfidence = 
+  | 'verified'      // User manually verified this link
+  | 'high'          // Both addresses are owned (wallet-import, xpub-derived, manual)
+  | 'medium'        // One owned address, one external but identified
+  | 'low'           // Blockchain-discovered with limited context
+  | 'unknown';      // Inferred from blockchain only
+
+// Tracks individual UTXO → UTXO relationships for provenance tracing
+export interface UtxoLineage {
+  id?: number;
+  // The UTXO that was spent (input)
+  spentTxid: string;        // Transaction where the UTXO was created
+  spentVout: number;        // Output index of the UTXO
+  spentAddress: string;     // Address that held the UTXO
+  spentAmount: number;      // Amount in satoshis
+  // The transaction that spent the UTXO
+  consumingTxid: string;    // Transaction that spent the UTXO
+  // The resulting UTXO (output) - for tracking where funds went
+  createdTxid: string;      // Same as consumingTxid for direct spend
+  createdVout: number;      // Output index of new UTXO
+  createdAddress: string;   // Destination address
+  createdAmount: number;    // Amount in satoshis
+  // Ownership tracking
+  spentOwned: boolean;      // Is the spent address owned by user?
+  createdOwned: boolean;    // Is the destination address owned by user?
+  isChange: boolean;        // Is this a change output back to user?
+  // Confidence and metadata
+  confidence: LineageConfidence;
+  blockTime: number;        // Unix timestamp of the consuming transaction
+  blockHeight: number;      // Block height of the consuming transaction
+  // Segment linking
+  segmentId?: string;       // Links to parent custody segment
+  // Timestamps
+  createdAt: number;
+  // Encryption
+  encryptedPayload?: string;
+  isEncrypted?: boolean;
+}
+
+// Custody segment status
+export type CustodyStatus = 
+  | 'active'        // Currently held by user
+  | 'spent'         // Fully spent to external party
+  | 'split'         // Partially spent, with change continuing custody
+  | 'consolidated'; // Merged into another segment
+
+// Tracks ownership periods for coin bundles
+export interface CustodySegment {
+  id?: number;
+  segmentId: string;          // Unique identifier (UUID)
+  // Origin information
+  originTxid: string;         // Transaction where custody began
+  originVout: number;         // Output index at origin
+  originAddress: string;      // Address at origin
+  originDate: number;         // Unix timestamp of origin
+  originAmount: number;       // Original amount in satoshis
+  // Acquisition details (from record metadata if available)
+  acquisitionMethod?: string; // How funds were acquired
+  costBasisUsd?: number;      // Cost basis at acquisition (USD)
+  // Current state
+  currentTxid?: string;       // Most recent transaction (if still held)
+  currentVout?: number;       // Current output index
+  currentAddress?: string;    // Current address
+  currentAmount: number;      // Current amount (may be less after partial spends)
+  status: CustodyStatus;      // Current custody status
+  // Segment relationships
+  parentSegmentId?: string;   // Parent segment if this is from a split
+  childSegmentIds?: string[]; // Child segments if this was split
+  // Hop tracking
+  hopCount: number;           // Number of internal transfers
+  // Evidence linking
+  evidenceTxids: string[];    // All txids in this custody chain
+  attachmentIds?: number[];   // Links to attachments (receipts, etc.)
+  // Narrative generation
+  narrative?: string;         // Human-readable custody timeline
+  // Owner/wallet metadata (inherited from records)
+  owner?: string;
+  walletName?: string;
+  seedName?: string;
+  // Timestamps
+  createdAt: number;
+  updatedAt: number;
+  // Encryption
+  encryptedPayload?: string;
+  isEncrypted?: boolean;
+}
+
+// Pre-computed lineage snapshot for export/sharing
+export interface LineageSnapshot {
+  id?: number;
+  snapshotId: string;         // Unique identifier (UUID)
+  // Target of this snapshot
+  targetType: 'address' | 'utxo' | 'segment';
+  targetAddress?: string;     // For address-based snapshots
+  targetTxid?: string;        // For UTXO/segment-based snapshots
+  targetVout?: number;        // For UTXO-based snapshots
+  targetSegmentId?: string;   // For segment-based snapshots
+  // Snapshot content
+  segments: string[];         // Array of segmentIds included
+  evidenceTxids: string[];    // All transaction IDs in the proof
+  // Summary data
+  totalAmount: number;        // Total amount covered (satoshis)
+  earliestDate: number;       // Earliest origin date
+  latestDate: number;         // Most recent date in chain
+  hopCount: number;           // Total hops across all segments
+  // Narrative
+  narrative: string;          // Full human-readable narrative
+  // Redaction support (for Approach C - selective disclosure)
+  redactedAddresses?: string[];    // Addresses to hide in export
+  disclosureLevel: 'full' | 'summary' | 'minimal';
+  // Export metadata
+  generatedAt: number;        // When snapshot was created
+  expiresAt?: number;         // Optional expiration for shared snapshots
+  // Encryption
+  encryptedPayload?: string;
+  isEncrypted?: boolean;
+}
+
 // Derivation template for optional encrypted xpub storage
 // WARNING: Storing xpubs doesn't risk funds but reveals wallet structure and all addresses
 export interface DerivationTemplate {
@@ -418,9 +539,41 @@ export class KYUTXODatabase extends Dexie {
   addressSyncState!: Table<AddressSyncState>;
   nodeSettings!: Table<NodeSettings>;
   derivationTemplates!: Table<DerivationTemplate>;
+  // Lineage tracking tables for AML/SOF
+  utxoLineage!: Table<UtxoLineage>;
+  custodySegments!: Table<CustodySegment>;
+  lineageSnapshots!: Table<LineageSnapshot>;
 
   constructor() {
     super('KYUTXODatabase');
+    
+    // Version 17 adds UTXO lineage tracking tables for AML/SOF origin tracking
+    // - utxoLineage: tracks individual UTXO→UTXO relationships
+    // - custodySegments: ownership periods for coin bundles  
+    // - lineageSnapshots: pre-computed proofs for selective disclosure export
+    this.version(17).stores({
+      records: '++id, type, inputString, label, owner, *tags, *categories, createdAt, updatedAt, isEncrypted, chainType, syncDepth, addressImportance, [type+addressImportance], flowType',
+      attachments: '++id, recordId, createdAt, isEncrypted',
+      tags: '++id, name, createdAt, isEncrypted',
+      categories: '++id, name, createdAt, isEncrypted',
+      owners: '++id, name, createdAt, isEncrypted',
+      walletNames: '++id, name, createdAt, isEncrypted',
+      seedNames: '++id, name, createdAt, isEncrypted',
+      walletSoftware: '++id, name, createdAt, isEncrypted',
+      recordOrigins: '++id, recordId, originType, createdAt, isEncrypted',
+      customFields: '++id, slug, enabled, createdAt',
+      settings: 'id',
+      priceData: '++id, [date+currency+asset], date, asset, currency, source, importedAt',
+      blockchainTransactions: '++id, &txid, blockHeight, blockTime, syncedAt',
+      transactionParticipants: '++id, [txid+role], txid, role, address, recordId',
+      addressSyncState: '++id, &address, recordId, lastSyncedAt',
+      nodeSettings: 'id',
+      derivationTemplates: '++id, fingerprint, scriptType, owner, walletName, seedName, createdAt, isEncrypted',
+      // New lineage tracking tables
+      utxoLineage: '++id, [spentTxid+spentVout], [createdTxid+createdVout], consumingTxid, spentAddress, createdAddress, segmentId, spentOwned, createdOwned, isChange, blockTime, isEncrypted',
+      custodySegments: '++id, &segmentId, [originTxid+originVout], originAddress, currentAddress, status, parentSegmentId, owner, walletName, originDate, isEncrypted',
+      lineageSnapshots: '++id, &snapshotId, targetType, targetAddress, targetSegmentId, generatedAt, disclosureLevel, isEncrypted'
+    });
     
     // Version 16 adds compound index [txid+role] on transactionParticipants for efficient queries
     this.version(16).stores({

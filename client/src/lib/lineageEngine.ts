@@ -1,0 +1,733 @@
+import { 
+  db, 
+  type UtxoLineage, 
+  type CustodySegment, 
+  type TransactionParticipant,
+  type BlockchainTransaction,
+  type Record,
+  type LineageConfidence,
+  type CustodyStatus,
+  type AddressImportance
+} from './database';
+import { decryptRecords, isEncryptionReady } from './encryptionFacade';
+
+// Generate a simple UUID for segment IDs
+function generateSegmentId(): string {
+  return 'seg_' + crypto.randomUUID().replace(/-/g, '').slice(0, 16);
+}
+
+// Importance tier mapping for confidence calculation
+const IMPORTANCE_TO_CONFIDENCE: { [key in AddressImportance]: LineageConfidence } = {
+  'verified': 'verified',
+  'manual': 'high',
+  'wallet-import': 'high',
+  'xpub-derived': 'high',
+  'blockchain-discovered': 'low',
+  'pending-review': 'unknown'
+};
+
+// Calculate confidence based on ownership of both addresses
+function calculateConfidence(
+  spentImportance: AddressImportance | undefined,
+  createdImportance: AddressImportance | undefined
+): LineageConfidence {
+  const spentConf = spentImportance ? IMPORTANCE_TO_CONFIDENCE[spentImportance] : 'unknown';
+  const createdConf = createdImportance ? IMPORTANCE_TO_CONFIDENCE[createdImportance] : 'unknown';
+  
+  // Both verified = verified
+  if (spentConf === 'verified' && createdConf === 'verified') return 'verified';
+  // Both high = high
+  if (spentConf === 'high' && createdConf === 'high') return 'high';
+  // One high, one at least medium = medium
+  if ((spentConf === 'high' || createdConf === 'high') && 
+      (spentConf !== 'unknown' && createdConf !== 'unknown')) return 'medium';
+  // At least one low = low
+  if (spentConf === 'low' || createdConf === 'low') return 'low';
+  // Default
+  return 'unknown';
+}
+
+// Check if an address is owned by the user (based on importance tier)
+function isOwnedAddress(importance: AddressImportance | undefined): boolean {
+  if (!importance) return false;
+  return ['verified', 'manual', 'wallet-import', 'xpub-derived'].includes(importance);
+}
+
+// Get record for an address with optional decryption
+async function getRecordForAddress(address: string): Promise<Record | undefined> {
+  const records = await db.records
+    .where('inputString')
+    .equals(address)
+    .toArray();
+  
+  if (records.length === 0) return undefined;
+  
+  // Get the best record (highest importance)
+  const importanceOrder: AddressImportance[] = [
+    'verified', 'manual', 'wallet-import', 'xpub-derived', 'blockchain-discovered', 'pending-review'
+  ];
+  
+  let bestRecord = records[0];
+  for (const record of records) {
+    const bestIdx = importanceOrder.indexOf(bestRecord.addressImportance || 'pending-review');
+    const currIdx = importanceOrder.indexOf(record.addressImportance || 'pending-review');
+    if (currIdx < bestIdx) bestRecord = record;
+  }
+  
+  // Decrypt if needed
+  if (bestRecord.isEncrypted && isEncryptionReady()) {
+    const decrypted = await decryptRecords([bestRecord]);
+    return decrypted[0];
+  }
+  
+  return bestRecord;
+}
+
+// Build lineage for a specific transaction
+export async function buildLineageForTransaction(txid: string): Promise<UtxoLineage[]> {
+  const transaction = await db.blockchainTransactions
+    .where('txid')
+    .equals(txid)
+    .first();
+  
+  if (!transaction) {
+    console.warn(`Transaction ${txid} not found in database`);
+    return [];
+  }
+  
+  // Get all participants for this transaction
+  const participants = await db.transactionParticipants
+    .where('txid')
+    .equals(txid)
+    .toArray();
+  
+  const inputs = participants.filter(p => p.role === 'input');
+  const outputs = participants.filter(p => p.role === 'output');
+  
+  if (inputs.length === 0 || outputs.length === 0) {
+    return [];
+  }
+  
+  const lineageRecords: UtxoLineage[] = [];
+  const now = Date.now();
+  
+  // For each input, find the previous transaction that created it
+  for (const input of inputs) {
+    const inputRecord = await getRecordForAddress(input.address);
+    const inputOwned = isOwnedAddress(inputRecord?.addressImportance);
+    
+    // For each output, create a lineage link
+    for (const output of outputs) {
+      if (output.vout === undefined) continue;
+      
+      const outputRecord = await getRecordForAddress(output.address);
+      const outputOwned = isOwnedAddress(outputRecord?.addressImportance);
+      
+      // Determine if this is a change output
+      // Heuristic: if both input and output are owned and output is smaller, likely change
+      const isChange = inputOwned && outputOwned && output.amount < input.amount;
+      
+      // Check if this lineage already exists
+      const existing = await db.utxoLineage
+        .where('[createdTxid+createdVout]')
+        .equals([txid, output.vout])
+        .first();
+      
+      if (existing) continue;
+      
+      const lineage: UtxoLineage = {
+        // Spent UTXO info - we need to find the previous tx that created this input
+        spentTxid: '', // Will be filled in by findPreviousUtxo
+        spentVout: 0,
+        spentAddress: input.address,
+        spentAmount: input.amount,
+        // Consuming transaction
+        consumingTxid: txid,
+        // Created UTXO info
+        createdTxid: txid,
+        createdVout: output.vout,
+        createdAddress: output.address,
+        createdAmount: output.amount,
+        // Ownership
+        spentOwned: inputOwned,
+        createdOwned: outputOwned,
+        isChange,
+        // Confidence
+        confidence: calculateConfidence(
+          inputRecord?.addressImportance,
+          outputRecord?.addressImportance
+        ),
+        blockTime: transaction.blockTime,
+        blockHeight: transaction.blockHeight,
+        createdAt: now
+      };
+      
+      lineageRecords.push(lineage);
+    }
+  }
+  
+  return lineageRecords;
+}
+
+// Build lineage for all synced transactions
+export async function buildAllLineage(
+  onProgress?: (current: number, total: number) => void
+): Promise<{ processed: number; created: number }> {
+  const allTransactions = await db.blockchainTransactions.toArray();
+  let processed = 0;
+  let created = 0;
+  
+  for (const tx of allTransactions) {
+    const lineageRecords = await buildLineageForTransaction(tx.txid);
+    
+    if (lineageRecords.length > 0) {
+      await db.utxoLineage.bulkAdd(lineageRecords);
+      created += lineageRecords.length;
+    }
+    
+    processed++;
+    if (onProgress) {
+      onProgress(processed, allTransactions.length);
+    }
+  }
+  
+  return { processed, created };
+}
+
+// Get lineage chain for an address (traces back to origin)
+export async function getLineageChainForAddress(
+  address: string,
+  maxDepth: number = 10
+): Promise<UtxoLineage[]> {
+  const chain: UtxoLineage[] = [];
+  const visited = new Set<string>();
+  const queue: string[] = [address];
+  let depth = 0;
+  
+  while (queue.length > 0 && depth < maxDepth) {
+    const currentAddress = queue.shift()!;
+    if (visited.has(currentAddress)) continue;
+    visited.add(currentAddress);
+    
+    // Find lineage records where this address received funds
+    const incoming = await db.utxoLineage
+      .where('createdAddress')
+      .equals(currentAddress)
+      .toArray();
+    
+    for (const lineage of incoming) {
+      chain.push(lineage);
+      
+      // If the source was also owned, continue tracing back
+      if (lineage.spentOwned && !visited.has(lineage.spentAddress)) {
+        queue.push(lineage.spentAddress);
+      }
+    }
+    
+    depth++;
+  }
+  
+  // Sort by block time (oldest first)
+  chain.sort((a, b) => a.blockTime - b.blockTime);
+  
+  return chain;
+}
+
+// Get lineage chain forward (traces where funds went)
+export async function getLineageChainForward(
+  address: string,
+  maxDepth: number = 10
+): Promise<UtxoLineage[]> {
+  const chain: UtxoLineage[] = [];
+  const visited = new Set<string>();
+  const queue: string[] = [address];
+  let depth = 0;
+  
+  while (queue.length > 0 && depth < maxDepth) {
+    const currentAddress = queue.shift()!;
+    if (visited.has(currentAddress)) continue;
+    visited.add(currentAddress);
+    
+    // Find lineage records where this address sent funds
+    const outgoing = await db.utxoLineage
+      .where('spentAddress')
+      .equals(currentAddress)
+      .toArray();
+    
+    for (const lineage of outgoing) {
+      chain.push(lineage);
+      
+      // If the destination was also owned (change or self-transfer), continue tracing
+      if (lineage.createdOwned && !visited.has(lineage.createdAddress)) {
+        queue.push(lineage.createdAddress);
+      }
+    }
+    
+    depth++;
+  }
+  
+  // Sort by block time (oldest first)
+  chain.sort((a, b) => a.blockTime - b.blockTime);
+  
+  return chain;
+}
+
+// Build or update a custody segment from lineage data
+export async function buildCustodySegment(
+  originAddress: string,
+  originTxid: string,
+  originVout: number
+): Promise<CustodySegment | null> {
+  // Check if segment already exists
+  const existing = await db.custodySegments
+    .where('[originTxid+originVout]')
+    .equals([originTxid, originVout])
+    .first();
+  
+  if (existing) {
+    return existing;
+  }
+  
+  // Get the origin transaction
+  const originTx = await db.blockchainTransactions
+    .where('txid')
+    .equals(originTxid)
+    .first();
+  
+  if (!originTx) return null;
+  
+  // Get origin record for metadata
+  const originRecord = await getRecordForAddress(originAddress);
+  
+  // Get the lineage chain forward to trace custody
+  const forwardChain = await getLineageChainForward(originAddress, 50);
+  
+  // Find the current state
+  let currentAddress = originAddress;
+  let currentTxid = originTxid;
+  let currentVout = originVout;
+  let currentAmount = 0;
+  let hopCount = 0;
+  let status: CustodyStatus = 'active';
+  const evidenceTxids: string[] = [originTxid];
+  const childSegmentIds: string[] = [];
+  
+  // Get original amount from participants
+  const originOutput = await db.transactionParticipants
+    .where('[txid+role]')
+    .equals([originTxid, 'output'])
+    .filter(p => p.address === originAddress && p.vout === originVout)
+    .first();
+  
+  const originAmount = originOutput?.amount || 0;
+  currentAmount = originAmount;
+  
+  // Trace forward through the chain
+  for (const lineage of forwardChain) {
+    if (lineage.spentAddress === currentAddress) {
+      evidenceTxids.push(lineage.consumingTxid);
+      hopCount++;
+      
+      if (lineage.createdOwned) {
+        // Self-transfer or change - custody continues
+        currentAddress = lineage.createdAddress;
+        currentTxid = lineage.createdTxid;
+        currentVout = lineage.createdVout;
+        currentAmount = lineage.createdAmount;
+        
+        if (lineage.isChange) {
+          status = 'split';
+        }
+      } else {
+        // Sent to external - custody ends
+        status = 'spent';
+        currentAmount = 0;
+        break;
+      }
+    }
+  }
+  
+  // Generate narrative
+  const narrative = generateNarrative(
+    originTx.blockTime,
+    originAmount,
+    hopCount,
+    status,
+    originRecord?.acquisitionMethod,
+    currentAmount
+  );
+  
+  const now = Date.now();
+  const segment: CustodySegment = {
+    segmentId: generateSegmentId(),
+    originTxid,
+    originVout,
+    originAddress,
+    originDate: originTx.blockTime,  // Store as Unix timestamp (seconds)
+    originAmount,
+    acquisitionMethod: originRecord?.acquisitionMethod,
+    costBasisUsd: originRecord?.costBasisUsd,
+    currentTxid: status === 'active' || status === 'split' ? currentTxid : undefined,
+    currentVout: status === 'active' || status === 'split' ? currentVout : undefined,
+    currentAddress: status === 'active' || status === 'split' ? currentAddress : undefined,
+    currentAmount,
+    status,
+    childSegmentIds: childSegmentIds.length > 0 ? childSegmentIds : undefined,
+    hopCount,
+    evidenceTxids,
+    narrative,
+    owner: originRecord?.owner,
+    walletName: originRecord?.walletName,
+    seedName: originRecord?.seedName,
+    createdAt: now,
+    updatedAt: now
+  };
+  
+  await db.custodySegments.add(segment);
+  
+  return segment;
+}
+
+// Generate human-readable narrative for a custody segment
+function generateNarrative(
+  originTimestamp: number,
+  originAmount: number,
+  hopCount: number,
+  status: CustodyStatus,
+  acquisitionMethod?: string,
+  currentAmount?: number
+): string {
+  const originDate = new Date(originTimestamp * 1000);
+  const dateStr = originDate.toLocaleDateString('en-US', { 
+    year: 'numeric', 
+    month: 'short', 
+    day: 'numeric' 
+  });
+  
+  const btcAmount = (originAmount / 100_000_000).toFixed(8);
+  const currentBtc = currentAmount ? (currentAmount / 100_000_000).toFixed(8) : '0';
+  
+  let narrative = `${btcAmount} BTC acquired ${dateStr}`;
+  
+  if (acquisitionMethod) {
+    const methodLabels: { [key: string]: string } = {
+      'purchase': 'via purchase',
+      'mining': 'from mining',
+      'staking': 'from staking',
+      'airdrop': 'via airdrop',
+      'gift-received': 'as a gift',
+      'inheritance': 'via inheritance',
+      'salary': 'as salary',
+      'payment-for-services': 'as payment for services'
+    };
+    narrative += ` ${methodLabels[acquisitionMethod] || ''}`;
+  }
+  
+  if (hopCount > 0) {
+    narrative += ` → ${hopCount} internal transfer${hopCount > 1 ? 's' : ''}`;
+  }
+  
+  if (status === 'active') {
+    narrative += ` → ${currentBtc} BTC still held`;
+  } else if (status === 'spent') {
+    narrative += ` → Fully spent`;
+  } else if (status === 'split') {
+    narrative += ` → ${currentBtc} BTC remaining (partial spend)`;
+  }
+  
+  return narrative;
+}
+
+// Build all custody segments from owned addresses
+export async function buildAllCustodySegments(
+  onProgress?: (current: number, total: number) => void
+): Promise<{ processed: number; created: number }> {
+  // Find all owned addresses that received funds
+  const ownedLineage = await db.utxoLineage
+    .where('createdOwned')
+    .equals(1) // IndexedDB uses 1/0 for booleans in indexes
+    .toArray();
+  
+  // Deduplicate by origin UTXO
+  const uniqueOrigins = new Map<string, UtxoLineage>();
+  for (const lineage of ownedLineage) {
+    const key = `${lineage.createdTxid}:${lineage.createdVout}`;
+    if (!uniqueOrigins.has(key)) {
+      uniqueOrigins.set(key, lineage);
+    }
+  }
+  
+  const origins = Array.from(uniqueOrigins.values());
+  let processed = 0;
+  let created = 0;
+  
+  for (const lineage of origins) {
+    const segment = await buildCustodySegment(
+      lineage.createdAddress,
+      lineage.createdTxid,
+      lineage.createdVout
+    );
+    
+    if (segment) {
+      created++;
+    }
+    
+    processed++;
+    if (onProgress) {
+      onProgress(processed, origins.length);
+    }
+  }
+  
+  return { processed, created };
+}
+
+// Get all segments for an address (as origin or current holder)
+export async function getSegmentsForAddress(address: string): Promise<CustodySegment[]> {
+  const asOrigin = await db.custodySegments
+    .where('originAddress')
+    .equals(address)
+    .toArray();
+  
+  const asCurrent = await db.custodySegments
+    .where('currentAddress')
+    .equals(address)
+    .toArray();
+  
+  // Combine and deduplicate
+  const segmentMap = new Map<string, CustodySegment>();
+  for (const seg of [...asOrigin, ...asCurrent]) {
+    segmentMap.set(seg.segmentId, seg);
+  }
+  
+  return Array.from(segmentMap.values());
+}
+
+// Get total custody duration for segments
+export function getCustodyDuration(segments: CustodySegment[]): {
+  totalDays: number;
+  earliestOrigin: Date;
+  latestActivity: Date;
+} {
+  if (segments.length === 0) {
+    return {
+      totalDays: 0,
+      earliestOrigin: new Date(),
+      latestActivity: new Date()
+    };
+  }
+  
+  // originDate is Unix timestamp (seconds), updatedAt is milliseconds
+  const earliestOriginMs = Math.min(...segments.map(s => s.originDate * 1000));
+  const latestActivityMs = Math.max(...segments.map(s => s.updatedAt));
+  
+  const earliestOrigin = new Date(earliestOriginMs);
+  const latestActivity = new Date(latestActivityMs);
+  const totalDays = Math.floor((latestActivityMs - earliestOriginMs) / (1000 * 60 * 60 * 24));
+  
+  return {
+    totalDays,
+    earliestOrigin,
+    latestActivity
+  };
+}
+
+// Evidence Bundle Types for Selective Disclosure
+export interface EvidenceBundle {
+  version: string;
+  generatedAt: string;
+  bundleId: string;
+  // Summary information (always included)
+  summary: {
+    totalSegments: number;
+    totalValueBtc: number;
+    earliestOrigin: string;
+    latestActivity: string;
+    totalCustodyDays: number;
+  };
+  // Segments with optional redaction
+  segments: EvidenceSegment[];
+  // Verification hash for integrity
+  integrityHash?: string;
+}
+
+export interface EvidenceSegment {
+  segmentId: string;
+  // Origin info (can be redacted)
+  origin?: {
+    address: string;
+    txid: string;
+    vout: number;
+    date: string;
+    amount: number;
+  };
+  // Current state (can be redacted)
+  current?: {
+    address?: string;
+    txid?: string;
+    vout?: number;
+    amount: number;
+    status: CustodyStatus;
+  };
+  // Custody metrics (always included)
+  custodyDays: number;
+  hopCount: number;
+  // Lineage chain (can include full txids or just hashes)
+  lineageChain?: {
+    txid: string;
+    type: 'spent' | 'created';
+    confidenceLevel: LineageConfidence;
+  }[];
+  // Metadata flags
+  includesFullAddresses: boolean;
+  includesFullTxids: boolean;
+}
+
+export interface EvidenceBundleOptions {
+  includeAddresses: boolean;
+  includeTxids: boolean;
+  includeLineageChain: boolean;
+  redactExternalAddresses: boolean;
+  selectedSegmentIds?: string[];
+}
+
+// Generate minimal evidence bundle with selective disclosure
+export async function generateEvidenceBundle(
+  options: EvidenceBundleOptions
+): Promise<EvidenceBundle> {
+  const segments = options.selectedSegmentIds
+    ? await db.custodySegments.where('segmentId').anyOf(options.selectedSegmentIds).toArray()
+    : await db.custodySegments.toArray();
+  
+  const lineageRecords = await db.utxoLineage.toArray();
+  
+  // Calculate summary
+  const { totalDays, earliestOrigin, latestActivity } = getCustodyDuration(segments);
+  const totalValueBtc = segments.reduce((sum, s) => sum + s.currentAmount, 0) / 100000000;
+  
+  // Build evidence segments
+  const evidenceSegments: EvidenceSegment[] = [];
+  
+  for (const segment of segments) {
+    const segmentLineage = lineageRecords.filter(l =>
+      l.createdAddress === segment.originAddress ||
+      l.createdAddress === segment.currentAddress ||
+      l.spentAddress === segment.originAddress ||
+      l.spentAddress === segment.currentAddress
+    );
+    
+    // originDate is Unix timestamp in seconds
+    const originDateMs = segment.originDate * 1000;
+    const custodyDays = Math.floor((Date.now() - originDateMs) / (1000 * 60 * 60 * 24));
+    
+    const evidenceSegment: EvidenceSegment = {
+      segmentId: segment.segmentId,
+      custodyDays,
+      hopCount: segment.hopCount,
+      includesFullAddresses: options.includeAddresses,
+      includesFullTxids: options.includeTxids
+    };
+    
+    // Include origin info - always include, but potentially redacted
+    evidenceSegment.origin = {
+      address: options.includeAddresses ? segment.originAddress : hashAddress(segment.originAddress),
+      txid: options.includeTxids ? segment.originTxid : hashTxid(segment.originTxid),
+      vout: segment.originVout,
+      date: new Date(originDateMs).toISOString(),
+      amount: segment.originAmount
+    };
+    
+    // Include current state
+    evidenceSegment.current = {
+      address: options.includeAddresses && segment.currentAddress 
+        ? segment.currentAddress 
+        : (segment.currentAddress ? hashAddress(segment.currentAddress) : undefined),
+      txid: options.includeTxids && segment.currentTxid 
+        ? segment.currentTxid 
+        : (segment.currentTxid ? hashTxid(segment.currentTxid) : undefined),
+      vout: segment.currentVout,
+      amount: segment.currentAmount,
+      status: segment.status
+    };
+    
+    // Include lineage chain if requested
+    if (options.includeLineageChain && segmentLineage.length > 0) {
+      evidenceSegment.lineageChain = segmentLineage.map(l => ({
+        txid: options.includeTxids ? l.createdTxid : hashTxid(l.createdTxid),
+        type: 'created' as const,
+        confidenceLevel: l.confidence
+      }));
+    }
+    
+    evidenceSegments.push(evidenceSegment);
+  }
+  
+  const bundle: EvidenceBundle = {
+    version: '1.0',
+    generatedAt: new Date().toISOString(),
+    bundleId: 'bundle_' + crypto.randomUUID().replace(/-/g, '').slice(0, 12),
+    summary: {
+      totalSegments: segments.length,
+      totalValueBtc,
+      earliestOrigin: earliestOrigin.toISOString(),
+      latestActivity: latestActivity.toISOString(),
+      totalCustodyDays: totalDays
+    },
+    segments: evidenceSegments
+  };
+  
+  // Add integrity hash
+  bundle.integrityHash = await generateIntegrityHash(bundle);
+  
+  return bundle;
+}
+
+// Hash address for privacy (first 8 chars of SHA-256)
+function hashAddress(address: string): string {
+  return 'addr_' + simpleHash(address).slice(0, 8);
+}
+
+// Hash txid for privacy (first 8 chars of SHA-256)
+function hashTxid(txid: string): string {
+  return 'tx_' + simpleHash(txid).slice(0, 8);
+}
+
+// Simple hash function for privacy (not cryptographically secure for external verification)
+function simpleHash(input: string): string {
+  let hash = 0;
+  for (let i = 0; i < input.length; i++) {
+    const char = input.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash; // Convert to 32bit integer
+  }
+  return Math.abs(hash).toString(16).padStart(8, '0');
+}
+
+// Generate integrity hash for the bundle
+async function generateIntegrityHash(bundle: EvidenceBundle): Promise<string> {
+  const content = JSON.stringify({
+    generatedAt: bundle.generatedAt,
+    summary: bundle.summary,
+    segmentCount: bundle.segments.length,
+    segmentIds: bundle.segments.map(s => s.segmentId).sort()
+  });
+  
+  const encoder = new TextEncoder();
+  const data = encoder.encode(content);
+  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+// Export evidence bundle to file
+export function downloadEvidenceBundle(bundle: EvidenceBundle, filename?: string): void {
+  const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename || `evidence-bundle-${bundle.bundleId}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// Export types for use in components
+export type { UtxoLineage, CustodySegment, LineageConfidence, CustodyStatus };

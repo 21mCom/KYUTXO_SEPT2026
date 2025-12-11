@@ -1,9 +1,10 @@
 import { useState } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { FileText, GitBranch, Search } from "lucide-react";
+import { FileText, GitBranch, Search, Shield } from "lucide-react";
 import { SourceOfFundsReport } from "@/components/reports/SourceOfFundsReport";
 import { HopPointReport } from "@/components/reports/HopPointReport";
+import { ContinuityCertificateReport } from "@/components/reports/ContinuityCertificateReport";
 
 export default function Reports() {
   const [activeTab, setActiveTab] = useState("source-of-funds");
@@ -19,7 +20,7 @@ export default function Reports() {
         </div>
 
         <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
-          <TabsList className="grid w-full grid-cols-2 max-w-md">
+          <TabsList className="grid w-full grid-cols-3 max-w-xl">
             <TabsTrigger value="source-of-funds" className="flex items-center gap-2" data-testid="tab-source-of-funds">
               <FileText className="h-4 w-4" />
               Source of Funds
@@ -27,6 +28,10 @@ export default function Reports() {
             <TabsTrigger value="hop-points" className="flex items-center gap-2" data-testid="tab-hop-points">
               <GitBranch className="h-4 w-4" />
               Hop Points
+            </TabsTrigger>
+            <TabsTrigger value="continuity" className="flex items-center gap-2" data-testid="tab-continuity">
+              <Shield className="h-4 w-4" />
+              Continuity
             </TabsTrigger>
           </TabsList>
 
@@ -60,6 +65,23 @@ export default function Reports() {
               </CardHeader>
               <CardContent>
                 <HopPointReport />
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="continuity" className="space-y-4">
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Shield className="h-5 w-5" />
+                  Continuity Certificates
+                </CardTitle>
+                <CardDescription>
+                  Generate proof-of-ownership certificates showing continuous custody of your Bitcoin through address changes and transactions. Export evidence bundles for compliance or audits.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <ContinuityCertificateReport />
               </CardContent>
             </Card>
           </TabsContent>
