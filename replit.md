@@ -49,6 +49,14 @@ Data is stored locally using Dexie.js (IndexedDB) for structured data, with all 
     *   **Continuity Proof component:** Visualizes complete ownership timeline with custody duration
     *   **Continuity Certificate Report:** Filtered export of custody segments with selective disclosure
     *   **Evidence Bundle Export:** Privacy-preserving export with toggles for addresses, txids, and lineage chains
+*   **Compliance Proofs Module (Database v18):** Cryptographic proof of custody for regulatory scenarios with:
+    *   **ownershipAttestations table:** Stores signed message proofs from wallet software (bitcoin-message, electrum, or hardware wallets)
+    *   **complianceProofs table:** Selective custody proof bundles with merkle trees for verifiable disclosure
+    *   **Merkle Tree Utilities:** Deterministic leaf hashing, balanced tree construction, and selective redaction support
+    *   **Selective Disclosure:** Choose specific addresses and date ranges to disclose (4 disclosure levels: full, addresses-hidden, amounts-hidden, minimal)
+    *   **JSON Bundle Export:** Portable proof bundles with merkle tree, attestations, and custody segments
+    *   **Standalone HTML Verifier:** Self-contained verifier file for offline proof validation by third parties
+    *   Note: Feature is isolated and can be pruned without affecting core flows; signature validation requires bitcoin-message/electrum libraries
 *   **Timestamp Standards:** originDate stored as Unix seconds (blockTime), updatedAt as Unix milliseconds (Date.now())
 
 ## External Dependencies
