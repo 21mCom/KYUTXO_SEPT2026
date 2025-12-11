@@ -4,6 +4,7 @@ import { db, type CustodySegment, type UtxoLineage } from "@/lib/database";
 import { 
   generateEvidenceBundle, 
   downloadEvidenceBundle,
+  downloadEvidenceBundlePdf,
   type EvidenceBundleOptions 
 } from "@/lib/lineageEngine";
 import { Button } from "@/components/ui/button";
@@ -18,7 +19,7 @@ import { Switch } from "@/components/ui/switch";
 import { format } from "date-fns";
 import { 
   CalendarIcon, Shield, Clock, Coins, 
-  ArrowRight, Filter, FileJson, Lock, Eye 
+  ArrowRight, Filter, FileJson, FileText, Lock, Eye 
 } from "lucide-react";
 import { AddressLink } from "@/components/AddressLink";
 import { TxidLink } from "@/components/TxidLink";
@@ -126,7 +127,7 @@ export function ContinuityCertificateReport() {
     setSelectedCertificates(new Set());
   };
 
-  const exportSelectedCertificates = async () => {
+  const exportSelectedCertificates = async (exportFormat: 'json' | 'pdf') => {
     const selected = filteredCertificates.filter(c => selectedCertificates.has(c.segment.id!));
     const selectedSegmentIds = selected.map(c => c.segment.segmentId);
     
@@ -141,8 +142,13 @@ export function ContinuityCertificateReport() {
       };
       
       const bundle = await generateEvidenceBundle(options);
-      const filename = `evidence-bundle-${format(new Date(), 'yyyy-MM-dd')}.json`;
-      downloadEvidenceBundle(bundle, filename);
+      const dateStr = format(new Date(), 'yyyy-MM-dd');
+      
+      if (exportFormat === 'pdf') {
+        await downloadEvidenceBundlePdf(bundle, `evidence-bundle-${dateStr}.pdf`);
+      } else {
+        downloadEvidenceBundle(bundle, `evidence-bundle-${dateStr}.json`);
+      }
     } finally {
       setIsExporting(false);
     }
@@ -306,14 +312,23 @@ export function ContinuityCertificateReport() {
           </Label>
         </div>
         
-        <div className="ml-auto">
+        <div className="ml-auto flex items-center gap-2">
           <Button 
-            onClick={exportSelectedCertificates}
+            variant="outline"
+            onClick={() => exportSelectedCertificates('json')}
             disabled={selectedCertificates.size === 0 || isExporting}
-            data-testid="button-export"
+            data-testid="button-export-json"
           >
             <FileJson className="h-4 w-4 mr-2" />
-            {isExporting ? "Exporting..." : `Export Evidence (${selectedCertificates.size})`}
+            {isExporting ? "..." : "JSON"}
+          </Button>
+          <Button 
+            onClick={() => exportSelectedCertificates('pdf')}
+            disabled={selectedCertificates.size === 0 || isExporting}
+            data-testid="button-export-pdf"
+          >
+            <FileText className="h-4 w-4 mr-2" />
+            {isExporting ? "Exporting..." : `Export PDF (${selectedCertificates.size})`}
           </Button>
         </div>
       </div>

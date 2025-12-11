@@ -729,5 +729,197 @@ export function downloadEvidenceBundle(bundle: EvidenceBundle, filename?: string
   URL.revokeObjectURL(url);
 }
 
+// Export evidence bundle as PDF
+export async function downloadEvidenceBundlePdf(bundle: EvidenceBundle, filename?: string): Promise<void> {
+  const { jsPDF } = await import('jspdf');
+  const doc = new jsPDF();
+  
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const margin = 20;
+  const contentWidth = pageWidth - margin * 2;
+  let y = 20;
+  
+  const checkPageBreak = (neededSpace: number) => {
+    if (y + neededSpace > 280) {
+      doc.addPage();
+      y = 20;
+    }
+  };
+  
+  const formatBtc = (sats: number): string => (sats / 100000000).toFixed(8);
+  
+  // Title
+  doc.setFontSize(20);
+  doc.setFont('helvetica', 'bold');
+  doc.text('KYUTXO Evidence Bundle', margin, y);
+  y += 10;
+  
+  doc.setFontSize(10);
+  doc.setFont('helvetica', 'normal');
+  doc.setTextColor(100);
+  doc.text('Continuity Certificate Report', margin, y);
+  y += 15;
+  
+  // Bundle info box
+  doc.setDrawColor(200);
+  doc.setFillColor(248, 248, 248);
+  doc.roundedRect(margin, y, contentWidth, 35, 2, 2, 'FD');
+  
+  doc.setTextColor(60);
+  doc.setFontSize(9);
+  y += 8;
+  doc.text(`Bundle ID: ${bundle.bundleId}`, margin + 5, y);
+  y += 6;
+  doc.text(`Generated: ${new Date(bundle.generatedAt).toLocaleString()}`, margin + 5, y);
+  y += 6;
+  doc.text(`Version: ${bundle.version}`, margin + 5, y);
+  y += 6;
+  doc.text(`Integrity Hash: ${bundle.integrityHash?.slice(0, 32)}...`, margin + 5, y);
+  y += 15;
+  
+  // Summary section
+  doc.setTextColor(0);
+  doc.setFontSize(14);
+  doc.setFont('helvetica', 'bold');
+  doc.text('Summary', margin, y);
+  y += 8;
+  
+  doc.setFontSize(10);
+  doc.setFont('helvetica', 'normal');
+  
+  const summaryData = [
+    ['Total Segments:', bundle.summary.totalSegments.toString()],
+    ['Total Value:', `${bundle.summary.totalValueBtc.toFixed(8)} BTC`],
+    ['Total Custody:', `${bundle.summary.totalCustodyDays} days`],
+    ['Earliest Origin:', new Date(bundle.summary.earliestOrigin).toLocaleDateString()],
+    ['Latest Activity:', new Date(bundle.summary.latestActivity).toLocaleDateString()]
+  ];
+  
+  for (const [label, value] of summaryData) {
+    doc.setFont('helvetica', 'bold');
+    doc.text(label, margin, y);
+    doc.setFont('helvetica', 'normal');
+    doc.text(value, margin + 45, y);
+    y += 6;
+  }
+  y += 10;
+  
+  // Segments section
+  doc.setFontSize(14);
+  doc.setFont('helvetica', 'bold');
+  doc.text('Custody Segments', margin, y);
+  y += 10;
+  
+  for (let i = 0; i < bundle.segments.length; i++) {
+    const segment = bundle.segments[i];
+    checkPageBreak(60);
+    
+    // Segment header
+    doc.setFillColor(240, 240, 240);
+    doc.roundedRect(margin, y - 4, contentWidth, 8, 1, 1, 'F');
+    doc.setFontSize(11);
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(0);
+    doc.text(`Segment ${i + 1}: ${segment.segmentId}`, margin + 3, y + 2);
+    y += 12;
+    
+    doc.setFontSize(9);
+    doc.setFont('helvetica', 'normal');
+    
+    // Custody info
+    doc.text(`Custody Duration: ${segment.custodyDays} days`, margin, y);
+    doc.text(`Hop Count: ${segment.hopCount}`, margin + 80, y);
+    y += 6;
+    
+    doc.setTextColor(100);
+    doc.text(`Disclosure: Addresses ${segment.includesFullAddresses ? 'included' : 'redacted'} | TXIDs ${segment.includesFullTxids ? 'included' : 'redacted'}`, margin, y);
+    doc.setTextColor(0);
+    y += 8;
+    
+    // Origin details
+    if (segment.origin) {
+      doc.setFont('helvetica', 'bold');
+      doc.text('Origin:', margin, y);
+      doc.setFont('helvetica', 'normal');
+      y += 5;
+      
+      const originAddress = segment.origin.address.length > 40 
+        ? segment.origin.address.slice(0, 20) + '...' + segment.origin.address.slice(-10)
+        : segment.origin.address;
+      doc.text(`  Address: ${originAddress}`, margin, y);
+      y += 5;
+      
+      const originTxid = segment.origin.txid.length > 40
+        ? segment.origin.txid.slice(0, 20) + '...' + segment.origin.txid.slice(-10)
+        : segment.origin.txid;
+      doc.text(`  TXID: ${originTxid}`, margin, y);
+      y += 5;
+      
+      doc.text(`  Date: ${new Date(segment.origin.date).toLocaleDateString()}`, margin, y);
+      doc.text(`  Amount: ${formatBtc(segment.origin.amount)} BTC`, margin + 80, y);
+      y += 8;
+    }
+    
+    // Current state
+    if (segment.current) {
+      doc.setFont('helvetica', 'bold');
+      doc.text('Current State:', margin, y);
+      doc.setFont('helvetica', 'normal');
+      y += 5;
+      
+      if (segment.current.address) {
+        const currentAddress = segment.current.address.length > 40 
+          ? segment.current.address.slice(0, 20) + '...' + segment.current.address.slice(-10)
+          : segment.current.address;
+        doc.text(`  Address: ${currentAddress}`, margin, y);
+        y += 5;
+      }
+      
+      doc.text(`  Status: ${segment.current.status.toUpperCase()}`, margin, y);
+      doc.text(`  Amount: ${formatBtc(segment.current.amount)} BTC`, margin + 80, y);
+      y += 8;
+    }
+    
+    // Lineage chain
+    if (segment.lineageChain && segment.lineageChain.length > 0) {
+      checkPageBreak(20);
+      doc.setFont('helvetica', 'bold');
+      doc.text(`Lineage Chain (${segment.lineageChain.length} links):`, margin, y);
+      doc.setFont('helvetica', 'normal');
+      y += 5;
+      
+      const maxLinks = Math.min(segment.lineageChain.length, 5);
+      for (let j = 0; j < maxLinks; j++) {
+        const link = segment.lineageChain[j];
+        const txid = link.txid.length > 40 
+          ? link.txid.slice(0, 16) + '...'
+          : link.txid;
+        doc.text(`  ${j + 1}. ${txid} (${link.confidenceLevel})`, margin, y);
+        y += 5;
+      }
+      
+      if (segment.lineageChain.length > 5) {
+        doc.setTextColor(100);
+        doc.text(`  ... and ${segment.lineageChain.length - 5} more links`, margin, y);
+        doc.setTextColor(0);
+        y += 5;
+      }
+    }
+    
+    y += 10;
+  }
+  
+  // Footer on last page
+  checkPageBreak(20);
+  y = doc.internal.pageSize.getHeight() - 20;
+  doc.setFontSize(8);
+  doc.setTextColor(150);
+  doc.text('Generated by KYUTXO - Bitcoin Metadata Manager', margin, y);
+  doc.text(`Page ${doc.getNumberOfPages()}`, pageWidth - margin - 20, y);
+  
+  // Save the PDF
+  doc.save(filename || `evidence-bundle-${bundle.bundleId}.pdf`);
+}
+
 // Export types for use in components
 export type { UtxoLineage, CustodySegment, LineageConfidence, CustodyStatus };
