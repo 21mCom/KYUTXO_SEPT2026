@@ -877,32 +877,32 @@ export default function BitcoinFlowVisualizer() {
                     
                     {hoveredNode && (
                       <div className="absolute bottom-4 left-4 right-4 bg-card/95 backdrop-blur border rounded-lg p-3 shadow-lg">
-                        <div className="flex items-center justify-between gap-4">
-                          <div className="space-y-1 min-w-0">
-                            <p className="font-mono text-xs truncate">{hoveredNode.address}</p>
-                            <div className="flex items-center gap-3 text-xs text-muted-foreground">
-                              <span>{hoveredNode.timestamp}</span>
+                        <div className="flex items-start justify-between gap-4">
+                          <div className="space-y-2 min-w-0 flex-1">
+                            <div className="flex items-center gap-2">
+                              <p className="font-mono text-xs truncate flex-1">{hoveredNode.address}</p>
+                              {hoveredNode.isOwned && (
+                                <Badge className="bg-green-600 text-xs shrink-0">Owned</Badge>
+                              )}
+                            </div>
+                            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
+                              <span className="text-muted-foreground">{hoveredNode.timestamp}</span>
+                              <span className={hoveredNode.type === "input" ? "text-blue-500" : hoveredNode.type === "output" ? "text-purple-500" : "text-primary"}>
+                                {hoveredNode.type === "input" ? `Source (Hop ${hoveredNode.hop})` : hoveredNode.type === "output" ? `Destination (Hop +${hoveredNode.hop})` : "Selected Address"}
+                              </span>
                               {hoveredNode.owner && (
-                                <Badge className="bg-green-600 text-xs">{hoveredNode.owner}</Badge>
+                                <span className="text-green-600">Owner: {hoveredNode.owner}</span>
+                              )}
+                              {hoveredNode.txid && (
+                                <span className="text-muted-foreground font-mono truncate max-w-[200px]">TX: {hoveredNode.txid.slice(0, 12)}...</span>
                               )}
                             </div>
                           </div>
-                          <div className="flex items-center gap-3">
-                            <div className="text-right shrink-0">
-                              <div className="text-lg font-bold">{hoveredNode.amount.toFixed(8)} BTC</div>
-                              <div className="text-xs text-muted-foreground">
-                                {hoveredNode.type === "input" ? "Received" : hoveredNode.type === "output" ? "Sent" : "Center"}
-                              </div>
+                          <div className="text-right shrink-0">
+                            <div className="text-lg font-bold">{hoveredNode.amount.toFixed(8)} BTC</div>
+                            <div className="text-xs text-muted-foreground">
+                              {hoveredNode.type === "input" ? "Received from" : hoveredNode.type === "output" ? "Sent to" : "Center"}
                             </div>
-                            <Button 
-                              size="sm" 
-                              variant="outline"
-                              onClick={() => handleNodeClick(hoveredNode.address)}
-                              disabled={loadingRecord}
-                              data-testid="button-view-record"
-                            >
-                              {loadingRecord ? <Loader2 className="h-4 w-4 animate-spin" /> : "View Record"}
-                            </Button>
                           </div>
                         </div>
                       </div>
