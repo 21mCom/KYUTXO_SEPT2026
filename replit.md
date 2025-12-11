@@ -39,8 +39,16 @@ Data is stored locally using Dexie.js (IndexedDB) for structured data, with all 
 *   **Nudgie (Transaction Labeling To-Do):** A workflow for systematically labeling unlabeled transactions, with dashboard and focus views, source filtering, and quick-label buttons.
 *   **Transaction Classification Metadata (Database v15):** Tax-neutral fact-recording system for `flowType`, `acquisitionMethod`, `dispositionType`, `costBasisUsd`, and `counterpartyType`.
 *   **Bulk Editor:** A powerful batch editing system for updating multiple records at once with a filter builder, action builder, preview panel, and undo capability. Optimized for fast processing of large datasets.
-*   **Bitcoin Flow Visualizer:** An interactive UTXO provenance tracing tool with Sankey Diagram, Timeline Swimlanes, and Line Chart visualizations, prioritizing local data before falling back to blockchain APIs.
+*   **Bitcoin Flow Visualizer:** An interactive UTXO provenance tracing tool with Sankey Diagram, Timeline Swimlanes, and Line Chart visualizations, prioritizing local data before falling back to blockchain APIs. Owned addresses are highlighted in green for easy identification.
 *   **Transaction Search Enhancement:** Records page search now includes blockchain transactions, showing all participating addresses for a given txid.
+*   **Origin Tracking System:** Comprehensive UTXO lineage tracking with:
+    *   **utxoLineage table:** Tracks UTXO flow relationships (spent → created) with confidence scoring
+    *   **custodySegment table:** Groups lineage chains into ownership periods with acquisition metadata
+    *   **Lineage Engine:** Builds lineage from TransactionParticipants with intelligent change detection
+    *   **Continuity Proof component:** Visualizes complete ownership timeline with custody duration
+    *   **Continuity Certificate Report:** Filtered export of custody segments with selective disclosure
+    *   **Evidence Bundle Export:** Privacy-preserving export with toggles for addresses, txids, and lineage chains
+*   **Timestamp Standards:** originDate stored as Unix seconds (blockTime), updatedAt as Unix milliseconds (Date.now())
 
 ## External Dependencies
 
