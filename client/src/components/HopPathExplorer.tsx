@@ -31,6 +31,7 @@ interface HopPathExplorerProps {
   links: FlowLink[];
   centerAddress: string;
   onExploreAddress?: (address: string) => void;
+  onNodeClick?: (address: string) => void;
   isLoading?: boolean;
 }
 
@@ -78,6 +79,7 @@ export function HopPathExplorer({
   links, 
   centerAddress,
   onExploreAddress,
+  onNodeClick,
   isLoading = false
 }: HopPathExplorerProps) {
   const [selectedNode, setSelectedNode] = useState<string | null>(null);
@@ -187,6 +189,15 @@ export function HopPathExplorer({
     return "text-muted-foreground";
   };
 
+  const handleNodeRowClick = useCallback((node: FlatNode) => {
+    // Always update local selection for visual highlight
+    setSelectedNode(node.id === selectedNode ? null : node.id);
+    // Also trigger the sidebar callback if provided
+    if (onNodeClick) {
+      onNodeClick(node.fullAddress);
+    }
+  }, [onNodeClick, selectedNode]);
+
   const renderNode = (node: FlatNode): JSX.Element => {
     const isSelected = selectedNode === node.id;
     // Center has 0 indent, other nodes indent by their absolute hop distance
@@ -199,7 +210,7 @@ export function HopPathExplorer({
           isSelected ? "bg-primary/10 ring-1 ring-primary" : "hover-elevate"
         }`}
         style={{ marginLeft: `${indent}px` }}
-        onClick={() => setSelectedNode(node.id === selectedNode ? null : node.id)}
+        onClick={() => handleNodeRowClick(node)}
         data-testid={`hop-node-${node.id}`}
       >
         <Circle className={`h-3 w-3 fill-current ${getNodeDotColor(node)}`} />

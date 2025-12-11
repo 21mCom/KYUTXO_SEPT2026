@@ -17,7 +17,6 @@ import {
 } from "lucide-react";
 import { SiBitcoin } from "react-icons/si";
 import { useFlowData, type FlowNode } from "@/hooks/use-flow-data";
-import { ClickableAddress } from "@/components/ClickableAddress";
 import { HopPathExplorer } from "@/components/HopPathExplorer";
 import { RecordDetailPanel } from "@/components/RecordDetailPanel";
 import { db, type ChainType, type AddressImportance, type VaultMetadata, type FlowType, type AcquisitionMethod, type DispositionType, type CounterpartyType } from "@/lib/database";
@@ -458,7 +457,7 @@ export default function BitcoinFlowVisualizer() {
                         const height = Math.max(20, Math.min(40, node.amount * 80));
                         const isOwned = node.isLabeled || !!node.owner;
                         return (
-                          <g key={node.id}>
+                          <g key={node.id} className="cursor-pointer" onClick={() => handleNodeClick(node.address)} data-testid={`sankey-input-${node.id}`}>
                             <path
                               d={`M 120 ${y} C 250 ${y}, 280 200, 350 ${180 + (i - totalNodes/2) * 20}`}
                               fill="none"
@@ -474,6 +473,7 @@ export default function BitcoinFlowVisualizer() {
                               rx="4"
                               fill={isOwned ? "hsl(142, 76%, 36%)" : "hsl(var(--chart-1))"}
                               opacity={isOwned ? "0.95" : "0.8"}
+                              className="hover:opacity-100 transition-opacity"
                             />
                             {isOwned && (
                               <rect
@@ -487,10 +487,10 @@ export default function BitcoinFlowVisualizer() {
                                 strokeWidth="2"
                               />
                             )}
-                            <text x="70" y={y + 4} textAnchor="middle" className="fill-current text-xs font-mono">
+                            <text x="70" y={y + 4} textAnchor="middle" className="fill-current text-xs font-mono pointer-events-none">
                               {node.address}
                             </text>
-                            <text x="70" y={y + 18} textAnchor="middle" className="fill-muted-foreground text-xs">
+                            <text x="70" y={y + 18} textAnchor="middle" className="fill-muted-foreground text-xs pointer-events-none">
                               {node.amount.toFixed(4)} BTC
                             </text>
                           </g>
@@ -498,7 +498,7 @@ export default function BitcoinFlowVisualizer() {
                       })}
 
                       {selectedNode && (
-                        <g>
+                        <g className="cursor-pointer" onClick={() => handleNodeClick(selectedNode.address)} data-testid="sankey-selected-node">
                           <rect
                             x="350"
                             y="150"
@@ -507,11 +507,12 @@ export default function BitcoinFlowVisualizer() {
                             rx="8"
                             fill="hsl(var(--primary))"
                             opacity="0.9"
+                            className="hover:opacity-100 transition-opacity"
                           />
-                          <text x="400" y="195" textAnchor="middle" className="fill-primary-foreground text-xs font-bold">
+                          <text x="400" y="195" textAnchor="middle" className="fill-primary-foreground text-xs font-bold pointer-events-none">
                             SELECTED
                           </text>
-                          <text x="400" y="215" textAnchor="middle" className="fill-primary-foreground text-xs font-mono">
+                          <text x="400" y="215" textAnchor="middle" className="fill-primary-foreground text-xs font-mono pointer-events-none">
                             {selectedNode.amount.toFixed(4)} BTC
                           </text>
                         </g>
@@ -524,7 +525,7 @@ export default function BitcoinFlowVisualizer() {
                         const height = Math.max(20, Math.min(40, node.amount * 80));
                         const isOwned = node.isLabeled || !!node.owner;
                         return (
-                          <g key={node.id}>
+                          <g key={node.id} className="cursor-pointer" onClick={() => handleNodeClick(node.address)} data-testid={`sankey-output-${node.id}`}>
                             <path
                               d={`M 450 ${200 + (i - totalNodes/2) * 20} C 520 ${200 + (i - totalNodes/2) * 20}, 550 ${y}, 680 ${y}`}
                               fill="none"
@@ -540,6 +541,7 @@ export default function BitcoinFlowVisualizer() {
                               rx="4"
                               fill={isOwned ? "hsl(142, 76%, 36%)" : "hsl(var(--chart-2))"}
                               opacity={isOwned ? "0.95" : "0.8"}
+                              className="hover:opacity-100 transition-opacity"
                             />
                             {isOwned && (
                               <rect
@@ -553,10 +555,10 @@ export default function BitcoinFlowVisualizer() {
                                 strokeWidth="2"
                               />
                             )}
-                            <text x="730" y={y + 4} textAnchor="middle" className="fill-current text-xs font-mono">
+                            <text x="730" y={y + 4} textAnchor="middle" className="fill-current text-xs font-mono pointer-events-none">
                               {node.address}
                             </text>
-                            <text x="730" y={y + 18} textAnchor="middle" className="fill-muted-foreground text-xs">
+                            <text x="730" y={y + 18} textAnchor="middle" className="fill-muted-foreground text-xs pointer-events-none">
                               {node.amount.toFixed(4)} BTC
                             </text>
                           </g>
@@ -636,17 +638,15 @@ export default function BitcoinFlowVisualizer() {
                           return (
                             <div 
                               key={node.id}
-                              className={`flex items-center gap-2 px-2 py-2 rounded hover-elevate text-sm ${isOwned ? 'bg-green-500/5 border-l-2 border-green-500' : ''}`}
+                              className={`flex items-center gap-2 px-2 py-2 rounded hover-elevate cursor-pointer text-sm ${isOwned ? 'bg-green-500/5 border-l-2 border-green-500' : ''}`}
                               data-testid={`timeline-row-${node.id}`}
+                              onClick={() => handleNodeClick(node.address)}
                             >
                               <Badge variant="outline" className="w-8 justify-center text-xs">
                                 {node.hop}
                               </Badge>
                               <div className="w-24 text-xs text-muted-foreground">{node.timestamp}</div>
-                              <ClickableAddress 
-                                address={node.address} 
-                                className="w-32 text-xs truncate"
-                              />
+                              <div className="w-32 text-xs font-mono truncate">{node.address}</div>
                               <div className="flex-1 flex items-center gap-1">
                                 <div 
                                   className="h-4 rounded"
@@ -667,13 +667,14 @@ export default function BitcoinFlowVisualizer() {
                         })}
 
                         {selectedNode && (
-                          <div className="flex items-center gap-2 px-2 py-3 rounded bg-primary/10 border border-primary/20">
+                          <div 
+                            className="flex items-center gap-2 px-2 py-3 rounded bg-primary/10 border border-primary/20 cursor-pointer hover-elevate"
+                            onClick={() => handleNodeClick(selectedNode.address)}
+                            data-testid="timeline-selected-row"
+                          >
                             <Badge className="w-8 justify-center text-xs">0</Badge>
                             <div className="w-24 text-xs">{selectedNode.timestamp}</div>
-                            <ClickableAddress 
-                              address={selectedNode.address} 
-                              className="w-32 text-xs font-bold truncate"
-                            />
+                            <div className="w-32 text-xs font-bold font-mono truncate">{selectedNode.address}</div>
                             <div className="flex-1 flex items-center gap-1">
                               <div 
                                 className="h-6 rounded flex items-center justify-center text-xs text-primary-foreground font-medium"
@@ -697,17 +698,15 @@ export default function BitcoinFlowVisualizer() {
                           return (
                             <div 
                               key={node.id}
-                              className={`flex items-center gap-2 px-2 py-2 rounded hover-elevate text-sm ${isOwned ? 'bg-green-500/5 border-l-2 border-green-500' : ''}`}
+                              className={`flex items-center gap-2 px-2 py-2 rounded hover-elevate cursor-pointer text-sm ${isOwned ? 'bg-green-500/5 border-l-2 border-green-500' : ''}`}
                               data-testid={`timeline-row-${node.id}`}
+                              onClick={() => handleNodeClick(node.address)}
                             >
                               <Badge variant="outline" className="w-8 justify-center text-xs">
                                 +{node.hop}
                               </Badge>
                               <div className="w-24 text-xs text-muted-foreground">{node.timestamp}</div>
-                              <ClickableAddress 
-                                address={node.address} 
-                                className="w-32 text-xs truncate"
-                              />
+                              <div className="w-32 text-xs font-mono truncate">{node.address}</div>
                               <div className="flex-1 flex items-center gap-1">
                                 <ArrowRight className="h-3 w-3 text-muted-foreground" />
                                 <div 
@@ -743,6 +742,7 @@ export default function BitcoinFlowVisualizer() {
                   setSearchAddress(address);
                   fetchFlow(address, hopDepth[0], allowBlockchainApi);
                 }}
+                onNodeClick={handleNodeClick}
               />
             </TabsContent>
 
