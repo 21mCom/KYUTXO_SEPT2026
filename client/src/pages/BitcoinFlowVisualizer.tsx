@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useCallback } from "react";
 import { useLocation } from "wouter";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -19,6 +19,39 @@ import { SiBitcoin } from "react-icons/si";
 import { useFlowData, type FlowNode } from "@/hooks/use-flow-data";
 import { ClickableAddress } from "@/components/ClickableAddress";
 import { HopPathExplorer } from "@/components/HopPathExplorer";
+import { RecordDetailPanel } from "@/components/RecordDetailPanel";
+import { db, type ChainType, type AddressImportance, type VaultMetadata, type FlowType, type AcquisitionMethod, type DispositionType, type CounterpartyType } from "@/lib/database";
+import { decryptRecords, isEncryptionReady } from "@/lib/encryptionFacade";
+
+interface RecordViewData {
+  id: string;
+  type: "address" | "transaction" | "other";
+  inputString: string;
+  label: string;
+  notes?: string;
+  tags: string[];
+  categories: string[];
+  seedName?: string;
+  walletSoftware?: string;
+  owner?: string;
+  walletName?: string;
+  privateKeyStatus?: string;
+  source?: string;
+  derivationPath?: string;
+  chainType?: ChainType;
+  vault?: VaultMetadata;
+  addressImportance?: AddressImportance;
+  customFields?: { [key: string]: string };
+  syncDepth?: number;
+  maxSyncedDepth?: number;
+  discoveredInTxid?: string;
+  discoveredFromRecordId?: number;
+  flowType?: FlowType;
+  acquisitionMethod?: AcquisitionMethod;
+  dispositionType?: DispositionType;
+  costBasisUsd?: number;
+  counterpartyType?: CounterpartyType;
+}
 
 interface FlowPathNode {
   id: string;
@@ -138,6 +171,74 @@ export default function BitcoinFlowVisualizer() {
   }, [flowData, searchAddress]);
   
   const [hoveredNode, setHoveredNode] = useState<FlowPathNode | null>(null);
+  const [recordPanelOpen, setRecordPanelOpen] = useState(false);
+  const [selectedRecord, setSelectedRecord] = useState<RecordViewData | null>(null);
+  const [loadingRecord, setLoadingRecord] = useState(false);
+
+  const handleNodeClick = useCallback(async (address: string) => {
+    if (!address) return;
+    
+    setLoadingRecord(true);
+    
+    try {
+      const dbRecord = await db.records
+        .where('inputString')
+        .equals(address)
+        .first();
+      
+      if (dbRecord && isEncryptionReady()) {
+        const decryptedRecords = await decryptRecords([dbRecord]);
+        const decrypted = decryptedRecords[0];
+        if (decrypted) {
+          const converted: RecordViewData = {
+            id: String(decrypted.id),
+            type: decrypted.type as "address" | "transaction" | "other",
+            inputString: decrypted.inputString,
+            label: decrypted.label || "",
+            notes: decrypted.notes,
+            tags: decrypted.tags || [],
+            categories: decrypted.categories || [],
+            seedName: decrypted.seedName,
+            walletSoftware: decrypted.walletSoftware,
+            owner: decrypted.owner,
+            walletName: decrypted.walletName,
+            privateKeyStatus: decrypted.privateKeyStatus,
+            source: decrypted.source,
+            derivationPath: decrypted.derivationPath,
+            chainType: decrypted.chainType as ChainType | undefined,
+            vault: decrypted.vault as VaultMetadata | undefined,
+            addressImportance: decrypted.addressImportance as AddressImportance | undefined,
+            customFields: decrypted.customFields as { [key: string]: string } | undefined,
+            syncDepth: decrypted.syncDepth,
+            maxSyncedDepth: decrypted.maxSyncedDepth,
+            discoveredInTxid: decrypted.discoveredInTxid,
+            discoveredFromRecordId: decrypted.discoveredFromRecordId,
+            flowType: decrypted.flowType as FlowType | undefined,
+            acquisitionMethod: decrypted.acquisitionMethod as AcquisitionMethod | undefined,
+            dispositionType: decrypted.dispositionType as DispositionType | undefined,
+            costBasisUsd: decrypted.costBasisUsd,
+            counterpartyType: decrypted.counterpartyType as CounterpartyType | undefined,
+          };
+          setSelectedRecord(converted);
+          setRecordPanelOpen(true);
+        }
+      } else {
+        navigate(`/records?search=${encodeURIComponent(address)}`);
+      }
+    } catch (err) {
+      console.error('[FlowVisualizer] Error loading record:', err);
+      navigate(`/records?search=${encodeURIComponent(address)}`);
+    } finally {
+      setLoadingRecord(false);
+    }
+  }, [navigate]);
+
+  const handleEditRecord = () => {
+    if (selectedRecord) {
+      setRecordPanelOpen(false);
+      navigate(`/records?id=${selectedRecord.id}`);
+    }
+  };
 
   const handleSearch = () => {
     if (!searchAddress.trim()) return;
@@ -725,7 +826,7 @@ export default function BitcoinFlowVisualizer() {
                                     className="cursor-pointer transition-all duration-200"
                                     onMouseEnter={() => setHoveredNode(node)}
                                     onMouseLeave={() => setHoveredNode(null)}
-                                    onClick={() => navigate(`/records?search=${encodeURIComponent(node.address)}`)}
+                                    onClick={() => handleNodeClick(node.address)}
                                     data-testid={`flow-node-${node.id}`}
                                   />
                                 </TooltipTrigger>
@@ -796,10 +897,11 @@ export default function BitcoinFlowVisualizer() {
                             <Button 
                               size="sm" 
                               variant="outline"
-                              onClick={() => navigate(`/records?search=${encodeURIComponent(hoveredNode.address)}`)}
+                              onClick={() => handleNodeClick(hoveredNode.address)}
+                              disabled={loadingRecord}
                               data-testid="button-view-record"
                             >
-                              View Record
+                              {loadingRecord ? <Loader2 className="h-4 w-4 animate-spin" /> : "View Record"}
                             </Button>
                           </div>
                         </div>
@@ -875,6 +977,13 @@ export default function BitcoinFlowVisualizer() {
           </Card>
         )}
       </div>
+      
+      <RecordDetailPanel
+        open={recordPanelOpen}
+        record={selectedRecord || undefined}
+        onClose={() => setRecordPanelOpen(false)}
+        onEdit={handleEditRecord}
+      />
     </ScrollArea>
   );
 }
