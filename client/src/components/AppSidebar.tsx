@@ -26,7 +26,8 @@ import {
   Layers,
   Map,
   Import,
-  DollarSign
+  DollarSign,
+  Shield
 } from "lucide-react";
 import logoUrl from "@assets/foot_1764929618997.png";
 import {
@@ -89,6 +90,7 @@ const navGroups: NavGroup[] = [
       { title: "Address Reuse", url: "/address-reuse", icon: Repeat2 },
       { title: "Provenance", url: "/provenance", icon: Map },
       { title: "Flow Visualizer", url: "/flow-visualizer", icon: Network },
+      { title: "Compliance Proofs", url: "/compliance-proofs", icon: Shield },
       { title: "Data Stats", url: "/data-stats", icon: BarChart3 },
       { title: "Reports", url: "/reports", icon: ClipboardList },
       { title: "Lightning", url: "/lightning-speculator", icon: Zap },

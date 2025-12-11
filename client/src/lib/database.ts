@@ -488,6 +488,122 @@ export interface LineageSnapshot {
   isEncrypted?: boolean;
 }
 
+// === Compliance Proofs Module (Separate Feature) ===
+
+// Signature type for ownership attestations
+export type AttestationSignatureType = 
+  | 'bitcoin-message'       // Standard Bitcoin signed message (P2PKH, P2WPKH)
+  | 'electrum'              // Electrum-style signed message
+  | 'sparrow'               // Sparrow wallet signed message
+  | 'hardware'              // Hardware wallet signed message
+  | 'multisig';             // Multisig attestation (multiple signatures)
+
+// Status of an attestation verification
+export type AttestationStatus = 
+  | 'verified'              // Signature verified successfully
+  | 'pending'               // Awaiting verification
+  | 'failed'                // Signature verification failed
+  | 'expired';              // Attestation has expired
+
+// Ownership attestation - cryptographic proof of address control
+export interface OwnershipAttestation {
+  id?: number;
+  attestationId: string;    // Unique identifier (UUID)
+  // Target address
+  address: string;          // The address being attested
+  recordId?: number;        // Link to existing record if any
+  // Attestation message
+  message: string;          // The message that was signed
+  messageHash: string;      // SHA256 hash of the message
+  // Signature data
+  signature: string;        // The signature (base64 or hex encoded)
+  signatureType: AttestationSignatureType;
+  // Verification status
+  status: AttestationStatus;
+  verifiedAt?: number;      // Unix timestamp of verification
+  // Time bounds (optional - for time-bounded attestations)
+  validFrom?: number;       // Unix timestamp - start of validity
+  validUntil?: number;      // Unix timestamp - end of validity
+  // Multisig support
+  requiredSignatures?: number;  // M in M-of-N multisig
+  totalSigners?: number;        // N in M-of-N multisig
+  additionalSignatures?: string[]; // Additional signatures for multisig
+  // Metadata
+  notes?: string;           // User notes about this attestation
+  createdAt: number;
+  updatedAt: number;
+  // Encryption
+  encryptedPayload?: string;
+  isEncrypted?: boolean;
+}
+
+// Merkle node for custody proof tree
+export interface MerkleNode {
+  hash: string;             // SHA256 hash of this node
+  left?: string;            // Left child hash (if branch)
+  right?: string;           // Right child hash (if branch)
+  data?: {                  // Leaf data (if leaf node)
+    segmentId?: string;     // Custody segment this represents
+    txid?: string;          // Transaction ID
+    address?: string;       // Address (may be redacted)
+    timestamp?: number;     // Block time
+    amount?: number;        // Amount in satoshis
+  };
+  isRedacted?: boolean;     // If true, this branch is hidden
+}
+
+// Disclosure level for compliance proofs
+export type ProofDisclosureLevel = 
+  | 'full'                  // All details visible
+  | 'addresses-hidden'      // Addresses replaced with hashes
+  | 'amounts-hidden'        // Amounts not disclosed
+  | 'minimal'               // Only merkle root and signatures
+  | 'custom';               // Custom redaction pattern
+
+// Compliance proof - selective custody proof for regulatory scenarios
+export interface ComplianceProof {
+  id?: number;
+  proofId: string;          // Unique identifier (UUID)
+  // Proof name and description
+  name: string;             // User-friendly name for this proof
+  description?: string;     // Purpose or notes
+  // Scope selection
+  includedAddresses: string[];      // Addresses selected for this proof
+  includedSegmentIds: string[];     // Custody segments included
+  // Time bounds
+  startDate: number;        // Unix timestamp - start of proof period
+  endDate: number;          // Unix timestamp - end of proof period
+  // Merkle tree data
+  merkleRoot: string;       // Root hash of the custody merkle tree
+  merkleNodes: MerkleNode[]; // Full tree structure (nodes may be redacted)
+  // Linked attestations
+  attestationIds: string[]; // Ownership attestations supporting this proof
+  // Disclosure settings
+  disclosureLevel: ProofDisclosureLevel;
+  redactedAddresses?: string[];     // Specific addresses to hide
+  redactedTxids?: string[];         // Specific txids to hide
+  // Summary (always visible regardless of disclosure level)
+  totalAddresses: number;   // Count of addresses covered
+  totalTransactions: number; // Count of transactions in scope
+  totalAmountSats?: number; // Total amount (if disclosed)
+  // Export tracking
+  exportedAt?: number;      // When this proof was last exported
+  exportFormat?: string;    // Format of last export (json, pdf, etc.)
+  // Blockchain anchoring (optional)
+  anchorTxid?: string;      // Transaction anchoring merkle root to Bitcoin
+  anchorBlockHeight?: number;// Block height of anchor
+  anchorTimestamp?: number; // Timestamp of anchor confirmation
+  // Verification URL (optional)
+  verificationUrl?: string; // URL where this proof can be verified
+  // Metadata
+  createdAt: number;
+  updatedAt: number;
+  expiresAt?: number;       // Optional expiration date
+  // Encryption
+  encryptedPayload?: string;
+  isEncrypted?: boolean;
+}
+
 // Derivation template for optional encrypted xpub storage
 // WARNING: Storing xpubs doesn't risk funds but reveals wallet structure and all addresses
 export interface DerivationTemplate {
@@ -543,9 +659,41 @@ export class KYUTXODatabase extends Dexie {
   utxoLineage!: Table<UtxoLineage>;
   custodySegments!: Table<CustodySegment>;
   lineageSnapshots!: Table<LineageSnapshot>;
+  // Compliance proofs module (separate feature - can be pruned)
+  ownershipAttestations!: Table<OwnershipAttestation>;
+  complianceProofs!: Table<ComplianceProof>;
 
   constructor() {
     super('KYUTXODatabase');
+    
+    // Version 18 adds Compliance Proofs module (separate feature - can be pruned)
+    // - ownershipAttestations: cryptographic proofs of address control
+    // - complianceProofs: selective merkle-based custody proofs for regulatory scenarios
+    this.version(18).stores({
+      records: '++id, type, inputString, label, owner, *tags, *categories, createdAt, updatedAt, isEncrypted, chainType, syncDepth, addressImportance, [type+addressImportance], flowType',
+      attachments: '++id, recordId, createdAt, isEncrypted',
+      tags: '++id, name, createdAt, isEncrypted',
+      categories: '++id, name, createdAt, isEncrypted',
+      owners: '++id, name, createdAt, isEncrypted',
+      walletNames: '++id, name, createdAt, isEncrypted',
+      seedNames: '++id, name, createdAt, isEncrypted',
+      walletSoftware: '++id, name, createdAt, isEncrypted',
+      recordOrigins: '++id, recordId, originType, createdAt, isEncrypted',
+      customFields: '++id, slug, enabled, createdAt',
+      settings: 'id',
+      priceData: '++id, [date+currency+asset], date, asset, currency, source, importedAt',
+      blockchainTransactions: '++id, &txid, blockHeight, blockTime, syncedAt',
+      transactionParticipants: '++id, [txid+role], txid, role, address, recordId',
+      addressSyncState: '++id, &address, recordId, lastSyncedAt',
+      nodeSettings: 'id',
+      derivationTemplates: '++id, fingerprint, scriptType, owner, walletName, seedName, createdAt, isEncrypted',
+      utxoLineage: '++id, [spentTxid+spentVout], [createdTxid+createdVout], consumingTxid, spentAddress, createdAddress, segmentId, spentOwned, createdOwned, isChange, blockTime, isEncrypted',
+      custodySegments: '++id, &segmentId, [originTxid+originVout], originAddress, currentAddress, status, parentSegmentId, owner, walletName, originDate, isEncrypted',
+      lineageSnapshots: '++id, &snapshotId, targetType, targetAddress, targetSegmentId, generatedAt, disclosureLevel, isEncrypted',
+      // Compliance Proofs module
+      ownershipAttestations: '++id, &attestationId, address, recordId, status, signatureType, createdAt, isEncrypted',
+      complianceProofs: '++id, &proofId, name, startDate, endDate, disclosureLevel, createdAt, isEncrypted'
+    });
     
     // Version 17 adds UTXO lineage tracking tables for AML/SOF origin tracking
     // - utxoLineage: tracks individual UTXO→UTXO relationships
