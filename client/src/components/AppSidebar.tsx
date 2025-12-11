@@ -227,7 +227,7 @@ export function AppSidebar() {
           <img src={logoUrl} alt="KYUTXO" className="h-8 w-8" />
           <div className="flex flex-col">
             <span className="font-bold text-lg tracking-tight">KYUTXO</span>
-            <span className="text-xs text-muted-foreground">Bitcoin Manager</span>
+            <span className="text-xs text-muted-foreground">Bitcoin Metadata Manager</span>
           </div>
         </div>
       </SidebarHeader>
