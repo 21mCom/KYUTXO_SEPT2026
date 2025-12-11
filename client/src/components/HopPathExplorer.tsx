@@ -6,7 +6,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Separator } from "@/components/ui/separator";
 import { 
-  Circle, ArrowRight, ArrowDown, ArrowUp,
+  Circle, ArrowDown, ArrowUp, MoveDown,
   ExternalLink, Home, Loader2, AlertCircle
 } from "lucide-react";
 import { type FlowNode, type FlowLink } from "@/hooks/use-flow-data";
@@ -49,6 +49,28 @@ const getNodeStatus = (node: FlowNode): { isOwned: boolean; isUnclassified: bool
 const parseTimestamp = (ts: string): number => {
   const date = new Date(ts);
   return isNaN(date.getTime()) ? 0 : date.getTime();
+};
+
+const FlowArrow = ({ fromIndent, toIndent, direction }: { 
+  fromIndent: number; 
+  toIndent: number; 
+  direction: "down" | "up";
+}) => {
+  const minIndent = Math.min(fromIndent, toIndent);
+  const arrowColor = direction === "down" ? "text-blue-400" : "text-purple-400";
+  
+  return (
+    <div 
+      className="flex items-center h-6 relative"
+      style={{ marginLeft: `${minIndent + 6}px` }}
+    >
+      <div className="flex items-center gap-1">
+        <div className={`w-px h-full bg-border absolute left-1 top-0 bottom-0`} />
+        <MoveDown className={`h-4 w-4 ${arrowColor} ${direction === "up" ? "" : ""}`} />
+        <span className="text-xs text-muted-foreground/60 italic">funds flow</span>
+      </div>
+    </div>
+  );
 };
 
 export function HopPathExplorer({ 
@@ -315,38 +337,63 @@ export function HopPathExplorer({
                       <span className="font-medium">INCOMING ({incomingNodes.length})</span>
                       <span className="text-muted-foreground/60">— funds received from these addresses</span>
                     </div>
-                    {incomingNodes.map(node => renderNode(node))}
-                  </div>
-                )}
-
-                {/* Center separator */}
-                {incomingNodes.length > 0 && (
-                  <div className="py-2">
-                    <Separator />
+                    {incomingNodes.map((node, index) => {
+                      const currentIndent = Math.abs(node.hop) * 32;
+                      const nextNode = incomingNodes[index + 1];
+                      const nextIndent = nextNode ? Math.abs(nextNode.hop) * 32 : 0;
+                      const showArrow = index < incomingNodes.length - 1 || true;
+                      
+                      return (
+                        <div key={node.id}>
+                          {renderNode(node)}
+                          {showArrow && (
+                            <FlowArrow 
+                              fromIndent={currentIndent} 
+                              toIndent={nextNode ? nextIndent : 0} 
+                              direction="down" 
+                            />
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
 
                 {/* Center node */}
-                <div className="py-1">
+                <div className="py-1 border-y border-primary/20 bg-primary/5">
                   {renderNode(centerNode)}
                 </div>
-
-                {/* Outgoing separator */}
-                {outgoingNodes.length > 0 && (
-                  <div className="py-2">
-                    <Separator />
-                  </div>
-                )}
 
                 {/* Outgoing section */}
                 {outgoingNodes.length > 0 && (
                   <div className="mt-2">
                     <div className="flex items-center gap-2 text-xs text-muted-foreground py-2 px-3">
-                      <ArrowUp className="h-3 w-3 text-purple-500" />
+                      <ArrowDown className="h-3 w-3 text-purple-500" />
                       <span className="font-medium">OUTGOING ({outgoingNodes.length})</span>
                       <span className="text-muted-foreground/60">— funds sent to these addresses</span>
                     </div>
-                    {outgoingNodes.map(node => renderNode(node))}
+                    {outgoingNodes.map((node, index) => {
+                      const currentIndent = Math.abs(node.hop) * 32;
+                      const showArrow = index < outgoingNodes.length - 1;
+                      const nextNode = outgoingNodes[index + 1];
+                      const nextIndent = nextNode ? Math.abs(nextNode.hop) * 32 : currentIndent;
+                      
+                      return (
+                        <div key={node.id}>
+                          {index === 0 && (
+                            <FlowArrow fromIndent={0} toIndent={currentIndent} direction="down" />
+                          )}
+                          {renderNode(node)}
+                          {showArrow && (
+                            <FlowArrow 
+                              fromIndent={currentIndent} 
+                              toIndent={nextIndent} 
+                              direction="down" 
+                            />
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
 
