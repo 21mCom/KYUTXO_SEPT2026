@@ -9,10 +9,7 @@ import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { 
-  LineChart, Line, XAxis, YAxis, CartesianGrid, 
-  ResponsiveContainer, Tooltip as RechartsTooltip, Legend
-} from "recharts";
+import { Tooltip as RadixTooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { 
   Search, Info, GitBranch, Clock, TrendingUp, 
   ArrowRight, Loader2, Database, Globe, AlertCircle, Route
@@ -22,26 +19,109 @@ import { useFlowData, type FlowNode } from "@/hooks/use-flow-data";
 import { ClickableAddress } from "@/components/ClickableAddress";
 import { HopPathExplorer } from "@/components/HopPathExplorer";
 
-const generateLineChartData = (nodes: FlowNode[]) => {
-  const sortedNodes = [...nodes]
-    .filter(n => n.type !== "selected")
-    .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+interface FlowPathNode {
+  id: string;
+  address: string;
+  amount: number;
+  timestamp: string;
+  hop: number;
+  type: "input" | "output" | "selected";
+  x: number;
+  y: number;
+  radius: number;
+  isOwned: boolean;
+  owner?: string;
+  txid?: string;
+}
+
+interface FlowPathLink {
+  source: FlowPathNode;
+  target: FlowPathNode;
+}
+
+const generateFlowPathData = (nodes: FlowNode[], centerAddress: string) => {
+  const selectedNode = nodes.find(n => n.type === "selected");
+  if (!selectedNode) return { nodes: [], links: [] };
   
-  let runningBalance = 0;
-  return sortedNodes.map(node => {
-    if (node.type === "input") {
-      runningBalance += node.amount;
-    } else if (node.type === "output") {
-      runningBalance -= node.amount;
-    }
-    return {
-      date: node.timestamp,
-      balance: Number(runningBalance.toFixed(8)),
+  const allNodes = nodes.filter(n => n.type !== "selected");
+  const sortedNodes = [...allNodes].sort((a, b) => 
+    new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+  );
+  
+  const inputNodes = sortedNodes.filter(n => n.type === "input");
+  const outputNodes = sortedNodes.filter(n => n.type === "output");
+  
+  const chartWidth = 700;
+  const chartHeight = 400;
+  const centerX = chartWidth / 2;
+  const paddingY = 40;
+  const usableHeight = chartHeight - paddingY * 2;
+  
+  const maxAmount = Math.max(...nodes.map(n => n.amount), 0.001);
+  const getRadius = (amount: number) => Math.max(6, Math.min(24, (amount / maxAmount) * 24 + 4));
+  
+  const pathNodes: FlowPathNode[] = [];
+  const pathLinks: FlowPathLink[] = [];
+  
+  const centerNode: FlowPathNode = {
+    id: selectedNode.id,
+    address: selectedNode.address,
+    amount: selectedNode.amount,
+    timestamp: selectedNode.timestamp,
+    hop: 0,
+    type: "selected",
+    x: centerX,
+    y: chartHeight / 2,
+    radius: 16,
+    isOwned: true,
+    owner: selectedNode.owner,
+    txid: selectedNode.txid
+  };
+  pathNodes.push(centerNode);
+  
+  inputNodes.forEach((node, i) => {
+    const ySpacing = usableHeight / (inputNodes.length + 1);
+    const hopOffset = Math.abs(node.hop) * 60;
+    const pathNode: FlowPathNode = {
+      id: node.id,
+      address: node.address,
       amount: node.amount,
-      type: node.type,
-      address: node.address
+      timestamp: node.timestamp,
+      hop: node.hop,
+      type: "input",
+      x: centerX - 120 - hopOffset,
+      y: paddingY + ySpacing * (i + 1),
+      radius: getRadius(node.amount),
+      isOwned: !!(node.isLabeled || node.owner),
+      owner: node.owner,
+      txid: node.txid
     };
+    pathNodes.push(pathNode);
+    pathLinks.push({ source: pathNode, target: centerNode });
   });
+  
+  outputNodes.forEach((node, i) => {
+    const ySpacing = usableHeight / (outputNodes.length + 1);
+    const hopOffset = Math.abs(node.hop) * 60;
+    const pathNode: FlowPathNode = {
+      id: node.id,
+      address: node.address,
+      amount: node.amount,
+      timestamp: node.timestamp,
+      hop: node.hop,
+      type: "output",
+      x: centerX + 120 + hopOffset,
+      y: paddingY + ySpacing * (i + 1),
+      radius: getRadius(node.amount),
+      isOwned: !!(node.isLabeled || node.owner),
+      owner: node.owner,
+      txid: node.txid
+    };
+    pathNodes.push(pathNode);
+    pathLinks.push({ source: centerNode, target: pathNode });
+  });
+  
+  return { nodes: pathNodes, links: pathLinks };
 };
 
 export default function BitcoinFlowVisualizer() {
@@ -50,10 +130,12 @@ export default function BitcoinFlowVisualizer() {
   const [allowBlockchainApi, setAllowBlockchainApi] = useState(false);
   const { flowData, isLoading, error, dataSource, fetchFlow } = useFlowData();
 
-  const lineChartData = useMemo(() => {
-    if (!flowData) return [];
-    return generateLineChartData(flowData.nodes);
-  }, [flowData]);
+  const flowPathData = useMemo(() => {
+    if (!flowData) return { nodes: [], links: [] };
+    return generateFlowPathData(flowData.nodes, searchAddress);
+  }, [flowData, searchAddress]);
+  
+  const [hoveredNode, setHoveredNode] = useState<FlowPathNode | null>(null);
 
   const handleSearch = () => {
     if (!searchAddress.trim()) return;
@@ -566,66 +648,168 @@ export default function BitcoinFlowVisualizer() {
                 <CardHeader>
                   <CardTitle className="flex items-center gap-2">
                     <Badge variant="outline">CHT-1</Badge>
-                    Balance Over Time
+                    Transaction Flow Paths
                   </CardTitle>
                   <CardDescription>
-                    Line chart showing cumulative balance changes as UTXOs flow through the address.
+                    Visualize fund flow paths. Dot size represents BTC amount. Hover for details.
                   </CardDescription>
                 </CardHeader>
                 <CardContent>
-                  <div className="h-[400px]">
-                    {lineChartData.length > 0 ? (
-                      <ResponsiveContainer width="100%" height="100%">
-                        <LineChart data={lineChartData} margin={{ top: 20, right: 30, left: 20, bottom: 20 }}>
-                          <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
-                          <XAxis 
-                            dataKey="date" 
-                            className="text-xs"
-                            tick={{ fill: 'hsl(var(--muted-foreground))' }}
-                          />
-                          <YAxis 
-                            className="text-xs"
-                            tick={{ fill: 'hsl(var(--muted-foreground))' }}
-                            tickFormatter={(v) => `${v.toFixed(4)} BTC`}
-                          />
-                          <RechartsTooltip 
-                            contentStyle={{ 
-                              background: 'hsl(var(--card))',
-                              border: '1px solid hsl(var(--border))',
-                              borderRadius: '8px'
-                            }}
-                            labelStyle={{ color: 'hsl(var(--foreground))' }}
-                            formatter={(value: number, name: string) => [
-                              `${value.toFixed(8)} BTC`,
-                              name === "balance" ? "Balance" : "Amount"
-                            ]}
-                          />
-                          <Legend />
-                          <Line 
-                            type="monotone" 
-                            dataKey="balance" 
-                            stroke="hsl(var(--primary))" 
-                            strokeWidth={2}
-                            dot={{ fill: 'hsl(var(--primary))', strokeWidth: 2 }}
-                            activeDot={{ r: 6, fill: 'hsl(var(--primary))' }}
-                            name="Cumulative Balance"
-                          />
-                          <Line 
-                            type="monotone" 
-                            dataKey="amount" 
-                            stroke="hsl(var(--chart-2))" 
-                            strokeWidth={1}
-                            strokeDasharray="5 5"
-                            dot={{ fill: 'hsl(var(--chart-2))', strokeWidth: 1, r: 3 }}
-                            name="Transaction Amount"
-                          />
-                        </LineChart>
-                      </ResponsiveContainer>
+                  <div className="h-[420px] bg-muted/10 rounded-lg relative overflow-hidden">
+                    {flowPathData.nodes.length > 0 ? (
+                      <svg viewBox="0 0 700 400" className="w-full h-full">
+                        <defs>
+                          <marker
+                            id="arrowhead"
+                            markerWidth="10"
+                            markerHeight="7"
+                            refX="9"
+                            refY="3.5"
+                            orient="auto"
+                          >
+                            <polygon
+                              points="0 0, 10 3.5, 0 7"
+                              fill="hsl(var(--muted-foreground))"
+                              opacity="0.5"
+                            />
+                          </marker>
+                        </defs>
+                        
+                        {flowPathData.links.map((link, i) => {
+                          const dx = link.target.x - link.source.x;
+                          const dy = link.target.y - link.source.y;
+                          const dist = Math.sqrt(dx * dx + dy * dy);
+                          const offsetX = (dx / dist) * link.target.radius;
+                          const offsetY = (dy / dist) * link.target.radius;
+                          
+                          const midX = (link.source.x + link.target.x) / 2;
+                          const curveOffset = link.source.type === "input" ? -20 : 20;
+                          
+                          return (
+                            <path
+                              key={i}
+                              d={`M ${link.source.x} ${link.source.y} Q ${midX} ${(link.source.y + link.target.y) / 2 + curveOffset} ${link.target.x - offsetX} ${link.target.y - offsetY}`}
+                              fill="none"
+                              stroke={link.source.isOwned || link.target.isOwned ? "hsl(142, 60%, 45%)" : "hsl(var(--muted-foreground))"}
+                              strokeWidth={Math.max(1, Math.min(3, link.source.amount * 4))}
+                              strokeOpacity={0.4}
+                              markerEnd="url(#arrowhead)"
+                              className="transition-all duration-200"
+                            />
+                          );
+                        })}
+                        
+                        {flowPathData.nodes.map((node) => {
+                          const isHovered = hoveredNode?.id === node.id;
+                          const fillColor = node.type === "selected" 
+                            ? "hsl(var(--primary))"
+                            : node.isOwned 
+                              ? "hsl(142, 70%, 40%)"
+                              : node.type === "input"
+                                ? "hsl(var(--chart-1))"
+                                : "hsl(var(--chart-2))";
+                          
+                          return (
+                            <g key={node.id}>
+                              <RadixTooltip>
+                                <TooltipTrigger asChild>
+                                  <circle
+                                    cx={node.x}
+                                    cy={node.y}
+                                    r={isHovered ? node.radius * 1.3 : node.radius}
+                                    fill={fillColor}
+                                    stroke={node.type === "selected" ? "hsl(var(--primary-foreground))" : isHovered ? "hsl(var(--foreground))" : "transparent"}
+                                    strokeWidth={2}
+                                    className="cursor-pointer transition-all duration-200"
+                                    onMouseEnter={() => setHoveredNode(node)}
+                                    onMouseLeave={() => setHoveredNode(null)}
+                                    data-testid={`flow-node-${node.id}`}
+                                  />
+                                </TooltipTrigger>
+                                <TooltipContent side="top" className="max-w-xs">
+                                  <div className="space-y-1">
+                                    <p className="font-mono text-xs break-all">{node.address}</p>
+                                    <div className="flex items-center gap-2 text-xs">
+                                      <span className="font-bold">{node.amount.toFixed(8)} BTC</span>
+                                      <span className="text-muted-foreground">{node.timestamp}</span>
+                                    </div>
+                                    {node.owner && (
+                                      <p className="text-xs text-green-500">Owner: {node.owner}</p>
+                                    )}
+                                    {node.type === "input" && <span className="text-xs text-blue-400">Source (Hop {node.hop})</span>}
+                                    {node.type === "output" && <span className="text-xs text-purple-400">Destination (Hop +{node.hop})</span>}
+                                    {node.type === "selected" && <span className="text-xs text-primary">Selected Address</span>}
+                                  </div>
+                                </TooltipContent>
+                              </RadixTooltip>
+                              
+                              {node.type === "selected" && (
+                                <text
+                                  x={node.x}
+                                  y={node.y + 4}
+                                  textAnchor="middle"
+                                  className="fill-primary-foreground text-xs font-bold pointer-events-none"
+                                >
+                                  YOU
+                                </text>
+                              )}
+                            </g>
+                          );
+                        })}
+                        
+                        <text x="80" y="20" className="fill-muted-foreground text-xs font-medium">
+                          SOURCES (Inputs)
+                        </text>
+                        <text x="550" y="20" className="fill-muted-foreground text-xs font-medium">
+                          DESTINATIONS (Outputs)
+                        </text>
+                      </svg>
                     ) : (
                       <div className="h-full flex items-center justify-center text-muted-foreground">
-                        No time-series data available
+                        No flow path data available
                       </div>
                     )}
+                    
+                    {hoveredNode && (
+                      <div className="absolute bottom-4 left-4 right-4 bg-card/95 backdrop-blur border rounded-lg p-3 shadow-lg">
+                        <div className="flex items-center justify-between gap-4">
+                          <div className="space-y-1 min-w-0">
+                            <p className="font-mono text-xs truncate">{hoveredNode.address}</p>
+                            <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                              <span>{hoveredNode.timestamp}</span>
+                              {hoveredNode.owner && (
+                                <Badge className="bg-green-600 text-xs">{hoveredNode.owner}</Badge>
+                              )}
+                            </div>
+                          </div>
+                          <div className="text-right shrink-0">
+                            <div className="text-lg font-bold">{hoveredNode.amount.toFixed(8)} BTC</div>
+                            <div className="text-xs text-muted-foreground">
+                              {hoveredNode.type === "input" ? "Received" : hoveredNode.type === "output" ? "Sent" : "Center"}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="mt-4 flex items-center justify-center gap-6 text-xs">
+                    <div className="flex items-center gap-2">
+                      <div className="w-4 h-4 rounded-full" style={{ background: "hsl(var(--chart-1))" }} />
+                      <span>External Inputs</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <div className="w-4 h-4 rounded-full" style={{ background: "hsl(var(--primary))" }} />
+                      <span>Selected Address</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <div className="w-4 h-4 rounded-full" style={{ background: "hsl(var(--chart-2))" }} />
+                      <span>External Outputs</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <div className="w-4 h-4 rounded-full border-2" style={{ background: "hsl(142, 70%, 40%)", borderColor: "hsl(142, 70%, 50%)" }} />
+                      <span className="text-green-600 dark:text-green-400">Owned</span>
+                    </div>
                   </div>
 
                   <div className="mt-4 grid grid-cols-4 gap-4 text-center">
