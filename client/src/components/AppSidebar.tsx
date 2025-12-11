@@ -3,13 +3,10 @@ import {
   Settings, 
   Download, 
   QrCode, 
-  Key, 
   RefreshCw, 
   Wallet, 
-  TrendingUp, 
   ArrowDownUp, 
   List, 
-  GitBranch, 
   Repeat2, 
   BarChart3, 
   Server, 
@@ -26,7 +23,10 @@ import {
   LayoutGrid,
   LayoutDashboard,
   Upload,
-  Layers
+  Layers,
+  Map,
+  Import,
+  DollarSign
 } from "lucide-react";
 import logoUrl from "@assets/foot_1764929618997.png";
 import {
@@ -87,7 +87,7 @@ const navGroups: NavGroup[] = [
     defaultOpen: false,
     items: [
       { title: "Address Reuse", url: "/address-reuse", icon: Repeat2 },
-      { title: "Provenance", url: "/provenance", icon: GitBranch },
+      { title: "Provenance", url: "/provenance", icon: Map },
       { title: "Flow Visualizer", url: "/flow-visualizer", icon: Network },
       { title: "Data Stats", url: "/data-stats", icon: BarChart3 },
       { title: "Reports", url: "/reports", icon: ClipboardList },
@@ -100,9 +100,9 @@ const navGroups: NavGroup[] = [
     icon: Upload,
     defaultOpen: false,
     items: [
-      { title: "Address Importer", url: "/import", icon: Key },
+      { title: "Address Importer", url: "/import", icon: Import },
       { title: "Wallet Data Sync", url: "/wallet-import", icon: Wallet },
-      { title: "Price Import", url: "/price-import", icon: TrendingUp },
+      { title: "Price Import", url: "/price-import", icon: DollarSign },
       { title: "Transaction Sync", url: "/transaction-sync", icon: ArrowDownUp },
       { title: "QR Scanner", url: "/scanner", icon: QrCode },
     ]
