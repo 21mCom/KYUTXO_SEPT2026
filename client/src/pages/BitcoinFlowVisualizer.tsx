@@ -1,4 +1,5 @@
 import { useState, useMemo } from "react";
+import { useLocation } from "wouter";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -125,6 +126,7 @@ const generateFlowPathData = (nodes: FlowNode[], centerAddress: string) => {
 };
 
 export default function BitcoinFlowVisualizer() {
+  const [, navigate] = useLocation();
   const [searchAddress, setSearchAddress] = useState("");
   const [hopDepth, setHopDepth] = useState([3]);
   const [allowBlockchainApi, setAllowBlockchainApi] = useState(false);
@@ -723,6 +725,7 @@ export default function BitcoinFlowVisualizer() {
                                     className="cursor-pointer transition-all duration-200"
                                     onMouseEnter={() => setHoveredNode(node)}
                                     onMouseLeave={() => setHoveredNode(null)}
+                                    onClick={() => navigate(`/records?search=${encodeURIComponent(node.address)}`)}
                                     data-testid={`flow-node-${node.id}`}
                                   />
                                 </TooltipTrigger>
@@ -739,6 +742,7 @@ export default function BitcoinFlowVisualizer() {
                                     {node.type === "input" && <span className="text-xs text-blue-400">Source (Hop {node.hop})</span>}
                                     {node.type === "output" && <span className="text-xs text-purple-400">Destination (Hop +{node.hop})</span>}
                                     {node.type === "selected" && <span className="text-xs text-primary">Selected Address</span>}
+                                    <p className="text-xs text-muted-foreground italic pt-1">Click to view record</p>
                                   </div>
                                 </TooltipContent>
                               </RadixTooltip>
@@ -782,11 +786,21 @@ export default function BitcoinFlowVisualizer() {
                               )}
                             </div>
                           </div>
-                          <div className="text-right shrink-0">
-                            <div className="text-lg font-bold">{hoveredNode.amount.toFixed(8)} BTC</div>
-                            <div className="text-xs text-muted-foreground">
-                              {hoveredNode.type === "input" ? "Received" : hoveredNode.type === "output" ? "Sent" : "Center"}
+                          <div className="flex items-center gap-3">
+                            <div className="text-right shrink-0">
+                              <div className="text-lg font-bold">{hoveredNode.amount.toFixed(8)} BTC</div>
+                              <div className="text-xs text-muted-foreground">
+                                {hoveredNode.type === "input" ? "Received" : hoveredNode.type === "output" ? "Sent" : "Center"}
+                              </div>
                             </div>
+                            <Button 
+                              size="sm" 
+                              variant="outline"
+                              onClick={() => navigate(`/records?search=${encodeURIComponent(hoveredNode.address)}`)}
+                              data-testid="button-view-record"
+                            >
+                              View Record
+                            </Button>
                           </div>
                         </div>
                       </div>
