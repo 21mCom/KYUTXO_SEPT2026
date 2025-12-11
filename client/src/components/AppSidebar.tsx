@@ -127,6 +127,7 @@ const devToolsGroup: NavGroup = {
   icon: Wrench,
   defaultOpen: false,
   items: [
+    { title: "Test Data Seeder", url: "/dev/test-data", icon: Database },
     { title: "UI Assets", url: "/dev/ui-assets", icon: Palette },
     { title: "Icons Reference", url: "/dev/icons", icon: Shapes },
     { title: "Nav Patterns", url: "/dev/nav-patterns", icon: PanelLeft },
