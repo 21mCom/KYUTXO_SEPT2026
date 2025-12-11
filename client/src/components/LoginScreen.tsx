@@ -5,7 +5,8 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { useToast } from '@/hooks/use-toast';
-import { Lock, Shield, Eye, EyeOff } from 'lucide-react';
+import { Lock, Eye, EyeOff } from 'lucide-react';
+import logoUrl from "@assets/foot_1765425850372.png";
 
 export function LoginScreen() {
   const { isInitialized, setupPassword, login, isLoading } = useAuth();
@@ -59,9 +60,7 @@ export function LoginScreen() {
       <Card className="w-full max-w-md">
         <CardHeader className="text-center">
           <div className="flex justify-center mb-4">
-            <div className="p-3 rounded-full bg-primary/10">
-              <Shield className="h-10 w-10 text-primary" />
-            </div>
+            <img src={logoUrl} alt="KYUTXO Logo" className="h-16 w-auto" />
           </div>
           <CardTitle className="text-2xl">KYUTXO Vault</CardTitle>
           <CardDescription>
