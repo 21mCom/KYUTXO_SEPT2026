@@ -57,7 +57,7 @@ Data is stored locally using Dexie.js (IndexedDB) for structured data, with all 
 
 ### Security Libraries
 
-*   **Web Crypto API:** AES-256-GCM encryption and PBKDF2 key derivation.
+*   **Offline Encryption:** AES-256-GCM encryption with PBKDF2 key derivation, running 100% locally in your browser.
 
 ### Desktop Packaging
 
