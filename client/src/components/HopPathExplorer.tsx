@@ -4,14 +4,14 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Separator } from "@/components/ui/separator";
 import { 
-  ChevronRight, ChevronDown, Circle, ArrowRight, 
+  Circle, ArrowRight, ArrowDown, ArrowUp,
   ExternalLink, Home, Loader2, AlertCircle
 } from "lucide-react";
-import { ClickableAddress } from "@/components/ClickableAddress";
 import { type FlowNode, type FlowLink } from "@/hooks/use-flow-data";
 
-interface HopPathNode {
+interface FlatNode {
   id: string;
   address: string;
   fullAddress: string;
@@ -24,8 +24,6 @@ interface HopPathNode {
   owner?: string;
   label?: string;
   txid?: string;
-  children: HopPathNode[];
-  isExpanded: boolean;
 }
 
 interface HopPathExplorerProps {
@@ -48,6 +46,11 @@ const getNodeStatus = (node: FlowNode): { isOwned: boolean; isUnclassified: bool
   return { isOwned, isUnclassified };
 };
 
+const parseTimestamp = (ts: string): number => {
+  const date = new Date(ts);
+  return isNaN(date.getTime()) ? 0 : date.getTime();
+};
+
 export function HopPathExplorer({ 
   nodes, 
   links, 
@@ -55,7 +58,6 @@ export function HopPathExplorer({
   onExploreAddress,
   isLoading = false
 }: HopPathExplorerProps) {
-  const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set(["center"]));
   const [selectedNode, setSelectedNode] = useState<string | null>(null);
   const [exploringAddress, setExploringAddress] = useState<string | null>(null);
 
@@ -66,7 +68,6 @@ export function HopPathExplorer({
     }
   }, [onExploreAddress, isLoading]);
 
-  // Clear exploringAddress when loading completes
   useEffect(() => {
     if (!isLoading && exploringAddress) {
       setExploringAddress(null);
@@ -84,92 +85,67 @@ export function HopPathExplorer({
     return linkMap;
   }, [links]);
 
-  const toggleNode = useCallback((nodeId: string) => {
-    setExpandedNodes(prev => {
-      const next = new Set(prev);
-      if (next.has(nodeId)) {
-        next.delete(nodeId);
-      } else {
-        next.add(nodeId);
-      }
-      return next;
-    });
-  }, []);
+  const { incomingNodes, centerNode, outgoingNodes } = useMemo(() => {
+    const incoming: FlatNode[] = [];
+    const outgoing: FlatNode[] = [];
+    let center: FlatNode | null = null;
 
-  const pathTree = useMemo((): HopPathNode | null => {
-    const centerNode = nodes.find(n => n.type === "selected");
-    if (!centerNode) return null;
-
-    // Create a map of node ID to FlowNode for quick lookup
-    const nodeMap = new Map<string, FlowNode>();
-    nodes.forEach(n => nodeMap.set(n.id, n));
-
-    // Build adjacency list from links
-    // For incoming: link.target is parent, link.source is child
-    // For outgoing: link.source is parent, link.target is child
-    const childrenMap = new Map<string, { nodeId: string; direction: "source" | "destination" }[]>();
-    
-    links.forEach(link => {
-      const sourceNode = nodeMap.get(link.source);
-      const targetNode = nodeMap.get(link.target);
+    for (const node of nodes) {
+      const { isOwned, isUnclassified } = getNodeStatus(node);
       
-      if (sourceNode && targetNode) {
-        // Determine direction based on node types
-        if (sourceNode.type === "input" && (targetNode.type === "selected" || targetNode.type === "input")) {
-          // Incoming flow: target is parent of source
-          if (!childrenMap.has(link.target)) childrenMap.set(link.target, []);
-          childrenMap.get(link.target)!.push({ nodeId: link.source, direction: "source" });
-        } else if (targetNode.type === "output" && (sourceNode.type === "selected" || sourceNode.type === "output")) {
-          // Outgoing flow: source is parent of target
-          if (!childrenMap.has(link.source)) childrenMap.set(link.source, []);
-          childrenMap.get(link.source)!.push({ nodeId: link.target, direction: "destination" });
-        }
-      }
-    });
-
-    // Build tree recursively
-    const buildHopNode = (flowNode: FlowNode, direction: "source" | "center" | "destination", visited: Set<string>): HopPathNode => {
-      const { isOwned, isUnclassified } = getNodeStatus(flowNode);
-      
-      // Get children for this node, avoiding cycles
-      const childRefs = childrenMap.get(flowNode.id) || [];
-      const children: HopPathNode[] = [];
-      
-      for (const childRef of childRefs) {
-        if (!visited.has(childRef.nodeId)) {
-          const childNode = nodeMap.get(childRef.nodeId);
-          if (childNode) {
-            visited.add(childRef.nodeId);
-            children.push(buildHopNode(childNode, childRef.direction, visited));
-          }
-        }
-      }
-      
-      return {
-        id: flowNode.id === "selected" ? "center" : flowNode.id,
-        address: flowNode.address.length > 16 
-          ? `${flowNode.address.slice(0, 8)}...${flowNode.address.slice(-6)}`
-          : flowNode.address,
-        fullAddress: flowNode.address,
-        amount: flowNode.amount,
-        timestamp: flowNode.timestamp,
-        hop: flowNode.hop,
-        direction,
+      const flatNode: FlatNode = {
+        id: node.id === "selected" ? "center" : node.id,
+        address: node.address.length > 16 
+          ? `${node.address.slice(0, 8)}...${node.address.slice(-6)}`
+          : node.address,
+        fullAddress: node.address,
+        amount: node.amount,
+        timestamp: node.timestamp,
+        hop: node.hop,
+        direction: node.type === "selected" ? "center" 
+          : node.type === "input" ? "source" 
+          : "destination",
         isOwned,
         isUnclassified,
-        owner: flowNode.owner,
-        label: flowNode.label,
-        txid: flowNode.txid,
-        children,
-        isExpanded: flowNode.id === "selected",
+        owner: node.owner,
+        label: node.label,
+        txid: node.txid,
       };
+
+      if (node.type === "selected") {
+        center = flatNode;
+      } else if (node.type === "input") {
+        incoming.push(flatNode);
+      } else if (node.type === "output") {
+        outgoing.push(flatNode);
+      }
+    }
+
+    // Sort incoming: oldest first (by timestamp), then by hop (furthest first for same time)
+    // Furthest hop at top = oldest transactions
+    incoming.sort((a, b) => {
+      const timeA = parseTimestamp(a.timestamp);
+      const timeB = parseTimestamp(b.timestamp);
+      if (timeA !== timeB) return timeA - timeB; // Oldest first
+      return b.hop - a.hop; // Further hops first if same time
+    });
+
+    // Sort outgoing: oldest first at top, newest at bottom
+    outgoing.sort((a, b) => {
+      const timeA = parseTimestamp(a.timestamp);
+      const timeB = parseTimestamp(b.timestamp);
+      if (timeA !== timeB) return timeA - timeB; // Oldest first
+      return a.hop - b.hop; // Closer hops first if same time
+    });
+
+    return {
+      incomingNodes: incoming,
+      centerNode: center,
+      outgoingNodes: outgoing,
     };
+  }, [nodes]);
 
-    const visited = new Set<string>(["selected"]);
-    return buildHopNode(centerNode, "center", visited);
-  }, [nodes, links]);
-
-  const getNodeColorClasses = (node: HopPathNode): string => {
+  const getNodeColorClasses = (node: FlatNode): string => {
     if (node.direction === "center") {
       return "bg-primary text-primary-foreground";
     }
@@ -182,171 +158,113 @@ export function HopPathExplorer({
     return "bg-muted border-muted-foreground/30";
   };
 
-  const getNodeDotColor = (node: HopPathNode): string => {
+  const getNodeDotColor = (node: FlatNode): string => {
     if (node.direction === "center") return "text-primary";
     if (node.isOwned) return "text-green-500";
     if (node.isUnclassified) return "text-orange-500";
     return "text-muted-foreground";
   };
 
-  const renderTreeNode = (node: HopPathNode, depth: number = 0): JSX.Element => {
-    const isExpanded = expandedNodes.has(node.id);
-    const hasChildren = node.children.length > 0;
+  const renderNode = (node: FlatNode): JSX.Element => {
     const isSelected = selectedNode === node.id;
-    const indent = depth * 24;
-
-    const sourceChildren = node.children.filter(c => c.direction === "source");
-    const destChildren = node.children.filter(c => c.direction === "destination");
+    // Center has 0 indent, other nodes indent by their absolute hop distance
+    const indent = node.direction === "center" ? 0 : Math.abs(node.hop) * 32;
 
     return (
-      <div key={node.id} className="select-none">
-        <div
-          className={`flex items-center gap-2 py-2 px-3 rounded-lg cursor-pointer transition-colors ${
-            isSelected ? "bg-primary/10 ring-1 ring-primary" : "hover-elevate"
-          }`}
-          style={{ marginLeft: `${indent}px` }}
-          onClick={() => setSelectedNode(node.id === selectedNode ? null : node.id)}
-          data-testid={`hop-node-${node.id}`}
-        >
-          {hasChildren ? (
-            <button 
-              onClick={(e) => { e.stopPropagation(); toggleNode(node.id); }}
-              className="p-0.5 rounded hover:bg-muted"
-              data-testid={`toggle-${node.id}`}
-            >
-              {isExpanded ? (
-                <ChevronDown className="h-4 w-4" />
-              ) : (
-                <ChevronRight className="h-4 w-4" />
-              )}
-            </button>
-          ) : (
-            <div className="w-5" />
+      <div
+        key={node.id}
+        className={`flex items-center gap-2 py-2 px-3 rounded-lg cursor-pointer transition-colors select-none ${
+          isSelected ? "bg-primary/10 ring-1 ring-primary" : "hover-elevate"
+        }`}
+        style={{ marginLeft: `${indent}px` }}
+        onClick={() => setSelectedNode(node.id === selectedNode ? null : node.id)}
+        data-testid={`hop-node-${node.id}`}
+      >
+        <Circle className={`h-3 w-3 fill-current ${getNodeDotColor(node)}`} />
+
+        <div className={`flex items-center gap-2 px-2 py-1 rounded border ${getNodeColorClasses(node)}`}>
+          {node.direction === "center" && <Home className="h-3 w-3" />}
+          {node.direction === "source" && (
+            <ArrowDown className="h-3 w-3 text-blue-500" />
           )}
-
-          <Circle className={`h-3 w-3 fill-current ${getNodeDotColor(node)}`} />
-
-          <div className={`flex items-center gap-2 px-2 py-1 rounded border ${getNodeColorClasses(node)}`}>
-            {node.direction === "center" && <Home className="h-3 w-3" />}
-            {node.direction === "source" && (
-              <ArrowRight className="h-3 w-3 rotate-180 text-blue-500" />
-            )}
-            {node.direction === "destination" && (
-              <ArrowRight className="h-3 w-3 text-purple-500" />
-            )}
-            
-            <span className="font-mono text-xs">{node.address}</span>
-          </div>
-
-          <span className="text-xs text-muted-foreground">
-            {formatBtc(node.amount)}
-          </span>
-
-          {node.owner && (
-            <Badge variant="secondary" className="text-xs">
-              {node.owner}
-            </Badge>
+          {node.direction === "destination" && (
+            <ArrowUp className="h-3 w-3 text-purple-500" />
           )}
-
-          {node.label && (
-            <Badge variant="outline" className="text-xs">
-              {node.label}
-            </Badge>
-          )}
-
-          <span className="text-xs text-muted-foreground ml-auto">
-            {node.timestamp}
-          </span>
-
-          {onExploreAddress && node.direction !== "center" && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  size="icon"
-                  variant="ghost"
-                  className="h-6 w-6"
-                  disabled={isLoading}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleExplore(node.fullAddress);
-                  }}
-                  data-testid={`explore-${node.id}`}
-                >
-                  {isLoading && exploringAddress === node.fullAddress ? (
-                    <Loader2 className="h-3 w-3 animate-spin" />
-                  ) : (
-                    <ExternalLink className="h-3 w-3" />
-                  )}
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>
-                <p>Explore this address</p>
-              </TooltipContent>
-            </Tooltip>
-          )}
+          
+          <span className="font-mono text-xs">{node.address}</span>
         </div>
 
-        {isExpanded && hasChildren && (
-          <div className="relative">
-            <div 
-              className="absolute left-0 top-0 bottom-0 w-px bg-border"
-              style={{ marginLeft: `${indent + 14}px` }}
-            />
-            
-            {sourceChildren.length > 0 && (
-              <div className="mb-2">
-                <div 
-                  className="text-xs text-muted-foreground py-1 px-2 flex items-center gap-1"
-                  style={{ marginLeft: `${indent + 24}px` }}
-                >
-                  <ArrowRight className="h-3 w-3 rotate-180 text-blue-500" />
-                  Received from ({sourceChildren.length})
-                </div>
-                {sourceChildren.map(child => renderTreeNode(child, depth + 1))}
-              </div>
-            )}
-            
-            {destChildren.length > 0 && (
-              <div>
-                <div 
-                  className="text-xs text-muted-foreground py-1 px-2 flex items-center gap-1"
-                  style={{ marginLeft: `${indent + 24}px` }}
-                >
-                  <ArrowRight className="h-3 w-3 text-purple-500" />
-                  Sent to ({destChildren.length})
-                </div>
-                {destChildren.map(child => renderTreeNode(child, depth + 1))}
-              </div>
-            )}
-          </div>
+        <span className="text-xs text-muted-foreground">
+          {formatBtc(node.amount)}
+        </span>
+
+        {node.hop !== 0 && (
+          <Badge variant="outline" className="text-xs">
+            {node.direction === "source" ? `-${Math.abs(node.hop)}` : `+${Math.abs(node.hop)}`}
+          </Badge>
+        )}
+
+        {node.owner && (
+          <Badge variant="secondary" className="text-xs">
+            {node.owner}
+          </Badge>
+        )}
+
+        {node.label && (
+          <Badge variant="outline" className="text-xs">
+            {node.label}
+          </Badge>
+        )}
+
+        <span className="text-xs text-muted-foreground ml-auto">
+          {node.timestamp}
+        </span>
+
+        {onExploreAddress && node.direction !== "center" && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                size="icon"
+                variant="ghost"
+                className="h-6 w-6"
+                disabled={isLoading}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleExplore(node.fullAddress);
+                }}
+                data-testid={`explore-${node.id}`}
+              >
+                {isLoading && exploringAddress === node.fullAddress ? (
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                ) : (
+                  <ExternalLink className="h-3 w-3" />
+                )}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>
+              <p>Explore this address</p>
+            </TooltipContent>
+          </Tooltip>
         )}
       </div>
     );
   };
 
   const selectedNodeData = useMemo(() => {
-    if (!selectedNode || !pathTree) return null;
+    if (!selectedNode) return null;
     
-    if (selectedNode === "center") return pathTree;
+    if (selectedNode === "center") return centerNode;
     
-    const findNodeRecursive = (node: HopPathNode): HopPathNode | null => {
-      if (node.id === selectedNode) return node;
-      for (const child of node.children) {
-        const found = findNodeRecursive(child);
-        if (found) return found;
-      }
-      return null;
-    };
-    
-    return findNodeRecursive(pathTree);
-  }, [selectedNode, pathTree]);
+    const allNodes = [...incomingNodes, ...outgoingNodes];
+    return allNodes.find(n => n.id === selectedNode) || null;
+  }, [selectedNode, centerNode, incomingNodes, outgoingNodes]);
 
   const selectedNodeLinksData = useMemo(() => {
     if (!selectedNode) return [];
     return nodeLinks.get(selectedNode) || [];
   }, [selectedNode, nodeLinks]);
 
-  if (!pathTree) {
+  if (!centerNode) {
     return (
       <div className="flex items-center justify-center h-64 text-muted-foreground">
         <AlertCircle className="h-5 w-5 mr-2" />
@@ -360,14 +278,14 @@ export function HopPathExplorer({
       <div className="lg:col-span-2">
         <Card>
           <CardHeader className="pb-3">
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between gap-2 flex-wrap">
               <div>
                 <CardTitle className="flex items-center gap-2 text-lg">
                   <Badge variant="outline">HOP</Badge>
                   Hop Path Explorer
                 </CardTitle>
                 <CardDescription>
-                  Interactive tree showing fund flow. Click nodes to select. Click explore to drill into deeper hops.
+                  Chronological fund flow. Incoming sources above, outgoing destinations below.
                 </CardDescription>
               </div>
               <div className="flex items-center gap-2">
@@ -388,7 +306,57 @@ export function HopPathExplorer({
           </CardHeader>
           <CardContent>
             <ScrollArea className="h-[450px]">
-              {renderTreeNode(pathTree)}
+              <div className="space-y-1">
+                {/* Incoming section */}
+                {incomingNodes.length > 0 && (
+                  <div className="mb-2">
+                    <div className="flex items-center gap-2 text-xs text-muted-foreground py-2 px-3">
+                      <ArrowDown className="h-3 w-3 text-blue-500" />
+                      <span className="font-medium">INCOMING ({incomingNodes.length})</span>
+                      <span className="text-muted-foreground/60">— funds received from these addresses</span>
+                    </div>
+                    {incomingNodes.map(node => renderNode(node))}
+                  </div>
+                )}
+
+                {/* Center separator */}
+                {incomingNodes.length > 0 && (
+                  <div className="py-2">
+                    <Separator />
+                  </div>
+                )}
+
+                {/* Center node */}
+                <div className="py-1">
+                  {renderNode(centerNode)}
+                </div>
+
+                {/* Outgoing separator */}
+                {outgoingNodes.length > 0 && (
+                  <div className="py-2">
+                    <Separator />
+                  </div>
+                )}
+
+                {/* Outgoing section */}
+                {outgoingNodes.length > 0 && (
+                  <div className="mt-2">
+                    <div className="flex items-center gap-2 text-xs text-muted-foreground py-2 px-3">
+                      <ArrowUp className="h-3 w-3 text-purple-500" />
+                      <span className="font-medium">OUTGOING ({outgoingNodes.length})</span>
+                      <span className="text-muted-foreground/60">— funds sent to these addresses</span>
+                    </div>
+                    {outgoingNodes.map(node => renderNode(node))}
+                  </div>
+                )}
+
+                {/* Empty state */}
+                {incomingNodes.length === 0 && outgoingNodes.length === 0 && (
+                  <div className="text-center py-8 text-muted-foreground">
+                    <p className="text-sm">No connected transactions found for this address</p>
+                  </div>
+                )}
+              </div>
             </ScrollArea>
           </CardContent>
         </Card>
@@ -425,7 +393,9 @@ export function HopPathExplorer({
                     <label className="text-xs font-medium text-muted-foreground">HOP</label>
                     <div className="font-medium">
                       {selectedNodeData.hop === 0 ? "Center" : (
-                        selectedNodeData.hop > 0 ? `+${selectedNodeData.hop}` : selectedNodeData.hop
+                        selectedNodeData.direction === "source" 
+                          ? `-${Math.abs(selectedNodeData.hop)}` 
+                          : `+${Math.abs(selectedNodeData.hop)}`
                       )}
                     </div>
                   </div>
@@ -437,13 +407,13 @@ export function HopPathExplorer({
                     <div className="flex items-center gap-1">
                       {selectedNodeData.direction === "source" && (
                         <>
-                          <ArrowRight className="h-4 w-4 rotate-180 text-blue-500" />
+                          <ArrowDown className="h-4 w-4 text-blue-500" />
                           Incoming
                         </>
                       )}
                       {selectedNodeData.direction === "destination" && (
                         <>
-                          <ArrowRight className="h-4 w-4 text-purple-500" />
+                          <ArrowUp className="h-4 w-4 text-purple-500" />
                           Outgoing
                         </>
                       )}
@@ -514,20 +484,6 @@ export function HopPathExplorer({
                   </div>
                 )}
 
-                {selectedNodeData.children.length > 0 && (
-                  <div className="space-y-1">
-                    <label className="text-xs font-medium text-muted-foreground">CONNECTIONS</label>
-                    <div className="flex gap-2">
-                      <Badge variant="secondary">
-                        {selectedNodeData.children.filter(c => c.direction === "source").length} incoming
-                      </Badge>
-                      <Badge variant="secondary">
-                        {selectedNodeData.children.filter(c => c.direction === "destination").length} outgoing
-                      </Badge>
-                    </div>
-                  </div>
-                )}
-
                 {onExploreAddress && selectedNodeData.direction !== "center" && (
                   <div className="space-y-2">
                     <Button 
@@ -554,7 +510,7 @@ export function HopPathExplorer({
             ) : (
               <div className="text-center py-8 text-muted-foreground">
                 <Circle className="h-8 w-8 mx-auto mb-2 opacity-30" />
-                <p className="text-sm">Select a node from the tree to view its details</p>
+                <p className="text-sm">Select a node from the list to view its details</p>
               </div>
             )}
           </CardContent>
