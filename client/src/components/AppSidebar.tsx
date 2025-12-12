@@ -26,7 +26,8 @@ import {
   Layers,
   Map,
   Import,
-  DollarSign
+  DollarSign,
+  AlertCircle
 } from "lucide-react";
 import logoUrl from "@assets/foot_1764929618997.png";
 import {
@@ -78,6 +79,7 @@ const navGroups: NavGroup[] = [
       { title: "Transactions", url: "/transactions", icon: List },
       { title: "UTXOs", url: "/utxos", icon: Coins },
       { title: "Bulk Editor", url: "/bulk-editor", icon: Layers },
+      { title: "Conflict Resolution", url: "/conflict-resolution", icon: AlertCircle },
     ]
   },
   {

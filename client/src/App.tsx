@@ -39,6 +39,7 @@ import FlowVisualizations from "@/pages/FlowVisualizations";
 import BitcoinFlowVisualizer from "@/pages/BitcoinFlowVisualizer";
 import BulkEditor from "@/pages/BulkEditor";
 import DevTestData from "@/pages/DevTestData";
+import ConflictResolution from "@/pages/ConflictResolution";
 import NotFound from "@/pages/not-found";
 
 function AppRoutes() {
@@ -71,6 +72,7 @@ function AppRoutes() {
       <Route path="/dev/test-data" component={DevTestData} />
       <Route path="/flow-visualizer" component={BitcoinFlowVisualizer} />
       <Route path="/bulk-editor" component={BulkEditor} />
+      <Route path="/conflict-resolution" component={ConflictResolution} />
       <Route component={NotFound} />
     </Switch>
   );

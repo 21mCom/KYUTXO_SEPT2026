@@ -1,4 +1,7 @@
-import { Edit, Paperclip, Wallet as WalletIcon, User, Upload, QrCode, Key, GitBranch, ArrowDownLeft, ArrowUpRight, Shield, ChevronDown, ChevronRight, Link2, Layers, FileInput, ExternalLink } from "lucide-react";
+import { Edit, Paperclip, Wallet as WalletIcon, User, Upload, QrCode, Key, GitBranch, ArrowDownLeft, ArrowUpRight, Shield, ChevronDown, ChevronRight, Link2, Layers, FileInput, ExternalLink, AlertCircle } from "lucide-react";
+import { useLocation } from "wouter";
+import { getDecryptedRecordOrigins } from "@/lib/encryptionFacade";
+import { detectSingularFieldConflicts } from "@/lib/conflict-detection";
 import { Link } from "wouter";
 import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
@@ -154,10 +157,12 @@ export function RecordDetailPanel({
   onAttachmentsChange,
   customFieldDefs = [],
 }: RecordDetailPanelProps) {
+  const [, navigate] = useLocation();
   const [showUpload, setShowUpload] = useState(false);
   const [qrDialogOpen, setQrDialogOpen] = useState(false);
   const [qrCodeDataUrl, setQrCodeDataUrl] = useState<string | null>(null);
   const [technicalOpen, setTechnicalOpen] = useState(false);
+  const [conflictCount, setConflictCount] = useState(0);
 
   useEffect(() => {
     if (qrDialogOpen && record?.inputString) {
@@ -173,6 +178,28 @@ export function RecordDetailPanel({
         .catch((err) => console.error('Error generating QR code:', err));
     }
   }, [qrDialogOpen, record?.inputString]);
+
+  useEffect(() => {
+    async function checkConflicts() {
+      if (!record?.id || !open) {
+        setConflictCount(0);
+        return;
+      }
+      try {
+        const origins = await getDecryptedRecordOrigins(Number(record.id));
+        if (origins.length < 2) {
+          setConflictCount(0);
+          return;
+        }
+        const conflicts = detectSingularFieldConflicts(record, origins);
+        setConflictCount(conflicts.length);
+      } catch (error) {
+        console.error("Failed to check conflicts:", error);
+        setConflictCount(0);
+      }
+    }
+    checkConflicts();
+  }, [record?.id, open]);
 
   if (!record) return null;
 
@@ -222,6 +249,17 @@ export function RecordDetailPanel({
                     ) : (
                       <><ArrowUpRight className="h-3 w-3 mr-1" />Change</>
                     )}
+                  </Badge>
+                )}
+                {conflictCount > 0 && (
+                  <Badge 
+                    variant="outline" 
+                    className="text-orange-600 border-orange-300 cursor-pointer hover-elevate"
+                    onClick={() => navigate(`/conflict-resolution?recordId=${record.id}`)}
+                    data-testid="badge-conflicts"
+                  >
+                    <AlertCircle className="h-3 w-3 mr-1" />
+                    {conflictCount} Conflict{conflictCount > 1 ? 's' : ''}
                   </Badge>
                 )}
               </div>
@@ -474,7 +512,7 @@ export function RecordDetailPanel({
               </div>
             )}
 
-            <MetadataSourcesPanel recordId={Number(record.id)} />
+            <MetadataSourcesPanel recordId={Number(record.id)} record={record} />
 
             {hasBlockchainDiscoveryInfo && (
               <Collapsible open={technicalOpen} onOpenChange={setTechnicalOpen}>

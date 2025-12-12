@@ -1,15 +1,27 @@
 import { useState, useEffect } from 'react';
 import { format } from 'date-fns';
-import { ChevronDown, ChevronRight, History, Key, Upload, Edit3, Tag, FolderOpen, KeyRound, RefreshCw, Link2 } from 'lucide-react';
+import { ChevronDown, ChevronRight, History, Key, Upload, Edit3, Tag, FolderOpen, KeyRound, RefreshCw, Link2, AlertCircle } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { Separator } from '@/components/ui/separator';
-import { type RecordOrigin, type RecordOriginType } from '@/lib/database';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { type RecordOrigin, type RecordOriginType, type Record as DBRecord } from '@/lib/database';
 import { getDecryptedRecordOrigins, isEncryptionReady } from '@/lib/encryptionFacade';
+import { SINGULAR_FIELDS, type FieldConfig } from '@/lib/conflict-detection';
+
+interface RecordFields {
+  label?: string;
+  owner?: string;
+  seedName?: string;
+  walletName?: string;
+  walletSoftware?: string;
+  privateKeyStatus?: string;
+}
 
 interface MetadataSourcesPanelProps {
   recordId: number;
+  record?: RecordFields;
 }
 
 const originTypeConfig: Record<RecordOriginType, { label: string; icon: typeof Key; variant: 'default' | 'secondary' | 'outline' }> = {
@@ -40,7 +52,43 @@ const originTypeConfig: Record<RecordOriginType, { label: string; icon: typeof K
   },
 };
 
-function OriginCard({ origin }: { origin: RecordOrigin }) {
+function isFieldDifferent(origin: RecordOrigin, record: RecordFields | undefined, fieldKey: keyof RecordOrigin): boolean {
+  if (!record) return false;
+  const originValue = origin[fieldKey] as string | undefined;
+  if (!originValue || originValue.trim() === '') return false;
+  
+  const recordKeyMap: Partial<{ [K in keyof RecordOrigin]: keyof RecordFields }> = {
+    label: 'label',
+    owner: 'owner',
+    seedName: 'seedName',
+    walletName: 'walletName',
+    walletSoftware: 'walletSoftware',
+    privateKeyStatus: 'privateKeyStatus',
+  };
+  
+  const recordKey = recordKeyMap[fieldKey];
+  if (!recordKey) return false;
+  
+  const recordValue = record[recordKey];
+  return originValue.trim() !== (recordValue?.trim() || '');
+}
+
+function ConflictIndicator({ tooltip }: { tooltip: string }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className="inline-flex items-center ml-1">
+          <AlertCircle className="h-3 w-3 text-orange-500" />
+        </span>
+      </TooltipTrigger>
+      <TooltipContent side="top" className="max-w-xs">
+        <p className="text-xs">{tooltip}</p>
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
+function OriginCard({ origin, record }: { origin: RecordOrigin; record?: RecordFields }) {
   const [isExpanded, setIsExpanded] = useState(false);
   const config = originTypeConfig[origin.originType] || originTypeConfig['manual'];
   const Icon = config.icon;
@@ -48,6 +96,11 @@ function OriginCard({ origin }: { origin: RecordOrigin }) {
   const hasMetadata = origin.label || origin.notes || origin.owner || origin.walletName || 
     origin.seedName || origin.walletSoftware || origin.privateKeyStatus || origin.xpub || origin.derivationPath ||
     origin.source || (origin.tags && origin.tags.length > 0) || (origin.categories && origin.categories.length > 0);
+  
+  const conflictingFields = record ? SINGULAR_FIELDS.filter(f => 
+    isFieldDifferent(origin, record, f.key)
+  ) : [];
+  const hasConflicts = conflictingFields.length > 0;
 
   return (
     <Collapsible open={isExpanded} onOpenChange={setIsExpanded}>
@@ -63,6 +116,12 @@ function OriginCard({ origin }: { origin: RecordOrigin }) {
                 <Icon className="h-3 w-3" />
                 {config.label}
               </Badge>
+              {hasConflicts && (
+                <Badge variant="outline" className="gap-1 text-orange-600 border-orange-300 bg-orange-50 dark:bg-orange-950/30 dark:border-orange-700">
+                  <AlertCircle className="h-3 w-3" />
+                  {conflictingFields.length} differs
+                </Badge>
+              )}
               <span className="text-xs text-muted-foreground">
                 {format(new Date(origin.createdAt), 'MMM d, yyyy h:mm a')}
               </span>
@@ -84,6 +143,9 @@ function OriginCard({ origin }: { origin: RecordOrigin }) {
                 <div data-testid={`text-origin-label-${origin.id}`}>
                   <span className="text-muted-foreground">Label:</span>{' '}
                   <span className="font-medium">{origin.label}</span>
+                  {isFieldDifferent(origin, record, 'label') && (
+                    <ConflictIndicator tooltip={`Active value: "${record?.label || '(empty)'}"`} />
+                  )}
                 </div>
               )}
 
@@ -100,6 +162,9 @@ function OriginCard({ origin }: { origin: RecordOrigin }) {
                 <div data-testid={`text-origin-owner-${origin.id}`}>
                   <span className="text-muted-foreground">Owner:</span>{' '}
                   <span>{origin.owner}</span>
+                  {isFieldDifferent(origin, record, 'owner') && (
+                    <ConflictIndicator tooltip={`Active value: "${record?.owner || '(empty)'}"`} />
+                  )}
                 </div>
               )}
 
@@ -107,6 +172,9 @@ function OriginCard({ origin }: { origin: RecordOrigin }) {
                 <div data-testid={`text-origin-wallet-${origin.id}`}>
                   <span className="text-muted-foreground">Wallet:</span>{' '}
                   <span>{origin.walletName}</span>
+                  {isFieldDifferent(origin, record, 'walletName') && (
+                    <ConflictIndicator tooltip={`Active value: "${record?.walletName || '(empty)'}"`} />
+                  )}
                 </div>
               )}
 
@@ -114,6 +182,9 @@ function OriginCard({ origin }: { origin: RecordOrigin }) {
                 <div data-testid={`text-origin-seed-${origin.id}`}>
                   <span className="text-muted-foreground">Seed Name:</span>{' '}
                   <span>{origin.seedName}</span>
+                  {isFieldDifferent(origin, record, 'seedName') && (
+                    <ConflictIndicator tooltip={`Active value: "${record?.seedName || '(empty)'}"`} />
+                  )}
                 </div>
               )}
 
@@ -121,6 +192,9 @@ function OriginCard({ origin }: { origin: RecordOrigin }) {
                 <div data-testid={`text-origin-software-${origin.id}`}>
                   <span className="text-muted-foreground">Wallet Software:</span>{' '}
                   <span>{origin.walletSoftware}</span>
+                  {isFieldDifferent(origin, record, 'walletSoftware') && (
+                    <ConflictIndicator tooltip={`Active value: "${record?.walletSoftware || '(empty)'}"`} />
+                  )}
                 </div>
               )}
 
@@ -130,6 +204,9 @@ function OriginCard({ origin }: { origin: RecordOrigin }) {
                     <KeyRound className="h-3 w-3" /> Private Key Status:
                   </span>{' '}
                   <span>{origin.privateKeyStatus}</span>
+                  {isFieldDifferent(origin, record, 'privateKeyStatus') && (
+                    <ConflictIndicator tooltip={`Active value: "${record?.privateKeyStatus || '(empty)'}"`} />
+                  )}
                 </div>
               )}
 
@@ -202,11 +279,12 @@ function OriginCard({ origin }: { origin: RecordOrigin }) {
   );
 }
 
-export function MetadataSourcesPanel({ recordId }: MetadataSourcesPanelProps) {
+export function MetadataSourcesPanel({ recordId, record }: MetadataSourcesPanelProps) {
   const [origins, setOrigins] = useState<RecordOrigin[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isExpanded, setIsExpanded] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [totalConflicts, setTotalConflicts] = useState(0);
 
   useEffect(() => {
     async function loadOrigins() {
@@ -222,6 +300,18 @@ export function MetadataSourcesPanel({ recordId }: MetadataSourcesPanelProps) {
         const decryptedOrigins = await getDecryptedRecordOrigins(recordId);
         decryptedOrigins.sort((a, b) => b.createdAt - a.createdAt);
         setOrigins(decryptedOrigins);
+        
+        if (record) {
+          let conflictCount = 0;
+          for (const origin of decryptedOrigins) {
+            for (const field of SINGULAR_FIELDS) {
+              if (isFieldDifferent(origin, record, field.key)) {
+                conflictCount++;
+              }
+            }
+          }
+          setTotalConflicts(conflictCount);
+        }
       } catch (err) {
         console.error('[MetadataSourcesPanel] Failed to load origins:', err);
         setError('Failed to load metadata sources');
@@ -234,7 +324,7 @@ export function MetadataSourcesPanel({ recordId }: MetadataSourcesPanelProps) {
     if (recordId) {
       loadOrigins();
     }
-  }, [recordId]);
+  }, [recordId, record]);
 
   if (isLoading) {
     return (
@@ -261,6 +351,12 @@ export function MetadataSourcesPanel({ recordId }: MetadataSourcesPanelProps) {
             <h4 className="text-sm font-medium flex items-center gap-2">
               <History className="h-4 w-4" />
               Metadata Sources ({origins.length})
+              {totalConflicts > 0 && (
+                <Badge variant="outline" className="gap-1 text-orange-600 border-orange-300 bg-orange-50 dark:bg-orange-950/30 dark:border-orange-700">
+                  <AlertCircle className="h-3 w-3" />
+                  {totalConflicts} conflicts
+                </Badge>
+              )}
             </h4>
             {isExpanded ? (
               <ChevronDown className="h-4 w-4 text-muted-foreground" />
@@ -273,7 +369,7 @@ export function MetadataSourcesPanel({ recordId }: MetadataSourcesPanelProps) {
         <CollapsibleContent>
           <div className="space-y-2" data-testid="list-metadata-sources">
             {origins.map((origin) => (
-              <OriginCard key={origin.id} origin={origin} />
+              <OriginCard key={origin.id} origin={origin} record={record} />
             ))}
           </div>
           <p className="text-xs text-muted-foreground mt-3">
