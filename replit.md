@@ -57,6 +57,12 @@ Data is stored locally using Dexie.js (IndexedDB) for structured data, with all 
     *   **Continuity Certificate Report:** Filtered export of custody segments with selective disclosure
     *   **Evidence Bundle Export:** Privacy-preserving export with toggles for addresses, txids, and lineage chains
 *   **Timestamp Standards:** originDate stored as Unix seconds (blockTime), updatedAt as Unix milliseconds (Date.now())
+*   **Evidence/Document Storage System (Database v18):** General-purpose encrypted document storage for proof-of-ownership and historical record keeping beyond Bitcoin transactions:
+    *   **Evidence Table:** Stores document metadata with fields: title, documentType (email/screenshot/receipt/contract/chat_log), originalDate, notes, tags, partiesInvolved, source, importance (low/medium/high)
+    *   **EvidenceAttachments Table:** Encrypted file storage linked to evidence entries, supporting multiple attachments per evidence item
+    *   **Full Encryption:** All evidence metadata and attachments encrypted at rest using AES-256-GCM
+    *   **Evidence UI:** List view with search/filter by type/importance/date/tags, add/edit forms, file upload with drag-and-drop, detail view with file download
+    *   **Sidebar Integration:** Added under "Documents" navigation group
 
 ## External Dependencies
 
