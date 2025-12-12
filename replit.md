@@ -39,6 +39,13 @@ Data is stored locally using Dexie.js (IndexedDB) for structured data, with all 
 *   **Nudgie (Transaction Labeling To-Do):** A workflow for systematically labeling unlabeled transactions, with dashboard and focus views, source filtering, and quick-label buttons.
 *   **Transaction Classification Metadata (Database v15):** Tax-neutral fact-recording system for `flowType`, `acquisitionMethod`, `dispositionType`, `costBasisUsd`, and `counterpartyType`.
 *   **Bulk Editor:** A powerful batch editing system for updating multiple records at once with a filter builder, action builder, preview panel, and undo capability. Optimized for fast processing of large datasets.
+*   **Metadata Conflict Resolution System:** Detects and resolves conflicts when multiple import sources (xpub import, wallet sync, manual entry) provide different values for singular metadata fields:
+    *   **Field Classification:** Union fields (tags, categories) accumulate values; Singular fields (seed name, owner, wallet name, wallet software, private key status, label) require resolution
+    *   **RecordOrigin System:** Preserves all metadata from each import source with timestamps and origin type
+    *   **Conflict Detection:** Identifies records where origins have conflicting singular field values
+    *   **Visual Indicators:** Orange dots in MetadataSourcesPanel show which origin values differ from active record
+    *   **Standalone Resolution Page:** Full-screen interface with search/filter to view all conflicts, select preferred values, or enter custom values
+    *   **RecordDetailPanel Badge:** Clickable conflict indicator navigates to filtered resolution page
 *   **Bitcoin Flow Visualizer:** An interactive UTXO provenance tracing tool with Sankey Diagram, Timeline Swimlanes, Line Chart, and Hop-Path Explorer visualizations, prioritizing local data before falling back to blockchain APIs. Owned addresses are highlighted in green for easy identification.
     *   **Hop-Path Explorer:** Interactive tree-based fund flow visualization with recursive node selection, multi-hop traversal using link-based adjacency, loading states during exploration, and color-coded ownership indicators (green=owned, orange=unclassified, gray=external). Includes transaction link metadata display and explore-to-drill functionality.
 *   **Transaction Search Enhancement:** Records page search now includes blockchain transactions, showing all participating addresses for a given txid.
