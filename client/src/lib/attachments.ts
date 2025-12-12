@@ -206,3 +206,109 @@ export function formatFileSize(bytes: number): string {
   
   return Math.round((bytes / Math.pow(k, i)) * 100) / 100 + ' ' + sizes[i];
 }
+
+// ============ GENERIC FILE UPLOAD/DOWNLOAD ============
+// These functions are for uploading files without creating attachment records
+// Useful for evidence attachments which have their own table
+
+// Upload a file and return the storage path (no DB record created)
+export async function uploadEncryptedFile(file: File): Promise<string> {
+  try {
+    let fileData: ArrayBuffer = await file.arrayBuffer();
+    let isEncrypted = false;
+    
+    // Encrypt the file if encryption is available
+    if (isEncryptionReady()) {
+      const key = getEncryptionKey();
+      if (key) {
+        fileData = await encryptBinary(fileData, key);
+        isEncrypted = true;
+      }
+    }
+    
+    if (isElectron()) {
+      // Electron mode: save via IPC
+      const api = getElectronAPI();
+      const identifier = `evidence_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      const result = await api.saveAttachment(identifier, file.name, fileData);
+      
+      if (!result.success) {
+        throw new Error(result.error || 'Upload failed');
+      }
+      
+      return result.path!;
+    } else {
+      // Web mode: upload via API
+      const fileToUpload = new Blob([fileData], { 
+        type: isEncrypted ? 'application/octet-stream' : file.type 
+      });
+      
+      const formData = new FormData();
+      formData.append('file', fileToUpload, file.name);
+      formData.append('identifier', `evidence_${Date.now()}`);
+      formData.append('recordId', '0'); // No associated record
+      formData.append('encrypted', isEncrypted.toString());
+
+      const response = await fetch('/api/attachments/upload', {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Upload failed');
+      }
+
+      const data = await response.json();
+      return data.objectStoragePath;
+    }
+  } catch (error) {
+    throw new Error(`Failed to upload file: ${error instanceof Error ? error.message : 'Unknown error'}`);
+  }
+}
+
+// Download a file by its storage path and trigger browser download
+export async function downloadDecryptedFile(objectPath: string, filename: string): Promise<void> {
+  try {
+    const blob = await downloadAttachment(objectPath, true); // Always try decrypting
+    
+    // Create download link
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  } catch (error) {
+    throw new Error(`Failed to download file: ${error instanceof Error ? error.message : 'Unknown error'}`);
+  }
+}
+
+// Delete a file by its storage path (no DB record deletion)
+export async function deleteEncryptedFile(objectPath: string): Promise<void> {
+  try {
+    if (isElectron()) {
+      // Electron mode: delete via IPC
+      const api = getElectronAPI();
+      const result = await api.deleteAttachment(objectPath);
+      
+      if (!result.success) {
+        throw new Error(result.error || 'Delete failed');
+      }
+    } else {
+      // Web mode: delete via API
+      const response = await fetch(`/api/attachments/${objectPath}`, {
+        method: 'DELETE',
+      });
+      
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Delete failed');
+      }
+    }
+  } catch (error) {
+    throw new Error(`Failed to delete file: ${error instanceof Error ? error.message : 'Unknown error'}`);
+  }
+}

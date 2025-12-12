@@ -27,7 +27,8 @@ import {
   Map,
   Import,
   DollarSign,
-  AlertCircle
+  AlertCircle,
+  FileText
 } from "lucide-react";
 import logoUrl from "@assets/foot_1764929618997.png";
 import {
@@ -107,6 +108,15 @@ const navGroups: NavGroup[] = [
       { title: "Price Import", url: "/price-import", icon: DollarSign },
       { title: "Transaction Sync", url: "/transaction-sync", icon: ArrowDownUp },
       { title: "QR Scanner", url: "/scanner", icon: QrCode },
+    ]
+  },
+  {
+    id: "documents",
+    title: "Documents",
+    icon: FileText,
+    defaultOpen: false,
+    items: [
+      { title: "Evidence", url: "/evidence", icon: FileText },
     ]
   },
   {

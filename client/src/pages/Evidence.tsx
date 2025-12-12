@@ -1,0 +1,987 @@
+import { useState, useCallback } from "react";
+import { useLiveQuery } from "dexie-react-hooks";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { z } from "zod";
+import { format } from "date-fns";
+import { 
+  Plus, 
+  Search, 
+  FileText, 
+  Calendar, 
+  Tag, 
+  Users, 
+  Download,
+  Trash2,
+  Edit2,
+  Filter,
+  X,
+  Upload,
+  Eye,
+  AlertTriangle,
+  FileImage,
+  File
+} from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { Badge } from "@/components/ui/badge";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  Form,
+  FormControl,
+  FormDescription,
+  FormField,
+  FormItem,
+  FormLabel,
+  FormMessage,
+} from "@/components/ui/form";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { useToast } from "@/hooks/use-toast";
+import { db, type Evidence, type EvidenceAttachment, EVIDENCE_DOCUMENT_TYPE_OPTIONS, EVIDENCE_IMPORTANCE_OPTIONS, type EvidenceDocumentType, type EvidenceImportance } from "@/lib/database";
+import { 
+  createEvidence, 
+  updateEvidence, 
+  deleteEvidence, 
+  decryptEvidenceList,
+  getDecryptedEvidenceAttachments,
+  createEvidenceAttachment,
+  deleteEvidenceAttachment,
+} from "@/lib/encryptionFacade";
+import { uploadEncryptedFile, downloadDecryptedFile, deleteEncryptedFile } from "@/lib/attachments";
+import { useDropzone } from "react-dropzone";
+
+const evidenceFormSchema = z.object({
+  title: z.string().min(1, "Title is required").max(200, "Title too long"),
+  documentType: z.string().min(1, "Document type is required"),
+  originalDate: z.string().optional(),
+  notes: z.string().optional(),
+  tags: z.string().optional(),
+  partiesInvolved: z.string().optional(),
+  source: z.string().optional(),
+  importance: z.string().optional(),
+});
+
+type EvidenceFormValues = z.infer<typeof evidenceFormSchema>;
+
+export default function EvidencePage() {
+  const { toast } = useToast();
+  const [searchTerm, setSearchTerm] = useState("");
+  const [filterType, setFilterType] = useState<string>("all");
+  const [filterImportance, setFilterImportance] = useState<string>("all");
+  const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
+  const [isDetailDialogOpen, setIsDetailDialogOpen] = useState(false);
+  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
+  const [selectedEvidence, setSelectedEvidence] = useState<Evidence | null>(null);
+  const [selectedAttachments, setSelectedAttachments] = useState<EvidenceAttachment[]>([]);
+  const [isEditing, setIsEditing] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const [pendingFiles, setPendingFiles] = useState<File[]>([]);
+
+  const rawEvidence = useLiveQuery(() => db.evidence.toArray(), []);
+  const [decryptedEvidence, setDecryptedEvidence] = useState<Evidence[]>([]);
+
+  useLiveQuery(async () => {
+    if (rawEvidence && rawEvidence.length > 0) {
+      const decrypted = await decryptEvidenceList(rawEvidence);
+      setDecryptedEvidence(decrypted);
+    } else {
+      setDecryptedEvidence([]);
+    }
+  }, [rawEvidence]);
+
+  const filteredEvidence = decryptedEvidence.filter((evidence) => {
+    const matchesSearch = 
+      searchTerm === "" ||
+      evidence.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      evidence.notes?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      evidence.partiesInvolved?.some(p => p.toLowerCase().includes(searchTerm.toLowerCase())) ||
+      evidence.tags?.some(t => t.toLowerCase().includes(searchTerm.toLowerCase()));
+    
+    const matchesType = filterType === "all" || evidence.documentType === filterType;
+    const matchesImportance = filterImportance === "all" || evidence.importance === filterImportance;
+    
+    return matchesSearch && matchesType && matchesImportance;
+  });
+
+  const sortedEvidence = [...filteredEvidence].sort((a, b) => {
+    if (a.originalDate && b.originalDate) {
+      return b.originalDate - a.originalDate;
+    }
+    return b.createdAt - a.createdAt;
+  });
+
+  const form = useForm<EvidenceFormValues>({
+    resolver: zodResolver(evidenceFormSchema),
+    defaultValues: {
+      title: "",
+      documentType: "",
+      originalDate: "",
+      notes: "",
+      tags: "",
+      partiesInvolved: "",
+      source: "",
+      importance: "",
+    },
+  });
+
+  const onDrop = useCallback((acceptedFiles: File[]) => {
+    setPendingFiles(prev => [...prev, ...acceptedFiles]);
+  }, []);
+
+  const { getRootProps, getInputProps, isDragActive } = useDropzone({
+    onDrop,
+    multiple: true,
+  });
+
+  const removePendingFile = (index: number) => {
+    setPendingFiles(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const openAddDialog = () => {
+    form.reset({
+      title: "",
+      documentType: "",
+      originalDate: "",
+      notes: "",
+      tags: "",
+      partiesInvolved: "",
+      source: "",
+      importance: "",
+    });
+    setPendingFiles([]);
+    setIsEditing(false);
+    setSelectedEvidence(null);
+    setIsAddDialogOpen(true);
+  };
+
+  const openEditDialog = async (evidence: Evidence) => {
+    const dateStr = evidence.originalDate 
+      ? format(new Date(evidence.originalDate * 1000), "yyyy-MM-dd")
+      : "";
+    
+    form.reset({
+      title: evidence.title,
+      documentType: evidence.documentType,
+      originalDate: dateStr,
+      notes: evidence.notes || "",
+      tags: evidence.tags?.join(", ") || "",
+      partiesInvolved: evidence.partiesInvolved?.join(", ") || "",
+      source: evidence.source || "",
+      importance: evidence.importance || "",
+    });
+    
+    setPendingFiles([]);
+    setSelectedEvidence(evidence);
+    setIsEditing(true);
+    
+    if (evidence.id) {
+      const attachments = await getDecryptedEvidenceAttachments(evidence.id);
+      setSelectedAttachments(attachments);
+    }
+    
+    setIsAddDialogOpen(true);
+  };
+
+  const openDetailDialog = async (evidence: Evidence) => {
+    setSelectedEvidence(evidence);
+    
+    if (evidence.id) {
+      const attachments = await getDecryptedEvidenceAttachments(evidence.id);
+      setSelectedAttachments(attachments);
+    }
+    
+    setIsDetailDialogOpen(true);
+  };
+
+  const confirmDelete = (evidence: Evidence) => {
+    setSelectedEvidence(evidence);
+    setIsDeleteDialogOpen(true);
+  };
+
+  const handleDelete = async () => {
+    if (!selectedEvidence?.id) return;
+    
+    setIsLoading(true);
+    try {
+      for (const attachment of selectedAttachments) {
+        if (attachment.objectStoragePath) {
+          await deleteEncryptedFile(attachment.objectStoragePath);
+        }
+      }
+      
+      await deleteEvidence(selectedEvidence.id);
+      
+      toast({
+        title: "Evidence deleted",
+        description: "The evidence entry has been permanently deleted.",
+      });
+      
+      setIsDeleteDialogOpen(false);
+      setIsDetailDialogOpen(false);
+      setSelectedEvidence(null);
+      setSelectedAttachments([]);
+    } catch (error) {
+      console.error("Failed to delete evidence:", error);
+      toast({
+        title: "Error",
+        description: "Failed to delete evidence. Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const onSubmit = async (values: EvidenceFormValues) => {
+    setIsLoading(true);
+    try {
+      const tags = values.tags 
+        ? values.tags.split(",").map(t => t.trim()).filter(Boolean)
+        : [];
+      
+      const partiesInvolved = values.partiesInvolved
+        ? values.partiesInvolved.split(",").map(p => p.trim()).filter(Boolean)
+        : [];
+      
+      const originalDate = values.originalDate
+        ? Math.floor(new Date(values.originalDate).getTime() / 1000)
+        : undefined;
+
+      const evidenceData = {
+        title: values.title,
+        documentType: values.documentType as EvidenceDocumentType,
+        originalDate,
+        notes: values.notes || undefined,
+        tags,
+        partiesInvolved: partiesInvolved.length > 0 ? partiesInvolved : undefined,
+        source: values.source || undefined,
+        importance: (values.importance || undefined) as EvidenceImportance | undefined,
+      };
+
+      let evidenceId: number;
+
+      if (isEditing && selectedEvidence?.id) {
+        await updateEvidence(selectedEvidence.id, evidenceData);
+        evidenceId = selectedEvidence.id;
+        
+        toast({
+          title: "Evidence updated",
+          description: "Your changes have been saved.",
+        });
+      } else {
+        evidenceId = await createEvidence(evidenceData);
+        
+        toast({
+          title: "Evidence added",
+          description: "The new evidence entry has been created.",
+        });
+      }
+
+      if (pendingFiles.length > 0) {
+        for (const file of pendingFiles) {
+          const storagePath = await uploadEncryptedFile(file);
+          
+          await createEvidenceAttachment({
+            evidenceId,
+            filename: file.name,
+            mimeType: file.type || "application/octet-stream",
+            size: file.size,
+            objectStoragePath: storagePath,
+          });
+        }
+      }
+
+      setIsAddDialogOpen(false);
+      form.reset();
+      setPendingFiles([]);
+      setSelectedEvidence(null);
+      setIsEditing(false);
+    } catch (error) {
+      console.error("Failed to save evidence:", error);
+      toast({
+        title: "Error",
+        description: "Failed to save evidence. Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleDownloadAttachment = async (attachment: EvidenceAttachment) => {
+    try {
+      await downloadDecryptedFile(attachment.objectStoragePath, attachment.filename);
+    } catch (error) {
+      console.error("Failed to download file:", error);
+      toast({
+        title: "Error",
+        description: "Failed to download the file.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleDeleteAttachment = async (attachment: EvidenceAttachment) => {
+    if (!attachment.id) return;
+    
+    try {
+      await deleteEncryptedFile(attachment.objectStoragePath);
+      await deleteEvidenceAttachment(attachment.id);
+      
+      setSelectedAttachments(prev => prev.filter(a => a.id !== attachment.id));
+      
+      toast({
+        title: "Attachment deleted",
+        description: "The file has been removed.",
+      });
+    } catch (error) {
+      console.error("Failed to delete attachment:", error);
+      toast({
+        title: "Error",
+        description: "Failed to delete the attachment.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const getDocumentTypeLabel = (type: string) => {
+    return EVIDENCE_DOCUMENT_TYPE_OPTIONS.find(o => o.value === type)?.label || type;
+  };
+
+  const getImportanceColor = (importance?: string) => {
+    switch (importance) {
+      case "critical": return "bg-red-500/20 text-red-700 dark:text-red-400";
+      case "high": return "bg-orange-500/20 text-orange-700 dark:text-orange-400";
+      case "medium": return "bg-yellow-500/20 text-yellow-700 dark:text-yellow-400";
+      case "low": return "bg-green-500/20 text-green-700 dark:text-green-400";
+      default: return "bg-muted text-muted-foreground";
+    }
+  };
+
+  const getFileIcon = (mimeType: string) => {
+    if (mimeType.startsWith("image/")) return FileImage;
+    return File;
+  };
+
+  return (
+    <div className="flex flex-col h-full overflow-hidden">
+      <div className="flex items-center justify-between p-4 border-b gap-4 flex-wrap">
+        <div>
+          <h1 className="text-2xl font-semibold" data-testid="text-page-title">Evidence</h1>
+          <p className="text-sm text-muted-foreground">
+            Store and organize documents, emails, screenshots, and receipts
+          </p>
+        </div>
+        <Button onClick={openAddDialog} data-testid="button-add-evidence">
+          <Plus className="h-4 w-4 mr-2" />
+          Add Evidence
+        </Button>
+      </div>
+
+      <div className="flex items-center gap-4 p-4 border-b flex-wrap">
+        <div className="relative flex-1 min-w-[200px]">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          <Input
+            placeholder="Search by title, notes, parties, or tags..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            className="pl-10"
+            data-testid="input-search"
+          />
+        </div>
+        
+        <Select value={filterType} onValueChange={setFilterType}>
+          <SelectTrigger className="w-[180px]" data-testid="select-filter-type">
+            <Filter className="h-4 w-4 mr-2" />
+            <SelectValue placeholder="Document Type" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Types</SelectItem>
+            {EVIDENCE_DOCUMENT_TYPE_OPTIONS.map((option) => (
+              <SelectItem key={option.value} value={option.value}>
+                {option.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+
+        <Select value={filterImportance} onValueChange={setFilterImportance}>
+          <SelectTrigger className="w-[150px]" data-testid="select-filter-importance">
+            <SelectValue placeholder="Importance" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Importance</SelectItem>
+            {EVIDENCE_IMPORTANCE_OPTIONS.map((option) => (
+              <SelectItem key={option.value} value={option.value}>
+                {option.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+
+      <ScrollArea className="flex-1">
+        <div className="p-4">
+          {sortedEvidence.length === 0 ? (
+            <Card className="border-dashed">
+              <CardContent className="flex flex-col items-center justify-center py-12">
+                <FileText className="h-12 w-12 text-muted-foreground mb-4" />
+                <h3 className="text-lg font-medium mb-2">No evidence found</h3>
+                <p className="text-sm text-muted-foreground text-center max-w-md mb-4">
+                  {decryptedEvidence.length === 0 
+                    ? "Add your first piece of evidence to keep track of important documents, emails, and receipts."
+                    : "No evidence matches your current filters."}
+                </p>
+                {decryptedEvidence.length === 0 && (
+                  <Button onClick={openAddDialog} variant="outline">
+                    <Plus className="h-4 w-4 mr-2" />
+                    Add Evidence
+                  </Button>
+                )}
+              </CardContent>
+            </Card>
+          ) : (
+            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+              {sortedEvidence.map((evidence) => (
+                <Card 
+                  key={evidence.id} 
+                  className="hover-elevate cursor-pointer"
+                  onClick={() => openDetailDialog(evidence)}
+                  data-testid={`card-evidence-${evidence.id}`}
+                >
+                  <CardHeader className="pb-2">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex-1 min-w-0">
+                        <CardTitle className="text-base truncate">
+                          {evidence.title}
+                        </CardTitle>
+                        <CardDescription className="flex items-center gap-2 mt-1">
+                          <Badge variant="secondary" className="text-xs">
+                            {getDocumentTypeLabel(evidence.documentType)}
+                          </Badge>
+                          {evidence.importance && (
+                            <Badge className={`text-xs ${getImportanceColor(evidence.importance)}`}>
+                              {evidence.importance}
+                            </Badge>
+                          )}
+                        </CardDescription>
+                      </div>
+                    </div>
+                  </CardHeader>
+                  <CardContent>
+                    {evidence.notes && (
+                      <p className="text-sm text-muted-foreground line-clamp-2 mb-2">
+                        {evidence.notes}
+                      </p>
+                    )}
+                    
+                    <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+                      {evidence.originalDate && (
+                        <span className="flex items-center gap-1">
+                          <Calendar className="h-3 w-3" />
+                          {format(new Date(evidence.originalDate * 1000), "MMM d, yyyy")}
+                        </span>
+                      )}
+                      {evidence.partiesInvolved && evidence.partiesInvolved.length > 0 && (
+                        <span className="flex items-center gap-1">
+                          <Users className="h-3 w-3" />
+                          {evidence.partiesInvolved.length} {evidence.partiesInvolved.length === 1 ? "party" : "parties"}
+                        </span>
+                      )}
+                    </div>
+                    
+                    {evidence.tags && evidence.tags.length > 0 && (
+                      <div className="flex flex-wrap gap-1 mt-2">
+                        {evidence.tags.slice(0, 3).map((tag, i) => (
+                          <Badge key={i} variant="outline" className="text-xs">
+                            {tag}
+                          </Badge>
+                        ))}
+                        {evidence.tags.length > 3 && (
+                          <Badge variant="outline" className="text-xs">
+                            +{evidence.tags.length - 3}
+                          </Badge>
+                        )}
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          )}
+        </div>
+      </ScrollArea>
+
+      <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>{isEditing ? "Edit Evidence" : "Add Evidence"}</DialogTitle>
+            <DialogDescription>
+              {isEditing 
+                ? "Update the details of this evidence entry."
+                : "Add a new document, email, screenshot, or receipt to your evidence collection."}
+            </DialogDescription>
+          </DialogHeader>
+
+          <Form {...form}>
+            <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+              <FormField
+                control={form.control}
+                name="title"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Title *</FormLabel>
+                    <FormControl>
+                      <Input 
+                        placeholder="e.g., Bitcoin purchase confirmation email" 
+                        {...field} 
+                        data-testid="input-title"
+                      />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <div className="grid grid-cols-2 gap-4">
+                <FormField
+                  control={form.control}
+                  name="documentType"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Document Type *</FormLabel>
+                      <Select onValueChange={field.onChange} value={field.value}>
+                        <FormControl>
+                          <SelectTrigger data-testid="select-document-type">
+                            <SelectValue placeholder="Select type..." />
+                          </SelectTrigger>
+                        </FormControl>
+                        <SelectContent>
+                          {EVIDENCE_DOCUMENT_TYPE_OPTIONS.map((option) => (
+                            <SelectItem key={option.value} value={option.value}>
+                              {option.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+                <FormField
+                  control={form.control}
+                  name="originalDate"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Original Date</FormLabel>
+                      <FormControl>
+                        <Input 
+                          type="date" 
+                          {...field} 
+                          data-testid="input-original-date"
+                        />
+                      </FormControl>
+                      <FormDescription>When was this document created?</FormDescription>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <FormField
+                  control={form.control}
+                  name="importance"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Importance</FormLabel>
+                      <Select onValueChange={field.onChange} value={field.value}>
+                        <FormControl>
+                          <SelectTrigger data-testid="select-importance">
+                            <SelectValue placeholder="Select importance..." />
+                          </SelectTrigger>
+                        </FormControl>
+                        <SelectContent>
+                          <SelectItem value="">None</SelectItem>
+                          {EVIDENCE_IMPORTANCE_OPTIONS.map((option) => (
+                            <SelectItem key={option.value} value={option.value}>
+                              {option.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+                <FormField
+                  control={form.control}
+                  name="source"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Source</FormLabel>
+                      <FormControl>
+                        <Input 
+                          placeholder="e.g., Gmail, Coinbase, Bank of America" 
+                          {...field} 
+                          data-testid="input-source"
+                        />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              </div>
+
+              <FormField
+                control={form.control}
+                name="notes"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Notes</FormLabel>
+                    <FormControl>
+                      <Textarea 
+                        placeholder="Add any relevant details or context..."
+                        className="min-h-[100px]"
+                        {...field} 
+                        data-testid="textarea-notes"
+                      />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name="partiesInvolved"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Parties Involved</FormLabel>
+                    <FormControl>
+                      <Input 
+                        placeholder="e.g., John Smith, Coinbase, XYZ Corp (comma-separated)" 
+                        {...field} 
+                        data-testid="input-parties"
+                      />
+                    </FormControl>
+                    <FormDescription>People, companies, or platforms mentioned</FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name="tags"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Tags</FormLabel>
+                    <FormControl>
+                      <Input 
+                        placeholder="e.g., purchase, 2017, important (comma-separated)" 
+                        {...field} 
+                        data-testid="input-tags"
+                      />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <div className="space-y-2">
+                <FormLabel>Attachments</FormLabel>
+                
+                {isEditing && selectedAttachments.length > 0 && (
+                  <div className="space-y-2 mb-3">
+                    <p className="text-sm text-muted-foreground">Existing files:</p>
+                    {selectedAttachments.map((att) => {
+                      const FileIcon = getFileIcon(att.mimeType);
+                      return (
+                        <div 
+                          key={att.id} 
+                          className="flex items-center justify-between p-2 bg-muted rounded-md"
+                        >
+                          <div className="flex items-center gap-2">
+                            <FileIcon className="h-4 w-4" />
+                            <span className="text-sm">{att.filename}</span>
+                            <span className="text-xs text-muted-foreground">
+                              ({(att.size / 1024).toFixed(1)} KB)
+                            </span>
+                          </div>
+                          <Button
+                            type="button"
+                            size="icon"
+                            variant="ghost"
+                            onClick={() => handleDeleteAttachment(att)}
+                          >
+                            <X className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                <div
+                  {...getRootProps()}
+                  className={`border-2 border-dashed rounded-lg p-6 text-center cursor-pointer transition-colors ${
+                    isDragActive ? "border-primary bg-primary/5" : "border-muted-foreground/25 hover:border-muted-foreground/50"
+                  }`}
+                  data-testid="dropzone-files"
+                >
+                  <input {...getInputProps()} />
+                  <Upload className="h-8 w-8 mx-auto mb-2 text-muted-foreground" />
+                  <p className="text-sm text-muted-foreground">
+                    {isDragActive
+                      ? "Drop files here..."
+                      : "Drag & drop files here, or click to select"}
+                  </p>
+                </div>
+
+                {pendingFiles.length > 0 && (
+                  <div className="space-y-2 mt-3">
+                    <p className="text-sm text-muted-foreground">Files to upload:</p>
+                    {pendingFiles.map((file, index) => (
+                      <div 
+                        key={index} 
+                        className="flex items-center justify-between p-2 bg-muted rounded-md"
+                      >
+                        <div className="flex items-center gap-2">
+                          <File className="h-4 w-4" />
+                          <span className="text-sm">{file.name}</span>
+                          <span className="text-xs text-muted-foreground">
+                            ({(file.size / 1024).toFixed(1)} KB)
+                          </span>
+                        </div>
+                        <Button
+                          type="button"
+                          size="icon"
+                          variant="ghost"
+                          onClick={() => removePendingFile(index)}
+                        >
+                          <X className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <DialogFooter>
+                <Button 
+                  type="button" 
+                  variant="outline" 
+                  onClick={() => setIsAddDialogOpen(false)}
+                  disabled={isLoading}
+                >
+                  Cancel
+                </Button>
+                <Button type="submit" disabled={isLoading} data-testid="button-submit">
+                  {isLoading ? "Saving..." : isEditing ? "Save Changes" : "Add Evidence"}
+                </Button>
+              </DialogFooter>
+            </form>
+          </Form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isDetailDialogOpen} onOpenChange={setIsDetailDialogOpen}>
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+          {selectedEvidence && (
+            <>
+              <DialogHeader>
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex-1">
+                    <DialogTitle className="text-xl">{selectedEvidence.title}</DialogTitle>
+                    <div className="flex items-center gap-2 mt-2">
+                      <Badge variant="secondary">
+                        {getDocumentTypeLabel(selectedEvidence.documentType)}
+                      </Badge>
+                      {selectedEvidence.importance && (
+                        <Badge className={getImportanceColor(selectedEvidence.importance)}>
+                          {selectedEvidence.importance}
+                        </Badge>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      onClick={() => {
+                        setIsDetailDialogOpen(false);
+                        openEditDialog(selectedEvidence);
+                      }}
+                      title="Edit"
+                      data-testid="button-edit-evidence"
+                    >
+                      <Edit2 className="h-4 w-4" />
+                    </Button>
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      onClick={() => confirmDelete(selectedEvidence)}
+                      title="Delete"
+                      data-testid="button-delete-evidence"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </div>
+              </DialogHeader>
+
+              <div className="space-y-4">
+                {selectedEvidence.originalDate && (
+                  <div>
+                    <h4 className="text-sm font-medium text-muted-foreground mb-1">Original Date</h4>
+                    <p className="flex items-center gap-2">
+                      <Calendar className="h-4 w-4" />
+                      {format(new Date(selectedEvidence.originalDate * 1000), "MMMM d, yyyy")}
+                    </p>
+                  </div>
+                )}
+
+                {selectedEvidence.source && (
+                  <div>
+                    <h4 className="text-sm font-medium text-muted-foreground mb-1">Source</h4>
+                    <p>{selectedEvidence.source}</p>
+                  </div>
+                )}
+
+                {selectedEvidence.notes && (
+                  <div>
+                    <h4 className="text-sm font-medium text-muted-foreground mb-1">Notes</h4>
+                    <p className="whitespace-pre-wrap">{selectedEvidence.notes}</p>
+                  </div>
+                )}
+
+                {selectedEvidence.partiesInvolved && selectedEvidence.partiesInvolved.length > 0 && (
+                  <div>
+                    <h4 className="text-sm font-medium text-muted-foreground mb-1">Parties Involved</h4>
+                    <div className="flex flex-wrap gap-2">
+                      {selectedEvidence.partiesInvolved.map((party, i) => (
+                        <Badge key={i} variant="secondary">
+                          <Users className="h-3 w-3 mr-1" />
+                          {party}
+                        </Badge>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {selectedEvidence.tags && selectedEvidence.tags.length > 0 && (
+                  <div>
+                    <h4 className="text-sm font-medium text-muted-foreground mb-1">Tags</h4>
+                    <div className="flex flex-wrap gap-2">
+                      {selectedEvidence.tags.map((tag, i) => (
+                        <Badge key={i} variant="outline">
+                          <Tag className="h-3 w-3 mr-1" />
+                          {tag}
+                        </Badge>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {selectedAttachments.length > 0 && (
+                  <div>
+                    <h4 className="text-sm font-medium text-muted-foreground mb-2">Attachments</h4>
+                    <div className="space-y-2">
+                      {selectedAttachments.map((att) => {
+                        const FileIcon = getFileIcon(att.mimeType);
+                        return (
+                          <div 
+                            key={att.id} 
+                            className="flex items-center justify-between p-3 bg-muted rounded-md"
+                          >
+                            <div className="flex items-center gap-3">
+                              <FileIcon className="h-5 w-5" />
+                              <div>
+                                <p className="text-sm font-medium">{att.filename}</p>
+                                <p className="text-xs text-muted-foreground">
+                                  {(att.size / 1024).toFixed(1)} KB
+                                </p>
+                              </div>
+                            </div>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => handleDownloadAttachment(att)}
+                              data-testid={`button-download-${att.id}`}
+                            >
+                              <Download className="h-4 w-4 mr-2" />
+                              Download
+                            </Button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                <div className="pt-4 border-t text-xs text-muted-foreground">
+                  <p>Created: {format(new Date(selectedEvidence.createdAt), "MMM d, yyyy 'at' h:mm a")}</p>
+                  <p>Updated: {format(new Date(selectedEvidence.updatedAt), "MMM d, yyyy 'at' h:mm a")}</p>
+                </div>
+              </div>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      <AlertDialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="h-5 w-5 text-destructive" />
+              Delete Evidence
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete "{selectedEvidence?.title}"? This will also delete 
+              all attached files. This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isLoading}>Cancel</AlertDialogCancel>
+            <AlertDialogAction 
+              onClick={handleDelete} 
+              disabled={isLoading}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {isLoading ? "Deleting..." : "Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </div>
+  );
+}

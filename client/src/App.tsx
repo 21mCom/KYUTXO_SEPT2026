@@ -40,6 +40,7 @@ import BitcoinFlowVisualizer from "@/pages/BitcoinFlowVisualizer";
 import BulkEditor from "@/pages/BulkEditor";
 import DevTestData from "@/pages/DevTestData";
 import ConflictResolution from "@/pages/ConflictResolution";
+import EvidencePage from "@/pages/Evidence";
 import NotFound from "@/pages/not-found";
 
 function AppRoutes() {
@@ -73,6 +74,7 @@ function AppRoutes() {
       <Route path="/flow-visualizer" component={BitcoinFlowVisualizer} />
       <Route path="/bulk-editor" component={BulkEditor} />
       <Route path="/conflict-resolution" component={ConflictResolution} />
+      <Route path="/evidence" component={EvidencePage} />
       <Route component={NotFound} />
     </Switch>
   );
