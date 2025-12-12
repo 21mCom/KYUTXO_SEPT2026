@@ -942,7 +942,18 @@ export default function EvidencePage() {
                     <h4 className="text-sm font-medium text-muted-foreground mb-1">Parties Involved</h4>
                     <div className="flex flex-wrap gap-2">
                       {selectedEvidence.partiesInvolved.map((party, i) => (
-                        <Badge key={i} variant="secondary">
+                        <Badge 
+                          key={i} 
+                          variant="secondary"
+                          className="cursor-pointer hover-elevate"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSearchTerm(party);
+                            setIsDetailDialogOpen(false);
+                          }}
+                          title={`Click to filter by "${party}"`}
+                          data-testid={`badge-party-${i}`}
+                        >
                           <Users className="h-3 w-3 mr-1" />
                           {party}
                         </Badge>
@@ -956,7 +967,18 @@ export default function EvidencePage() {
                     <h4 className="text-sm font-medium text-muted-foreground mb-1">Tags</h4>
                     <div className="flex flex-wrap gap-2">
                       {selectedEvidence.tags.map((tag, i) => (
-                        <Badge key={i} variant="outline">
+                        <Badge 
+                          key={i} 
+                          variant="outline"
+                          className="cursor-pointer hover-elevate"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSearchTerm(tag);
+                            setIsDetailDialogOpen(false);
+                          }}
+                          title={`Click to filter by "${tag}"`}
+                          data-testid={`badge-tag-${i}`}
+                        >
                           <Tag className="h-3 w-3 mr-1" />
                           {tag}
                         </Badge>
