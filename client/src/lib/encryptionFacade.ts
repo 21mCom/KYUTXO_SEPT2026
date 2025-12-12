@@ -2,7 +2,7 @@
 // Provides encryption-aware CRUD operations while maintaining compatibility
 // with existing Dexie live queries
 
-import { db, notifyDbChange, type Record, type Attachment, type Tag, type Category, type RecordOrigin, type RecordOriginType, type Owner, type WalletName, type SeedName, type WalletSoftware, type DerivationTemplate, type AddressImportance } from './database';
+import { db, notifyDbChange, type Record, type Attachment, type Tag, type Category, type RecordOrigin, type RecordOriginType, type Owner, type WalletName, type SeedName, type WalletSoftware, type DerivationTemplate, type AddressImportance, type Evidence, type EvidenceAttachment, type EvidenceDocumentType, type EvidenceImportance } from './database';
 import { encrypt } from './crypto';
 import { 
   encryptRecord, 
@@ -23,6 +23,10 @@ import {
   decryptSeedName,
   encryptWalletSoftware,
   decryptWalletSoftware,
+  encryptEvidence,
+  decryptEvidence,
+  encryptEvidenceAttachment,
+  decryptEvidenceAttachment,
 } from './dbEncryption';
 
 let _encryptionKey: CryptoKey | null = null;
@@ -1244,4 +1248,162 @@ export async function saveDerivationTemplate(template: {
   };
   
   return await db.derivationTemplates.add(encryptedTemplate);
+}
+
+// ============ EVIDENCE OPERATIONS ============
+
+// Create a new evidence entry (encrypted)
+export async function createEvidence(
+  data: Omit<Evidence, 'id' | 'createdAt' | 'updatedAt'>
+): Promise<number> {
+  const key = getKey();
+  
+  const now = Date.now();
+  const evidence: Evidence = {
+    ...data,
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  const encrypted = await encryptEvidence(evidence, key);
+  const id = await db.evidence.add(encrypted);
+  
+  // Notify listeners of the change
+  notifyDbChange('evidence');
+  
+  return id as number;
+}
+
+// Get a single decrypted evidence entry
+export async function getDecryptedEvidence(id: number): Promise<Evidence | undefined> {
+  const key = getKey();
+  
+  const evidence = await db.evidence.get(id);
+  
+  if (!evidence) return undefined;
+  
+  if (evidence.isEncrypted) {
+    return await decryptEvidence(evidence, key);
+  }
+  
+  return evidence;
+}
+
+// Get all decrypted evidence entries
+export async function getAllDecryptedEvidence(): Promise<Evidence[]> {
+  const key = getKey();
+  
+  const allEvidence = await db.evidence.toArray();
+  
+  return Promise.all(
+    allEvidence.map(async (evidence) => {
+      if (evidence.isEncrypted) {
+        return await decryptEvidence(evidence, key);
+      }
+      return evidence;
+    })
+  );
+}
+
+// Decrypt multiple evidence entries
+export async function decryptEvidenceList(evidenceList: Evidence[]): Promise<Evidence[]> {
+  const key = getKey();
+  
+  return Promise.all(
+    evidenceList.map(async (evidence) => {
+      if (evidence.isEncrypted) {
+        return await decryptEvidence(evidence, key);
+      }
+      return evidence;
+    })
+  );
+}
+
+// Update an evidence entry (encrypted)
+export async function updateEvidence(
+  id: number,
+  updates: Partial<Evidence>
+): Promise<void> {
+  const key = getKey();
+  
+  // Get the existing evidence
+  const existing = await db.evidence.get(id);
+  if (!existing) throw new Error('Evidence not found');
+
+  // Decrypt if encrypted
+  const decrypted = existing.isEncrypted
+    ? await decryptEvidence(existing, key)
+    : existing;
+
+  // Merge updates
+  const updated: Evidence = {
+    ...decrypted,
+    ...updates,
+    id,
+    updatedAt: Date.now(),
+  };
+
+  // Encrypt and save
+  const encrypted = await encryptEvidence(updated, key);
+  await db.evidence.put(encrypted);
+  
+  // Notify listeners of the change
+  notifyDbChange('evidence');
+}
+
+// Delete an evidence entry and its attachments
+export async function deleteEvidence(id: number): Promise<void> {
+  // Get all attachments for this evidence
+  const attachments = await db.evidenceAttachments.where('evidenceId').equals(id).toArray();
+  
+  // Delete all attachments
+  for (const attachment of attachments) {
+    if (attachment.id) {
+      await db.evidenceAttachments.delete(attachment.id);
+    }
+  }
+  
+  // Delete the evidence entry
+  await db.evidence.delete(id);
+  
+  // Notify listeners of the change
+  notifyDbChange('evidence');
+}
+
+// ============ EVIDENCE ATTACHMENT OPERATIONS ============
+
+// Create an evidence attachment entry (encrypted)
+export async function createEvidenceAttachment(
+  data: Omit<EvidenceAttachment, 'id' | 'createdAt'>
+): Promise<number> {
+  const key = getKey();
+  
+  const attachment: EvidenceAttachment = {
+    ...data,
+    createdAt: Date.now(),
+  };
+
+  const encrypted = await encryptEvidenceAttachment(attachment, key);
+  const id = await db.evidenceAttachments.add(encrypted);
+  return id as number;
+}
+
+// Get decrypted attachments for an evidence entry
+export async function getDecryptedEvidenceAttachments(evidenceId: number): Promise<EvidenceAttachment[]> {
+  const key = getKey();
+  const attachments = await db.evidenceAttachments.where('evidenceId').equals(evidenceId).toArray();
+  
+  return Promise.all(
+    attachments.map(async (att) => {
+      if (att.isEncrypted) {
+        return await decryptEvidenceAttachment(att, key);
+      }
+      return att;
+    })
+  );
+}
+
+// Delete an evidence attachment
+export async function deleteEvidenceAttachment(id: number): Promise<void> {
+  await db.evidenceAttachments.delete(id);
 }

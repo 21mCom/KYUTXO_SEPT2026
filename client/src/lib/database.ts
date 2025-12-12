@@ -488,6 +488,84 @@ export interface LineageSnapshot {
   isEncrypted?: boolean;
 }
 
+// Document types for evidence entries
+export type EvidenceDocumentType = 
+  | 'email'           // Email correspondence
+  | 'screenshot'      // Screenshot evidence
+  | 'receipt'         // Payment receipt
+  | 'invoice'         // Invoice document
+  | 'contract'        // Legal contract or agreement
+  | 'id-verification' // Identity verification documents
+  | 'bank-statement'  // Bank or financial statement
+  | 'tax-document'    // Tax-related documents
+  | 'correspondence'  // General correspondence
+  | 'other';          // Other document types
+
+export const EVIDENCE_DOCUMENT_TYPE_OPTIONS: { value: EvidenceDocumentType; label: string }[] = [
+  { value: 'email', label: 'Email' },
+  { value: 'screenshot', label: 'Screenshot' },
+  { value: 'receipt', label: 'Receipt' },
+  { value: 'invoice', label: 'Invoice' },
+  { value: 'contract', label: 'Contract' },
+  { value: 'id-verification', label: 'ID Verification' },
+  { value: 'bank-statement', label: 'Bank Statement' },
+  { value: 'tax-document', label: 'Tax Document' },
+  { value: 'correspondence', label: 'Correspondence' },
+  { value: 'other', label: 'Other' },
+];
+
+// Importance levels for evidence entries
+export type EvidenceImportance = 'critical' | 'high' | 'medium' | 'low';
+
+export const EVIDENCE_IMPORTANCE_OPTIONS: { value: EvidenceImportance; label: string }[] = [
+  { value: 'critical', label: 'Critical' },
+  { value: 'high', label: 'High' },
+  { value: 'medium', label: 'Medium' },
+  { value: 'low', label: 'Low' },
+];
+
+// General evidence/document storage for non-address/txid related items
+// Examples: old emails, screenshots, receipts, proof of early participation
+export interface Evidence {
+  id?: number;
+  // Title/description of the evidence
+  title: string;
+  // Type of document
+  documentType: EvidenceDocumentType;
+  // Original date of the document (when it was created/sent/received)
+  originalDate?: number;  // Unix timestamp in seconds
+  // Detailed notes about this evidence
+  notes?: string;
+  // Tags for categorization
+  tags: string[];
+  // Parties involved (people, companies, platforms mentioned)
+  partiesInvolved?: string[];
+  // Where this evidence came from (email client, website, etc.)
+  source?: string;
+  // Importance level
+  importance?: EvidenceImportance;
+  // Timestamps
+  createdAt: number;
+  updatedAt: number;
+  // Encryption
+  encryptedPayload?: string;
+  isEncrypted?: boolean;
+}
+
+// Attachment specifically for evidence entries (separate from record attachments)
+export interface EvidenceAttachment {
+  id?: number;
+  evidenceId: number;
+  filename: string;
+  mimeType: string;
+  size: number;
+  objectStoragePath: string;
+  createdAt: number;
+  // Encrypted fields
+  encryptedPayload?: string;
+  isEncrypted?: boolean;
+}
+
 // Derivation template for optional encrypted xpub storage
 // WARNING: Storing xpubs doesn't risk funds but reveals wallet structure and all addresses
 export interface DerivationTemplate {
@@ -543,9 +621,41 @@ export class KYUTXODatabase extends Dexie {
   utxoLineage!: Table<UtxoLineage>;
   custodySegments!: Table<CustodySegment>;
   lineageSnapshots!: Table<LineageSnapshot>;
+  // Evidence/document storage tables
+  evidence!: Table<Evidence>;
+  evidenceAttachments!: Table<EvidenceAttachment>;
 
   constructor() {
     super('KYUTXODatabase');
+    
+    // Version 18 adds Evidence and EvidenceAttachment tables for general document storage
+    // - evidence: stores general documents, emails, screenshots, receipts not tied to specific addresses/txids
+    // - evidenceAttachments: file attachments linked to evidence entries
+    this.version(18).stores({
+      records: '++id, type, inputString, label, owner, *tags, *categories, createdAt, updatedAt, isEncrypted, chainType, syncDepth, addressImportance, [type+addressImportance], flowType',
+      attachments: '++id, recordId, createdAt, isEncrypted',
+      tags: '++id, name, createdAt, isEncrypted',
+      categories: '++id, name, createdAt, isEncrypted',
+      owners: '++id, name, createdAt, isEncrypted',
+      walletNames: '++id, name, createdAt, isEncrypted',
+      seedNames: '++id, name, createdAt, isEncrypted',
+      walletSoftware: '++id, name, createdAt, isEncrypted',
+      recordOrigins: '++id, recordId, originType, createdAt, isEncrypted',
+      customFields: '++id, slug, enabled, createdAt',
+      settings: 'id',
+      priceData: '++id, [date+currency+asset], date, asset, currency, source, importedAt',
+      blockchainTransactions: '++id, &txid, blockHeight, blockTime, syncedAt',
+      transactionParticipants: '++id, [txid+role], txid, role, address, recordId',
+      addressSyncState: '++id, &address, recordId, lastSyncedAt',
+      nodeSettings: 'id',
+      derivationTemplates: '++id, fingerprint, scriptType, owner, walletName, seedName, createdAt, isEncrypted',
+      utxoLineage: '++id, [spentTxid+spentVout], [createdTxid+createdVout], consumingTxid, spentAddress, createdAddress, segmentId, spentOwned, createdOwned, isChange, blockTime, isEncrypted',
+      custodySegments: '++id, &segmentId, [originTxid+originVout], originAddress, currentAddress, status, parentSegmentId, owner, walletName, originDate, isEncrypted',
+      lineageSnapshots: '++id, &snapshotId, targetType, targetAddress, targetSegmentId, generatedAt, disclosureLevel, isEncrypted',
+      // New evidence tables
+      evidence: '++id, documentType, originalDate, *tags, importance, createdAt, updatedAt, isEncrypted',
+      evidenceAttachments: '++id, evidenceId, createdAt, isEncrypted'
+    });
     
     // Version 17 adds UTXO lineage tracking tables for AML/SOF origin tracking
     // - utxoLineage: tracks individual UTXO→UTXO relationships

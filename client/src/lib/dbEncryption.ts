@@ -2,7 +2,7 @@
 // Handles encryption/decryption of record data in IndexedDB
 
 import { encrypt, decrypt } from './crypto';
-import { db, type Record, type Attachment, type Tag, type Category, type RecordOrigin, type Owner, type WalletName, type SeedName, type WalletSoftware, type DerivationTemplate } from './database';
+import { db, type Record, type Attachment, type Tag, type Category, type RecordOrigin, type Owner, type WalletName, type SeedName, type WalletSoftware, type DerivationTemplate, type Evidence, type EvidenceAttachment } from './database';
 
 // Fields to encrypt for each record type
 const RECORD_SENSITIVE_FIELDS: (keyof Record)[] = [
@@ -505,5 +505,101 @@ export async function decryptDerivationTemplate(template: DerivationTemplate, ke
   } catch (error) {
     console.error('Failed to decrypt derivation template:', error);
     throw new Error('Failed to decrypt derivation template.');
+  }
+}
+
+// ============ EVIDENCE ENCRYPTION ============
+
+const EVIDENCE_SENSITIVE_FIELDS: (keyof Evidence)[] = [
+  'title',
+  'notes',
+  'partiesInvolved',
+  'source',
+];
+
+export async function encryptEvidence(evidence: Evidence, key: CryptoKey): Promise<Evidence> {
+  const sensitiveData: Partial<Evidence> = {};
+  
+  for (const field of EVIDENCE_SENSITIVE_FIELDS) {
+    if (evidence[field] !== undefined) {
+      sensitiveData[field] = evidence[field] as any;
+    }
+  }
+
+  const encryptedPayload = await encrypt(JSON.stringify(sensitiveData), key);
+
+  return {
+    ...evidence,
+    title: '[encrypted]',
+    notes: undefined,
+    partiesInvolved: undefined,
+    source: undefined,
+    encryptedPayload,
+    isEncrypted: true,
+  };
+}
+
+export async function decryptEvidence(evidence: Evidence, key: CryptoKey): Promise<Evidence> {
+  if (!evidence.isEncrypted || !evidence.encryptedPayload) {
+    return evidence;
+  }
+  try {
+    const decryptedJson = await decrypt(evidence.encryptedPayload, key);
+    const sensitiveData = JSON.parse(decryptedJson);
+    return {
+      ...evidence,
+      ...sensitiveData,
+      encryptedPayload: undefined,
+      isEncrypted: false,
+    };
+  } catch (error) {
+    console.error('Failed to decrypt evidence:', error);
+    throw new Error('Failed to decrypt evidence.');
+  }
+}
+
+// ============ EVIDENCE ATTACHMENT ENCRYPTION ============
+
+const EVIDENCE_ATTACHMENT_SENSITIVE_FIELDS: (keyof EvidenceAttachment)[] = [
+  'filename',
+  'objectStoragePath',
+];
+
+export async function encryptEvidenceAttachment(attachment: EvidenceAttachment, key: CryptoKey): Promise<EvidenceAttachment> {
+  const sensitiveData: Partial<EvidenceAttachment> = {};
+  
+  for (const field of EVIDENCE_ATTACHMENT_SENSITIVE_FIELDS) {
+    if (attachment[field] !== undefined) {
+      sensitiveData[field] = attachment[field] as any;
+    }
+  }
+
+  const encryptedPayload = await encrypt(JSON.stringify(sensitiveData), key);
+
+  return {
+    ...attachment,
+    filename: '[encrypted]',
+    objectStoragePath: '[encrypted]',
+    encryptedPayload,
+    isEncrypted: true,
+  };
+}
+
+export async function decryptEvidenceAttachment(attachment: EvidenceAttachment, key: CryptoKey): Promise<EvidenceAttachment> {
+  if (!attachment.isEncrypted || !attachment.encryptedPayload) {
+    return attachment;
+  }
+  try {
+    const decryptedJson = await decrypt(attachment.encryptedPayload, key);
+    const sensitiveData = JSON.parse(decryptedJson);
+    return {
+      ...attachment,
+      ...sensitiveData,
+      encryptedPayload: undefined,
+      isEncrypted: false,
+    };
+  } catch (error) {
+    console.error('Failed to decrypt evidence attachment:', error);
+    throw new Error('Failed to decrypt evidence attachment.');
   }
 }
