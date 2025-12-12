@@ -622,14 +622,17 @@ export default function EvidencePage() {
                   render={({ field }) => (
                     <FormItem>
                       <FormLabel>Importance</FormLabel>
-                      <Select onValueChange={field.onChange} value={field.value}>
+                      <Select 
+                        onValueChange={(val) => field.onChange(val === "__none__" ? "" : val)} 
+                        value={field.value || "__none__"}
+                      >
                         <FormControl>
                           <SelectTrigger data-testid="select-importance">
                             <SelectValue placeholder="Select importance..." />
                           </SelectTrigger>
                         </FormControl>
                         <SelectContent>
-                          <SelectItem value="">None</SelectItem>
+                          <SelectItem value="__none__">None</SelectItem>
                           {EVIDENCE_IMPORTANCE_OPTIONS.map((option) => (
                             <SelectItem key={option.value} value={option.value}>
                               {option.label}
