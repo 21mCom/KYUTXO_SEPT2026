@@ -287,9 +287,13 @@ export async function downloadDecryptedFile(objectPath: string, filename: string
 }
 
 // Get decrypted file blob for preview (no download triggered)
-export async function getDecryptedFileBlob(objectPath: string, mimeType: string): Promise<Blob> {
+export async function getDecryptedFileBlob(
+  objectPath: string, 
+  mimeType: string,
+  isEncrypted: boolean = true
+): Promise<Blob> {
   try {
-    const blob = await downloadAttachment(objectPath, true); // Always try decrypting
+    const blob = await downloadAttachment(objectPath, isEncrypted);
     // Return blob with correct mime type for proper browser handling
     return new Blob([blob], { type: mimeType });
   } catch (error) {
@@ -298,11 +302,13 @@ export async function getDecryptedFileBlob(objectPath: string, mimeType: string)
 }
 
 // Check if a file type is previewable in-browser
+// Note: PDFs excluded from preview due to XSS concerns - download only
 export function isPreviewableType(mimeType: string): boolean {
-  // Images
+  // SVG excluded - can contain scripts
+  if (mimeType === 'image/svg+xml') return true; // Treated as text
+  // Images (except SVG handled above)
   if (mimeType.startsWith('image/')) return true;
-  // PDF
-  if (mimeType === 'application/pdf') return true;
+  // PDF excluded for security - use download instead
   // Text files
   if (mimeType.startsWith('text/')) return true;
   // Common text-based formats
@@ -317,9 +323,14 @@ export function isPreviewableType(mimeType: string): boolean {
 }
 
 // Get preview type category
-export function getPreviewType(mimeType: string): 'image' | 'pdf' | 'text' | 'audio' | 'video' | 'unsupported' {
+// Note: SVG is treated as text for security (SVG can contain embedded scripts)
+// Note: PDF excluded from preview for security - download only
+export function getPreviewType(mimeType: string): 'image' | 'text' | 'audio' | 'video' | 'unsupported' {
+  // SVG treated as text for security reasons (can contain scripts)
+  if (mimeType === 'image/svg+xml') return 'text';
   if (mimeType.startsWith('image/')) return 'image';
-  if (mimeType === 'application/pdf') return 'pdf';
+  // PDF excluded for security - use download instead
+  if (mimeType === 'application/pdf') return 'unsupported';
   if (mimeType.startsWith('text/') || mimeType === 'application/json' || mimeType === 'application/xml') return 'text';
   if (mimeType.startsWith('audio/')) return 'audio';
   if (mimeType.startsWith('video/')) return 'video';

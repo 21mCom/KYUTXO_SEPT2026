@@ -380,15 +380,35 @@ export default function EvidencePage() {
   };
 
   const handlePreviewAttachment = async (attachment: EvidenceAttachment) => {
+    const previewType = getPreviewType(attachment.mimeType);
+    
+    // Guard against unsupported types
+    if (previewType === 'unsupported') {
+      toast({
+        title: "Preview not available",
+        description: "This file type cannot be previewed. Please download it instead.",
+        variant: "destructive",
+      });
+      return;
+    }
+    
+    // Revoke any existing blob URL before creating a new one to prevent memory leaks
+    if (previewBlobUrl) {
+      URL.revokeObjectURL(previewBlobUrl);
+      setPreviewBlobUrl(null);
+    }
+    setPreviewTextContent(null);
+    
     setPreviewAttachment(attachment);
     setIsPreviewDialogOpen(true);
     setIsPreviewLoading(true);
-    setPreviewBlobUrl(null);
-    setPreviewTextContent(null);
     
     try {
-      const blob = await getDecryptedFileBlob(attachment.objectStoragePath, attachment.mimeType);
-      const previewType = getPreviewType(attachment.mimeType);
+      const blob = await getDecryptedFileBlob(
+        attachment.objectStoragePath, 
+        attachment.mimeType,
+        attachment.isEncrypted ?? true
+      );
       
       if (previewType === 'text') {
         const text = await blob.text();
@@ -993,7 +1013,7 @@ export default function EvidencePage() {
                     <div className="space-y-2">
                       {selectedAttachments.map((att) => {
                         const FileIcon = getFileIcon(att.mimeType);
-                        const canPreview = isPreviewableType(att.mimeType);
+                        const canPreview = isPreviewableType(att.mimeType) && getPreviewType(att.mimeType) !== 'unsupported';
                         return (
                           <div 
                             key={att.id} 
@@ -1107,14 +1127,6 @@ export default function EvidencePage() {
                       </div>
                     )}
                     
-                    {getPreviewType(previewAttachment.mimeType) === 'pdf' && previewBlobUrl && (
-                      <iframe
-                        src={previewBlobUrl}
-                        className="w-full h-[60vh] border-0"
-                        title={previewAttachment.filename}
-                        data-testid="preview-pdf"
-                      />
-                    )}
                     
                     {getPreviewType(previewAttachment.mimeType) === 'text' && previewTextContent !== null && (
                       <ScrollArea className="h-[60vh] p-4">
