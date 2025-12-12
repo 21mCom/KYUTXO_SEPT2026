@@ -286,6 +286,46 @@ export async function downloadDecryptedFile(objectPath: string, filename: string
   }
 }
 
+// Get decrypted file blob for preview (no download triggered)
+export async function getDecryptedFileBlob(objectPath: string, mimeType: string): Promise<Blob> {
+  try {
+    const blob = await downloadAttachment(objectPath, true); // Always try decrypting
+    // Return blob with correct mime type for proper browser handling
+    return new Blob([blob], { type: mimeType });
+  } catch (error) {
+    throw new Error(`Failed to get file for preview: ${error instanceof Error ? error.message : 'Unknown error'}`);
+  }
+}
+
+// Check if a file type is previewable in-browser
+export function isPreviewableType(mimeType: string): boolean {
+  // Images
+  if (mimeType.startsWith('image/')) return true;
+  // PDF
+  if (mimeType === 'application/pdf') return true;
+  // Text files
+  if (mimeType.startsWith('text/')) return true;
+  // Common text-based formats
+  if (mimeType === 'application/json') return true;
+  if (mimeType === 'application/xml') return true;
+  // Audio
+  if (mimeType.startsWith('audio/')) return true;
+  // Video
+  if (mimeType.startsWith('video/')) return true;
+  
+  return false;
+}
+
+// Get preview type category
+export function getPreviewType(mimeType: string): 'image' | 'pdf' | 'text' | 'audio' | 'video' | 'unsupported' {
+  if (mimeType.startsWith('image/')) return 'image';
+  if (mimeType === 'application/pdf') return 'pdf';
+  if (mimeType.startsWith('text/') || mimeType === 'application/json' || mimeType === 'application/xml') return 'text';
+  if (mimeType.startsWith('audio/')) return 'audio';
+  if (mimeType.startsWith('video/')) return 'video';
+  return 'unsupported';
+}
+
 // Delete a file by its storage path (no DB record deletion)
 export async function deleteEncryptedFile(objectPath: string): Promise<void> {
   try {

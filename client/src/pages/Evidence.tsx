@@ -20,7 +20,11 @@ import {
   Eye,
   AlertTriangle,
   FileImage,
-  File
+  File,
+  Loader2,
+  Play,
+  FileAudio,
+  FileVideo
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -73,7 +77,7 @@ import {
   createEvidenceAttachment,
   deleteEvidenceAttachment,
 } from "@/lib/encryptionFacade";
-import { uploadEncryptedFile, downloadDecryptedFile, deleteEncryptedFile } from "@/lib/attachments";
+import { uploadEncryptedFile, downloadDecryptedFile, deleteEncryptedFile, getDecryptedFileBlob, isPreviewableType, getPreviewType } from "@/lib/attachments";
 import { useDropzone } from "react-dropzone";
 
 const evidenceFormSchema = z.object({
@@ -102,6 +106,11 @@ export default function EvidencePage() {
   const [isEditing, setIsEditing] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
+  const [isPreviewDialogOpen, setIsPreviewDialogOpen] = useState(false);
+  const [previewAttachment, setPreviewAttachment] = useState<EvidenceAttachment | null>(null);
+  const [previewBlobUrl, setPreviewBlobUrl] = useState<string | null>(null);
+  const [previewTextContent, setPreviewTextContent] = useState<string | null>(null);
+  const [isPreviewLoading, setIsPreviewLoading] = useState(false);
 
   const rawEvidence = useLiveQuery(() => db.evidence.toArray(), []);
   const [decryptedEvidence, setDecryptedEvidence] = useState<Evidence[]>([]);
@@ -368,6 +377,47 @@ export default function EvidencePage() {
         variant: "destructive",
       });
     }
+  };
+
+  const handlePreviewAttachment = async (attachment: EvidenceAttachment) => {
+    setPreviewAttachment(attachment);
+    setIsPreviewDialogOpen(true);
+    setIsPreviewLoading(true);
+    setPreviewBlobUrl(null);
+    setPreviewTextContent(null);
+    
+    try {
+      const blob = await getDecryptedFileBlob(attachment.objectStoragePath, attachment.mimeType);
+      const previewType = getPreviewType(attachment.mimeType);
+      
+      if (previewType === 'text') {
+        const text = await blob.text();
+        setPreviewTextContent(text);
+      } else {
+        const url = URL.createObjectURL(blob);
+        setPreviewBlobUrl(url);
+      }
+    } catch (error) {
+      console.error("Failed to load preview:", error);
+      toast({
+        title: "Error",
+        description: "Failed to load file preview.",
+        variant: "destructive",
+      });
+      setIsPreviewDialogOpen(false);
+    } finally {
+      setIsPreviewLoading(false);
+    }
+  };
+
+  const closePreviewDialog = () => {
+    if (previewBlobUrl) {
+      URL.revokeObjectURL(previewBlobUrl);
+    }
+    setPreviewBlobUrl(null);
+    setPreviewTextContent(null);
+    setPreviewAttachment(null);
+    setIsPreviewDialogOpen(false);
   };
 
   const getDocumentTypeLabel = (type: string) => {
@@ -921,6 +971,7 @@ export default function EvidencePage() {
                     <div className="space-y-2">
                       {selectedAttachments.map((att) => {
                         const FileIcon = getFileIcon(att.mimeType);
+                        const canPreview = isPreviewableType(att.mimeType);
                         return (
                           <div 
                             key={att.id} 
@@ -935,15 +986,28 @@ export default function EvidencePage() {
                                 </p>
                               </div>
                             </div>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => handleDownloadAttachment(att)}
-                              data-testid={`button-download-${att.id}`}
-                            >
-                              <Download className="h-4 w-4 mr-2" />
-                              Download
-                            </Button>
+                            <div className="flex items-center gap-2">
+                              {canPreview && (
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  onClick={() => handlePreviewAttachment(att)}
+                                  data-testid={`button-preview-${att.id}`}
+                                >
+                                  <Eye className="h-4 w-4 mr-1" />
+                                  Preview
+                                </Button>
+                              )}
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => handleDownloadAttachment(att)}
+                                data-testid={`button-download-${att.id}`}
+                              >
+                                <Download className="h-4 w-4 mr-1" />
+                                Download
+                              </Button>
+                            </div>
                           </div>
                         );
                       })}
@@ -985,6 +1049,101 @@ export default function EvidencePage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <Dialog open={isPreviewDialogOpen} onOpenChange={(open) => !open && closePreviewDialog()}>
+        <DialogContent className="max-w-4xl max-h-[90vh] overflow-hidden flex flex-col">
+          {previewAttachment && (
+            <>
+              <DialogHeader className="flex-shrink-0">
+                <DialogTitle className="flex items-center gap-2">
+                  {(() => {
+                    const FileIcon = getFileIcon(previewAttachment.mimeType);
+                    return <FileIcon className="h-5 w-5" />;
+                  })()}
+                  {previewAttachment.filename}
+                </DialogTitle>
+                <DialogDescription>
+                  {(previewAttachment.size / 1024).toFixed(1)} KB
+                </DialogDescription>
+              </DialogHeader>
+
+              <div className="flex-1 min-h-0 overflow-auto bg-muted/30 rounded-md">
+                {isPreviewLoading ? (
+                  <div className="flex items-center justify-center h-64">
+                    <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+                  </div>
+                ) : (
+                  <>
+                    {getPreviewType(previewAttachment.mimeType) === 'image' && previewBlobUrl && (
+                      <div className="flex items-center justify-center p-4">
+                        <img 
+                          src={previewBlobUrl} 
+                          alt={previewAttachment.filename}
+                          className="max-w-full max-h-[60vh] object-contain rounded"
+                          data-testid="preview-image"
+                        />
+                      </div>
+                    )}
+                    
+                    {getPreviewType(previewAttachment.mimeType) === 'pdf' && previewBlobUrl && (
+                      <iframe
+                        src={previewBlobUrl}
+                        className="w-full h-[60vh] border-0"
+                        title={previewAttachment.filename}
+                        data-testid="preview-pdf"
+                      />
+                    )}
+                    
+                    {getPreviewType(previewAttachment.mimeType) === 'text' && previewTextContent !== null && (
+                      <ScrollArea className="h-[60vh] p-4">
+                        <pre className="text-sm whitespace-pre-wrap font-mono" data-testid="preview-text">
+                          {previewTextContent}
+                        </pre>
+                      </ScrollArea>
+                    )}
+                    
+                    {getPreviewType(previewAttachment.mimeType) === 'audio' && previewBlobUrl && (
+                      <div className="flex items-center justify-center p-8">
+                        <audio 
+                          controls 
+                          src={previewBlobUrl}
+                          className="w-full max-w-md"
+                          data-testid="preview-audio"
+                        />
+                      </div>
+                    )}
+                    
+                    {getPreviewType(previewAttachment.mimeType) === 'video' && previewBlobUrl && (
+                      <div className="flex items-center justify-center p-4">
+                        <video 
+                          controls 
+                          src={previewBlobUrl}
+                          className="max-w-full max-h-[60vh] rounded"
+                          data-testid="preview-video"
+                        />
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+
+              <DialogFooter className="flex-shrink-0 gap-2">
+                <Button
+                  variant="outline"
+                  onClick={() => handleDownloadAttachment(previewAttachment)}
+                  data-testid="button-preview-download"
+                >
+                  <Download className="h-4 w-4 mr-2" />
+                  Download
+                </Button>
+                <Button onClick={closePreviewDialog} data-testid="button-preview-close">
+                  Close
+                </Button>
+              </DialogFooter>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
