@@ -53,6 +53,8 @@ import {
   encryptSeedName,
   encryptWalletSoftware,
   encryptDerivationTemplate,
+  encryptEvidence,
+  encryptEvidenceAttachment,
   decryptTag,
   decryptCategory,
   decryptOwner,
@@ -395,6 +397,13 @@ export default function SettingsPage() {
         seedNames = [],
         walletSoftware = [],
         derivationTemplates = [],
+        evidence = [],
+        evidenceAttachments = [],
+        priceData = [],
+        settings: backupSettings = [],
+        nodeSettings: backupNodeSettings = [],
+        utxoLineage = [],
+        custodySegments = [],
       } = data;
 
       // If replace mode, clear existing data first
@@ -413,6 +422,12 @@ export default function SettingsPage() {
         await db.seedNames.clear();
         await db.walletSoftware.clear();
         await db.derivationTemplates.clear();
+        await db.evidence.clear();
+        await db.evidenceAttachments.clear();
+        await db.priceData.clear();
+        await db.nodeSettings.clear();
+        await db.utxoLineage.clear();
+        await db.custodySegments.clear();
       }
 
       setRestoreProgress(50);
@@ -898,6 +913,93 @@ export default function SettingsPage() {
         }
       }
 
+      setRestoreProgress(97);
+      setRestoreMessage("Restoring evidence and additional data...");
+
+      let evidenceAdded = 0;
+      let evidenceAttachmentsAdded = 0;
+      let priceDataAdded = 0;
+      let lineageDataAdded = 0;
+
+      // Restore evidence documents (v2.2.0+)
+      if (evidence && evidence.length > 0) {
+        for (const ev of evidence) {
+          const { id, encryptedPayload, isEncrypted, ...evData } = ev;
+          
+          const newEvidence = {
+            title: evData.title || "Restored Evidence",
+            documentType: evData.documentType || "other",
+            originalDate: evData.originalDate,
+            notes: evData.notes,
+            tags: evData.tags || [],
+            partiesInvolved: evData.partiesInvolved || [],
+            source: evData.source,
+            importance: evData.importance,
+            createdAt: evData.createdAt || Date.now(),
+            updatedAt: evData.updatedAt || Date.now(),
+          };
+          
+          const encrypted = await encryptEvidence(newEvidence as any, currentKey);
+          await db.evidence.add(encrypted);
+          evidenceAdded++;
+        }
+      }
+
+      // Restore evidence attachments (v2.2.0+)
+      if (evidenceAttachments && evidenceAttachments.length > 0) {
+        for (const ea of evidenceAttachments) {
+          const { id, encryptedPayload, isEncrypted, ...eaData } = ea;
+          
+          const newEvidenceAttachment = {
+            evidenceId: eaData.evidenceId,
+            filename: eaData.filename || "unknown",
+            mimeType: eaData.mimeType || "application/octet-stream",
+            size: eaData.size || 0,
+            objectStoragePath: eaData.objectStoragePath || "",
+            createdAt: eaData.createdAt || Date.now(),
+            isEncrypted: eaData.isEncrypted ?? true,
+          };
+          
+          const encrypted = await encryptEvidenceAttachment(newEvidenceAttachment as any, currentKey);
+          await db.evidenceAttachments.add(encrypted);
+          evidenceAttachmentsAdded++;
+        }
+      }
+
+      // Restore price data (v2.2.0+, not encrypted)
+      if (priceData && priceData.length > 0) {
+        for (const pd of priceData) {
+          const { id, ...pdData } = pd;
+          await db.priceData.add(pdData);
+          priceDataAdded++;
+        }
+      }
+
+      // Restore node settings (v2.2.0+, not encrypted)
+      if (backupNodeSettings && backupNodeSettings.length > 0) {
+        for (const ns of backupNodeSettings) {
+          const { id, ...nsData } = ns;
+          await db.nodeSettings.add(nsData);
+        }
+      }
+
+      // Restore UTXO lineage data (v2.2.0+, not encrypted)
+      if (utxoLineage && utxoLineage.length > 0) {
+        for (const ul of utxoLineage) {
+          const { id, ...ulData } = ul;
+          await db.utxoLineage.add(ulData);
+          lineageDataAdded++;
+        }
+      }
+
+      // Restore custody segments (v2.2.0+, not encrypted)
+      if (custodySegments && custodySegments.length > 0) {
+        for (const cs of custodySegments) {
+          const { id, ...csData } = cs;
+          await db.custodySegments.add(csData);
+        }
+      }
+
       setRestoreProgress(100);
       setRestoreMessage("Restore complete!");
 
@@ -909,9 +1011,18 @@ export default function SettingsPage() {
       } else if (attachmentFilesErrors > 0) {
         attachmentFilesMsg = ` (${attachmentFilesErrors} attachment files failed)`;
       }
+      let additionalDataMsg = "";
+      if (evidenceAdded > 0 || priceDataAdded > 0 || lineageDataAdded > 0) {
+        const parts = [];
+        if (evidenceAdded > 0) parts.push(`${evidenceAdded} evidence`);
+        if (priceDataAdded > 0) parts.push(`${priceDataAdded} prices`);
+        if (lineageDataAdded > 0) parts.push(`${lineageDataAdded} lineage`);
+        additionalDataMsg = `, ${parts.join(", ")}`;
+      }
+
       const message = restoreMode === "merge"
-        ? `Added ${recordsAdded} records (${recordsSkipped} skipped), ${tagsAdded} tags, ${categoriesAdded} categories, ${vocabularyAdded} vocabulary items, ${templatesAdded} templates${attachmentFilesMsg}.`
-        : `Restored ${recordsAdded} records, ${tagsAdded} tags, ${categoriesAdded} categories, ${vocabularyAdded} vocabulary items, ${templatesAdded} templates${attachmentFilesMsg}.`;
+        ? `Added ${recordsAdded} records (${recordsSkipped} skipped), ${tagsAdded} tags, ${categoriesAdded} categories, ${vocabularyAdded} vocabulary items, ${templatesAdded} templates${attachmentFilesMsg}${additionalDataMsg}.`
+        : `Restored ${recordsAdded} records, ${tagsAdded} tags, ${categoriesAdded} categories, ${vocabularyAdded} vocabulary items, ${templatesAdded} templates${attachmentFilesMsg}${additionalDataMsg}.`;
 
       toast({
         title: "Restore Successful",

@@ -70,6 +70,13 @@ interface ExportData {
     seedNames: any[];
     walletSoftware: any[];
     derivationTemplates: any[];
+    evidence: any[];
+    evidenceAttachments: any[];
+    priceData: any[];
+    settings: any[];
+    nodeSettings: any[];
+    utxoLineage: any[];
+    custodySegments: any[];
   };
 }
 
@@ -366,6 +373,13 @@ export default function ExportPage() {
       const rawSeedNames = await db.seedNames.toArray();
       const rawWalletSoftware = await db.walletSoftware.toArray();
       const rawDerivationTemplates = await db.derivationTemplates.toArray();
+      const rawEvidence = await db.evidence.toArray();
+      const rawEvidenceAttachments = await db.evidenceAttachments.toArray();
+      const rawPriceData = await db.priceData.toArray();
+      const rawSettings = await db.settings.toArray();
+      const rawNodeSettings = await db.nodeSettings.toArray();
+      const rawUtxoLineage = await db.utxoLineage.toArray();
+      const rawCustodySegments = await db.custodySegments.toArray();
 
       setProgress(20);
       setProgressMessage("Decrypting data...");
@@ -382,6 +396,8 @@ export default function ExportPage() {
       const seedNames = await Promise.all(rawSeedNames.map(decryptRecord));
       const walletSoftware = await Promise.all(rawWalletSoftware.map(decryptRecord));
       const derivationTemplates = await Promise.all(rawDerivationTemplates.map(decryptRecord));
+      const evidence = await Promise.all(rawEvidence.map(decryptRecord));
+      const evidenceAttachments = await Promise.all(rawEvidenceAttachments.map(decryptRecord));
 
       setProgress(50);
       setProgressMessage("Generating CSV files...");
@@ -397,6 +413,13 @@ export default function ExportPage() {
       const cleanSeedNames = seedNames.map(({ encryptedPayload, isEncrypted, ...s }) => s);
       const cleanWalletSoftware = walletSoftware.map(({ encryptedPayload, isEncrypted, ...w }) => w);
       const cleanDerivationTemplates = derivationTemplates.map(({ encryptedPayload, isEncrypted, ...d }) => d);
+      const cleanEvidence = evidence.map(({ encryptedPayload, isEncrypted, ...e }) => e);
+      const cleanEvidenceAttachments = evidenceAttachments.map(({ encryptedPayload, isEncrypted, ...ea }) => ea);
+      const cleanPriceData = rawPriceData;
+      const cleanSettings = rawSettings;
+      const cleanNodeSettings = rawNodeSettings;
+      const cleanUtxoLineage = rawUtxoLineage;
+      const cleanCustodySegments = rawCustodySegments;
 
       const recordsCSV = generateRecordsCSV(cleanRecords, cleanAttachments, customFields);
       const tagsCSV = generateTagsCSV(cleanTags);
@@ -429,7 +452,7 @@ export default function ExportPage() {
       setProgressMessage("Creating ZIP archive...");
 
       const exportData: ExportData = {
-        version: "2.1.0",
+        version: "2.2.0",
         exportDate: new Date().toISOString(),
         encrypted: encrypted,
         data: {
@@ -444,6 +467,13 @@ export default function ExportPage() {
           seedNames: cleanSeedNames,
           walletSoftware: cleanWalletSoftware,
           derivationTemplates: cleanDerivationTemplates,
+          evidence: cleanEvidence,
+          evidenceAttachments: cleanEvidenceAttachments,
+          priceData: cleanPriceData,
+          settings: cleanSettings,
+          nodeSettings: cleanNodeSettings,
+          utxoLineage: cleanUtxoLineage,
+          custodySegments: cleanCustodySegments,
         },
       };
 
