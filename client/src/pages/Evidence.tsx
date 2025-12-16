@@ -118,6 +118,7 @@ export default function EvidencePage() {
   const [previewTextContent, setPreviewTextContent] = useState<string | null>(null);
   const [isPreviewLoading, setIsPreviewLoading] = useState(false);
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
+  const [sortColumn, setSortColumn] = useState<'date' | 'title' | 'type' | 'importance' | 'source' | 'parties'>('date');
   const [sortDirection, setSortDirection] = useState<'desc' | 'asc'>('desc');
   const [attachmentCounts, setAttachmentCounts] = useState<Map<number, number>>(new Map());
 
@@ -139,7 +140,8 @@ export default function EvidencePage() {
       evidence.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
       evidence.notes?.toLowerCase().includes(searchTerm.toLowerCase()) ||
       evidence.partiesInvolved?.some(p => p.toLowerCase().includes(searchTerm.toLowerCase())) ||
-      evidence.tags?.some(t => t.toLowerCase().includes(searchTerm.toLowerCase()));
+      evidence.tags?.some(t => t.toLowerCase().includes(searchTerm.toLowerCase())) ||
+      evidence.source?.toLowerCase().includes(searchTerm.toLowerCase());
     
     const matchesType = filterType === "all" || evidence.documentType === filterType;
     const matchesImportance = filterImportance === "all" || evidence.importance === filterImportance;
@@ -148,9 +150,37 @@ export default function EvidencePage() {
   });
 
   const sortedEvidence = [...filteredEvidence].sort((a, b) => {
-    const dateA = a.originalDate || a.createdAt / 1000;
-    const dateB = b.originalDate || b.createdAt / 1000;
-    return sortDirection === 'desc' ? dateB - dateA : dateA - dateB;
+    let comparison = 0;
+    
+    switch (sortColumn) {
+      case 'date':
+        const dateA = a.originalDate || a.createdAt / 1000;
+        const dateB = b.originalDate || b.createdAt / 1000;
+        comparison = dateA - dateB;
+        break;
+      case 'title':
+        comparison = a.title.localeCompare(b.title);
+        break;
+      case 'type':
+        comparison = a.documentType.localeCompare(b.documentType);
+        break;
+      case 'importance':
+        const impOrder = { critical: 4, high: 3, medium: 2, low: 1 };
+        const impA = impOrder[a.importance as keyof typeof impOrder] || 0;
+        const impB = impOrder[b.importance as keyof typeof impOrder] || 0;
+        comparison = impA - impB;
+        break;
+      case 'source':
+        comparison = (a.source || '').localeCompare(b.source || '');
+        break;
+      case 'parties':
+        const partiesA = a.partiesInvolved?.join(', ') || '';
+        const partiesB = b.partiesInvolved?.join(', ') || '';
+        comparison = partiesA.localeCompare(partiesB);
+        break;
+    }
+    
+    return sortDirection === 'desc' ? -comparison : comparison;
   });
 
   // Load attachment counts for list view
@@ -512,8 +542,20 @@ export default function EvidencePage() {
     }
   };
 
-  const toggleSortDirection = () => {
-    setSortDirection(prev => prev === 'desc' ? 'asc' : 'desc');
+  const handleColumnSort = (column: 'date' | 'title' | 'type' | 'importance' | 'source' | 'parties') => {
+    if (sortColumn === column) {
+      setSortDirection(prev => prev === 'desc' ? 'asc' : 'desc');
+    } else {
+      setSortColumn(column);
+      setSortDirection('asc');
+    }
+  };
+
+  const SortIcon = ({ column }: { column: typeof sortColumn }) => {
+    if (sortColumn !== column) return null;
+    return sortDirection === 'desc' 
+      ? <ArrowDown className="h-3 w-3" />
+      : <ArrowUp className="h-3 w-3" />;
   };
 
   return (
@@ -689,21 +731,53 @@ export default function EvidencePage() {
               <div className="flex items-center gap-4 px-3 py-2 text-xs font-medium text-muted-foreground border-b">
                 <div 
                   className="w-24 flex items-center gap-1 cursor-pointer hover:text-foreground"
-                  onClick={toggleSortDirection}
+                  onClick={() => handleColumnSort('date')}
                   data-testid="header-sort-date"
                 >
                   Date
-                  {sortDirection === 'desc' ? (
-                    <ArrowDown className="h-3 w-3" />
-                  ) : (
-                    <ArrowUp className="h-3 w-3" />
-                  )}
+                  <SortIcon column="date" />
                 </div>
-                <div className="flex-1 min-w-0">Title</div>
-                <div className="w-24">Type</div>
-                <div className="w-20">Importance</div>
+                <div 
+                  className="flex-1 min-w-0 flex items-center gap-1 cursor-pointer hover:text-foreground"
+                  onClick={() => handleColumnSort('title')}
+                  data-testid="header-sort-title"
+                >
+                  Title
+                  <SortIcon column="title" />
+                </div>
+                <div 
+                  className="w-24 flex items-center gap-1 cursor-pointer hover:text-foreground"
+                  onClick={() => handleColumnSort('type')}
+                  data-testid="header-sort-type"
+                >
+                  Type
+                  <SortIcon column="type" />
+                </div>
+                <div 
+                  className="w-20 flex items-center gap-1 cursor-pointer hover:text-foreground"
+                  onClick={() => handleColumnSort('importance')}
+                  data-testid="header-sort-importance"
+                >
+                  Importance
+                  <SortIcon column="importance" />
+                </div>
                 <div className="w-16 text-center">Files</div>
-                <div className="w-32">Parties</div>
+                <div 
+                  className="w-28 flex items-center gap-1 cursor-pointer hover:text-foreground"
+                  onClick={() => handleColumnSort('source')}
+                  data-testid="header-sort-source"
+                >
+                  Source
+                  <SortIcon column="source" />
+                </div>
+                <div 
+                  className="w-32 flex items-center gap-1 cursor-pointer hover:text-foreground"
+                  onClick={() => handleColumnSort('parties')}
+                  data-testid="header-sort-parties"
+                >
+                  Parties
+                  <SortIcon column="parties" />
+                </div>
               </div>
               {sortedEvidence.map((evidence) => {
                 const effectiveDate = evidence.originalDate 
@@ -766,6 +840,11 @@ export default function EvidencePage() {
                           {attachCount}
                         </span>
                       )}
+                    </div>
+                    
+                    {/* Source */}
+                    <div className="w-28 shrink-0 text-xs text-muted-foreground truncate">
+                      {evidence.source || ''}
                     </div>
                     
                     {/* Parties */}
