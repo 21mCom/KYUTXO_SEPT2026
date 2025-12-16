@@ -673,7 +673,7 @@ export default function EvidencePage() {
                 <Card 
                   key={evidence.id} 
                   className="hover-elevate cursor-pointer"
-                  onClick={() => openDetailDialog(evidence)}
+                  onClick={() => handleQuickViewClick(evidence)}
                   data-testid={`card-evidence-${evidence.id}`}
                 >
                   <CardHeader className="pb-2">
