@@ -16,7 +16,7 @@ import { Progress } from "@/components/ui/progress";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { X, Upload, File as FileIcon, Loader2, Plus, Check, ChevronsUpDown, AlertTriangle, Download, ArrowDownLeft, ArrowUpRight, Info, ExternalLink, ShieldCheck, Wallet } from "lucide-react";
+import { X, Upload, File as FileIcon, Loader2, Plus, Check, ChevronsUpDown, AlertTriangle, Download, ArrowDownLeft, ArrowUpRight, Info, ExternalLink, ShieldCheck, Wallet, Layers } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import type { 
   AddressImportance, 
@@ -176,6 +176,13 @@ export function RecordFormDialog({
   const [txFetchError, setTxFetchError] = useState<string | null>(null);
   const [fetchedTxData, setFetchedTxData] = useState<ParsedTransaction | null>(null);
 
+  // Multisig vault state
+  const [isVault, setIsVault] = useState(false);
+  const [vaultName, setVaultName] = useState('');
+  const [vaultM, setVaultM] = useState<number | null>(null);
+  const [vaultN, setVaultN] = useState<number | null>(null);
+  const [vaultNotes, setVaultNotes] = useState('');
+
   // Reset form data when dialog opens or initialData changes
   useEffect(() => {
     if (open) {
@@ -194,6 +201,12 @@ export function RecordFormDialog({
       setIsCheckingDuplicate(false);
       setFetchedTxData(null);
       setTxFetchError(null);
+      // Initialize vault state from initialData
+      setIsVault(data.vault?.isVaultXpub || false);
+      setVaultName(data.vault?.vaultName || '');
+      setVaultM(data.vault?.m || null);
+      setVaultN(data.vault?.n || null);
+      setVaultNotes(data.vault?.vaultNotes || '');
     }
   }, [open, initialData]);
 
@@ -351,6 +364,15 @@ export function RecordFormDialog({
       feeRate: fetchedTxData.feeRate,
     } : undefined;
     
+    // Build vault metadata if enabled
+    const vaultData = isVault ? {
+      isVaultXpub: true,
+      vaultName: vaultName || null,
+      m: vaultM,
+      n: vaultN,
+      vaultNotes: vaultNotes || null,
+    } : undefined;
+
     await onSave({
       ...formData,
       tags: parsedTags,
@@ -359,6 +381,7 @@ export function RecordFormDialog({
       walletName: walletNameInput,
       source: formData.source || 'manual',
       customFields: Object.keys(filteredCustomFields).length > 0 ? filteredCustomFields : undefined,
+      vault: vaultData,
     }, selectedFiles, transactionAddresses);
   };
 
@@ -1171,6 +1194,88 @@ export function RecordFormDialog({
             <p className="text-xs text-muted-foreground">
               Do you have the private keys to spend from this address?
             </p>
+          </div>
+
+          {/* Multisig Vault Section */}
+          <div className="space-y-3 p-4 bg-muted/30 rounded-lg border">
+            <div className="flex items-center justify-between">
+              <h5 className="font-medium text-sm flex items-center gap-2">
+                <Layers className="h-4 w-4" />
+                Multisig Vault (Optional)
+              </h5>
+              <Switch
+                id="is-vault"
+                checked={isVault}
+                onCheckedChange={setIsVault}
+                disabled={isSubmitting}
+                data-testid="switch-is-vault"
+              />
+            </div>
+            {isVault && (
+              <div className="space-y-4 mt-3">
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="vault-name">Vault Name (optional)</Label>
+                    <Input
+                      id="vault-name"
+                      value={vaultName}
+                      onChange={(e) => setVaultName(e.target.value)}
+                      placeholder="e.g., Family Cold Vault"
+                      disabled={isSubmitting}
+                      data-testid="input-vault-name"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>M-of-N Signature Requirement</Label>
+                    <div className="flex items-center gap-2">
+                      <Select
+                        value={vaultM?.toString() || ""}
+                        onValueChange={(value) => setVaultM(value ? parseInt(value) : null)}
+                        disabled={isSubmitting}
+                      >
+                        <SelectTrigger className="w-20" data-testid="select-vault-m">
+                          <SelectValue placeholder="M" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15].map((num) => (
+                            <SelectItem key={num} value={num.toString()}>{num}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <span className="text-muted-foreground">of</span>
+                      <Select
+                        value={vaultN?.toString() || ""}
+                        onValueChange={(value) => setVaultN(value ? parseInt(value) : null)}
+                        disabled={isSubmitting}
+                      >
+                        <SelectTrigger className="w-20" data-testid="select-vault-n">
+                          <SelectValue placeholder="N" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15].map((num) => (
+                            <SelectItem key={num} value={num.toString()}>{num}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    {vaultM && vaultN && vaultM > vaultN && (
+                      <p className="text-xs text-destructive">Required signatures (M) cannot exceed total keys (N)</p>
+                    )}
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="vault-notes">Vault Notes (optional)</Label>
+                  <Input
+                    id="vault-notes"
+                    value={vaultNotes}
+                    onChange={(e) => setVaultNotes(e.target.value)}
+                    placeholder="e.g., Cosigners: Alice, Bob, Carol"
+                    disabled={isSubmitting}
+                    data-testid="input-vault-notes"
+                  />
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Custom Fields Section */}
