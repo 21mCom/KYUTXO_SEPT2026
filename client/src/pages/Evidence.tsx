@@ -575,15 +575,6 @@ export default function EvidencePage() {
         <div className="flex items-center gap-1 border-l pl-4">
           <Button
             size="icon"
-            variant={sortDirection === 'desc' ? 'default' : 'outline'}
-            onClick={toggleSortDirection}
-            title={sortDirection === 'desc' ? 'Newest first' : 'Oldest first'}
-            data-testid="button-toggle-sort"
-          >
-            {sortDirection === 'desc' ? <ArrowDown className="h-4 w-4" /> : <ArrowUp className="h-4 w-4" />}
-          </Button>
-          <Button
-            size="icon"
             variant={viewMode === 'grid' ? 'default' : 'outline'}
             onClick={() => setViewMode('grid')}
             title="Grid view"
@@ -696,7 +687,18 @@ export default function EvidencePage() {
             <div className="space-y-1">
               {/* List Header */}
               <div className="flex items-center gap-4 px-3 py-2 text-xs font-medium text-muted-foreground border-b">
-                <div className="w-24">Date</div>
+                <div 
+                  className="w-24 flex items-center gap-1 cursor-pointer hover:text-foreground"
+                  onClick={toggleSortDirection}
+                  data-testid="header-sort-date"
+                >
+                  Date
+                  {sortDirection === 'desc' ? (
+                    <ArrowDown className="h-3 w-3" />
+                  ) : (
+                    <ArrowUp className="h-3 w-3" />
+                  )}
+                </div>
                 <div className="flex-1 min-w-0">Title</div>
                 <div className="w-24">Type</div>
                 <div className="w-20">Importance</div>
