@@ -30,7 +30,8 @@ import {
   ArrowUpDown,
   ArrowUp,
   ArrowDown,
-  Paperclip
+  Paperclip,
+  Pencil
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -114,6 +115,7 @@ export default function EvidencePage() {
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [isPreviewDialogOpen, setIsPreviewDialogOpen] = useState(false);
   const [previewAttachment, setPreviewAttachment] = useState<EvidenceAttachment | null>(null);
+  const [previewEvidence, setPreviewEvidence] = useState<Evidence | null>(null);
   const [previewBlobUrl, setPreviewBlobUrl] = useState<string | null>(null);
   const [previewTextContent, setPreviewTextContent] = useState<string | null>(null);
   const [isPreviewLoading, setIsPreviewLoading] = useState(false);
@@ -492,6 +494,7 @@ export default function EvidencePage() {
     setPreviewBlobUrl(null);
     setPreviewTextContent(null);
     setPreviewAttachment(null);
+    setPreviewEvidence(null);
     setIsPreviewDialogOpen(false);
   };
 
@@ -514,7 +517,7 @@ export default function EvidencePage() {
     return File;
   };
 
-  // Handle quick view list item click - opens preview if previewable attachment exists
+  // Handle quick view list item click - opens preview with full metadata
   const handleQuickViewClick = async (evidence: Evidence) => {
     if (!evidence.id) {
       openDetailDialog(evidence);
@@ -525,20 +528,28 @@ export default function EvidencePage() {
       const attachments = await getDecryptedEvidenceAttachments(evidence.id);
       const previewable = attachments.find(att => isPreviewableType(att.mimeType));
       
+      // Always set the preview evidence for metadata display
+      setPreviewEvidence(evidence);
+      
       if (previewable) {
         handlePreviewAttachment(previewable);
-      } else if (attachments.length > 0) {
-        toast({
-          title: "No preview available",
-          description: "This evidence has attachments but none can be previewed. Opening details instead.",
-        });
-        openDetailDialog(evidence);
       } else {
-        openDetailDialog(evidence);
+        // Open preview dialog even without previewable attachment to show metadata
+        setPreviewAttachment(null);
+        setIsPreviewDialogOpen(true);
       }
     } catch (error) {
       console.error("Failed to load attachments:", error);
       openDetailDialog(evidence);
+    }
+  };
+  
+  // Handle edit from preview dialog
+  const handleEditFromPreview = () => {
+    if (previewEvidence) {
+      closePreviewDialog();
+      openDetailDialog(previewEvidence);
+      setIsEditing(true);
     }
   };
 
@@ -1349,23 +1360,28 @@ export default function EvidencePage() {
       </AlertDialog>
 
       <Dialog open={isPreviewDialogOpen} onOpenChange={(open) => !open && closePreviewDialog()}>
-        <DialogContent className="max-w-4xl max-h-[90vh] overflow-hidden flex flex-col">
-          {previewAttachment && (
-            <>
-              <DialogHeader className="flex-shrink-0">
-                <DialogTitle className="flex items-center gap-2">
-                  {(() => {
-                    const FileIcon = getFileIcon(previewAttachment.mimeType);
-                    return <FileIcon className="h-5 w-5" />;
-                  })()}
-                  {previewAttachment.filename}
-                </DialogTitle>
-                <DialogDescription>
-                  {(previewAttachment.size / 1024).toFixed(1)} KB
-                </DialogDescription>
-              </DialogHeader>
+        <DialogContent className="max-w-5xl max-h-[90vh] overflow-hidden flex flex-col">
+          <DialogHeader className="flex-shrink-0">
+            <DialogTitle className="flex items-center gap-2">
+              <FileText className="h-5 w-5" />
+              {previewEvidence?.title || previewAttachment?.filename || "Preview"}
+            </DialogTitle>
+            {previewEvidence && (
+              <DialogDescription className="flex items-center gap-2">
+                <Badge variant="secondary">{getDocumentTypeLabel(previewEvidence.documentType)}</Badge>
+                {previewEvidence.importance && (
+                  <Badge className={getImportanceColor(previewEvidence.importance)}>
+                    {previewEvidence.importance}
+                  </Badge>
+                )}
+              </DialogDescription>
+            )}
+          </DialogHeader>
 
-              <div className="flex-1 min-h-0 overflow-auto bg-muted/30 rounded-md">
+          <div className="flex-1 min-h-0 overflow-auto flex gap-4">
+            {/* File Preview Section */}
+            {previewAttachment && (
+              <div className="flex-1 min-w-0 bg-muted/30 rounded-md overflow-auto">
                 {isPreviewLoading ? (
                   <div className="flex items-center justify-center h-64">
                     <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
@@ -1377,15 +1393,14 @@ export default function EvidencePage() {
                         <img 
                           src={previewBlobUrl} 
                           alt={previewAttachment.filename}
-                          className="max-w-full max-h-[60vh] object-contain rounded"
+                          className="max-w-full max-h-[50vh] object-contain rounded"
                           data-testid="preview-image"
                         />
                       </div>
                     )}
                     
-                    
                     {getPreviewType(previewAttachment.mimeType) === 'text' && previewTextContent !== null && (
-                      <ScrollArea className="h-[60vh] p-4">
+                      <ScrollArea className="h-[50vh] p-4">
                         <pre className="text-sm whitespace-pre-wrap font-mono" data-testid="preview-text">
                           {previewTextContent}
                         </pre>
@@ -1408,7 +1423,7 @@ export default function EvidencePage() {
                         <video 
                           controls 
                           src={previewBlobUrl}
-                          className="max-w-full max-h-[60vh] rounded"
+                          className="max-w-full max-h-[50vh] rounded"
                           data-testid="preview-video"
                         />
                       </div>
@@ -1416,22 +1431,136 @@ export default function EvidencePage() {
                   </>
                 )}
               </div>
+            )}
+            
+            {/* Metadata Panel */}
+            {previewEvidence && (
+              <div className={`${previewAttachment ? 'w-80' : 'flex-1'} shrink-0 space-y-4 overflow-auto`}>
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-sm font-medium">Details</CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-3 text-sm">
+                    {/* Date */}
+                    {previewEvidence.originalDate && (
+                      <div className="flex items-start gap-2">
+                        <Calendar className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
+                        <div>
+                          <div className="text-muted-foreground text-xs">Date</div>
+                          <div>{format(new Date(previewEvidence.originalDate * 1000), "MMMM d, yyyy")}</div>
+                        </div>
+                      </div>
+                    )}
+                    
+                    {/* Source */}
+                    {previewEvidence.source && (
+                      <div className="flex items-start gap-2">
+                        <FileText className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
+                        <div>
+                          <div className="text-muted-foreground text-xs">Source</div>
+                          <div>{previewEvidence.source}</div>
+                        </div>
+                      </div>
+                    )}
+                    
+                    {/* Parties Involved */}
+                    {previewEvidence.partiesInvolved && previewEvidence.partiesInvolved.length > 0 && (
+                      <div className="flex items-start gap-2">
+                        <Users className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
+                        <div>
+                          <div className="text-muted-foreground text-xs">Parties Involved</div>
+                          <div className="flex flex-wrap gap-1 mt-1">
+                            {previewEvidence.partiesInvolved.map((party, i) => (
+                              <Badge key={i} variant="outline" className="text-xs">
+                                {party}
+                              </Badge>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                    
+                    {/* Tags */}
+                    {previewEvidence.tags && previewEvidence.tags.length > 0 && (
+                      <div className="flex items-start gap-2">
+                        <Tag className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
+                        <div>
+                          <div className="text-muted-foreground text-xs">Tags</div>
+                          <div className="flex flex-wrap gap-1 mt-1">
+                            {previewEvidence.tags.map((tag, i) => (
+                              <Badge key={i} variant="secondary" className="text-xs">
+                                {tag}
+                              </Badge>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                    
+                    {/* Notes */}
+                    {previewEvidence.notes && (
+                      <div className="pt-2 border-t">
+                        <div className="text-muted-foreground text-xs mb-1">Notes</div>
+                        <p className="text-sm whitespace-pre-wrap">{previewEvidence.notes}</p>
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+                
+                {/* File info if attachment present */}
+                {previewAttachment && (
+                  <Card>
+                    <CardHeader className="pb-2">
+                      <CardTitle className="text-sm font-medium">Attachment</CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-2 text-sm">
+                      <div className="flex items-center gap-2">
+                        {(() => {
+                          const FileIcon = getFileIcon(previewAttachment.mimeType);
+                          return <FileIcon className="h-4 w-4 text-muted-foreground" />;
+                        })()}
+                        <span className="truncate">{previewAttachment.filename}</span>
+                      </div>
+                      <div className="text-xs text-muted-foreground">
+                        {(previewAttachment.size / 1024).toFixed(1)} KB
+                      </div>
+                    </CardContent>
+                  </Card>
+                )}
+              </div>
+            )}
+            
+            {/* No content fallback */}
+            {!previewAttachment && !previewEvidence && (
+              <div className="flex-1 flex items-center justify-center text-muted-foreground">
+                No preview available
+              </div>
+            )}
+          </div>
 
-              <DialogFooter className="flex-shrink-0 gap-2">
-                <Button
-                  variant="outline"
-                  onClick={() => handleDownloadAttachment(previewAttachment)}
-                  data-testid="button-preview-download"
-                >
-                  <Download className="h-4 w-4 mr-2" />
-                  Download
-                </Button>
-                <Button onClick={closePreviewDialog} data-testid="button-preview-close">
-                  Close
-                </Button>
-              </DialogFooter>
-            </>
-          )}
+          <DialogFooter className="flex-shrink-0 gap-2">
+            {previewAttachment && (
+              <Button
+                variant="outline"
+                onClick={() => handleDownloadAttachment(previewAttachment)}
+                data-testid="button-preview-download"
+              >
+                <Download className="h-4 w-4 mr-2" />
+                Download
+              </Button>
+            )}
+            <Button
+              variant="outline"
+              onClick={handleEditFromPreview}
+              data-testid="button-preview-edit"
+            >
+              <Pencil className="h-4 w-4 mr-2" />
+              Edit
+            </Button>
+            <Button onClick={closePreviewDialog} data-testid="button-preview-close">
+              Close
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>
