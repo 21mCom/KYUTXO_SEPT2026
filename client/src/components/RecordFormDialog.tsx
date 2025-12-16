@@ -339,6 +339,17 @@ export function RecordFormDialog({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    // Validate vault quorum if vault is enabled
+    if (isVault && vaultM && vaultN && vaultM > vaultN) {
+      toast({
+        variant: "destructive",
+        title: "Invalid vault configuration",
+        description: "Required signatures (M) cannot exceed total keys (N)",
+      });
+      return;
+    }
+
     // Get selected tags and categories from combobox state
     const parsedTags = selectedTags;
     const parsedCategories = selectedCategories;
