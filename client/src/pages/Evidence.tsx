@@ -404,10 +404,13 @@ export default function EvidencePage() {
     setIsPreviewLoading(true);
     
     try {
+      // Evidence attachments are always encrypted on storage
+      // Note: isEncrypted on the attachment object refers to metadata encryption state,
+      // but the file itself is always encrypted when uploaded via uploadEncryptedFile
       const blob = await getDecryptedFileBlob(
         attachment.objectStoragePath, 
         attachment.mimeType,
-        attachment.isEncrypted ?? true
+        true // Always decrypt - files are encrypted on upload
       );
       
       if (previewType === 'text') {
@@ -465,7 +468,7 @@ export default function EvidencePage() {
         <div>
           <h1 className="text-2xl font-semibold" data-testid="text-page-title">Evidence</h1>
           <p className="text-sm text-muted-foreground">
-            Store and organize documents, emails, screenshots, and receipts
+            Store and organize files which do not relate to specific addresses or TXIDs. Documents, emails, screenshots, receipts, etc.
           </p>
         </div>
         <Button onClick={openAddDialog} data-testid="button-add-evidence">
