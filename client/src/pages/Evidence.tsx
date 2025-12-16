@@ -24,7 +24,13 @@ import {
   Loader2,
   Play,
   FileAudio,
-  FileVideo
+  FileVideo,
+  LayoutGrid,
+  List,
+  ArrowUpDown,
+  ArrowUp,
+  ArrowDown,
+  Paperclip
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -111,6 +117,9 @@ export default function EvidencePage() {
   const [previewBlobUrl, setPreviewBlobUrl] = useState<string | null>(null);
   const [previewTextContent, setPreviewTextContent] = useState<string | null>(null);
   const [isPreviewLoading, setIsPreviewLoading] = useState(false);
+  const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
+  const [sortDirection, setSortDirection] = useState<'desc' | 'asc'>('desc');
+  const [attachmentCounts, setAttachmentCounts] = useState<Map<number, number>>(new Map());
 
   const rawEvidence = useLiveQuery(() => db.evidence.toArray(), []);
   const [decryptedEvidence, setDecryptedEvidence] = useState<Evidence[]>([]);
@@ -139,11 +148,24 @@ export default function EvidencePage() {
   });
 
   const sortedEvidence = [...filteredEvidence].sort((a, b) => {
-    if (a.originalDate && b.originalDate) {
-      return b.originalDate - a.originalDate;
-    }
-    return b.createdAt - a.createdAt;
+    const dateA = a.originalDate || a.createdAt / 1000;
+    const dateB = b.originalDate || b.createdAt / 1000;
+    return sortDirection === 'desc' ? dateB - dateA : dateA - dateB;
   });
+
+  // Load attachment counts for list view
+  useLiveQuery(async () => {
+    if (viewMode === 'list' && decryptedEvidence.length > 0) {
+      const counts = new Map<number, number>();
+      for (const ev of decryptedEvidence) {
+        if (ev.id) {
+          const count = await db.evidenceAttachments.where('evidenceId').equals(ev.id).count();
+          counts.set(ev.id, count);
+        }
+      }
+      setAttachmentCounts(counts);
+    }
+  }, [viewMode, decryptedEvidence]);
 
   const form = useForm<EvidenceFormValues>({
     resolver: zodResolver(evidenceFormSchema),
@@ -462,6 +484,38 @@ export default function EvidencePage() {
     return File;
   };
 
+  // Handle quick view list item click - opens preview if previewable attachment exists
+  const handleQuickViewClick = async (evidence: Evidence) => {
+    if (!evidence.id) {
+      openDetailDialog(evidence);
+      return;
+    }
+    
+    try {
+      const attachments = await getDecryptedEvidenceAttachments(evidence.id);
+      const previewable = attachments.find(att => isPreviewableType(att.mimeType));
+      
+      if (previewable) {
+        handlePreviewAttachment(previewable);
+      } else if (attachments.length > 0) {
+        toast({
+          title: "No preview available",
+          description: "This evidence has attachments but none can be previewed. Opening details instead.",
+        });
+        openDetailDialog(evidence);
+      } else {
+        openDetailDialog(evidence);
+      }
+    } catch (error) {
+      console.error("Failed to load attachments:", error);
+      openDetailDialog(evidence);
+    }
+  };
+
+  const toggleSortDirection = () => {
+    setSortDirection(prev => prev === 'desc' ? 'asc' : 'desc');
+  };
+
   return (
     <div className="flex flex-col h-full overflow-hidden">
       <div className="flex items-center justify-between p-4 border-b gap-4 flex-wrap">
@@ -517,6 +571,36 @@ export default function EvidencePage() {
             ))}
           </SelectContent>
         </Select>
+
+        <div className="flex items-center gap-1 border-l pl-4">
+          <Button
+            size="icon"
+            variant={sortDirection === 'desc' ? 'default' : 'outline'}
+            onClick={toggleSortDirection}
+            title={sortDirection === 'desc' ? 'Newest first' : 'Oldest first'}
+            data-testid="button-toggle-sort"
+          >
+            {sortDirection === 'desc' ? <ArrowDown className="h-4 w-4" /> : <ArrowUp className="h-4 w-4" />}
+          </Button>
+          <Button
+            size="icon"
+            variant={viewMode === 'grid' ? 'default' : 'outline'}
+            onClick={() => setViewMode('grid')}
+            title="Grid view"
+            data-testid="button-view-grid"
+          >
+            <LayoutGrid className="h-4 w-4" />
+          </Button>
+          <Button
+            size="icon"
+            variant={viewMode === 'list' ? 'default' : 'outline'}
+            onClick={() => setViewMode('list')}
+            title="List view"
+            data-testid="button-view-list"
+          >
+            <List className="h-4 w-4" />
+          </Button>
+        </div>
       </div>
 
       <ScrollArea className="flex-1">
@@ -539,7 +623,7 @@ export default function EvidencePage() {
                 )}
               </CardContent>
             </Card>
-          ) : (
+          ) : viewMode === 'grid' ? (
             <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
               {sortedEvidence.map((evidence) => (
                 <Card 
@@ -606,6 +690,94 @@ export default function EvidencePage() {
                   </CardContent>
                 </Card>
               ))}
+            </div>
+          ) : (
+            /* Compact Quick View List */
+            <div className="space-y-1">
+              {/* List Header */}
+              <div className="flex items-center gap-4 px-3 py-2 text-xs font-medium text-muted-foreground border-b">
+                <div className="w-24">Date</div>
+                <div className="flex-1 min-w-0">Title</div>
+                <div className="w-24">Type</div>
+                <div className="w-20">Importance</div>
+                <div className="w-16 text-center">Files</div>
+                <div className="w-32">Parties</div>
+              </div>
+              {sortedEvidence.map((evidence) => {
+                const effectiveDate = evidence.originalDate 
+                  ? new Date(evidence.originalDate * 1000)
+                  : new Date(evidence.createdAt);
+                const attachCount = evidence.id ? (attachmentCounts.get(evidence.id) || 0) : 0;
+                
+                return (
+                  <div
+                    key={evidence.id}
+                    className="flex items-center gap-4 px-3 py-2 rounded-md hover-elevate cursor-pointer border-b border-transparent hover:border-border"
+                    onClick={() => handleQuickViewClick(evidence)}
+                    data-testid={`row-evidence-${evidence.id}`}
+                  >
+                    {/* Date */}
+                    <div className="w-24 text-xs text-muted-foreground shrink-0">
+                      {format(effectiveDate, "MMM d, yyyy")}
+                    </div>
+                    
+                    {/* Title + Tags */}
+                    <div className="flex-1 min-w-0 flex items-center gap-2">
+                      <span className="text-sm font-medium truncate">
+                        {evidence.title}
+                      </span>
+                      {evidence.tags && evidence.tags.length > 0 && (
+                        <div className="flex gap-1 shrink-0">
+                          {evidence.tags.slice(0, 2).map((tag, i) => (
+                            <Badge key={i} variant="outline" className="text-xs px-1 py-0">
+                              {tag}
+                            </Badge>
+                          ))}
+                          {evidence.tags.length > 2 && (
+                            <span className="text-xs text-muted-foreground">+{evidence.tags.length - 2}</span>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                    
+                    {/* Type */}
+                    <div className="w-24 shrink-0">
+                      <Badge variant="secondary" className="text-xs">
+                        {getDocumentTypeLabel(evidence.documentType)}
+                      </Badge>
+                    </div>
+                    
+                    {/* Importance */}
+                    <div className="w-20 shrink-0">
+                      {evidence.importance && (
+                        <Badge className={`text-xs ${getImportanceColor(evidence.importance)}`}>
+                          {evidence.importance}
+                        </Badge>
+                      )}
+                    </div>
+                    
+                    {/* Attachment Count */}
+                    <div className="w-16 text-center shrink-0">
+                      {attachCount > 0 && (
+                        <span className="flex items-center justify-center gap-1 text-xs text-muted-foreground">
+                          <Paperclip className="h-3 w-3" />
+                          {attachCount}
+                        </span>
+                      )}
+                    </div>
+                    
+                    {/* Parties */}
+                    <div className="w-32 shrink-0 text-xs text-muted-foreground truncate">
+                      {evidence.partiesInvolved && evidence.partiesInvolved.length > 0 && (
+                        <span className="flex items-center gap-1">
+                          <Users className="h-3 w-3 shrink-0" />
+                          <span className="truncate">{evidence.partiesInvolved.join(", ")}</span>
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>
