@@ -9,6 +9,13 @@ import { Badge } from "@/components/ui/badge";
 import { BlockchainToggle } from "@/components/BlockchainToggle";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { 
+  TransactionSearchFilters, 
+  SearchFilters, 
+  defaultFilters, 
+  hasActiveSearchFilters,
+  filterByDateAndAmount 
+} from "@/components/TransactionSearchFilters";
+import { 
   ChevronLeft, 
   ChevronRight, 
   ChevronDown, 
@@ -60,6 +67,7 @@ export default function Transactions() {
   const [search, setSearch] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
   const [expandedTxs, setExpandedTxs] = useState<Set<string>>(new Set());
+  const [searchFilters, setSearchFilters] = useState<SearchFilters>(defaultFilters);
   
   // Smart filtering: exclude transactions only involving blockchain-discovered addresses
   // This filters at the DATABASE level, avoiding loading/decrypting records we don't need
@@ -197,7 +205,7 @@ export default function Transactions() {
     }).length;
   }, [transactionsWithParticipants, userCuratedAddresses]);
 
-  // Filter by search and blockchain-discovered toggle
+  // Filter by search, date/amount filters, and blockchain-discovered toggle
   const filteredTransactions = useMemo(() => {
     let results = transactionsWithParticipants;
     
@@ -208,6 +216,16 @@ export default function Transactions() {
         // Keep transaction if at least one address is user-curated
         return allAddresses.some(addr => userCuratedAddresses.has(addr));
       });
+    }
+    
+    // Apply date and amount filters
+    if (hasActiveSearchFilters(searchFilters)) {
+      results = filterByDateAndAmount(
+        results,
+        searchFilters,
+        (tx) => tx.blockTime,
+        (tx) => tx.totalOutputValue
+      );
     }
     
     // Apply search filter
@@ -229,7 +247,7 @@ export default function Transactions() {
     }
     
     return results;
-  }, [transactionsWithParticipants, search, addressToRecord, includeBlockchainDiscovered, userCuratedAddresses]);
+  }, [transactionsWithParticipants, search, searchFilters, addressToRecord, includeBlockchainDiscovered, userCuratedAddresses]);
 
   // Pagination
   const totalPages = Math.max(1, Math.ceil(filteredTransactions.length / ITEMS_PER_PAGE));
@@ -334,18 +352,31 @@ export default function Transactions() {
         </Card>
       </div>
 
-      {/* Search */}
-      <div className="flex-none relative">
-        <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-        <Input
-          placeholder="Search by txid, address, or label..."
-          value={search}
-          onChange={(e) => {
-            setSearch(e.target.value);
+      {/* Search and Filters */}
+      <div className="flex-none flex flex-col sm:flex-row gap-3">
+        <div className="relative flex-1">
+          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          <Input
+            placeholder="Search by txid, address, or label..."
+            value={search}
+            onChange={(e) => {
+              setSearch(e.target.value);
+              setCurrentPage(1);
+            }}
+            className="pl-10"
+            data-testid="input-search"
+          />
+        </div>
+        <TransactionSearchFilters
+          filters={searchFilters}
+          onChange={(filters) => {
+            setSearchFilters(filters);
             setCurrentPage(1);
           }}
-          className="pl-10"
-          data-testid="input-search"
+          onClear={() => {
+            setSearchFilters(defaultFilters);
+            setCurrentPage(1);
+          }}
         />
       </div>
 

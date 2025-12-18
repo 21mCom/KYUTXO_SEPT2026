@@ -14,6 +14,13 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Calendar } from "@/components/ui/calendar";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { 
+  TransactionSearchFilters, 
+  SearchFilters, 
+  defaultFilters, 
+  hasActiveSearchFilters,
+  filterByDateAndAmount 
+} from "@/components/TransactionSearchFilters";
+import { 
   Search,
   CalendarIcon,
   Coins,
@@ -153,6 +160,7 @@ export default function UTXOs() {
   
   const [search, setSearch] = useState("");
   const [selectedDate, setSelectedDate] = useState<Date | undefined>(undefined);
+  const [searchFilters, setSearchFilters] = useState<SearchFilters>(defaultFilters);
   const [ownerFilter, setOwnerFilter] = useState<string>(initialSettings.ownerFilter);
   const [walletFilter, setWalletFilter] = useState<string>(initialSettings.walletFilter);
   const [tagFilter, setTagFilter] = useState<string>(initialSettings.tagFilter);
@@ -506,6 +514,20 @@ export default function UTXOs() {
       filtered = filtered.filter(g => userCuratedAddresses.has(g.address));
     }
 
+    // Apply date and amount filters from TransactionSearchFilters
+    if (hasActiveSearchFilters(searchFilters)) {
+      filtered = filtered.filter(group => {
+        // Filter by checking if any UTXO in the group matches the criteria
+        const matchingUtxos = filterByDateAndAmount(
+          group.utxos,
+          searchFilters,
+          (u) => u.blockTime,
+          (u) => u.amountSats
+        );
+        return matchingUtxos.length > 0;
+      });
+    }
+
     if (ownerFilter !== "all") {
       if (ownerFilter === "unassigned") {
         filtered = filtered.filter(g => !g.owner);
@@ -552,7 +574,7 @@ export default function UTXOs() {
     }
 
     return filtered;
-  }, [addressGroups, ownerFilter, walletFilter, tagFilter, categoryFilter, search, includeBlockchainDiscovered, userCuratedAddresses]);
+  }, [addressGroups, ownerFilter, walletFilter, tagFilter, categoryFilter, search, searchFilters, includeBlockchainDiscovered, userCuratedAddresses]);
 
   const sortedGroups = useMemo(() => {
     const sorted = [...filteredGroups];
@@ -611,15 +633,16 @@ export default function UTXOs() {
     setTagFilter("all");
     setCategoryFilter("all");
     setSelectedDate(undefined);
+    setSearchFilters(defaultFilters);
   };
 
-  const hasActiveFilters = search || ownerFilter !== "all" || walletFilter !== "all" || tagFilter !== "all" || categoryFilter !== "all" || selectedDate;
+  const hasActiveFilters = search || ownerFilter !== "all" || walletFilter !== "all" || tagFilter !== "all" || categoryFilter !== "all" || selectedDate || hasActiveSearchFilters(searchFilters);
 
   const isLoading = !transactions || !participants;
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [search, ownerFilter, walletFilter, tagFilter, categoryFilter, selectedDate]);
+  }, [search, ownerFilter, walletFilter, tagFilter, categoryFilter, selectedDate, searchFilters]);
 
   const toggleExpanded = (address: string) => {
     setExpandedAddresses(prev => {
@@ -793,6 +816,18 @@ export default function UTXOs() {
                 />
               </div>
             </div>
+            
+            <TransactionSearchFilters
+              filters={searchFilters}
+              onChange={(filters) => {
+                setSearchFilters(filters);
+                setCurrentPage(1);
+              }}
+              onClear={() => {
+                setSearchFilters(defaultFilters);
+                setCurrentPage(1);
+              }}
+            />
 
             <div className="w-[180px]">
               <Label className="sr-only">Owner</Label>
