@@ -307,6 +307,27 @@ export interface PriceData {
   importedAt: number;     // Timestamp of when this data was imported
 }
 
+// Script type classification for addresses/outputs
+export type ScriptType = 
+  | 'p2pkh'          // Pay-to-PubKey-Hash (legacy)
+  | 'p2sh'           // Pay-to-Script-Hash
+  | 'v0_p2wpkh'      // Native SegWit (P2WPKH)
+  | 'v0_p2wsh'       // Native SegWit (P2WSH)
+  | 'v1_p2tr'        // Taproot
+  | 'p2pk'           // Pay-to-PubKey (very old)
+  | 'op_return'      // OP_RETURN data output
+  | 'multisig'       // Bare multisig
+  | 'nonstandard'    // Non-standard script
+  | 'unknown';       // Unrecognized type
+
+// OP_RETURN output data
+export interface OpReturnOutput {
+  vout: number;           // Output index
+  dataHex: string;        // Raw hex data (after OP_RETURN)
+  dataText?: string;      // Decoded as UTF-8 text (if valid)
+  dataAsm?: string;       // Assembly representation
+}
+
 // Blockchain transaction data (fetched from blockchain APIs)
 export interface BlockchainTransaction {
   id?: number;
@@ -316,7 +337,13 @@ export interface BlockchainTransaction {
   fee: number;            // Transaction fee in satoshis
   feeRate: number;        // Fee rate in sats/vB
   syncedAt: number;       // When we fetched this data
-  // Note: We don't store confirmations (always increasing) or raw hex (assumed valid)
+  // Size and weight data
+  size?: number;          // Transaction size in bytes
+  weight?: number;        // Transaction weight units
+  vsize?: number;         // Virtual size (weight / 4)
+  // OP_RETURN data
+  hasOpReturn?: boolean;  // Flag if transaction has OP_RETURN outputs
+  opReturnData?: OpReturnOutput[]; // OP_RETURN output details
 }
 
 // Transaction participant (input or output)
@@ -329,6 +356,8 @@ export interface TransactionParticipant {
   vout?: number;          // Output index (for outputs)
   // Link to our records table if address exists there
   recordId?: number;
+  // Script/address type information
+  scriptType?: ScriptType; // Type of script (p2pkh, p2sh, v0_p2wpkh, v1_p2tr, etc.)
 }
 
 // Tracks sync state per address for incremental syncing
@@ -627,6 +656,55 @@ export class KYUTXODatabase extends Dexie {
 
   constructor() {
     super('KYUTXODatabase');
+    
+    // Version 19 adds OP_RETURN detection and transaction size/weight data
+    // - blockchainTransactions: adds hasOpReturn, opReturnData, size, weight, vsize
+    // - transactionParticipants: adds scriptType for address type analysis
+    this.version(19).stores({
+      records: '++id, type, inputString, label, owner, *tags, *categories, createdAt, updatedAt, isEncrypted, chainType, syncDepth, addressImportance, [type+addressImportance], flowType',
+      attachments: '++id, recordId, createdAt, isEncrypted',
+      tags: '++id, name, createdAt, isEncrypted',
+      categories: '++id, name, createdAt, isEncrypted',
+      owners: '++id, name, createdAt, isEncrypted',
+      walletNames: '++id, name, createdAt, isEncrypted',
+      seedNames: '++id, name, createdAt, isEncrypted',
+      walletSoftware: '++id, name, createdAt, isEncrypted',
+      recordOrigins: '++id, recordId, originType, createdAt, isEncrypted',
+      customFields: '++id, slug, enabled, createdAt',
+      settings: 'id',
+      priceData: '++id, [date+currency+asset], date, asset, currency, source, importedAt',
+      blockchainTransactions: '++id, &txid, blockHeight, blockTime, syncedAt, hasOpReturn',
+      transactionParticipants: '++id, [txid+role], txid, role, address, recordId, scriptType',
+      addressSyncState: '++id, &address, recordId, lastSyncedAt',
+      nodeSettings: 'id',
+      derivationTemplates: '++id, fingerprint, scriptType, owner, walletName, seedName, createdAt, isEncrypted',
+      utxoLineage: '++id, [spentTxid+spentVout], [createdTxid+createdVout], consumingTxid, spentAddress, createdAddress, segmentId, spentOwned, createdOwned, isChange, blockTime, isEncrypted',
+      custodySegments: '++id, &segmentId, [originTxid+originVout], originAddress, currentAddress, status, parentSegmentId, owner, walletName, originDate, isEncrypted',
+      lineageSnapshots: '++id, &snapshotId, targetType, targetAddress, targetSegmentId, generatedAt, disclosureLevel, isEncrypted',
+      evidence: '++id, documentType, originalDate, *tags, importance, createdAt, updatedAt, isEncrypted',
+      evidenceAttachments: '++id, evidenceId, createdAt, isEncrypted'
+    }).upgrade(async tx => {
+      // Set defaults on existing blockchain transactions for the new index
+      // hasOpReturn defaults to false for existing records (requires resync to detect OP_RETURN)
+      await tx.table('blockchainTransactions').toCollection().modify(record => {
+        if (record.hasOpReturn === undefined) {
+          record.hasOpReturn = false;
+          record.opReturnData = [];
+        }
+        if (record.size === undefined) record.size = 0;
+        if (record.weight === undefined) record.weight = 0;
+        if (record.vsize === undefined) {
+          // Compute vsize from weight if available, otherwise use size
+          record.vsize = record.weight > 0 ? Math.ceil(record.weight / 4) : record.size;
+        }
+      });
+      // Set scriptType default on existing transaction participants
+      await tx.table('transactionParticipants').toCollection().modify(record => {
+        if (record.scriptType === undefined) {
+          record.scriptType = 'unknown';
+        }
+      });
+    });
     
     // Version 18 adds Evidence and EvidenceAttachment tables for general document storage
     // - evidence: stores general documents, emails, screenshots, receipts not tied to specific addresses/txids

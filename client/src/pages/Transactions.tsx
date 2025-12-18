@@ -27,7 +27,9 @@ import {
   Clock,
   Hash,
   Zap,
-  Link as LinkIcon
+  Link as LinkIcon,
+  FileCode,
+  Scale
 } from "lucide-react";
 import { decryptRecords } from "@/lib/encryptionFacade";
 import { ClickableAddress } from "@/components/ClickableAddress";
@@ -72,6 +74,9 @@ export default function Transactions() {
   // Smart filtering: exclude transactions only involving blockchain-discovered addresses
   // This filters at the DATABASE level, avoiding loading/decrypting records we don't need
   const [includeBlockchainDiscovered, setIncludeBlockchainDiscovered] = useState(false);
+  
+  // OP_RETURN filter: only show transactions with OP_RETURN data
+  const [opReturnOnly, setOpReturnOnly] = useState(false);
 
   // Fetch all transactions
   const transactions = useLiveQuery(
@@ -228,6 +233,11 @@ export default function Transactions() {
       );
     }
     
+    // Apply OP_RETURN filter
+    if (opReturnOnly) {
+      results = results.filter(tx => tx.hasOpReturn === true);
+    }
+    
     // Apply search filter
     if (search.trim()) {
       const searchLower = search.toLowerCase();
@@ -247,7 +257,7 @@ export default function Transactions() {
     }
     
     return results;
-  }, [transactionsWithParticipants, search, searchFilters, addressToRecord, includeBlockchainDiscovered, userCuratedAddresses]);
+  }, [transactionsWithParticipants, search, searchFilters, addressToRecord, includeBlockchainDiscovered, userCuratedAddresses, opReturnOnly]);
 
   // Pagination
   const totalPages = Math.max(1, Math.ceil(filteredTransactions.length / ITEMS_PER_PAGE));
@@ -378,6 +388,19 @@ export default function Transactions() {
             setCurrentPage(1);
           }}
         />
+        <Button
+          variant={opReturnOnly ? "default" : "outline"}
+          size="sm"
+          onClick={() => {
+            setOpReturnOnly(!opReturnOnly);
+            setCurrentPage(1);
+          }}
+          className={opReturnOnly ? "bg-purple-600 hover:bg-purple-700 text-white" : ""}
+          data-testid="button-opreturn-filter"
+        >
+          <FileCode className="h-4 w-4 mr-1" />
+          OP_RETURN
+        </Button>
       </div>
 
       {/* Transaction List */}
@@ -444,6 +467,18 @@ export default function Transactions() {
                               <Zap className="h-3 w-3" />
                               {(tx.feeRate ?? 0).toFixed(1)} sat/vB
                             </span>
+                            {tx.vsize && (
+                              <span className="flex items-center gap-1">
+                                <Scale className="h-3 w-3" />
+                                {tx.vsize.toLocaleString()} vB
+                              </span>
+                            )}
+                            {tx.hasOpReturn && (
+                              <Badge variant="outline" className="text-xs bg-purple-50 dark:bg-purple-950 text-purple-700 dark:text-purple-300 border-purple-200 dark:border-purple-800">
+                                <FileCode className="h-3 w-3 mr-1" />
+                                OP_RETURN
+                              </Badge>
+                            )}
                           </div>
                         </div>
                         <div className="flex items-center gap-3">
@@ -544,6 +579,45 @@ export default function Transactions() {
                           </div>
                         </div>
                       </div>
+                      
+                      {/* OP_RETURN Data */}
+                      {tx.hasOpReturn && tx.opReturnData && tx.opReturnData.length > 0 && (
+                        <div className="mt-4 pt-4 border-t">
+                          <h4 className="text-sm font-medium mb-2 flex items-center gap-2">
+                            <FileCode className="h-4 w-4 text-purple-500" />
+                            OP_RETURN Data ({tx.opReturnData.length})
+                          </h4>
+                          <div className="space-y-2">
+                            {tx.opReturnData.map((opReturn, idx) => (
+                              <div
+                                key={`op-return-${idx}`}
+                                className="p-3 rounded-md bg-purple-50 dark:bg-purple-950/50 border border-purple-200 dark:border-purple-800 text-sm"
+                                data-testid={`op-return-${idx}`}
+                              >
+                                <div className="flex items-center gap-2 mb-2">
+                                  <Badge variant="outline" className="text-xs">
+                                    Output #{opReturn.vout}
+                                  </Badge>
+                                </div>
+                                {opReturn.dataText && (
+                                  <div className="mb-2">
+                                    <span className="text-xs text-muted-foreground">Text:</span>
+                                    <pre className="mt-1 p-2 bg-background rounded text-xs font-mono whitespace-pre-wrap break-all">
+                                      {opReturn.dataText}
+                                    </pre>
+                                  </div>
+                                )}
+                                <div>
+                                  <span className="text-xs text-muted-foreground">Hex:</span>
+                                  <pre className="mt-1 p-2 bg-background rounded text-xs font-mono whitespace-pre-wrap break-all text-muted-foreground">
+                                    {opReturn.dataHex || '(empty)'}
+                                  </pre>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                     </CardContent>
                   </CollapsibleContent>
                 </Card>

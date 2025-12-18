@@ -534,6 +534,11 @@ export class TransactionSyncService {
         fee: parsed.fee,
         feeRate: parsed.feeRate,
         syncedAt: Date.now(),
+        size: parsed.size,
+        weight: parsed.weight,
+        vsize: parsed.vsize,
+        hasOpReturn: parsed.hasOpReturn,
+        opReturnData: parsed.opReturnData.length > 0 ? parsed.opReturnData : undefined,
       });
       stats.imported++;
 
@@ -552,6 +557,7 @@ export class TransactionSyncService {
           address: input.address,
           amount: input.amount,
           recordId: inputRecordId,
+          scriptType: input.scriptType,
         });
       }
 
@@ -571,6 +577,7 @@ export class TransactionSyncService {
           amount: output.amount,
           vout: output.vout,
           recordId: outputRecordId,
+          scriptType: output.scriptType,
         });
       }
     }

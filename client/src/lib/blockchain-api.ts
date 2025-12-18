@@ -2,7 +2,7 @@
 // Supports mempool.space, blockstream.info, and self-hosted Electrs/Esplora nodes
 // Can route through Tor for privacy when connecting to .onion addresses
 
-import { NodeSettings, NodeProviderType } from '@/lib/database';
+import { NodeSettings, NodeProviderType, ScriptType, OpReturnOutput } from '@/lib/database';
 
 export interface BlockchainProvider {
   name: string;
@@ -20,16 +20,23 @@ export interface ApiTransaction {
     block_time?: number;
   };
   fee: number;
+  size: number;
   weight: number;
   vin: Array<{
     txid: string;
     vout: number;
     prevout?: {
+      scriptpubkey?: string;
+      scriptpubkey_asm?: string;
+      scriptpubkey_type?: string;
       scriptpubkey_address?: string;
       value: number;
     };
   }>;
   vout: Array<{
+    scriptpubkey?: string;
+    scriptpubkey_asm?: string;
+    scriptpubkey_type?: string;
     scriptpubkey_address?: string;
     value: number;
     n: number;
@@ -42,15 +49,22 @@ export interface ParsedTransaction {
   blockTime: number;
   fee: number;
   feeRate: number;
+  size: number;
+  weight: number;
+  vsize: number;
   inputs: Array<{
     address: string;
     amount: number;
+    scriptType?: ScriptType;
   }>;
   outputs: Array<{
     address: string;
     amount: number;
     vout: number;
+    scriptType?: ScriptType;
   }>;
+  hasOpReturn: boolean;
+  opReturnData: OpReturnOutput[];
 }
 
 const DEFAULT_RATE_LIMIT_DELAY = 250; // ms between requests to avoid rate limiting
@@ -306,6 +320,72 @@ export function getProviderPrivacyInfo(providerType: NodeProviderType, useTor: b
   };
 }
 
+function mapScriptType(apiType: string | undefined): ScriptType {
+  if (!apiType) return 'unknown';
+  const typeMap: Record<string, ScriptType> = {
+    'p2pkh': 'p2pkh',
+    'p2sh': 'p2sh',
+    'v0_p2wpkh': 'v0_p2wpkh',
+    'v0_p2wsh': 'v0_p2wsh',
+    'v1_p2tr': 'v1_p2tr',
+    'p2pk': 'p2pk',
+    'op_return': 'op_return',
+    'multisig': 'multisig',
+    'nonstandard': 'nonstandard',
+  };
+  return typeMap[apiType] || 'unknown';
+}
+
+function hexToText(hex: string): string | undefined {
+  try {
+    const bytes = hex.match(/.{1,2}/g);
+    if (!bytes) return undefined;
+    const text = bytes.map(b => String.fromCharCode(parseInt(b, 16))).join('');
+    if (/^[\x20-\x7E\n\r\t]*$/.test(text)) {
+      return text;
+    }
+    return undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function extractOpReturnData(scriptpubkey: string | undefined, scriptpubkeyAsm: string | undefined): string {
+  // Prefer ASM format which gives us the decoded data directly
+  if (scriptpubkeyAsm) {
+    const parts = scriptpubkeyAsm.split(' ');
+    const dataIndex = parts.findIndex(p => p === 'OP_RETURN');
+    if (dataIndex >= 0 && parts.length > dataIndex + 1) {
+      // Filter out OP_ codes and join remaining hex data parts
+      const dataParts = parts.slice(dataIndex + 1).filter(p => !p.startsWith('OP_'));
+      return dataParts.join('');
+    }
+  }
+  
+  // Fallback to raw hex parsing if ASM not available
+  // OP_RETURN scripts: 6a (OP_RETURN) + push opcode + data
+  if (scriptpubkey && scriptpubkey.startsWith('6a') && scriptpubkey.length > 4) {
+    const afterOpReturn = scriptpubkey.substring(2); // Skip '6a' (OP_RETURN)
+    const pushOpcode = parseInt(afterOpReturn.substring(0, 2), 16);
+    
+    // Direct push: 0x01-0x4b (1-75 bytes) - length is the opcode itself
+    if (pushOpcode >= 0x01 && pushOpcode <= 0x4b) {
+      return afterOpReturn.substring(2); // Skip the length byte, return data
+    }
+    // OP_PUSHDATA1 (0x4c): next byte is length, then data
+    if (pushOpcode === 0x4c && afterOpReturn.length > 4) {
+      return afterOpReturn.substring(4); // Skip 4c + length byte
+    }
+    // OP_PUSHDATA2 (0x4d): next 2 bytes are length, then data
+    if (pushOpcode === 0x4d && afterOpReturn.length > 6) {
+      return afterOpReturn.substring(6); // Skip 4d + 2 length bytes
+    }
+    // OP_0 or unknown - just return everything after OP_RETURN
+    return afterOpReturn.substring(2);
+  }
+  return '';
+}
+
 export function parseTransaction(tx: ApiTransaction): ParsedTransaction | null {
   if (!tx.status.confirmed || !tx.status.block_height || !tx.status.block_time) {
     return null;
@@ -313,27 +393,41 @@ export function parseTransaction(tx: ApiTransaction): ParsedTransaction | null {
 
   const inputs: ParsedTransaction['inputs'] = [];
   const outputs: ParsedTransaction['outputs'] = [];
+  const opReturnData: OpReturnOutput[] = [];
 
   for (const vin of tx.vin) {
     if (vin.prevout?.scriptpubkey_address) {
       inputs.push({
         address: vin.prevout.scriptpubkey_address,
         amount: vin.prevout.value,
+        scriptType: mapScriptType(vin.prevout.scriptpubkey_type),
       });
     }
   }
 
   for (const vout of tx.vout) {
-    if (vout.scriptpubkey_address) {
+    const scriptType = mapScriptType(vout.scriptpubkey_type);
+    
+    if (scriptType === 'op_return') {
+      const dataHex = extractOpReturnData(vout.scriptpubkey, vout.scriptpubkey_asm);
+      opReturnData.push({
+        vout: vout.n,
+        dataHex,
+        dataText: hexToText(dataHex),
+        dataAsm: vout.scriptpubkey_asm,
+      });
+    } else if (vout.scriptpubkey_address) {
       outputs.push({
         address: vout.scriptpubkey_address,
         amount: vout.value,
         vout: vout.n,
+        scriptType,
       });
     }
   }
 
   const feeRate = tx.weight > 0 ? Math.round((tx.fee / tx.weight) * 4) : 0;
+  const vsize = tx.weight > 0 ? Math.ceil(tx.weight / 4) : tx.size || 0;
 
   return {
     txid: tx.txid,
@@ -341,8 +435,13 @@ export function parseTransaction(tx: ApiTransaction): ParsedTransaction | null {
     blockTime: tx.status.block_time,
     fee: tx.fee,
     feeRate,
+    size: tx.size || 0,
+    weight: tx.weight || 0,
+    vsize,
     inputs,
     outputs,
+    hasOpReturn: opReturnData.length > 0,
+    opReturnData,
   };
 }
 
