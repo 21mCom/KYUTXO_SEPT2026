@@ -28,7 +28,8 @@ import {
   Import,
   DollarSign,
   AlertCircle,
-  FileText
+  FileText,
+  Tags
 } from "lucide-react";
 import logoUrl from "@assets/foot_1764929618997.png";
 import {
@@ -80,6 +81,7 @@ const navGroups: NavGroup[] = [
       { title: "Transactions", url: "/transactions", icon: List },
       { title: "UTXOs", url: "/utxos", icon: Coins },
       { title: "Bulk Editor", url: "/bulk-editor", icon: Layers },
+      { title: "Quick Tagger", url: "/quick-tagger", icon: Tags },
       { title: "Conflict Resolution", url: "/conflict-resolution", icon: AlertCircle },
     ]
   },

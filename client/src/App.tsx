@@ -38,6 +38,7 @@ import GroupedSidebarPreview from "@/pages/GroupedSidebarPreview";
 import FlowVisualizations from "@/pages/FlowVisualizations";
 import BitcoinFlowVisualizer from "@/pages/BitcoinFlowVisualizer";
 import BulkEditor from "@/pages/BulkEditor";
+import QuickTagger from "@/pages/QuickTagger";
 import DevTestData from "@/pages/DevTestData";
 import ConflictResolution from "@/pages/ConflictResolution";
 import EvidencePage from "@/pages/Evidence";
@@ -73,6 +74,7 @@ function AppRoutes() {
       <Route path="/dev/test-data" component={DevTestData} />
       <Route path="/flow-visualizer" component={BitcoinFlowVisualizer} />
       <Route path="/bulk-editor" component={BulkEditor} />
+      <Route path="/quick-tagger" component={QuickTagger} />
       <Route path="/conflict-resolution" component={ConflictResolution} />
       <Route path="/evidence" component={EvidencePage} />
       <Route component={NotFound} />
