@@ -108,18 +108,44 @@ function createWindow() {
     mainWindow.webContents.openDevTools();
   } else {
     // In production, load the built files
-    // Use app.getAppPath() for correct path in packaged apps
     const appPath = app.getAppPath();
-    const indexPath = path.join(appPath, 'dist', 'public', 'index.html');
+    console.log('[KYUTXO] App path:', appPath);
+    console.log('[KYUTXO] __dirname:', __dirname);
+    console.log('[KYUTXO] resourcesPath:', process.resourcesPath);
     
-    if (fs.existsSync(indexPath)) {
-      mainWindow.loadFile(indexPath);
-    } else {
-      // Fallback: try resources path
-      const resourcePath = path.join(process.resourcesPath, 'app', 'dist', 'public', 'index.html');
-      if (fs.existsSync(resourcePath)) {
-        mainWindow.loadFile(resourcePath);
+    // Try multiple possible paths for the index.html
+    const possiblePaths = [
+      path.join(appPath, 'dist', 'public', 'index.html'),
+      path.join(__dirname, '..', 'dist', 'public', 'index.html'),
+      path.join(process.resourcesPath, 'app', 'dist', 'public', 'index.html'),
+      path.join(process.resourcesPath, 'app.asar', 'dist', 'public', 'index.html'),
+    ];
+    
+    let loaded = false;
+    for (const indexPath of possiblePaths) {
+      console.log('[KYUTXO] Trying path:', indexPath, '- exists:', fs.existsSync(indexPath));
+      if (fs.existsSync(indexPath)) {
+        console.log('[KYUTXO] Loading from:', indexPath);
+        mainWindow.loadFile(indexPath);
+        loaded = true;
+        break;
       }
+    }
+    
+    if (!loaded) {
+      console.error('[KYUTXO] Could not find index.html in any of the expected paths');
+      mainWindow.loadURL(`data:text/html,
+        <html>
+          <body style="background:#1a1a2e;color:white;font-family:sans-serif;padding:40px;">
+            <h1>Error Loading KYUTXO</h1>
+            <p>Could not find the application files.</p>
+            <p>Searched paths:</p>
+            <ul>${possiblePaths.map(p => `<li>${p}</li>`).join('')}</ul>
+            <p>App path: ${appPath}</p>
+            <p>Resources path: ${process.resourcesPath}</p>
+          </body>
+        </html>
+      `);
     }
   }
 
