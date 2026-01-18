@@ -107,46 +107,24 @@ function createWindow() {
     mainWindow.loadURL('http://localhost:5000');
     mainWindow.webContents.openDevTools();
   } else {
-    // In production, load the built files
-    const appPath = app.getAppPath();
-    console.log('[KYUTXO] App path:', appPath);
-    console.log('[KYUTXO] __dirname:', __dirname);
-    console.log('[KYUTXO] resourcesPath:', process.resourcesPath);
+    // In production, load the built files from the asar package
+    // app.getAppPath() returns the path to app.asar which contains dist/public/index.html
+    const indexPath = path.join(app.getAppPath(), 'dist', 'public', 'index.html');
+    console.log('[KYUTXO] Loading from:', indexPath);
     
-    // Try multiple possible paths for the index.html
-    const possiblePaths = [
-      path.join(appPath, 'dist', 'public', 'index.html'),
-      path.join(__dirname, '..', 'dist', 'public', 'index.html'),
-      path.join(process.resourcesPath, 'app', 'dist', 'public', 'index.html'),
-      path.join(process.resourcesPath, 'app.asar', 'dist', 'public', 'index.html'),
-    ];
-    
-    let loaded = false;
-    for (const indexPath of possiblePaths) {
-      console.log('[KYUTXO] Trying path:', indexPath, '- exists:', fs.existsSync(indexPath));
-      if (fs.existsSync(indexPath)) {
-        console.log('[KYUTXO] Loading from:', indexPath);
-        mainWindow.loadFile(indexPath);
-        loaded = true;
-        break;
-      }
-    }
-    
-    if (!loaded) {
-      console.error('[KYUTXO] Could not find index.html in any of the expected paths');
+    mainWindow.loadFile(indexPath).catch((err) => {
+      console.error('[KYUTXO] Failed to load index.html:', err);
       mainWindow.loadURL(`data:text/html,
         <html>
           <body style="background:#1a1a2e;color:white;font-family:sans-serif;padding:40px;">
             <h1>Error Loading KYUTXO</h1>
-            <p>Could not find the application files.</p>
-            <p>Searched paths:</p>
-            <ul>${possiblePaths.map(p => `<li>${p}</li>`).join('')}</ul>
-            <p>App path: ${appPath}</p>
-            <p>Resources path: ${process.resourcesPath}</p>
+            <p>Failed to load: ${indexPath}</p>
+            <p>Error: ${err.message}</p>
+            <p>App path: ${app.getAppPath()}</p>
           </body>
         </html>
       `);
-    }
+    });
   }
 
   mainWindow.on('closed', () => {
