@@ -1,4 +1,4 @@
-const { app, BrowserWindow, protocol, ipcMain, session } = require('electron');
+const { app, BrowserWindow, protocol, ipcMain, session, powerMonitor } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const url = require('url');
@@ -297,6 +297,37 @@ app.whenReady().then(() => {
   }
   
   createWindow();
+  
+  // ============================================================================
+  // SLEEP/WAKE HANDLING - Prevent crash when computer sleeps/wakes
+  // ============================================================================
+  
+  // Handle system suspend (going to sleep)
+  powerMonitor.on('suspend', () => {
+    console.log('[KYUTXO] System suspending (going to sleep)');
+  });
+  
+  // Handle system resume (waking up) - reload window to prevent grey screen/crash
+  powerMonitor.on('resume', () => {
+    console.log('[KYUTXO] System resumed from sleep');
+    // Give the system a moment to stabilize after wake, then reload
+    setTimeout(() => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        console.log('[KYUTXO] Reloading window after resume');
+        mainWindow.reload();
+      }
+    }, 1000);
+  });
+  
+  // Handle screen lock (optional logging)
+  powerMonitor.on('lock-screen', () => {
+    console.log('[KYUTXO] Screen locked');
+  });
+  
+  // Handle screen unlock
+  powerMonitor.on('unlock-screen', () => {
+    console.log('[KYUTXO] Screen unlocked');
+  });
 });
 
 app.on('window-all-closed', () => {
