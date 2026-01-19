@@ -558,6 +558,8 @@ export class TransactionSyncService {
           amount: input.amount,
           recordId: inputRecordId,
           scriptType: input.scriptType,
+          prevTxid: input.prevTxid,   // The txid of the UTXO being spent
+          prevVout: input.prevVout,   // The vout of the UTXO being spent
         });
       }
 

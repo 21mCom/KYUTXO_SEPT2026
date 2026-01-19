@@ -49,6 +49,8 @@ import { ClickableAddress } from "@/components/ClickableAddress";
 const ITEMS_PER_PAGE = 50;
 const SETTINGS_KEY = "kyutxo-utxos-settings";
 
+type UTXOCalculationMode = "heuristic" | "exact";
+
 interface UTXOSettings {
   displayUnit: "btc" | "sats";
   sortColumn: SortColumn;
@@ -57,6 +59,7 @@ interface UTXOSettings {
   walletFilter: string;
   tagFilter: string;
   categoryFilter: string;
+  utxoMode: UTXOCalculationMode;
 }
 
 const DEFAULT_SETTINGS: UTXOSettings = {
@@ -66,7 +69,8 @@ const DEFAULT_SETTINGS: UTXOSettings = {
   ownerFilter: "all",
   walletFilter: "all",
   tagFilter: "all",
-  categoryFilter: "all"
+  categoryFilter: "all",
+  utxoMode: "heuristic"
 };
 
 function loadSettings(): UTXOSettings {
@@ -167,6 +171,7 @@ export default function UTXOs() {
   const [categoryFilter, setCategoryFilter] = useState<string>(initialSettings.categoryFilter);
   const [sortColumn, setSortColumn] = useState<SortColumn>(initialSettings.sortColumn);
   const [sortDirection, setSortDirection] = useState<SortDirection>(initialSettings.sortDirection);
+  const [utxoMode, setUtxoMode] = useState<UTXOCalculationMode>(initialSettings.utxoMode);
   const [currentPage, setCurrentPage] = useState(1);
   const [displayUnit, setDisplayUnit] = useState<"btc" | "sats">(initialSettings.displayUnit);
   const [expandedAddresses, setExpandedAddresses] = useState<Set<string>>(new Set());
@@ -179,8 +184,8 @@ export default function UTXOs() {
 
   // Save settings when they change
   useEffect(() => {
-    saveSettings({ displayUnit, sortColumn, sortDirection, ownerFilter, walletFilter, tagFilter, categoryFilter });
-  }, [displayUnit, sortColumn, sortDirection, ownerFilter, walletFilter, tagFilter, categoryFilter]);
+    saveSettings({ displayUnit, sortColumn, sortDirection, ownerFilter, walletFilter, tagFilter, categoryFilter, utxoMode });
+  }, [displayUnit, sortColumn, sortDirection, ownerFilter, walletFilter, tagFilter, categoryFilter, utxoMode]);
 
   const transactions = useLiveQuery(
     () => db.blockchainTransactions.toArray(),
@@ -369,7 +374,29 @@ export default function UTXOs() {
     return priceByDate.get(date);
   }, [priceByDate]);
 
-  const utxos = useMemo(() => {
+  // Check what percentage of inputs have outpoint data (prevTxid/prevVout) for exact UTXO matching
+  const outpointDataStatus = useMemo(() => {
+    if (!participants) return { hasData: false, percentage: 0, total: 0, withData: 0 };
+    const inputs = participants.filter(p => p.role === 'input');
+    if (inputs.length === 0) return { hasData: true, percentage: 100, total: 0, withData: 0 };
+    
+    // Count inputs with prevTxid populated (excludes coinbase which legitimately have none)
+    const inputsWithOutpoint = inputs.filter(i => i.prevTxid !== undefined && i.prevTxid !== null);
+    const percentage = Math.round((inputsWithOutpoint.length / inputs.length) * 100);
+    
+    return {
+      hasData: percentage > 0,
+      percentage,
+      total: inputs.length,
+      withData: inputsWithOutpoint.length
+    };
+  }, [participants]);
+
+  // For backward compatibility
+  const hasOutpointData = outpointDataStatus.hasData && outpointDataStatus.percentage >= 50;
+
+  // HEURISTIC UTXO calculation (uses address:amount matching - may be approximate)
+  const utxosHeuristic = useMemo(() => {
     if (!participants || !transactions) return [];
 
     const cutoffTime = selectedDate 
@@ -453,6 +480,81 @@ export default function UTXOs() {
 
     return result;
   }, [participants, transactions, txidToTx, addressToRecord, selectedDate, getPriceForTimestamp]);
+
+  // EXACT UTXO calculation (uses prevTxid:prevVout outpoint matching - 100% accurate)
+  const utxosExact = useMemo(() => {
+    if (!participants || !transactions) return [];
+
+    const cutoffTime = selectedDate 
+      ? Math.floor(selectedDate.getTime() / 1000) + 86400
+      : Infinity;
+
+    const outputs = participants.filter(p => p.role === 'output');
+    const inputs = participants.filter(p => p.role === 'input');
+
+    // Build a set of spent outpoints (prevTxid:prevVout) from inputs within the cutoff time
+    const spentOutpoints = new Set<string>();
+    inputs.forEach(input => {
+      if (input.prevTxid !== undefined && input.prevVout !== undefined) {
+        const tx = txidToTx.get(input.txid);
+        const inputBlockTime = tx?.blockTime ?? 0;
+        // Only count as spent if the spending tx is within cutoff
+        if (inputBlockTime > 0 && inputBlockTime <= cutoffTime) {
+          const outpoint = `${input.prevTxid}:${input.prevVout}`;
+          spentOutpoints.add(outpoint);
+        }
+      }
+    });
+
+    const result: UTXO[] = [];
+
+    for (const output of outputs) {
+      const tx = txidToTx.get(output.txid);
+      const blockTime = tx?.blockTime ?? 0;
+      const blockHeight = tx?.blockHeight ?? 0;
+
+      // Skip if output is not confirmed or after cutoff
+      if (blockTime <= 0 || blockTime > cutoffTime) continue;
+
+      // Check if this output has been spent (its outpoint appears in spentOutpoints)
+      const outpoint = `${output.txid}:${output.vout ?? 0}`;
+      if (spentOutpoints.has(outpoint)) continue;
+
+      const record = addressToRecord.get(output.address);
+      
+      // Only include UTXOs for addresses we have records for (non-discovered)
+      if (!record) continue;
+      
+      const priceAtReceipt = getPriceForTimestamp(blockTime);
+      const btcAmount = output.amount / 100_000_000;
+      const valueAtReceipt = priceAtReceipt !== undefined ? btcAmount * priceAtReceipt : undefined;
+      
+      result.push({
+        id: outpoint,
+        txid: output.txid,
+        vout: output.vout ?? 0,
+        address: output.address,
+        amountSats: output.amount,
+        blockTime: blockTime,
+        blockHeight: blockHeight,
+        recordId: record?.id,
+        label: record?.label,
+        owner: record?.owner,
+        walletName: record?.walletName,
+        tags: record?.tags,
+        categories: record?.categories,
+        valueAtReceipt,
+        priceAtReceipt
+      });
+    }
+
+    return result;
+  }, [participants, transactions, txidToTx, addressToRecord, selectedDate, getPriceForTimestamp]);
+
+  // Select which UTXO calculation to use based on mode
+  const utxos = useMemo(() => {
+    return utxoMode === 'exact' ? utxosExact : utxosHeuristic;
+  }, [utxoMode, utxosExact, utxosHeuristic]);
 
   // Group UTXOs by address
   const addressGroups = useMemo(() => {
@@ -723,10 +825,38 @@ export default function UTXOs() {
               ({format(new Date(lastSyncTime), "MMM d, yyyy 'at' h:mm a")})
             </span>
           )}
-          <span className="mx-2">|</span>
-          <span className="text-amber-600 dark:text-amber-400">
-            UTXO matching uses heuristics; balances may be approximate for addresses with multiple same-amount UTXOs
-          </span>
+          {utxoMode === 'heuristic' && (
+            <>
+              <span className="mx-2">|</span>
+              <span className="text-amber-600 dark:text-amber-400">
+                Standard mode uses heuristics; balances may be approximate
+              </span>
+            </>
+          )}
+          {utxoMode === 'exact' && outpointDataStatus.percentage === 0 && (
+            <>
+              <span className="mx-2">|</span>
+              <span className="text-amber-600 dark:text-amber-400">
+                Exact mode requires re-sync to populate outpoint data
+              </span>
+            </>
+          )}
+          {utxoMode === 'exact' && outpointDataStatus.percentage > 0 && outpointDataStatus.percentage < 100 && (
+            <>
+              <span className="mx-2">|</span>
+              <span className="text-amber-600 dark:text-amber-400">
+                Exact mode: {outpointDataStatus.percentage}% of inputs have outpoint data (re-sync for full accuracy)
+              </span>
+            </>
+          )}
+          {utxoMode === 'exact' && outpointDataStatus.percentage === 100 && (
+            <>
+              <span className="mx-2">|</span>
+              <span className="text-green-600 dark:text-green-400">
+                Exact mode: using outpoint-based UTXO matching
+              </span>
+            </>
+          )}
         </span>
         <Link href="/transaction-sync">
           <Button variant="ghost" size="sm" className="h-auto p-0 text-primary hover:underline" data-testid="link-sync">
@@ -927,6 +1057,19 @@ export default function UTXOs() {
                   />
                 </PopoverContent>
               </Popover>
+            </div>
+
+            <div className="w-[160px]">
+              <Label className="sr-only">Calculation Mode</Label>
+              <Select value={utxoMode} onValueChange={(v) => setUtxoMode(v as UTXOCalculationMode)}>
+                <SelectTrigger data-testid="select-utxo-mode">
+                  <SelectValue placeholder="Mode" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="heuristic">Standard</SelectItem>
+                  <SelectItem value="exact">Exact (Beta)</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
 
             {hasActiveFilters && (

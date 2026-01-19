@@ -56,6 +56,8 @@ export interface ParsedTransaction {
     address: string;
     amount: number;
     scriptType?: ScriptType;
+    prevTxid?: string;  // The txid of the transaction that created this UTXO (undefined for coinbase)
+    prevVout?: number;  // The output index in that transaction (undefined for coinbase)
   }>;
   outputs: Array<{
     address: string;
@@ -401,6 +403,8 @@ export function parseTransaction(tx: ApiTransaction): ParsedTransaction | null {
         address: vin.prevout.scriptpubkey_address,
         amount: vin.prevout.value,
         scriptType: mapScriptType(vin.prevout.scriptpubkey_type),
+        prevTxid: vin.txid,   // The transaction that created the UTXO being spent
+        prevVout: vin.vout,   // The output index in that transaction
       });
     }
   }

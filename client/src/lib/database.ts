@@ -354,6 +354,9 @@ export interface TransactionParticipant {
   address: string;        // Bitcoin address
   amount: number;         // Amount in satoshis
   vout?: number;          // Output index (for outputs)
+  // For inputs: the outpoint being spent (identifies which UTXO is consumed)
+  prevTxid?: string;      // The txid of the transaction that created the UTXO being spent
+  prevVout?: number;      // The output index in that transaction
   // Link to our records table if address exists there
   recordId?: number;
   // Script/address type information
@@ -656,6 +659,34 @@ export class KYUTXODatabase extends Dexie {
 
   constructor() {
     super('KYUTXODatabase');
+    
+    // Version 20 adds prevTxid/prevVout to transactionParticipants for exact UTXO matching
+    // - transactionParticipants: adds prevTxid, prevVout for inputs to enable outpoint-based UTXO tracking
+    // - New compound index [prevTxid+prevVout] enables fast lookup of spent outputs
+    this.version(20).stores({
+      records: '++id, type, inputString, label, owner, *tags, *categories, createdAt, updatedAt, isEncrypted, chainType, syncDepth, addressImportance, [type+addressImportance], flowType',
+      attachments: '++id, recordId, createdAt, isEncrypted',
+      tags: '++id, name, createdAt, isEncrypted',
+      categories: '++id, name, createdAt, isEncrypted',
+      owners: '++id, name, createdAt, isEncrypted',
+      walletNames: '++id, name, createdAt, isEncrypted',
+      seedNames: '++id, name, createdAt, isEncrypted',
+      walletSoftware: '++id, name, createdAt, isEncrypted',
+      recordOrigins: '++id, recordId, originType, createdAt, isEncrypted',
+      customFields: '++id, slug, enabled, createdAt',
+      settings: 'id',
+      priceData: '++id, [date+currency+asset], date, asset, currency, source, importedAt',
+      blockchainTransactions: '++id, &txid, blockHeight, blockTime, syncedAt, hasOpReturn',
+      transactionParticipants: '++id, [txid+role], txid, role, address, recordId, scriptType, [prevTxid+prevVout]',
+      addressSyncState: '++id, &address, recordId, lastSyncedAt',
+      nodeSettings: 'id',
+      derivationTemplates: '++id, fingerprint, scriptType, owner, walletName, seedName, createdAt, isEncrypted',
+      utxoLineage: '++id, [spentTxid+spentVout], [createdTxid+createdVout], consumingTxid, spentAddress, createdAddress, segmentId, spentOwned, createdOwned, isChange, blockTime, isEncrypted',
+      custodySegments: '++id, &segmentId, [originTxid+originVout], originAddress, currentAddress, status, parentSegmentId, owner, walletName, originDate, isEncrypted',
+      lineageSnapshots: '++id, &snapshotId, targetType, targetAddress, targetSegmentId, generatedAt, disclosureLevel, isEncrypted',
+      evidence: '++id, documentType, originalDate, *tags, importance, createdAt, updatedAt, isEncrypted',
+      evidenceAttachments: '++id, evidenceId, createdAt, isEncrypted'
+    });
     
     // Version 19 adds OP_RETURN detection and transaction size/weight data
     // - blockchainTransactions: adds hasOpReturn, opReturnData, size, weight, vsize
