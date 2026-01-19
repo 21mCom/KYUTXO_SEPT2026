@@ -226,7 +226,7 @@ export function RecordDetailPanel({
   return (
     <>
     <Sheet open={open} onOpenChange={onClose}>
-      <SheetContent className="w-full sm:max-w-md overflow-hidden flex flex-col p-0">
+      <SheetContent className="w-full sm:max-w-md flex flex-col p-0">
         <SheetHeader className="p-6 pb-4 space-y-0">
           <div className="flex items-start justify-between gap-4">
             <div className="flex-1 min-w-0">

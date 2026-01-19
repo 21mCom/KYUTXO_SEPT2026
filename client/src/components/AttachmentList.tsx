@@ -109,7 +109,7 @@ export function AttachmentList({ attachments, onDelete }: AttachmentListProps) {
                   </p>
                 </div>
               </div>
-              <div className="flex gap-1">
+              <div className="flex gap-1 flex-shrink-0">
                 <Button
                   size="icon"
                   variant="ghost"
