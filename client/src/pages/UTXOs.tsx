@@ -723,6 +723,10 @@ export default function UTXOs() {
               ({format(new Date(lastSyncTime), "MMM d, yyyy 'at' h:mm a")})
             </span>
           )}
+          <span className="mx-2">|</span>
+          <span className="text-amber-600 dark:text-amber-400">
+            UTXO matching uses heuristics; balances may be approximate for addresses with multiple same-amount UTXOs
+          </span>
         </span>
         <Link href="/transaction-sync">
           <Button variant="ghost" size="sm" className="h-auto p-0 text-primary hover:underline" data-testid="link-sync">

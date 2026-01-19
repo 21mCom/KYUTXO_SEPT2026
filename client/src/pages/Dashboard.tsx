@@ -352,6 +352,11 @@ export default function Dashboard() {
         source: data.source || 'manual',
         customFields: data.customFields,
         addressImportance,
+        flowType: data.flowType,
+        acquisitionMethod: data.acquisitionMethod,
+        dispositionType: data.dispositionType,
+        costBasisUsd: data.costBasisUsd,
+        counterpartyType: data.counterpartyType,
       };
 
       // If record exists, update it instead of creating
@@ -643,6 +648,11 @@ export default function Dashboard() {
         source: data.source || 'manual',
         customFields: data.customFields,
         addressImportance,
+        flowType: data.flowType,
+        acquisitionMethod: data.acquisitionMethod,
+        dispositionType: data.dispositionType,
+        costBasisUsd: data.costBasisUsd,
+        counterpartyType: data.counterpartyType,
       });
 
       // Upload any new files for existing record
