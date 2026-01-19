@@ -1,6 +1,16 @@
 import { useState, useEffect, useMemo } from "react";
 import { Plus, Grid3x3, List, ChevronLeft, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { BlockchainToggle } from "@/components/BlockchainToggle";
 import { SearchBar } from "@/components/SearchBar";
 import { FilterBar } from "@/components/FilterBar";
@@ -54,6 +64,10 @@ export default function Dashboard() {
   // Smart filtering: exclude blockchain-discovered records by default for performance
   // This filters at the DATABASE level, avoiding loading/decrypting records we don't need
   const [includeBlockchainDiscovered, setIncludeBlockchainDiscovered] = useState(false);
+  
+  // Delete confirmation state
+  const [deleteConfirmTarget, setDeleteConfirmTarget] = useState<number | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   const { records, isLoading, blockchainDiscoveredCount } = useFilteredRecords(includeBlockchainDiscovered);
   const { tags } = useEncryptedTags();
@@ -675,19 +689,29 @@ export default function Dashboard() {
     }
   };
 
-  const handleDeleteRecord = async (id: number) => {
+  const handleDeleteRequest = (id: number) => {
+    setDeleteConfirmTarget(id);
+  };
+
+  const handleConfirmDelete = async () => {
+    if (deleteConfirmTarget === null) return;
+    
+    setIsDeleting(true);
     try {
-      await deleteRecord(id);
+      await deleteRecord(deleteConfirmTarget);
       toast({
         title: "Record Deleted",
         description: "The record has been deleted successfully",
       });
+      setDeleteConfirmTarget(null);
     } catch (error) {
       toast({
         variant: "destructive",
         title: "Error",
         description: error instanceof Error ? error.message : "Failed to delete record",
       });
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -829,7 +853,7 @@ export default function Dashboard() {
                       attachmentCount={0}
                       onClick={() => handleRecordClick(record.id!)}
                       onEdit={() => handleEditRecord(record.id!)}
-                      onDelete={() => handleDeleteRecord(record.id!)}
+                      onDelete={() => handleDeleteRequest(record.id!)}
                     />
                   );
                 })}
@@ -842,7 +866,7 @@ export default function Dashboard() {
                 })}
                 onRowClick={(id) => handleRecordClick(Number(id))}
                 onEdit={(id) => handleEditRecord(Number(id))}
-                onDelete={(id) => handleDeleteRecord(Number(id))}
+                onDelete={(id) => handleDeleteRequest(Number(id))}
                 onSyncDeeper={(id) => handleSyncDeeper(Number(id))}
                 externalSortColumn={sortColumn}
                 externalSortDirection={sortDirection}
@@ -931,6 +955,28 @@ export default function Dashboard() {
         enabledCustomFields={enabledCustomFields}
         onCheckDuplicate={handleCheckDuplicate}
       />
+
+      <AlertDialog open={deleteConfirmTarget !== null} onOpenChange={(open) => !open && setDeleteConfirmTarget(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Record?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This action cannot be undone. This will permanently delete this record and all associated attachments.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isDeleting} data-testid="button-cancel-delete">Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleConfirmDelete}
+              disabled={isDeleting}
+              className="bg-destructive text-destructive-foreground"
+              data-testid="button-confirm-delete"
+            >
+              {isDeleting ? "Deleting..." : "Delete Record"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

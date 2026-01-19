@@ -4,15 +4,26 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { ArrowLeft, Search as SearchIcon, Database, Hash, ExternalLink, AlertCircle } from "lucide-react";
+import { ArrowLeft, Search as SearchIcon, Database, Hash, ExternalLink, AlertCircle, Trash2, X } from "lucide-react";
 import { BlockchainToggle } from "@/components/BlockchainToggle";
 import { db, subscribeToDbChanges, type Record as DbRecord, type VaultMetadata, type AddressImportance, type ChainType, type CustomField, type BlockchainTransaction, type TransactionParticipant } from "@/lib/database";
-import { decryptRecords, isEncryptionReady } from "@/lib/encryptionFacade";
+import { decryptRecords, isEncryptionReady, deleteRecord } from "@/lib/encryptionFacade";
 import { RecordTable } from "@/components/RecordTable";
 import { RecordDetailPanel } from "@/components/RecordDetailPanel";
 import { ClickableAddress } from "@/components/ClickableAddress";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { RecordFilters, ColumnFilter, applyColumnFilters, extractUniqueValues } from "@/components/RecordFilters";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { useToast } from "@/hooks/use-toast";
 
 // User-curated importance tiers (exclude blockchain-discovered and pending-review by default)
 const USER_CURATED_TIERS: AddressImportance[] = ['verified', 'manual', 'wallet-import', 'xpub-derived'];
@@ -60,6 +71,16 @@ export default function Records() {
   
   // Column filters state
   const [columnFilters, setColumnFilters] = useState<ColumnFilter[]>([]);
+  
+  // Bulk selection state
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  
+  // Delete confirmation dialogs
+  const [bulkDeleteDialogOpen, setBulkDeleteDialogOpen] = useState(false);
+  const [singleDeleteTarget, setSingleDeleteTarget] = useState<string | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+  
+  const { toast } = useToast();
   
   // State for blockchain transaction search results
   const [matchingTxids, setMatchingTxids] = useState<string[]>([]);
@@ -217,13 +238,13 @@ export default function Records() {
 
   // Extract unique values from records for filter dropdowns
   const uniqueFilterValues = useMemo(() => {
-    return extractUniqueValues(records as Array<Record<string, unknown>>);
+    return extractUniqueValues(records as unknown as Array<Record<string, unknown>>);
   }, [records]);
 
   // Filter records based on column filters, search query, including blockchain transaction search
   useEffect(() => {
     // First apply column filters
-    const columnFiltered = applyColumnFilters(records as Array<Record<string, unknown>>, columnFilters) as ConvertedRecord[];
+    const columnFiltered = applyColumnFilters(records as unknown as Array<Record<string, unknown>>, columnFilters) as unknown as ConvertedRecord[];
     
     if (!searchQuery) {
       setFilteredRecords(columnFiltered);
@@ -413,6 +434,91 @@ export default function Records() {
     ? (records.find(r => r.id === selectedRecordId) || directLoadedRecord)
     : null;
 
+  // Clear selection when records change (e.g., after delete)
+  useEffect(() => {
+    // Remove any selected IDs that are no longer in the records list
+    const recordIds = new Set(records.map(r => r.id));
+    setSelectedIds(prev => {
+      const validSelected = new Set(Array.from(prev).filter(id => recordIds.has(id)));
+      if (validSelected.size !== prev.size) {
+        return validSelected;
+      }
+      return prev;
+    });
+  }, [records]);
+
+  // Delete handlers
+  const handleSingleDelete = async () => {
+    if (!singleDeleteTarget) return;
+    setIsDeleting(true);
+    try {
+      await deleteRecord(parseInt(singleDeleteTarget));
+      toast({
+        title: "Record deleted",
+        description: "The record has been permanently deleted.",
+      });
+      setSingleDeleteTarget(null);
+      if (selectedRecordId === singleDeleteTarget) {
+        setSelectedRecordId(null);
+      }
+    } catch (error) {
+      toast({
+        title: "Delete failed",
+        description: error instanceof Error ? error.message : "Failed to delete record",
+        variant: "destructive",
+      });
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+  const handleBulkDelete = async () => {
+    if (selectedIds.size === 0) return;
+    setIsDeleting(true);
+    try {
+      const idsToDelete = Array.from(selectedIds);
+      let successCount = 0;
+      let failCount = 0;
+
+      for (const id of idsToDelete) {
+        try {
+          await deleteRecord(parseInt(id));
+          successCount++;
+        } catch {
+          failCount++;
+        }
+      }
+
+      if (failCount === 0) {
+        toast({
+          title: "Records deleted",
+          description: `Successfully deleted ${successCount} record${successCount !== 1 ? 's' : ''}.`,
+        });
+      } else {
+        toast({
+          title: "Partial deletion",
+          description: `Deleted ${successCount} record${successCount !== 1 ? 's' : ''}, but ${failCount} failed.`,
+          variant: "destructive",
+        });
+      }
+      
+      setSelectedIds(new Set());
+      setBulkDeleteDialogOpen(false);
+    } catch (error) {
+      toast({
+        title: "Delete failed",
+        description: error instanceof Error ? error.message : "Failed to delete records",
+        variant: "destructive",
+      });
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+  const handleDeleteRequest = (id: string) => {
+    setSingleDeleteTarget(id);
+  };
+
   // If viewing a specific record by ID, show detail-focused view
   if (selectedRecordId && selectedRecord && !searchQuery) {
     return (
@@ -555,6 +661,35 @@ export default function Records() {
           </Card>
         )}
 
+        {/* Bulk Action Bar */}
+        {selectedIds.size > 0 && (
+          <div className="flex items-center justify-between p-3 rounded-lg bg-muted border">
+            <div className="flex items-center gap-3">
+              <Badge variant="secondary" className="text-sm">
+                {selectedIds.size} selected
+              </Badge>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setSelectedIds(new Set())}
+                data-testid="button-clear-selection"
+              >
+                <X className="h-4 w-4 mr-1" />
+                Clear
+              </Button>
+            </div>
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={() => setBulkDeleteDialogOpen(true)}
+              data-testid="button-bulk-delete"
+            >
+              <Trash2 className="h-4 w-4 mr-1" />
+              Delete Selected
+            </Button>
+          </div>
+        )}
+
         <div className="grid gap-6 lg:grid-cols-3">
           {/* Records List */}
           <div className="lg:col-span-2">
@@ -590,6 +725,10 @@ export default function Records() {
                   <RecordTable 
                     records={filteredRecords}
                     onRowClick={setSelectedRecordId}
+                    onDelete={handleDeleteRequest}
+                    selectionEnabled={true}
+                    selectedIds={selectedIds}
+                    onSelectionChange={setSelectedIds}
                   />
                 )}
               </CardContent>
@@ -609,6 +748,52 @@ export default function Records() {
           )}
         </div>
       </div>
+
+      {/* Bulk Delete Confirmation Dialog */}
+      <AlertDialog open={bulkDeleteDialogOpen} onOpenChange={setBulkDeleteDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete {selectedIds.size} Record{selectedIds.size !== 1 ? 's' : ''}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This action cannot be undone. This will permanently delete the selected record{selectedIds.size !== 1 ? 's' : ''} and all associated attachments.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isDeleting} data-testid="button-cancel-bulk-delete">Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleBulkDelete}
+              disabled={isDeleting}
+              className="bg-destructive text-destructive-foreground"
+              data-testid="button-confirm-bulk-delete"
+            >
+              {isDeleting ? "Deleting..." : `Delete ${selectedIds.size} Record${selectedIds.size !== 1 ? 's' : ''}`}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Single Delete Confirmation Dialog */}
+      <AlertDialog open={!!singleDeleteTarget} onOpenChange={(open) => !open && setSingleDeleteTarget(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Record?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This action cannot be undone. This will permanently delete this record and all associated attachments.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isDeleting} data-testid="button-cancel-single-delete">Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleSingleDelete}
+              disabled={isDeleting}
+              className="bg-destructive text-destructive-foreground"
+              data-testid="button-confirm-single-delete"
+            >
+              {isDeleting ? "Deleting..." : "Delete Record"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

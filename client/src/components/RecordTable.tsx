@@ -87,6 +87,10 @@ interface RecordTableProps {
   externalSortColumn?: SortColumn | null;
   externalSortDirection?: SortDirection;
   onSortChange?: (column: SortColumn) => void;
+  // Bulk selection props
+  selectionEnabled?: boolean;
+  selectedIds?: Set<string>;
+  onSelectionChange?: (selectedIds: Set<string>) => void;
 }
 
 interface SortableHeaderProps {
@@ -132,6 +136,9 @@ export function RecordTable({
   externalSortColumn,
   externalSortDirection,
   onSortChange,
+  selectionEnabled = false,
+  selectedIds = new Set(),
+  onSelectionChange,
 }: RecordTableProps) {
   const { tableColumns, customFieldColumns } = useSettings();
   const { enabledCustomFields } = useCustomFields();
@@ -285,6 +292,37 @@ export function RecordTable({
     }
   };
 
+  // Selection helpers
+  const allSelected = selectionEnabled && sortedRecords.length > 0 && sortedRecords.every(r => selectedIds.has(r.id));
+  const someSelected = selectionEnabled && sortedRecords.some(r => selectedIds.has(r.id));
+  
+  const handleSelectAll = (checked: boolean) => {
+    if (!onSelectionChange) return;
+    if (!checked) {
+      // Deselect all visible records
+      const newSelected = new Set(selectedIds);
+      sortedRecords.forEach(r => newSelected.delete(r.id));
+      onSelectionChange(newSelected);
+    } else {
+      // Select all visible records
+      const newSelected = new Set(selectedIds);
+      sortedRecords.forEach(r => newSelected.add(r.id));
+      onSelectionChange(newSelected);
+    }
+  };
+
+  const handleSelectRow = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!onSelectionChange) return;
+    const newSelected = new Set(selectedIds);
+    if (newSelected.has(id)) {
+      newSelected.delete(id);
+    } else {
+      newSelected.add(id);
+    }
+    onSelectionChange(newSelected);
+  };
+
   return (
     <div className="border rounded-lg">
       <div className="flex items-center justify-end p-2 border-b">
@@ -397,6 +435,16 @@ export function RecordTable({
       <Table>
         <TableHeader>
           <TableRow>
+            {selectionEnabled && (
+              <TableHead className="w-[40px]">
+                <Checkbox
+                  checked={allSelected ? true : (someSelected ? "indeterminate" : false)}
+                  onCheckedChange={(checked) => handleSelectAll(checked === true)}
+                  onClick={(e) => e.stopPropagation()}
+                  data-testid="checkbox-select-all"
+                />
+              </TableHead>
+            )}
             <SortableHeader
               column="type"
               label="Type"
@@ -519,6 +567,7 @@ export function RecordTable({
             <TableRow>
               <TableCell 
                 colSpan={5 + 
+                  (selectionEnabled ? 1 : 0) +
                   (tableColumns.tags ? 1 : 0) + 
                   (tableColumns.categories ? 1 : 0) + 
                   (tableColumns.walletSoftware ? 1 : 0) + 
@@ -539,10 +588,19 @@ export function RecordTable({
             sortedRecords.map((record) => (
               <TableRow
                 key={record.id}
-                className="cursor-pointer hover-elevate"
+                className={`cursor-pointer hover-elevate ${selectedIds.has(record.id) ? 'bg-muted/50' : ''}`}
                 onClick={() => onRowClick?.(record.id)}
                 data-testid={`row-record-${record.id}`}
               >
+                {selectionEnabled && (
+                  <TableCell>
+                    <Checkbox
+                      checked={selectedIds.has(record.id)}
+                      onClick={(e) => handleSelectRow(record.id, e)}
+                      data-testid={`checkbox-select-${record.id}`}
+                    />
+                  </TableCell>
+                )}
                 <TableCell>
                   <RecordTypeBadge type={record.type} />
                 </TableCell>
