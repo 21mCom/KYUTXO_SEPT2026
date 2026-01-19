@@ -106,8 +106,9 @@ export async function downloadAttachment(objectPath: string, isEncrypted?: boole
       
       data = result.data!;
     } else {
-      // Web mode: download via API
-      const response = await fetch(`/api/attachments/download/${objectPath}`);
+      // Web mode: download via API (encode path to handle slashes and special characters)
+      const encodedPath = objectPath.split('/').map(segment => encodeURIComponent(segment)).join('/');
+      const response = await fetch(`/api/attachments/download/${encodedPath}`);
       
       if (!response.ok) {
         throw new Error('Download failed');
@@ -166,8 +167,9 @@ export async function deleteAttachment(id: number): Promise<void> {
         throw new Error(result.error || 'Delete failed');
       }
     } else {
-      // Web mode: delete via API
-      const response = await fetch(`/api/attachments/${attachment.objectStoragePath}`, {
+      // Web mode: delete via API (encode path to handle slashes and special characters)
+      const encodedPath = attachment.objectStoragePath.split('/').map(segment => encodeURIComponent(segment)).join('/');
+      const response = await fetch(`/api/attachments/${encodedPath}`, {
         method: 'DELETE',
       });
       
@@ -349,8 +351,9 @@ export async function deleteEncryptedFile(objectPath: string): Promise<void> {
         throw new Error(result.error || 'Delete failed');
       }
     } else {
-      // Web mode: delete via API
-      const response = await fetch(`/api/attachments/${objectPath}`, {
+      // Web mode: delete via API (encode path to handle slashes and special characters)
+      const encodedPath = objectPath.split('/').map(segment => encodeURIComponent(segment)).join('/');
+      const response = await fetch(`/api/attachments/${encodedPath}`, {
         method: 'DELETE',
       });
       
@@ -376,7 +379,8 @@ async function readRawFile(objectPath: string): Promise<ArrayBuffer> {
     }
     return result.data!;
   } else {
-    const response = await fetch(`/api/attachments/download/${objectPath}`);
+    const encodedPath = objectPath.split('/').map(segment => encodeURIComponent(segment)).join('/');
+    const response = await fetch(`/api/attachments/download/${encodedPath}`);
     if (!response.ok) {
       throw new Error('Read failed');
     }

@@ -65,12 +65,21 @@ export function detectSingularFieldConflicts(
       }
     }
 
+    // A conflict exists only if there are multiple distinct origin values
+    // AND the active value doesn't match any of them (meaning user hasn't resolved it yet)
     if (originValues.length > 1) {
-      conflicts.push({
-        field,
-        activeValue: activeValue?.trim(),
-        originValues: originValues.sort((a, b) => b.createdAt - a.createdAt),
-      });
+      const normalizedActive = activeValue?.trim() || '';
+      const isResolved = normalizedActive !== '' && 
+        originValues.some(ov => ov.value === normalizedActive);
+      
+      // Only add as conflict if not resolved
+      if (!isResolved) {
+        conflicts.push({
+          field,
+          activeValue: activeValue?.trim(),
+          originValues: originValues.sort((a, b) => b.createdAt - a.createdAt),
+        });
+      }
     }
   }
 

@@ -81,7 +81,6 @@ const navGroups: NavGroup[] = [
       { title: "Transactions", url: "/transactions", icon: List },
       { title: "UTXOs", url: "/utxos", icon: Coins },
       { title: "Bulk Editor", url: "/bulk-editor", icon: Layers },
-      { title: "Quick Tagger", url: "/quick-tagger", icon: Tags },
       { title: "Conflict Resolution", url: "/conflict-resolution", icon: AlertCircle },
     ]
   },
@@ -110,6 +109,8 @@ const navGroups: NavGroup[] = [
       { title: "Price Import", url: "/price-import", icon: DollarSign },
       { title: "Transaction Sync", url: "/transaction-sync", icon: ArrowDownUp },
       { title: "QR Scanner", url: "/scanner", icon: QrCode },
+      { title: "Quick Tagger", url: "/quick-tagger", icon: Tags },
+      { title: "Backup", url: "/export", icon: Download },
     ]
   },
   {
@@ -127,7 +128,6 @@ const navGroups: NavGroup[] = [
     icon: Settings,
     defaultOpen: false,
     items: [
-      { title: "Backup", url: "/export", icon: Download },
       { title: "Node Connection", url: "/node-settings", icon: Server },
       { title: "Value Updater", url: "/value-updater", icon: RefreshCw },
       { title: "Settings", url: "/settings", icon: Settings },
