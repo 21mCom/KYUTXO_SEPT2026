@@ -363,3 +363,127 @@ export async function deleteEncryptedFile(objectPath: string): Promise<void> {
     throw new Error(`Failed to delete file: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
 }
+
+// ============ RE-ENCRYPTION FOR PASSWORD CHANGE ============
+
+// Read raw file data without decrypting (for re-encryption purposes)
+async function readRawFile(objectPath: string): Promise<ArrayBuffer> {
+  if (isElectron()) {
+    const api = getElectronAPI();
+    const result = await api.readAttachment(objectPath);
+    if (!result.success) {
+      throw new Error(result.error || 'Read failed');
+    }
+    return result.data!;
+  } else {
+    const response = await fetch(`/api/attachments/download/${objectPath}`);
+    if (!response.ok) {
+      throw new Error('Read failed');
+    }
+    return response.arrayBuffer();
+  }
+}
+
+// Write raw file data (for re-encryption purposes)
+async function writeRawFile(objectPath: string, data: ArrayBuffer): Promise<void> {
+  if (isElectron()) {
+    const api = getElectronAPI();
+    // Use writeAttachment to overwrite at exact path (not saveAttachment which creates new file)
+    const result = await api.writeAttachment(objectPath, data);
+    if (!result.success) {
+      throw new Error(result.error || 'Write failed');
+    }
+  } else {
+    // Web mode: upload via API (overwrite)
+    const blob = new Blob([data], { type: 'application/octet-stream' });
+    const formData = new FormData();
+    formData.append('file', blob, 'file');
+    formData.append('objectPath', objectPath);
+    formData.append('overwrite', 'true');
+
+    const response = await fetch('/api/attachments/rewrite', {
+      method: 'POST',
+      body: formData,
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Write failed');
+    }
+  }
+}
+
+// Re-encrypt a single attachment file with a new key
+export async function reEncryptAttachmentFile(
+  objectPath: string,
+  oldKey: CryptoKey,
+  newKey: CryptoKey
+): Promise<void> {
+  // Read raw encrypted data
+  const encryptedData = await readRawFile(objectPath);
+  
+  // Decrypt with old key
+  const decryptedData = await decryptBinary(encryptedData, oldKey);
+  
+  // Re-encrypt with new key
+  const reEncryptedData = await encryptBinary(decryptedData, newKey);
+  
+  // Write back
+  await writeRawFile(objectPath, reEncryptedData);
+}
+
+// Re-encrypt all attachment files (for password change)
+export async function reEncryptAllAttachmentFiles(
+  oldKey: CryptoKey,
+  newKey: CryptoKey,
+  onProgress?: (current: number, total: number) => void
+): Promise<number> {
+  // Get all encrypted attachments
+  const attachments = await db.attachments.filter(a => a.isEncrypted === true).toArray();
+  
+  let count = 0;
+  for (let i = 0; i < attachments.length; i++) {
+    const attachment = attachments[i];
+    if (onProgress) {
+      onProgress(i + 1, attachments.length);
+    }
+    
+    try {
+      await reEncryptAttachmentFile(attachment.objectStoragePath, oldKey, newKey);
+      count++;
+    } catch (error) {
+      console.error(`Failed to re-encrypt attachment ${attachment.id}:`, error);
+      throw new Error(`Failed to re-encrypt attachment "${attachment.filename}": ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+  
+  return count;
+}
+
+// Re-encrypt all evidence attachment files (for password change)
+export async function reEncryptAllEvidenceAttachmentFiles(
+  oldKey: CryptoKey,
+  newKey: CryptoKey,
+  onProgress?: (current: number, total: number) => void
+): Promise<number> {
+  // Get all encrypted evidence attachments
+  const evidenceAttachments = await db.evidenceAttachments.filter(a => a.isEncrypted === true).toArray();
+  
+  let count = 0;
+  for (let i = 0; i < evidenceAttachments.length; i++) {
+    const attachment = evidenceAttachments[i];
+    if (onProgress) {
+      onProgress(i + 1, evidenceAttachments.length);
+    }
+    
+    try {
+      await reEncryptAttachmentFile(attachment.objectStoragePath, oldKey, newKey);
+      count++;
+    } catch (error) {
+      console.error(`Failed to re-encrypt evidence attachment ${attachment.id}:`, error);
+      throw new Error(`Failed to re-encrypt evidence attachment "${attachment.filename}": ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+  
+  return count;
+}

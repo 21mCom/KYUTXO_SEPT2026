@@ -603,3 +603,206 @@ export async function decryptEvidenceAttachment(attachment: EvidenceAttachment, 
     throw new Error('Failed to decrypt evidence attachment.');
   }
 }
+
+// ============ RE-ENCRYPTION FOR PASSWORD CHANGE ============
+
+export interface ReEncryptionProgress {
+  stage: string;
+  current: number;
+  total: number;
+  percentage: number;
+}
+
+export type ProgressCallback = (progress: ReEncryptionProgress) => void;
+
+export async function reEncryptAllData(
+  oldKey: CryptoKey, 
+  newKey: CryptoKey,
+  onProgress?: ProgressCallback
+): Promise<{
+  records: number;
+  attachments: number;
+  tags: number;
+  categories: number;
+  owners: number;
+  walletNames: number;
+  seedNames: number;
+  walletSoftware: number;
+  derivationTemplates: number;
+  recordOrigins: number;
+  evidence: number;
+  evidenceAttachments: number;
+}> {
+  let recordCount = 0;
+  let attachmentCount = 0;
+  let tagCount = 0;
+  let categoryCount = 0;
+  let ownerCount = 0;
+  let walletNameCount = 0;
+  let seedNameCount = 0;
+  let walletSoftwareCount = 0;
+  let derivationTemplateCount = 0;
+  let recordOriginCount = 0;
+  let evidenceCount = 0;
+  let evidenceAttachmentCount = 0;
+
+  const reportProgress = (stage: string, current: number, total: number) => {
+    if (onProgress) {
+      onProgress({
+        stage,
+        current,
+        total,
+        percentage: total > 0 ? Math.round((current / total) * 100) : 100,
+      });
+    }
+  };
+
+  // Re-encrypt records
+  const records = await db.records.filter(r => r.isEncrypted === true).toArray();
+  for (let i = 0; i < records.length; i++) {
+    const record = records[i];
+    reportProgress('Records', i + 1, records.length);
+    const decrypted = await decryptRecord(record, oldKey);
+    const reEncrypted = await encryptRecord(decrypted, newKey);
+    await db.records.put(reEncrypted);
+    recordCount++;
+  }
+
+  // Re-encrypt attachments (metadata only - file contents use same key via encryptionFacade)
+  const attachments = await db.attachments.filter(a => a.isEncrypted === true).toArray();
+  for (let i = 0; i < attachments.length; i++) {
+    const attachment = attachments[i];
+    reportProgress('Attachments', i + 1, attachments.length);
+    const decrypted = await decryptAttachment(attachment, oldKey);
+    const reEncrypted = await encryptAttachment(decrypted, newKey);
+    await db.attachments.put(reEncrypted);
+    attachmentCount++;
+  }
+
+  // Re-encrypt tags
+  const tags = await db.tags.filter(t => t.isEncrypted === true).toArray();
+  for (let i = 0; i < tags.length; i++) {
+    const tag = tags[i];
+    reportProgress('Tags', i + 1, tags.length);
+    const decrypted = await decryptTag(tag, oldKey);
+    const reEncrypted = await encryptTag(decrypted, newKey);
+    await db.tags.put(reEncrypted);
+    tagCount++;
+  }
+
+  // Re-encrypt categories
+  const categories = await db.categories.filter(c => c.isEncrypted === true).toArray();
+  for (let i = 0; i < categories.length; i++) {
+    const category = categories[i];
+    reportProgress('Categories', i + 1, categories.length);
+    const decrypted = await decryptCategory(category, oldKey);
+    const reEncrypted = await encryptCategory(decrypted, newKey);
+    await db.categories.put(reEncrypted);
+    categoryCount++;
+  }
+
+  // Re-encrypt owners
+  const owners = await db.owners.filter(o => o.isEncrypted === true).toArray();
+  for (let i = 0; i < owners.length; i++) {
+    const owner = owners[i];
+    reportProgress('Owners', i + 1, owners.length);
+    const decrypted = await decryptOwner(owner, oldKey);
+    const reEncrypted = await encryptOwner(decrypted, newKey);
+    await db.owners.put(reEncrypted);
+    ownerCount++;
+  }
+
+  // Re-encrypt wallet names
+  const walletNames = await db.walletNames.filter(w => w.isEncrypted === true).toArray();
+  for (let i = 0; i < walletNames.length; i++) {
+    const walletName = walletNames[i];
+    reportProgress('Wallet Names', i + 1, walletNames.length);
+    const decrypted = await decryptWalletName(walletName, oldKey);
+    const reEncrypted = await encryptWalletName(decrypted, newKey);
+    await db.walletNames.put(reEncrypted);
+    walletNameCount++;
+  }
+
+  // Re-encrypt seed names
+  const seedNames = await db.seedNames.filter(s => s.isEncrypted === true).toArray();
+  for (let i = 0; i < seedNames.length; i++) {
+    const seedName = seedNames[i];
+    reportProgress('Seed Names', i + 1, seedNames.length);
+    const decrypted = await decryptSeedName(seedName, oldKey);
+    const reEncrypted = await encryptSeedName(decrypted, newKey);
+    await db.seedNames.put(reEncrypted);
+    seedNameCount++;
+  }
+
+  // Re-encrypt wallet software
+  const walletSoftwareItems = await db.walletSoftware.filter(w => w.isEncrypted === true).toArray();
+  for (let i = 0; i < walletSoftwareItems.length; i++) {
+    const item = walletSoftwareItems[i];
+    reportProgress('Wallet Software', i + 1, walletSoftwareItems.length);
+    const decrypted = await decryptWalletSoftware(item, oldKey);
+    const reEncrypted = await encryptWalletSoftware(decrypted, newKey);
+    await db.walletSoftware.put(reEncrypted);
+    walletSoftwareCount++;
+  }
+
+  // Re-encrypt derivation templates
+  const templates = await db.derivationTemplates.filter(t => t.isEncrypted === true).toArray();
+  for (let i = 0; i < templates.length; i++) {
+    const template = templates[i];
+    reportProgress('Derivation Templates', i + 1, templates.length);
+    const decrypted = await decryptDerivationTemplate(template, oldKey);
+    const reEncrypted = await encryptDerivationTemplate(decrypted, newKey);
+    await db.derivationTemplates.put(reEncrypted);
+    derivationTemplateCount++;
+  }
+
+  // Re-encrypt record origins
+  const origins = await db.recordOrigins.filter(o => o.isEncrypted === true).toArray();
+  for (let i = 0; i < origins.length; i++) {
+    const origin = origins[i];
+    reportProgress('Record Origins', i + 1, origins.length);
+    const decrypted = await decryptRecordOrigin(origin, oldKey);
+    const reEncrypted = await encryptRecordOrigin(decrypted, newKey);
+    await db.recordOrigins.put(reEncrypted);
+    recordOriginCount++;
+  }
+
+  // Re-encrypt evidence
+  const evidenceItems = await db.evidence.filter(e => e.isEncrypted === true).toArray();
+  for (let i = 0; i < evidenceItems.length; i++) {
+    const item = evidenceItems[i];
+    reportProgress('Evidence', i + 1, evidenceItems.length);
+    const decrypted = await decryptEvidence(item, oldKey);
+    const reEncrypted = await encryptEvidence(decrypted, newKey);
+    await db.evidence.put(reEncrypted);
+    evidenceCount++;
+  }
+
+  // Re-encrypt evidence attachments
+  const evidenceAttachments = await db.evidenceAttachments.filter(a => a.isEncrypted === true).toArray();
+  for (let i = 0; i < evidenceAttachments.length; i++) {
+    const attachment = evidenceAttachments[i];
+    reportProgress('Evidence Attachments', i + 1, evidenceAttachments.length);
+    const decrypted = await decryptEvidenceAttachment(attachment, oldKey);
+    const reEncrypted = await encryptEvidenceAttachment(decrypted, newKey);
+    await db.evidenceAttachments.put(reEncrypted);
+    evidenceAttachmentCount++;
+  }
+
+  reportProgress('Complete', 1, 1);
+
+  return {
+    records: recordCount,
+    attachments: attachmentCount,
+    tags: tagCount,
+    categories: categoryCount,
+    owners: ownerCount,
+    walletNames: walletNameCount,
+    seedNames: seedNameCount,
+    walletSoftware: walletSoftwareCount,
+    derivationTemplates: derivationTemplateCount,
+    recordOrigins: recordOriginCount,
+    evidence: evidenceCount,
+    evidenceAttachments: evidenceAttachmentCount,
+  };
+}

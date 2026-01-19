@@ -157,6 +157,44 @@ router.post('/write', upload.single('file'), async (req: Request, res) => {
   }
 });
 
+// Rewrite attachment (for password change re-encryption) - overwrites existing file
+router.post('/rewrite', upload.single('file'), async (req: Request, res) => {
+  try {
+    const file = (req as any).file;
+    if (!file) {
+      return res.status(400).json({ error: 'No file provided' });
+    }
+
+    const { objectPath } = req.body;
+    
+    if (!objectPath) {
+      return res.status(400).json({ error: 'Object path is required' });
+    }
+
+    // Security check: ensure path stays within DATA_DIR
+    const filePath = path.join(DATA_DIR, objectPath);
+    const resolvedPath = path.resolve(filePath);
+    if (!resolvedPath.startsWith(path.resolve(DATA_DIR))) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    // Check file exists before overwriting
+    try {
+      await fs.access(filePath);
+    } catch {
+      return res.status(404).json({ error: 'File not found' });
+    }
+    
+    // Overwrite file with new encrypted content
+    await fs.writeFile(filePath, file.buffer);
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Rewrite attachment error:', error);
+    res.status(500).json({ error: error instanceof Error ? error.message : 'Rewrite failed' });
+  }
+});
+
 // Download attachment
 router.get('/download/:path(*)', async (req, res) => {
   try {

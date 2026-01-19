@@ -22,7 +22,7 @@ Data is stored locally using Dexie.js (IndexedDB) for structured data, with all 
 
 *   **UI/UX:** Responsive, offline-first UI with a reorganized navigation sidebar into 6 collapsible groups, quick action UI patterns (hover card, side sheet panel, dropdown actions), and branded elements.
 *   **Data Model:** Records track ownership, wallet names, and other metadata.
-*   **Encryption:** Full AES-256-GCM encryption at rest for all data and attachments.
+*   **Encryption:** Full AES-256-GCM encryption at rest for all data and attachments. Includes password change functionality that re-encrypts all data with a new key.
 *   **Offline First:** Designed for complete offline functionality, with core logic client-side.
 *   **Portability:** Supports fully portable database storage, allowing the application to run from a USB drive.
 *   **Vocabulary Management System:** Allows users to define and manage custom tags, categories, owners, wallet names, seed names, and wallet software, with auto-syncing of new vocabulary entries.
