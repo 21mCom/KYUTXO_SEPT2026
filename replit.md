@@ -32,7 +32,13 @@ Data is stored locally using Dexie.js (IndexedDB) for structured data, with all 
 *   **Seed Name Protection:** Limits seed name field length to prevent accidental seed phrase entry.
 *   **Address Verification System:** Confirms address ownership with a tiered importance system.
 *   **Historical Price Import System:** Imports and stores Bitcoin OHLCV price data from CSV files.
-*   **Transaction Sync System (Phase 2):** Fetches blockchain data for tracked addresses from configurable sources, importing confirmed transactions, intelligently matching addresses, and auto-creating "Pending Review" records.
+*   **Transaction Sync System (Phase 2):** Fetches blockchain data for tracked addresses from configurable sources, importing confirmed transactions, intelligently matching addresses, and auto-creating "Pending Review" records. Captures outpoint data (prevTxid/prevVout) for inputs to enable exact UTXO matching.
+*   **Exact UTXO Tracking (Database v20):** Dual-mode UTXO calculation system:
+    *   **Standard Mode:** Uses heuristic address:amount matching (may be approximate for repeated amounts)
+    *   **Exact Mode (Beta):** Uses outpoint-based matching (prevTxid:prevVout) for 100% accurate UTXO identification
+    *   **Data Coverage Indicators:** Shows 0%/partial/100% outpoint data coverage with re-sync prompts
+    *   **Mode Persistence:** User's selected mode saved in settings
+    *   **Historical Views:** Both modes integrate with date filter for point-in-time UTXO snapshots
 *   **Record Detail Panel:** Comprehensive metadata display with navigation links.
 *   **Blockchain Toggle Component:** Filters blockchain-discovered records efficiently using optimized database indexing.
 *   **Reports System:** Includes Source of Funds Report (acquisition history, cost basis, valuation) and Hop-Point Detection Report (identifies unclassified addresses with confidence scoring).
