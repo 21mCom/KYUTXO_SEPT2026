@@ -12,6 +12,7 @@ import { RecordTable } from "@/components/RecordTable";
 import { RecordDetailPanel } from "@/components/RecordDetailPanel";
 import { ClickableAddress } from "@/components/ClickableAddress";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { RecordFilters, ColumnFilter, applyColumnFilters, extractUniqueValues } from "@/components/RecordFilters";
 
 // User-curated importance tiers (exclude blockchain-discovered and pending-review by default)
 const USER_CURATED_TIERS: AddressImportance[] = ['verified', 'manual', 'wallet-import', 'xpub-derived'];
@@ -56,6 +57,9 @@ export default function Records() {
   // Filter state: by default, only show user-curated records (not blockchain-discovered)
   const [includeBlockchainDiscovered, setIncludeBlockchainDiscovered] = useState(false);
   const [totalBlockchainDiscovered, setTotalBlockchainDiscovered] = useState(0);
+  
+  // Column filters state
+  const [columnFilters, setColumnFilters] = useState<ColumnFilter[]>([]);
   
   // State for blockchain transaction search results
   const [matchingTxids, setMatchingTxids] = useState<string[]>([]);
@@ -211,10 +215,18 @@ export default function Records() {
     loadRecords();
   }, [includeBlockchainDiscovered, dbChangeSignal]);
 
-  // Filter records based on search query, including blockchain transaction search
+  // Extract unique values from records for filter dropdowns
+  const uniqueFilterValues = useMemo(() => {
+    return extractUniqueValues(records as Array<Record<string, unknown>>);
+  }, [records]);
+
+  // Filter records based on column filters, search query, including blockchain transaction search
   useEffect(() => {
+    // First apply column filters
+    const columnFiltered = applyColumnFilters(records as Array<Record<string, unknown>>, columnFilters) as ConvertedRecord[];
+    
     if (!searchQuery) {
-      setFilteredRecords(records);
+      setFilteredRecords(columnFiltered);
       setMatchingTxids([]);
       setTxidSearchResults([]);
       return;
@@ -222,8 +234,8 @@ export default function Records() {
 
     const query = searchQuery.toLowerCase();
     
-    // First, filter records directly
-    const filtered = records.filter(record => 
+    // Then apply search query filter
+    const filtered = columnFiltered.filter(record => 
       record.label?.toLowerCase().includes(query) ||
       record.inputString?.toLowerCase().includes(query) ||
       record.owner?.toLowerCase().includes(query) ||
@@ -333,7 +345,7 @@ export default function Records() {
       setTxidSearchResults([]);
       setFilteredRecords(filtered);
     }
-  }, [records, searchQuery]);
+  }, [records, searchQuery, columnFilters]);
 
   // State for directly-loaded record (when accessed by URL but not in filtered view)
   const [directLoadedRecord, setDirectLoadedRecord] = useState<ConvertedRecord | null>(null);
@@ -485,6 +497,12 @@ export default function Records() {
               />
             </div>
           </div>
+          
+          <RecordFilters
+            filters={columnFilters}
+            onFiltersChange={setColumnFilters}
+            uniqueValues={uniqueFilterValues}
+          />
         </div>
 
         {/* Blockchain Transaction Search Results */}
