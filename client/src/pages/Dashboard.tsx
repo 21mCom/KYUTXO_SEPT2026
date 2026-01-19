@@ -14,6 +14,7 @@ import {
 import { BlockchainToggle } from "@/components/BlockchainToggle";
 import { SearchBar } from "@/components/SearchBar";
 import { FilterBar } from "@/components/FilterBar";
+import { RecordFilters, ColumnFilter, applyColumnFilters, extractUniqueValues } from "@/components/RecordFilters";
 import { RecordCard } from "@/components/RecordCard";
 import { RecordTable } from "@/components/RecordTable";
 import { RecordDetailPanel } from "@/components/RecordDetailPanel";
@@ -72,6 +73,9 @@ export default function Dashboard() {
   // Bulk selection state
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkDeleteDialogOpen, setBulkDeleteDialogOpen] = useState(false);
+  
+  // Column filters state
+  const [columnFilters, setColumnFilters] = useState<ColumnFilter[]>([]);
 
   const { records, isLoading, blockchainDiscoveredCount } = useFilteredRecords(includeBlockchainDiscovered);
   const { tags } = useEncryptedTags();
@@ -98,11 +102,17 @@ export default function Dashboard() {
     loadAttachments();
   }, [selectedRecordId]);
 
+  // Extract unique values from records for filter dropdowns
+  const uniqueFilterValues = useMemo(() => {
+    return extractUniqueValues(records as unknown as Array<{ [key: string]: unknown }>);
+  }, [records]);
+
   // Apply search and filters
   // Note: blockchain-discovered filtering is now done at the DATABASE level via useFilteredRecords
   useEffect(() => {
-    const applyFilters = async () => {
-      let results = [...records];
+    const applyFiltersAsync = async () => {
+      // First apply column filters
+      let results = applyColumnFilters(records as unknown as Array<{ [key: string]: unknown }>, columnFilters) as unknown as typeof records;
 
       // Apply type filter
       if (filter.type && filter.type !== "all") {
@@ -141,13 +151,13 @@ export default function Dashboard() {
       setFilteredRecords(results);
     };
 
-    applyFilters();
-  }, [search, filter, records, includeBlockchainDiscovered]);
+    applyFiltersAsync();
+  }, [search, filter, records, includeBlockchainDiscovered, columnFilters]);
 
   // Reset to page 1 when filters change
   useEffect(() => {
     setCurrentPage(1);
-  }, [search, filter, includeBlockchainDiscovered]);
+  }, [search, filter, includeBlockchainDiscovered, columnFilters]);
   
   // Handle sort column clicks from RecordTable
   const handleSort = (column: SortColumn) => {
@@ -874,6 +884,12 @@ export default function Dashboard() {
           availableTags={tags.map(t => t.name).filter(n => n && n !== '[encrypted]')}
           availableCategories={categories.map(c => c.name).filter(n => n && n !== '[encrypted]')}
           tableColumns={settings?.tableColumns}
+        />
+        
+        <RecordFilters
+          filters={columnFilters}
+          onFiltersChange={setColumnFilters}
+          uniqueValues={uniqueFilterValues}
         />
       </div>
 
