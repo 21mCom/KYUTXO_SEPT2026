@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from "react";
-import { Plus, Grid3x3, List, ChevronLeft, ChevronRight } from "lucide-react";
+import { Plus, Grid3x3, List, ChevronLeft, ChevronRight, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   AlertDialog,
@@ -68,6 +68,10 @@ export default function Dashboard() {
   // Delete confirmation state
   const [deleteConfirmTarget, setDeleteConfirmTarget] = useState<number | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+  
+  // Bulk selection state
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkDeleteDialogOpen, setBulkDeleteDialogOpen] = useState(false);
 
   const { records, isLoading, blockchainDiscoveredCount } = useFilteredRecords(includeBlockchainDiscovered);
   const { tags } = useEncryptedTags();
@@ -715,6 +719,53 @@ export default function Dashboard() {
     }
   };
 
+  // Clear selection when records change (e.g., after delete)
+  useEffect(() => {
+    const recordIds = new Set(filteredRecords.map(r => String(r.id)));
+    setSelectedIds(prev => {
+      const validSelected = new Set(Array.from(prev).filter(id => recordIds.has(id)));
+      if (validSelected.size !== prev.size) {
+        return validSelected;
+      }
+      return prev;
+    });
+  }, [filteredRecords]);
+
+  const handleBulkDelete = async () => {
+    if (selectedIds.size === 0) return;
+    
+    setIsDeleting(true);
+    const idsToDelete = Array.from(selectedIds);
+    let successCount = 0;
+    let failCount = 0;
+    
+    for (const id of idsToDelete) {
+      try {
+        await deleteRecord(parseInt(id));
+        successCount++;
+      } catch {
+        failCount++;
+      }
+    }
+    
+    setSelectedIds(new Set());
+    setBulkDeleteDialogOpen(false);
+    setIsDeleting(false);
+    
+    if (failCount === 0) {
+      toast({
+        title: "Records deleted",
+        description: `Successfully deleted ${successCount} record${successCount !== 1 ? 's' : ''}.`,
+      });
+    } else {
+      toast({
+        variant: "destructive",
+        title: "Partial deletion",
+        description: `Deleted ${successCount} record${successCount !== 1 ? 's' : ''}, ${failCount} failed.`,
+      });
+    }
+  };
+
   const handleEditRecord = (id: number) => {
     const record = records.find(r => r.id === id);
     if (record) {
@@ -859,19 +910,49 @@ export default function Dashboard() {
                 })}
               </div>
             ) : (
-              <RecordTable
-                records={paginatedRecords.map(r => {
-                  const stringId = r.id !== undefined ? String(r.id) : "";
-                  return { ...r, id: stringId };
-                })}
-                onRowClick={(id) => handleRecordClick(Number(id))}
-                onEdit={(id) => handleEditRecord(Number(id))}
-                onDelete={(id) => handleDeleteRequest(Number(id))}
-                onSyncDeeper={(id) => handleSyncDeeper(Number(id))}
-                externalSortColumn={sortColumn}
-                externalSortDirection={sortDirection}
-                onSortChange={handleSort}
-              />
+              <>
+                {selectedIds.size > 0 && (
+                  <div className="mb-4 p-3 bg-muted rounded-md flex items-center justify-between gap-4">
+                    <span className="text-sm font-medium">{selectedIds.size} selected</span>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setSelectedIds(new Set())}
+                        data-testid="button-clear-selection"
+                      >
+                        <X className="h-4 w-4 mr-1" />
+                        Clear
+                      </Button>
+                      <Button
+                        variant="destructive"
+                        size="sm"
+                        onClick={() => setBulkDeleteDialogOpen(true)}
+                        data-testid="button-bulk-delete"
+                      >
+                        <Trash2 className="h-4 w-4 mr-1" />
+                        Delete Selected
+                      </Button>
+                    </div>
+                  </div>
+                )}
+                <RecordTable
+                  records={paginatedRecords.map(r => {
+                    const stringId = r.id !== undefined ? String(r.id) : "";
+                    return { ...r, id: stringId };
+                  })}
+                  onRowClick={(id) => handleRecordClick(Number(id))}
+                  onEdit={(id) => handleEditRecord(Number(id))}
+                  onDelete={(id) => handleDeleteRequest(Number(id))}
+                  onSyncDeeper={(id) => handleSyncDeeper(Number(id))}
+                  externalSortColumn={sortColumn}
+                  externalSortDirection={sortDirection}
+                  onSortChange={handleSort}
+                  selectionEnabled={true}
+                  selectedIds={selectedIds}
+                  onSelectionChange={setSelectedIds}
+                />
+              </>
             )}
 
             {/* Pagination Controls */}
@@ -973,6 +1054,28 @@ export default function Dashboard() {
               data-testid="button-confirm-delete"
             >
               {isDeleting ? "Deleting..." : "Delete Record"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={bulkDeleteDialogOpen} onOpenChange={setBulkDeleteDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete {selectedIds.size} Record{selectedIds.size !== 1 ? 's' : ''}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This action cannot be undone. This will permanently delete the selected record{selectedIds.size !== 1 ? 's' : ''} and all associated attachments.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isDeleting} data-testid="button-cancel-bulk-delete">Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleBulkDelete}
+              disabled={isDeleting}
+              className="bg-destructive text-destructive-foreground"
+              data-testid="button-confirm-bulk-delete"
+            >
+              {isDeleting ? "Deleting..." : `Delete ${selectedIds.size} Record${selectedIds.size !== 1 ? 's' : ''}`}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
