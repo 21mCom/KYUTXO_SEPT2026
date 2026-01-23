@@ -38,7 +38,8 @@ import {
   Copy,
   Check,
   TrendingUp,
-  TrendingDown
+  TrendingDown,
+  HelpCircle
 } from "lucide-react";
 import { SiBitcoin } from "react-icons/si";
 import { decryptRecords, isEncryptionReady, getDecryptedOwners, getDecryptedWalletNames, getDecryptedTags, getDecryptedCategories } from "@/lib/encryptionFacade";
@@ -1059,17 +1060,48 @@ export default function UTXOs() {
               </Popover>
             </div>
 
-            <div className="w-[160px]">
-              <Label className="sr-only">Calculation Mode</Label>
-              <Select value={utxoMode} onValueChange={(v) => setUtxoMode(v as UTXOCalculationMode)}>
-                <SelectTrigger data-testid="select-utxo-mode">
-                  <SelectValue placeholder="Mode" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="heuristic">Standard</SelectItem>
-                  <SelectItem value="exact">Exact (Beta)</SelectItem>
-                </SelectContent>
-              </Select>
+            <div className="flex items-center gap-1">
+              <div className="w-[160px]">
+                <Label className="sr-only">Calculation Mode</Label>
+                <Select value={utxoMode} onValueChange={(v) => setUtxoMode(v as UTXOCalculationMode)}>
+                  <SelectTrigger data-testid="select-utxo-mode">
+                    <SelectValue placeholder="Mode" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="heuristic">Standard</SelectItem>
+                    <SelectItem value="exact">Exact (Beta)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <Popover>
+                <PopoverTrigger asChild>
+                  <Button variant="ghost" size="icon" className="h-8 w-8" data-testid="button-mode-help">
+                    <HelpCircle className="h-4 w-4 text-muted-foreground" />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-80" align="start">
+                  <div className="space-y-3">
+                    <h4 className="font-medium">UTXO Calculation Modes</h4>
+                    <div className="space-y-2 text-sm">
+                      <div>
+                        <span className="font-medium">Standard Mode:</span>
+                        <p className="text-muted-foreground">
+                          Uses address + amount matching to identify spent UTXOs. Fast and works with any data, but may be approximate when the same address receives identical amounts multiple times.
+                        </p>
+                      </div>
+                      <div>
+                        <span className="font-medium">Exact Mode (Beta):</span>
+                        <p className="text-muted-foreground">
+                          Uses outpoint data (txid:vout) for 100% accurate UTXO identification. Requires transaction sync data with outpoint information. Shows exact which specific UTXO was spent in each transaction.
+                        </p>
+                      </div>
+                    </div>
+                    <p className="text-xs text-muted-foreground border-t pt-2">
+                      Tip: If Exact mode shows 0% data coverage, re-sync your transactions to fetch outpoint data.
+                    </p>
+                  </div>
+                </PopoverContent>
+              </Popover>
             </div>
 
             {hasActiveFilters && (
