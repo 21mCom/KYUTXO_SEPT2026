@@ -59,6 +59,7 @@ export default function Dashboard() {
   const [showDetail, setShowDetail] = useState(false);
   const [showForm, setShowForm] = useState(false);
   const [editingRecord, setEditingRecord] = useState<Record | undefined>();
+  const [editingRecordAttachments, setEditingRecordAttachments] = useState<Attachment[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<{ current: number; total: number } | null>(null);
   
@@ -101,6 +102,20 @@ export default function Dashboard() {
 
     loadAttachments();
   }, [selectedRecordId]);
+
+  // Load attachments when editing record changes
+  useEffect(() => {
+    const loadEditingAttachments = async () => {
+      if (editingRecord?.id !== undefined) {
+        const attachments = await getRecordAttachments(editingRecord.id);
+        setEditingRecordAttachments(attachments);
+      } else {
+        setEditingRecordAttachments([]);
+      }
+    };
+
+    loadEditingAttachments();
+  }, [editingRecord?.id]);
 
   // Extract unique values from records for filter dropdowns
   const uniqueFilterValues = useMemo(() => {
@@ -1061,6 +1076,13 @@ export default function Dashboard() {
         availableCategories={categories.map(c => c.name).filter(n => n && n !== '[encrypted]')}
         enabledCustomFields={enabledCustomFields}
         onCheckDuplicate={handleCheckDuplicate}
+        existingAttachments={editingRecord ? editingRecordAttachments : []}
+        onAttachmentDeleted={async () => {
+          if (editingRecord?.id) {
+            const attachments = await getRecordAttachments(editingRecord.id);
+            setEditingRecordAttachments(attachments);
+          }
+        }}
       />
 
       <AlertDialog open={deleteConfirmTarget !== null} onOpenChange={(open) => !open && setDeleteConfirmTarget(null)}>

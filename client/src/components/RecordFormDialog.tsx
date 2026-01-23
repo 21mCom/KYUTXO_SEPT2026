@@ -54,6 +54,8 @@ import {
 import { cn } from "@/lib/utils";
 import { formatFileSize } from "@/lib/attachments";
 import { MultiSelectCombobox } from "@/components/ui/multi-select-combobox";
+import { AttachmentList } from "./AttachmentList";
+import type { Attachment } from "@/lib/database";
 import { createProvider, parseTransaction, type ParsedTransaction, MINIMUM_CONFIRMATIONS } from "@/lib/blockchain-api";
 import { useToast } from "@/hooks/use-toast";
 import { SEED_NAME_MAX_LENGTH } from "@/hooks/use-seed-names";
@@ -107,6 +109,8 @@ interface RecordFormDialogProps {
   availableCategories?: string[];
   enabledCustomFields?: CustomFieldDef[];
   onCheckDuplicate?: (inputString: string) => Promise<ExistingRecord | undefined>;
+  existingAttachments?: Attachment[];
+  onAttachmentDeleted?: () => void;
 }
 
 export function RecordFormDialog({ 
@@ -124,6 +128,8 @@ export function RecordFormDialog({
   availableCategories = [],
   enabledCustomFields = [],
   onCheckDuplicate,
+  existingAttachments = [],
+  onAttachmentDeleted,
 }: RecordFormDialogProps) {
   const getDefaultFormData = () => ({
     inputString: "",
@@ -1317,7 +1323,18 @@ export function RecordFormDialog({
           )}
 
           <div className="space-y-2">
-            <Label>Attachments</Label>
+            <Label>Attachments {existingAttachments.length > 0 && `(${existingAttachments.length} existing)`}</Label>
+            
+            {existingAttachments.length > 0 && (
+              <div className="mb-3">
+                <AttachmentList 
+                  attachments={existingAttachments} 
+                  onDelete={onAttachmentDeleted}
+                />
+              </div>
+            )}
+
+            <Label className="text-sm text-muted-foreground">Add new files</Label>
             <input
               type="file"
               multiple
