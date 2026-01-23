@@ -112,7 +112,7 @@ export function AttachmentList({ attachments, onDelete }: AttachmentListProps) {
               <div className="flex gap-1 flex-shrink-0">
                 <Button
                   size="icon"
-                  variant="ghost"
+                  variant="outline"
                   onClick={() => handleDownload(attachment)}
                   data-testid={`button-download-${attachment.id}`}
                 >
@@ -120,7 +120,7 @@ export function AttachmentList({ attachments, onDelete }: AttachmentListProps) {
                 </Button>
                 <Button
                   size="icon"
-                  variant="ghost"
+                  variant="outline"
                   onClick={() => {
                     setDeleteTarget(attachment);
                     setDeleteDialogOpen(true);
