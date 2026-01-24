@@ -452,6 +452,28 @@ export default function BulkImport() {
       const changeToSave = (activeChange || []).filter((_, i) => selectedChangeAddresses.has(i));
       const allAddresses = [...receiveToSave, ...changeToSave];
       
+      // Build multisig vault notes with cosigner details as structured JSON
+      const buildMultisigVaultNotes = () => {
+        // Extract cosigner metadata (names, notes)
+        const cosignerDetails = multisigXpubs
+          .filter(x => x.xpub.trim())
+          .map((x, idx) => ({
+            index: idx + 1,
+            name: x.name || `Cosigner ${idx + 1}`,
+            notes: x.notes || undefined,
+            // Include truncated xpub preview for visual reference (not a cryptographic fingerprint)
+            xpubPreview: x.xpub.substring(0, 12) + '...',
+          }));
+        
+        const structuredData = {
+          cosigners: cosignerDetails,
+          scriptType: multisigScriptType,
+          userNotes: notes || undefined,
+        };
+        
+        return JSON.stringify(structuredData, null, 2);
+      };
+      
       const parsedTags = selectedTags;
       const parsedCategories = selectedCategories;
 
@@ -545,7 +567,7 @@ export default function BulkImport() {
                 vaultName: walletNameInput || seedName || 'Multisig Vault',
                 m: multisigResult?.m ?? null,
                 n: multisigResult?.n ?? null,
-                vaultNotes: notes || null,
+                vaultNotes: buildMultisigVaultNotes(),
               } : vaultMetadata,
               // Handle addressImportance upgrade
               addressImportance: newImportance,
@@ -566,8 +588,8 @@ export default function BulkImport() {
                   privateKeyStatus: privateKeyStatus || undefined,
                   owner: ownerInput || undefined,
                   walletName: walletNameInput || undefined,
-                  xpub: xpub,
-                  derivationPath: addr.path,
+                  xpub: isMultisigMode ? undefined : xpub,
+                  derivationPath: derivationPath,
                   chainType: addr.chainType,
                 });
               } catch (originError) {
@@ -599,7 +621,7 @@ export default function BulkImport() {
                 vaultName: walletNameInput || seedName || 'Multisig Vault',
                 m: multisigResult?.m ?? null,
                 n: multisigResult?.n ?? null,
-                vaultNotes: notes || null,
+                vaultNotes: buildMultisigVaultNotes(),
               } : vaultMetadata,
               addressImportance: markAsVerified ? 'verified' : 'xpub-derived',
             });
@@ -704,18 +726,20 @@ export default function BulkImport() {
     }
   };
   
-  const updateMultisigXpub = (index: number, field: 'xpub' | 'derivationPath', value: string) => {
+  const updateMultisigXpub = (index: number, field: 'xpub' | 'derivationPath' | 'name' | 'notes', value: string) => {
     const updated = [...multisigXpubs];
     updated[index] = { ...updated[index], [field]: value };
     setMultisigXpubs(updated);
     
-    // Validate multisig xpubs when changed
-    const filledXpubs = updated.filter(x => x.xpub.trim()).map(x => x.xpub);
-    if (filledXpubs.length >= 2) {
-      const validation = validateMultisigXpubs(filledXpubs);
-      setMultisigValidationError(validation.valid ? null : (validation.error || 'Invalid xpubs'));
-    } else {
-      setMultisigValidationError(null);
+    // Validate multisig xpubs when changed (only for xpub field changes)
+    if (field === 'xpub') {
+      const filledXpubs = updated.filter(x => x.xpub.trim()).map(x => x.xpub);
+      if (filledXpubs.length >= 2) {
+        const validation = validateMultisigXpubs(filledXpubs);
+        setMultisigValidationError(validation.valid ? null : (validation.error || 'Invalid xpubs'));
+      } else {
+        setMultisigValidationError(null);
+      }
     }
   };
   
@@ -1008,7 +1032,16 @@ export default function BulkImport() {
                     {multisigXpubs.map((entry, index) => (
                       <div key={index} className="p-4 border rounded-lg space-y-3">
                         <div className="flex items-center justify-between gap-2">
-                          <Label className="font-medium">Cosigner {index + 1}</Label>
+                          <div className="flex items-center gap-2 flex-1 min-w-0">
+                            <Label className="font-medium shrink-0">Cosigner {index + 1}</Label>
+                            <Input
+                              value={entry.name || ''}
+                              onChange={(e) => updateMultisigXpub(index, 'name', e.target.value)}
+                              placeholder="Name (e.g., Hardware Wallet)"
+                              className="flex-1 text-sm"
+                              data-testid={`input-cosigner-name-${index}`}
+                            />
+                          </div>
                           {multisigXpubs.length > 2 && (
                             <Button
                               variant="ghost"
@@ -1024,27 +1057,42 @@ export default function BulkImport() {
                           value={entry.xpub}
                           onChange={(e) => updateMultisigXpub(index, 'xpub', e.target.value)}
                           placeholder={`xpub6D... / zpub6D... (Cosigner ${index + 1})`}
-                          className="font-mono text-sm min-h-[80px]"
+                          className="font-mono text-sm"
+                          rows={3}
                           data-testid={`input-multisig-xpub-${index}`}
                         />
                         <Collapsible>
                           <CollapsibleTrigger asChild>
-                            <Button variant="ghost" size="sm" className="text-xs gap-1">
+                            <Button variant="ghost" size="sm" className="text-xs gap-1" data-testid={`button-cosigner-advanced-${index}`}>
                               <ChevronDown className="h-3 w-3" />
-                              Custom Derivation Path
+                              Advanced Options
                             </Button>
                           </CollapsibleTrigger>
-                          <CollapsibleContent className="pt-2">
-                            <Input
-                              value={entry.derivationPath || ''}
-                              onChange={(e) => updateMultisigXpub(index, 'derivationPath', e.target.value)}
-                              placeholder="Optional: e.g., 0 or 0/0 (default: auto-detect)"
-                              className="font-mono text-sm"
-                              data-testid={`input-multisig-path-${index}`}
-                            />
-                            <p className="text-xs text-muted-foreground mt-1">
-                              Leave empty for auto-detection based on key depth
-                            </p>
+                          <CollapsibleContent className="pt-2 space-y-3">
+                            <div>
+                              <Label className="text-xs text-muted-foreground">Custom Derivation Path</Label>
+                              <Input
+                                value={entry.derivationPath || ''}
+                                onChange={(e) => updateMultisigXpub(index, 'derivationPath', e.target.value)}
+                                placeholder="Optional: e.g., 0 or 0/0 (default: auto-detect)"
+                                className="font-mono text-sm mt-1"
+                                data-testid={`input-multisig-path-${index}`}
+                              />
+                              <p className="text-xs text-muted-foreground mt-1">
+                                Leave empty for auto-detection based on key depth
+                              </p>
+                            </div>
+                            <div>
+                              <Label className="text-xs text-muted-foreground">Notes</Label>
+                              <Textarea
+                                value={entry.notes || ''}
+                                onChange={(e) => updateMultisigXpub(index, 'notes', e.target.value)}
+                                placeholder="Optional notes about this cosigner..."
+                                className="text-sm mt-1"
+                                rows={2}
+                                data-testid={`input-cosigner-notes-${index}`}
+                              />
+                            </div>
                           </CollapsibleContent>
                         </Collapsible>
                       </div>
@@ -1806,7 +1854,7 @@ export default function BulkImport() {
                         Total: {totalSelectedAddresses} addresses selected
                       </p>
                       <div className="flex gap-2">
-                        {(isMultisigMode ? multisigResult?.change : dualChainResult?.change)?.length > 0 ? (
+                        {((isMultisigMode ? multisigResult?.change : dualChainResult?.change)?.length ?? 0) > 0 ? (
                           <>
                             <Badge variant="secondary">{selectedReceiveAddresses.size} receive</Badge>
                             <Badge variant="outline">{selectedChangeAddresses.size} change</Badge>
