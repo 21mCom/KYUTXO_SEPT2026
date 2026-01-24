@@ -483,6 +483,8 @@ export type MultisigScriptType = 'p2sh' | 'p2wsh' | 'p2sh-p2wsh';
 export interface MultisigXpubEntry {
   xpub: string;
   derivationPath?: string; // Optional custom path like "0" or "1" for chain
+  name?: string; // Optional cosigner name (e.g., "Hardware Wallet", "Cold Storage")
+  notes?: string; // Optional notes about this cosigner
 }
 
 export interface MultisigConfig {
