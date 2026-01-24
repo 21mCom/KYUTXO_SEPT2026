@@ -58,6 +58,7 @@ Data is stored locally using Dexie.js (IndexedDB) for structured data, with all 
 *   **Record Detail Panel:** Comprehensive metadata display with navigation links.
 *   **Blockchain Toggle Component:** Filters blockchain-discovered records efficiently using optimized database indexing.
 *   **Reports System:** Includes Source of Funds Report (acquisition history, cost basis, valuation) and Hop-Point Detection Report (identifies unclassified addresses with confidence scoring).
+*   **Quick Tagger:** Paste-based bulk tagging tool for addresses and transactions with full metadata support including tags, categories, owner, wallet name, seed name, wallet software, private key status, label, notes, and type-specific fields (address importance, counterparty type, flow type, acquisition method, disposition type, cost basis).
 *   **Nudgie (Transaction Labeling To-Do):** A workflow for systematically labeling unlabeled transactions, with dashboard and focus views, source filtering, and quick-label buttons.
 *   **Transaction Classification Metadata (Database v15):** Tax-neutral fact-recording system for `flowType`, `acquisitionMethod`, `dispositionType`, `costBasisUsd`, and `counterpartyType`.
 *   **Bulk Editor:** A powerful batch editing system for updating multiple records at once with a filter builder, action builder, preview panel, and undo capability. Optimized for fast processing of large datasets.

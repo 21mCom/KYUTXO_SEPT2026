@@ -23,6 +23,8 @@ import { useAuth } from "@/contexts/AuthContext";
 import { useRecords, createRecord, updateRecord } from "@/hooks/use-records";
 import { useOwners, createOwner } from "@/hooks/use-owners";
 import { useWalletNames, createWalletName } from "@/hooks/use-wallet-names";
+import { useSeedNames, createSeedName } from "@/hooks/use-seed-names";
+import { useWalletSoftware, createWalletSoftware } from "@/hooks/use-wallet-software";
 import { syncTagsToMaster, syncCategoriesToMaster, findRecordByInputString, createRecordOrigin, isEncryptionReady } from "@/lib/encryptionFacade";
 import { validateBitcoinInput } from "@/lib/bitcoin";
 import { 
@@ -71,6 +73,9 @@ export default function QuickTagger() {
   const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
   const [owner, setOwner] = useState("");
   const [walletName, setWalletName] = useState("");
+  const [seedName, setSeedName] = useState("");
+  const [walletSoftware, setWalletSoftware] = useState("");
+  const [privateKeyStatus, setPrivateKeyStatus] = useState("");
   const [label, setLabel] = useState("");
   const [notes, setNotes] = useState("");
 
@@ -90,6 +95,8 @@ export default function QuickTagger() {
   const { records } = useRecords();
   const { owners } = useOwners();
   const { walletNames } = useWalletNames();
+  const { seedNames } = useSeedNames();
+  const { walletSoftware: walletSoftwareList } = useWalletSoftware();
 
   // Parse pasted text into entries
   const parseEntries = async () => {
@@ -232,6 +239,24 @@ export default function QuickTagger() {
         await createWalletName(walletName);
       }
 
+      // Ensure seed name exists
+      if (seedName && !seedNames.find(s => s.name === seedName)) {
+        try {
+          await createSeedName(seedName);
+        } catch {
+          // May already exist
+        }
+      }
+
+      // Ensure wallet software exists
+      if (walletSoftware && !walletSoftwareList.find(w => w.name === walletSoftware)) {
+        try {
+          await createWalletSoftware(walletSoftware);
+        } catch {
+          // May already exist
+        }
+      }
+
       for (const entry of entriesToProcess) {
         const isAddress = entry.type === 'address';
         const isTransaction = entry.type === 'transaction';
@@ -257,6 +282,9 @@ export default function QuickTagger() {
         if (selectedCategories.length > 0) updateData.categories = selectedCategories;
         if (owner) updateData.owner = owner;
         if (walletName) updateData.walletName = walletName;
+        if (seedName) updateData.seedName = seedName;
+        if (walletSoftware) updateData.walletSoftware = walletSoftware;
+        if (privateKeyStatus) updateData.privateKeyStatus = privateKeyStatus;
         if (label) updateData.label = label;
         if (notes) updateData.notes = notes;
 
@@ -299,6 +327,9 @@ export default function QuickTagger() {
             categories: selectedCategories,
             owner: owner || undefined,
             walletName: walletName || undefined,
+            seedName: seedName || undefined,
+            walletSoftware: walletSoftware || undefined,
+            privateKeyStatus: privateKeyStatus || undefined,
             addressImportance: isAddress ? (addressImportance as AddressImportance || 'manual') : undefined,
             counterpartyType: isAddress ? (counterpartyType as CounterpartyType || undefined) : undefined,
             flowType: isTransaction ? (flowType as FlowType || undefined) : undefined,
@@ -348,6 +379,9 @@ export default function QuickTagger() {
     setSelectedCategories([]);
     setOwner("");
     setWalletName("");
+    setSeedName("");
+    setWalletSoftware("");
+    setPrivateKeyStatus("");
     setLabel("");
     setNotes("");
     setAddressImportance("");
@@ -611,6 +645,48 @@ a1075db55d416d3ca199f55b6084e2115b9345e16c5cf302fc80e9d5fbf5d48d
                         {walletNames.map(w => (
                           <SelectItem key={w.id} value={w.name}>{w.name}</SelectItem>
                         ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label>Seed Name</Label>
+                    <Select value={seedName} onValueChange={setSeedName}>
+                      <SelectTrigger data-testid="select-seed-name">
+                        <SelectValue placeholder="Select seed..." />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {seedNames.map(s => (
+                          <SelectItem key={s.id} value={s.name}>{s.name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label>Wallet Software</Label>
+                    <Select value={walletSoftware} onValueChange={setWalletSoftware}>
+                      <SelectTrigger data-testid="select-wallet-software">
+                        <SelectValue placeholder="Select software..." />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {walletSoftwareList.map(ws => (
+                          <SelectItem key={ws.id} value={ws.name}>{ws.name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label>Private Key Status</Label>
+                    <Select value={privateKeyStatus} onValueChange={setPrivateKeyStatus}>
+                      <SelectTrigger data-testid="select-private-key-status">
+                        <SelectValue placeholder="Select status..." />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="has-private-key">Has Private Key</SelectItem>
+                        <SelectItem value="no-private-key">No Private Key</SelectItem>
+                        <SelectItem value="unknown">Unknown</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
