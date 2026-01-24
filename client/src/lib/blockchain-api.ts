@@ -137,6 +137,7 @@ abstract class EsploraProvider implements BlockchainProvider {
         method: 'GET',
         timeout: this.timeout,
         torProxyUrl: this.torProxyUrl,
+        allowedHost: this.baseUrl, // Pass configured provider URL for SSRF protection
       }),
     });
 
@@ -146,13 +147,36 @@ abstract class EsploraProvider implements BlockchainProvider {
       statusText?: string;
       data?: unknown;
       error?: string;
+      latency?: number;
+      contentType?: string;
     };
 
-    if (!result.success) {
+    // Handle proxy-level errors (connection failed, timeout, etc.)
+    if (!result.success && !result.status) {
       throw new Error(result.error || 'Tor proxy request failed');
     }
 
-    // Create a Response-like object from the proxied result
+    // Handle HTTP-level errors with better context
+    if (!result.success && result.status) {
+      const status = result.status;
+      const statusText = result.statusText || 'Unknown';
+      
+      if (status === 429) {
+        throw new Error(`Rate limited by ${this.name} (via Tor). Please wait a moment and try again.`);
+      }
+      if (status === 403) {
+        throw new Error(`Access forbidden by ${this.name}. Status: ${status} ${statusText}`);
+      }
+      if (status >= 500) {
+        throw new Error(`Server error from ${this.name}: ${status} ${statusText}`);
+      }
+      throw new Error(`API request failed: ${status} ${statusText}${result.error ? ` - ${result.error}` : ''}`);
+    }
+
+    // Use upstream content-type if available, otherwise determine from data
+    const contentType = result.contentType || 
+      (typeof result.data === 'object' && result.data !== null ? 'application/json' : 'text/plain');
+    
     const responseBody = typeof result.data === 'string' 
       ? result.data 
       : JSON.stringify(result.data);
@@ -160,7 +184,7 @@ abstract class EsploraProvider implements BlockchainProvider {
     return new Response(responseBody, {
       status: result.status || 200,
       statusText: result.statusText || 'OK',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': contentType },
     });
   }
 

@@ -6,6 +6,87 @@ const router = Router();
 const DEFAULT_TOR_PROXY = "socks5h://127.0.0.1:9050";
 const TOR_BROWSER_PROXY = "socks5h://127.0.0.1:9150";
 
+// Allowed hostnames for Bitcoin API requests - prevents SSRF attacks
+const ALLOWED_API_HOSTS = [
+  // Mempool.space
+  "mempool.space",
+  // Blockstream
+  "blockstream.info",
+  // Tor project (for testing)
+  "check.torproject.org",
+  // Allow any .onion address (user's own nodes)
+];
+
+function isAllowedUrl(url: string, additionalAllowedHost?: string): { allowed: boolean; reason?: string } {
+  try {
+    const parsed = new URL(url);
+    const hostname = parsed.hostname.toLowerCase();
+    
+    // Allow .onion addresses (user's self-hosted nodes)
+    if (hostname.endsWith('.onion')) {
+      return { allowed: true };
+    }
+    
+    // Block private IP ranges and localhost
+    const privatePatterns = [
+      /^localhost$/i,
+      /^127\./,
+      /^10\./,
+      /^172\.(1[6-9]|2[0-9]|3[0-1])\./,
+      /^192\.168\./,
+      /^0\./,
+      /^169\.254\./,
+      /^\[::1\]$/,
+      /^\[fe80:/i,
+      /^\[fc00:/i,
+      /^\[fd00:/i,
+    ];
+    
+    for (const pattern of privatePatterns) {
+      if (pattern.test(hostname)) {
+        return { allowed: false, reason: "Internal network addresses are not allowed" };
+      }
+    }
+    
+    // Build dynamic allowlist including client-provided host
+    const allowedHosts = [...ALLOWED_API_HOSTS];
+    if (additionalAllowedHost) {
+      try {
+        const additionalParsed = new URL(additionalAllowedHost);
+        const additionalHostname = additionalParsed.hostname.toLowerCase();
+        // Only add if it passes private IP check
+        const isPrivate = privatePatterns.some(p => p.test(additionalHostname));
+        if (!isPrivate) {
+          allowedHosts.push(additionalHostname);
+        }
+      } catch {
+        // Invalid URL, ignore
+      }
+    }
+    
+    // Check against allowlist
+    const isAllowed = allowedHosts.some(allowed => 
+      hostname === allowed || hostname.endsWith('.' + allowed)
+    );
+    
+    if (!isAllowed) {
+      return { 
+        allowed: false, 
+        reason: `Host '${hostname}' is not in the allowed list. Only Bitcoin API providers are permitted.`
+      };
+    }
+    
+    // Only allow HTTPS for non-.onion hosts
+    if (parsed.protocol !== 'https:') {
+      return { allowed: false, reason: "Only HTTPS URLs are allowed (except for .onion)" };
+    }
+    
+    return { allowed: true };
+  } catch {
+    return { allowed: false, reason: "Invalid URL format" };
+  }
+}
+
 interface ProxyRequest {
   url: string;
   method?: "GET" | "POST" | "PUT" | "DELETE";
@@ -13,6 +94,7 @@ interface ProxyRequest {
   body?: unknown;
   timeout?: number;
   torProxyUrl?: string;
+  allowedHost?: string; // Client-specified allowed host for custom providers
 }
 
 interface ProxyResponse {
@@ -22,6 +104,7 @@ interface ProxyResponse {
   data?: unknown;
   error?: string;
   latency?: number;
+  contentType?: string; // Preserve upstream content-type
 }
 
 async function makeProxiedRequest(req: ProxyRequest): Promise<ProxyResponse> {
@@ -66,6 +149,7 @@ async function makeProxiedRequest(req: ProxyRequest): Promise<ProxyResponse> {
       statusText: response.statusText,
       data,
       latency,
+      contentType: contentType || undefined,
     };
   } catch (error) {
     const latency = Date.now() - startTime;
@@ -103,10 +187,20 @@ async function makeProxiedRequest(req: ProxyRequest): Promise<ProxyResponse> {
 }
 
 router.post("/request", async (req: Request, res: Response) => {
-  const { url, method, headers, body, timeout, torProxyUrl } = req.body as ProxyRequest;
+  const { url, method, headers, body, timeout, torProxyUrl, allowedHost } = req.body as ProxyRequest;
 
   if (!url) {
     return res.status(400).json({ success: false, error: "URL is required" });
+  }
+
+  // Validate URL to prevent SSRF attacks
+  // allowedHost allows the client to specify their configured provider URL for custom nodes
+  const urlCheck = isAllowedUrl(url, allowedHost);
+  if (!urlCheck.allowed) {
+    return res.status(403).json({ 
+      success: false, 
+      error: urlCheck.reason || "URL not allowed"
+    });
   }
 
   const result = await makeProxiedRequest({
