@@ -85,6 +85,13 @@ Data is stored locally using Dexie.js (IndexedDB) for structured data, with all 
     *   **Full Encryption:** All evidence metadata and attachments encrypted at rest using AES-256-GCM
     *   **Evidence UI:** List view with search/filter by type/importance/date/tags, add/edit forms, file upload with drag-and-drop, detail view with file download
     *   **Sidebar Integration:** Added under "Documents" navigation group
+*   **Vault Management Page (/vaults):** Dedicated UI for viewing and managing multisig vaults:
+    *   **Vault Aggregation:** Groups addresses by vault name, M-of-N quorum, script type, and cosigner xpubs for stable deduplication
+    *   **Vault Cards:** Display vault name, quorum badge, script type badge, and address count
+    *   **Cosigner Details:** Collapsible section showing each cosigner's name, xpub preview, and notes
+    *   **Navigation:** "View Addresses" button navigates to Records page filtered by vault name
+    *   **Search/Filter:** Filter vaults by vault name, cosigner name, or script type
+    *   **RecordDetailPanel Integration:** VaultInfoSection component displays structured cosigner metadata when viewing individual multisig addresses
 
 ## External Dependencies
 
