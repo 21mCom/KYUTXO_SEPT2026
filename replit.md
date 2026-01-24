@@ -29,6 +29,13 @@ Data is stored locally using Dexie.js (IndexedDB) for structured data, with all 
 *   **Duplicate Detection & Merge System:** Intelligently merges new metadata with existing records, prioritizing manual input and ensuring data integrity.
 *   **Address Importer (Bulk Import):** Generates addresses from xpub/zpub keys, supports multisig vault metadata, and includes privacy warnings.
 *   **Wallet Data Sync System:** Modular system for importing labels and transaction history from various wallet software, with intelligent duplicate detection and address verification. Includes a private key scanner to prevent importing sensitive data.
+*   **BIP-329 Label Import:** Dedicated streamlined importer for BIP-329 standard wallet label exports (.jsonl files):
+    *   **3-Step Wizard:** Upload → Preview → Import flow with progress tracking
+    *   **Type Support:** Handles addr, tx, input, output records (xpub/pubkey skipped)
+    *   **Origin Preservation:** Captures BIP-329 origin field in notes for all record types
+    *   **Input/Output Specificity:** Uses full outpoint ref (txid:vout) as inputString to preserve per-outpoint uniqueness and prevent label merging
+    *   **Duplicate Detection:** Identifies existing records and shows new vs. update status
+    *   **Security:** Rejects files containing private key material
 *   **Seed Name Protection:** Limits seed name field length to prevent accidental seed phrase entry.
 *   **Address Verification System:** Confirms address ownership with a tiered importance system.
 *   **Historical Price Import System:** Imports and stores Bitcoin OHLCV price data from CSV files.

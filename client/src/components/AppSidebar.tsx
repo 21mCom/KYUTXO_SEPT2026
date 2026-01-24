@@ -105,6 +105,7 @@ const navGroups: NavGroup[] = [
     defaultOpen: false,
     items: [
       { title: "Address Importer", url: "/import", icon: Import },
+      { title: "BIP-329 Labels", url: "/bip329-import", icon: Tags },
       { title: "Wallet Data Sync", url: "/wallet-import", icon: Wallet },
       { title: "Price Import", url: "/price-import", icon: DollarSign },
       { title: "Transaction Sync", url: "/transaction-sync", icon: ArrowDownUp },
