@@ -34,7 +34,8 @@ Data is stored locally using Dexie.js (IndexedDB) for structured data, with all 
         *   **M-of-N Threshold:** Configurable signature requirements
         *   **BIP-67 Compliance:** Lexicographic pubkey sorting for deterministic address generation
         *   **Custom Derivation Paths:** Per-cosigner path configuration for flexibility
-    *   **Vault Metadata:** Support for vault naming, M-of-N requirements, and notes
+        *   **Cosigner Naming & Notes:** Each cosigner can have a custom name and optional notes, stored as structured JSON in vault metadata
+    *   **Vault Metadata:** Support for vault naming, M-of-N requirements, cosigner details, and notes
     *   **Privacy Warnings:** Clear notices about xpub exposure implications
 *   **Wallet Data Sync System:** Modular system for importing labels and transaction history from various wallet software, with intelligent duplicate detection and address verification. Includes a private key scanner to prevent importing sensitive data.
 *   **BIP-329 Label Import:** Dedicated streamlined importer for BIP-329 standard wallet label exports (.jsonl files):
