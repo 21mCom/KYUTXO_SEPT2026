@@ -1,4 +1,4 @@
-import { Edit, Paperclip, Wallet as WalletIcon, User, Upload, QrCode, Key, GitBranch, ArrowDownLeft, ArrowUpRight, Shield, ChevronDown, ChevronRight, Link2, Layers, FileInput, ExternalLink, AlertCircle } from "lucide-react";
+import { Edit, Paperclip, Wallet as WalletIcon, User, Users, Upload, QrCode, Key, GitBranch, ArrowDownLeft, ArrowUpRight, Shield, ChevronDown, ChevronRight, Link2, Layers, FileInput, ExternalLink, AlertCircle } from "lucide-react";
 import { useLocation } from "wouter";
 import { getDecryptedRecordOrigins } from "@/lib/encryptionFacade";
 import { detectSingularFieldConflicts } from "@/lib/conflict-detection";
@@ -146,6 +146,126 @@ function getSourceLabel(source?: string): string {
     default:
       return source || 'Unknown';
   }
+}
+
+interface CosignerDetail {
+  index: number;
+  name: string;
+  notes?: string;
+  xpubPreview?: string;
+}
+
+interface ParsedVaultNotes {
+  cosigners?: CosignerDetail[];
+  scriptType?: string;
+  userNotes?: string;
+}
+
+function parseVaultNotes(vaultNotes?: string | null): ParsedVaultNotes | null {
+  if (!vaultNotes) return null;
+  try {
+    const parsed = JSON.parse(vaultNotes);
+    if (parsed && typeof parsed === 'object') {
+      const result: ParsedVaultNotes = {};
+      if (Array.isArray(parsed.cosigners)) {
+        result.cosigners = parsed.cosigners.map((c: CosignerDetail) => ({
+          index: c.index ?? 0,
+          name: c.name || `Cosigner ${c.index ?? 0}`,
+          notes: c.notes,
+          xpubPreview: c.xpubPreview,
+        }));
+      }
+      if (parsed.scriptType) result.scriptType = String(parsed.scriptType);
+      if (parsed.userNotes) result.userNotes = String(parsed.userNotes);
+      if (result.cosigners || result.scriptType || result.userNotes) {
+        return result;
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function VaultInfoSection({ vault }: { vault: VaultMetadata }) {
+  const [cosignersOpen, setCosignersOpen] = useState(false);
+  const parsedNotes = parseVaultNotes(vault.vaultNotes);
+  const hasStructuredCosigners = parsedNotes?.cosigners && parsedNotes.cosigners.length > 0;
+
+  return (
+    <div className="p-3 bg-muted/50 rounded-lg space-y-3" data-testid="section-vault-info">
+      <h4 className="text-sm font-medium flex items-center gap-2">
+        <Layers className="h-4 w-4" />
+        Multisig Vault
+      </h4>
+      {vault.vaultName && (
+        <div>
+          <span className="text-xs text-muted-foreground">Vault Name:</span>
+          <p className="text-sm" data-testid="text-vault-name">{vault.vaultName}</p>
+        </div>
+      )}
+      {vault.m && vault.n && (
+        <div>
+          <span className="text-xs text-muted-foreground">Quorum:</span>
+          <p className="text-sm" data-testid="text-vault-quorum">
+            {vault.m} of {vault.n} signatures required
+          </p>
+        </div>
+      )}
+      {parsedNotes?.scriptType && (
+        <div>
+          <span className="text-xs text-muted-foreground">Script Type:</span>
+          <p className="text-sm" data-testid="text-vault-script-type">{parsedNotes.scriptType}</p>
+        </div>
+      )}
+      {hasStructuredCosigners && (
+        <Collapsible open={cosignersOpen} onOpenChange={setCosignersOpen}>
+          <CollapsibleTrigger asChild>
+            <Button variant="ghost" size="sm" className="w-full justify-between text-xs gap-1" data-testid="button-toggle-cosigners">
+              <span className="flex items-center gap-2">
+                <Users className="h-3 w-3" />
+                Cosigners ({parsedNotes.cosigners!.length})
+              </span>
+              {cosignersOpen ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+            </Button>
+          </CollapsibleTrigger>
+          <CollapsibleContent className="pt-2 space-y-2">
+            {parsedNotes.cosigners!.map((cosigner, idx) => (
+              <div key={idx} className="pl-2 border-l-2 border-muted-foreground/30 space-y-1" data-testid={`cosigner-detail-${idx}`}>
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-medium" data-testid={`text-cosigner-name-${idx}`}>{cosigner.name}</span>
+                  {cosigner.xpubPreview && (
+                    <code className="text-xs text-muted-foreground bg-muted px-1 rounded" data-testid={`text-cosigner-xpub-${idx}`}>
+                      {cosigner.xpubPreview}
+                    </code>
+                  )}
+                </div>
+                {cosigner.notes && (
+                  <p className="text-xs text-muted-foreground" data-testid={`text-cosigner-notes-${idx}`}>{cosigner.notes}</p>
+                )}
+              </div>
+            ))}
+          </CollapsibleContent>
+        </Collapsible>
+      )}
+      {parsedNotes?.userNotes && (
+        <div>
+          <span className="text-xs text-muted-foreground">Notes:</span>
+          <p className="text-sm text-muted-foreground whitespace-pre-wrap" data-testid="text-vault-user-notes">
+            {parsedNotes.userNotes}
+          </p>
+        </div>
+      )}
+      {!hasStructuredCosigners && vault.vaultNotes && !parsedNotes && (
+        <div>
+          <span className="text-xs text-muted-foreground">Notes:</span>
+          <p className="text-sm text-muted-foreground whitespace-pre-wrap" data-testid="text-vault-notes">
+            {vault.vaultNotes}
+          </p>
+        </div>
+      )}
+    </div>
+  );
 }
 
 export function RecordDetailPanel({ 
@@ -380,34 +500,7 @@ export function RecordDetailPanel({
             )}
 
             {hasVaultInfo && record.vault && (
-              <div className="p-3 bg-muted/50 rounded-lg space-y-2">
-                <h4 className="text-sm font-medium flex items-center gap-2">
-                  <Layers className="h-4 w-4" />
-                  Multisig Vault
-                </h4>
-                {record.vault.vaultName && (
-                  <div>
-                    <span className="text-xs text-muted-foreground">Vault Name:</span>
-                    <p className="text-sm" data-testid="text-vault-name">{record.vault.vaultName}</p>
-                  </div>
-                )}
-                {record.vault.m && record.vault.n && (
-                  <div>
-                    <span className="text-xs text-muted-foreground">Quorum:</span>
-                    <p className="text-sm" data-testid="text-vault-quorum">
-                      {record.vault.m} of {record.vault.n} signatures required
-                    </p>
-                  </div>
-                )}
-                {record.vault.vaultNotes && (
-                  <div>
-                    <span className="text-xs text-muted-foreground">Notes:</span>
-                    <p className="text-sm text-muted-foreground whitespace-pre-wrap" data-testid="text-vault-notes">
-                      {record.vault.vaultNotes}
-                    </p>
-                  </div>
-                )}
-              </div>
+              <VaultInfoSection vault={record.vault} />
             )}
 
             {/* Transaction Metadata Section */}
