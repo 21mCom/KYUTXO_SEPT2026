@@ -50,7 +50,8 @@ Data is stored locally using Dexie.js (IndexedDB) for structured data, with all 
 *   **Historical Price Import System:** Imports and stores Bitcoin OHLCV price data from CSV files.
 *   **Transaction Sync System (Phase 2):** Fetches blockchain data for tracked addresses from configurable sources, importing confirmed transactions, intelligently matching addresses, and auto-creating "Pending Review" records. Captures outpoint data (prevTxid/prevVout) for inputs to enable exact UTXO matching.
 *   **Tor Proxy Integration:** Privacy-enhanced node connectivity via SOCKS5 proxy:
-    *   **Backend Proxy Routing:** `/api/tor` endpoints route blockchain API requests through Tor
+    *   **Dual-Mode Routing:** Works in both dev mode (Express backend) AND portable Electron builds (IPC handlers)
+    *   **Electron IPC Handlers:** `tor-test`, `tor-request`, `tor-status` handlers in main process using node-fetch + socks-proxy-agent
     *   **Auto-Detection:** Automatically detects Tor Browser (port 9150) or Tor service (port 9050)
     *   **Connection Testing:** "Test Tor" button verifies connectivity via check.torproject.org
     *   **.onion Support:** Native support for .onion addresses (user's self-hosted nodes)
