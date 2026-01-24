@@ -27,6 +27,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Portable mode support
   isPortableMode: () => ipcRenderer.invoke('is-portable-mode'),
   
+  // Tor proxy operations
+  torTest: (torProxyUrl) => 
+    ipcRenderer.invoke('tor-test', { torProxyUrl }),
+  torRequest: (params) => 
+    ipcRenderer.invoke('tor-request', params),
+  torStatus: () => 
+    ipcRenderer.invoke('tor-status'),
+  
   // Platform information
   platform: process.platform,
   isElectron: true,
