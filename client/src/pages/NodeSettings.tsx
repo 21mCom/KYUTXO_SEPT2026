@@ -40,7 +40,9 @@ import { NodeProviderType, NodeSettings as NodeSettingsType } from "@/lib/databa
 import { 
   testConnectionWithSettings, 
   getProviderDisplayName, 
-  getProviderPrivacyInfo 
+  getProviderPrivacyInfo,
+  testTorConnectivity,
+  TorTestResult
 } from "@/lib/blockchain-api";
 
 type UrlClassification = 'local' | 'onion' | 'public' | 'unknown';
@@ -155,6 +157,9 @@ export default function NodeSettings() {
     providerName: string;
   } | null>(null);
   
+  const [isTorTesting, setIsTorTesting] = useState(false);
+  const [torTestResult, setTorTestResult] = useState<TorTestResult | null>(null);
+  
   const [pendingChanges, setPendingChanges] = useState<Partial<NodeSettingsType>>({});
   
   const currentSettings: NodeSettingsType = {
@@ -214,6 +219,46 @@ export default function NodeSettings() {
         : prev.requestTimeout || currentSettings.requestTimeout,
     }));
     setTestResult(null);
+  };
+  
+  const handleTestTor = async () => {
+    setIsTorTesting(true);
+    setTorTestResult(null);
+    
+    try {
+      const result = await testTorConnectivity(currentSettings.torProxyUrl);
+      setTorTestResult(result);
+      
+      if (result.success) {
+        toast({
+          title: "Tor Connected",
+          description: `Connected via ${result.proxyName}. Exit IP: ${result.torIp}`,
+        });
+        
+        if (result.proxyUrl && result.proxyUrl !== currentSettings.torProxyUrl) {
+          setPendingChanges(prev => ({ ...prev, torProxyUrl: result.proxyUrl }));
+        }
+      } else {
+        toast({
+          title: "Tor Not Available",
+          description: result.error || "Could not connect to Tor",
+          variant: "destructive",
+        });
+      }
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Unknown error";
+      setTorTestResult({
+        success: false,
+        error: errorMessage,
+      });
+      toast({
+        title: "Tor Test Failed",
+        description: errorMessage,
+        variant: "destructive",
+      });
+    } finally {
+      setIsTorTesting(false);
+    }
   };
   
   const handleTimeoutChange = (value: number[]) => {
@@ -444,26 +489,79 @@ export default function NodeSettings() {
               {currentSettings.useTor && (
                 <>
                   <Separator />
+                  
+                  {/* Tor Test Result */}
+                  {torTestResult && (
+                    <div className={`p-3 rounded-md ${torTestResult.success ? 'bg-green-50 dark:bg-green-950 border border-green-200 dark:border-green-800' : 'bg-destructive/10 border border-destructive/20'}`}>
+                      <div className="flex items-center gap-2">
+                        {torTestResult.success ? (
+                          <CheckCircle2 className="h-5 w-5 text-green-600" />
+                        ) : (
+                          <AlertTriangle className="h-5 w-5 text-destructive" />
+                        )}
+                        <div>
+                          <p className="font-medium">
+                            {torTestResult.success ? 'Tor Connected' : 'Tor Not Available'}
+                          </p>
+                          <p className="text-sm text-muted-foreground">
+                            {torTestResult.success 
+                              ? `${torTestResult.proxyName} - Exit IP: ${torTestResult.torIp} (${torTestResult.latency}ms)`
+                              : torTestResult.error
+                            }
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                  
+                  <Button
+                    onClick={handleTestTor}
+                    disabled={isTorTesting}
+                    variant="outline"
+                    className="w-full"
+                    data-testid="button-test-tor"
+                  >
+                    {isTorTesting ? (
+                      <>
+                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                        Testing Tor Connection...
+                      </>
+                    ) : (
+                      <>
+                        <Shield className="h-4 w-4 mr-2" />
+                        Test Tor Connection
+                      </>
+                    )}
+                  </Button>
+                  
                   <div className="space-y-2">
-                    <Label htmlFor="torProxy">Tor SOCKS Proxy</Label>
+                    <Label htmlFor="torProxy">Tor SOCKS Proxy (Optional)</Label>
                     <Input
                       id="torProxy"
-                      placeholder="socks5h://127.0.0.1:9050"
+                      placeholder="Leave empty for auto-detect"
                       value={currentSettings.torProxyUrl || ''}
                       onChange={(e) => setPendingChanges(prev => ({ ...prev, torProxyUrl: e.target.value }))}
                       data-testid="input-tor-proxy"
                     />
                     <p className="text-xs text-muted-foreground">
-                      SOCKS5 proxy URL for Tor. Default: socks5h://127.0.0.1:9050
+                      Leave empty to auto-detect Tor Browser (port 9150) or Tor service (port 9050)
                     </p>
                   </div>
                   
                   <Alert>
                     <Info className="h-4 w-4" />
-                    <AlertTitle>Tor Requirements</AlertTitle>
-                    <AlertDescription>
-                      Tor must be running on your system. The app will route requests through the SOCKS proxy.
-                      {urlClassification !== 'onion' && " Use .onion addresses for maximum privacy."}
+                    <AlertTitle>How to Get Tor Running</AlertTitle>
+                    <AlertDescription className="space-y-2">
+                      <p>Choose one of these options:</p>
+                      <ul className="list-disc list-inside text-sm space-y-1 mt-2">
+                        <li><strong>Tor Browser</strong> - Download from torproject.org, keep it running in background (uses port 9150)</li>
+                        <li><strong>Tor Expert Bundle</strong> - For advanced users who want Tor as a background service (uses port 9050)</li>
+                      </ul>
+                      {urlClassification !== 'onion' && (
+                        <p className="mt-2 text-amber-600 dark:text-amber-400">
+                          For maximum privacy, use a .onion address for your node.
+                        </p>
+                      )}
                     </AlertDescription>
                   </Alert>
                 </>
