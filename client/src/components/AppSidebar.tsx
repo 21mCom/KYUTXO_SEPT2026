@@ -30,7 +30,8 @@ import {
   AlertCircle,
   FileText,
   Tags,
-  Vault
+  Vault,
+  Trash2
 } from "lucide-react";
 import logoUrl from "@assets/foot_1764929618997.png";
 import {
@@ -133,6 +134,7 @@ const navGroups: NavGroup[] = [
     items: [
       { title: "Node Connection", url: "/node-settings", icon: Server },
       { title: "Value Updater", url: "/value-updater", icon: RefreshCw },
+      { title: "Cleanup", url: "/cleanup", icon: Trash2 },
       { title: "Settings", url: "/settings", icon: Settings },
     ]
   },

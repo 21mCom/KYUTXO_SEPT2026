@@ -44,6 +44,7 @@ import DevTestData from "@/pages/DevTestData";
 import ConflictResolution from "@/pages/ConflictResolution";
 import EvidencePage from "@/pages/Evidence";
 import VaultManagement from "@/pages/VaultManagement";
+import Cleanup from "@/pages/Cleanup";
 import NotFound from "@/pages/not-found";
 
 function AppRoutes() {
@@ -81,6 +82,7 @@ function AppRoutes() {
       <Route path="/conflict-resolution" component={ConflictResolution} />
       <Route path="/evidence" component={EvidencePage} />
       <Route path="/vaults" component={VaultManagement} />
+      <Route path="/cleanup" component={Cleanup} />
       <Route component={NotFound} />
     </Switch>
   );

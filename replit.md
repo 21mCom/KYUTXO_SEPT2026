@@ -60,6 +60,12 @@ Data is stored locally using Dexie.js (IndexedDB) for structured data, with all 
 *   **Reports System:** Includes Source of Funds Report (acquisition history, cost basis, valuation) and Hop-Point Detection Report (identifies unclassified addresses with confidence scoring).
 *   **Quick Tagger:** Paste-based bulk tagging tool for addresses and transactions with full metadata support including tags, categories, owner, wallet name, seed name, wallet software, private key status, label, notes, and type-specific fields (address importance, counterparty type, flow type, acquisition method, disposition type, cost basis).
 *   **Nudgie (Transaction Labeling To-Do):** A workflow for systematically labeling unlabeled transactions, with dashboard and focus views, source filtering, and quick-label buttons.
+*   **Database Cleanup (/cleanup):** Dedicated page for querying and bulk deleting blockchain-discovered records with no user metadata:
+    *   **Scope Selector:** Filter by addresses, transactions, or both
+    *   **Conservative Eligibility:** Only includes records with at least one blockchain-sync origin, no non-blockchain origins, and no user-added metadata
+    *   **Preview List:** Shows eligible records with checkboxes for selection
+    *   **Bulk Controls:** Select All/Select None for efficient batch operations
+    *   **Hard Delete:** Permanently removes records and their origins (can be re-synced from blockchain later)
 *   **Transaction Classification Metadata (Database v15):** Tax-neutral fact-recording system for `flowType`, `acquisitionMethod`, `dispositionType`, `costBasisUsd`, and `counterpartyType`.
 *   **Bulk Editor:** A powerful batch editing system for updating multiple records at once with a filter builder, action builder, preview panel, and undo capability. Optimized for fast processing of large datasets.
 *   **Metadata Conflict Resolution System:** Detects and resolves conflicts when multiple import sources (xpub import, wallet sync, manual entry) provide different values for singular metadata fields:
