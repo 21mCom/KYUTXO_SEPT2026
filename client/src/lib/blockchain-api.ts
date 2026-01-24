@@ -79,11 +79,15 @@ abstract class EsploraProvider implements BlockchainProvider {
   protected lastRequestTime = 0;
   protected timeout: number;
   protected rateLimitDelay: number;
+  protected useTor: boolean;
+  protected torProxyUrl?: string;
 
-  constructor(baseUrl: string, timeout: number = 30000, useTor: boolean = false) {
+  constructor(baseUrl: string, timeout: number = 30000, useTor: boolean = false, torProxyUrl?: string) {
     this.baseUrl = baseUrl.replace(/\/$/, ''); // Remove trailing slash
     this.timeout = timeout;
     this.rateLimitDelay = useTor ? TOR_RATE_LIMIT_DELAY : DEFAULT_RATE_LIMIT_DELAY;
+    this.useTor = useTor;
+    this.torProxyUrl = torProxyUrl;
   }
 
   protected async rateLimitedFetch(url: string): Promise<Response> {
@@ -95,6 +99,11 @@ abstract class EsploraProvider implements BlockchainProvider {
     }
     
     this.lastRequestTime = Date.now();
+    
+    // Route through backend Tor proxy if enabled
+    if (this.useTor) {
+      return this.torProxiedFetch(url);
+    }
     
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), this.timeout);
@@ -117,6 +126,42 @@ abstract class EsploraProvider implements BlockchainProvider {
       }
       throw error;
     }
+  }
+
+  protected async torProxiedFetch(url: string): Promise<Response> {
+    const proxyResponse = await fetch('/api/tor/request', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        url,
+        method: 'GET',
+        timeout: this.timeout,
+        torProxyUrl: this.torProxyUrl,
+      }),
+    });
+
+    const result = await proxyResponse.json() as {
+      success: boolean;
+      status?: number;
+      statusText?: string;
+      data?: unknown;
+      error?: string;
+    };
+
+    if (!result.success) {
+      throw new Error(result.error || 'Tor proxy request failed');
+    }
+
+    // Create a Response-like object from the proxied result
+    const responseBody = typeof result.data === 'string' 
+      ? result.data 
+      : JSON.stringify(result.data);
+    
+    return new Response(responseBody, {
+      status: result.status || 200,
+      statusText: result.statusText || 'OK',
+      headers: { 'Content-Type': 'application/json' },
+    });
   }
 
   async getBlockHeight(): Promise<number> {
@@ -161,11 +206,14 @@ abstract class EsploraProvider implements BlockchainProvider {
 class MempoolSpaceProvider extends EsploraProvider {
   name = 'mempool.space';
 
-  constructor(network: 'mainnet' | 'testnet' = 'mainnet', timeout: number = 30000) {
+  constructor(network: 'mainnet' | 'testnet' = 'mainnet', timeout: number = 30000, useTor: boolean = false, torProxyUrl?: string) {
     const baseUrl = network === 'mainnet' 
       ? 'https://mempool.space/api'
       : 'https://mempool.space/testnet/api';
-    super(baseUrl, timeout, false);
+    super(baseUrl, timeout, useTor, torProxyUrl);
+    if (useTor) {
+      this.name = 'mempool.space (via Tor)';
+    }
   }
 }
 
@@ -173,11 +221,14 @@ class MempoolSpaceProvider extends EsploraProvider {
 class BlockstreamProvider extends EsploraProvider {
   name = 'blockstream.info';
 
-  constructor(network: 'mainnet' | 'testnet' = 'mainnet', timeout: number = 30000) {
+  constructor(network: 'mainnet' | 'testnet' = 'mainnet', timeout: number = 30000, useTor: boolean = false, torProxyUrl?: string) {
     const baseUrl = network === 'mainnet'
       ? 'https://blockstream.info/api'
       : 'https://blockstream.info/testnet/api';
-    super(baseUrl, timeout, false);
+    super(baseUrl, timeout, useTor, torProxyUrl);
+    if (useTor) {
+      this.name = 'blockstream.info (via Tor)';
+    }
   }
 }
 
@@ -185,11 +236,13 @@ class BlockstreamProvider extends EsploraProvider {
 class CustomElectrsProvider extends EsploraProvider {
   name: string;
 
-  constructor(customUrl: string, timeout: number = 30000, useTor: boolean = false) {
-    super(customUrl, timeout, useTor);
+  constructor(customUrl: string, timeout: number = 30000, useTor: boolean = false, torProxyUrl?: string) {
+    super(customUrl, timeout, useTor, torProxyUrl);
     // Determine name based on URL
     if (customUrl.includes('.onion')) {
       this.name = 'Custom Electrs (Tor)';
+    } else if (useTor) {
+      this.name = 'Custom Electrs (via Tor)';
     } else {
       this.name = 'Custom Electrs';
     }
@@ -200,13 +253,15 @@ class CustomElectrsProvider extends EsploraProvider {
 class CustomMempoolProvider extends EsploraProvider {
   name: string;
 
-  constructor(customUrl: string, timeout: number = 30000, useTor: boolean = false) {
+  constructor(customUrl: string, timeout: number = 30000, useTor: boolean = false, torProxyUrl?: string) {
     // Custom mempool instances use /api path
     const apiUrl = customUrl.endsWith('/api') ? customUrl : `${customUrl}/api`;
-    super(apiUrl, timeout, useTor);
+    super(apiUrl, timeout, useTor, torProxyUrl);
     
     if (customUrl.includes('.onion')) {
       this.name = 'Custom Mempool (Tor)';
+    } else if (useTor) {
+      this.name = 'Custom Mempool (via Tor)';
     } else {
       this.name = 'Custom Mempool';
     }
@@ -229,27 +284,27 @@ export function createProvider(type: ProviderType = 'mempool', network: 'mainnet
 
 // Create a provider from NodeSettings configuration
 export function createProviderFromSettings(settings: NodeSettings): BlockchainProvider {
-  const { providerType, customUrl, useTor, requestTimeout, network } = settings;
+  const { providerType, customUrl, useTor, requestTimeout, network, torProxyUrl } = settings;
   
   switch (providerType) {
     case 'blockstream':
-      return new BlockstreamProvider(network, requestTimeout);
+      return new BlockstreamProvider(network, requestTimeout, useTor, torProxyUrl);
     
     case 'custom-electrs':
       if (!customUrl) {
         throw new Error('Custom URL is required for custom Electrs provider');
       }
-      return new CustomElectrsProvider(customUrl, requestTimeout, useTor);
+      return new CustomElectrsProvider(customUrl, requestTimeout, useTor, torProxyUrl);
     
     case 'custom-mempool':
       if (!customUrl) {
         throw new Error('Custom URL is required for custom mempool provider');
       }
-      return new CustomMempoolProvider(customUrl, requestTimeout, useTor);
+      return new CustomMempoolProvider(customUrl, requestTimeout, useTor, torProxyUrl);
     
     case 'mempool-space':
     default:
-      return new MempoolSpaceProvider(network, requestTimeout);
+      return new MempoolSpaceProvider(network, requestTimeout, useTor, torProxyUrl);
   }
 }
 
@@ -450,3 +505,62 @@ export function parseTransaction(tx: ApiTransaction): ParsedTransaction | null {
 }
 
 export const MINIMUM_CONFIRMATIONS = 5;
+
+// Tor connectivity testing
+export interface TorStatus {
+  torAvailable: boolean;
+  proxies: Array<{
+    name: string;
+    url: string;
+    port: number;
+    available: boolean;
+    isTor?: boolean;
+    exitIp?: string;
+    latency?: number;
+    error?: string;
+  }>;
+  recommendation: string;
+}
+
+export interface TorTestResult {
+  success: boolean;
+  proxyUrl?: string;
+  proxyName?: string;
+  isTor?: boolean;
+  torIp?: string;
+  latency?: number;
+  message?: string;
+  error?: string;
+  testedProxies?: string[];
+}
+
+// Test if Tor is available and working
+export async function testTorConnectivity(customProxyUrl?: string): Promise<TorTestResult> {
+  try {
+    const response = await fetch('/api/tor/test', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ torProxyUrl: customProxyUrl }),
+    });
+    return await response.json();
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to test Tor connectivity',
+    };
+  }
+}
+
+// Get current Tor status (checks all known proxy ports)
+export async function getTorStatus(): Promise<TorStatus> {
+  try {
+    const response = await fetch('/api/tor/status');
+    return await response.json();
+  } catch (error) {
+    return {
+      torAvailable: false,
+      proxies: [],
+      recommendation: error instanceof Error ? error.message : 'Failed to check Tor status',
+    };
+  }
+}
