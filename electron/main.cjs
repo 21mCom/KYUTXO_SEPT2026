@@ -11,6 +11,21 @@ let mainWindow;
 const DEFAULT_TOR_PROXY = "socks5h://127.0.0.1:9050";
 const TOR_BROWSER_PROXY = "socks5h://127.0.0.1:9150";
 
+// Use node-fetch for Node.js compatibility in Electron main process
+let nodeFetch;
+async function getFetch() {
+  if (!nodeFetch) {
+    try {
+      // Dynamic import for node-fetch (ESM module)
+      nodeFetch = (await import('node-fetch')).default;
+    } catch (error) {
+      console.error('[KYUTXO] Failed to load node-fetch for Tor proxy:', error.message);
+      throw new Error('Tor proxy requires node-fetch module. Please ensure it is installed.');
+    }
+  }
+  return nodeFetch;
+}
+
 // Allowed hostnames for Bitcoin API requests - prevents SSRF attacks
 const ALLOWED_API_HOSTS = [
   "mempool.space",
@@ -77,6 +92,7 @@ function isAllowedUrl(urlString, additionalAllowedHost) {
 
 async function makeProxiedRequest(requestParams) {
   const { SocksProxyAgent } = require('socks-proxy-agent');
+  const fetch = await getFetch();
   const startTime = Date.now();
   const proxyUrl = requestParams.torProxyUrl || DEFAULT_TOR_PROXY;
   const timeout = requestParams.timeout || 60000;
