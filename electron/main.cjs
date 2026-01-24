@@ -26,6 +26,62 @@ async function getFetch() {
   return nodeFetch;
 }
 
+// Cache the last detected working Tor proxy to avoid repeated detection
+let cachedWorkingProxy = null;
+let cacheTimestamp = 0;
+const PROXY_CACHE_DURATION = 60000; // 1 minute cache
+
+// Quick test if a proxy is reachable (doesn't verify it's Tor, just that it accepts connections)
+async function isProxyReachable(proxyUrl, timeoutMs = 5000) {
+  const { SocksProxyAgent } = require('socks-proxy-agent');
+  const fetch = await getFetch();
+  
+  try {
+    const agent = new SocksProxyAgent(proxyUrl);
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    
+    // Just try to connect - any response means the proxy is working
+    const response = await fetch('https://check.torproject.org/api/ip', {
+      signal: controller.signal,
+      agent,
+    });
+    clearTimeout(timeoutId);
+    return response.ok;
+  } catch (error) {
+    return false;
+  }
+}
+
+// Auto-detect working Tor proxy, trying Tor Browser first
+async function detectWorkingTorProxy() {
+  const now = Date.now();
+  
+  // Return cached result if still valid
+  if (cachedWorkingProxy && (now - cacheTimestamp) < PROXY_CACHE_DURATION) {
+    return cachedWorkingProxy;
+  }
+  
+  // Try Tor Browser first (port 9150), then Tor service (port 9050)
+  if (await isProxyReachable(TOR_BROWSER_PROXY, 3000)) {
+    cachedWorkingProxy = TOR_BROWSER_PROXY;
+    cacheTimestamp = now;
+    console.log('[KYUTXO] Auto-detected Tor Browser proxy at port 9150');
+    return TOR_BROWSER_PROXY;
+  }
+  
+  if (await isProxyReachable(DEFAULT_TOR_PROXY, 3000)) {
+    cachedWorkingProxy = DEFAULT_TOR_PROXY;
+    cacheTimestamp = now;
+    console.log('[KYUTXO] Auto-detected Tor service at port 9050');
+    return DEFAULT_TOR_PROXY;
+  }
+  
+  // No proxy found - return default and let it fail with a clear error
+  console.log('[KYUTXO] No Tor proxy detected, using default 9050');
+  return DEFAULT_TOR_PROXY;
+}
+
 // Allowed hostnames for Bitcoin API requests - prevents SSRF attacks
 const ALLOWED_API_HOSTS = [
   "mempool.space",
@@ -94,7 +150,9 @@ async function makeProxiedRequest(requestParams) {
   const { SocksProxyAgent } = require('socks-proxy-agent');
   const fetch = await getFetch();
   const startTime = Date.now();
-  const proxyUrl = requestParams.torProxyUrl || DEFAULT_TOR_PROXY;
+  
+  // Use provided proxy URL, or auto-detect if not specified
+  const proxyUrl = requestParams.torProxyUrl || await detectWorkingTorProxy();
   const timeout = requestParams.timeout || 60000;
 
   try {

@@ -235,8 +235,19 @@ export default function NodeSettings() {
           description: `Connected via ${result.proxyName}. Exit IP: ${result.torIp}`,
         });
         
+        // Auto-save the detected working proxy URL so it's used for syncs
         if (result.proxyUrl && result.proxyUrl !== currentSettings.torProxyUrl) {
-          setPendingChanges(prev => ({ ...prev, torProxyUrl: result.proxyUrl }));
+          try {
+            await updateSettings({ torProxyUrl: result.proxyUrl });
+            setPendingChanges(prev => {
+              const { torProxyUrl, ...rest } = prev;
+              return rest;
+            });
+          } catch (saveError) {
+            // If auto-save fails, keep it as a pending change so user can save manually
+            setPendingChanges(prev => ({ ...prev, torProxyUrl: result.proxyUrl }));
+            console.error('[KYUTXO] Failed to auto-save Tor proxy URL:', saveError);
+          }
         }
       } else {
         toast({
