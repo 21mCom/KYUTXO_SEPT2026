@@ -27,7 +27,15 @@ Data is stored locally using Dexie.js (IndexedDB) for structured data, with all 
 *   **Portability:** Supports fully portable database storage, allowing the application to run from a USB drive.
 *   **Vocabulary Management System:** Allows users to define and manage custom tags, categories, owners, wallet names, seed names, and wallet software, with auto-syncing of new vocabulary entries.
 *   **Duplicate Detection & Merge System:** Intelligently merges new metadata with existing records, prioritizing manual input and ensuring data integrity.
-*   **Address Importer (Bulk Import):** Generates addresses from xpub/zpub keys, supports multisig vault metadata, and includes privacy warnings.
+*   **Address Importer (Bulk Import):** Generates addresses from xpub/zpub keys with two modes:
+    *   **Singlesig Mode:** Standard HD wallet address derivation from a single xpub/ypub/zpub with automatic BIP standard detection
+    *   **Multisig Mode:** Proper multisig address derivation from multiple cosigner xpubs with:
+        *   **Script Type Selection:** P2WSH (native segwit), P2SH-P2WSH (nested segwit), P2SH (legacy)
+        *   **M-of-N Threshold:** Configurable signature requirements
+        *   **BIP-67 Compliance:** Lexicographic pubkey sorting for deterministic address generation
+        *   **Custom Derivation Paths:** Per-cosigner path configuration for flexibility
+    *   **Vault Metadata:** Support for vault naming, M-of-N requirements, and notes
+    *   **Privacy Warnings:** Clear notices about xpub exposure implications
 *   **Wallet Data Sync System:** Modular system for importing labels and transaction history from various wallet software, with intelligent duplicate detection and address verification. Includes a private key scanner to prevent importing sensitive data.
 *   **BIP-329 Label Import:** Dedicated streamlined importer for BIP-329 standard wallet label exports (.jsonl files):
     *   **3-Step Wizard:** Upload → Preview → Import flow with progress tracking

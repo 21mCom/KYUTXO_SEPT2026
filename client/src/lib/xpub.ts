@@ -473,3 +473,303 @@ export function getDepthDescription(depth: number): string {
       return `Depth ${depth}`;
   }
 }
+
+// ============================================
+// MULTISIG ADDRESS DERIVATION
+// ============================================
+
+export type MultisigScriptType = 'p2sh' | 'p2wsh' | 'p2sh-p2wsh';
+
+export interface MultisigXpubEntry {
+  xpub: string;
+  derivationPath?: string; // Optional custom path like "0" or "1" for chain
+}
+
+export interface MultisigConfig {
+  xpubs: MultisigXpubEntry[];
+  m: number; // Required signatures
+  n: number; // Total signers (derived from xpubs.length)
+  scriptType: MultisigScriptType;
+  network?: 'mainnet' | 'testnet';
+}
+
+export interface DerivedMultisigAddress {
+  index: number;
+  address: string;
+  redeemScript?: string; // For P2SH and P2SH-P2WSH
+  witnessScript?: string; // For P2WSH and P2SH-P2WSH
+  chainType: ChainType;
+  chainLabel: string;
+  pubkeys: string[]; // Sorted pubkeys used for this address
+}
+
+export interface MultisigDualChainResult {
+  receive: DerivedMultisigAddress[];
+  change: DerivedMultisigAddress[];
+  m: number;
+  n: number;
+  scriptType: MultisigScriptType;
+  network: 'mainnet' | 'testnet';
+}
+
+// BIP-67: Lexicographic ordering of pubkeys for deterministic multisig
+function sortPubkeysLexicographically(pubkeys: Uint8Array[]): Uint8Array[] {
+  return [...pubkeys].sort((a, b) => {
+    for (let i = 0; i < Math.min(a.length, b.length); i++) {
+      if (a[i] !== b[i]) return a[i] - b[i];
+    }
+    return a.length - b.length;
+  });
+}
+
+// Convert Uint8Array to hex string
+function toHex(arr: Uint8Array): string {
+  return Array.from(arr).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+// Get pubkey at specific derivation index from an xpub
+function getPubkeyAtIndex(
+  xpub: string,
+  chain: 0 | 1,
+  index: number,
+  customPath?: string
+): Uint8Array {
+  const bip32 = BIP32Factory(ecc);
+  const trimmed = xpub.trim();
+  const prefix = getXpubPrefix(trimmed);
+  const prefixInfo = PREFIX_TO_BIP[prefix];
+  const network = prefixInfo.network === 'testnet' ? bitcoin.networks.testnet : bitcoin.networks.bitcoin;
+  const depth = getKeyDepth(trimmed);
+  
+  const convertedKey = convertToXpub(trimmed, prefix);
+  let node = bip32.fromBase58(convertedKey, network);
+  
+  if (customPath) {
+    // Parse custom path like "0" or "0/0" and derive
+    const parts = customPath.split('/').filter(p => p.length > 0);
+    for (const part of parts) {
+      const idx = parseInt(part.replace("'", ""), 10);
+      if (!isNaN(idx)) {
+        node = node.derive(idx);
+      }
+    }
+    // Then derive chain and index
+    node = node.derive(chain).derive(index);
+  } else {
+    // Standard derivation based on depth
+    if (depth === 4) {
+      // Already at chain level
+      node = node.derive(index);
+    } else if (depth === 3 || depth === 0 || depth === 1) {
+      // Account level or Electrum style
+      node = node.derive(chain).derive(index);
+    } else {
+      throw new Error(`XPUB at depth ${depth} requires a custom derivation path`);
+    }
+  }
+  
+  return node.publicKey;
+}
+
+// Create multisig script and address
+function createMultisigAddress(
+  pubkeys: Uint8Array[],
+  m: number,
+  scriptType: MultisigScriptType,
+  network: bitcoin.Network
+): { address: string; redeemScript?: string; witnessScript?: string } {
+  // Sort pubkeys lexicographically (BIP-67)
+  const sortedPubkeys = sortPubkeysLexicographically(pubkeys);
+  
+  // Create multisig payment
+  const p2ms = bitcoin.payments.p2ms({
+    m,
+    pubkeys: sortedPubkeys,
+    network,
+  });
+  
+  if (!p2ms.output) {
+    throw new Error('Failed to create multisig script');
+  }
+  
+  let address: string;
+  let redeemScript: string | undefined;
+  let witnessScript: string | undefined;
+  
+  switch (scriptType) {
+    case 'p2sh': {
+      // Legacy P2SH multisig (3xxx addresses)
+      const p2sh = bitcoin.payments.p2sh({
+        redeem: p2ms,
+        network,
+      });
+      address = p2sh.address!;
+      redeemScript = toHex(p2ms.output);
+      break;
+    }
+    
+    case 'p2wsh': {
+      // Native SegWit P2WSH (bc1qxxx... longer addresses)
+      const p2wsh = bitcoin.payments.p2wsh({
+        redeem: p2ms,
+        network,
+      });
+      address = p2wsh.address!;
+      witnessScript = toHex(p2ms.output);
+      break;
+    }
+    
+    case 'p2sh-p2wsh': {
+      // Nested SegWit P2SH-P2WSH (3xxx addresses but SegWit internally)
+      const p2wsh = bitcoin.payments.p2wsh({
+        redeem: p2ms,
+        network,
+      });
+      const p2sh = bitcoin.payments.p2sh({
+        redeem: p2wsh,
+        network,
+      });
+      address = p2sh.address!;
+      redeemScript = p2wsh.output ? toHex(p2wsh.output) : undefined;
+      witnessScript = toHex(p2ms.output);
+      break;
+    }
+    
+    default:
+      throw new Error(`Unknown script type: ${scriptType}`);
+  }
+  
+  return { address, redeemScript, witnessScript };
+}
+
+export async function deriveMultisigAddresses(
+  config: MultisigConfig,
+  chain: 0 | 1,
+  startIndex: number = 0,
+  endIndex: number = 19
+): Promise<DerivedMultisigAddress[]> {
+  const { xpubs, m, scriptType } = config;
+  const n = xpubs.length;
+  
+  if (m < 1 || m > n) {
+    throw new Error(`Invalid threshold: ${m} of ${n}. M must be between 1 and N.`);
+  }
+  
+  if (n < 2 || n > 15) {
+    throw new Error(`Invalid number of signers: ${n}. Must be between 2 and 15.`);
+  }
+  
+  if (endIndex < startIndex) {
+    throw new Error('End index must be greater than or equal to start index');
+  }
+  
+  if (endIndex - startIndex > 500) {
+    throw new Error('Maximum 500 addresses can be derived at once');
+  }
+  
+  // Determine network from first xpub
+  const firstPrefix = getXpubPrefix(xpubs[0].xpub.trim());
+  const networkType = PREFIX_TO_BIP[firstPrefix].network;
+  const network = networkType === 'testnet' ? bitcoin.networks.testnet : bitcoin.networks.bitcoin;
+  
+  const chainType: ChainType = chain === 0 ? 'receive' : 'change';
+  const chainLabel = chain === 0 ? 'Receive Address (External)' : 'Change Address (Internal)';
+  const addresses: DerivedMultisigAddress[] = [];
+  
+  for (let i = startIndex; i <= endIndex; i++) {
+    // Collect pubkeys from all xpubs at this index
+    const pubkeys: Uint8Array[] = [];
+    for (const xpubEntry of xpubs) {
+      const pubkey = getPubkeyAtIndex(xpubEntry.xpub, chain, i, xpubEntry.derivationPath);
+      pubkeys.push(pubkey);
+    }
+    
+    // Create multisig address with sorted pubkeys
+    const { address, redeemScript, witnessScript } = createMultisigAddress(
+      pubkeys,
+      m,
+      scriptType,
+      network
+    );
+    
+    addresses.push({
+      index: i,
+      address,
+      redeemScript,
+      witnessScript,
+      chainType,
+      chainLabel,
+      pubkeys: sortPubkeysLexicographically(pubkeys).map(p => toHex(p)),
+    });
+  }
+  
+  return addresses;
+}
+
+export async function deriveMultisigDualChain(
+  config: MultisigConfig,
+  receiveStart: number = 0,
+  receiveEnd: number = 19,
+  changeStart: number = 0,
+  changeEnd: number = 19
+): Promise<MultisigDualChainResult> {
+  const firstPrefix = getXpubPrefix(config.xpubs[0].xpub.trim());
+  const networkType = PREFIX_TO_BIP[firstPrefix].network;
+  
+  const [receive, change] = await Promise.all([
+    deriveMultisigAddresses(config, 0, receiveStart, receiveEnd),
+    deriveMultisigAddresses(config, 1, changeStart, changeEnd),
+  ]);
+  
+  return {
+    receive,
+    change,
+    m: config.m,
+    n: config.xpubs.length,
+    scriptType: config.scriptType,
+    network: networkType,
+  };
+}
+
+export function getMultisigScriptTypeDescription(scriptType: MultisigScriptType): string {
+  switch (scriptType) {
+    case 'p2sh':
+      return 'Legacy P2SH - Addresses starting with 3 (higher fees)';
+    case 'p2wsh':
+      return 'Native SegWit P2WSH - Addresses starting with bc1q (lowest fees)';
+    case 'p2sh-p2wsh':
+      return 'Nested SegWit P2SH-P2WSH - Addresses starting with 3 (compatible, medium fees)';
+    default:
+      return 'Unknown script type';
+  }
+}
+
+export function validateMultisigXpubs(xpubs: string[]): { valid: boolean; error?: string } {
+  if (xpubs.length < 2) {
+    return { valid: false, error: 'Multisig requires at least 2 xpubs' };
+  }
+  
+  if (xpubs.length > 15) {
+    return { valid: false, error: 'Maximum 15 xpubs supported for multisig' };
+  }
+  
+  // Validate each xpub
+  for (let i = 0; i < xpubs.length; i++) {
+    const result = validateExtendedPublicKey(xpubs[i]);
+    if (!result.valid) {
+      return { valid: false, error: `Xpub #${i + 1}: ${result.error}` };
+    }
+  }
+  
+  // Check all xpubs are on same network
+  const networks = xpubs.map(x => {
+    const prefix = getXpubPrefix(x.trim());
+    return PREFIX_TO_BIP[prefix].network;
+  });
+  
+  if (new Set(networks).size > 1) {
+    return { valid: false, error: 'All xpubs must be on the same network (mainnet or testnet)' };
+  }
+  
+  return { valid: true };
+}

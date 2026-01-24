@@ -55,12 +55,19 @@ import { useWalletSoftware, createWalletSoftware } from "@/hooks/use-wallet-soft
 import { 
   deriveDualChainAddresses,
   deriveDualChainAdvanced,
+  deriveMultisigDualChain,
   analyzeXpub, 
   validateExtendedPublicKey,
+  validateMultisigXpubs,
   getBipDescription,
   getDepthDescription,
+  getMultisigScriptTypeDescription,
   type DerivedAddress,
+  type DerivedMultisigAddress,
   type DualChainResult,
+  type MultisigDualChainResult,
+  type MultisigScriptType,
+  type MultisigXpubEntry,
   type XpubInfo 
 } from "@/lib/xpub";
 import { expandLabelTokens, hasTokens, previewLabelTemplate, AVAILABLE_TOKENS } from "@/lib/label-tokens";
@@ -107,12 +114,23 @@ export default function BulkImport() {
   const [newOwner, setNewOwner] = useState("");
   const [newWalletName, setNewWalletName] = useState("");
 
-  // Vault metadata state
+  // Vault metadata state (for singlesig xpub that's part of a multisig)
   const [isVaultXpub, setIsVaultXpub] = useState(false);
   const [vaultName, setVaultName] = useState("");
   const [vaultM, setVaultM] = useState<number | null>(null);
   const [vaultN, setVaultN] = useState<number | null>(null);
   const [vaultNotes, setVaultNotes] = useState("");
+  
+  // Multisig mode state
+  const [isMultisigMode, setIsMultisigMode] = useState(false);
+  const [multisigXpubs, setMultisigXpubs] = useState<MultisigXpubEntry[]>([
+    { xpub: '', derivationPath: '' },
+    { xpub: '', derivationPath: '' },
+  ]);
+  const [multisigM, setMultisigM] = useState<number>(2);
+  const [multisigScriptType, setMultisigScriptType] = useState<MultisigScriptType>('p2wsh');
+  const [multisigValidationError, setMultisigValidationError] = useState<string | null>(null);
+  const [multisigResult, setMultisigResult] = useState<MultisigDualChainResult | null>(null);
   
   // Verified status
   const [markAsVerified, setMarkAsVerified] = useState(false);
@@ -257,8 +275,12 @@ export default function BulkImport() {
   }, [xpub, analyzeXpubInput]);
 
   useEffect(() => {
-    if (step === 3 && xpub && xpubInfo) {
-      deriveAddresses();
+    if (step === 3) {
+      if (isMultisigMode) {
+        deriveMultisigAddressesHandler();
+      } else if (xpub && xpubInfo) {
+        deriveAddresses();
+      }
     }
   }, [step]);
 
@@ -303,6 +325,40 @@ export default function BulkImport() {
       setIsDerivingAddresses(false);
     }
   };
+  
+  const deriveMultisigAddressesHandler = async () => {
+    const filledXpubs = multisigXpubs.filter(x => x.xpub.trim());
+    if (filledXpubs.length < 2) return;
+    
+    setIsDerivingAddresses(true);
+    try {
+      const result = await deriveMultisigDualChain(
+        {
+          xpubs: filledXpubs,
+          m: effectiveM,
+          n: filledXpubs.length,
+          scriptType: multisigScriptType,
+        },
+        receiveStartIndex,
+        receiveEndIndex,
+        changeStartIndex,
+        changeEndIndex
+      );
+      
+      setMultisigResult(result);
+      setSelectedReceiveAddresses(new Set(result.receive.map((_, i) => i)));
+      setSelectedChangeAddresses(new Set(result.change.map((_, i) => i)));
+    } catch (error) {
+      toast({
+        variant: "destructive",
+        title: "Multisig Derivation Failed",
+        description: error instanceof Error ? error.message : "Failed to derive multisig addresses",
+      });
+      setStep(2);
+    } finally {
+      setIsDerivingAddresses(false);
+    }
+  };
 
   const toggleReceiveSelection = (index: number) => {
     const newSelected = new Set(selectedReceiveAddresses);
@@ -325,20 +381,22 @@ export default function BulkImport() {
   };
 
   const toggleAllReceiveAddresses = () => {
-    if (!dualChainResult) return;
-    if (selectedReceiveAddresses.size === dualChainResult.receive.length) {
+    const receiveList = isMultisigMode ? multisigResult?.receive : dualChainResult?.receive;
+    if (!receiveList) return;
+    if (selectedReceiveAddresses.size === receiveList.length) {
       setSelectedReceiveAddresses(new Set());
     } else {
-      setSelectedReceiveAddresses(new Set(dualChainResult.receive.map((_, i) => i)));
+      setSelectedReceiveAddresses(new Set(receiveList.map((_, i) => i)));
     }
   };
 
   const toggleAllChangeAddresses = () => {
-    if (!dualChainResult) return;
-    if (selectedChangeAddresses.size === dualChainResult.change.length) {
+    const changeList = isMultisigMode ? multisigResult?.change : dualChainResult?.change;
+    if (!changeList) return;
+    if (selectedChangeAddresses.size === changeList.length) {
       setSelectedChangeAddresses(new Set());
     } else {
-      setSelectedChangeAddresses(new Set(dualChainResult.change.map((_, i) => i)));
+      setSelectedChangeAddresses(new Set(changeList.map((_, i) => i)));
     }
   };
 
@@ -382,12 +440,16 @@ export default function BulkImport() {
       return;
     }
 
-    if (!dualChainResult) return;
+    // Get active result based on mode
+    const activeReceive = isMultisigMode ? multisigResult?.receive : dualChainResult?.receive;
+    const activeChange = isMultisigMode ? multisigResult?.change : dualChainResult?.change;
+    
+    if (!activeReceive) return;
 
     setIsSaving(true);
     try {
-      const receiveToSave = dualChainResult.receive.filter((_, i) => selectedReceiveAddresses.has(i));
-      const changeToSave = dualChainResult.change.filter((_, i) => selectedChangeAddresses.has(i));
+      const receiveToSave = activeReceive.filter((_, i) => selectedReceiveAddresses.has(i));
+      const changeToSave = (activeChange || []).filter((_, i) => selectedChangeAddresses.has(i));
       const allAddresses = [...receiveToSave, ...changeToSave];
       
       const parsedTags = selectedTags;
@@ -415,9 +477,11 @@ export default function BulkImport() {
       for (let i = 0; i < allAddresses.length; i++) {
         const addr = allAddresses[i];
         const chainSuffix = addr.chainType === 'receive' ? ' (Receive)' : ' (Change)';
+        // Get derivation path (singlesig has path, multisig uses index)
+        const derivationPath = 'path' in addr ? addr.path : `multisig:${addr.index}`;
         // Human-readable source: wallet name or seed name with derivation path
-        const sourcePrefix = walletNameInput || seedName || 'xpub-import';
-        const addressSource = `${sourcePrefix} (${addr.path})`;
+        const sourcePrefix = walletNameInput || seedName || (isMultisigMode ? 'multisig-import' : 'xpub-import');
+        const addressSource = `${sourcePrefix} (${derivationPath})`;
         
         // Generate label from template with token expansion
         const generatedLabel = expandLabelTokens(labelTemplate, {
@@ -472,11 +536,17 @@ export default function BulkImport() {
               notes: existingRecord.notes || notes || undefined,
               // Always update xpub-related metadata (more specific info)
               chainType: addr.chainType,
-              derivationPath: addr.path,
-              xpub: xpub,
+              derivationPath: derivationPath,
+              xpub: isMultisigMode ? undefined : xpub,
               source: addressSource,
-              // Add vault metadata (overwrite with new vault info if provided)
-              vault: vaultMetadata,
+              // Add vault metadata (overwrite with new vault info if provided, use multisig config in multisig mode)
+              vault: isMultisigMode ? {
+                isVaultXpub: true,
+                vaultName: walletNameInput || seedName || 'Multisig Vault',
+                m: multisigResult?.m ?? null,
+                n: multisigResult?.n ?? null,
+                vaultNotes: notes || null,
+              } : vaultMetadata,
               // Handle addressImportance upgrade
               addressImportance: newImportance,
             });
@@ -522,9 +592,15 @@ export default function BulkImport() {
               walletName: walletNameInput || undefined,
               source: addressSource,
               chainType: addr.chainType,
-              derivationPath: addr.path,
-              xpub: xpub,
-              vault: vaultMetadata,
+              derivationPath: derivationPath,
+              xpub: isMultisigMode ? undefined : xpub,
+              vault: isMultisigMode ? {
+                isVaultXpub: true,
+                vaultName: walletNameInput || seedName || 'Multisig Vault',
+                m: multisigResult?.m ?? null,
+                n: multisigResult?.n ?? null,
+                vaultNotes: notes || null,
+              } : vaultMetadata,
               addressImportance: markAsVerified ? 'verified' : 'xpub-derived',
             });
             createdCount++;
@@ -615,7 +691,53 @@ export default function BulkImport() {
     }
   };
 
-  const canProceedToStep2 = xpub.trim() && xpubInfo && !validationError;
+  // Multisig helper functions
+  const addMultisigXpub = () => {
+    if (multisigXpubs.length < 15) {
+      setMultisigXpubs([...multisigXpubs, { xpub: '', derivationPath: '' }]);
+    }
+  };
+  
+  const removeMultisigXpub = (index: number) => {
+    if (multisigXpubs.length > 2) {
+      setMultisigXpubs(multisigXpubs.filter((_, i) => i !== index));
+    }
+  };
+  
+  const updateMultisigXpub = (index: number, field: 'xpub' | 'derivationPath', value: string) => {
+    const updated = [...multisigXpubs];
+    updated[index] = { ...updated[index], [field]: value };
+    setMultisigXpubs(updated);
+    
+    // Validate multisig xpubs when changed
+    const filledXpubs = updated.filter(x => x.xpub.trim()).map(x => x.xpub);
+    if (filledXpubs.length >= 2) {
+      const validation = validateMultisigXpubs(filledXpubs);
+      setMultisigValidationError(validation.valid ? null : (validation.error || 'Invalid xpubs'));
+    } else {
+      setMultisigValidationError(null);
+    }
+  };
+  
+  // Ensure M is always valid for current N
+  const multisigN = multisigXpubs.filter(x => x.xpub.trim()).length;
+  const effectiveM = Math.min(multisigM, multisigN);
+  
+  // Validation for multisig mode
+  const validMultisigXpubs = multisigXpubs.filter(x => x.xpub.trim());
+  const canProceedMultisig = validMultisigXpubs.length >= 2 && 
+    effectiveM >= 1 && 
+    effectiveM <= validMultisigXpubs.length &&
+    !multisigValidationError;
+  
+  const canProceedToStep2 = isMultisigMode 
+    ? canProceedMultisig 
+    : (xpub.trim() && xpubInfo && !validationError);
+
+  // Unified result for step 3 preview - works with both singlesig and multisig
+  const activeReceiveAddresses = isMultisigMode ? multisigResult?.receive : dualChainResult?.receive;
+  const activeChangeAddresses = isMultisigMode ? multisigResult?.change : dualChainResult?.change;
+  const hasActiveResult = isMultisigMode ? !!multisigResult : !!dualChainResult;
 
   return (
     <div className="flex-1 overflow-auto p-6">
@@ -655,141 +777,311 @@ export default function BulkImport() {
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <Key className="h-5 w-5" />
-                Paste Your Extended Public Key
+                {isMultisigMode ? 'Import Multisig Wallet' : 'Paste Your Extended Public Key'}
               </CardTitle>
               <CardDescription>
-                Just paste your xpub/ypub/zpub - everything will be auto-detected
+                {isMultisigMode 
+                  ? 'Enter all cosigner xpubs to derive correct multisig addresses'
+                  : 'Just paste your xpub/ypub/zpub - everything will be auto-detected'}
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="xpub">Extended Public Key</Label>
-                <Textarea
-                  id="xpub"
-                  value={xpub}
-                  onChange={(e) => setXpub(e.target.value)}
-                  placeholder="xpub6D... / ypub6D... / zpub6D..."
-                  className="font-mono text-sm min-h-[100px]"
-                  data-testid="input-xpub"
-                />
+              {/* Mode Selector */}
+              <div className="space-y-3 pb-4 border-b">
+                <Label className="text-base font-medium">Import Type</Label>
+                <RadioGroup
+                  value={isMultisigMode ? "multisig" : "singlesig"}
+                  onValueChange={(value) => setIsMultisigMode(value === "multisig")}
+                  className="flex gap-4 flex-wrap"
+                >
+                  <div className="flex items-center gap-2">
+                    <RadioGroupItem value="singlesig" id="mode-singlesig" data-testid="radio-mode-singlesig" />
+                    <Label htmlFor="mode-singlesig" className="font-normal cursor-pointer">Single-signature wallet</Label>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <RadioGroupItem value="multisig" id="mode-multisig" data-testid="radio-mode-multisig" />
+                    <Label htmlFor="mode-multisig" className="font-normal cursor-pointer">Multisig wallet (multiple xpubs)</Label>
+                  </div>
+                </RadioGroup>
               </div>
 
-              {validationError && (
-                <Alert variant="destructive">
-                  <AlertCircle className="h-4 w-4" />
-                  <AlertTitle>Invalid Key</AlertTitle>
-                  <AlertDescription>{validationError}</AlertDescription>
-                </Alert>
-              )}
-
-              {xpubInfo && !validationError && (
-                <Alert>
-                  <Info className="h-4 w-4" />
-                  <AlertTitle>Key Detected</AlertTitle>
-                  <AlertDescription className="space-y-2">
-                    <div className="flex flex-wrap gap-2 mt-2">
-                      <Badge variant="secondary">{xpubInfo.prefix.toUpperCase()}</Badge>
-                      <Badge variant="outline">{xpubInfo.bipStandard}</Badge>
-                      <Badge variant="outline">{xpubInfo.network}</Badge>
-                      <Badge variant="outline">{getDepthDescription(xpubInfo.depth)}</Badge>
-                    </div>
-                    <p className="text-sm mt-2">{getBipDescription(xpubInfo.bipStandard)}</p>
-                    {xpubInfo.needsAdvancedMode && xpubInfo.reason && (
-                      <p className="text-sm text-amber-600 dark:text-amber-400 mt-2">
-                        {xpubInfo.reason}
-                      </p>
-                    )}
-                  </AlertDescription>
-                </Alert>
-              )}
-
-              <p className="text-xs text-muted-foreground">
-                Supported formats: xpub (Legacy), ypub (Nested SegWit), zpub (Native SegWit), 
-                tpub/upub/vpub (Testnet)
-              </p>
-
-              {xpubInfo && !validationError && (
-                <div className="space-y-4 pt-4 border-t">
-                  <div className="space-y-3">
-                    <Label className="text-base font-medium">Is this XPUB from a multisig vault?</Label>
-                    <RadioGroup
-                      value={isVaultXpub ? "yes" : "no"}
-                      onValueChange={(value) => setIsVaultXpub(value === "yes")}
-                      className="flex gap-4"
-                    >
-                      <div className="flex items-center gap-2">
-                        <RadioGroupItem value="no" id="vault-no" data-testid="radio-vault-no" />
-                        <Label htmlFor="vault-no" className="font-normal cursor-pointer">No</Label>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <RadioGroupItem value="yes" id="vault-yes" data-testid="radio-vault-yes" />
-                        <Label htmlFor="vault-yes" className="font-normal cursor-pointer">Yes - add vault metadata</Label>
-                      </div>
-                    </RadioGroup>
+              {/* Single-sig Mode */}
+              {!isMultisigMode && (
+                <>
+                  <div className="space-y-2">
+                    <Label htmlFor="xpub">Extended Public Key</Label>
+                    <Textarea
+                      id="xpub"
+                      value={xpub}
+                      onChange={(e) => setXpub(e.target.value)}
+                      placeholder="xpub6D... / ypub6D... / zpub6D..."
+                      className="font-mono text-sm min-h-[100px]"
+                      data-testid="input-xpub"
+                    />
                   </div>
 
-                  {isVaultXpub && (
-                    <div className="space-y-4 p-4 bg-muted/50 rounded-lg border">
-                      <div className="space-y-2">
-                        <Label htmlFor="vault-name">Vault Name (optional)</Label>
-                        <Input
-                          id="vault-name"
-                          value={vaultName}
-                          onChange={(e) => setVaultName(e.target.value)}
-                          placeholder="e.g., Family Cold Vault"
-                          data-testid="input-vault-name"
-                        />
-                      </div>
+                  {validationError && (
+                    <Alert variant="destructive">
+                      <AlertCircle className="h-4 w-4" />
+                      <AlertTitle>Invalid Key</AlertTitle>
+                      <AlertDescription>{validationError}</AlertDescription>
+                    </Alert>
+                  )}
 
-                      <div className="space-y-2">
-                        <Label>M-of-N Signature Requirement (optional)</Label>
-                        <div className="flex items-center gap-2">
-                          <Select
-                            value={vaultM?.toString() || ""}
-                            onValueChange={(value) => setVaultM(value ? parseInt(value) : null)}
-                          >
-                            <SelectTrigger className="w-24" data-testid="select-vault-m">
-                              <SelectValue placeholder="M" />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15].map((num) => (
-                                <SelectItem key={num} value={num.toString()}>{num}</SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                          <span className="text-muted-foreground">of</span>
-                          <Select
-                            value={vaultN?.toString() || ""}
-                            onValueChange={(value) => setVaultN(value ? parseInt(value) : null)}
-                          >
-                            <SelectTrigger className="w-24" data-testid="select-vault-n">
-                              <SelectValue placeholder="N" />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15].map((num) => (
-                                <SelectItem key={num} value={num.toString()}>{num}</SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                          <span className="text-sm text-muted-foreground">signatures required</span>
+                  {xpubInfo && !validationError && (
+                    <Alert>
+                      <Info className="h-4 w-4" />
+                      <AlertTitle>Key Detected</AlertTitle>
+                      <AlertDescription className="space-y-2">
+                        <div className="flex flex-wrap gap-2 mt-2">
+                          <Badge variant="secondary">{xpubInfo.prefix.toUpperCase()}</Badge>
+                          <Badge variant="outline">{xpubInfo.bipStandard}</Badge>
+                          <Badge variant="outline">{xpubInfo.network}</Badge>
+                          <Badge variant="outline">{getDepthDescription(xpubInfo.depth)}</Badge>
                         </div>
-                        {vaultM && vaultN && vaultM > vaultN && (
-                          <p className="text-xs text-destructive">Required signatures (M) cannot exceed total keys (N)</p>
+                        <p className="text-sm mt-2">{getBipDescription(xpubInfo.bipStandard)}</p>
+                        {xpubInfo.needsAdvancedMode && xpubInfo.reason && (
+                          <p className="text-sm text-amber-600 dark:text-amber-400 mt-2">
+                            {xpubInfo.reason}
+                          </p>
                         )}
+                      </AlertDescription>
+                    </Alert>
+                  )}
+
+                  <p className="text-xs text-muted-foreground">
+                    Supported formats: xpub (Legacy), ypub (Nested SegWit), zpub (Native SegWit), 
+                    tpub/upub/vpub (Testnet)
+                  </p>
+
+                  {xpubInfo && !validationError && (
+                    <div className="space-y-4 pt-4 border-t">
+                      <div className="space-y-3">
+                        <Label className="text-base font-medium">Is this XPUB from a multisig vault?</Label>
+                        <RadioGroup
+                          value={isVaultXpub ? "yes" : "no"}
+                          onValueChange={(value) => setIsVaultXpub(value === "yes")}
+                          className="flex gap-4"
+                        >
+                          <div className="flex items-center gap-2">
+                            <RadioGroupItem value="no" id="vault-no" data-testid="radio-vault-no" />
+                            <Label htmlFor="vault-no" className="font-normal cursor-pointer">No</Label>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <RadioGroupItem value="yes" id="vault-yes" data-testid="radio-vault-yes" />
+                            <Label htmlFor="vault-yes" className="font-normal cursor-pointer">Yes - add vault metadata</Label>
+                          </div>
+                        </RadioGroup>
                       </div>
 
-                      <div className="space-y-2">
-                        <Label htmlFor="vault-notes">Vault Notes (optional)</Label>
-                        <Textarea
-                          id="vault-notes"
-                          value={vaultNotes}
-                          onChange={(e) => setVaultNotes(e.target.value)}
-                          placeholder="Additional notes about this vault XPUB..."
-                          className="min-h-[80px]"
-                          data-testid="input-vault-notes"
-                        />
-                      </div>
+                      {isVaultXpub && (
+                        <div className="space-y-4 p-4 bg-muted/50 rounded-lg border">
+                          <div className="space-y-2">
+                            <Label htmlFor="vault-name">Vault Name (optional)</Label>
+                            <Input
+                              id="vault-name"
+                              value={vaultName}
+                              onChange={(e) => setVaultName(e.target.value)}
+                              placeholder="e.g., Family Cold Vault"
+                              data-testid="input-vault-name"
+                            />
+                          </div>
+
+                          <div className="space-y-2">
+                            <Label>M-of-N Signature Requirement (optional)</Label>
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <Select
+                                value={vaultM?.toString() || ""}
+                                onValueChange={(value) => setVaultM(value ? parseInt(value) : null)}
+                              >
+                                <SelectTrigger className="w-24" data-testid="select-vault-m">
+                                  <SelectValue placeholder="M" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15].map((num) => (
+                                    <SelectItem key={num} value={num.toString()}>{num}</SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                              <span className="text-muted-foreground">of</span>
+                              <Select
+                                value={vaultN?.toString() || ""}
+                                onValueChange={(value) => setVaultN(value ? parseInt(value) : null)}
+                              >
+                                <SelectTrigger className="w-24" data-testid="select-vault-n">
+                                  <SelectValue placeholder="N" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15].map((num) => (
+                                    <SelectItem key={num} value={num.toString()}>{num}</SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                              <span className="text-sm text-muted-foreground">signatures required</span>
+                            </div>
+                            {vaultM && vaultN && vaultM > vaultN && (
+                              <p className="text-xs text-destructive">Required signatures (M) cannot exceed total keys (N)</p>
+                            )}
+                          </div>
+
+                          <div className="space-y-2">
+                            <Label htmlFor="vault-notes">Vault Notes (optional)</Label>
+                            <Textarea
+                              id="vault-notes"
+                              value={vaultNotes}
+                              onChange={(e) => setVaultNotes(e.target.value)}
+                              placeholder="Additional notes about this vault XPUB..."
+                              className="min-h-[80px]"
+                              data-testid="input-vault-notes"
+                            />
+                          </div>
+                        </div>
+                      )}
                     </div>
+                  )}
+                </>
+              )}
+
+              {/* Multisig Mode */}
+              {isMultisigMode && (
+                <div className="space-y-4">
+                  <Alert>
+                    <Info className="h-4 w-4" />
+                    <AlertDescription>
+                      For multisig wallets, you need <strong>all cosigner xpubs</strong> to derive the correct addresses.
+                      The addresses are created by combining sorted public keys from all signers.
+                    </AlertDescription>
+                  </Alert>
+
+                  {/* Script Type */}
+                  <div className="space-y-2">
+                    <Label className="text-base font-medium">Script Type</Label>
+                    <Select
+                      value={multisigScriptType}
+                      onValueChange={(value) => setMultisigScriptType(value as MultisigScriptType)}
+                    >
+                      <SelectTrigger data-testid="select-multisig-script-type">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="p2wsh">Native SegWit (P2WSH) - bc1q... (lowest fees)</SelectItem>
+                        <SelectItem value="p2sh-p2wsh">Nested SegWit (P2SH-P2WSH) - 3... (compatible)</SelectItem>
+                        <SelectItem value="p2sh">Legacy (P2SH) - 3... (highest fees)</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-muted-foreground">
+                      {getMultisigScriptTypeDescription(multisigScriptType)}
+                    </p>
+                  </div>
+
+                  {/* M-of-N Threshold */}
+                  <div className="space-y-2">
+                    <Label className="text-base font-medium">Signature Threshold</Label>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <Select
+                        value={multisigM.toString()}
+                        onValueChange={(value) => setMultisigM(parseInt(value))}
+                      >
+                        <SelectTrigger className="w-24" data-testid="select-multisig-m">
+                          <SelectValue placeholder="M" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {Array.from({ length: Math.max(multisigN, 2) }, (_, i) => i + 1).map((num) => (
+                            <SelectItem key={num} value={num.toString()}>{num}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <span className="text-muted-foreground">of</span>
+                      <Badge variant="secondary" data-testid="badge-multisig-n">{multisigN}</Badge>
+                      <span className="text-sm text-muted-foreground">signatures required</span>
+                    </div>
+                    {effectiveM !== multisigM && multisigN >= 2 && (
+                      <p className="text-xs text-amber-600 dark:text-amber-400">
+                        Threshold adjusted to {effectiveM} (maximum for {multisigN} signers)
+                      </p>
+                    )}
+                  </div>
+
+                  {/* Cosigner XPUBs */}
+                  <div className="space-y-3">
+                    <Label className="text-base font-medium">Cosigner Extended Public Keys</Label>
+                    {multisigXpubs.map((entry, index) => (
+                      <div key={index} className="p-4 border rounded-lg space-y-3">
+                        <div className="flex items-center justify-between gap-2">
+                          <Label className="font-medium">Cosigner {index + 1}</Label>
+                          {multisigXpubs.length > 2 && (
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => removeMultisigXpub(index)}
+                              data-testid={`button-remove-xpub-${index}`}
+                            >
+                              <X className="h-4 w-4" />
+                            </Button>
+                          )}
+                        </div>
+                        <Textarea
+                          value={entry.xpub}
+                          onChange={(e) => updateMultisigXpub(index, 'xpub', e.target.value)}
+                          placeholder={`xpub6D... / zpub6D... (Cosigner ${index + 1})`}
+                          className="font-mono text-sm min-h-[80px]"
+                          data-testid={`input-multisig-xpub-${index}`}
+                        />
+                        <Collapsible>
+                          <CollapsibleTrigger asChild>
+                            <Button variant="ghost" size="sm" className="text-xs gap-1">
+                              <ChevronDown className="h-3 w-3" />
+                              Custom Derivation Path
+                            </Button>
+                          </CollapsibleTrigger>
+                          <CollapsibleContent className="pt-2">
+                            <Input
+                              value={entry.derivationPath || ''}
+                              onChange={(e) => updateMultisigXpub(index, 'derivationPath', e.target.value)}
+                              placeholder="Optional: e.g., 0 or 0/0 (default: auto-detect)"
+                              className="font-mono text-sm"
+                              data-testid={`input-multisig-path-${index}`}
+                            />
+                            <p className="text-xs text-muted-foreground mt-1">
+                              Leave empty for auto-detection based on key depth
+                            </p>
+                          </CollapsibleContent>
+                        </Collapsible>
+                      </div>
+                    ))}
+
+                    {multisigXpubs.length < 15 && (
+                      <Button
+                        variant="outline"
+                        onClick={addMultisigXpub}
+                        className="w-full"
+                        data-testid="button-add-cosigner"
+                      >
+                        <Plus className="h-4 w-4 mr-2" />
+                        Add Cosigner
+                      </Button>
+                    )}
+                  </div>
+
+                  {multisigValidationError && (
+                    <Alert variant="destructive">
+                      <AlertCircle className="h-4 w-4" />
+                      <AlertTitle>Validation Error</AlertTitle>
+                      <AlertDescription>{multisigValidationError}</AlertDescription>
+                    </Alert>
+                  )}
+
+                  {validMultisigXpubs.length >= 2 && !multisigValidationError && (
+                    <Alert>
+                      <ShieldCheck className="h-4 w-4" />
+                      <AlertTitle>Multisig Configuration</AlertTitle>
+                      <AlertDescription>
+                        <div className="flex flex-wrap gap-2 mt-2">
+                          <Badge variant="secondary">{effectiveM}-of-{multisigN}</Badge>
+                          <Badge variant="outline">{multisigScriptType.toUpperCase()}</Badge>
+                        </div>
+                      </AlertDescription>
+                    </Alert>
                   )}
                 </div>
               )}
@@ -816,7 +1108,8 @@ export default function BulkImport() {
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
-              {xpubInfo && (
+              {/* Singlesig auto-detected settings */}
+              {!isMultisigMode && xpubInfo && (
                 <div className="p-4 bg-muted rounded-lg space-y-3">
                   <div className="flex items-center justify-between flex-wrap gap-2">
                     <h4 className="font-medium">Auto-Detected Settings</h4>
@@ -854,52 +1147,77 @@ export default function BulkImport() {
                 </div>
               )}
 
-              <Collapsible open={advancedOpen} onOpenChange={setAdvancedOpen}>
-                <CollapsibleTrigger asChild>
-                  <Button variant="outline" className="w-full justify-between" data-testid="button-toggle-advanced">
-                    <span className="flex items-center gap-2">
-                      Advanced Settings
-                      {advancedMode && <Badge variant="secondary" className="text-xs">Active</Badge>}
-                    </span>
-                    {advancedOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-                  </Button>
-                </CollapsibleTrigger>
-                <CollapsibleContent className="pt-4 space-y-4">
-                  <div className="flex items-center justify-between">
-                    <div className="space-y-0.5">
-                      <Label htmlFor="advanced-mode">Use Custom Derivation Paths</Label>
-                      <p className="text-xs text-muted-foreground">
-                        Override the auto-detected paths with custom ones
-                      </p>
+              {/* Multisig configuration summary */}
+              {isMultisigMode && validMultisigXpubs.length >= 2 && (
+                <div className="p-4 bg-muted rounded-lg space-y-3">
+                  <div className="flex items-center justify-between flex-wrap gap-2">
+                    <h4 className="font-medium">Multisig Configuration</h4>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <Badge variant="secondary">{effectiveM}-of-{multisigN}</Badge>
+                      <Badge variant="outline">{multisigScriptType.toUpperCase()}</Badge>
                     </div>
-                    <Switch
-                      id="advanced-mode"
-                      checked={advancedMode}
-                      onCheckedChange={setAdvancedMode}
-                      data-testid="switch-advanced-mode"
-                    />
                   </div>
+                  <p className="text-sm text-muted-foreground">
+                    {getMultisigScriptTypeDescription(multisigScriptType)}
+                  </p>
+                  <div className="text-sm space-y-1">
+                    <p>Will generate both chains:</p>
+                    <ul className="list-disc list-inside text-muted-foreground">
+                      <li>Receive addresses {receiveStartIndex}-{receiveEndIndex} (external chain /0/n)</li>
+                      <li>Change addresses {changeStartIndex}-{changeEndIndex} (internal chain /1/n)</li>
+                    </ul>
+                  </div>
+                </div>
+              )}
 
-                  {advancedMode && (
-                    <div className="space-y-4 pl-4 border-l-2 border-primary/20">
-                      <div className="space-y-2">
-                        <Label htmlFor="custom-path-receive">Receive Chain Path</Label>
-                        <Input
-                          id="custom-path-receive"
-                          value={customPathReceive}
-                          onChange={(e) => setCustomPathReceive(e.target.value)}
-                          placeholder="e.g., 0"
-                          className="font-mono"
-                          data-testid="input-custom-path-receive"
-                        />
+              {/* Advanced settings only for singlesig mode */}
+              {!isMultisigMode && (
+                <Collapsible open={advancedOpen} onOpenChange={setAdvancedOpen}>
+                  <CollapsibleTrigger asChild>
+                    <Button variant="outline" className="w-full justify-between" data-testid="button-toggle-advanced">
+                      <span className="flex items-center gap-2">
+                        Advanced Settings
+                        {advancedMode && <Badge variant="secondary" className="text-xs">Active</Badge>}
+                      </span>
+                      {advancedOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                    </Button>
+                  </CollapsibleTrigger>
+                  <CollapsibleContent className="pt-4 space-y-4">
+                    <div className="flex items-center justify-between">
+                      <div className="space-y-0.5">
+                        <Label htmlFor="advanced-mode">Use Custom Derivation Paths</Label>
+                        <p className="text-xs text-muted-foreground">
+                          Override the auto-detected paths with custom ones
+                        </p>
                       </div>
-                      <div className="space-y-2">
-                        <Label htmlFor="custom-path-change">Change Chain Path</Label>
-                        <Input
-                          id="custom-path-change"
-                          value={customPathChange}
-                          onChange={(e) => setCustomPathChange(e.target.value)}
-                          placeholder="e.g., 1"
+                      <Switch
+                        id="advanced-mode"
+                        checked={advancedMode}
+                        onCheckedChange={setAdvancedMode}
+                        data-testid="switch-advanced-mode"
+                      />
+                    </div>
+
+                    {advancedMode && (
+                      <div className="space-y-4 pl-4 border-l-2 border-primary/20">
+                        <div className="space-y-2">
+                          <Label htmlFor="custom-path-receive">Receive Chain Path</Label>
+                          <Input
+                            id="custom-path-receive"
+                            value={customPathReceive}
+                            onChange={(e) => setCustomPathReceive(e.target.value)}
+                            placeholder="e.g., 0"
+                            className="font-mono"
+                            data-testid="input-custom-path-receive"
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="custom-path-change">Change Chain Path</Label>
+                          <Input
+                            id="custom-path-change"
+                            value={customPathChange}
+                            onChange={(e) => setCustomPathChange(e.target.value)}
+                            placeholder="e.g., 1"
                           className="font-mono"
                           data-testid="input-custom-path-change"
                         />
@@ -977,6 +1295,7 @@ export default function BulkImport() {
                   </div>
                 </CollapsibleContent>
               </Collapsible>
+              )}
 
               <div className="space-y-4 pt-4 border-t">
                 <h4 className="font-medium">Metadata (applied to all addresses)</h4>
@@ -1469,15 +1788,25 @@ export default function BulkImport() {
                   <Loader2 className="h-8 w-8 animate-spin text-primary mb-4" />
                   <p className="text-muted-foreground">Deriving addresses...</p>
                 </div>
-              ) : dualChainResult && (
+              ) : (isMultisigMode ? multisigResult : dualChainResult) && (
                 <>
+                  {/* Multisig mode indicator */}
+                  {isMultisigMode && multisigResult && (
+                    <div className="p-3 bg-primary/10 rounded-md mb-2 flex items-center gap-2 flex-wrap">
+                      <ShieldCheck className="h-4 w-4 text-primary" />
+                      <span className="font-medium">Multisig Addresses</span>
+                      <Badge variant="secondary">{multisigResult.m}-of-{multisigResult.n}</Badge>
+                      <Badge variant="outline">{multisigResult.scriptType.toUpperCase()}</Badge>
+                    </div>
+                  )}
+                  
                   <div className="p-3 bg-muted rounded-md mb-4">
-                    <div className="flex items-center justify-between">
+                    <div className="flex items-center justify-between flex-wrap gap-2">
                       <p className="text-sm font-medium">
                         Total: {totalSelectedAddresses} addresses selected
                       </p>
                       <div className="flex gap-2">
-                        {dualChainResult.change.length > 0 ? (
+                        {(isMultisigMode ? multisigResult?.change : dualChainResult?.change)?.length > 0 ? (
                           <>
                             <Badge variant="secondary">{selectedReceiveAddresses.size} receive</Badge>
                             <Badge variant="outline">{selectedChangeAddresses.size} change</Badge>
@@ -1487,7 +1816,7 @@ export default function BulkImport() {
                         )}
                       </div>
                     </div>
-                    {dualChainResult.change.length === 0 && (
+                    {!isMultisigMode && activeChangeAddresses?.length === 0 && (
                       <p className="text-xs text-amber-600 dark:text-amber-400 mt-2">
                         Chain-level key: only single chain derivation available
                       </p>
@@ -1499,20 +1828,20 @@ export default function BulkImport() {
                       <div className="bg-primary/10 p-3 flex items-center justify-between">
                         <div className="flex items-center gap-2">
                           <Checkbox
-                            checked={selectedReceiveAddresses.size === dualChainResult.receive.length}
+                            checked={activeReceiveAddresses && selectedReceiveAddresses.size === activeReceiveAddresses.length}
                             onCheckedChange={toggleAllReceiveAddresses}
                             data-testid="checkbox-select-all-receive"
                           />
                           <Label className="cursor-pointer font-medium" onClick={toggleAllReceiveAddresses}>
-                            {dualChainResult.change.length > 0 ? 'Receive Addresses (External)' : 'Derived Addresses'}
+                            {(activeChangeAddresses?.length ?? 0) > 0 ? 'Receive Addresses (External)' : 'Derived Addresses'}
                           </Label>
                           <Badge variant="secondary" className="text-xs">
-                            {selectedReceiveAddresses.size}/{dualChainResult.receive.length}
+                            {selectedReceiveAddresses.size}/{activeReceiveAddresses?.length ?? 0}
                           </Badge>
                         </div>
                       </div>
                       <div className="space-y-2 max-h-[200px] overflow-y-auto p-2">
-                        {dualChainResult.receive.map((addr, index) => (
+                        {activeReceiveAddresses?.map((addr, index) => (
                           <div
                             key={`receive-${index}`}
                             className={`flex items-center gap-3 p-3 border rounded hover-elevate ${
@@ -1530,7 +1859,7 @@ export default function BulkImport() {
                                 <Badge variant="outline" className="text-xs">
                                   #{addr.index}
                                 </Badge>
-                                <code className="text-xs text-muted-foreground">{addr.path}</code>
+                                {'path' in addr && <code className="text-xs text-muted-foreground">{addr.path}</code>}
                               </div>
                               <code className="text-sm font-mono break-all">{addr.address}</code>
                             </div>
@@ -1539,7 +1868,7 @@ export default function BulkImport() {
                       </div>
                     </div>
 
-                    {dualChainResult.change.length > 0 && (
+                    {(activeChangeAddresses?.length ?? 0) > 0 && (
                       <div className="border rounded-lg overflow-hidden">
                         <div 
                           className="bg-muted p-3 flex items-center justify-between cursor-pointer hover-elevate"
@@ -1548,7 +1877,7 @@ export default function BulkImport() {
                         >
                           <div className="flex items-center gap-2">
                             <Checkbox
-                              checked={selectedChangeAddresses.size === dualChainResult.change.length}
+                              checked={activeChangeAddresses && selectedChangeAddresses.size === activeChangeAddresses.length}
                               onCheckedChange={() => toggleAllChangeAddresses()}
                               onClick={(e) => e.stopPropagation()}
                               data-testid="checkbox-select-all-change"
@@ -1557,7 +1886,7 @@ export default function BulkImport() {
                               Change Addresses (Internal)
                             </Label>
                             <Badge variant="outline" className="text-xs">
-                              {selectedChangeAddresses.size}/{dualChainResult.change.length}
+                              {selectedChangeAddresses.size}/{activeChangeAddresses?.length ?? 0}
                             </Badge>
                           </div>
                           <Button variant="ghost" size="sm">
@@ -1570,7 +1899,7 @@ export default function BulkImport() {
                         </div>
                         {showChangeAddresses && (
                           <div className="space-y-2 max-h-[200px] overflow-y-auto p-2">
-                            {dualChainResult.change.map((addr, index) => (
+                            {activeChangeAddresses?.map((addr, index) => (
                               <div
                                 key={`change-${index}`}
                                 className={`flex items-center gap-3 p-3 border rounded hover-elevate ${
@@ -1588,7 +1917,7 @@ export default function BulkImport() {
                                     <Badge variant="outline" className="text-xs">
                                       #{addr.index}
                                     </Badge>
-                                    <code className="text-xs text-muted-foreground">{addr.path}</code>
+                                    {'path' in addr && <code className="text-xs text-muted-foreground">{addr.path}</code>}
                                   </div>
                                   <code className="text-sm font-mono break-all">{addr.address}</code>
                                 </div>
