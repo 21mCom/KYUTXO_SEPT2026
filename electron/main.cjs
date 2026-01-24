@@ -5,6 +5,147 @@ const url = require('url');
 
 let mainWindow;
 
+// ============================================================================
+// TOR PROXY SUPPORT
+// ============================================================================
+const DEFAULT_TOR_PROXY = "socks5h://127.0.0.1:9050";
+const TOR_BROWSER_PROXY = "socks5h://127.0.0.1:9150";
+
+// Allowed hostnames for Bitcoin API requests - prevents SSRF attacks
+const ALLOWED_API_HOSTS = [
+  "mempool.space",
+  "blockstream.info",
+  "check.torproject.org",
+];
+
+function isAllowedUrl(urlString, additionalAllowedHost) {
+  try {
+    const parsed = new URL(urlString);
+    const hostname = parsed.hostname.toLowerCase();
+    
+    // Allow .onion addresses
+    if (hostname.endsWith('.onion')) {
+      return { allowed: true };
+    }
+    
+    // Block private IP ranges
+    const privatePatterns = [
+      /^localhost$/i,
+      /^127\./,
+      /^10\./,
+      /^172\.(1[6-9]|2[0-9]|3[0-1])\./,
+      /^192\.168\./,
+      /^0\./,
+      /^169\.254\./,
+    ];
+    
+    for (const pattern of privatePatterns) {
+      if (pattern.test(hostname)) {
+        return { allowed: false, reason: "Internal network addresses are not allowed" };
+      }
+    }
+    
+    // Build dynamic allowlist
+    const allowedHosts = [...ALLOWED_API_HOSTS];
+    if (additionalAllowedHost) {
+      try {
+        const additionalParsed = new URL(additionalAllowedHost);
+        const additionalHostname = additionalParsed.hostname.toLowerCase();
+        const isPrivate = privatePatterns.some(p => p.test(additionalHostname));
+        if (!isPrivate) {
+          allowedHosts.push(additionalHostname);
+        }
+      } catch {
+        // Invalid URL, ignore
+      }
+    }
+    
+    // Check against allowlist
+    const isAllowed = allowedHosts.some(allowed => 
+      hostname === allowed || hostname.endsWith('.' + allowed)
+    );
+    
+    if (!isAllowed) {
+      return { allowed: false, reason: `Host '${hostname}' is not in the allowed list` };
+    }
+    
+    return { allowed: true };
+  } catch {
+    return { allowed: false, reason: "Invalid URL format" };
+  }
+}
+
+async function makeProxiedRequest(requestParams) {
+  const { SocksProxyAgent } = require('socks-proxy-agent');
+  const startTime = Date.now();
+  const proxyUrl = requestParams.torProxyUrl || DEFAULT_TOR_PROXY;
+  const timeout = requestParams.timeout || 60000;
+
+  try {
+    const agent = new SocksProxyAgent(proxyUrl);
+    
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeout);
+
+    const fetchOptions = {
+      method: requestParams.method || "GET",
+      headers: requestParams.headers,
+      signal: controller.signal,
+      agent,
+    };
+
+    if (requestParams.body && (requestParams.method === "POST" || requestParams.method === "PUT")) {
+      fetchOptions.body = JSON.stringify(requestParams.body);
+    }
+
+    const response = await fetch(requestParams.url, fetchOptions);
+    clearTimeout(timeoutId);
+
+    const latency = Date.now() - startTime;
+    
+    let data;
+    const contentType = response.headers.get("content-type");
+    if (contentType && contentType.includes("application/json")) {
+      data = await response.json();
+    } else {
+      data = await response.text();
+    }
+
+    return {
+      success: response.ok,
+      status: response.status,
+      statusText: response.statusText,
+      data,
+      latency,
+      contentType: contentType || undefined,
+    };
+  } catch (error) {
+    const latency = Date.now() - startTime;
+    
+    if (error.name === "AbortError") {
+      return {
+        success: false,
+        error: `Request timed out after ${timeout / 1000}s. Tor connections can be slow - try increasing the timeout.`,
+        latency,
+      };
+    }
+    
+    if (error.message && error.message.includes("ECONNREFUSED")) {
+      return {
+        success: false,
+        error: `Cannot connect to Tor proxy at ${proxyUrl}. Make sure Tor is running.`,
+        latency,
+      };
+    }
+    
+    return {
+      success: false,
+      error: error.message || "Unknown error occurred",
+      latency,
+    };
+  }
+}
+
 // Determine if running in development or production
 const isDev = process.env.NODE_ENV === 'development';
 
@@ -273,6 +414,136 @@ ipcMain.handle('write-attachment', async (event, { relativePath, data }) => {
   } catch (error) {
     return { success: false, error: error.message };
   }
+});
+
+// ============================================================================
+// TOR PROXY IPC HANDLERS
+// ============================================================================
+
+// Test Tor connection
+ipcMain.handle('tor-test', async (event, { torProxyUrl }) => {
+  const proxiesToTest = [
+    { name: "Tor Browser", url: TOR_BROWSER_PROXY },
+    { name: "Tor Service", url: DEFAULT_TOR_PROXY },
+  ];
+
+  if (torProxyUrl) {
+    proxiesToTest.unshift({ name: "Custom", url: torProxyUrl });
+  }
+
+  for (const proxy of proxiesToTest) {
+    try {
+      const result = await makeProxiedRequest({
+        url: "https://check.torproject.org/api/ip",
+        torProxyUrl: proxy.url,
+        timeout: 15000,
+      });
+
+      if (result.success && result.data) {
+        const torCheck = result.data;
+        if (torCheck.IsTor) {
+          return {
+            success: true,
+            proxyUrl: proxy.url,
+            proxyName: proxy.name,
+            isTor: true,
+            torIp: torCheck.IP,
+            latency: result.latency,
+            message: `Connected via ${proxy.name}. Exit IP: ${torCheck.IP}`,
+          };
+        }
+      }
+    } catch {
+      continue;
+    }
+  }
+
+  return {
+    success: false,
+    error: "Could not connect to Tor. Make sure Tor Browser or Tor service is running.",
+    testedProxies: proxiesToTest.map(p => p.url),
+  };
+});
+
+// Proxy a request through Tor
+ipcMain.handle('tor-request', async (event, { url: requestUrl, method, headers, body, timeout, torProxyUrl, allowedHost }) => {
+  if (!requestUrl) {
+    return { success: false, error: "URL is required" };
+  }
+
+  // Validate URL to prevent SSRF attacks
+  const urlCheck = isAllowedUrl(requestUrl, allowedHost);
+  if (!urlCheck.allowed) {
+    return { success: false, error: urlCheck.reason || "URL not allowed" };
+  }
+
+  return await makeProxiedRequest({
+    url: requestUrl,
+    method,
+    headers,
+    body,
+    timeout,
+    torProxyUrl,
+  });
+});
+
+// Get Tor status
+ipcMain.handle('tor-status', async () => {
+  const proxiesToTest = [
+    { name: "Tor Browser", url: TOR_BROWSER_PROXY, port: 9150 },
+    { name: "Tor Service", url: DEFAULT_TOR_PROXY, port: 9050 },
+  ];
+
+  const results = [];
+
+  for (const proxy of proxiesToTest) {
+    try {
+      const result = await makeProxiedRequest({
+        url: "https://check.torproject.org/api/ip",
+        torProxyUrl: proxy.url,
+        timeout: 10000,
+      });
+
+      if (result.success) {
+        const torCheck = result.data;
+        results.push({
+          name: proxy.name,
+          url: proxy.url,
+          port: proxy.port,
+          available: true,
+          isTor: torCheck.IsTor || false,
+          exitIp: torCheck.IP,
+          latency: result.latency,
+        });
+      } else {
+        results.push({
+          name: proxy.name,
+          url: proxy.url,
+          port: proxy.port,
+          available: false,
+          error: result.error,
+        });
+      }
+    } catch (error) {
+      results.push({
+        name: proxy.name,
+        url: proxy.url,
+        port: proxy.port,
+        available: false,
+        error: error.message || "Unknown error",
+      });
+    }
+  }
+
+  const anyAvailable = results.some(r => r.available && r.isTor);
+
+  return {
+    torAvailable: anyAvailable,
+    proxies: results,
+    recommendation: anyAvailable 
+      ? `Tor is available via ${results.find(r => r.available && r.isTor)?.name}`
+      : "No Tor proxy detected. Please start Tor Browser or install the Tor service.",
+  };
 });
 
 // Security: Set Content Security Policy
