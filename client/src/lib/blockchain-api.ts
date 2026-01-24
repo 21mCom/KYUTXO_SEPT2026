@@ -3,6 +3,7 @@
 // Can route through Tor for privacy when connecting to .onion addresses
 
 import { NodeSettings, NodeProviderType, ScriptType, OpReturnOutput } from '@/lib/database';
+import { isElectron, getElectronAPI, TorRequestResult as ElectronTorRequestResult, TorStatusResult as ElectronTorStatusResult, TorTestResult as ElectronTorTestResult } from './electron';
 
 export interface BlockchainProvider {
   name: string;
@@ -129,19 +130,7 @@ abstract class EsploraProvider implements BlockchainProvider {
   }
 
   protected async torProxiedFetch(url: string): Promise<Response> {
-    const proxyResponse = await fetch('/api/tor/request', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        url,
-        method: 'GET',
-        timeout: this.timeout,
-        torProxyUrl: this.torProxyUrl,
-        allowedHost: this.baseUrl, // Pass configured provider URL for SSRF protection
-      }),
-    });
-
-    const result = await proxyResponse.json() as {
+    let result: {
       success: boolean;
       status?: number;
       statusText?: string;
@@ -150,6 +139,31 @@ abstract class EsploraProvider implements BlockchainProvider {
       latency?: number;
       contentType?: string;
     };
+
+    // Use Electron IPC in portable app, or backend API in dev mode
+    if (isElectron()) {
+      const electronAPI = getElectronAPI();
+      result = await electronAPI.torRequest({
+        url,
+        method: 'GET',
+        timeout: this.timeout,
+        torProxyUrl: this.torProxyUrl,
+        allowedHost: this.baseUrl,
+      });
+    } else {
+      const proxyResponse = await fetch('/api/tor/request', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          url,
+          method: 'GET',
+          timeout: this.timeout,
+          torProxyUrl: this.torProxyUrl,
+          allowedHost: this.baseUrl,
+        }),
+      });
+      result = await proxyResponse.json();
+    }
 
     // Handle proxy-level errors (connection failed, timeout, etc.)
     if (!result.success && !result.status) {
@@ -561,12 +575,18 @@ export interface TorTestResult {
 // Test if Tor is available and working
 export async function testTorConnectivity(customProxyUrl?: string): Promise<TorTestResult> {
   try {
-    const response = await fetch('/api/tor/test', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ torProxyUrl: customProxyUrl }),
-    });
-    return await response.json();
+    // Use Electron IPC in portable app, or backend API in dev mode
+    if (isElectron()) {
+      const electronAPI = getElectronAPI();
+      return await electronAPI.torTest(customProxyUrl);
+    } else {
+      const response = await fetch('/api/tor/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ torProxyUrl: customProxyUrl }),
+      });
+      return await response.json();
+    }
   } catch (error) {
     return {
       success: false,
@@ -578,8 +598,14 @@ export async function testTorConnectivity(customProxyUrl?: string): Promise<TorT
 // Get current Tor status (checks all known proxy ports)
 export async function getTorStatus(): Promise<TorStatus> {
   try {
-    const response = await fetch('/api/tor/status');
-    return await response.json();
+    // Use Electron IPC in portable app, or backend API in dev mode
+    if (isElectron()) {
+      const electronAPI = getElectronAPI();
+      return await electronAPI.torStatus();
+    } else {
+      const response = await fetch('/api/tor/status');
+      return await response.json();
+    }
   } catch (error) {
     return {
       torAvailable: false,
