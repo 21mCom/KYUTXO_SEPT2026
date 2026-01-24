@@ -6,6 +6,19 @@ const router = Router();
 const DEFAULT_TOR_PROXY = "socks5h://127.0.0.1:9050";
 const TOR_BROWSER_PROXY = "socks5h://127.0.0.1:9150";
 
+// SECURITY NOTE: This Tor proxy is designed for a desktop Electron application
+// where the "client" and "server" run on the same machine controlled by the user.
+// The threat model does NOT include protecting against the user themselves.
+// 
+// SSRF protections implemented:
+// 1. Private IP range blocking (localhost, 10.x, 172.16-31.x, 192.168.x, etc.)
+// 2. Allowlist for known Bitcoin API providers
+// 3. Dynamic allowlist extension via allowedHost for user-configured custom nodes
+//
+// Known limitations for future enhancement:
+// - DNS rebinding not fully mitigated (would require resolving hostnames server-side)
+// - allowedHost is client-supplied (acceptable in desktop context, reconsider if server is exposed)
+
 // Allowed hostnames for Bitcoin API requests - prevents SSRF attacks
 const ALLOWED_API_HOSTS = [
   // Mempool.space
@@ -14,7 +27,7 @@ const ALLOWED_API_HOSTS = [
   "blockstream.info",
   // Tor project (for testing)
   "check.torproject.org",
-  // Allow any .onion address (user's own nodes)
+  // Note: .onion addresses are always allowed (user's own nodes)
 ];
 
 function isAllowedUrl(url: string, additionalAllowedHost?: string): { allowed: boolean; reason?: string } {
