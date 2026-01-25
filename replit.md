@@ -2,7 +2,7 @@
 
 ## Overview
 
-KYUTXO is a secure, offline-first encrypted desktop application for managing cryptocurrency metadata. It allows users to organize information about Bitcoin addresses and transactions, attach encrypted files, and manage custom vocabularies. The project prioritizes data privacy through full encryption at rest, password-protected access, and complete offline functionality. It aims to provide a robust solution for personal crypto data management, with future ambitions including advanced provenance tracking, entity relationship mapping, and tax/compliance reporting. The project is currently focused on blockchain data import and transaction synchronization.
+KYUTXO is an encrypted, offline-first desktop application designed for managing Bitcoin address and transaction metadata. It enables users to organize cryptocurrency information, attach encrypted files, and manage custom vocabularies, all while prioritizing data privacy through full encryption, password protection, and complete offline functionality. The project's vision is to provide a robust personal crypto data management solution with future expansion into advanced provenance tracking, entity relationship mapping, and compliance reporting. The current focus is on blockchain data import and transaction synchronization.
 
 ## User Preferences
 
@@ -20,118 +20,47 @@ Data is stored locally using Dexie.js (IndexedDB) for structured data, with all 
 
 **Key Architectural Decisions & Features:**
 
-*   **UI/UX:** Responsive, offline-first UI with a reorganized navigation sidebar into 6 collapsible groups, quick action UI patterns (hover card, side sheet panel, dropdown actions), and branded elements.
-*   **Data Model:** Records track ownership, wallet names, and other metadata.
-*   **Encryption:** Full AES-256-GCM encryption at rest for all data and attachments. Includes password change functionality that re-encrypts all data with a new key.
-*   **Offline First:** Designed for complete offline functionality, with core logic client-side.
-*   **Portability:** Supports fully portable database storage, allowing the application to run from a USB drive.
-*   **Vocabulary Management System:** Allows users to define and manage custom tags, categories, owners, wallet names, seed names, and wallet software, with auto-syncing of new vocabulary entries.
-*   **Duplicate Detection & Merge System:** Intelligently merges new metadata with existing records, prioritizing manual input and ensuring data integrity.
-*   **Address Importer (Bulk Import):** Generates addresses from xpub/zpub keys with two modes:
-    *   **Singlesig Mode:** Standard HD wallet address derivation from a single xpub/ypub/zpub with automatic BIP standard detection
-    *   **Multisig Mode:** Proper multisig address derivation from multiple cosigner xpubs with:
-        *   **Script Type Selection:** P2WSH (native segwit), P2SH-P2WSH (nested segwit), P2SH (legacy)
-        *   **M-of-N Threshold:** Configurable signature requirements
-        *   **BIP-67 Compliance:** Lexicographic pubkey sorting for deterministic address generation
-        *   **Custom Derivation Paths:** Per-cosigner path configuration for flexibility
-        *   **Cosigner Naming & Notes:** Each cosigner can have a custom name and optional notes, stored as structured JSON in vault metadata
-    *   **Vault Metadata:** Support for vault naming, M-of-N requirements, cosigner details, and notes
-    *   **Privacy Warnings:** Clear notices about xpub exposure implications
-*   **Wallet Data Sync System:** Modular system for importing labels and transaction history from various wallet software, with intelligent duplicate detection and address verification. Includes a private key scanner to prevent importing sensitive data.
-*   **BIP-329 Label Import:** Dedicated streamlined importer for BIP-329 standard wallet label exports (.jsonl files):
-    *   **3-Step Wizard:** Upload → Preview → Import flow with progress tracking
-    *   **Type Support:** Handles addr, tx, input, output records (xpub/pubkey skipped)
-    *   **Origin Preservation:** Captures BIP-329 origin field in notes for all record types
-    *   **Input/Output Specificity:** Uses full outpoint ref (txid:vout) as inputString to preserve per-outpoint uniqueness and prevent label merging
-    *   **Duplicate Detection:** Identifies existing records and shows new vs. update status
-    *   **Security:** Rejects files containing private key material
-*   **Seed Name Protection:** Limits seed name field length to prevent accidental seed phrase entry.
+*   **UI/UX:** Responsive, offline-first UI with reorganized navigation, quick action patterns (hover card, side sheet, dropdowns), and branded elements.
+*   **Data Model:** Comprehensive records tracking ownership, wallet names, and other metadata.
+*   **Encryption:** Full AES-256-GCM encryption at rest for all data and attachments, including re-encryption on password change.
+*   **Offline First & Portability:** Designed for complete offline functionality and portable database storage.
+*   **Vocabulary Management:** Custom tags, categories, owners, wallet names, seed names, and wallet software with auto-sync.
+*   **Duplicate Detection & Merge:** Intelligent merging of new metadata with existing records.
+*   **Address Importer (Bulk Import):** Generates addresses from xpub/zpub keys in Singlesig and Multisig modes, with script type selection, M-of-N thresholds, BIP-67 compliance, custom derivation paths, and privacy warnings. Supports vault metadata.
+*   **Wallet Data Sync System:** Modular system for importing labels and transaction history from various wallet software, with intelligent duplicate detection and a private key scanner.
+*   **BIP-329 Label Import:** Streamlined 3-step wizard for importing BIP-329 standard `.jsonl` files, preserving origin and handling input/output specificity with duplicate detection and private key rejection.
+*   **Seed Name Protection:** Prevents accidental seed phrase entry in seed name fields.
 *   **Address Verification System:** Confirms address ownership with a tiered importance system.
-*   **Historical Price Import System:** Imports and stores Bitcoin OHLCV price data from CSV files.
-*   **Transaction Sync System (Phase 2):** Fetches blockchain data for tracked addresses from configurable sources, importing confirmed transactions, intelligently matching addresses, and auto-creating "Pending Review" records. Captures outpoint data (prevTxid/prevVout) for inputs to enable exact UTXO matching.
-*   **Tor Proxy Integration:** Privacy-enhanced node connectivity via SOCKS5 proxy:
-    *   **Dual-Mode Routing:** Works in both dev mode (Express backend) AND portable Electron builds (IPC handlers)
-    *   **Electron IPC Handlers:** `tor-test`, `tor-request`, `tor-status` handlers in main process using node-fetch + socks-proxy-agent
-    *   **Auto-Detection:** Automatically detects Tor Browser (port 9150) or Tor service (port 9050)
-    *   **Connection Testing:** "Test Tor" button verifies connectivity via check.torproject.org
-    *   **.onion Support:** Native support for .onion addresses (user's self-hosted nodes)
-    *   **SSRF Protection:** URL allowlist with private IP blocking for security
-    *   **Setup Instructions:** Built-in guidance for Tor Browser and Tor Expert Bundle
-*   **Exact UTXO Tracking (Database v20):** Dual-mode UTXO calculation system:
-    *   **Standard Mode:** Uses heuristic address:amount matching (may be approximate for repeated amounts)
-    *   **Exact Mode (Beta):** Uses outpoint-based matching (prevTxid:prevVout) for 100% accurate UTXO identification
-    *   **Data Coverage Indicators:** Shows 0%/partial/100% outpoint data coverage with re-sync prompts
-    *   **Mode Persistence:** User's selected mode saved in settings
-    *   **Historical Views:** Both modes integrate with date filter for point-in-time UTXO snapshots
-*   **Record Detail Panel:** Comprehensive metadata display with navigation links.
-*   **Blockchain Toggle Component:** Filters blockchain-discovered records efficiently using optimized database indexing.
-*   **Reports System:** Includes Source of Funds Report (acquisition history, cost basis, valuation) and Hop-Point Detection Report (identifies unclassified addresses with confidence scoring).
-*   **Quick Tagger:** Paste-based bulk tagging tool for addresses and transactions with full metadata support including tags, categories, owner, wallet name, seed name, wallet software, private key status, label, notes, and type-specific fields (address importance, counterparty type, flow type, acquisition method, disposition type, cost basis).
-*   **Nudgie (Transaction Labeling To-Do):** A workflow for systematically labeling unlabeled transactions, with dashboard and focus views, source filtering, and quick-label buttons.
-*   **Database Cleanup (/cleanup):** Dedicated page for querying and bulk deleting blockchain-discovered records with no user metadata:
-    *   **Scope Selector:** Filter by addresses, transactions, or both
-    *   **Conservative Eligibility:** Only includes records with at least one blockchain-sync origin, no non-blockchain origins, and no user-added metadata
-    *   **Preview List:** Shows eligible records with checkboxes for selection
-    *   **Bulk Controls:** Select All/Select None for efficient batch operations
-    *   **Hard Delete:** Permanently removes records and their origins (can be re-synced from blockchain later)
-*   **Transaction Classification Metadata (Database v15):** Tax-neutral fact-recording system for `flowType`, `acquisitionMethod`, `dispositionType`, `costBasisUsd`, and `counterpartyType`.
-*   **Bulk Editor:** A powerful batch editing system for updating multiple records at once with a filter builder, action builder, preview panel, and undo capability. Optimized for fast processing of large datasets.
-*   **Metadata Conflict Resolution System:** Detects and resolves conflicts when multiple import sources (xpub import, wallet sync, manual entry) provide different values for singular metadata fields:
-    *   **Field Classification:** Union fields (tags, categories) accumulate values; Singular fields (seed name, owner, wallet name, wallet software, private key status, label) require resolution
-    *   **RecordOrigin System:** Preserves all metadata from each import source with timestamps and origin type
-    *   **Conflict Detection:** Identifies records where origins have conflicting singular field values
-    *   **Visual Indicators:** Orange dots in MetadataSourcesPanel show which origin values differ from active record
-    *   **Standalone Resolution Page:** Full-screen interface with search/filter to view all conflicts, select preferred values, or enter custom values
-    *   **RecordDetailPanel Badge:** Clickable conflict indicator navigates to filtered resolution page
-*   **Bitcoin Flow Visualizer:** An interactive UTXO provenance tracing tool with Sankey Diagram, Timeline Swimlanes, Line Chart, and Hop-Path Explorer visualizations, prioritizing local data before falling back to blockchain APIs. Owned addresses are highlighted in green for easy identification.
-    *   **Hop-Path Explorer:** Interactive tree-based fund flow visualization with recursive node selection, multi-hop traversal using link-based adjacency, loading states during exploration, and color-coded ownership indicators (green=owned, orange=unclassified, gray=external). Includes transaction link metadata display and explore-to-drill functionality.
-*   **Transaction Search Enhancement:** Records page search now includes blockchain transactions, showing all participating addresses for a given txid.
-*   **Origin Tracking System:** Comprehensive UTXO lineage tracking with:
-    *   **utxoLineage table:** Tracks UTXO flow relationships (spent → created) with confidence scoring
-    *   **custodySegment table:** Groups lineage chains into ownership periods with acquisition metadata
-    *   **Lineage Engine:** Builds lineage from TransactionParticipants with intelligent change detection
-    *   **Continuity Proof component:** Visualizes complete ownership timeline with custody duration
-    *   **Continuity Certificate Report:** Filtered export of custody segments with selective disclosure
-    *   **Evidence Bundle Export:** Privacy-preserving export with toggles for addresses, txids, and lineage chains
-*   **Timestamp Standards:** originDate stored as Unix seconds (blockTime), updatedAt as Unix milliseconds (Date.now())
-*   **Evidence/Document Storage System (Database v18):** General-purpose encrypted document storage for proof-of-ownership and historical record keeping beyond Bitcoin transactions:
-    *   **Evidence Table:** Stores document metadata with fields: title, documentType (email/screenshot/receipt/contract/chat_log), originalDate, notes, tags, partiesInvolved, source, importance (low/medium/high)
-    *   **EvidenceAttachments Table:** Encrypted file storage linked to evidence entries, supporting multiple attachments per evidence item
-    *   **Full Encryption:** All evidence metadata and attachments encrypted at rest using AES-256-GCM
-    *   **Evidence UI:** List view with search/filter by type/importance/date/tags, add/edit forms, file upload with drag-and-drop, detail view with file download
-    *   **Sidebar Integration:** Added under "Documents" navigation group
-*   **Vault Management Page (/vaults):** Dedicated UI for viewing and managing multisig vaults:
-    *   **Vault Aggregation:** Groups addresses by vault name, M-of-N quorum, script type, and cosigner xpubs for stable deduplication
-    *   **Vault Cards:** Display vault name, quorum badge, script type badge, and address count
-    *   **Cosigner Details:** Collapsible section showing each cosigner's name, xpub preview, and notes
-    *   **Navigation:** "View Addresses" button navigates to Records page filtered by vault name
-    *   **Search/Filter:** Filter vaults by vault name, cosigner name, or script type
-    *   **RecordDetailPanel Integration:** VaultInfoSection component displays structured cosigner metadata when viewing individual multisig addresses
+*   **Historical Price Import:** Imports Bitcoin OHLCV price data from CSV files.
+*   **Transaction Sync System:** Fetches and imports confirmed transactions from blockchain data sources for tracked addresses, intelligently matching and creating "Pending Review" records. Captures outpoint data.
+*   **Tor Proxy Integration:** Privacy-enhanced node connectivity via SOCKS5 proxy (Tor Browser/service) with dual-mode routing, Electron IPC handlers, auto-detection, connection testing, .onion support, SSRF protection (URL allowlist), and a trusted local hosts whitelist.
+*   **Exact UTXO Tracking:** Dual-mode UTXO calculation (Standard/Exact) with outpoint-based matching for accuracy, data coverage indicators, and historical views.
+*   **Record Detail Panel:** Comprehensive metadata display with navigation.
+*   **Blockchain Toggle Component:** Filters blockchain-discovered records using optimized indexing.
+*   **Reports System:** Includes Source of Funds Report (acquisition history, cost basis, valuation) and Hop-Point Detection Report.
+*   **Quick Tagger:** Paste-based bulk tagging tool for addresses and transactions with full metadata support.
+*   **Nudgie (Transaction Labeling To-Do):** Workflow for systematically labeling unlabeled transactions.
+*   **Database Cleanup:** Dedicated page for querying and bulk deleting blockchain-discovered records without user metadata, with conservative eligibility rules and permanent deletion.
+*   **Transaction Classification Metadata:** Tax-neutral fact-recording system for `flowType`, `acquisitionMethod`, `dispositionType`, `costBasisUsd`, and `counterpartyType`.
+*   **Bulk Editor:** Batch editing system with filter/action builders, preview, and undo capabilities.
+*   **Metadata Conflict Resolution System:** Detects and resolves conflicts for singular metadata fields from multiple import sources, using a `RecordOrigin` system, visual indicators, and a dedicated resolution interface.
+*   **Bitcoin Flow Visualizer:** Interactive UTXO provenance tracing tool with Sankey Diagram, Timeline Swimlanes, Line Chart, and Hop-Path Explorer visualizations, prioritizing local data.
+*   **Transaction Search Enhancement:** Includes blockchain transactions and participating addresses in search results.
+*   **Origin Tracking System:** Comprehensive UTXO lineage tracking with `utxoLineage` and `custodySegment` tables, a Lineage Engine, Continuity Proof component, Continuity Certificate Report, and Evidence Bundle Export.
+*   **Timestamp Standards:** `originDate` as Unix seconds (blockTime), `updatedAt` as Unix milliseconds (Date.now()).
+*   **Evidence/Document Storage System:** General-purpose encrypted document storage for proof-of-ownership and historical records, supporting various document types and attachments with full encryption.
+*   **Vault Management Page:** Dedicated UI for viewing and managing multisig vaults, aggregating addresses, displaying vault details, and providing navigation to filtered records.
 
 ## External Dependencies
 
-### Third-Party Services
-
-*   **Local File System:** Used for storing encrypted attachments.
+*   **Local File System:** For storing encrypted attachments.
 *   **Google Fonts CDN:** For the Inter font family.
-
-### Bitcoin Libraries
-
 *   **bitcoinjs-lib:** Bitcoin address validation and network detection.
 *   **bip32:** HD wallet key derivation.
 *   **bip39:** Mnemonic seed phrase handling.
-
-### Security Libraries
-
-*   **Offline Encryption:** AES-256-GCM encryption with PBKDF2 key derivation, running 100% locally in your browser.
-
-### Desktop Packaging
-
-*   **Electron:** Core framework for the desktop application, with security hardening (CSP, context isolation, node integration disabled, remote module blocked, navigation blocking).
+*   **Offline Encryption:** AES-256-GCM encryption with PBKDF2 key derivation.
+*   **Electron:** Core framework for desktop application, with security hardening.
 *   **electron-builder:** For packaging and distribution.
-
-### UI Dependencies
-
 *   **Radix UI:** Unstyled, accessible component primitives.
 *   **Lucide React & React Icons:** Icon libraries.
 *   **cmdk:** Command palette component.
