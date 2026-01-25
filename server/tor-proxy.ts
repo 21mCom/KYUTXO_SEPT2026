@@ -30,7 +30,26 @@ const ALLOWED_API_HOSTS = [
   // Note: .onion addresses are always allowed (user's own nodes)
 ];
 
-function isAllowedUrl(url: string, additionalAllowedHost?: string): { allowed: boolean; reason?: string } {
+// Check if a hostname matches private/local IP patterns
+function isPrivateAddress(hostname: string): boolean {
+  const privatePatterns = [
+    /^localhost$/i,
+    /^127\./,
+    /^10\./,
+    /^172\.(1[6-9]|2[0-9]|3[0-1])\./,
+    /^192\.168\./,
+    /^0\./,
+    /^169\.254\./,
+    /^\[::1\]$/,
+    /^\[fe80:/i,
+    /^\[fc00:/i,
+    /^\[fd00:/i,
+    /\.local$/i,  // mDNS local domains
+  ];
+  return privatePatterns.some(p => p.test(hostname));
+}
+
+function isAllowedUrl(url: string, additionalAllowedHost?: string, trustedLocalHosts: string[] = []): { allowed: boolean; reason?: string; isLocal?: boolean } {
   try {
     const parsed = new URL(url);
     const hostname = parsed.hostname.toLowerCase();
@@ -40,25 +59,29 @@ function isAllowedUrl(url: string, additionalAllowedHost?: string): { allowed: b
       return { allowed: true };
     }
     
-    // Block private IP ranges and localhost
-    const privatePatterns = [
-      /^localhost$/i,
-      /^127\./,
-      /^10\./,
-      /^172\.(1[6-9]|2[0-9]|3[0-1])\./,
-      /^192\.168\./,
-      /^0\./,
-      /^169\.254\./,
-      /^\[::1\]$/,
-      /^\[fe80:/i,
-      /^\[fc00:/i,
-      /^\[fd00:/i,
-    ];
+    // Check if this is a private/local address
+    const isPrivate = isPrivateAddress(hostname);
     
-    for (const pattern of privatePatterns) {
-      if (pattern.test(hostname)) {
-        return { allowed: false, reason: "Internal network addresses are not allowed" };
+    if (isPrivate) {
+      // For private addresses, check against trusted local hosts whitelist
+      if (trustedLocalHosts && trustedLocalHosts.length > 0) {
+        const isTrusted = trustedLocalHosts.some(trusted => {
+          const trustedLower = trusted.toLowerCase();
+          return hostname === trustedLower || 
+                 hostname.startsWith(trustedLower + ':') ||
+                 hostname.startsWith(trustedLower + '.');
+        });
+        
+        if (isTrusted) {
+          console.log(`[KYUTXO] Allowing trusted local host: ${hostname}`);
+          return { allowed: true, isLocal: true };
+        }
       }
+      
+      return { 
+        allowed: false, 
+        reason: `Local address '${hostname}' is not in your trusted hosts whitelist. Add it in Node Settings → Trusted Local Hosts.` 
+      };
     }
     
     // Build dynamic allowlist including client-provided host
@@ -67,9 +90,8 @@ function isAllowedUrl(url: string, additionalAllowedHost?: string): { allowed: b
       try {
         const additionalParsed = new URL(additionalAllowedHost);
         const additionalHostname = additionalParsed.hostname.toLowerCase();
-        // Only add if it passes private IP check
-        const isPrivate = privatePatterns.some(p => p.test(additionalHostname));
-        if (!isPrivate) {
+        // Only add if not a private address
+        if (!isPrivateAddress(additionalHostname)) {
           allowedHosts.push(additionalHostname);
         }
       } catch {
@@ -89,9 +111,9 @@ function isAllowedUrl(url: string, additionalAllowedHost?: string): { allowed: b
       };
     }
     
-    // Only allow HTTPS for non-.onion hosts
+    // Only allow HTTPS for non-.onion, non-local hosts
     if (parsed.protocol !== 'https:') {
-      return { allowed: false, reason: "Only HTTPS URLs are allowed (except for .onion)" };
+      return { allowed: false, reason: "Only HTTPS URLs are allowed (except for .onion and local addresses)" };
     }
     
     return { allowed: true };
@@ -108,6 +130,7 @@ interface ProxyRequest {
   timeout?: number;
   torProxyUrl?: string;
   allowedHost?: string; // Client-specified allowed host for custom providers
+  trustedLocalHosts?: string[]; // Whitelist of allowed local IPs/hostnames
 }
 
 interface ProxyResponse {
@@ -199,8 +222,83 @@ async function makeProxiedRequest(req: ProxyRequest): Promise<ProxyResponse> {
   }
 }
 
+// Direct request without Tor proxy (for trusted local hosts)
+async function makeDirectRequest(req: ProxyRequest): Promise<ProxyResponse> {
+  const startTime = Date.now();
+  const timeout = req.timeout || 60000;
+
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeout);
+
+    const fetchOptions: RequestInit = {
+      method: req.method || "GET",
+      headers: req.headers,
+      signal: controller.signal,
+    };
+
+    if (req.body && (req.method === "POST" || req.method === "PUT")) {
+      fetchOptions.body = JSON.stringify(req.body);
+    }
+
+    const response = await fetch(req.url, fetchOptions);
+    clearTimeout(timeoutId);
+
+    const latency = Date.now() - startTime;
+    
+    let data: unknown;
+    const contentType = response.headers.get("content-type");
+    if (contentType?.includes("application/json")) {
+      data = await response.json();
+    } else {
+      data = await response.text();
+    }
+
+    return {
+      success: response.ok,
+      status: response.status,
+      statusText: response.statusText,
+      data,
+      latency,
+      contentType: contentType || undefined,
+    };
+  } catch (error) {
+    const latency = Date.now() - startTime;
+    
+    if (error instanceof Error) {
+      if (error.name === "AbortError") {
+        return {
+          success: false,
+          error: `Request timed out after ${timeout / 1000}s`,
+          latency,
+        };
+      }
+      
+      if (error.message.includes("ECONNREFUSED")) {
+        return {
+          success: false,
+          error: `Cannot connect to ${req.url}. Make sure the host is reachable.`,
+          latency,
+        };
+      }
+      
+      return {
+        success: false,
+        error: error.message,
+        latency,
+      };
+    }
+    
+    return {
+      success: false,
+      error: "Unknown error occurred",
+      latency,
+    };
+  }
+}
+
 router.post("/request", async (req: Request, res: Response) => {
-  const { url, method, headers, body, timeout, torProxyUrl, allowedHost } = req.body as ProxyRequest;
+  const { url, method, headers, body, timeout, torProxyUrl, allowedHost, trustedLocalHosts } = req.body as ProxyRequest;
 
   if (!url) {
     return res.status(400).json({ success: false, error: "URL is required" });
@@ -208,7 +306,8 @@ router.post("/request", async (req: Request, res: Response) => {
 
   // Validate URL to prevent SSRF attacks
   // allowedHost allows the client to specify their configured provider URL for custom nodes
-  const urlCheck = isAllowedUrl(url, allowedHost);
+  // trustedLocalHosts allows direct local network connections
+  const urlCheck = isAllowedUrl(url, allowedHost, trustedLocalHosts || []);
   if (!urlCheck.allowed) {
     return res.status(403).json({ 
       success: false, 
@@ -216,6 +315,20 @@ router.post("/request", async (req: Request, res: Response) => {
     });
   }
 
+  // Use direct request for trusted local hosts (skip Tor proxy)
+  if (urlCheck.isLocal) {
+    console.log(`[KYUTXO] Making direct request to trusted local host: ${url}`);
+    const result = await makeDirectRequest({
+      url,
+      method,
+      headers,
+      body,
+      timeout,
+    });
+    return res.json(result);
+  }
+
+  // Use Tor proxy for remote/onion addresses
   const result = await makeProxiedRequest({
     url,
     method,

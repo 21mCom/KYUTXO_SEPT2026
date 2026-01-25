@@ -10,7 +10,10 @@ import {
   CheckCircle2,
   Loader2,
   RefreshCw,
-  Info
+  Info,
+  Plus,
+  X,
+  Home
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
@@ -36,7 +39,7 @@ import {
 } from "@/components/ui/tooltip";
 import { useToast } from "@/hooks/use-toast";
 import { useNodeSettings } from "@/hooks/use-node-settings";
-import { NodeProviderType, NodeSettings as NodeSettingsType } from "@/lib/database";
+import { NodeProviderType, NodeSettings as NodeSettingsType, DEFAULT_TRUSTED_LOCAL_HOSTS } from "@/lib/database";
 import { 
   testConnectionWithSettings, 
   getProviderDisplayName, 
@@ -162,10 +165,13 @@ export default function NodeSettings() {
   const [torTestResult, setTorTestResult] = useState<TorTestResult | null>(null);
   
   const [pendingChanges, setPendingChanges] = useState<Partial<NodeSettingsType>>({});
+  const [newLocalHost, setNewLocalHost] = useState('');
   
   const currentSettings: NodeSettingsType = {
     ...nodeSettings,
     ...pendingChanges,
+    // Ensure trustedLocalHosts always has a value
+    trustedLocalHosts: pendingChanges.trustedLocalHosts ?? nodeSettings.trustedLocalHosts ?? [...DEFAULT_TRUSTED_LOCAL_HOSTS],
   };
   
   const hasCustomProvider = currentSettings.providerType === 'custom-electrs' || 
@@ -361,6 +367,64 @@ export default function NodeSettings() {
     toast({
       title: "Settings Reset",
       description: "Node settings have been reset to defaults",
+    });
+  };
+  
+  // Helper functions for managing trusted local hosts
+  const handleAddLocalHost = () => {
+    const host = newLocalHost.trim().toLowerCase();
+    if (!host) return;
+    
+    // Basic validation: must be an IP, hostname, or domain-like pattern
+    const isValidHost = /^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/i.test(host) || 
+                        /^(\d{1,3}\.){0,3}\d{0,3}$/.test(host);
+    
+    if (!isValidHost) {
+      toast({
+        title: "Invalid Host",
+        description: "Please enter a valid IP address or hostname",
+        variant: "destructive",
+      });
+      return;
+    }
+    
+    const existingHosts = currentSettings.trustedLocalHosts || [];
+    if (existingHosts.includes(host)) {
+      toast({
+        title: "Already Added",
+        description: `"${host}" is already in your trusted hosts list`,
+        variant: "destructive",
+      });
+      return;
+    }
+    
+    setPendingChanges(prev => ({
+      ...prev,
+      trustedLocalHosts: [...existingHosts, host],
+    }));
+    setNewLocalHost('');
+    toast({
+      title: "Host Added",
+      description: `"${host}" added to trusted hosts. Click "Save Settings" to apply.`,
+    });
+  };
+  
+  const handleRemoveLocalHost = (hostToRemove: string) => {
+    const existingHosts = currentSettings.trustedLocalHosts || [];
+    setPendingChanges(prev => ({
+      ...prev,
+      trustedLocalHosts: existingHosts.filter(h => h !== hostToRemove),
+    }));
+  };
+  
+  const handleResetLocalHosts = () => {
+    setPendingChanges(prev => ({
+      ...prev,
+      trustedLocalHosts: [...DEFAULT_TRUSTED_LOCAL_HOSTS],
+    }));
+    toast({
+      title: "Hosts Reset",
+      description: "Trusted hosts reset to defaults. Click \"Save Settings\" to apply.",
     });
   };
   
@@ -591,6 +655,86 @@ export default function NodeSettings() {
           </Card>
         );
       })()}
+      
+      {/* Trusted Local Hosts - for direct local network connections */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base flex items-center gap-2">
+            <Home className="h-4 w-4" />
+            Trusted Local Hosts
+          </CardTitle>
+          <CardDescription>
+            Whitelist local IPs and hostnames for direct connections (without Tor)
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <Alert>
+            <Info className="h-4 w-4" />
+            <AlertDescription className="text-sm">
+              When you connect to a local address (like your home network), KYUTXO makes a direct connection 
+              instead of routing through Tor. Only add addresses you trust.
+            </AlertDescription>
+          </Alert>
+          
+          {/* Add new host */}
+          <div className="flex gap-2">
+            <Input
+              placeholder="e.g., 192.168.1.50 or umbrel.local"
+              value={newLocalHost}
+              onChange={(e) => setNewLocalHost(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handleAddLocalHost()}
+              data-testid="input-new-local-host"
+            />
+            <Button 
+              onClick={handleAddLocalHost}
+              disabled={!newLocalHost.trim()}
+              data-testid="button-add-local-host"
+            >
+              <Plus className="h-4 w-4 mr-1" />
+              Add
+            </Button>
+          </div>
+          
+          {/* List of trusted hosts */}
+          <div className="space-y-2">
+            <div className="flex flex-wrap gap-2">
+              {(currentSettings.trustedLocalHosts || []).map((host) => (
+                <Badge 
+                  key={host} 
+                  variant="secondary" 
+                  className="flex items-center gap-1 pl-2 pr-1 py-1"
+                >
+                  <span className="font-mono text-xs">{host}</span>
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    className="h-4 w-4 p-0 hover:bg-destructive/20"
+                    onClick={() => handleRemoveLocalHost(host)}
+                    data-testid={`button-remove-host-${host}`}
+                  >
+                    <X className="h-3 w-3" />
+                  </Button>
+                </Badge>
+              ))}
+              {(currentSettings.trustedLocalHosts || []).length === 0 && (
+                <p className="text-sm text-muted-foreground">
+                  No trusted hosts configured. Local network connections will be blocked.
+                </p>
+              )}
+            </div>
+          </div>
+          
+          {/* Reset to defaults button */}
+          <Button 
+            variant="outline" 
+            size="sm"
+            onClick={handleResetLocalHosts}
+            data-testid="button-reset-local-hosts"
+          >
+            Reset to Defaults
+          </Button>
+        </CardContent>
+      </Card>
       
       {/* Connection Settings */}
       <Card>

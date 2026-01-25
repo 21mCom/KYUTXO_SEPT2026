@@ -380,6 +380,16 @@ export type NodeProviderType =
   | 'custom-electrs'      // Self-hosted Electrs/Esplora API
   | 'custom-mempool';     // Self-hosted mempool instance
 
+// Default trusted local hosts for local network connections
+export const DEFAULT_TRUSTED_LOCAL_HOSTS = [
+  'localhost',
+  '127.0.0.1',
+  'umbrel.local',
+  'umbrel',
+  '192.168.1.1',
+  '10.21.21.9',  // Umbrel's internal Docker IP for Electrs
+];
+
 // Node connection settings for blockchain data fetching
 export interface NodeSettings {
   id: string;             // Always 'default' - singleton pattern
@@ -393,6 +403,8 @@ export interface NodeSettings {
   requestTimeout: number; // Default 30000 (30s), higher for Tor
   // Network selection
   network: 'mainnet' | 'testnet';
+  // Trusted local hosts whitelist (for local network connections without Tor)
+  trustedLocalHosts: string[];  // User-editable whitelist of allowed local IPs/hostnames
   // Last successful connection timestamp
   lastConnectedAt?: number;
   // Connection status message

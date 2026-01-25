@@ -19,6 +19,7 @@ export interface TorRequestParams {
   timeout?: number;
   torProxyUrl?: string;
   allowedHost?: string;
+  trustedLocalHosts?: string[];  // Whitelist of allowed local IPs/hostnames
 }
 
 export interface TorRequestResult {

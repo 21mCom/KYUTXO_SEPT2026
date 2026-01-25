@@ -89,41 +89,64 @@ const ALLOWED_API_HOSTS = [
   "check.torproject.org",
 ];
 
-function isAllowedUrl(urlString, additionalAllowedHost) {
+// Check if a hostname matches private/local IP patterns
+function isPrivateAddress(hostname) {
+  const privatePatterns = [
+    /^localhost$/i,
+    /^127\./,
+    /^10\./,
+    /^172\.(1[6-9]|2[0-9]|3[0-1])\./,
+    /^192\.168\./,
+    /^0\./,
+    /^169\.254\./,
+    /\.local$/i,  // mDNS local domains
+  ];
+  return privatePatterns.some(p => p.test(hostname));
+}
+
+function isAllowedUrl(urlString, additionalAllowedHost, trustedLocalHosts = []) {
   try {
     const parsed = new URL(urlString);
     const hostname = parsed.hostname.toLowerCase();
     
-    // Allow .onion addresses
+    // Allow .onion addresses (Tor hidden services)
     if (hostname.endsWith('.onion')) {
       return { allowed: true };
     }
     
-    // Block private IP ranges
-    const privatePatterns = [
-      /^localhost$/i,
-      /^127\./,
-      /^10\./,
-      /^172\.(1[6-9]|2[0-9]|3[0-1])\./,
-      /^192\.168\./,
-      /^0\./,
-      /^169\.254\./,
-    ];
+    // Check if this is a private/local address
+    const isPrivate = isPrivateAddress(hostname);
     
-    for (const pattern of privatePatterns) {
-      if (pattern.test(hostname)) {
-        return { allowed: false, reason: "Internal network addresses are not allowed" };
+    if (isPrivate) {
+      // For private addresses, check against trusted local hosts whitelist
+      if (trustedLocalHosts && trustedLocalHosts.length > 0) {
+        const isTrusted = trustedLocalHosts.some(trusted => {
+          const trustedLower = trusted.toLowerCase();
+          return hostname === trustedLower || 
+                 hostname.startsWith(trustedLower + ':') ||
+                 // Allow if the trusted host is a prefix (e.g., "192.168.1" matches "192.168.1.50")
+                 hostname.startsWith(trustedLower + '.');
+        });
+        
+        if (isTrusted) {
+          console.log(`[KYUTXO] Allowing trusted local host: ${hostname}`);
+          return { allowed: true, isLocal: true };
+        }
       }
+      
+      return { 
+        allowed: false, 
+        reason: `Local address '${hostname}' is not in your trusted hosts whitelist. Add it in Node Settings → Trusted Local Hosts.` 
+      };
     }
     
-    // Build dynamic allowlist
+    // For public addresses, check against allowed API hosts
     const allowedHosts = [...ALLOWED_API_HOSTS];
     if (additionalAllowedHost) {
       try {
         const additionalParsed = new URL(additionalAllowedHost);
         const additionalHostname = additionalParsed.hostname.toLowerCase();
-        const isPrivate = privatePatterns.some(p => p.test(additionalHostname));
-        if (!isPrivate) {
+        if (!isPrivateAddress(additionalHostname)) {
           allowedHosts.push(additionalHostname);
         }
       } catch {
@@ -539,18 +562,105 @@ ipcMain.handle('tor-test', async (event, { torProxyUrl }) => {
   };
 });
 
-// Proxy a request through Tor
-ipcMain.handle('tor-request', async (event, { url: requestUrl, method, headers, body, timeout, torProxyUrl, allowedHost }) => {
+// Make a direct HTTP request (no proxy) for trusted local hosts
+async function makeDirectRequest(requestParams) {
+  const fetch = await getFetch();
+  const startTime = Date.now();
+  const timeout = requestParams.timeout || 30000;
+
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeout);
+
+    const fetchOptions = {
+      method: requestParams.method || "GET",
+      headers: requestParams.headers,
+      signal: controller.signal,
+    };
+    
+    if (requestParams.body) {
+      fetchOptions.body = typeof requestParams.body === 'string' 
+        ? requestParams.body 
+        : JSON.stringify(requestParams.body);
+    }
+
+    console.log(`[KYUTXO] Direct local request to: ${requestParams.url}`);
+    const response = await fetch(requestParams.url, fetchOptions);
+    clearTimeout(timeoutId);
+
+    const contentType = response.headers.get('content-type') || '';
+    let data;
+    
+    if (contentType.includes('application/json')) {
+      data = await response.json();
+    } else {
+      data = await response.text();
+    }
+
+    const latency = Date.now() - startTime;
+
+    if (!response.ok) {
+      return {
+        success: false,
+        status: response.status,
+        statusText: response.statusText,
+        data,
+        latency,
+        error: `HTTP ${response.status}: ${response.statusText}`,
+      };
+    }
+
+    return {
+      success: true,
+      status: response.status,
+      statusText: response.statusText,
+      data,
+      latency,
+      contentType,
+    };
+  } catch (error) {
+    const latency = Date.now() - startTime;
+    
+    if (error.name === 'AbortError') {
+      return {
+        success: false,
+        error: `Request timed out after ${timeout / 1000}s`,
+        latency,
+      };
+    }
+    
+    return {
+      success: false,
+      error: error.message || "Direct request failed",
+      latency,
+    };
+  }
+}
+
+// Proxy a request through Tor, or make direct request for trusted local hosts
+ipcMain.handle('tor-request', async (event, { url: requestUrl, method, headers, body, timeout, torProxyUrl, allowedHost, trustedLocalHosts }) => {
   if (!requestUrl) {
     return { success: false, error: "URL is required" };
   }
 
-  // Validate URL to prevent SSRF attacks
-  const urlCheck = isAllowedUrl(requestUrl, allowedHost);
+  // Validate URL against allowlist (including trusted local hosts)
+  const urlCheck = isAllowedUrl(requestUrl, allowedHost, trustedLocalHosts || []);
   if (!urlCheck.allowed) {
     return { success: false, error: urlCheck.reason || "URL not allowed" };
   }
 
+  // For trusted local addresses, make a direct request (no Tor proxy needed)
+  if (urlCheck.isLocal) {
+    return await makeDirectRequest({
+      url: requestUrl,
+      method,
+      headers,
+      body,
+      timeout,
+    });
+  }
+
+  // For remote/public addresses, use Tor proxy
   return await makeProxiedRequest({
     url: requestUrl,
     method,

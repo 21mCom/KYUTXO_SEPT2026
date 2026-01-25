@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { db, NodeSettings, NodeProviderType } from '@/lib/database';
+import { db, NodeSettings, NodeProviderType, DEFAULT_TRUSTED_LOCAL_HOSTS } from '@/lib/database';
 
 const DEFAULT_NODE_SETTINGS: NodeSettings = {
   id: 'default',
@@ -8,6 +8,7 @@ const DEFAULT_NODE_SETTINGS: NodeSettings = {
   useTor: false,
   requestTimeout: 30000,
   network: 'mainnet',
+  trustedLocalHosts: [...DEFAULT_TRUSTED_LOCAL_HOSTS],
 };
 
 export function useNodeSettings() {
@@ -30,7 +31,15 @@ export function useNodeSettings() {
   }, [settings]);
 
   // Use defaults if settings haven't loaded or timed out
-  const nodeSettings: NodeSettings = settings ?? DEFAULT_NODE_SETTINGS;
+  // Also merge in any missing fields (e.g., trustedLocalHosts for existing users)
+  const nodeSettings: NodeSettings = settings 
+    ? {
+        ...DEFAULT_NODE_SETTINGS,
+        ...settings,
+        // Ensure trustedLocalHosts is always defined (for existing users who don't have it)
+        trustedLocalHosts: settings.trustedLocalHosts ?? [...DEFAULT_TRUSTED_LOCAL_HOSTS],
+      }
+    : DEFAULT_NODE_SETTINGS;
 
   const updateSettings = async (updates: Partial<Omit<NodeSettings, 'id'>>) => {
     const existing = await db.nodeSettings.get('default');

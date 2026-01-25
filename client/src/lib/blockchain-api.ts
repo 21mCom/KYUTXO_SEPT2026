@@ -2,7 +2,7 @@
 // Supports mempool.space, blockstream.info, and self-hosted Electrs/Esplora nodes
 // Can route through Tor for privacy when connecting to .onion addresses
 
-import { NodeSettings, NodeProviderType, ScriptType, OpReturnOutput } from '@/lib/database';
+import { NodeSettings, NodeProviderType, ScriptType, OpReturnOutput, DEFAULT_TRUSTED_LOCAL_HOSTS } from '@/lib/database';
 import { isElectron, getElectronAPI, TorRequestResult as ElectronTorRequestResult, TorStatusResult as ElectronTorStatusResult, TorTestResult as ElectronTorTestResult } from './electron';
 
 export interface BlockchainProvider {
@@ -82,13 +82,15 @@ abstract class EsploraProvider implements BlockchainProvider {
   protected rateLimitDelay: number;
   protected useTor: boolean;
   protected torProxyUrl?: string;
+  protected trustedLocalHosts: string[];
 
-  constructor(baseUrl: string, timeout: number = 30000, useTor: boolean = false, torProxyUrl?: string) {
+  constructor(baseUrl: string, timeout: number = 30000, useTor: boolean = false, torProxyUrl?: string, trustedLocalHosts: string[] = []) {
     this.baseUrl = baseUrl.replace(/\/$/, ''); // Remove trailing slash
     this.timeout = timeout;
     this.rateLimitDelay = useTor ? TOR_RATE_LIMIT_DELAY : DEFAULT_RATE_LIMIT_DELAY;
     this.useTor = useTor;
     this.torProxyUrl = torProxyUrl;
+    this.trustedLocalHosts = trustedLocalHosts;
   }
 
   protected async rateLimitedFetch(url: string): Promise<Response> {
@@ -149,6 +151,7 @@ abstract class EsploraProvider implements BlockchainProvider {
         timeout: this.timeout,
         torProxyUrl: this.torProxyUrl,
         allowedHost: this.baseUrl,
+        trustedLocalHosts: this.trustedLocalHosts,
       });
     } else {
       const proxyResponse = await fetch('/api/tor/request', {
@@ -160,6 +163,7 @@ abstract class EsploraProvider implements BlockchainProvider {
           timeout: this.timeout,
           torProxyUrl: this.torProxyUrl,
           allowedHost: this.baseUrl,
+          trustedLocalHosts: this.trustedLocalHosts,
         }),
       });
       result = await proxyResponse.json();
@@ -254,11 +258,11 @@ abstract class EsploraProvider implements BlockchainProvider {
 class MempoolSpaceProvider extends EsploraProvider {
   name = 'mempool.space';
 
-  constructor(network: 'mainnet' | 'testnet' = 'mainnet', timeout: number = 30000, useTor: boolean = false, torProxyUrl?: string) {
+  constructor(network: 'mainnet' | 'testnet' = 'mainnet', timeout: number = 30000, useTor: boolean = false, torProxyUrl?: string, trustedLocalHosts: string[] = []) {
     const baseUrl = network === 'mainnet' 
       ? 'https://mempool.space/api'
       : 'https://mempool.space/testnet/api';
-    super(baseUrl, timeout, useTor, torProxyUrl);
+    super(baseUrl, timeout, useTor, torProxyUrl, trustedLocalHosts);
     if (useTor) {
       this.name = 'mempool.space (via Tor)';
     }
@@ -269,11 +273,11 @@ class MempoolSpaceProvider extends EsploraProvider {
 class BlockstreamProvider extends EsploraProvider {
   name = 'blockstream.info';
 
-  constructor(network: 'mainnet' | 'testnet' = 'mainnet', timeout: number = 30000, useTor: boolean = false, torProxyUrl?: string) {
+  constructor(network: 'mainnet' | 'testnet' = 'mainnet', timeout: number = 30000, useTor: boolean = false, torProxyUrl?: string, trustedLocalHosts: string[] = []) {
     const baseUrl = network === 'mainnet'
       ? 'https://blockstream.info/api'
       : 'https://blockstream.info/testnet/api';
-    super(baseUrl, timeout, useTor, torProxyUrl);
+    super(baseUrl, timeout, useTor, torProxyUrl, trustedLocalHosts);
     if (useTor) {
       this.name = 'blockstream.info (via Tor)';
     }
@@ -284,8 +288,8 @@ class BlockstreamProvider extends EsploraProvider {
 class CustomElectrsProvider extends EsploraProvider {
   name: string;
 
-  constructor(customUrl: string, timeout: number = 30000, useTor: boolean = false, torProxyUrl?: string) {
-    super(customUrl, timeout, useTor, torProxyUrl);
+  constructor(customUrl: string, timeout: number = 30000, useTor: boolean = false, torProxyUrl?: string, trustedLocalHosts: string[] = []) {
+    super(customUrl, timeout, useTor, torProxyUrl, trustedLocalHosts);
     // Determine name based on URL
     if (customUrl.includes('.onion')) {
       this.name = 'Custom Electrs (Tor)';
@@ -301,10 +305,10 @@ class CustomElectrsProvider extends EsploraProvider {
 class CustomMempoolProvider extends EsploraProvider {
   name: string;
 
-  constructor(customUrl: string, timeout: number = 30000, useTor: boolean = false, torProxyUrl?: string) {
+  constructor(customUrl: string, timeout: number = 30000, useTor: boolean = false, torProxyUrl?: string, trustedLocalHosts: string[] = []) {
     // Custom mempool instances use /api path
     const apiUrl = customUrl.endsWith('/api') ? customUrl : `${customUrl}/api`;
-    super(apiUrl, timeout, useTor, torProxyUrl);
+    super(apiUrl, timeout, useTor, torProxyUrl, trustedLocalHosts);
     
     if (customUrl.includes('.onion')) {
       this.name = 'Custom Mempool (Tor)';
@@ -332,27 +336,29 @@ export function createProvider(type: ProviderType = 'mempool', network: 'mainnet
 
 // Create a provider from NodeSettings configuration
 export function createProviderFromSettings(settings: NodeSettings): BlockchainProvider {
-  const { providerType, customUrl, useTor, requestTimeout, network, torProxyUrl } = settings;
+  const { providerType, customUrl, useTor, requestTimeout, network, torProxyUrl, trustedLocalHosts } = settings;
+  // Default to DEFAULT_TRUSTED_LOCAL_HOSTS if not specified (for backward compatibility with existing users)
+  const localHosts = trustedLocalHosts || [...DEFAULT_TRUSTED_LOCAL_HOSTS];
   
   switch (providerType) {
     case 'blockstream':
-      return new BlockstreamProvider(network, requestTimeout, useTor, torProxyUrl);
+      return new BlockstreamProvider(network, requestTimeout, useTor, torProxyUrl, localHosts);
     
     case 'custom-electrs':
       if (!customUrl) {
         throw new Error('Custom URL is required for custom Electrs provider');
       }
-      return new CustomElectrsProvider(customUrl, requestTimeout, useTor, torProxyUrl);
+      return new CustomElectrsProvider(customUrl, requestTimeout, useTor, torProxyUrl, localHosts);
     
     case 'custom-mempool':
       if (!customUrl) {
         throw new Error('Custom URL is required for custom mempool provider');
       }
-      return new CustomMempoolProvider(customUrl, requestTimeout, useTor, torProxyUrl);
+      return new CustomMempoolProvider(customUrl, requestTimeout, useTor, torProxyUrl, localHosts);
     
     case 'mempool-space':
     default:
-      return new MempoolSpaceProvider(network, requestTimeout, useTor, torProxyUrl);
+      return new MempoolSpaceProvider(network, requestTimeout, useTor, torProxyUrl, localHosts);
   }
 }
 
