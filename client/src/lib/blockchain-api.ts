@@ -181,6 +181,16 @@ abstract class EsploraProvider implements BlockchainProvider {
       if (status === 403) {
         throw new Error(`Access forbidden by ${this.name}. Status: ${status} ${statusText}`);
       }
+      if (status === 502) {
+        // 502 Bad Gateway usually means the reverse proxy (Umbrel/nginx) can't reach the backend service
+        throw new Error(`${this.name} returned 502 Bad Gateway. This usually means the Mempool service on your node isn't running. Check that Mempool is installed and running on your Umbrel/node.`);
+      }
+      if (status === 503) {
+        throw new Error(`${this.name} returned 503 Service Unavailable. The Mempool service may be starting up or overloaded.`);
+      }
+      if (status === 504) {
+        throw new Error(`${this.name} returned 504 Gateway Timeout. The connection to your node's Mempool service timed out.`);
+      }
       if (status >= 500) {
         throw new Error(`Server error from ${this.name}: ${status} ${statusText}`);
       }
@@ -353,11 +363,22 @@ export async function testConnectionWithSettings(settings: NodeSettings): Promis
   error?: string;
   latency?: number;
   providerName: string;
+  testedUrl?: string;
 }> {
   try {
     const provider = createProviderFromSettings(settings);
     const result = await provider.testConnection();
-    return { ...result, providerName: provider.name };
+    
+    // Include the tested URL for diagnostics (helps users verify their config)
+    let testedUrl: string | undefined;
+    if (settings.providerType === 'custom-mempool' && settings.customUrl) {
+      const baseUrl = settings.customUrl.endsWith('/api') 
+        ? settings.customUrl 
+        : `${settings.customUrl}/api`;
+      testedUrl = `${baseUrl}/blocks/tip/height`;
+    }
+    
+    return { ...result, providerName: provider.name, testedUrl };
   } catch (error) {
     return {
       success: false,

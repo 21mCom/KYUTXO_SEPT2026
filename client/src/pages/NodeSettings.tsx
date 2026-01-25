@@ -155,6 +155,7 @@ export default function NodeSettings() {
     error?: string;
     latency?: number;
     providerName: string;
+    testedUrl?: string;
   } | null>(null);
   
   const [isTorTesting, setIsTorTesting] = useState(false);
@@ -303,10 +304,19 @@ export default function NodeSettings() {
       }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : "Unknown error";
+      // Build the testedUrl for diagnostics
+      let testedUrl: string | undefined;
+      if (currentSettings.providerType === 'custom-mempool' && currentSettings.customUrl) {
+        const baseUrl = currentSettings.customUrl.endsWith('/api') 
+          ? currentSettings.customUrl 
+          : `${currentSettings.customUrl}/api`;
+        testedUrl = `${baseUrl}/blocks/tip/height`;
+      }
       setTestResult({
         success: false,
         error: errorMessage,
         providerName: getProviderDisplayName(currentSettings.providerType),
+        testedUrl,
       });
       toast({
         title: "Connection Error",
@@ -652,13 +662,13 @@ export default function NodeSettings() {
         <CardContent className="space-y-4">
           {testResult && (
             <div className={`p-3 rounded-md ${testResult.success ? 'bg-green-50 dark:bg-green-950 border border-green-200 dark:border-green-800' : 'bg-destructive/10 border border-destructive/20'}`}>
-              <div className="flex items-center gap-2">
+              <div className="flex items-start gap-2">
                 {testResult.success ? (
-                  <CheckCircle2 className="h-5 w-5 text-green-600" />
+                  <CheckCircle2 className="h-5 w-5 text-green-600 flex-shrink-0 mt-0.5" />
                 ) : (
-                  <AlertTriangle className="h-5 w-5 text-destructive" />
+                  <AlertTriangle className="h-5 w-5 text-destructive flex-shrink-0 mt-0.5" />
                 )}
-                <div>
+                <div className="min-w-0 flex-1">
                   <p className="font-medium">
                     {testResult.success ? 'Connected' : 'Connection Failed'}
                   </p>
@@ -668,6 +678,11 @@ export default function NodeSettings() {
                       : testResult.error
                     }
                   </p>
+                  {testResult.testedUrl && (
+                    <p className="text-xs text-muted-foreground mt-1 break-all">
+                      Tested: {testResult.testedUrl}
+                    </p>
+                  )}
                 </div>
               </div>
             </div>
