@@ -73,6 +73,36 @@ export interface ParsedTransaction {
 const DEFAULT_RATE_LIMIT_DELAY = 250; // ms between requests to avoid rate limiting
 const TOR_RATE_LIMIT_DELAY = 500; // Slower rate limit for Tor connections
 
+// Check if a URL points to a local/private network address
+// These addresses need special handling in Electron due to CSP restrictions
+function isLocalOrPrivateUrl(urlString: string): boolean {
+  try {
+    const parsed = new URL(urlString);
+    const hostname = parsed.hostname.toLowerCase();
+    
+    // .onion addresses are handled via Tor
+    if (hostname.endsWith('.onion')) {
+      return false;
+    }
+    
+    // Check for local/private address patterns
+    const privatePatterns = [
+      /^localhost$/i,
+      /^127\./,
+      /^10\./,
+      /^172\.(1[6-9]|2[0-9]|3[0-1])\./,
+      /^192\.168\./,
+      /^0\./,
+      /^169\.254\./,
+      /\.local$/i,  // mDNS local domains (e.g., umbrel.local)
+    ];
+    
+    return privatePatterns.some(p => p.test(hostname));
+  } catch {
+    return false;
+  }
+}
+
 // Base class with shared functionality for Esplora-compatible APIs
 abstract class EsploraProvider implements BlockchainProvider {
   abstract name: string;
@@ -105,6 +135,12 @@ abstract class EsploraProvider implements BlockchainProvider {
     
     // Route through backend Tor proxy if enabled
     if (this.useTor) {
+      return this.torProxiedFetch(url);
+    }
+    
+    // In Electron, local/private URLs must go through IPC to bypass CSP restrictions
+    // The Electron main process can make direct requests without CSP issues
+    if (isElectron() && isLocalOrPrivateUrl(url)) {
       return this.torProxiedFetch(url);
     }
     
