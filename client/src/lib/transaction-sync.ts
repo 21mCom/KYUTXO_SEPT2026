@@ -596,7 +596,10 @@ export class TransactionSyncService {
       stats.imported++;
 
       // Create a transaction record in the records table so it appears in Records view
-      const { isNew: isTxRecordNew } = await this.findOrCreateTransactionRecord(parsed.txid, parsed.blockTime, recordId);
+      // Transaction depth = the address's depth (newAddressDepth - 1)
+      // Depth 0 = directly involves tracked addresses, depth 1+ = involves discovered addresses
+      const txSyncDepth = Math.max(0, newAddressDepth - 1);
+      const { isNew: isTxRecordNew } = await this.findOrCreateTransactionRecord(parsed.txid, parsed.blockTime, txSyncDepth, recordId);
       if (isTxRecordNew) stats.newRecords++;
 
       for (const input of parsed.inputs) {
@@ -746,9 +749,13 @@ export class TransactionSyncService {
 
   // Find or create a transaction record in the records table
   // This ensures synced transactions appear in the Records view
+  // syncDepth indicates how "close" this transaction is to tracked addresses:
+  //   0 = directly involves a tracked address
+  //   1+ = involves addresses discovered N hops away
   private async findOrCreateTransactionRecord(
     txid: string,
     blockTime: number,
+    syncDepth: number,
     discoveredFromRecordId?: number
   ): Promise<{ recordId: number; isNew: boolean }> {
     // Check if a transaction record already exists for this txid
@@ -787,6 +794,7 @@ export class TransactionSyncService {
       categories: [],
       owner: parentOwner || 'Pending Review',
       source: 'blockchain-sync',
+      syncDepth, // Track how close this tx is to tracked addresses
       discoveredFromRecordId,
       // Store blockTime in date field (formatted as ISO string)
       date: new Date(blockTime * 1000).toISOString().split('T')[0],
