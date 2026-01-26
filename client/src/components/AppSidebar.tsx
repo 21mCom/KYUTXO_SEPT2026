@@ -28,6 +28,7 @@ import {
   Import,
   DollarSign,
   AlertCircle,
+  Key,
   FileText,
   Tags,
   Vault,
@@ -109,6 +110,7 @@ const navGroups: NavGroup[] = [
     defaultOpen: false,
     items: [
       { title: "Address Importer", url: "/import", icon: Import },
+      { title: "Descriptor Import", url: "/descriptor-import", icon: Key },
       { title: "BIP-329 Labels", url: "/bip329-import", icon: Tags },
       { title: "Wallet Data Sync", url: "/wallet-import", icon: Wallet },
       { title: "Mobile Wallets", url: "/mobile-wallet-import", icon: Smartphone },

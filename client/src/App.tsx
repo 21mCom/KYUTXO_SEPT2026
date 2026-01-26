@@ -17,6 +17,7 @@ import ValueUpdaterPage from "@/pages/ValueUpdaterPage";
 import BulkImport from "@/pages/BulkImport";
 import WalletImport from "@/pages/WalletImport";
 import MobileWalletImport from "@/pages/MobileWalletImport";
+import DescriptorImport from "@/pages/DescriptorImport";
 import BIP329Import from "@/pages/BIP329Import";
 import PriceImport from "@/pages/PriceImport";
 import TransactionSync from "@/pages/TransactionSync";
@@ -56,6 +57,7 @@ function AppRoutes() {
       <Route path="/import" component={BulkImport} />
       <Route path="/wallet-import" component={WalletImport} />
       <Route path="/mobile-wallet-import" component={MobileWalletImport} />
+      <Route path="/descriptor-import" component={DescriptorImport} />
       <Route path="/bip329-import" component={BIP329Import} />
       <Route path="/price-import" component={PriceImport} />
       <Route path="/transaction-sync" component={TransactionSync} />
