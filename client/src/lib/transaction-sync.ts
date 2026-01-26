@@ -66,6 +66,14 @@ export type SyncProgressCallback = (progress: SyncProgress) => void;
 export class TransactionSyncService {
   private provider: BlockchainProvider;
   private onProgress?: SyncProgressCallback;
+  private currentProgress: SyncProgress = {
+    phase: 'idle',
+    addressesTotal: 0,
+    addressesProcessed: 0,
+    transactionsFound: 0,
+    transactionsNew: 0,
+    newAddressRecords: 0,
+  };
 
   constructor(providerType: ProviderType = 'mempool') {
     this.provider = createProvider(providerType);
@@ -96,9 +104,22 @@ export class TransactionSyncService {
     this.onProgress = callback;
   }
 
+  private resetProgress() {
+    this.currentProgress = {
+      phase: 'idle',
+      addressesTotal: 0,
+      addressesProcessed: 0,
+      transactionsFound: 0,
+      transactionsNew: 0,
+      newAddressRecords: 0,
+    };
+  }
+
   private updateProgress(progress: Partial<SyncProgress>) {
+    // Merge partial updates with current progress to maintain cumulative state
+    this.currentProgress = { ...this.currentProgress, ...progress };
     if (this.onProgress) {
-      this.onProgress(progress as SyncProgress);
+      this.onProgress(this.currentProgress);
     }
   }
 
@@ -112,6 +133,9 @@ export class TransactionSyncService {
 
   async syncWithDepth(options: SyncOptions): Promise<SyncResult> {
     const { sourceFilter, maxDepth, specificRecordIds } = options;
+    
+    // Reset progress counters at the start of each sync
+    this.resetProgress();
     
     const result: SyncResult = {
       success: false,
