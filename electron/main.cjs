@@ -577,9 +577,17 @@ async function makeDirectRequest(requestParams) {
       controller.abort();
     }, timeout);
 
+    // Add browser-like headers to help with nginx reverse proxies (like Umbrel's)
+    const defaultHeaders = {
+      'User-Agent': 'KYUTXO/1.2.1 (Electron)',
+      'Accept': 'application/json, text/plain, */*',
+      'Accept-Encoding': 'gzip, deflate',
+      'Connection': 'keep-alive',
+    };
+
     const fetchOptions = {
       method: requestParams.method || "GET",
-      headers: requestParams.headers,
+      headers: { ...defaultHeaders, ...requestParams.headers },
       signal: controller.signal,
     };
     
