@@ -20,7 +20,8 @@ import {
   Server,
   Settings,
   ChevronDown,
-  ChevronRight
+  ChevronRight,
+  Square
 } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -50,6 +51,7 @@ export default function TransactionSync() {
   } | null>(null);
   
   const [isSyncing, setIsSyncing] = useState(false);
+  const [isStopping, setIsStopping] = useState(false);
   const [syncProgress, setSyncProgress] = useState<SyncProgress | null>(null);
   const [lastResult, setLastResult] = useState<SyncResult | null>(null);
   const [maxDepth, setMaxDepth] = useState<number>(1);
@@ -173,10 +175,30 @@ export default function TransactionSync() {
         variant: "destructive",
       });
     } finally {
+      const wasStopped = isStopping;
       setIsSyncing(false);
+      setIsStopping(false);
       await loadStats();
       await loadSources();
+      
+      // If sync was stopped, update the result message
+      if (wasStopped && lastResult === null) {
+        // lastResult will be set by the sync, but we can show a stopped toast
+        toast({
+          title: "Sync Stopped",
+          description: "Sync was stopped. Any transactions already found have been saved.",
+        });
+      }
     }
+  };
+
+  const handleStopSync = () => {
+    setIsStopping(true);
+    transactionSyncService.stopSync();
+    toast({
+      title: "Stopping Sync",
+      description: "Finishing current address, then stopping...",
+    });
   };
 
   const formatSats = (sats: number) => {
@@ -601,7 +623,7 @@ export default function TransactionSync() {
               </Alert>
             )}
           </CardContent>
-          <CardFooter>
+          <CardFooter className="gap-2">
             <Button 
               onClick={handleSync} 
               disabled={isSyncing || (stats?.totalAddresses ?? 0) === 0}
@@ -619,8 +641,28 @@ export default function TransactionSync() {
                 </>
               )}
             </Button>
-            {(stats?.totalAddresses ?? 0) === 0 && (
-              <p className="ml-4 text-sm text-muted-foreground">
+            {isSyncing && (
+              <Button 
+                variant="destructive"
+                onClick={handleStopSync}
+                disabled={isStopping}
+                data-testid="button-stop-sync"
+              >
+                {isStopping ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Stopping...
+                  </>
+                ) : (
+                  <>
+                    <Square className="mr-2 h-4 w-4" />
+                    Stop
+                  </>
+                )}
+              </Button>
+            )}
+            {!isSyncing && (stats?.totalAddresses ?? 0) === 0 && (
+              <p className="ml-2 text-sm text-muted-foreground">
                 Add some addresses first to sync their transactions
               </p>
             )}

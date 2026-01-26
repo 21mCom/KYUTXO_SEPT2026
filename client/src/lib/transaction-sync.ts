@@ -66,6 +66,7 @@ export type SyncProgressCallback = (progress: SyncProgress) => void;
 export class TransactionSyncService {
   private provider: BlockchainProvider;
   private onProgress?: SyncProgressCallback;
+  private cancelled: boolean = false;
   private currentProgress: SyncProgress = {
     phase: 'idle',
     addressesTotal: 0,
@@ -77,6 +78,17 @@ export class TransactionSyncService {
 
   constructor(providerType: ProviderType = 'mempool') {
     this.provider = createProvider(providerType);
+  }
+
+  // Stop the current sync operation
+  stopSync() {
+    this.cancelled = true;
+    console.log('[TransactionSync] Stop requested');
+  }
+
+  // Check if sync was cancelled (for external use)
+  isCancelled(): boolean {
+    return this.cancelled;
   }
 
   // Create a sync service from saved node settings
@@ -134,8 +146,9 @@ export class TransactionSyncService {
   async syncWithDepth(options: SyncOptions): Promise<SyncResult> {
     const { sourceFilter, maxDepth, specificRecordIds } = options;
     
-    // Reset progress counters at the start of each sync
+    // Reset progress counters and cancellation flag at the start of each sync
     this.resetProgress();
+    this.cancelled = false;
     
     const result: SyncResult = {
       success: false,
@@ -279,6 +292,14 @@ export class TransactionSyncService {
           });
           
           for (let i = 0; i < validAddresses.length; i++) {
+            // Check for cancellation before processing each address
+            if (this.cancelled) {
+              console.log('[TransactionSync] Sync cancelled by user');
+              this.updateProgress({ phase: 'complete' });
+              result.success = true; // Partial success - what we synced is valid
+              return result;
+            }
+
             const record = validAddresses[i];
             if (!record.id) continue;
             
@@ -451,6 +472,14 @@ export class TransactionSyncService {
         });
 
         for (let i = 0; i < validAddressRecords.length; i++) {
+          // Check for cancellation before processing each address
+          if (this.cancelled) {
+            console.log('[TransactionSync] Sync cancelled by user');
+            this.updateProgress({ phase: 'complete' });
+            result.success = true; // Partial success - what we synced is valid
+            return result;
+          }
+
           const record = validAddressRecords[i];
           if (!record.id) continue;
           
