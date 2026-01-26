@@ -143,6 +143,10 @@ export interface Record {
   discoveredFromRecordId?: number;
   // Importance tier for filtering provenance views and prioritization
   addressImportance?: AddressImportance;
+  // First seen on blockchain - Unix timestamp (seconds) of the earliest transaction
+  // For addresses: earliest tx involving this address
+  // For transactions: the block confirmation time
+  firstSeenBlockTime?: number;
   
   // === Transaction-specific metadata fields ===
   // Flow type: direction/purpose of the transaction
@@ -286,6 +290,7 @@ export interface Settings {
     owner: boolean;
     walletName: boolean;
     source: boolean;
+    firstSeen: boolean;
   };
   customFieldColumns: { [key: string]: boolean };
   theme: 'light' | 'dark';
@@ -1202,6 +1207,7 @@ db.on('ready', async () => {
         owner: false,
         walletName: false,
         source: false,
+        firstSeen: true,
       },
       customFieldColumns: {},
       theme: 'light',
@@ -1245,16 +1251,18 @@ db.on('ready', async () => {
         owner: false,
         walletName: false,
         source: false,
+        firstSeen: true,
       };
     } else {
-      const tableCols = settings.tableColumns as { owner?: boolean; walletName?: boolean; [key: string]: boolean | undefined };
-      if (tableCols.owner === undefined || tableCols.walletName === undefined) {
+      const tableCols = settings.tableColumns as { owner?: boolean; walletName?: boolean; firstSeen?: boolean; [key: string]: boolean | undefined };
+      if (tableCols.owner === undefined || tableCols.walletName === undefined || tableCols.firstSeen === undefined) {
         needsTableColumnsUpdate = true;
         updates.tableColumns = {
           ...settings.tableColumns,
           owner: tableCols.owner ?? false,
           walletName: tableCols.walletName ?? false,
           source: settings.tableColumns.source ?? false,
+          firstSeen: tableCols.firstSeen ?? true,
         };
       }
     }

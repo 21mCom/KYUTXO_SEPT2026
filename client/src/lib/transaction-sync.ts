@@ -602,6 +602,9 @@ export class TransactionSyncService {
       const { isNew: isTxRecordNew } = await this.findOrCreateTransactionRecord(parsed.txid, parsed.blockTime, txSyncDepth, recordId);
       if (isTxRecordNew) stats.newRecords++;
 
+      // Update the parent address's firstSeenBlockTime if this tx is older
+      await this.updateFirstSeenBlockTime(recordId, parsed.blockTime);
+
       for (const input of parsed.inputs) {
         const { recordId: inputRecordId, isNew } = await this.findOrCreateAddressRecord(
           input.address, 
@@ -610,6 +613,9 @@ export class TransactionSyncService {
           recordId
         );
         if (isNew) stats.newRecords++;
+
+        // Update address firstSeenBlockTime if this tx is older
+        await this.updateFirstSeenBlockTime(inputRecordId, parsed.blockTime);
 
         await db.transactionParticipants.add({
           txid: parsed.txid,
@@ -631,6 +637,9 @@ export class TransactionSyncService {
           recordId
         );
         if (isNew) stats.newRecords++;
+
+        // Update address firstSeenBlockTime if this tx is older
+        await this.updateFirstSeenBlockTime(outputRecordId, parsed.blockTime);
 
         await db.transactionParticipants.add({
           txid: parsed.txid,
@@ -747,6 +756,22 @@ export class TransactionSyncService {
     return { recordId: newRecordId, isNew: true };
   }
 
+  // Update an address record's firstSeenBlockTime if this transaction is older
+  // Only updates if blockTime is earlier than current value (or if not set)
+  private async updateFirstSeenBlockTime(recordId: number, blockTime: number): Promise<void> {
+    const record = await db.records.get(recordId);
+    if (!record) return;
+
+    // Only update if this transaction is older than current firstSeenBlockTime
+    // or if firstSeenBlockTime is not set
+    if (!record.firstSeenBlockTime || blockTime < record.firstSeenBlockTime) {
+      await db.records.update(recordId, {
+        firstSeenBlockTime: blockTime,
+        updatedAt: Date.now(),
+      });
+    }
+  }
+
   // Find or create a transaction record in the records table
   // This ensures synced transactions appear in the Records view
   // syncDepth indicates how "close" this transaction is to tracked addresses:
@@ -798,6 +823,8 @@ export class TransactionSyncService {
       discoveredFromRecordId,
       // Store blockTime in date field (formatted as ISO string)
       date: new Date(blockTime * 1000).toISOString().split('T')[0],
+      // Store block time for sorting (Unix seconds)
+      firstSeenBlockTime: blockTime,
       // Inherit context from parent
       walletName: parentWalletName,
       seedName: parentSeedName,

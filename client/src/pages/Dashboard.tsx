@@ -246,6 +246,10 @@ export default function Dashboard() {
           aVal = (a.walletName || "").toLowerCase();
           bVal = (b.walletName || "").toLowerCase();
           break;
+        case "firstSeen":
+          aVal = a.firstSeenBlockTime || 0;
+          bVal = b.firstSeenBlockTime || 0;
+          break;
         default:
           if (sortColumn.startsWith("custom_")) {
             const fieldSlug = sortColumn.replace("custom_", "");

@@ -34,6 +34,17 @@ import { Separator } from "@/components/ui/separator";
 type SortDirection = "asc" | "desc" | null;
 type SortColumn = "type" | "label" | "inputString" | "tags" | "categories" | "walletSoftware" | "seedName" | "privateKeyStatus" | "attachments" | "source" | "owner" | string;
 
+// Format Unix timestamp (seconds) to human-readable date
+function formatBlockTime(timestamp?: number): string {
+  if (!timestamp) return "-";
+  const date = new Date(timestamp * 1000);
+  return date.toLocaleDateString('en-US', { 
+    year: 'numeric', 
+    month: 'short', 
+    day: 'numeric' 
+  });
+}
+
 // Format source field for display - strip timestamp suffixes
 function formatSourceDisplay(source?: string): string {
   if (!source || source === '[encrypted]') return "-";
@@ -75,6 +86,7 @@ interface Record {
   customFields?: { [key: string]: string };
   syncDepth?: number;
   maxSyncedDepth?: number;
+  firstSeenBlockTime?: number;
 }
 
 interface RecordTableProps {
@@ -264,6 +276,10 @@ export function RecordTable({
           aVal = (a.walletName || "").toLowerCase();
           bVal = (b.walletName || "").toLowerCase();
           break;
+        case "firstSeen":
+          aVal = a.firstSeenBlockTime || 0;
+          bVal = b.firstSeenBlockTime || 0;
+          break;
         default:
           if (activeColumn.startsWith("custom_")) {
             const fieldSlug = activeColumn.replace("custom_", "");
@@ -409,6 +425,14 @@ export function RecordTable({
                   />
                   <span className="text-sm">Wallet Name</span>
                 </label>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <Checkbox
+                    checked={tableColumns.firstSeen}
+                    onCheckedChange={() => toggleTableColumn('firstSeen')}
+                    data-testid="checkbox-col-firstseen"
+                  />
+                  <span className="text-sm">First Seen</span>
+                </label>
               </div>
               {enabledCustomFields.length > 0 && (
                 <>
@@ -549,6 +573,15 @@ export function RecordTable({
                 onSort={handleSort}
               />
             )}
+            {tableColumns.firstSeen && (
+              <SortableHeader
+                column="firstSeen"
+                label="First Seen"
+                currentSort={sortColumn}
+                direction={sortDirection}
+                onSort={handleSort}
+              />
+            )}
             {enabledCustomFields.filter(f => customFieldColumns[f.slug]).map((field) => (
               <SortableHeader
                 key={field.slug}
@@ -577,6 +610,7 @@ export function RecordTable({
                   (tableColumns.source ? 1 : 0) +
                   (tableColumns.owner ? 1 : 0) +
                   (tableColumns.walletName ? 1 : 0) +
+                  (tableColumns.firstSeen ? 1 : 0) +
                   enabledCustomFields.filter(f => customFieldColumns[f.slug]).length
                 } 
                 className="h-24 text-center text-muted-foreground"
@@ -680,6 +714,11 @@ export function RecordTable({
                 {tableColumns.walletName && (
                   <TableCell className="text-sm text-muted-foreground">
                     {record.walletName && record.walletName !== '[encrypted]' ? record.walletName : "-"}
+                  </TableCell>
+                )}
+                {tableColumns.firstSeen && (
+                  <TableCell className="text-sm text-muted-foreground">
+                    {formatBlockTime(record.firstSeenBlockTime)}
                   </TableCell>
                 )}
                 {enabledCustomFields.filter(f => customFieldColumns[f.slug]).map((field) => {
