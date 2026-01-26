@@ -618,7 +618,7 @@ export default function DescriptorImport() {
             <CardHeader>
               <CardTitle>Upload Descriptor File</CardTitle>
               <CardDescription>
-                Upload a Sparrow wallet export file (.json) or paste the descriptor directly
+                Upload a Sparrow wallet export file (.json) or paste the multisig/taproot descriptor directly
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
