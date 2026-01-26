@@ -296,6 +296,133 @@ export async function deriveAddressesFromXpub(
   return deriveAddressesForChain(extendedKey, isChangeChain ? 1 : 0, startIndex, endIndex);
 }
 
+// ============================================
+// TAPROOT (P2TR) ADDRESS DERIVATION
+// ============================================
+
+export interface TaprootDerivedAddress {
+  index: number;
+  address: string;
+  path: string;
+  chainType: ChainType;
+  chainLabel: string;
+  internalPubkey: string;
+}
+
+export interface TaprootDualChainResult {
+  receive: TaprootDerivedAddress[];
+  change: TaprootDerivedAddress[];
+  xpub: string;
+  network: 'mainnet' | 'testnet';
+  fingerprint: string;
+  derivationPath: string;
+}
+
+function toXOnly(pubkey: Uint8Array): Uint8Array {
+  return pubkey.length === 33 ? pubkey.slice(1, 33) : pubkey;
+}
+
+export async function deriveTaprootAddressesForChain(
+  extendedKey: string,
+  chain: 0 | 1,
+  startIndex: number = 0,
+  endIndex: number = 19,
+  networkType: 'mainnet' | 'testnet' = 'mainnet'
+): Promise<TaprootDerivedAddress[]> {
+  const trimmed = extendedKey.trim();
+  const network = networkType === 'testnet' ? bitcoin.networks.testnet : bitcoin.networks.bitcoin;
+  
+  if (endIndex < startIndex) {
+    throw new Error('End index must be greater than or equal to start index');
+  }
+  
+  if (endIndex - startIndex > 500) {
+    throw new Error('Maximum 500 addresses can be derived at once');
+  }
+  
+  const chainType: ChainType = chain === 0 ? 'receive' : 'change';
+  const chainLabel = chain === 0 ? 'Receive Address (External)' : 'Change Address (Internal)';
+  const addresses: TaprootDerivedAddress[] = [];
+
+  try {
+    const bip32 = BIP32Factory(ecc);
+    
+    const convertedKey = convertToXpub(trimmed, getXpubPrefix(trimmed));
+    const baseNode = bip32.fromBase58(convertedKey, network);
+    
+    const depth = getKeyDepth(trimmed);
+    
+    let chainNode;
+    let pathPrefix: string;
+    
+    if (depth === 4) {
+      chainNode = baseNode;
+      pathPrefix = `taproot/${chain}`;
+    } else if (depth === 3) {
+      chainNode = baseNode.derive(chain);
+      pathPrefix = `m/86'/${networkType === 'testnet' ? '1' : '0'}'/0'/${chain}`;
+    } else if (depth === 0 || depth === 1) {
+      chainNode = baseNode.derive(chain);
+      pathPrefix = `${chain}`;
+    } else {
+      throw new Error(`XPUB at depth ${depth} is not supported for taproot derivation.`);
+    }
+    
+    for (let i = startIndex; i <= endIndex; i++) {
+      const child = chainNode.derive(i);
+      const xOnlyPubkey = toXOnly(child.publicKey);
+      
+      const { address } = bitcoin.payments.p2tr({
+        internalPubkey: xOnlyPubkey,
+        network,
+      });
+      
+      if (!address) {
+        throw new Error(`Failed to derive taproot address at index ${i}`);
+      }
+      
+      addresses.push({
+        index: i,
+        address,
+        path: `${pathPrefix}/${i}`,
+        chainType,
+        chainLabel,
+        internalPubkey: Buffer.from(xOnlyPubkey).toString('hex'),
+      });
+    }
+    
+    return addresses;
+  } catch (error) {
+    console.error('Taproot derivation error:', error);
+    throw new Error(`Failed to derive taproot addresses: ${error instanceof Error ? error.message : 'Unknown error'}`);
+  }
+}
+
+export async function deriveTaprootDualChain(
+  extendedKey: string,
+  fingerprint: string,
+  derivationPath: string,
+  receiveStartIndex: number = 0,
+  receiveEndIndex: number = 19,
+  changeStartIndex: number = 0,
+  changeEndIndex: number = 19,
+  networkType: 'mainnet' | 'testnet' = 'mainnet'
+): Promise<TaprootDualChainResult> {
+  const [receive, change] = await Promise.all([
+    deriveTaprootAddressesForChain(extendedKey, 0, receiveStartIndex, receiveEndIndex, networkType),
+    deriveTaprootAddressesForChain(extendedKey, 1, changeStartIndex, changeEndIndex, networkType),
+  ]);
+  
+  return {
+    receive,
+    change,
+    xpub: extendedKey,
+    network: networkType,
+    fingerprint,
+    derivationPath,
+  };
+}
+
 export async function deriveAddressesAdvanced(
   extendedKey: string,
   customPath: string,
@@ -479,6 +606,7 @@ export function getDepthDescription(depth: number): string {
 // ============================================
 
 export type MultisigScriptType = 'p2sh' | 'p2wsh' | 'p2sh-p2wsh';
+export type DescriptorScriptType = MultisigScriptType | 'p2tr';
 
 export interface MultisigXpubEntry {
   xpub: string;

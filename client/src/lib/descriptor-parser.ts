@@ -1,4 +1,4 @@
-import { MultisigScriptType, MultisigXpubEntry } from './xpub';
+import { MultisigScriptType, MultisigXpubEntry, DescriptorScriptType } from './xpub';
 
 export interface DescriptorKey {
   fingerprint: string;
@@ -8,12 +8,13 @@ export interface DescriptorKey {
 }
 
 export interface ParsedDescriptor {
-  scriptType: MultisigScriptType;
+  scriptType: DescriptorScriptType;
   threshold: number;
   keys: DescriptorKey[];
   network: 'mainnet' | 'testnet';
   isMultisig: boolean;
   isSortedMulti: boolean;
+  isTaproot: boolean;
   rawDescriptor: string;
   label?: string;
 }
@@ -51,9 +52,12 @@ function removeChecksum(descriptor: string): string {
   return descriptor;
 }
 
-function detectScriptType(descriptor: string): MultisigScriptType {
+function detectScriptType(descriptor: string): DescriptorScriptType {
   const clean = descriptor.toLowerCase().trim();
   
+  if (clean.startsWith('tr(')) {
+    return 'p2tr';
+  }
   if (clean.startsWith('sh(wsh(')) {
     return 'p2sh-p2wsh';
   }
@@ -196,6 +200,30 @@ function parseMultisigContent(content: string): { threshold: number; keys: Descr
   return { threshold, keys, isSorted };
 }
 
+function extractTaprootContent(descriptor: string): string {
+  let content = removeChecksum(descriptor);
+  
+  if (/^tr\(/i.test(content)) {
+    content = content.replace(/^tr\(/i, '');
+    if (content.endsWith(')')) {
+      content = content.slice(0, -1);
+    }
+  }
+  
+  return content;
+}
+
+function parseTaprootContent(content: string): { key: DescriptorKey } | null {
+  const trimmed = content.trim();
+  
+  const key = parseKeyExpression(trimmed);
+  if (key) {
+    return { key };
+  }
+  
+  return null;
+}
+
 export function parseDescriptor(descriptorInput: string): DescriptorParseResult {
   try {
     const descriptor = descriptorInput.trim();
@@ -205,6 +233,35 @@ export function parseDescriptor(descriptorInput: string): DescriptorParseResult 
     }
     
     const scriptType = detectScriptType(descriptor);
+    
+    if (scriptType === 'p2tr') {
+      const content = extractTaprootContent(descriptor);
+      const parsed = parseTaprootContent(content);
+      
+      if (!parsed) {
+        return { 
+          success: false, 
+          error: 'Could not parse taproot descriptor. Expected format: tr([fp/path]xpub/chain/*)' 
+        };
+      }
+      
+      const network = detectNetwork(parsed.key.xpub);
+      
+      return {
+        success: true,
+        descriptor: {
+          scriptType,
+          threshold: 1,
+          keys: [parsed.key],
+          network,
+          isMultisig: false,
+          isSortedMulti: false,
+          isTaproot: true,
+          rawDescriptor: descriptor,
+        },
+      };
+    }
+    
     const content = extractMultisigContent(descriptor);
     const parsed = parseMultisigContent(content);
     
@@ -248,6 +305,7 @@ export function parseDescriptor(descriptorInput: string): DescriptorParseResult 
         network,
         isMultisig: parsed.keys.length >= 2,
         isSortedMulti: parsed.isSorted,
+        isTaproot: false,
         rawDescriptor: descriptor,
       },
     };
@@ -342,11 +400,16 @@ export function descriptorKeysToXpubEntries(keys: DescriptorKey[]): MultisigXpub
 }
 
 export function getDescriptorSummary(parsed: ParsedDescriptor): string {
-  const scriptNames: Record<MultisigScriptType, string> = {
+  const scriptNames: Record<DescriptorScriptType, string> = {
     'p2wsh': 'Native SegWit (bc1q...)',
     'p2sh': 'Legacy (3...)',
     'p2sh-p2wsh': 'Nested SegWit (3...)',
+    'p2tr': 'Taproot (bc1p...)',
   };
+  
+  if (parsed.isTaproot) {
+    return `Taproot Singlesig ${scriptNames[parsed.scriptType]}`;
+  }
   
   return `${parsed.threshold}-of-${parsed.keys.length} ${parsed.isSortedMulti ? 'sortedmulti' : 'multi'} ${scriptNames[parsed.scriptType]}`;
 }

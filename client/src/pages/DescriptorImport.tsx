@@ -65,10 +65,13 @@ import { useSeedNames, createSeedName } from "@/hooks/use-seed-names";
 import { useWalletSoftware, createWalletSoftware } from "@/hooks/use-wallet-software";
 import { 
   deriveMultisigDualChain,
+  deriveTaprootDualChain,
   type DerivedMultisigAddress,
   type MultisigDualChainResult,
   type MultisigScriptType,
   type MultisigXpubEntry,
+  type TaprootDualChainResult,
+  type TaprootDerivedAddress,
 } from "@/lib/xpub";
 import {
   parseDescriptor,
@@ -96,6 +99,7 @@ export default function DescriptorImport() {
   const [changeEndIndex, setChangeEndIndex] = useState(99);
   
   const [multisigResult, setMultisigResult] = useState<MultisigDualChainResult | null>(null);
+  const [taprootResult, setTaprootResult] = useState<TaprootDualChainResult | null>(null);
   const [selectedReceiveAddresses, setSelectedReceiveAddresses] = useState<Set<number>>(new Set());
   const [selectedChangeAddresses, setSelectedChangeAddresses] = useState<Set<number>>(new Set());
   const [showChangeAddresses, setShowChangeAddresses] = useState(false);
@@ -243,41 +247,79 @@ export default function DescriptorImport() {
     
     setIsDerivingAddresses(true);
     try {
-      const xpubEntries = descriptorKeysToXpubEntries(parsedDescriptor.keys);
-      
-      const result = await deriveMultisigDualChain(
-        {
-          xpubs: xpubEntries,
-          m: parsedDescriptor.threshold,
-          n: parsedDescriptor.keys.length,
-          scriptType: parsedDescriptor.scriptType,
-        },
-        receiveStartIndex,
-        receiveEndIndex,
-        changeStartIndex,
-        changeEndIndex
-      );
-      
-      setMultisigResult(result);
-      
-      const receiveSet = new Set<number>();
-      for (let i = receiveStartIndex; i <= receiveEndIndex; i++) {
-        receiveSet.add(i);
+      if (parsedDescriptor.isTaproot) {
+        const key = parsedDescriptor.keys[0];
+        
+        const result = await deriveTaprootDualChain(
+          key.xpub,
+          key.fingerprint,
+          key.derivationPath,
+          receiveStartIndex,
+          receiveEndIndex,
+          changeStartIndex,
+          changeEndIndex,
+          parsedDescriptor.network
+        );
+        
+        setTaprootResult(result);
+        setMultisigResult(null);
+        
+        const receiveSet = new Set<number>();
+        for (let i = receiveStartIndex; i <= receiveEndIndex; i++) {
+          receiveSet.add(i);
+        }
+        setSelectedReceiveAddresses(receiveSet);
+        
+        const changeSet = new Set<number>();
+        for (let i = changeStartIndex; i <= changeEndIndex; i++) {
+          changeSet.add(i);
+        }
+        setSelectedChangeAddresses(changeSet);
+        
+        setStep(2);
+        
+        toast({
+          title: "Taproot addresses derived",
+          description: `Generated ${result.receive.length} receive and ${result.change.length} change addresses`,
+        });
+      } else {
+        const xpubEntries = descriptorKeysToXpubEntries(parsedDescriptor.keys);
+        
+        const result = await deriveMultisigDualChain(
+          {
+            xpubs: xpubEntries,
+            m: parsedDescriptor.threshold,
+            n: parsedDescriptor.keys.length,
+            scriptType: parsedDescriptor.scriptType as MultisigScriptType,
+          },
+          receiveStartIndex,
+          receiveEndIndex,
+          changeStartIndex,
+          changeEndIndex
+        );
+        
+        setMultisigResult(result);
+        setTaprootResult(null);
+        
+        const receiveSet = new Set<number>();
+        for (let i = receiveStartIndex; i <= receiveEndIndex; i++) {
+          receiveSet.add(i);
+        }
+        setSelectedReceiveAddresses(receiveSet);
+        
+        const changeSet = new Set<number>();
+        for (let i = changeStartIndex; i <= changeEndIndex; i++) {
+          changeSet.add(i);
+        }
+        setSelectedChangeAddresses(changeSet);
+        
+        setStep(2);
+        
+        toast({
+          title: "Addresses derived",
+          description: `Generated ${result.receive.length} receive and ${result.change.length} change addresses`,
+        });
       }
-      setSelectedReceiveAddresses(receiveSet);
-      
-      const changeSet = new Set<number>();
-      for (let i = changeStartIndex; i <= changeEndIndex; i++) {
-        changeSet.add(i);
-      }
-      setSelectedChangeAddresses(changeSet);
-      
-      setStep(2);
-      
-      toast({
-        title: "Addresses derived",
-        description: `Generated ${result.receive.length} receive and ${result.change.length} change addresses`,
-      });
     } catch (error) {
       toast({
         title: "Derivation failed",
@@ -290,7 +332,8 @@ export default function DescriptorImport() {
   };
 
   const handleSaveAddresses = async () => {
-    if (!multisigResult || !parsedDescriptor || !encryptionKey) {
+    const hasResult = multisigResult || taprootResult;
+    if (!hasResult || !parsedDescriptor || !encryptionKey) {
       toast({
         title: "Error",
         description: "Missing data for save",
@@ -302,9 +345,17 @@ export default function DescriptorImport() {
     setIsSaving(true);
     
     try {
-      const selectedReceive = multisigResult.receive.filter(a => selectedReceiveAddresses.has(a.index));
-      const selectedChange = multisigResult.change.filter(a => selectedChangeAddresses.has(a.index));
-      const allSelected = [...selectedReceive, ...selectedChange];
+      let allSelected: Array<{ address: string; chainType: string; index: number }> = [];
+      
+      if (taprootResult) {
+        const selectedReceive = taprootResult.receive.filter(a => selectedReceiveAddresses.has(a.index));
+        const selectedChange = taprootResult.change.filter(a => selectedChangeAddresses.has(a.index));
+        allSelected = [...selectedReceive, ...selectedChange];
+      } else if (multisigResult) {
+        const selectedReceive = multisigResult.receive.filter(a => selectedReceiveAddresses.has(a.index));
+        const selectedChange = multisigResult.change.filter(a => selectedChangeAddresses.has(a.index));
+        allSelected = [...selectedReceive, ...selectedChange];
+      }
       
       if (allSelected.length === 0) {
         toast({
@@ -363,21 +414,25 @@ export default function DescriptorImport() {
             owner: existingRecord.owner || ownerInput || undefined,
             walletName: existingRecord.walletName || walletNameInput || undefined,
             addressImportance: newImportance,
-            vault: {
-              isVaultXpub: true,
-              vaultName: walletNameInput || seedName || 'Multisig Vault',
-              m: parsedDescriptor.threshold,
-              n: parsedDescriptor.keys.length,
-              vaultNotes: `${parsedDescriptor.threshold}-of-${parsedDescriptor.keys.length} ${parsedDescriptor.scriptType}`,
-            },
+            ...(parsedDescriptor.isMultisig ? {
+              vault: {
+                isVaultXpub: true,
+                vaultName: walletNameInput || seedName || 'Multisig Vault',
+                m: parsedDescriptor.threshold,
+                n: parsedDescriptor.keys.length,
+                vaultNotes: `${parsedDescriptor.threshold}-of-${parsedDescriptor.keys.length} ${parsedDescriptor.scriptType}`,
+              },
+            } : {}),
           });
+          
+          const walletLabel = parsedDescriptor.isTaproot ? (walletNameInput || 'Taproot') : (walletNameInput || 'Multisig');
           
           if (isEncryptionReady() && existingRecord.id !== undefined) {
             try {
               await createRecordOrigin({
                 recordId: existingRecord.id,
                 originType: 'xpub-derived',
-                label: `${walletNameInput || 'Multisig'} ${addr.chainType === 'receive' ? 'Receive' : 'Change'} #${addr.index}`,
+                label: `${walletLabel} ${addr.chainType === 'receive' ? 'Receive' : 'Change'} #${addr.index}`,
                 notes: notes || undefined,
                 tags: parsedTags,
                 categories: parsedCategories,
@@ -389,10 +444,12 @@ export default function DescriptorImport() {
           }
           updated++;
         } else {
+          const walletLabel = parsedDescriptor.isTaproot ? (walletNameInput || 'Taproot') : (walletNameInput || 'Multisig');
+          
           const recordId = await createRecord({
             type: 'address',
             inputString: addr.address,
-            label: `${walletNameInput || 'Multisig'} ${addr.chainType === 'receive' ? 'Receive' : 'Change'} #${addr.index}`,
+            label: `${walletLabel} ${addr.chainType === 'receive' ? 'Receive' : 'Change'} #${addr.index}`,
             tags: parsedTags,
             categories: parsedCategories,
             notes: notes || undefined,
@@ -402,13 +459,15 @@ export default function DescriptorImport() {
             owner: ownerInput || undefined,
             walletName: walletNameInput || undefined,
             addressImportance: markAsVerified ? 'verified' : 'xpub-derived',
-            vault: {
-              isVaultXpub: true,
-              vaultName: walletNameInput || seedName || 'Multisig Vault',
-              m: parsedDescriptor.threshold,
-              n: parsedDescriptor.keys.length,
-              vaultNotes: `${parsedDescriptor.threshold}-of-${parsedDescriptor.keys.length} ${parsedDescriptor.scriptType}`,
-            },
+            ...(parsedDescriptor.isMultisig ? {
+              vault: {
+                isVaultXpub: true,
+                vaultName: walletNameInput || seedName || 'Multisig Vault',
+                m: parsedDescriptor.threshold,
+                n: parsedDescriptor.keys.length,
+                vaultNotes: `${parsedDescriptor.threshold}-of-${parsedDescriptor.keys.length} ${parsedDescriptor.scriptType}`,
+              },
+            } : {}),
           });
           
           if (recordId && isEncryptionReady()) {
@@ -416,7 +475,7 @@ export default function DescriptorImport() {
               await createRecordOrigin({
                 recordId,
                 originType: 'xpub-derived',
-                label: `${walletNameInput || 'Multisig'} ${addr.chainType === 'receive' ? 'Receive' : 'Change'} #${addr.index}`,
+                label: `${walletLabel} ${addr.chainType === 'receive' ? 'Receive' : 'Change'} #${addr.index}`,
                 notes: notes || undefined,
                 tags: parsedTags,
                 categories: parsedCategories,
@@ -491,9 +550,11 @@ export default function DescriptorImport() {
     });
   };
 
+  const activeReceiveAddresses = taprootResult?.receive || multisigResult?.receive || [];
+  const activeChangeAddresses = taprootResult?.change || multisigResult?.change || [];
+
   const selectAllReceive = () => {
-    if (!multisigResult) return;
-    const all = new Set(multisigResult.receive.map(a => a.index));
+    const all = new Set(activeReceiveAddresses.map(a => a.index));
     setSelectedReceiveAddresses(all);
   };
 
@@ -502,8 +563,7 @@ export default function DescriptorImport() {
   };
 
   const selectAllChange = () => {
-    if (!multisigResult) return;
-    const all = new Set(multisigResult.change.map(a => a.index));
+    const all = new Set(activeChangeAddresses.map(a => a.index));
     setSelectedChangeAddresses(all);
   };
 
@@ -711,7 +771,7 @@ export default function DescriptorImport() {
         </div>
       )}
       
-      {step === 2 && multisigResult && parsedDescriptor && (
+      {step === 2 && (multisigResult || taprootResult) && parsedDescriptor && (
         <div className="space-y-6">
           <Card>
             <CardHeader>
@@ -1032,7 +1092,7 @@ export default function DescriptorImport() {
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center justify-between">
-                <span>Receive Addresses ({multisigResult.receive.length})</span>
+                <span>Receive Addresses ({activeReceiveAddresses.length})</span>
                 <div className="flex gap-2">
                   <Button variant="outline" size="sm" onClick={selectAllReceive} data-testid="button-select-all-receive">
                     Select All
@@ -1043,13 +1103,13 @@ export default function DescriptorImport() {
                 </div>
               </CardTitle>
               <CardDescription>
-                {selectedReceiveAddresses.size} of {multisigResult.receive.length} selected
+                {selectedReceiveAddresses.size} of {activeReceiveAddresses.length} selected
               </CardDescription>
             </CardHeader>
             <CardContent>
               <ScrollArea className="h-[250px]">
                 <div className="space-y-1">
-                  {multisigResult.receive.map((addr) => (
+                  {activeReceiveAddresses.map((addr) => (
                     <div
                       key={addr.index}
                       className={cn(
@@ -1089,7 +1149,7 @@ export default function DescriptorImport() {
             <CardHeader>
               <CardTitle className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
-                  <span>Change Addresses ({multisigResult.change.length})</span>
+                  <span>Change Addresses ({activeChangeAddresses.length})</span>
                   <Button
                     variant="ghost"
                     size="sm"
@@ -1111,14 +1171,14 @@ export default function DescriptorImport() {
                 )}
               </CardTitle>
               <CardDescription>
-                {selectedChangeAddresses.size} of {multisigResult.change.length} selected
+                {selectedChangeAddresses.size} of {activeChangeAddresses.length} selected
               </CardDescription>
             </CardHeader>
             {showChangeAddresses && (
               <CardContent>
                 <ScrollArea className="h-[250px]">
                   <div className="space-y-1">
-                    {multisigResult.change.map((addr) => (
+                    {activeChangeAddresses.map((addr) => (
                       <div
                         key={addr.index}
                         className={cn(
