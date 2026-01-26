@@ -32,7 +32,7 @@ Data is stored locally using Dexie.js (IndexedDB) for structured data, with all 
 *   **Seed Name Protection:** Prevents accidental seed phrase entry in seed name fields.
 *   **Address Verification System:** Confirms address ownership with a tiered importance system.
 *   **Historical Price Import:** Imports Bitcoin OHLCV price data from CSV files.
-*   **Transaction Sync System:** Fetches and imports confirmed transactions from blockchain data sources for tracked addresses, intelligently matching and creating "Pending Review" records. Captures outpoint data.
+*   **Transaction Sync System:** Fetches and imports confirmed transactions from blockchain data sources for tracked addresses, intelligently matching and creating "Pending Review" records. Captures outpoint data. Includes pause/resume functionality for long-running syncs - paused syncs save progress to IndexedDB and can be resumed later. Resume works best for single-depth syncs; for multi-depth syncs, additional sync runs may be needed after resume to process discovered addresses at higher depths.
 *   **Tor Proxy Integration:** Privacy-enhanced node connectivity via SOCKS5 proxy (Tor Browser/service) with dual-mode routing, Electron IPC handlers, auto-detection, connection testing, .onion support, SSRF protection (URL allowlist), and a trusted local hosts whitelist.
 *   **Exact UTXO Tracking:** Dual-mode UTXO calculation (Standard/Exact) with outpoint-based matching for accuracy, data coverage indicators, and historical views.
 *   **Record Detail Panel:** Comprehensive metadata display with navigation.

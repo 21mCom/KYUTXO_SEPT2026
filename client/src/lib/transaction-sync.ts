@@ -1,7 +1,7 @@
 // Transaction Sync Service
 // Syncs blockchain transaction data for addresses in the local database
 
-import { db, notifyDbChange, type Record, type BlockchainTransaction, type TransactionParticipant, type AddressSyncState, type NodeSettings } from './database';
+import { db, notifyDbChange, type Record, type BlockchainTransaction, type TransactionParticipant, type AddressSyncState, type NodeSettings, type PausedSyncState } from './database';
 import { createProvider, createProviderFromSettings, parseTransaction, MINIMUM_CONFIRMATIONS, type ProviderType, type ParsedTransaction, type BlockchainProvider } from './blockchain-api';
 import { validateAddress } from './bitcoin';
 import { decryptRecords, isEncryptionReady, createRecordOrigin } from './encryptionFacade';
@@ -54,11 +54,23 @@ export interface SyncResult {
   errors: string[];
 }
 
+export interface ResumeContext {
+  completedRecordIds: Set<number>;  // Record IDs already processed before pause
+  previousResult: {                  // Stats from before pause
+    transactionsImported: number;
+    transactionsUpdated: number;
+    newAddressRecords: number;
+    addressesSynced: number;
+  };
+  resumeFromDepth: number;           // Depth level to resume from
+}
+
 export interface SyncOptions {
   sourceFilter: SourceFilter;
   sourceSelection?: SourceSelection;  // Used when sourceFilter is 'custom'
   maxDepth: number; // How many levels deep to sync (1 = only sync depth-0 addresses, 2 = sync depth-0 and discovered depth-1, etc.)
   specificRecordIds?: number[]; // If provided, only sync these specific records (for "Sync Deeper" on individual records)
+  resumeContext?: ResumeContext;     // If provided, resume from paused state
 }
 
 export type SyncProgressCallback = (progress: SyncProgress) => void;
@@ -67,6 +79,7 @@ export class TransactionSyncService {
   private provider: BlockchainProvider;
   private onProgress?: SyncProgressCallback;
   private cancelled: boolean = false;
+  private pauseRequested: boolean = false;
   private currentProgress: SyncProgress = {
     phase: 'idle',
     addressesTotal: 0,
@@ -75,20 +88,140 @@ export class TransactionSyncService {
     transactionsNew: 0,
     newAddressRecords: 0,
   };
+  
+  // Track current sync state for pause functionality
+  private currentSyncState: {
+    sourceSelection?: SourceSelection;
+    maxDepth: number;
+    currentDepth: number;
+    allAddressRecordIds: number[];
+    processedIndex: number;
+  } | null = null;
 
   constructor(providerType: ProviderType = 'mempool') {
     this.provider = createProvider(providerType);
   }
 
-  // Stop the current sync operation
+  // Stop the current sync operation (does not save state)
   stopSync() {
     this.cancelled = true;
+    this.pauseRequested = false;
     console.log('[TransactionSync] Stop requested');
+  }
+  
+  // Request pause and save state for resume
+  requestPause() {
+    this.cancelled = true;
+    this.pauseRequested = true;
+    console.log('[TransactionSync] Pause requested');
+  }
+  
+  // Check if pause was requested (vs stop)
+  isPauseRequested(): boolean {
+    return this.pauseRequested;
   }
 
   // Check if sync was cancelled (for external use)
   isCancelled(): boolean {
     return this.cancelled;
+  }
+
+  // Pause sync and save state for resuming later
+  async pauseSync(
+    remainingRecordIds: number[],
+    completedRecordIds: number[],
+    sourceSelection: SourceSelection,
+    maxDepth: number,
+    currentDepth: number,
+    result: SyncResult
+  ): Promise<void> {
+    this.cancelled = true;
+    console.log('[TransactionSync] Pause requested - saving state');
+    
+    const pausedState: PausedSyncState = {
+      id: 'default',
+      pausedAt: Date.now(),
+      remainingRecordIds,
+      completedRecordIds,
+      sourceSelection: {
+        selectedSources: Array.from(sourceSelection.selectedSources),
+        includeNoSource: sourceSelection.includeNoSource,
+      },
+      maxDepth,
+      currentDepth,
+      transactionsImported: result.transactionsImported,
+      transactionsUpdated: result.transactionsUpdated,
+      newAddressRecords: result.newAddressRecords,
+      addressesSynced: result.addressesSynced,
+    };
+    
+    await db.pausedSyncState.put(pausedState);
+    console.log(`[TransactionSync] Saved paused state: ${remainingRecordIds.length} addresses remaining`);
+  }
+
+  // Get paused sync state
+  async getPausedState(): Promise<PausedSyncState | undefined> {
+    return db.pausedSyncState.get('default');
+  }
+
+  // Clear paused sync state (when sync completes or user cancels resume)
+  async clearPausedState(): Promise<void> {
+    await db.pausedSyncState.delete('default');
+    console.log('[TransactionSync] Cleared paused state');
+  }
+
+  // Resume sync from paused state
+  async resumeSync(): Promise<SyncResult> {
+    const pausedState = await this.getPausedState();
+    
+    if (!pausedState) {
+      return {
+        success: false,
+        addressesSynced: 0,
+        transactionsImported: 0,
+        transactionsUpdated: 0,
+        newAddressRecords: 0,
+        depthsProcessed: [],
+        errors: ['No paused sync state found'],
+      };
+    }
+    
+    console.log(`[TransactionSync] Resuming sync: ${pausedState.remainingRecordIds.length} addresses remaining`);
+    
+    // Convert stored array back to Set
+    const sourceSelection: SourceSelection = {
+      selectedSources: new Set(pausedState.sourceSelection.selectedSources),
+      includeNoSource: pausedState.sourceSelection.includeNoSource,
+    };
+    
+    // DON'T clear paused state before resuming - only clear on success
+    // This preserves state if resume fails early
+    
+    // Resume with the remaining addresses using specificRecordIds path
+    // This syncs just the remaining addresses directly
+    const result = await this.syncWithDepth({
+      sourceFilter: 'custom',
+      sourceSelection,
+      maxDepth: pausedState.maxDepth,
+      specificRecordIds: pausedState.remainingRecordIds,
+      resumeContext: {
+        completedRecordIds: new Set(pausedState.completedRecordIds),
+        previousResult: {
+          transactionsImported: pausedState.transactionsImported,
+          transactionsUpdated: pausedState.transactionsUpdated,
+          newAddressRecords: pausedState.newAddressRecords,
+          addressesSynced: pausedState.addressesSynced,
+        },
+        resumeFromDepth: pausedState.currentDepth,
+      },
+    });
+    
+    // Only clear paused state if sync completed successfully (not paused again)
+    if (result.success && !this.pauseRequested) {
+      await this.clearPausedState();
+    }
+    
+    return result;
   }
 
   // Create a sync service from saved node settings
@@ -144,40 +277,46 @@ export class TransactionSyncService {
   }
 
   async syncWithDepth(options: SyncOptions): Promise<SyncResult> {
-    const { sourceFilter, maxDepth, specificRecordIds } = options;
+    const { sourceFilter, maxDepth, specificRecordIds, resumeContext } = options;
     
-    // Reset progress counters and cancellation flag at the start of each sync
+    // Reset progress counters and cancellation flags at the start of each sync
     this.resetProgress();
     this.cancelled = false;
+    this.pauseRequested = false;
     
+    // Initialize result with previous values if resuming
     const result: SyncResult = {
       success: false,
-      addressesSynced: 0,
-      transactionsImported: 0,
-      transactionsUpdated: 0,
-      newAddressRecords: 0,
+      addressesSynced: resumeContext?.previousResult?.addressesSynced ?? 0,
+      transactionsImported: resumeContext?.previousResult?.transactionsImported ?? 0,
+      transactionsUpdated: resumeContext?.previousResult?.transactionsUpdated ?? 0,
+      newAddressRecords: resumeContext?.previousResult?.newAddressRecords ?? 0,
       depthsProcessed: [],
       errors: [],
     };
+    
+    // Initialize progress with resume values if available
+    const initialTransactionsNew = resumeContext?.previousResult?.transactionsImported ?? 0;
+    const initialNewAddresses = resumeContext?.previousResult?.newAddressRecords ?? 0;
 
     try {
       this.updateProgress({
         phase: 'fetching-height',
-        currentDepth: 0,
+        currentDepth: resumeContext?.resumeFromDepth ?? 0,
         maxDepth,
         addressesTotal: 0,
         addressesProcessed: 0,
-        transactionsFound: 0,
-        transactionsNew: 0,
-        newAddressRecords: 0,
+        transactionsFound: initialTransactionsNew,
+        transactionsNew: initialTransactionsNew,
+        newAddressRecords: initialNewAddresses,
       });
 
       const currentHeight = await this.provider.getBlockHeight();
       const minConfirmedHeight = currentHeight - MINIMUM_CONFIRMATIONS;
 
       // Track which record IDs we've already processed in this sync session
-      // This prevents re-enqueuing addresses discovered multiple times
-      const processedRecordIds = new Set<number>();
+      // Initialize from resumeContext if available (prevents reprocessing completed addresses)
+      const processedRecordIds = new Set<number>(resumeContext?.completedRecordIds ?? []);
       
       // For "Sync Deeper", we sync one additional layer beyond each record's current maxSyncedDepth
       // This means:
@@ -291,10 +430,36 @@ export class TransactionSyncService {
             addressesProcessed: 0,
           });
           
+          // Get all valid record IDs for pause state saving
+          const allValidRecordIds = validAddresses.map(r => r.id).filter((id): id is number => id !== undefined);
+          
           for (let i = 0; i < validAddresses.length; i++) {
             // Check for cancellation before processing each address
             if (this.cancelled) {
               console.log('[TransactionSync] Sync cancelled by user');
+              
+              // Handle pause vs stop (same logic as normal sync path)
+              if (this.pauseRequested) {
+                const remainingIds = allValidRecordIds.slice(i);
+                const completedIds = Array.from(processedRecordIds);
+                const sourceSelection = options.sourceSelection || {
+                  selectedSources: new Set<string>(),
+                  includeNoSource: true,
+                };
+                
+                await this.pauseSync(
+                  remainingIds,
+                  completedIds,
+                  sourceSelection,
+                  maxDepth,
+                  currentDepth,
+                  result
+                );
+                console.log(`[TransactionSync] Sync Deeper paused - saved ${remainingIds.length} remaining addresses`);
+              } else {
+                console.log('[TransactionSync] Sync Deeper stopped by user (not paused)');
+              }
+              
               this.updateProgress({ phase: 'complete' });
               result.success = true; // Partial success - what we synced is valid
               return result;
@@ -471,10 +636,34 @@ export class TransactionSyncService {
           addressesProcessed: 0,
         });
 
+        // Track all valid record IDs for this depth level for pause/resume
+        const allValidRecordIds = validAddressRecords.map(r => r.id!).filter(id => id !== undefined);
+        
         for (let i = 0; i < validAddressRecords.length; i++) {
           // Check for cancellation before processing each address
           if (this.cancelled) {
-            console.log('[TransactionSync] Sync cancelled by user');
+            // If pause was requested, save state for resume
+            if (this.pauseRequested) {
+              const remainingIds = allValidRecordIds.slice(i); // IDs not yet processed at this depth
+              const completedIds = Array.from(processedRecordIds);
+              const sourceSelection = options.sourceSelection || {
+                selectedSources: new Set<string>(),
+                includeNoSource: true,
+              };
+              
+              await this.pauseSync(
+                remainingIds,
+                completedIds,
+                sourceSelection,
+                maxDepth,
+                currentDepth,
+                result
+              );
+              console.log(`[TransactionSync] Paused - saved ${remainingIds.length} remaining addresses`);
+            } else {
+              console.log('[TransactionSync] Sync stopped by user (not paused)');
+            }
+            
             this.updateProgress({ phase: 'complete' });
             result.success = true; // Partial success - what we synced is valid
             return result;
@@ -534,6 +723,9 @@ export class TransactionSyncService {
         addressesProcessed: result.addressesSynced,
       });
 
+      // Note: Paused state is managed by resumeSync() - don't clear here
+      // as that would race with pause requests
+      
       result.success = true;
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : 'Unknown error';
@@ -542,6 +734,9 @@ export class TransactionSyncService {
         phase: 'error',
         error: errorMsg,
       });
+    } finally {
+      // Reset pause flag
+      this.pauseRequested = false;
     }
 
     return result;

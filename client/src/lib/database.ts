@@ -416,6 +416,26 @@ export interface NodeSettings {
   lastConnectionStatus?: string;
 }
 
+// === Paused Sync State ===
+// Stores paused sync state for resume functionality
+export interface PausedSyncState {
+  id: string;                     // Always 'default' - singleton pattern
+  pausedAt: number;               // Timestamp when sync was paused
+  remainingRecordIds: number[];   // Record IDs still to sync
+  completedRecordIds: number[];   // Record IDs already synced in this session
+  sourceSelection: {              // Source filter settings
+    selectedSources: string[];    // Array version of Set for storage
+    includeNoSource: boolean;
+  };
+  maxDepth: number;               // Max depth setting
+  currentDepth: number;           // Current depth being processed
+  // Cumulative stats from the paused sync
+  transactionsImported: number;
+  transactionsUpdated: number;
+  newAddressRecords: number;
+  addressesSynced: number;
+}
+
 // === UTXO Lineage Tracking for AML/SOF ===
 
 // Confidence tier for lineage links (higher = more reliable)
@@ -673,9 +693,38 @@ export class KYUTXODatabase extends Dexie {
   // Evidence/document storage tables
   evidence!: Table<Evidence>;
   evidenceAttachments!: Table<EvidenceAttachment>;
+  // Paused sync state for resume functionality
+  pausedSyncState!: Table<PausedSyncState>;
 
   constructor() {
     super('KYUTXODatabase');
+    
+    // Version 21 adds pausedSyncState table for pause/resume sync functionality
+    this.version(21).stores({
+      records: '++id, type, inputString, label, owner, *tags, *categories, createdAt, updatedAt, isEncrypted, chainType, syncDepth, addressImportance, [type+addressImportance], flowType',
+      attachments: '++id, recordId, createdAt, isEncrypted',
+      tags: '++id, name, createdAt, isEncrypted',
+      categories: '++id, name, createdAt, isEncrypted',
+      owners: '++id, name, createdAt, isEncrypted',
+      walletNames: '++id, name, createdAt, isEncrypted',
+      seedNames: '++id, name, createdAt, isEncrypted',
+      walletSoftware: '++id, name, createdAt, isEncrypted',
+      recordOrigins: '++id, recordId, originType, createdAt, isEncrypted',
+      customFields: '++id, slug, enabled, createdAt',
+      settings: 'id',
+      priceData: '++id, [date+currency+asset], date, asset, currency, source, importedAt',
+      blockchainTransactions: '++id, &txid, blockHeight, blockTime, syncedAt, hasOpReturn',
+      transactionParticipants: '++id, [txid+role], txid, role, address, recordId, scriptType, [prevTxid+prevVout]',
+      addressSyncState: '++id, &address, recordId, lastSyncedAt',
+      nodeSettings: 'id',
+      derivationTemplates: '++id, fingerprint, scriptType, owner, walletName, seedName, createdAt, isEncrypted',
+      utxoLineage: '++id, [spentTxid+spentVout], [createdTxid+createdVout], consumingTxid, spentAddress, createdAddress, segmentId, spentOwned, createdOwned, isChange, blockTime, isEncrypted',
+      custodySegments: '++id, &segmentId, [originTxid+originVout], originAddress, currentAddress, status, parentSegmentId, owner, walletName, originDate, isEncrypted',
+      lineageSnapshots: '++id, &snapshotId, targetType, targetAddress, targetSegmentId, generatedAt, disclosureLevel, isEncrypted',
+      evidence: '++id, documentType, originalDate, *tags, importance, createdAt, updatedAt, isEncrypted',
+      evidenceAttachments: '++id, evidenceId, createdAt, isEncrypted',
+      pausedSyncState: 'id'
+    });
     
     // Version 20 adds prevTxid/prevVout to transactionParticipants for exact UTXO matching
     // - transactionParticipants: adds prevTxid, prevVout for inputs to enable outpoint-based UTXO tracking

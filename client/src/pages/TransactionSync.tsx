@@ -21,11 +21,15 @@ import {
   Settings,
   ChevronDown,
   ChevronRight,
-  Square
+  Square,
+  Pause,
+  Play,
+  Trash2
 } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { transactionSyncService, type SyncProgress, type SyncResult, type SyncOptions, type SourceCategory, type SourceSelection, type SourceInfo, getAddressSources } from "@/lib/transaction-sync";
+import type { PausedSyncState } from "@/lib/database";
 import { useNodeSettings } from "@/hooks/use-node-settings";
 import { getProviderDisplayName, getProviderPrivacyInfo } from "@/lib/blockchain-api";
 import { Link } from "wouter";
@@ -55,6 +59,9 @@ export default function TransactionSync() {
   const [syncProgress, setSyncProgress] = useState<SyncProgress | null>(null);
   const [lastResult, setLastResult] = useState<SyncResult | null>(null);
   const [maxDepth, setMaxDepth] = useState<number>(1);
+  
+  // Paused sync state for resume functionality
+  const [pausedState, setPausedState] = useState<PausedSyncState | null>(null);
   
   // New granular source selection state
   const [sourceCategories, setSourceCategories] = useState<SourceCategory[]>([]);
@@ -104,10 +111,17 @@ export default function TransactionSync() {
     setIncludeNoSource(true);
   }, []);
 
+  // Load paused state on mount
+  const loadPausedState = useCallback(async () => {
+    const state = await transactionSyncService.getPausedState();
+    setPausedState(state ?? null);
+  }, []);
+
   useEffect(() => {
     loadStats();
     loadSources();
-  }, [loadStats, loadSources]);
+    loadPausedState();
+  }, [loadStats, loadSources, loadPausedState]);
 
   // Update filtered address count whenever selection changes
   useEffect(() => {
@@ -180,16 +194,34 @@ export default function TransactionSync() {
       setIsStopping(false);
       await loadStats();
       await loadSources();
+      await loadPausedState();
       
-      // If sync was stopped, update the result message
+      // If sync was stopped/paused, update the result message
       if (wasStopped && lastResult === null) {
-        // lastResult will be set by the sync, but we can show a stopped toast
-        toast({
-          title: "Sync Stopped",
-          description: "Sync was stopped. Any transactions already found have been saved.",
-        });
+        // Check if it was paused (state was saved) or stopped
+        const newPausedState = await transactionSyncService.getPausedState();
+        if (newPausedState) {
+          toast({
+            title: "Sync Paused",
+            description: `${newPausedState.remainingRecordIds.length} addresses remaining. You can resume anytime.`,
+          });
+        } else {
+          toast({
+            title: "Sync Stopped",
+            description: "Sync was stopped. Any transactions already found have been saved.",
+          });
+        }
       }
     }
+  };
+
+  const handlePauseSync = () => {
+    setIsStopping(true);
+    transactionSyncService.requestPause();
+    toast({
+      title: "Pausing Sync",
+      description: "Finishing current address, then pausing...",
+    });
   };
 
   const handleStopSync = () => {
@@ -198,6 +230,67 @@ export default function TransactionSync() {
     toast({
       title: "Stopping Sync",
       description: "Finishing current address, then stopping...",
+    });
+  };
+  
+  const handleResumeSync = async () => {
+    setIsSyncing(true);
+    setSyncProgress({
+      phase: 'idle',
+      addressesTotal: pausedState?.remainingRecordIds.length ?? 0,
+      addressesProcessed: 0,
+      transactionsFound: pausedState?.transactionsImported ?? 0,
+      transactionsNew: pausedState?.transactionsImported ?? 0,
+      newAddressRecords: pausedState?.newAddressRecords ?? 0,
+    });
+    setLastResult(null);
+
+    // Update the sync service to use current node settings
+    transactionSyncService.updateProvider(nodeSettings);
+    
+    transactionSyncService.setProgressCallback((progress) => {
+      setSyncProgress(progress);
+    });
+
+    try {
+      const result = await transactionSyncService.resumeSync();
+      setLastResult(result);
+      // Note: paused state is managed by the service - if sync was paused again, state is preserved
+      // If sync completed, service clears the state
+      
+      if (result.success) {
+        toast({
+          title: "Sync Complete",
+          description: `Imported ${result.transactionsImported} new transactions from ${result.addressesSynced} addresses.`,
+        });
+      } else {
+        toast({
+          title: "Sync Completed with Errors",
+          description: result.errors[0] || "Some addresses failed to sync",
+          variant: "destructive",
+        });
+      }
+    } catch (error) {
+      toast({
+        title: "Resume Failed",
+        description: error instanceof Error ? error.message : "An error occurred",
+        variant: "destructive",
+      });
+    } finally {
+      setIsSyncing(false);
+      setIsStopping(false);
+      await loadStats();
+      await loadSources();
+      await loadPausedState(); // Reload paused state (may have new state if paused again, or cleared if complete)
+    }
+  };
+  
+  const handleDiscardPausedSync = async () => {
+    await transactionSyncService.clearPausedState();
+    setPausedState(null);
+    toast({
+      title: "Paused Sync Discarded",
+      description: "You can start a fresh sync anytime.",
     });
   };
 
@@ -642,26 +735,61 @@ export default function TransactionSync() {
               )}
             </Button>
             {isSyncing && (
-              <Button 
-                variant="destructive"
-                onClick={handleStopSync}
-                disabled={isStopping}
-                data-testid="button-stop-sync"
-              >
-                {isStopping ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Stopping...
-                  </>
-                ) : (
-                  <>
-                    <Square className="mr-2 h-4 w-4" />
-                    Stop
-                  </>
-                )}
-              </Button>
+              <>
+                <Button 
+                  variant="outline"
+                  onClick={handlePauseSync}
+                  disabled={isStopping}
+                  data-testid="button-pause-sync"
+                >
+                  {isStopping ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Pausing...
+                    </>
+                  ) : (
+                    <>
+                      <Pause className="mr-2 h-4 w-4" />
+                      Pause
+                    </>
+                  )}
+                </Button>
+                <Button 
+                  variant="destructive"
+                  onClick={handleStopSync}
+                  disabled={isStopping}
+                  data-testid="button-stop-sync"
+                >
+                  <Square className="mr-2 h-4 w-4" />
+                  Stop
+                </Button>
+              </>
             )}
-            {!isSyncing && (stats?.totalAddresses ?? 0) === 0 && (
+            {!isSyncing && pausedState && (
+              <div className="flex flex-col gap-2">
+                <div className="flex items-center gap-2">
+                  <Button 
+                    onClick={handleResumeSync}
+                    data-testid="button-resume-sync"
+                  >
+                    <Play className="mr-2 h-4 w-4" />
+                    Resume ({pausedState.remainingRecordIds.length} remaining)
+                  </Button>
+                  <Button 
+                    variant="outline"
+                    onClick={handleDiscardPausedSync}
+                    data-testid="button-discard-paused"
+                  >
+                    <Trash2 className="mr-2 h-4 w-4" />
+                    Discard
+                  </Button>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Paused at depth {pausedState.currentDepth}. Already synced {pausedState.addressesSynced} addresses, found {pausedState.transactionsImported} transactions.
+                </p>
+              </div>
+            )}
+            {!isSyncing && !pausedState && (stats?.totalAddresses ?? 0) === 0 && (
               <p className="ml-2 text-sm text-muted-foreground">
                 Add some addresses first to sync their transactions
               </p>
