@@ -595,6 +595,10 @@ export class TransactionSyncService {
       });
       stats.imported++;
 
+      // Create a transaction record in the records table so it appears in Records view
+      const { isNew: isTxRecordNew } = await this.findOrCreateTransactionRecord(parsed.txid, parsed.blockTime, recordId);
+      if (isTxRecordNew) stats.newRecords++;
+
       for (const input of parsed.inputs) {
         const { recordId: inputRecordId, isNew } = await this.findOrCreateAddressRecord(
           input.address, 
@@ -734,6 +738,83 @@ export class TransactionSyncService {
       } catch (originError) {
         console.error('[TransactionSync] Failed to create record origin:', originError);
         // Don't fail the record creation if origin creation fails
+      }
+    }
+
+    return { recordId: newRecordId, isNew: true };
+  }
+
+  // Find or create a transaction record in the records table
+  // This ensures synced transactions appear in the Records view
+  private async findOrCreateTransactionRecord(
+    txid: string,
+    blockTime: number,
+    discoveredFromRecordId?: number
+  ): Promise<{ recordId: number; isNew: boolean }> {
+    // Check if a transaction record already exists for this txid
+    // Scope to type='transaction' to avoid collisions with address records
+    const existing = await db.records
+      .where('inputString').equals(txid)
+      .and(r => r.type === 'transaction')
+      .first();
+    
+    if (existing && existing.id) {
+      return { recordId: existing.id, isNew: false };
+    }
+
+    // Look up parent record to inherit context
+    let parentWalletName: string | undefined;
+    let parentSeedName: string | undefined;
+    let parentWalletSoftware: string | undefined;
+    let parentOwner: string | undefined;
+    
+    if (discoveredFromRecordId) {
+      const parentRecord = await db.records.get(discoveredFromRecordId);
+      if (parentRecord) {
+        parentWalletName = parentRecord.walletName;
+        parentSeedName = parentRecord.seedName;
+        parentWalletSoftware = parentRecord.walletSoftware;
+        parentOwner = parentRecord.owner;
+      }
+    }
+
+    const now = Date.now();
+    const newRecordId = await db.records.add({
+      type: 'transaction',
+      inputString: txid,
+      label: '',
+      tags: [],
+      categories: [],
+      owner: parentOwner || 'Pending Review',
+      source: 'blockchain-sync',
+      discoveredFromRecordId,
+      // Store blockTime in date field (formatted as ISO string)
+      date: new Date(blockTime * 1000).toISOString().split('T')[0],
+      // Inherit context from parent
+      walletName: parentWalletName,
+      seedName: parentSeedName,
+      walletSoftware: parentWalletSoftware,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    // Notify listeners of the change
+    notifyDbChange('records');
+
+    // Create a record origin entry to track blockchain sync source
+    if (isEncryptionReady()) {
+      try {
+        await createRecordOrigin({
+          recordId: newRecordId,
+          originType: 'blockchain-sync',
+          source: 'blockchain-sync',
+          owner: parentOwner || 'Pending Review',
+          walletName: parentWalletName,
+          seedName: parentSeedName,
+          walletSoftware: parentWalletSoftware,
+        });
+      } catch (originError) {
+        console.error('[TransactionSync] Failed to create transaction record origin:', originError);
       }
     }
 
