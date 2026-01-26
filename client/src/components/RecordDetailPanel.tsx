@@ -39,8 +39,10 @@ import type {
   AcquisitionMethod,
   DispositionType,
   CounterpartyType,
+  BlockchainTransaction,
 } from "@/lib/database";
 import { 
+  db,
   FLOW_TYPE_OPTIONS,
   ACQUISITION_METHOD_OPTIONS,
   DISPOSITION_TYPE_OPTIONS,
@@ -283,6 +285,7 @@ export function RecordDetailPanel({
   const [qrCodeDataUrl, setQrCodeDataUrl] = useState<string | null>(null);
   const [technicalOpen, setTechnicalOpen] = useState(false);
   const [conflictCount, setConflictCount] = useState(0);
+  const [blockchainTx, setBlockchainTx] = useState<BlockchainTransaction | null>(null);
 
   useEffect(() => {
     if (qrDialogOpen && record?.inputString) {
@@ -320,6 +323,24 @@ export function RecordDetailPanel({
     }
     checkConflicts();
   }, [record?.id, open]);
+
+  // Fetch blockchain transaction data for transaction records
+  useEffect(() => {
+    async function fetchBlockchainTx() {
+      if (!record || record.type !== 'transaction' || !open) {
+        setBlockchainTx(null);
+        return;
+      }
+      try {
+        const tx = await db.blockchainTransactions.where('txid').equals(record.inputString).first();
+        setBlockchainTx(tx ?? null);
+      } catch (error) {
+        console.error("Failed to fetch blockchain transaction:", error);
+        setBlockchainTx(null);
+      }
+    }
+    fetchBlockchainTx();
+  }, [record?.inputString, record?.type, open]);
 
   if (!record) return null;
 
@@ -544,6 +565,46 @@ export function RecordDetailPanel({
                     </p>
                   </div>
                 )}
+              </div>
+            )}
+
+            {/* OP_RETURN Data Section */}
+            {record.type === 'transaction' && blockchainTx?.hasOpReturn && blockchainTx.opReturnData && blockchainTx.opReturnData.length > 0 && (
+              <div className="p-3 bg-amber-500/10 dark:bg-amber-500/5 border border-amber-500/20 rounded-lg space-y-3">
+                <h4 className="text-sm font-medium flex items-center gap-2">
+                  <FileInput className="h-4 w-4" />
+                  OP_RETURN Data
+                </h4>
+                {blockchainTx.opReturnData.map((opReturn, idx) => {
+                  // Try to decode hex as readable text
+                  let decodedText = '';
+                  try {
+                    const bytes = opReturn.dataHex.match(/.{1,2}/g)?.map(byte => parseInt(byte, 16)) || [];
+                    const textChars = bytes.filter(b => b >= 32 && b < 127);
+                    if (textChars.length > bytes.length * 0.7) {
+                      decodedText = bytes.map(b => (b >= 32 && b < 127) ? String.fromCharCode(b) : '.').join('');
+                    }
+                  } catch {
+                    // Ignore decode errors
+                  }
+                  
+                  return (
+                    <div key={idx} className="space-y-1" data-testid={`op-return-${idx}`}>
+                      <span className="text-xs text-muted-foreground">Output #{opReturn.vout}</span>
+                      <div className="bg-muted/50 p-2 rounded">
+                        <code className="text-xs break-all font-mono" data-testid={`op-return-hex-${idx}`}>
+                          {opReturn.dataHex}
+                        </code>
+                      </div>
+                      {decodedText && (
+                        <div className="text-xs text-muted-foreground">
+                          <span>Decoded: </span>
+                          <span className="font-mono" data-testid={`op-return-text-${idx}`}>{decodedText}</span>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             )}
 

@@ -656,37 +656,77 @@ export default function NodeSettings() {
         );
       })()}
       
-      {/* Trusted Local Hosts - for direct local network connections */}
+      {/* Local Network Access - for direct local network connections */}
       <Card>
         <CardHeader>
           <CardTitle className="text-base flex items-center gap-2">
             <Home className="h-4 w-4" />
-            Trusted Local Hosts
+            Local Network Access
           </CardTitle>
           <CardDescription>
-            Whitelist local IPs and hostnames for direct connections (without Tor)
+            Allow connections to local network devices like your home Bitcoin node
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <Alert>
-            <Info className="h-4 w-4" />
+          {/* Security toggle for local network access */}
+          <div className="flex items-center justify-between p-3 border rounded-lg">
+            <div className="space-y-1">
+              <Label htmlFor="allow-local-network" className="text-sm font-medium">
+                Enable Local Network Access
+              </Label>
+              <p className="text-xs text-muted-foreground">
+                Allow direct connections to local IPs and hostnames
+              </p>
+            </div>
+            <Switch
+              id="allow-local-network"
+              checked={currentSettings.allowLocalNetwork ?? false}
+              onCheckedChange={(checked) => {
+                setPendingChanges(prev => ({ ...prev, allowLocalNetwork: checked }));
+              }}
+              data-testid="switch-allow-local-network"
+            />
+          </div>
+          
+          {/* Security warning */}
+          <Alert variant={currentSettings.allowLocalNetwork ? "default" : "destructive"}>
+            <AlertTriangle className="h-4 w-4" />
             <AlertDescription className="text-sm">
-              When you connect to a local address (like your home network), KYUTXO makes a direct connection 
-              instead of routing through Tor. Only add addresses you trust.
+              {currentSettings.allowLocalNetwork ? (
+                <>
+                  <strong>Security Notice:</strong> Local network access is enabled. Only use this on trusted networks 
+                  (like your home or office). On public WiFi, this could expose your connection to local attackers.
+                </>
+              ) : (
+                <>
+                  Local network access is disabled for security. Enable it only when you need to connect 
+                  to a local Bitcoin node and you are on a trusted network.
+                </>
+              )}
             </AlertDescription>
           </Alert>
           
-          {/* Add new host */}
-          <div className="flex gap-2">
-            <Input
-              placeholder="e.g., 192.168.1.50 or umbrel.local"
-              value={newLocalHost}
-              onChange={(e) => setNewLocalHost(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && handleAddLocalHost()}
-              data-testid="input-new-local-host"
-            />
-            <Button 
-              onClick={handleAddLocalHost}
+          {/* Trusted hosts configuration - only shown when enabled */}
+          {currentSettings.allowLocalNetwork && (
+            <>
+              <div className="pt-2 space-y-3">
+                <Label className="text-sm font-medium">Trusted Hosts</Label>
+                <p className="text-xs text-muted-foreground">
+                  Connections to these addresses will bypass Tor for faster direct access.
+                </p>
+              </div>
+              
+              {/* Add new host */}
+              <div className="flex gap-2">
+                <Input
+                  placeholder="e.g., 192.168.1.50 or umbrel.local"
+                  value={newLocalHost}
+                  onChange={(e) => setNewLocalHost(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && handleAddLocalHost()}
+                  data-testid="input-new-local-host"
+                />
+                <Button 
+                  onClick={handleAddLocalHost}
               disabled={!newLocalHost.trim()}
               data-testid="button-add-local-host"
             >
@@ -721,18 +761,20 @@ export default function NodeSettings() {
                   No trusted hosts configured. Local network connections will be blocked.
                 </p>
               )}
+              </div>
             </div>
-          </div>
-          
-          {/* Reset to defaults button */}
-          <Button 
-            variant="outline" 
-            size="sm"
-            onClick={handleResetLocalHosts}
-            data-testid="button-reset-local-hosts"
-          >
-            Reset to Defaults
-          </Button>
+            
+            {/* Reset to defaults button */}
+            <Button 
+              variant="outline" 
+              size="sm"
+              onClick={handleResetLocalHosts}
+              data-testid="button-reset-local-hosts"
+            >
+              Reset to Defaults
+            </Button>
+          </>
+          )}
         </CardContent>
       </Card>
       

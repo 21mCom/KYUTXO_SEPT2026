@@ -377,9 +377,10 @@ export function createProvider(type: ProviderType = 'mempool', network: 'mainnet
 
 // Create a provider from NodeSettings configuration
 export function createProviderFromSettings(settings: NodeSettings): BlockchainProvider {
-  const { providerType, customUrl, useTor, requestTimeout, network, torProxyUrl, trustedLocalHosts } = settings;
-  // Default to DEFAULT_TRUSTED_LOCAL_HOSTS if not specified (for backward compatibility with existing users)
-  const localHosts = trustedLocalHosts || [...DEFAULT_TRUSTED_LOCAL_HOSTS];
+  const { providerType, customUrl, useTor, requestTimeout, network, torProxyUrl, trustedLocalHosts, allowLocalNetwork } = settings;
+  // Only use trusted local hosts when allowLocalNetwork is explicitly enabled (SECURITY)
+  // This prevents accidental local network access on public networks
+  const localHosts = allowLocalNetwork ? (trustedLocalHosts || [...DEFAULT_TRUSTED_LOCAL_HOSTS]) : [];
   
   switch (providerType) {
     case 'blockstream':

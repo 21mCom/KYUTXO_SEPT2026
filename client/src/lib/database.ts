@@ -408,7 +408,9 @@ export interface NodeSettings {
   requestTimeout: number; // Default 30000 (30s), higher for Tor
   // Network selection
   network: 'mainnet' | 'testnet';
-  // Trusted local hosts whitelist (for local network connections without Tor)
+  // Local network access (SECURITY: disabled by default, user must opt-in)
+  allowLocalNetwork: boolean;  // Whether to allow connections to local network hosts
+  // Trusted local hosts whitelist (only used when allowLocalNetwork is true)
   trustedLocalHosts: string[];  // User-editable whitelist of allowed local IPs/hostnames
   // Last successful connection timestamp
   lastConnectedAt?: number;

@@ -8,6 +8,7 @@ const DEFAULT_NODE_SETTINGS: NodeSettings = {
   useTor: false,
   requestTimeout: 30000,
   network: 'mainnet',
+  allowLocalNetwork: false,  // SECURITY: disabled by default
   trustedLocalHosts: [...DEFAULT_TRUSTED_LOCAL_HOSTS],
 };
 
@@ -36,6 +37,8 @@ export function useNodeSettings() {
     ? {
         ...DEFAULT_NODE_SETTINGS,
         ...settings,
+        // Ensure allowLocalNetwork defaults to false for existing users (security)
+        allowLocalNetwork: settings.allowLocalNetwork ?? false,
         // Ensure trustedLocalHosts is always defined (for existing users who don't have it)
         trustedLocalHosts: settings.trustedLocalHosts ?? [...DEFAULT_TRUSTED_LOCAL_HOSTS],
       }
