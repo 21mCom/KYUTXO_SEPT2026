@@ -588,7 +588,7 @@ export default function DescriptorImport() {
           <h1 className="text-2xl font-bold">Descriptor Import</h1>
         </div>
         <p className="text-muted-foreground">
-          Import multisig addresses from a Bitcoin output descriptor (Sparrow wallet export)
+          Import multisig or taproot addresses from a Bitcoin output descriptor (Sparrow wallet export)
         </p>
       </div>
       
