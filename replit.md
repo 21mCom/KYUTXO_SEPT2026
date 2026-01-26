@@ -28,6 +28,7 @@ Data is stored locally using Dexie.js (IndexedDB) for structured data, with all 
 *   **Duplicate Detection & Merge:** Intelligent merging of new metadata with existing records.
 *   **Address Importer (Bulk Import):** Generates addresses from xpub/zpub keys in Singlesig and Multisig modes, with script type selection, M-of-N thresholds, BIP-67 compliance, custom derivation paths, and privacy warnings. Supports vault metadata.
 *   **Wallet Data Sync System:** Modular system for importing labels and transaction history from various wallet software, with intelligent duplicate detection and a private key scanner.
+*   **Mobile Wallet Import:** Dedicated import page for mobile Lightning wallets (Phoenix). Extracts only on-chain transactions (swaps, channel operations) that have proper Bitcoin TXIDs, skipping Lightning-only payments. Parses millisatoshi amounts and identifies transaction types via context field.
 *   **BIP-329 Label Import:** Streamlined 3-step wizard for importing BIP-329 standard `.jsonl` files, preserving origin and handling input/output specificity with duplicate detection and private key rejection.
 *   **Seed Name Protection:** Prevents accidental seed phrase entry in seed name fields.
 *   **Address Verification System:** Confirms address ownership with a tiered importance system.
