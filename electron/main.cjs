@@ -568,9 +568,14 @@ async function makeDirectRequest(requestParams) {
   const startTime = Date.now();
   const timeout = requestParams.timeout || 30000;
 
+  console.log(`[KYUTXO] [${new Date().toISOString()}] makeDirectRequest START - URL: ${requestParams.url}, timeout: ${timeout}ms`);
+
   try {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), timeout);
+    const timeoutId = setTimeout(() => {
+      console.log(`[KYUTXO] [${new Date().toISOString()}] TIMEOUT TRIGGERED after ${timeout}ms for: ${requestParams.url}`);
+      controller.abort();
+    }, timeout);
 
     const fetchOptions = {
       method: requestParams.method || "GET",
@@ -584,20 +589,25 @@ async function makeDirectRequest(requestParams) {
         : JSON.stringify(requestParams.body);
     }
 
-    console.log(`[KYUTXO] Direct local request to: ${requestParams.url}`);
+    console.log(`[KYUTXO] [${new Date().toISOString()}] Calling fetch() for: ${requestParams.url}`);
     const response = await fetch(requestParams.url, fetchOptions);
+    console.log(`[KYUTXO] [${new Date().toISOString()}] fetch() returned - status: ${response.status}, elapsed: ${Date.now() - startTime}ms`);
     clearTimeout(timeoutId);
 
     const contentType = response.headers.get('content-type') || '';
     let data;
     
+    console.log(`[KYUTXO] [${new Date().toISOString()}] Reading response body - contentType: ${contentType}`);
     if (contentType.includes('application/json')) {
       data = await response.json();
+      console.log(`[KYUTXO] [${new Date().toISOString()}] JSON parsed - items: ${Array.isArray(data) ? data.length : 'object'}, elapsed: ${Date.now() - startTime}ms`);
     } else {
       data = await response.text();
+      console.log(`[KYUTXO] [${new Date().toISOString()}] Text read - length: ${data.length} chars, elapsed: ${Date.now() - startTime}ms`);
     }
 
     const latency = Date.now() - startTime;
+    console.log(`[KYUTXO] [${new Date().toISOString()}] makeDirectRequest SUCCESS - total latency: ${latency}ms`);
 
     if (!response.ok) {
       return {
@@ -622,6 +632,7 @@ async function makeDirectRequest(requestParams) {
     const latency = Date.now() - startTime;
     
     if (error.name === 'AbortError') {
+      console.log(`[KYUTXO] [${new Date().toISOString()}] makeDirectRequest TIMEOUT - elapsed: ${latency}ms, URL: ${requestParams.url}`);
       return {
         success: false,
         error: `Request timed out after ${timeout / 1000}s`,
@@ -629,6 +640,7 @@ async function makeDirectRequest(requestParams) {
       };
     }
     
+    console.log(`[KYUTXO] [${new Date().toISOString()}] makeDirectRequest ERROR - ${error.message}, elapsed: ${latency}ms, URL: ${requestParams.url}`);
     return {
       success: false,
       error: error.message || "Direct request failed",

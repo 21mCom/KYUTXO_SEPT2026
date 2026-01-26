@@ -178,9 +178,13 @@ abstract class EsploraProvider implements BlockchainProvider {
       contentType?: string;
     };
 
+    const startTime = Date.now();
+    console.log(`[KYUTXO] [${new Date().toISOString()}] torProxiedFetch START - URL: ${url}, timeout: ${this.timeout}ms, isElectron: ${isElectron()}`);
+
     // Use Electron IPC in portable app, or backend API in dev mode
     if (isElectron()) {
       const electronAPI = getElectronAPI();
+      console.log(`[KYUTXO] [${new Date().toISOString()}] Calling Electron IPC torRequest...`);
       result = await electronAPI.torRequest({
         url,
         method: 'GET',
@@ -189,6 +193,7 @@ abstract class EsploraProvider implements BlockchainProvider {
         allowedHost: this.baseUrl,
         trustedLocalHosts: this.trustedLocalHosts,
       });
+      console.log(`[KYUTXO] [${new Date().toISOString()}] Electron IPC returned - success: ${result.success}, elapsed: ${Date.now() - startTime}ms`);
     } else {
       const proxyResponse = await fetch('/api/tor/request', {
         method: 'POST',
