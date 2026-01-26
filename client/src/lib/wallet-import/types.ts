@@ -1,6 +1,6 @@
 import type { Record as DBRecord } from '../database';
 
-export type WalletType = 'trezor' | 'sparrow' | 'sparrow-bip329' | 'mycelium' | 'unknown';
+export type WalletType = 'trezor' | 'sparrow' | 'sparrow-bip329' | 'mycelium' | 'phoenix' | 'unknown';
 export type FileFormat = 'csv' | 'json' | 'jsonl';
 export type TransactionDirection = 'incoming' | 'outgoing' | 'self' | 'unknown';
 

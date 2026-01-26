@@ -31,7 +31,8 @@ import {
   FileText,
   Tags,
   Vault,
-  Trash2
+  Trash2,
+  Smartphone
 } from "lucide-react";
 import logoUrl from "@assets/foot_1764929618997.png";
 import {
@@ -110,6 +111,7 @@ const navGroups: NavGroup[] = [
       { title: "Address Importer", url: "/import", icon: Import },
       { title: "BIP-329 Labels", url: "/bip329-import", icon: Tags },
       { title: "Wallet Data Sync", url: "/wallet-import", icon: Wallet },
+      { title: "Mobile Wallets", url: "/mobile-wallet-import", icon: Smartphone },
       { title: "Price Import", url: "/price-import", icon: DollarSign },
       { title: "Transaction Sync", url: "/transaction-sync", icon: ArrowDownUp },
       { title: "QR Scanner", url: "/scanner", icon: QrCode },
