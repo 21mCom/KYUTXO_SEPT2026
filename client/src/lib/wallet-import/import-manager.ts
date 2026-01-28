@@ -19,36 +19,44 @@ import { nunchukAdapter } from './adapters/nunchuk';
 import { checkForDuplicates, mergeRecordData, createNewRecordData } from './merge-utils';
 import { createRecord, updateRecord, isEncryptionReady, createRecordOrigin } from '../encryptionFacade';
 
-const PRIVATE_KEY_PATTERNS = [
-  /xprv[a-zA-Z0-9]{100,}/i,
-  /[5KL][1-9A-HJ-NP-Za-km-z]{50,52}/,
-  /"wif"\s*:/i,
-  /"privateKey"\s*:/i,
-  /"private_key"\s*:/i,
-  /"seed"\s*:\s*"[a-f0-9]{64,}"/i,
-  /"mnemonic"\s*:/i,
-  /-----BEGIN.*PRIVATE KEY-----/i,
-];
-
 export function scanForPrivateKeys(content: string): { hasPrivateKeys: boolean; warnings: string[] } {
   const warnings: string[] = [];
   
-  for (const pattern of PRIVATE_KEY_PATTERNS) {
-    if (pattern.test(content)) {
-      if (pattern.source.includes('xprv')) {
-        warnings.push('File appears to contain extended private keys (xprv)');
-      } else if (pattern.source.includes('wif') || pattern.source.includes('5KL')) {
-        warnings.push('File appears to contain WIF private keys');
-      } else if (pattern.source.includes('mnemonic')) {
-        warnings.push('File appears to contain mnemonic seed phrases');
-      } else if (pattern.source.includes('seed')) {
-        warnings.push('File appears to contain raw seed data');
-      } else if (pattern.source.includes('privateKey') || pattern.source.includes('private_key')) {
-        warnings.push('File appears to contain private key data');
-      } else {
-        warnings.push('File appears to contain private key material');
-      }
-    }
+  // Check for extended private keys (xprv/tprv)
+  if (/xprv[a-zA-Z0-9]{100,}/i.test(content) || /tprv[a-zA-Z0-9]{100,}/i.test(content)) {
+    warnings.push('File appears to contain extended private keys (xprv/tprv)');
+  }
+  
+  // Check for WIF private keys (start with 5, K, or L followed by 50-52 base58 chars)
+  // Only match standalone keys, not as part of other data
+  if (/(?:^|[^a-zA-Z0-9])[5KL][1-9A-HJ-NP-Za-km-z]{50,52}(?:$|[^a-zA-Z0-9])/m.test(content)) {
+    warnings.push('File appears to contain WIF private keys');
+  }
+  
+  // Check for JSON fields with actual values (not empty/null)
+  // "wif": "actualValue" (not "wif": "" or "wif": null)
+  if (/"wif"\s*:\s*"[^"]{10,}"/i.test(content)) {
+    warnings.push('File appears to contain WIF private keys');
+  }
+  
+  // "privateKey" or "private_key" with actual value
+  if (/"private[_]?[kK]ey"\s*:\s*"[^"]{10,}"/i.test(content)) {
+    warnings.push('File appears to contain private key data');
+  }
+  
+  // Raw seed data (64+ hex chars as a value)
+  if (/"seed"\s*:\s*"[a-f0-9]{64,}"/i.test(content)) {
+    warnings.push('File appears to contain raw seed data');
+  }
+  
+  // Mnemonic with actual words (not empty)
+  if (/"mnemonic"\s*:\s*"[a-z]{3,}(\s+[a-z]{3,}){11,}"/i.test(content)) {
+    warnings.push('File appears to contain mnemonic seed phrases');
+  }
+  
+  // PEM private keys
+  if (/-----BEGIN.*PRIVATE KEY-----/.test(content)) {
+    warnings.push('File appears to contain private key material');
   }
   
   return { 
