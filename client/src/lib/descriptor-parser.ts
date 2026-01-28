@@ -5,7 +5,10 @@ export interface DescriptorKey {
   derivationPath: string;
   xpub: string;
   chainPath: string;
+  rawChainPath: string; // Original chain path before normalization (preserves <0;1>)
 }
+
+export type DescriptorChainType = 'receive-only' | 'change-only' | 'dual-chain';
 
 export interface ParsedDescriptor {
   scriptType: DescriptorScriptType;
@@ -17,6 +20,7 @@ export interface ParsedDescriptor {
   isTaproot: boolean;
   rawDescriptor: string;
   label?: string;
+  chainType: DescriptorChainType; // Which chain(s) this descriptor supports
 }
 
 export interface SparrowExport {
@@ -80,14 +84,16 @@ function parseKeyExpression(keyExpr: string): DescriptorKey | null {
   const match = trimmed.match(keyRegex);
   
   if (match) {
-    let chainPath = match[4] || '/*';
-    chainPath = chainPath.replace(/<0;1>/g, '0').replace(/<1;0>/g, '1');
+    const rawChainPath = match[4] || '/*';
+    // Normalize for derivation: replace <0;1> with 0 for receive chain
+    let chainPath = rawChainPath.replace(/<0;1>/g, '0').replace(/<1;0>/g, '1');
     
     return {
       fingerprint: match[1].toLowerCase(),
       derivationPath: match[2],
       xpub: match[3],
       chainPath: chainPath,
+      rawChainPath: rawChainPath,
     };
   }
   
@@ -95,14 +101,15 @@ function parseKeyExpression(keyExpr: string): DescriptorKey | null {
   const simpleMatch = trimmed.match(simpleKeyRegex);
   
   if (simpleMatch) {
-    let chainPath = simpleMatch[3] || '/*';
-    chainPath = chainPath.replace(/<0;1>/g, '0').replace(/<1;0>/g, '1');
+    const rawChainPath = simpleMatch[3] || '/*';
+    let chainPath = rawChainPath.replace(/<0;1>/g, '0').replace(/<1;0>/g, '1');
     
     return {
       fingerprint: simpleMatch[1].toLowerCase(),
       derivationPath: '',
       xpub: simpleMatch[2],
       chainPath: chainPath,
+      rawChainPath: rawChainPath,
     };
   }
   
@@ -110,18 +117,41 @@ function parseKeyExpression(keyExpr: string): DescriptorKey | null {
   const xpubMatch = trimmed.match(xpubOnlyRegex);
   
   if (xpubMatch) {
-    let chainPath = xpubMatch[2] || '/*';
-    chainPath = chainPath.replace(/<0;1>/g, '0').replace(/<1;0>/g, '1');
+    const rawChainPath = xpubMatch[2] || '/*';
+    let chainPath = rawChainPath.replace(/<0;1>/g, '0').replace(/<1;0>/g, '1');
     
     return {
       fingerprint: '00000000',
       derivationPath: '',
       xpub: xpubMatch[1],
       chainPath: chainPath,
+      rawChainPath: rawChainPath,
     };
   }
   
   return null;
+}
+
+// Detect which chain(s) a descriptor supports based on the chainPath
+function detectChainType(rawChainPath: string): DescriptorChainType {
+  // <0;1> or <1;0> means dual-chain (both receive and change)
+  if (rawChainPath.includes('<0;1>') || rawChainPath.includes('<1;0>')) {
+    return 'dual-chain';
+  }
+  // /* alone (no explicit chain) typically means dual-chain
+  if (rawChainPath === '/*') {
+    return 'dual-chain';
+  }
+  // /0/* means receive only (external chain)
+  if (rawChainPath.includes('/0/') || rawChainPath === '/0/*') {
+    return 'receive-only';
+  }
+  // /1/* means change only (internal chain)
+  if (rawChainPath.includes('/1/') || rawChainPath === '/1/*') {
+    return 'change-only';
+  }
+  // Default to dual-chain if unclear
+  return 'dual-chain';
 }
 
 function extractMultisigContent(descriptor: string): string {
@@ -246,6 +276,7 @@ export function parseDescriptor(descriptorInput: string): DescriptorParseResult 
       }
       
       const network = detectNetwork(parsed.key.xpub);
+      const chainType = detectChainType(parsed.key.rawChainPath);
       
       return {
         success: true,
@@ -258,6 +289,7 @@ export function parseDescriptor(descriptorInput: string): DescriptorParseResult 
           isSortedMulti: false,
           isTaproot: true,
           rawDescriptor: descriptor,
+          chainType,
         },
       };
     }
@@ -296,6 +328,10 @@ export function parseDescriptor(descriptorInput: string): DescriptorParseResult 
       };
     }
     
+    // Detect chain type from the first key's rawChainPath
+    // (all keys in a descriptor should have the same chain path pattern)
+    const chainType = detectChainType(parsed.keys[0].rawChainPath);
+    
     return {
       success: true,
       descriptor: {
@@ -307,6 +343,7 @@ export function parseDescriptor(descriptorInput: string): DescriptorParseResult 
         isSortedMulti: parsed.isSorted,
         isTaproot: false,
         rawDescriptor: descriptor,
+        chainType,
       },
     };
   } catch (error) {
@@ -384,17 +421,56 @@ export function parseSparrowExport(content: string): { export?: SparrowExport; e
 
 export function descriptorKeysToXpubEntries(keys: DescriptorKey[]): MultisigXpubEntry[] {
   return keys.map(key => {
+    // The chainPath contains the derivation from the xpub to addresses
+    // Standard patterns are: /0/*, /1/*, /<0;1>/*, /*
+    // These indicate chain (0=receive, 1=change) and index derivation
+    // We should NOT include the chain component (0 or 1) as a derivationPath
+    // because deriveMultisigAddresses already handles chain derivation
+    
+    // Detect if xpub is already at chain level (chainPath is /* with no chain component)
+    // In this case, we should skip chain derivation and only derive index
+    const rawPath = key.rawChainPath || key.chainPath || '/*';
+    const isChainLevel = rawPath === '/*';
+    
+    // Only extract extra path segments if there are any BEFORE the chain/index
+    // For example, if chainPath is "/custom/0/*", extract "custom"
+    // But for standard "/0/*", "/1/*", "/<0;1>/*", "/*" - return empty derivationPath
+    
     let derivationPath = '';
-    if (key.chainPath && key.chainPath !== '/*' && key.chainPath !== '/<0;1>/*') {
-      const cleanPath = key.chainPath.replace(/^\//, '').replace(/\/\*$/, '').replace(/\/<0;1>$/, '');
-      if (cleanPath && !cleanPath.includes('<') && !cleanPath.includes(';')) {
-        derivationPath = cleanPath;
+    if (key.chainPath) {
+      // Remove leading slash and trailing wildcard patterns
+      let cleaned = key.chainPath
+        .replace(/^\//, '')  // Remove leading /
+        .replace(/\/\*$/, '') // Remove trailing /*
+        .replace(/<0;1>$/, '') // Remove trailing <0;1>
+        .replace(/<1;0>$/, ''); // Remove trailing <1;0>
+      
+      // If what remains is just "0", "1", or empty, it's a standard chain path
+      // No extra derivation needed
+      if (cleaned === '0' || cleaned === '1' || cleaned === '' || cleaned.includes('<')) {
+        derivationPath = '';
+      } else {
+        // There's something extra - might be like "custom/0" or similar
+        // Extract just the non-chain parts
+        const parts = cleaned.split('/');
+        // Check if last part is a chain indicator
+        const lastPart = parts[parts.length - 1];
+        if (lastPart === '0' || lastPart === '1' || lastPart.includes('<')) {
+          // Remove the chain part, keep the rest
+          parts.pop();
+          derivationPath = parts.join('/');
+        } else {
+          // No chain indicator, use the whole thing
+          // This is unusual but handle it
+          derivationPath = cleaned;
+        }
       }
     }
     
     return {
       xpub: key.xpub,
       derivationPath,
+      skipChainDerivation: isChainLevel,
     };
   });
 }

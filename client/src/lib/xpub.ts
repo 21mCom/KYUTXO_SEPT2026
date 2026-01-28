@@ -327,13 +327,15 @@ export async function deriveTaprootAddressesForChain(
   chain: 0 | 1,
   startIndex: number = 0,
   endIndex: number = 19,
-  networkType: 'mainnet' | 'testnet' = 'mainnet'
+  networkType: 'mainnet' | 'testnet' = 'mainnet',
+  skipChainDerivation: boolean = false
 ): Promise<TaprootDerivedAddress[]> {
   const trimmed = extendedKey.trim();
   const network = networkType === 'testnet' ? bitcoin.networks.testnet : bitcoin.networks.bitcoin;
   
   if (endIndex < startIndex) {
-    throw new Error('End index must be greater than or equal to start index');
+    // Return empty array - useful for chain-specific descriptors that only support one chain
+    return [];
   }
   
   if (endIndex - startIndex > 500) {
@@ -355,7 +357,15 @@ export async function deriveTaprootAddressesForChain(
     let chainNode;
     let pathPrefix: string;
     
-    if (depth === 4) {
+    // If skipChainDerivation is true, the xpub is already at chain level (chainPath was /*)
+    // Only derive index, not chain
+    if (skipChainDerivation) {
+      chainNode = baseNode;
+      pathPrefix = `taproot`;
+    } else if (depth === 4) {
+      // Depth 4 could be chain level (BIP-86) or script type level (custom)
+      // For descriptor imports, trust the skipChainDerivation flag
+      // For direct calls without the flag, assume chain level for backward compatibility
       chainNode = baseNode;
       pathPrefix = `taproot/${chain}`;
     } else if (depth === 3) {
@@ -406,11 +416,12 @@ export async function deriveTaprootDualChain(
   receiveEndIndex: number = 19,
   changeStartIndex: number = 0,
   changeEndIndex: number = 19,
-  networkType: 'mainnet' | 'testnet' = 'mainnet'
+  networkType: 'mainnet' | 'testnet' = 'mainnet',
+  skipChainDerivation: boolean = false
 ): Promise<TaprootDualChainResult> {
   const [receive, change] = await Promise.all([
-    deriveTaprootAddressesForChain(extendedKey, 0, receiveStartIndex, receiveEndIndex, networkType),
-    deriveTaprootAddressesForChain(extendedKey, 1, changeStartIndex, changeEndIndex, networkType),
+    deriveTaprootAddressesForChain(extendedKey, 0, receiveStartIndex, receiveEndIndex, networkType, skipChainDerivation),
+    deriveTaprootAddressesForChain(extendedKey, 1, changeStartIndex, changeEndIndex, networkType, skipChainDerivation),
   ]);
   
   return {
@@ -613,6 +624,7 @@ export interface MultisigXpubEntry {
   derivationPath?: string; // Optional custom path like "0" or "1" for chain
   name?: string; // Optional cosigner name (e.g., "Hardware Wallet", "Cold Storage")
   notes?: string; // Optional notes about this cosigner
+  skipChainDerivation?: boolean; // If true, xpub is already at chain level, only derive index
 }
 
 export interface MultisigConfig {
@@ -662,7 +674,8 @@ function getPubkeyAtIndex(
   xpub: string,
   chain: 0 | 1,
   index: number,
-  customPath?: string
+  customPath?: string,
+  skipChainDerivation?: boolean
 ): Uint8Array {
   const bip32 = BIP32Factory(ecc);
   const trimmed = xpub.trim();
@@ -685,14 +698,24 @@ function getPubkeyAtIndex(
     }
     // Then derive chain and index
     node = node.derive(chain).derive(index);
+  } else if (skipChainDerivation) {
+    // Caller explicitly says xpub is already at chain level
+    // Only derive index
+    node = node.derive(index);
   } else {
     // Standard derivation based on depth
-    if (depth === 4) {
-      // Already at chain level
-      node = node.derive(index);
-    } else if (depth === 3 || depth === 0 || depth === 1) {
-      // Account level or Electrum style
+    // Note: depth 4 could be chain level (BIP-44/49/84) or script type level (BIP-48)
+    // For safety, we now default to deriving chain + index for most depths
+    // This is correct for:
+    // - BIP-48 multisig at depth 4 (m/48'/coin'/account'/script_type')
+    // - BIP-44/49/84 at depth 3 (m/purpose'/coin'/account')
+    // - Electrum style at depth 0 or 1
+    if (depth === 3 || depth === 4 || depth === 0 || depth === 1) {
       node = node.derive(chain).derive(index);
+    } else if (depth === 5) {
+      // Depth 5 is genuinely at chain level (rare but possible)
+      // e.g., m/48'/0'/0'/2'/0 would be depth 5
+      node = node.derive(index);
     } else {
       throw new Error(`XPUB at depth ${depth} requires a custom derivation path`);
     }
@@ -790,7 +813,8 @@ export async function deriveMultisigAddresses(
   }
   
   if (endIndex < startIndex) {
-    throw new Error('End index must be greater than or equal to start index');
+    // Return empty array - useful for chain-specific descriptors that only support one chain
+    return [];
   }
   
   if (endIndex - startIndex > 500) {
@@ -810,7 +834,13 @@ export async function deriveMultisigAddresses(
     // Collect pubkeys from all xpubs at this index
     const pubkeys: Uint8Array[] = [];
     for (const xpubEntry of xpubs) {
-      const pubkey = getPubkeyAtIndex(xpubEntry.xpub, chain, i, xpubEntry.derivationPath);
+      const pubkey = getPubkeyAtIndex(
+        xpubEntry.xpub, 
+        chain, 
+        i, 
+        xpubEntry.derivationPath,
+        xpubEntry.skipChainDerivation
+      );
       pubkeys.push(pubkey);
     }
     

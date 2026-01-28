@@ -249,41 +249,78 @@ export default function DescriptorImport() {
     try {
       if (parsedDescriptor.isTaproot) {
         const key = parsedDescriptor.keys[0];
+        const chainType = parsedDescriptor.chainType;
+        
+        // Only derive the chains that the descriptor supports
+        const deriveReceive = chainType === 'dual-chain' || chainType === 'receive-only';
+        const deriveChange = chainType === 'dual-chain' || chainType === 'change-only';
+        
+        // Detect if xpub is already at chain level (chainPath is /*)
+        const rawPath = key.rawChainPath || key.chainPath || '/*';
+        const skipChainDerivation = rawPath === '/*';
         
         const result = await deriveTaprootDualChain(
           key.xpub,
           key.fingerprint,
           key.derivationPath,
-          receiveStartIndex,
-          receiveEndIndex,
-          changeStartIndex,
-          changeEndIndex,
-          parsedDescriptor.network
+          deriveReceive ? receiveStartIndex : 0,
+          deriveReceive ? receiveEndIndex : -1,
+          deriveChange ? changeStartIndex : 0,
+          deriveChange ? changeEndIndex : -1,
+          parsedDescriptor.network,
+          skipChainDerivation
         );
+        
+        // Clear addresses that aren't supported by this descriptor
+        if (!deriveReceive) {
+          result.receive = [];
+        }
+        if (!deriveChange) {
+          result.change = [];
+        }
         
         setTaprootResult(result);
         setMultisigResult(null);
         
         const receiveSet = new Set<number>();
-        for (let i = receiveStartIndex; i <= receiveEndIndex; i++) {
-          receiveSet.add(i);
+        if (deriveReceive) {
+          for (let i = receiveStartIndex; i <= receiveEndIndex; i++) {
+            receiveSet.add(i);
+          }
         }
         setSelectedReceiveAddresses(receiveSet);
         
         const changeSet = new Set<number>();
-        for (let i = changeStartIndex; i <= changeEndIndex; i++) {
-          changeSet.add(i);
+        if (deriveChange) {
+          for (let i = changeStartIndex; i <= changeEndIndex; i++) {
+            changeSet.add(i);
+          }
         }
         setSelectedChangeAddresses(changeSet);
         
         setStep(2);
         
+        // Inform user about what was derived based on descriptor type
+        let description = '';
+        if (chainType === 'receive-only') {
+          description = `Generated ${result.receive.length} receive addresses (descriptor is receive-only)`;
+        } else if (chainType === 'change-only') {
+          description = `Generated ${result.change.length} change addresses (descriptor is change-only)`;
+        } else {
+          description = `Generated ${result.receive.length} receive and ${result.change.length} change addresses`;
+        }
+        
         toast({
           title: "Taproot addresses derived",
-          description: `Generated ${result.receive.length} receive and ${result.change.length} change addresses`,
+          description,
         });
       } else {
         const xpubEntries = descriptorKeysToXpubEntries(parsedDescriptor.keys);
+        const chainType = parsedDescriptor.chainType;
+        
+        // Only derive the chains that the descriptor supports
+        const deriveReceive = chainType === 'dual-chain' || chainType === 'receive-only';
+        const deriveChange = chainType === 'dual-chain' || chainType === 'change-only';
         
         const result = await deriveMultisigDualChain(
           {
@@ -292,32 +329,54 @@ export default function DescriptorImport() {
             n: parsedDescriptor.keys.length,
             scriptType: parsedDescriptor.scriptType as MultisigScriptType,
           },
-          receiveStartIndex,
-          receiveEndIndex,
-          changeStartIndex,
-          changeEndIndex
+          deriveReceive ? receiveStartIndex : 0,
+          deriveReceive ? receiveEndIndex : -1, // -1 means empty range
+          deriveChange ? changeStartIndex : 0,
+          deriveChange ? changeEndIndex : -1
         );
+        
+        // Clear addresses that aren't supported by this descriptor
+        if (!deriveReceive) {
+          result.receive = [];
+        }
+        if (!deriveChange) {
+          result.change = [];
+        }
         
         setMultisigResult(result);
         setTaprootResult(null);
         
         const receiveSet = new Set<number>();
-        for (let i = receiveStartIndex; i <= receiveEndIndex; i++) {
-          receiveSet.add(i);
+        if (deriveReceive) {
+          for (let i = receiveStartIndex; i <= receiveEndIndex; i++) {
+            receiveSet.add(i);
+          }
         }
         setSelectedReceiveAddresses(receiveSet);
         
         const changeSet = new Set<number>();
-        for (let i = changeStartIndex; i <= changeEndIndex; i++) {
-          changeSet.add(i);
+        if (deriveChange) {
+          for (let i = changeStartIndex; i <= changeEndIndex; i++) {
+            changeSet.add(i);
+          }
         }
         setSelectedChangeAddresses(changeSet);
         
         setStep(2);
         
+        // Inform user about what was derived based on descriptor type
+        let description = '';
+        if (chainType === 'receive-only') {
+          description = `Generated ${result.receive.length} receive addresses (descriptor is receive-only)`;
+        } else if (chainType === 'change-only') {
+          description = `Generated ${result.change.length} change addresses (descriptor is change-only)`;
+        } else {
+          description = `Generated ${result.receive.length} receive and ${result.change.length} change addresses`;
+        }
+        
         toast({
           title: "Addresses derived",
-          description: `Generated ${result.receive.length} receive and ${result.change.length} change addresses`,
+          description,
         });
       }
     } catch (error) {
