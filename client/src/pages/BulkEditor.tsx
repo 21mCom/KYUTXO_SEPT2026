@@ -48,11 +48,15 @@ import type {
   AddressImportance, 
   FlowType, 
   CounterpartyType,
-  ChainType 
+  ChainType,
+  AcquisitionMethod,
+  DispositionType 
 } from "@/lib/database";
 import {
   FLOW_TYPE_OPTIONS,
   COUNTERPARTY_TYPE_OPTIONS,
+  ACQUISITION_METHOD_OPTIONS,
+  DISPOSITION_TYPE_OPTIONS,
 } from "@/lib/database";
 
 // Field definitions for filter/action builders
@@ -100,6 +104,7 @@ const FIELD_DEFS: FieldDef[] = [
   { key: 'walletName', label: 'Wallet Name', type: 'select', vocabularyKey: 'walletNames' },
   { key: 'seedName', label: 'Seed Name', type: 'select', vocabularyKey: 'seedNames' },
   { key: 'walletSoftware', label: 'Wallet Software', type: 'select', vocabularyKey: 'walletSoftware' },
+  { key: 'privateKeyStatus', label: 'Private Key Status', type: 'text' },
   { key: 'tags', label: 'Tags', type: 'array', vocabularyKey: 'tags' },
   { key: 'categories', label: 'Categories', type: 'array', vocabularyKey: 'categories' },
   { key: 'label', label: 'Label', type: 'text' },
@@ -108,6 +113,8 @@ const FIELD_DEFS: FieldDef[] = [
   { key: 'chainType', label: 'Chain Type', type: 'enum', options: CHAIN_TYPE_OPTIONS },
   { key: 'addressImportance', label: 'Address Importance', type: 'enum', options: ADDRESS_IMPORTANCE_OPTIONS },
   { key: 'flowType', label: 'Flow Type', type: 'enum', options: FLOW_TYPE_OPTIONS },
+  { key: 'acquisitionMethod', label: 'Acquisition Method', type: 'enum', options: ACQUISITION_METHOD_OPTIONS },
+  { key: 'dispositionType', label: 'Disposition Type', type: 'enum', options: DISPOSITION_TYPE_OPTIONS },
   { key: 'counterpartyType', label: 'Counterparty Type', type: 'enum', options: COUNTERPARTY_TYPE_OPTIONS },
 ];
 
