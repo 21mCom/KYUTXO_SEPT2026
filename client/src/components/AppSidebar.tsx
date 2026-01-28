@@ -265,7 +265,7 @@ export function AppSidebar() {
         <div className="text-xs text-muted-foreground">
           <p>Offline-first PWA</p>
           <p className="mt-1">All data stored locally</p>
-          <p className="mt-1">v0.2.1</p>
+          <p className="mt-1">v1.5.2</p>
         </div>
       </SidebarFooter>
     </Sidebar>
