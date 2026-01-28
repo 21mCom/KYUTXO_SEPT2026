@@ -14,6 +14,7 @@ import { sparrowAdapter } from './adapters/sparrow';
 import { bip329Adapter } from './adapters/bip329';
 import { myceliumAdapter } from './adapters/mycelium';
 import { phoenixAdapter } from './adapters/phoenix';
+import { walletOfSatoshiAdapter } from './adapters/wallet-of-satoshi';
 import { checkForDuplicates, mergeRecordData, createNewRecordData } from './merge-utils';
 import { createRecord, updateRecord, isEncryptionReady, createRecordOrigin } from '../encryptionFacade';
 
@@ -61,6 +62,7 @@ const adapters: WalletAdapter[] = [
   sparrowAdapter,
   myceliumAdapter,
   phoenixAdapter,
+  walletOfSatoshiAdapter,
 ];
 
 export function getWalletName(walletType: WalletType): string {
@@ -70,6 +72,7 @@ export function getWalletName(walletType: WalletType): string {
     case 'sparrow-bip329': return 'BIP-329 Labels (Sparrow)';
     case 'mycelium': return 'Mycelium';
     case 'phoenix': return 'Phoenix Wallet';
+    case 'wallet-of-satoshi': return 'Wallet of Satoshi';
     default: return 'Unknown Wallet';
   }
 }

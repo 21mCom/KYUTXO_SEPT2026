@@ -68,6 +68,8 @@ type WizardStep = 'upload' | 'setup' | 'preview' | 'import';
 
 const MOBILE_WALLET_TYPES: { type: WalletType; name: string; description: string }[] = [
   { type: 'phoenix', name: 'Phoenix Wallet', description: 'Lightning wallet by ACINQ - imports on-chain transactions only (swaps, channel operations)' },
+  { type: 'wallet-of-satoshi', name: 'Wallet of Satoshi', description: 'Custodial Lightning wallet - imports on-chain deposits and withdrawals only' },
+  { type: 'mycelium', name: 'Mycelium', description: 'Bitcoin wallet with full transaction history export' },
 ];
 
 const generateSourceName = (walletType: WalletType): string => {
@@ -354,9 +356,10 @@ export default function MobileWalletImport() {
             <Info className="h-4 w-4" />
             <AlertTitle>About Mobile Wallet Import</AlertTitle>
             <AlertDescription>
-              Mobile Lightning wallets like Phoenix mix on-chain and Lightning transactions. 
-              This importer extracts only the <strong>on-chain transactions</strong> (swaps, channel operations) 
+              Import transaction history from mobile Bitcoin and Lightning wallets. 
+              For Lightning wallets (Phoenix, Wallet of Satoshi), this extracts only <strong>on-chain transactions</strong> (swaps, deposits, withdrawals) 
               which have proper Bitcoin transaction IDs. Lightning-only payments are skipped.
+              Mycelium imports include full transaction history.
             </AlertDescription>
           </Alert>
           
@@ -414,6 +417,38 @@ export default function MobileWalletImport() {
                       <li>Tap the export icon (top right)</li>
                       <li>Save the CSV file and transfer to this device</li>
                     </ol>
+                  </AlertDescription>
+                </Alert>
+              )}
+              
+              {selectedWalletType === 'wallet-of-satoshi' && (
+                <Alert>
+                  <FileSpreadsheet className="h-4 w-4" />
+                  <AlertTitle>How to export from Wallet of Satoshi</AlertTitle>
+                  <AlertDescription>
+                    <ol className="list-decimal list-inside mt-2 space-y-1 text-sm">
+                      <li>Open Wallet of Satoshi app</li>
+                      <li>Tap Menu (top right) &gt; Settings</li>
+                      <li>Select "History CSV File"</li>
+                      <li>Confirm your email - download link will be sent</li>
+                      <li>Download CSV from email and upload here</li>
+                    </ol>
+                  </AlertDescription>
+                </Alert>
+              )}
+              
+              {selectedWalletType === 'mycelium' && (
+                <Alert>
+                  <FileSpreadsheet className="h-4 w-4" />
+                  <AlertTitle>How to export from Mycelium</AlertTitle>
+                  <AlertDescription>
+                    <ol className="list-decimal list-inside mt-2 space-y-1 text-sm">
+                      <li>Go to wallet.mycelium.com and log in</li>
+                      <li>Open the TRANSACTIONS tab</li>
+                      <li>Click "Export transaction history"</li>
+                      <li>Download the CSV file and upload here</li>
+                    </ol>
+                    <p className="mt-2 text-xs text-muted-foreground">Note: Mobile app exports may require the web wallet interface.</p>
                   </AlertDescription>
                 </Alert>
               )}
