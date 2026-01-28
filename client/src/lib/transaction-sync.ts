@@ -170,9 +170,12 @@ export class TransactionSyncService {
     
     // Process next address from queue
     const processNext = async (): Promise<void> => {
-      while (!this.cancelled && nextIndex < addresses.length) {
-        const currentIdx = nextIndex;
-        nextIndex++;
+      while (!this.cancelled) {
+        // Atomically grab the next index - increment first, then check bounds
+        const currentIdx = nextIndex++;
+        if (currentIdx >= addresses.length) {
+          break; // No more work available
+        }
         
         const item = addresses[currentIdx];
         const { address, recordId } = item;
