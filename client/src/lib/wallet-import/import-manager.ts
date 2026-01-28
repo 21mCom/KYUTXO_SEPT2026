@@ -15,6 +15,7 @@ import { bip329Adapter } from './adapters/bip329';
 import { myceliumAdapter } from './adapters/mycelium';
 import { phoenixAdapter } from './adapters/phoenix';
 import { walletOfSatoshiAdapter } from './adapters/wallet-of-satoshi';
+import { nunchukAdapter } from './adapters/nunchuk';
 import { checkForDuplicates, mergeRecordData, createNewRecordData } from './merge-utils';
 import { createRecord, updateRecord, isEncryptionReady, createRecordOrigin } from '../encryptionFacade';
 
@@ -63,6 +64,7 @@ const adapters: WalletAdapter[] = [
   myceliumAdapter,
   phoenixAdapter,
   walletOfSatoshiAdapter,
+  nunchukAdapter,
 ];
 
 export function getWalletName(walletType: WalletType): string {
@@ -73,6 +75,7 @@ export function getWalletName(walletType: WalletType): string {
     case 'mycelium': return 'Mycelium';
     case 'phoenix': return 'Phoenix Wallet';
     case 'wallet-of-satoshi': return 'Wallet of Satoshi';
+    case 'nunchuk': return 'Nunchuk';
     default: return 'Unknown Wallet';
   }
 }

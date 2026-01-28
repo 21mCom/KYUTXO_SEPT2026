@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect } from 'react';
+import { Link } from 'wouter';
 import { useDropzone } from 'react-dropzone';
 import { 
   Upload, 
@@ -70,6 +71,7 @@ const MOBILE_WALLET_TYPES: { type: WalletType; name: string; description: string
   { type: 'phoenix', name: 'Phoenix Wallet', description: 'Lightning wallet by ACINQ - imports on-chain transactions only (swaps, channel operations)' },
   { type: 'wallet-of-satoshi', name: 'Wallet of Satoshi', description: 'Custodial Lightning wallet - imports on-chain deposits and withdrawals only' },
   { type: 'mycelium', name: 'Mycelium', description: 'Bitcoin wallet with full transaction history export' },
+  { type: 'nunchuk', name: 'Nunchuk', description: 'Multisig wallet - imports CSV transaction history. For BSMS wallet backup, use Descriptor Import instead' },
 ];
 
 const generateSourceName = (walletType: WalletType): string => {
@@ -360,7 +362,7 @@ export default function MobileWalletImport() {
               Import transaction history from mobile Bitcoin and Lightning wallets. 
               For Lightning wallets (Phoenix, Wallet of Satoshi), this extracts only <strong>on-chain transactions</strong> (swaps, deposits, withdrawals) 
               which have proper Bitcoin transaction IDs. Lightning-only payments are skipped.
-              Mycelium imports include full transaction history.
+              Mycelium and Nunchuk imports include full transaction history.
             </AlertDescription>
           </Alert>
           
@@ -450,6 +452,29 @@ export default function MobileWalletImport() {
                       <li>Download the CSV file and upload here</li>
                     </ol>
                     <p className="mt-2 text-xs text-muted-foreground">Note: Mobile app exports may require the web wallet interface.</p>
+                  </AlertDescription>
+                </Alert>
+              )}
+              
+              {selectedWalletType === 'nunchuk' && (
+                <Alert>
+                  <FileSpreadsheet className="h-4 w-4" />
+                  <AlertTitle>How to export from Nunchuk</AlertTitle>
+                  <AlertDescription>
+                    <ol className="list-decimal list-inside mt-2 space-y-1 text-sm">
+                      <li>Open Nunchuk app and select your wallet</li>
+                      <li>Tap Settings (gear icon)</li>
+                      <li>Select "Export transaction history"</li>
+                      <li>Choose CSV format and save</li>
+                      <li>Transfer the file to this device</li>
+                    </ol>
+                    <p className="mt-2 text-xs text-muted-foreground">
+                      <strong>Tip:</strong> For multisig wallet backup (BSMS files), use the{' '}
+                      <Link href="/descriptor-import" className="underline" data-testid="link-descriptor-import">
+                        Descriptor Import
+                      </Link>{' '}
+                      page instead.
+                    </p>
                   </AlertDescription>
                 </Alert>
               )}

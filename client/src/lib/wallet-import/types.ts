@@ -1,8 +1,8 @@
 import type { Record as DBRecord } from '../database';
 
-export type WalletType = 'trezor' | 'sparrow' | 'sparrow-bip329' | 'mycelium' | 'phoenix' | 'wallet-of-satoshi' | 'unknown';
-export type FileFormat = 'csv' | 'json' | 'jsonl';
-export type TransactionDirection = 'incoming' | 'outgoing' | 'self' | 'unknown';
+export type WalletType = 'trezor' | 'sparrow' | 'sparrow-bip329' | 'mycelium' | 'phoenix' | 'wallet-of-satoshi' | 'nunchuk' | 'unknown';
+export type FileFormat = 'csv' | 'json' | 'jsonl' | 'bsms';
+export type TransactionDirection = 'incoming' | 'outgoing' | 'self' | 'internal' | 'unknown';
 
 export interface ParsedTransaction {
   txid: string;

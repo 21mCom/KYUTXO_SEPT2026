@@ -80,6 +80,7 @@ import {
   getDescriptorSummary,
   type ParsedDescriptor,
 } from "@/lib/descriptor-parser";
+import { parseBSMS, isBSMSFile } from "@/lib/bsms-parser";
 import { SEED_NAME_MAX_LENGTH } from "@/hooks/use-seed-names";
 import { useDropzone } from "react-dropzone";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -92,6 +93,7 @@ export default function DescriptorImport() {
   const [parsedDescriptor, setParsedDescriptor] = useState<ParsedDescriptor | null>(null);
   const [parseError, setParseError] = useState<string | null>(null);
   const [walletLabel, setWalletLabel] = useState("");
+  const [bsmsFirstAddress, setBsmsFirstAddress] = useState<string | null>(null);
   
   const [receiveStartIndex, setReceiveStartIndex] = useState(0);
   const [receiveEndIndex, setReceiveEndIndex] = useState(99);
@@ -173,6 +175,39 @@ export default function DescriptorImport() {
       const content = e.target?.result as string;
       if (!content) return;
       
+      if (isBSMSFile(content, file.name)) {
+        const bsmsResult = parseBSMS(content);
+        
+        if (bsmsResult.success && bsmsResult.descriptor) {
+          setDescriptorInput(bsmsResult.descriptor);
+          setBsmsFirstAddress(bsmsResult.firstAddress || null);
+          
+          const parseResult = parseDescriptor(bsmsResult.descriptor);
+          if (parseResult.success && parseResult.descriptor) {
+            setParsedDescriptor(parseResult.descriptor);
+            setParseError(null);
+            setWalletSoftware("Nunchuk");
+            
+            toast({
+              title: "BSMS file loaded",
+              description: `${getDescriptorSummary(parseResult.descriptor)}${bsmsResult.firstAddress ? ` (will verify first address)` : ''}`,
+            });
+          } else {
+            setParsedDescriptor(null);
+            setParseError(parseResult.error || "Unknown parse error");
+          }
+        } else {
+          setParseError(bsmsResult.error || "Could not parse BSMS file");
+          setBsmsFirstAddress(null);
+          toast({
+            title: "BSMS parse error",
+            description: bsmsResult.error,
+            variant: "destructive",
+          });
+        }
+        return;
+      }
+      
       const sparrowResult = parseSparrowExport(content);
       
       if (sparrowResult.export) {
@@ -211,7 +246,7 @@ export default function DescriptorImport() {
     onDrop,
     accept: {
       'application/json': ['.json'],
-      'text/plain': ['.txt'],
+      'text/plain': ['.txt', '.bsms'],
     },
     multiple: false,
   });
@@ -223,6 +258,27 @@ export default function DescriptorImport() {
       setParsedDescriptor(null);
       setParseError(null);
       return;
+    }
+    
+    if (isBSMSFile(value, '')) {
+      const bsmsResult = parseBSMS(value);
+      if (bsmsResult.success && bsmsResult.descriptor) {
+        setWalletSoftware("Nunchuk");
+        setBsmsFirstAddress(bsmsResult.firstAddress || null);
+        const parseResult = parseDescriptor(bsmsResult.descriptor);
+        if (parseResult.success && parseResult.descriptor) {
+          setParsedDescriptor(parseResult.descriptor);
+          setParseError(null);
+        } else {
+          setParsedDescriptor(null);
+          setParseError(parseResult.error || "Unknown parse error");
+        }
+        return;
+      } else {
+        setBsmsFirstAddress(null);
+      }
+    } else {
+      setBsmsFirstAddress(null);
     }
     
     const sparrowResult = parseSparrowExport(value);
@@ -300,20 +356,49 @@ export default function DescriptorImport() {
         
         setStep(2);
         
-        // Inform user about what was derived based on descriptor type
-        let description = '';
-        if (chainType === 'receive-only') {
-          description = `Generated ${result.receive.length} receive addresses (descriptor is receive-only)`;
-        } else if (chainType === 'change-only') {
-          description = `Generated ${result.change.length} change addresses (descriptor is change-only)`;
+        // Verify BSMS first address if available (only when starting at index 0)
+        if (bsmsFirstAddress && result.receive.length > 0 && receiveStartIndex === 0) {
+          const derivedFirst = result.receive[0].address;
+          if (derivedFirst === bsmsFirstAddress) {
+            toast({
+              title: "Address verification passed",
+              description: `First derived address matches BSMS file: ${bsmsFirstAddress.slice(0, 12)}...`,
+            });
+          } else {
+            toast({
+              title: "Address verification failed",
+              description: `First address mismatch! BSMS: ${bsmsFirstAddress.slice(0, 12)}... Derived: ${derivedFirst.slice(0, 12)}...`,
+              variant: "destructive",
+            });
+          }
+        } else if (bsmsFirstAddress && result.receive.length === 0) {
+          // Can't verify - no receive addresses derived
+          toast({
+            title: "Taproot addresses derived",
+            description: `Generated ${result.change.length} change addresses. BSMS verification skipped (no receive addresses)`,
+          });
+        } else if (bsmsFirstAddress && receiveStartIndex !== 0) {
+          // Derived addresses but not starting from 0 - warn user
+          toast({
+            title: "Taproot addresses derived",
+            description: `Generated ${result.receive.length} addresses. BSMS verification skipped (start index is not 0)`,
+          });
         } else {
-          description = `Generated ${result.receive.length} receive and ${result.change.length} change addresses`;
+          // Inform user about what was derived based on descriptor type
+          let description = '';
+          if (chainType === 'receive-only') {
+            description = `Generated ${result.receive.length} receive addresses (descriptor is receive-only)`;
+          } else if (chainType === 'change-only') {
+            description = `Generated ${result.change.length} change addresses (descriptor is change-only)`;
+          } else {
+            description = `Generated ${result.receive.length} receive and ${result.change.length} change addresses`;
+          }
+          
+          toast({
+            title: "Taproot addresses derived",
+            description,
+          });
         }
-        
-        toast({
-          title: "Taproot addresses derived",
-          description,
-        });
       } else {
         const xpubEntries = descriptorKeysToXpubEntries(parsedDescriptor.keys);
         const chainType = parsedDescriptor.chainType;
@@ -364,20 +449,49 @@ export default function DescriptorImport() {
         
         setStep(2);
         
-        // Inform user about what was derived based on descriptor type
-        let description = '';
-        if (chainType === 'receive-only') {
-          description = `Generated ${result.receive.length} receive addresses (descriptor is receive-only)`;
-        } else if (chainType === 'change-only') {
-          description = `Generated ${result.change.length} change addresses (descriptor is change-only)`;
+        // Verify BSMS first address if available (only when starting at index 0)
+        if (bsmsFirstAddress && result.receive.length > 0 && receiveStartIndex === 0) {
+          const derivedFirst = result.receive[0].address;
+          if (derivedFirst === bsmsFirstAddress) {
+            toast({
+              title: "Address verification passed",
+              description: `First derived address matches BSMS file: ${bsmsFirstAddress.slice(0, 12)}...`,
+            });
+          } else {
+            toast({
+              title: "Address verification failed",
+              description: `First address mismatch! BSMS: ${bsmsFirstAddress.slice(0, 12)}... Derived: ${derivedFirst.slice(0, 12)}...`,
+              variant: "destructive",
+            });
+          }
+        } else if (bsmsFirstAddress && result.receive.length === 0) {
+          // Can't verify - no receive addresses derived
+          toast({
+            title: "Addresses derived",
+            description: `Generated ${result.change.length} change addresses. BSMS verification skipped (no receive addresses)`,
+          });
+        } else if (bsmsFirstAddress && receiveStartIndex !== 0) {
+          // Derived addresses but not starting from 0 - warn user
+          toast({
+            title: "Addresses derived",
+            description: `Generated ${result.receive.length} addresses. BSMS verification skipped (start index is not 0)`,
+          });
         } else {
-          description = `Generated ${result.receive.length} receive and ${result.change.length} change addresses`;
+          // Inform user about what was derived based on descriptor type
+          let description = '';
+          if (chainType === 'receive-only') {
+            description = `Generated ${result.receive.length} receive addresses (descriptor is receive-only)`;
+          } else if (chainType === 'change-only') {
+            description = `Generated ${result.change.length} change addresses (descriptor is change-only)`;
+          } else {
+            description = `Generated ${result.receive.length} receive and ${result.change.length} change addresses`;
+          }
+          
+          toast({
+            title: "Addresses derived",
+            description,
+          });
         }
-        
-        toast({
-          title: "Addresses derived",
-          description,
-        });
       }
     } catch (error) {
       toast({
