@@ -179,7 +179,6 @@ abstract class EsploraProvider implements BlockchainProvider {
     };
 
     const startTime = Date.now();
-    console.log(`[KYUTXO] [${new Date().toISOString()}] torProxiedFetch START - URL: ${url}, timeout: ${this.timeout}ms, isElectron: ${isElectron()}, trustedLocalHosts: ${JSON.stringify(this.trustedLocalHosts)}`);
 
     // Use Electron IPC in portable app, or backend API in dev mode
     if (isElectron()) {
@@ -381,16 +380,6 @@ export function createProviderFromSettings(settings: NodeSettings): BlockchainPr
   // Only use trusted local hosts when allowLocalNetwork is explicitly enabled (SECURITY)
   // This prevents accidental local network access on public networks
   const localHosts = allowLocalNetwork ? (trustedLocalHosts || [...DEFAULT_TRUSTED_LOCAL_HOSTS]) : [];
-  
-  console.log(`[KYUTXO] createProviderFromSettings:`, {
-    providerType,
-    customUrl,
-    useTor,
-    requestTimeout,
-    allowLocalNetwork,
-    trustedLocalHosts: trustedLocalHosts?.length ?? 0,
-    effectiveLocalHosts: localHosts,
-  });
   
   switch (providerType) {
     case 'blockstream':

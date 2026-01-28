@@ -5,7 +5,6 @@ import { db, notifyDbChange, type Record, type BlockchainTransaction, type Trans
 import { createProvider, createProviderFromSettings, parseTransaction, MINIMUM_CONFIRMATIONS, type ProviderType, type ParsedTransaction, type BlockchainProvider } from './blockchain-api';
 import { validateAddress } from './bitcoin';
 import { decryptRecords, isEncryptionReady, createRecordOrigin } from './encryptionFacade';
-import { isElectron } from './electron';
 
 // Legacy source filter type - kept for backwards compatibility
 export type SourceFilter = 'manual-only' | 'include-tx-import' | 'include-blockchain-sync' | 'all' | 'custom';
@@ -76,11 +75,6 @@ export interface SyncOptions {
 
 export type SyncProgressCallback = (progress: SyncProgress) => void;
 
-// Concurrency limit for parallel address syncing
-// Higher values = faster sync but more load on the node
-// 6 is a good balance for local nodes
-const SYNC_CONCURRENCY = 6;
-
 export class TransactionSyncService {
   private provider: BlockchainProvider;
   private onProgress?: SyncProgressCallback;
@@ -103,186 +97,9 @@ export class TransactionSyncService {
     allAddressRecordIds: number[];
     processedIndex: number;
   } | null = null;
-  
-  // Address cache to avoid redundant DB lookups during sync
-  // Maps address string -> recordId
-  private addressCache: Map<string, number> = new Map();
-  
-  // Transaction cache to skip already-processed txids
-  private txidCache: Set<string> = new Set();
 
   constructor(providerType: ProviderType = 'mempool') {
     this.provider = createProvider(providerType);
-  }
-  
-  // Clear caches at sync start
-  private clearCaches() {
-    this.addressCache.clear();
-    this.txidCache.clear();
-  }
-  
-  // Pre-populate caches with existing data
-  private async warmupCaches() {
-    // Load all existing addresses into cache
-    const records = await db.records.where('type').equals('address').toArray();
-    for (const r of records) {
-      if (r.id && r.inputString) {
-        this.addressCache.set(r.inputString, r.id);
-      }
-    }
-    
-    // Load all existing txids into cache
-    const txs = await db.blockchainTransactions.toArray();
-    for (const tx of txs) {
-      this.txidCache.add(tx.txid);
-    }
-    
-    console.log(`[TransactionSync] Cache warmup: ${this.addressCache.size} addresses, ${this.txidCache.size} transactions`);
-  }
-  
-  // Process addresses in parallel with concurrency limit
-  // Returns array of results in order, plus stats and any errors
-  private async syncAddressesInParallel(
-    addresses: Array<{ address: string; recordId: number; index: number }>,
-    minConfirmedHeight: number,
-    currentHeight: number,
-    newAddressDepth: number,
-    currentDepth: number,
-    maxDepth: number,
-    processedRecordIds: Set<number>,
-    result: SyncResult,
-    options: SyncOptions,
-    allValidRecordIds: number[]
-  ): Promise<{ completed: number; pausedAt?: number }> {
-    let completed = 0;
-    let nextIndex = 0;
-    
-    // Track which addresses have actually completed (not just started)
-    const completedInThisBatch = new Set<number>();
-    
-    // Stats accumulator
-    const stats = {
-      imported: 0,
-      updated: 0,
-      newRecords: 0,
-      synced: 0,
-      errors: [] as string[],
-    };
-    
-    // Process next address from queue
-    const processNext = async (): Promise<void> => {
-      while (!this.cancelled) {
-        // Atomically grab the next index - increment first, then check bounds
-        const currentIdx = nextIndex++;
-        if (currentIdx >= addresses.length) {
-          break; // No more work available
-        }
-        
-        const item = addresses[currentIdx];
-        const { address, recordId } = item;
-        
-        try {
-          const syncResult = await this.syncAddress(
-            address,
-            recordId,
-            minConfirmedHeight,
-            currentHeight,
-            newAddressDepth
-          );
-          
-          // Only mark as completed/processed AFTER sync finishes
-          completedInThisBatch.add(recordId);
-          processedRecordIds.add(recordId);
-          
-          // Accumulate stats
-          stats.imported += syncResult.imported;
-          stats.updated += syncResult.updated;
-          stats.newRecords += syncResult.newRecords;
-          stats.synced++;
-          
-          // Mark record as synced at this depth
-          await db.records.update(recordId, {
-            maxSyncedDepth: currentDepth,
-            updatedAt: Date.now(),
-          });
-          
-          completed++;
-          
-          // Update progress
-          this.updateProgress({
-            phase: 'syncing-addresses',
-            currentAddress: address,
-            currentDepth,
-            maxDepth,
-            addressesProcessed: completed,
-            transactionsFound: result.transactionsImported + stats.imported + stats.updated,
-            transactionsNew: result.transactionsImported + stats.imported,
-            newAddressRecords: result.newAddressRecords + stats.newRecords,
-          });
-        } catch (error) {
-          // Still mark as processed to avoid retry loop, but note the error
-          completedInThisBatch.add(recordId);
-          processedRecordIds.add(recordId);
-          
-          const errorMsg = `Failed to sync ${address}: ${error instanceof Error ? error.message : 'Unknown error'}`;
-          stats.errors.push(errorMsg);
-          console.error(errorMsg);
-          completed++;
-        }
-      }
-    };
-    
-    // Start concurrent workers
-    // In Electron, limit to 1 worker (sequential) to prevent IPC channel overload
-    // In browser mode, use full concurrency since backend API handles it
-    const effectiveConcurrency = isElectron() ? 1 : SYNC_CONCURRENCY;
-    const workerCount = Math.min(effectiveConcurrency, addresses.length);
-    console.log(`[TransactionSync] Starting ${workerCount} worker(s) for ${addresses.length} addresses${isElectron() ? ' (Electron: sequential mode)' : ''}`);
-    
-    const activePromises: Promise<void>[] = [];
-    for (let i = 0; i < workerCount; i++) {
-      activePromises.push(processNext());
-    }
-    
-    // Wait for all workers to complete (they will exit when cancelled or queue empty)
-    await Promise.all(activePromises);
-    
-    // Merge stats into result
-    result.transactionsImported += stats.imported;
-    result.transactionsUpdated += stats.updated;
-    result.newAddressRecords += stats.newRecords;
-    result.addressesSynced += stats.synced;
-    result.errors.push(...stats.errors);
-    
-    // Handle pause if requested
-    if (this.cancelled && this.pauseRequested) {
-      // Compute remaining IDs correctly: those NOT in processedRecordIds
-      // processedRecordIds includes both previously completed (from resumeContext) AND this batch
-      const remainingIds = allValidRecordIds.filter(id => !processedRecordIds.has(id));
-      const completedIds = Array.from(processedRecordIds);
-      const sourceSelection = options.sourceSelection || {
-        selectedSources: new Set<string>(),
-        includeNoSource: true,
-      };
-      
-      await this.pauseSync(
-        remainingIds,
-        completedIds,
-        sourceSelection,
-        options.maxDepth,
-        currentDepth,
-        result
-      );
-      console.log(`[TransactionSync] Paused - saved ${remainingIds.length} remaining addresses (${completedInThisBatch.size} completed this batch, ${processedRecordIds.size} total processed)`);
-      return { completed, pausedAt: nextIndex };
-    }
-    
-    if (this.cancelled) {
-      console.log('[TransactionSync] Sync stopped by user (not paused)');
-      return { completed, pausedAt: nextIndex };
-    }
-    
-    return { completed };
   }
 
   // Stop the current sync operation (does not save state)
@@ -441,8 +258,6 @@ export class TransactionSyncService {
       transactionsNew: 0,
       newAddressRecords: 0,
     };
-    // Clear caches at sync start
-    this.clearCaches();
   }
 
   private updateProgress(progress: Partial<SyncProgress>) {
@@ -485,9 +300,6 @@ export class TransactionSyncService {
     const initialNewAddresses = resumeContext?.previousResult?.newAddressRecords ?? 0;
 
     try {
-      // Pre-populate caches for faster lookups
-      await this.warmupCaches();
-      
       this.updateProgress({
         phase: 'fetching-height',
         currentDepth: resumeContext?.resumeFromDepth ?? 0,
@@ -621,41 +433,83 @@ export class TransactionSyncService {
           // Get all valid record IDs for pause state saving
           const allValidRecordIds = validAddresses.map(r => r.id).filter((id): id is number => id !== undefined);
           
-          // Prepare addresses for parallel processing
-          const addressItems = validAddresses
-            .filter(r => r.id !== undefined)
-            .map((r, i) => ({
-              address: r.inputString,
-              recordId: r.id!,
-              index: i,
-            }));
-          
-          // Process addresses in parallel with concurrency limit
-          const { pausedAt } = await this.syncAddressesInParallel(
-            addressItems,
-            minConfirmedHeight,
-            currentHeight,
-            currentDepth + 1, // Newly discovered addresses will be at depth+1
-            currentDepth,
-            maxDepth,
-            processedRecordIds,
-            result,
-            options,
-            allValidRecordIds
-          );
-          
-          // Add all processed record IDs to validAncestorIds for next depth level
-          for (const id of allValidRecordIds) {
-            if (processedRecordIds.has(id)) {
-              validAncestorIds.add(id);
+          for (let i = 0; i < validAddresses.length; i++) {
+            // Check for cancellation before processing each address
+            if (this.cancelled) {
+              console.log('[TransactionSync] Sync cancelled by user');
+              
+              // Handle pause vs stop (same logic as normal sync path)
+              if (this.pauseRequested) {
+                const remainingIds = allValidRecordIds.slice(i);
+                const completedIds = Array.from(processedRecordIds);
+                const sourceSelection = options.sourceSelection || {
+                  selectedSources: new Set<string>(),
+                  includeNoSource: true,
+                };
+                
+                await this.pauseSync(
+                  remainingIds,
+                  completedIds,
+                  sourceSelection,
+                  maxDepth,
+                  currentDepth,
+                  result
+                );
+                console.log(`[TransactionSync] Sync Deeper paused - saved ${remainingIds.length} remaining addresses`);
+              } else {
+                console.log('[TransactionSync] Sync Deeper stopped by user (not paused)');
+              }
+              
+              this.updateProgress({ phase: 'complete' });
+              result.success = true; // Partial success - what we synced is valid
+              return result;
             }
-          }
-          
-          // If sync was paused or cancelled, exit early
-          if (this.cancelled) {
-            this.updateProgress({ phase: 'complete' });
-            result.success = true; // Partial success - what we synced is valid
-            return result;
+
+            const record = validAddresses[i];
+            if (!record.id) continue;
+            
+            processedRecordIds.add(record.id);
+            // Also add to validAncestorIds so grandchildren can reference this record
+            validAncestorIds.add(record.id);
+            
+            this.updateProgress({
+              phase: 'syncing-addresses',
+              currentAddress: record.inputString,
+              currentDepth,
+              maxDepth,
+              addressesProcessed: i,
+              addressesTotal: validAddresses.length,
+            });
+            
+            try {
+              const syncResult = await this.syncAddress(
+                record.inputString,
+                record.id,
+                minConfirmedHeight,
+                currentHeight,
+                currentDepth + 1 // Newly discovered addresses will be at depth+1
+              );
+              result.transactionsImported += syncResult.imported;
+              result.transactionsUpdated += syncResult.updated;
+              result.newAddressRecords += syncResult.newRecords;
+              result.addressesSynced++;
+              
+              // Mark as synced at this depth
+              await db.records.update(record.id, {
+                maxSyncedDepth: currentDepth,
+                updatedAt: Date.now(),
+              });
+              
+              this.updateProgress({
+                transactionsFound: result.transactionsImported + result.transactionsUpdated,
+                transactionsNew: result.transactionsImported,
+                newAddressRecords: result.newAddressRecords,
+              });
+            } catch (error) {
+              const errorMsg = `Failed to sync ${record.inputString}: ${error instanceof Error ? error.message : 'Unknown error'}`;
+              result.errors.push(errorMsg);
+              console.error(errorMsg);
+            }
           }
         }
         
@@ -785,34 +639,82 @@ export class TransactionSyncService {
         // Track all valid record IDs for this depth level for pause/resume
         const allValidRecordIds = validAddressRecords.map(r => r.id!).filter(id => id !== undefined);
         
-        // Prepare addresses for parallel processing
-        const addressItems = validAddressRecords
-          .filter(r => r.id !== undefined)
-          .map((r, i) => ({
-            address: r.inputString,
-            recordId: r.id!,
-            index: i,
-          }));
-        
-        // Process addresses in parallel with concurrency limit
-        const { pausedAt } = await this.syncAddressesInParallel(
-          addressItems,
-          minConfirmedHeight,
-          currentHeight,
-          currentDepth + 1, // New addresses discovered will be at depth+1
-          currentDepth,
-          maxDepth,
-          processedRecordIds,
-          result,
-          options,
-          allValidRecordIds
-        );
-        
-        // If sync was paused or cancelled, exit early
-        if (this.cancelled) {
-          this.updateProgress({ phase: 'complete' });
-          result.success = true; // Partial success - what we synced is valid
-          return result;
+        for (let i = 0; i < validAddressRecords.length; i++) {
+          // Check for cancellation before processing each address
+          if (this.cancelled) {
+            // If pause was requested, save state for resume
+            if (this.pauseRequested) {
+              const remainingIds = allValidRecordIds.slice(i); // IDs not yet processed at this depth
+              const completedIds = Array.from(processedRecordIds);
+              const sourceSelection = options.sourceSelection || {
+                selectedSources: new Set<string>(),
+                includeNoSource: true,
+              };
+              
+              await this.pauseSync(
+                remainingIds,
+                completedIds,
+                sourceSelection,
+                maxDepth,
+                currentDepth,
+                result
+              );
+              console.log(`[TransactionSync] Paused - saved ${remainingIds.length} remaining addresses`);
+            } else {
+              console.log('[TransactionSync] Sync stopped by user (not paused)');
+            }
+            
+            this.updateProgress({ phase: 'complete' });
+            result.success = true; // Partial success - what we synced is valid
+            return result;
+          }
+
+          const record = validAddressRecords[i];
+          if (!record.id) continue;
+          
+          const address = record.inputString;
+
+          // Mark as processed to prevent re-enqueuing
+          processedRecordIds.add(record.id);
+
+          this.updateProgress({
+            phase: 'syncing-addresses',
+            currentAddress: address,
+            currentDepth,
+            maxDepth,
+            addressesProcessed: i,
+            addressesTotal: validAddressRecords.length,
+          });
+
+          try {
+            const syncResult = await this.syncAddress(
+              address, 
+              record.id, 
+              minConfirmedHeight, 
+              currentHeight,
+              currentDepth + 1 // New addresses discovered will be at depth+1
+            );
+            result.transactionsImported += syncResult.imported;
+            result.transactionsUpdated += syncResult.updated;
+            result.newAddressRecords += syncResult.newRecords;
+            result.addressesSynced++;
+
+            // Mark this record as synced at this depth
+            await db.records.update(record.id, {
+              maxSyncedDepth: currentDepth,
+              updatedAt: Date.now(),
+            });
+
+            this.updateProgress({
+              transactionsFound: result.transactionsImported + result.transactionsUpdated,
+              transactionsNew: result.transactionsImported,
+              newAddressRecords: result.newAddressRecords,
+            });
+          } catch (error) {
+            const errorMsg = `Failed to sync ${address}: ${error instanceof Error ? error.message : 'Unknown error'}`;
+            result.errors.push(errorMsg);
+            console.error(errorMsg);
+          }
         }
       }
 
@@ -866,18 +768,9 @@ export class TransactionSyncService {
         continue;
       }
 
-      // Use cache first, then fall back to DB query
-      if (this.txidCache.has(parsed.txid)) {
-        stats.updated++;
-        continue;
-      }
-      
-      // Double-check DB in case cache missed it
       const existingTx = await db.blockchainTransactions.where('txid').equals(parsed.txid).first();
 
       if (existingTx) {
-        // Add to cache for future lookups
-        this.txidCache.add(parsed.txid);
         stats.updated++;
         continue;
       }
@@ -895,8 +788,6 @@ export class TransactionSyncService {
         hasOpReturn: parsed.hasOpReturn,
         opReturnData: parsed.opReturnData.length > 0 ? parsed.opReturnData : undefined,
       });
-      // Add to cache for future lookups
-      this.txidCache.add(parsed.txid);
       stats.imported++;
 
       // Create a transaction record in the records table so it appears in Records view
@@ -992,18 +883,9 @@ export class TransactionSyncService {
     discoveredInTxid?: string,
     discoveredFromRecordId?: number
   ): Promise<{ recordId: number; isNew: boolean }> {
-    // Check cache first for fast lookup
-    const cachedId = this.addressCache.get(address);
-    if (cachedId !== undefined) {
-      return { recordId: cachedId, isNew: false };
-    }
-    
-    // Fall back to DB query
     const existing = await db.records.where('inputString').equals(address).first();
     
     if (existing && existing.id) {
-      // Add to cache for future lookups
-      this.addressCache.set(address, existing.id);
       return { recordId: existing.id, isNew: false };
     }
 
@@ -1044,9 +926,6 @@ export class TransactionSyncService {
       createdAt: now,
       updatedAt: now,
     });
-    
-    // Add to cache for future lookups
-    this.addressCache.set(address, newRecordId);
 
     // Notify listeners of the change
     notifyDbChange('records');
