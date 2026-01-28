@@ -322,7 +322,8 @@ export default function MobileWalletImport() {
   const summary = duplicateInfos.length > 0 ? getImportSummary(duplicateInfos) : null;
   
   return (
-    <div className="container mx-auto p-6 max-w-4xl">
+    <ScrollArea className="h-full">
+      <div className="container mx-auto p-6 max-w-4xl">
       <div className="mb-6">
         <div className="flex items-center gap-3 mb-2">
           <Smartphone className="h-8 w-8 text-primary" />
@@ -919,6 +920,7 @@ export default function MobileWalletImport() {
           </div>
         </div>
       )}
-    </div>
+      </div>
+    </ScrollArea>
   );
 }
