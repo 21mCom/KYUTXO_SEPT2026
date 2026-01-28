@@ -5,6 +5,7 @@ import { db, notifyDbChange, type Record, type BlockchainTransaction, type Trans
 import { createProvider, createProviderFromSettings, parseTransaction, MINIMUM_CONFIRMATIONS, type ProviderType, type ParsedTransaction, type BlockchainProvider } from './blockchain-api';
 import { validateAddress } from './bitcoin';
 import { decryptRecords, isEncryptionReady, createRecordOrigin } from './encryptionFacade';
+import { isElectron } from './electron';
 
 // Legacy source filter type - kept for backwards compatibility
 export type SourceFilter = 'manual-only' | 'include-tx-import' | 'include-blockchain-sync' | 'all' | 'custom';
@@ -231,9 +232,12 @@ export class TransactionSyncService {
       }
     };
     
-    // Start initial batch of concurrent workers
-    const workerCount = Math.min(SYNC_CONCURRENCY, addresses.length);
-    console.log(`[TransactionSync] Starting ${workerCount} parallel workers for ${addresses.length} addresses`);
+    // Start concurrent workers
+    // In Electron, limit to 1 worker (sequential) to prevent IPC channel overload
+    // In browser mode, use full concurrency since backend API handles it
+    const effectiveConcurrency = isElectron() ? 1 : SYNC_CONCURRENCY;
+    const workerCount = Math.min(effectiveConcurrency, addresses.length);
+    console.log(`[TransactionSync] Starting ${workerCount} worker(s) for ${addresses.length} addresses${isElectron() ? ' (Electron: sequential mode)' : ''}`);
     
     const activePromises: Promise<void>[] = [];
     for (let i = 0; i < workerCount; i++) {
