@@ -350,7 +350,15 @@ export default function NodeSettings() {
     }
     
     try {
-      await updateSettings(pendingChanges);
+      // Normalize electrumHost before saving - remove http:// prefix
+      const settingsToSave = { ...pendingChanges };
+      if (settingsToSave.electrumHost) {
+        settingsToSave.electrumHost = settingsToSave.electrumHost
+          .replace(/^https?:\/\//i, '')
+          .replace(/\/+$/, '')
+          .trim();
+      }
+      await updateSettings(settingsToSave);
       setPendingChanges({});
       toast({
         title: "Settings Saved",
@@ -443,7 +451,9 @@ export default function NodeSettings() {
       return;
     }
     
-    const host = currentSettings.electrumHost?.trim();
+    // Clean the host - remove http:// prefix in case it's still in stored settings
+    let host = currentSettings.electrumHost?.trim() || '';
+    host = host.replace(/^https?:\/\//i, '').replace(/\/+$/, '');
     const port = currentSettings.electrumPort || 50001;
     
     if (!host) {
@@ -454,6 +464,8 @@ export default function NodeSettings() {
       });
       return;
     }
+    
+    console.log(`[NodeSettings] Testing Electrum connection to ${host}:${port}`);
     
     setIsElectrumTesting(true);
     setElectrumTestResult(null);
@@ -528,21 +540,38 @@ export default function NodeSettings() {
       </Alert>
       
       {/* Provider Selection */}
-      <Card>
+      <Card className={currentSettings.useElectrum ? 'opacity-60' : ''}>
         <CardHeader>
           <CardTitle className="text-base flex items-center gap-2">
             <Globe className="h-4 w-4" />
-            Data Provider
+            HTTP Data Provider
+            {currentSettings.useElectrum && (
+              <Badge variant="outline" className="ml-2 text-xs text-muted-foreground">
+                Overridden by Electrum
+              </Badge>
+            )}
           </CardTitle>
           <CardDescription>
-            Choose where to fetch blockchain data from
+            {currentSettings.useElectrum 
+              ? "Not used when Electrum protocol is enabled above"
+              : "Choose where to fetch blockchain data from"
+            }
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
+          {currentSettings.useElectrum && (
+            <Alert>
+              <AlertDescription className="text-sm">
+                The Electrum protocol is enabled and will be used exclusively for syncing. 
+                This HTTP provider setting is ignored.
+              </AlertDescription>
+            </Alert>
+          )}
           <RadioGroup 
             value={currentSettings.providerType} 
             onValueChange={(v) => handleProviderChange(v as NodeProviderType)}
             className="space-y-3"
+            disabled={currentSettings.useElectrum}
           >
             {PROVIDER_OPTIONS.map(option => (
               <div key={option.value} className="flex items-start space-x-3">

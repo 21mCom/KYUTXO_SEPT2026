@@ -231,6 +231,7 @@ export class TransactionSyncService {
     
     if (settings) {
       service.provider = createProviderFromSettings(settings);
+      console.log(`[TransactionSync] Initialized with provider: ${service.provider.name}`);
     }
     
     return service;

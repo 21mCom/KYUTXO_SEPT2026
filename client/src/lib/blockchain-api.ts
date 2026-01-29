@@ -363,6 +363,18 @@ class CustomMempoolProvider extends EsploraProvider {
 // Electrum protocol provider - uses TCP instead of HTTP for faster bulk queries
 // Note: This provider is experimental and primarily optimized for getting transaction history.
 // For production use with 10k+ addresses, consider using batch endpoints with concurrency limits.
+// Clean Electrum host - remove http:// prefix and trailing slashes
+// Electrum uses raw TCP, not HTTP
+function cleanElectrumHost(host: string): string {
+  if (!host) return host;
+  let cleaned = host.trim();
+  // Remove protocol prefixes (Electrum uses raw TCP, not HTTP)
+  cleaned = cleaned.replace(/^https?:\/\//i, '');
+  // Remove trailing slashes
+  cleaned = cleaned.replace(/\/+$/, '');
+  return cleaned;
+}
+
 class ElectrumProvider implements BlockchainProvider {
   name = 'Electrum Protocol';
   private host: string;
@@ -376,11 +388,13 @@ class ElectrumProvider implements BlockchainProvider {
     if (!host || host.trim() === '') {
       throw new Error('Electrum host is required');
     }
-    this.host = host.trim();
+    // Clean the host - remove http:// prefix (common user mistake)
+    this.host = cleanElectrumHost(host);
     this.port = port;
     this.useSSL = useSSL;
     this.timeout = timeout;
     this.name = `Electrum (${this.host}:${port})`;
+    console.log(`[ElectrumProvider] Initialized with ${this.host}:${port} (SSL: ${useSSL})`);
   }
 
   private ensureElectron(): void {
@@ -624,14 +638,21 @@ export function createProviderFromSettings(settings: NodeSettings): BlockchainPr
   // This prevents accidental local network access on public networks
   const localHosts = allowLocalNetwork ? (trustedLocalHosts || [...DEFAULT_TRUSTED_LOCAL_HOSTS]) : [];
   
-  // Use Electrum protocol if enabled and configured (overrides HTTP-based providers)
+  // Use Electrum protocol if enabled and configured (EXCLUSIVELY - no HTTP fallback)
   if (settings.useElectrum && settings.electrumHost && isElectron()) {
+    console.log(`[BlockchainAPI] Using Electrum protocol exclusively (${settings.electrumHost}:${settings.electrumPort || 50001})`);
     return new ElectrumProvider(
       settings.electrumHost,
       settings.electrumPort || 50001,
       settings.electrumSSL || false,
       requestTimeout
     );
+  }
+  
+  // Log which HTTP provider is being used
+  console.log(`[BlockchainAPI] Using HTTP provider: ${providerType}`);
+  if (settings.useElectrum && !isElectron()) {
+    console.warn('[BlockchainAPI] Electrum enabled but not in Electron - falling back to HTTP provider');
   }
   
   switch (providerType) {
