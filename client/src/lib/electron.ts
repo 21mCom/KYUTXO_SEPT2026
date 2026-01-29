@@ -11,6 +11,100 @@ export interface TorTestResult {
   testedProxies?: string[];
 }
 
+// Electrum protocol types
+export interface ElectrumTestParams {
+  host: string;
+  port: number;
+  useSSL?: boolean;
+  timeout?: number;
+}
+
+export interface ElectrumTestResult {
+  success: boolean;
+  serverVersion?: string;
+  blockHeight?: number;
+  latency?: number;
+  message?: string;
+  error?: string;
+}
+
+export interface ElectrumHistoryParams {
+  host: string;
+  port: number;
+  useSSL?: boolean;
+  address: string;
+  timeout?: number;
+}
+
+export interface ElectrumHistoryItem {
+  tx_hash: string;
+  height: number;
+  fee?: number;
+}
+
+export interface ElectrumHistoryResult {
+  success: boolean;
+  history: ElectrumHistoryItem[];
+  error?: string;
+}
+
+export interface ElectrumUtxoParams {
+  host: string;
+  port: number;
+  useSSL?: boolean;
+  address: string;
+  timeout?: number;
+}
+
+export interface ElectrumUtxo {
+  tx_hash: string;
+  tx_pos: number;
+  value: number;
+  height: number;
+}
+
+export interface ElectrumUtxoResult {
+  success: boolean;
+  utxos: ElectrumUtxo[];
+  error?: string;
+}
+
+export interface ElectrumTransactionParams {
+  host: string;
+  port: number;
+  useSSL?: boolean;
+  txid: string;
+  verbose?: boolean;
+  timeout?: number;
+}
+
+export interface ElectrumTransactionResult {
+  success: boolean;
+  transaction?: unknown;
+  error?: string;
+}
+
+export interface ElectrumBatchHistoryParams {
+  host: string;
+  port: number;
+  useSSL?: boolean;
+  addresses: string[];
+  timeout?: number;
+}
+
+export interface ElectrumBatchHistoryResult {
+  success: boolean;
+  results: Array<{
+    address: string;
+    success: boolean;
+    history: ElectrumHistoryItem[];
+    error?: string;
+  }>;
+  latency?: number;
+  addressCount?: number;
+  error?: string;
+}
+
 export interface TorRequestParams {
   url: string;
   method?: string;
@@ -66,6 +160,12 @@ interface ElectronAPI {
   torTest: (torProxyUrl?: string) => Promise<TorTestResult>;
   torRequest: (params: TorRequestParams) => Promise<TorRequestResult>;
   torStatus: () => Promise<TorStatusResult>;
+  // Electrum protocol operations
+  electrumTest: (params: ElectrumTestParams) => Promise<ElectrumTestResult>;
+  electrumGetHistory: (params: ElectrumHistoryParams) => Promise<ElectrumHistoryResult>;
+  electrumGetUtxos: (params: ElectrumUtxoParams) => Promise<ElectrumUtxoResult>;
+  electrumGetTransaction: (params: ElectrumTransactionParams) => Promise<ElectrumTransactionResult>;
+  electrumBatchGetHistory: (params: ElectrumBatchHistoryParams) => Promise<ElectrumBatchHistoryResult>;
   platform: string;
   isElectron: boolean;
 }

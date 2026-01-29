@@ -750,6 +750,300 @@ ipcMain.handle('tor-status', async () => {
   };
 });
 
+// ============================================================================
+// ELECTRUM PROTOCOL SUPPORT
+// ============================================================================
+const net = require('net');
+const tls = require('tls');
+const crypto = require('crypto');
+
+// Active Electrum connections (keyed by host:port)
+const electrumConnections = new Map();
+
+// Helper to create scripthash from address
+function addressToScripthash(address) {
+  // Import bitcoinjs-lib dynamically
+  const bitcoin = require('bitcoinjs-lib');
+  
+  let scriptPubKey;
+  try {
+    // Decode the address to get the script
+    const decoded = bitcoin.address.toOutputScript(address, bitcoin.networks.bitcoin);
+    scriptPubKey = decoded;
+  } catch (e) {
+    // Try testnet
+    try {
+      const decoded = bitcoin.address.toOutputScript(address, bitcoin.networks.testnet);
+      scriptPubKey = decoded;
+    } catch (e2) {
+      throw new Error(`Invalid Bitcoin address: ${address}`);
+    }
+  }
+  
+  // SHA256 hash of the scriptPubKey, then reverse byte order
+  const hash = crypto.createHash('sha256').update(scriptPubKey).digest();
+  const reversed = Buffer.from(hash).reverse();
+  return reversed.toString('hex');
+}
+
+// Create Electrum connection with proper cleanup
+function createElectrumConnection(host, port, useSSL, timeout = 30000) {
+  return new Promise((resolve, reject) => {
+    const key = `${host}:${port}`;
+    
+    // Close existing connection if any
+    if (electrumConnections.has(key)) {
+      const existing = electrumConnections.get(key);
+      try { existing.socket.destroy(); } catch (e) {}
+      electrumConnections.delete(key);
+    }
+    
+    let socket;
+    const connectOptions = { host, port };
+    
+    if (useSSL) {
+      socket = tls.connect(connectOptions, () => {
+        if (!socket.authorized && socket.authorizationError !== 'DEPTH_ZERO_SELF_SIGNED_CERT') {
+          // Allow self-signed certs for local nodes
+          console.log('[KYUTXO] Electrum TLS warning:', socket.authorizationError);
+        }
+        resolve(socket);
+      });
+    } else {
+      socket = net.createConnection(connectOptions, () => {
+        resolve(socket);
+      });
+    }
+    
+    socket.setTimeout(timeout);
+    
+    socket.on('timeout', () => {
+      socket.destroy();
+      reject(new Error(`Connection timeout after ${timeout/1000}s`));
+    });
+    
+    socket.on('error', (err) => {
+      reject(new Error(`Connection failed: ${err.message}`));
+    });
+    
+    // Store connection for reuse
+    electrumConnections.set(key, { socket, host, port, useSSL });
+  });
+}
+
+// Send JSON-RPC request over Electrum connection
+function electrumRequest(socket, method, params = [], timeout = 30000) {
+  return new Promise((resolve, reject) => {
+    const id = Math.floor(Math.random() * 1000000);
+    const request = JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n';
+    
+    let buffer = '';
+    let timeoutId;
+    
+    const cleanup = () => {
+      clearTimeout(timeoutId);
+      socket.removeListener('data', onData);
+      socket.removeListener('error', onError);
+    };
+    
+    const onData = (data) => {
+      buffer += data.toString();
+      
+      // Electrum uses newline-delimited JSON
+      const lines = buffer.split('\n');
+      for (let i = 0; i < lines.length - 1; i++) {
+        const line = lines[i].trim();
+        if (!line) continue;
+        
+        try {
+          const response = JSON.parse(line);
+          if (response.id === id) {
+            cleanup();
+            if (response.error) {
+              reject(new Error(response.error.message || JSON.stringify(response.error)));
+            } else {
+              resolve(response.result);
+            }
+            return;
+          }
+        } catch (e) {
+          // Not valid JSON, continue buffering
+        }
+      }
+      buffer = lines[lines.length - 1];
+    };
+    
+    const onError = (err) => {
+      cleanup();
+      reject(new Error(`Socket error: ${err.message}`));
+    };
+    
+    timeoutId = setTimeout(() => {
+      cleanup();
+      reject(new Error(`Request timeout after ${timeout/1000}s`));
+    }, timeout);
+    
+    socket.on('data', onData);
+    socket.on('error', onError);
+    socket.write(request);
+  });
+}
+
+// Electrum connection test
+ipcMain.handle('electrum-test', async (event, { host, port, useSSL, timeout }) => {
+  const startTime = Date.now();
+  
+  try {
+    const socket = await createElectrumConnection(host, port, useSSL, timeout || 15000);
+    
+    // Test with server.version
+    const version = await electrumRequest(socket, 'server.version', ['KYUTXO', '1.4'], timeout || 15000);
+    
+    // Get block height to verify full functionality
+    const headerResult = await electrumRequest(socket, 'blockchain.headers.subscribe', [], timeout || 15000);
+    const blockHeight = headerResult?.height || headerResult?.block_height;
+    
+    socket.destroy();
+    electrumConnections.delete(`${host}:${port}`);
+    
+    const latency = Date.now() - startTime;
+    
+    return {
+      success: true,
+      serverVersion: Array.isArray(version) ? version.join(' ') : String(version),
+      blockHeight,
+      latency,
+      message: `Connected to Electrum server (${Array.isArray(version) ? version[0] : version})`,
+    };
+  } catch (error) {
+    const latency = Date.now() - startTime;
+    return {
+      success: false,
+      error: error.message,
+      latency,
+    };
+  }
+});
+
+// Get address history (transactions) via Electrum
+ipcMain.handle('electrum-get-history', async (event, { host, port, useSSL, address, timeout }) => {
+  try {
+    const socket = await createElectrumConnection(host, port, useSSL, timeout || 30000);
+    
+    const scripthash = addressToScripthash(address);
+    const history = await electrumRequest(socket, 'blockchain.scripthash.get_history', [scripthash], timeout || 30000);
+    
+    socket.destroy();
+    electrumConnections.delete(`${host}:${port}`);
+    
+    return {
+      success: true,
+      history: history || [],
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error.message,
+      history: [],
+    };
+  }
+});
+
+// Get address UTXOs via Electrum
+ipcMain.handle('electrum-get-utxos', async (event, { host, port, useSSL, address, timeout }) => {
+  try {
+    const socket = await createElectrumConnection(host, port, useSSL, timeout || 30000);
+    
+    const scripthash = addressToScripthash(address);
+    const utxos = await electrumRequest(socket, 'blockchain.scripthash.listunspent', [scripthash], timeout || 30000);
+    
+    socket.destroy();
+    electrumConnections.delete(`${host}:${port}`);
+    
+    return {
+      success: true,
+      utxos: utxos || [],
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error.message,
+      utxos: [],
+    };
+  }
+});
+
+// Get transaction details via Electrum
+ipcMain.handle('electrum-get-transaction', async (event, { host, port, useSSL, txid, verbose, timeout }) => {
+  try {
+    const socket = await createElectrumConnection(host, port, useSSL, timeout || 30000);
+    
+    const tx = await electrumRequest(socket, 'blockchain.transaction.get', [txid, verbose !== false], timeout || 30000);
+    
+    socket.destroy();
+    electrumConnections.delete(`${host}:${port}`);
+    
+    return {
+      success: true,
+      transaction: tx,
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error.message,
+    };
+  }
+});
+
+// Batch get history for multiple addresses (efficient)
+ipcMain.handle('electrum-batch-get-history', async (event, { host, port, useSSL, addresses, timeout }) => {
+  const startTime = Date.now();
+  
+  try {
+    const socket = await createElectrumConnection(host, port, useSSL, timeout || 60000);
+    
+    const results = [];
+    
+    for (const address of addresses) {
+      try {
+        const scripthash = addressToScripthash(address);
+        const history = await electrumRequest(socket, 'blockchain.scripthash.get_history', [scripthash], timeout || 30000);
+        results.push({
+          address,
+          success: true,
+          history: history || [],
+        });
+      } catch (err) {
+        results.push({
+          address,
+          success: false,
+          error: err.message,
+          history: [],
+        });
+      }
+    }
+    
+    socket.destroy();
+    electrumConnections.delete(`${host}:${port}`);
+    
+    const latency = Date.now() - startTime;
+    
+    return {
+      success: true,
+      results,
+      latency,
+      addressCount: addresses.length,
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error.message,
+      results: [],
+      latency: Date.now() - startTime,
+    };
+  }
+});
+
 // Security: Set Content Security Policy
 app.whenReady().then(() => {
   // Set CSP headers for production

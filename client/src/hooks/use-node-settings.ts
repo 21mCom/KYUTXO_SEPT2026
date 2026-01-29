@@ -10,6 +10,9 @@ const DEFAULT_NODE_SETTINGS: NodeSettings = {
   network: 'mainnet',
   allowLocalNetwork: false,  // SECURITY: disabled by default
   trustedLocalHosts: [...DEFAULT_TRUSTED_LOCAL_HOSTS],
+  useElectrum: false,
+  electrumPort: 50001,
+  electrumSSL: false,
 };
 
 export function useNodeSettings() {

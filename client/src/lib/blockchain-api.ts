@@ -360,6 +360,249 @@ class CustomMempoolProvider extends EsploraProvider {
   }
 }
 
+// Electrum protocol provider - uses TCP instead of HTTP for faster bulk queries
+// Note: This provider is experimental and primarily optimized for getting transaction history.
+// For production use with 10k+ addresses, consider using batch endpoints with concurrency limits.
+class ElectrumProvider implements BlockchainProvider {
+  name = 'Electrum Protocol';
+  private host: string;
+  private port: number;
+  private useSSL: boolean;
+  private timeout: number;
+  private transactionCache: Map<string, ApiTransaction> = new Map();
+  private static readonly TX_FETCH_CONCURRENCY = 5;
+
+  constructor(host: string, port: number = 50001, useSSL: boolean = false, timeout: number = 30000) {
+    if (!host || host.trim() === '') {
+      throw new Error('Electrum host is required');
+    }
+    this.host = host.trim();
+    this.port = port;
+    this.useSSL = useSSL;
+    this.timeout = timeout;
+    this.name = `Electrum (${this.host}:${port})`;
+  }
+
+  private ensureElectron(): void {
+    if (!isElectron()) {
+      throw new Error('Electrum protocol requires the desktop app. Please use HTTP-based sync in web mode.');
+    }
+  }
+
+  async getBlockHeight(): Promise<number> {
+    this.ensureElectron();
+    
+    const api = getElectronAPI();
+    const result = await api.electrumTest({
+      host: this.host,
+      port: this.port,
+      useSSL: this.useSSL,
+      timeout: this.timeout,
+    });
+    
+    if (!result.success || result.blockHeight === undefined) {
+      throw new Error(result.error || 'Failed to get block height via Electrum');
+    }
+    
+    return result.blockHeight;
+  }
+
+  async getAddressTransactions(address: string): Promise<ApiTransaction[]> {
+    this.ensureElectron();
+    
+    const api = getElectronAPI();
+    
+    // Get transaction history for the address
+    const historyResult = await api.electrumGetHistory({
+      host: this.host,
+      port: this.port,
+      useSSL: this.useSSL,
+      address,
+      timeout: this.timeout,
+    });
+    
+    if (!historyResult.success) {
+      throw new Error(historyResult.error || 'Failed to get address history via Electrum');
+    }
+    
+    // Fetch full transaction details with concurrency limit
+    const transactions: ApiTransaction[] = [];
+    const uncached = historyResult.history.filter(item => {
+      if (this.transactionCache.has(item.tx_hash)) {
+        transactions.push(this.transactionCache.get(item.tx_hash)!);
+        return false;
+      }
+      return true;
+    });
+    
+    // Process in batches with concurrency limit
+    for (let i = 0; i < uncached.length; i += ElectrumProvider.TX_FETCH_CONCURRENCY) {
+      const batch = uncached.slice(i, i + ElectrumProvider.TX_FETCH_CONCURRENCY);
+      const results = await Promise.all(
+        batch.map(async (item) => {
+          try {
+            const txResult = await api.electrumGetTransaction({
+              host: this.host,
+              port: this.port,
+              useSSL: this.useSSL,
+              txid: item.tx_hash,
+              verbose: true,
+              timeout: this.timeout,
+            });
+            
+            if (txResult.success && txResult.transaction) {
+              return { txid: item.tx_hash, height: item.height, tx: txResult.transaction };
+            }
+          } catch (e) {
+            console.warn(`[Electrum] Failed to fetch tx ${item.tx_hash}:`, e);
+          }
+          return null;
+        })
+      );
+      
+      for (const result of results) {
+        if (result) {
+          const tx = this.convertElectrumTxToApiTx(result.tx, result.height);
+          this.transactionCache.set(result.txid, tx);
+          transactions.push(tx);
+        }
+      }
+    }
+    
+    return transactions;
+  }
+
+  async getTransaction(txid: string): Promise<ApiTransaction | null> {
+    this.ensureElectron();
+    
+    // Check cache first
+    if (this.transactionCache.has(txid)) {
+      return this.transactionCache.get(txid)!;
+    }
+    
+    const api = getElectronAPI();
+    const result = await api.electrumGetTransaction({
+      host: this.host,
+      port: this.port,
+      useSSL: this.useSSL,
+      txid,
+      verbose: true,
+      timeout: this.timeout,
+    });
+    
+    if (!result.success || !result.transaction) {
+      return null;
+    }
+    
+    const tx = this.convertElectrumTxToApiTx(result.transaction, 0);
+    this.transactionCache.set(txid, tx);
+    return tx;
+  }
+
+  async testConnection(): Promise<{ success: boolean; blockHeight?: number; error?: string; latency?: number }> {
+    if (!isElectron()) {
+      return { success: false, error: 'Electrum protocol requires the desktop app' };
+    }
+    
+    const api = getElectronAPI();
+    const result = await api.electrumTest({
+      host: this.host,
+      port: this.port,
+      useSSL: this.useSSL,
+      timeout: this.timeout,
+    });
+    
+    return {
+      success: result.success,
+      blockHeight: result.blockHeight,
+      error: result.error,
+      latency: result.latency,
+    };
+  }
+
+  // Convert Electrum transaction format to our ApiTransaction format
+  // Electrum verbose tx format differs from Esplora - handle both BTC and satoshi values
+  private convertElectrumTxToApiTx(electrumTx: unknown, height: number): ApiTransaction {
+    const tx = electrumTx as {
+      txid?: string;
+      hash?: string;
+      size?: number;
+      vsize?: number;
+      weight?: number;
+      fee?: number;
+      time?: number;
+      blocktime?: number;
+      confirmations?: number;
+      vin?: Array<{
+        txid?: string;
+        vout?: number;
+        scriptSig?: { hex?: string; asm?: string };
+        value?: number;
+        prevout?: {
+          scriptpubkey?: string;
+          scriptpubkey_asm?: string;
+          scriptpubkey_type?: string;
+          scriptpubkey_address?: string;
+          value?: number;
+        };
+      }>;
+      vout?: Array<{
+        value?: number;
+        n?: number;
+        scriptPubKey?: {
+          hex?: string;
+          asm?: string;
+          type?: string;
+          address?: string;
+          addresses?: string[];
+        };
+      }>;
+    };
+    
+    // Detect if values are in BTC (< 21M) or satoshis (> 21M)
+    const firstVoutValue = tx.vout?.[0]?.value || 0;
+    const isSatoshis = firstVoutValue > 21_000_000;
+    
+    const toSatoshis = (val: number | undefined): number => {
+      if (val === undefined) return 0;
+      return isSatoshis ? Math.round(val) : Math.round(val * 100_000_000);
+    };
+    
+    return {
+      txid: tx.txid || tx.hash || '',
+      status: {
+        confirmed: height > 0,
+        block_height: height > 0 ? height : undefined,
+        block_time: tx.blocktime || tx.time,
+      },
+      fee: tx.fee ? toSatoshis(tx.fee) : 0,
+      size: tx.size || 0,
+      weight: tx.weight || (tx.vsize ? tx.vsize * 4 : (tx.size ? tx.size * 4 : 0)),
+      vin: (tx.vin || []).map(input => ({
+        txid: input.txid || '',
+        vout: input.vout || 0,
+        prevout: input.prevout ? {
+          value: input.prevout.value !== undefined ? toSatoshis(input.prevout.value) : 0,
+          scriptpubkey: input.prevout.scriptpubkey,
+          scriptpubkey_asm: input.prevout.scriptpubkey_asm,
+          scriptpubkey_type: input.prevout.scriptpubkey_type,
+          scriptpubkey_address: input.prevout.scriptpubkey_address,
+        } : (input.value !== undefined ? {
+          value: toSatoshis(input.value),
+        } : undefined),
+      })),
+      vout: (tx.vout || []).map((output, idx) => ({
+        value: toSatoshis(output.value),
+        n: output.n ?? idx,
+        scriptpubkey: output.scriptPubKey?.hex,
+        scriptpubkey_asm: output.scriptPubKey?.asm,
+        scriptpubkey_type: output.scriptPubKey?.type,
+        scriptpubkey_address: output.scriptPubKey?.address || (output.scriptPubKey?.addresses?.[0]),
+      })),
+    };
+  }
+}
+
 // Legacy type for backwards compatibility
 export type ProviderType = 'mempool' | 'blockstream';
 
@@ -380,6 +623,16 @@ export function createProviderFromSettings(settings: NodeSettings): BlockchainPr
   // Only use trusted local hosts when allowLocalNetwork is explicitly enabled (SECURITY)
   // This prevents accidental local network access on public networks
   const localHosts = allowLocalNetwork ? (trustedLocalHosts || [...DEFAULT_TRUSTED_LOCAL_HOSTS]) : [];
+  
+  // Use Electrum protocol if enabled and configured (overrides HTTP-based providers)
+  if (settings.useElectrum && settings.electrumHost && isElectron()) {
+    return new ElectrumProvider(
+      settings.electrumHost,
+      settings.electrumPort || 50001,
+      settings.electrumSSL || false,
+      requestTimeout
+    );
+  }
   
   switch (providerType) {
     case 'blockstream':

@@ -13,8 +13,10 @@ import {
   Info,
   Plus,
   X,
-  Home
+  Home,
+  Zap
 } from "lucide-react";
+import { isElectron, getElectronAPI, ElectrumTestResult } from "@/lib/electron";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
@@ -163,6 +165,9 @@ export default function NodeSettings() {
   
   const [isTorTesting, setIsTorTesting] = useState(false);
   const [torTestResult, setTorTestResult] = useState<TorTestResult | null>(null);
+  
+  const [isElectrumTesting, setIsElectrumTesting] = useState(false);
+  const [electrumTestResult, setElectrumTestResult] = useState<ElectrumTestResult | null>(null);
   
   const [pendingChanges, setPendingChanges] = useState<Partial<NodeSettingsType>>({});
   const [newLocalHost, setNewLocalHost] = useState('');
@@ -426,6 +431,70 @@ export default function NodeSettings() {
       title: "Hosts Reset",
       description: "Trusted hosts reset to defaults. Click \"Save Settings\" to apply.",
     });
+  };
+  
+  const handleTestElectrum = async () => {
+    if (!isElectron()) {
+      toast({
+        title: "Not Available",
+        description: "Electrum protocol requires the desktop app",
+        variant: "destructive",
+      });
+      return;
+    }
+    
+    const host = currentSettings.electrumHost?.trim();
+    const port = currentSettings.electrumPort || 50001;
+    
+    if (!host) {
+      toast({
+        title: "Missing Host",
+        description: "Please enter an Electrum server host",
+        variant: "destructive",
+      });
+      return;
+    }
+    
+    setIsElectrumTesting(true);
+    setElectrumTestResult(null);
+    
+    try {
+      const api = getElectronAPI();
+      const result = await api.electrumTest({
+        host,
+        port,
+        useSSL: currentSettings.electrumSSL ?? false,
+        timeout: currentSettings.requestTimeout || 30000,
+      });
+      
+      setElectrumTestResult(result);
+      
+      if (result.success) {
+        toast({
+          title: "Electrum Connected",
+          description: `${result.serverVersion} - Block height: ${result.blockHeight?.toLocaleString()}`,
+        });
+      } else {
+        toast({
+          title: "Connection Failed",
+          description: result.error || "Could not connect to Electrum server",
+          variant: "destructive",
+        });
+      }
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Unknown error";
+      setElectrumTestResult({
+        success: false,
+        error: errorMessage,
+      });
+      toast({
+        title: "Connection Error",
+        description: errorMessage,
+        variant: "destructive",
+      });
+    } finally {
+      setIsElectrumTesting(false);
+    }
   };
   
   const hasPendingChanges = Object.keys(pendingChanges).length > 0;
@@ -777,6 +846,160 @@ export default function NodeSettings() {
           )}
         </CardContent>
       </Card>
+      
+      {/* Electrum Protocol Settings */}
+      {isElectron() && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base flex items-center gap-2">
+              <Zap className="h-4 w-4" />
+              Electrum Protocol
+              <Badge variant="secondary" className="ml-2 text-xs">Fast Sync</Badge>
+            </CardTitle>
+            <CardDescription>
+              Connect directly to Electrs using the Electrum protocol for faster syncing
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="flex items-center justify-between p-3 border rounded-lg">
+              <div className="space-y-1">
+                <Label htmlFor="use-electrum" className="text-sm font-medium">
+                  Use Electrum Protocol
+                </Label>
+                <p className="text-xs text-muted-foreground">
+                  More efficient for syncing many addresses (10,000+)
+                </p>
+              </div>
+              <Switch
+                id="use-electrum"
+                checked={currentSettings.useElectrum ?? false}
+                onCheckedChange={(checked) => {
+                  setPendingChanges(prev => ({ ...prev, useElectrum: checked }));
+                  setElectrumTestResult(null);
+                }}
+                data-testid="switch-use-electrum"
+              />
+            </div>
+            
+            {currentSettings.useElectrum && (
+              <>
+                <div className="space-y-4 pt-2">
+                  <div className="grid grid-cols-3 gap-3">
+                    <div className="col-span-2 space-y-2">
+                      <Label htmlFor="electrumHost">Electrum Server Host</Label>
+                      <Input
+                        id="electrumHost"
+                        placeholder="e.g., 192.168.4.118"
+                        value={currentSettings.electrumHost || ''}
+                        onChange={(e) => {
+                          setPendingChanges(prev => ({ ...prev, electrumHost: e.target.value }));
+                          setElectrumTestResult(null);
+                        }}
+                        data-testid="input-electrum-host"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="electrumPort">Port</Label>
+                      <Input
+                        id="electrumPort"
+                        type="number"
+                        placeholder="50001"
+                        value={currentSettings.electrumPort || 50001}
+                        onChange={(e) => {
+                          setPendingChanges(prev => ({ ...prev, electrumPort: parseInt(e.target.value) || 50001 }));
+                          setElectrumTestResult(null);
+                        }}
+                        data-testid="input-electrum-port"
+                      />
+                    </div>
+                  </div>
+                  
+                  <div className="flex items-center justify-between p-3 border rounded-lg">
+                    <div className="space-y-1">
+                      <Label htmlFor="electrum-ssl" className="text-sm font-medium">
+                        Use SSL/TLS
+                      </Label>
+                      <p className="text-xs text-muted-foreground">
+                        Port 50002 typically uses SSL, port 50001 is unencrypted
+                      </p>
+                    </div>
+                    <Switch
+                      id="electrum-ssl"
+                      checked={currentSettings.electrumSSL ?? false}
+                      onCheckedChange={(checked) => {
+                        const newPort = checked ? 50002 : 50001;
+                        setPendingChanges(prev => ({ 
+                          ...prev, 
+                          electrumSSL: checked,
+                          electrumPort: prev.electrumPort === 50001 || prev.electrumPort === 50002 ? newPort : prev.electrumPort,
+                        }));
+                        setElectrumTestResult(null);
+                      }}
+                      data-testid="switch-electrum-ssl"
+                    />
+                  </div>
+                  
+                  {electrumTestResult && (
+                    <div className={`p-3 rounded-md ${electrumTestResult.success ? 'bg-green-50 dark:bg-green-950 border border-green-200 dark:border-green-800' : 'bg-destructive/10 border border-destructive/20'}`}>
+                      <div className="flex items-center gap-2">
+                        {electrumTestResult.success ? (
+                          <CheckCircle2 className="h-5 w-5 text-green-600" />
+                        ) : (
+                          <AlertTriangle className="h-5 w-5 text-destructive" />
+                        )}
+                        <div>
+                          <p className="font-medium">
+                            {electrumTestResult.success ? 'Connection Successful' : 'Connection Failed'}
+                          </p>
+                          <p className="text-sm text-muted-foreground">
+                            {electrumTestResult.success 
+                              ? `${electrumTestResult.serverVersion} - Block: ${electrumTestResult.blockHeight?.toLocaleString()} (${electrumTestResult.latency}ms)`
+                              : electrumTestResult.error
+                            }
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                  
+                  <Button
+                    onClick={handleTestElectrum}
+                    disabled={isElectrumTesting || !currentSettings.electrumHost?.trim()}
+                    variant="outline"
+                    className="w-full"
+                    data-testid="button-test-electrum"
+                  >
+                    {isElectrumTesting ? (
+                      <>
+                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                        Testing Electrum Connection...
+                      </>
+                    ) : (
+                      <>
+                        <Zap className="h-4 w-4 mr-2" />
+                        Test Electrum Connection
+                      </>
+                    )}
+                  </Button>
+                  
+                  <Alert>
+                    <Info className="h-4 w-4" />
+                    <AlertTitle>About Electrum Protocol</AlertTitle>
+                    <AlertDescription className="space-y-2">
+                      <p>The Electrum protocol connects directly to Electrs for efficient address queries:</p>
+                      <ul className="list-disc list-inside text-sm space-y-1 mt-2">
+                        <li><strong>Port 50001</strong> - Unencrypted TCP (for local network)</li>
+                        <li><strong>Port 50002</strong> - Encrypted SSL/TLS</li>
+                        <li>Much faster than HTTP API for bulk address syncing</li>
+                      </ul>
+                    </AlertDescription>
+                  </Alert>
+                </div>
+              </>
+            )}
+          </CardContent>
+        </Card>
+      )}
       
       {/* Connection Settings */}
       <Card>

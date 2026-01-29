@@ -35,6 +35,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
   torStatus: () => 
     ipcRenderer.invoke('tor-status'),
   
+  // Electrum protocol operations
+  electrumTest: (params) =>
+    ipcRenderer.invoke('electrum-test', params),
+  electrumGetHistory: (params) =>
+    ipcRenderer.invoke('electrum-get-history', params),
+  electrumGetUtxos: (params) =>
+    ipcRenderer.invoke('electrum-get-utxos', params),
+  electrumGetTransaction: (params) =>
+    ipcRenderer.invoke('electrum-get-transaction', params),
+  electrumBatchGetHistory: (params) =>
+    ipcRenderer.invoke('electrum-batch-get-history', params),
+  
   // Platform information
   platform: process.platform,
   isElectron: true,

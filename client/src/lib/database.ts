@@ -412,6 +412,11 @@ export interface NodeSettings {
   allowLocalNetwork: boolean;  // Whether to allow connections to local network hosts
   // Trusted local hosts whitelist (only used when allowLocalNetwork is true)
   trustedLocalHosts: string[];  // User-editable whitelist of allowed local IPs/hostnames
+  // Electrum protocol settings (alternative to HTTP API)
+  useElectrum?: boolean;        // Whether to use Electrum protocol instead of HTTP
+  electrumHost?: string;        // Electrum server host (e.g., "192.168.4.118")
+  electrumPort?: number;        // Electrum server port (e.g., 50001)
+  electrumSSL?: boolean;        // Whether to use SSL/TLS for Electrum connection
   // Last successful connection timestamp
   lastConnectedAt?: number;
   // Connection status message
