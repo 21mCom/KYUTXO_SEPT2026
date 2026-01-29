@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Edit, Tag, FolderOpen, Wallet, Sprout, Users, Plus, Trash2, RefreshCw, KeySquare } from "lucide-react";
+import { Edit, Tag, FolderOpen, Wallet, Sprout, Users, Plus, Trash2, RefreshCw, KeySquare, ArrowLeftRight, TrendingUp, TrendingDown, UserCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -32,7 +32,13 @@ import {
   deleteWalletSoftwareEntry,
 } from "@/lib/encryptionFacade";
 import { useToast } from "@/hooks/use-toast";
-import { type Record } from "@/lib/database";
+import { 
+  type Record,
+  FLOW_TYPE_OPTIONS,
+  ACQUISITION_METHOD_OPTIONS,
+  DISPOSITION_TYPE_OPTIONS,
+  COUNTERPARTY_TYPE_OPTIONS,
+} from "@/lib/database";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -44,7 +50,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 
-type FieldType = 'tags' | 'categories' | 'walletSoftware' | 'seedName' | 'owner' | 'walletName';
+type FieldType = 'tags' | 'categories' | 'walletSoftware' | 'seedName' | 'owner' | 'walletName' | 'flowType' | 'acquisitionMethod' | 'dispositionType' | 'counterpartyType';
 
 interface UniqueValue {
   value: string;
@@ -58,6 +64,7 @@ interface FieldConfig {
   description: string;
   isArray: boolean;
   hasMasterList: boolean;
+  enumOptions?: { value: string; label: string }[];
 }
 
 const FIELD_CONFIGS: FieldConfig[] = [
@@ -108,6 +115,42 @@ const FIELD_CONFIGS: FieldConfig[] = [
     description: 'Wallet applications used (e.g., Trezor, Sparrow, Mycelium)',
     isArray: false,
     hasMasterList: true,
+  },
+  { 
+    key: 'flowType', 
+    label: 'Flow Type', 
+    icon: ArrowLeftRight, 
+    description: 'Transaction direction (received, sent, self-transfer, consolidation)',
+    isArray: false,
+    hasMasterList: false,
+    enumOptions: FLOW_TYPE_OPTIONS,
+  },
+  { 
+    key: 'acquisitionMethod', 
+    label: 'Acquisition Method', 
+    icon: TrendingUp, 
+    description: 'How funds were acquired (purchase, mining, gift, salary, etc.)',
+    isArray: false,
+    hasMasterList: false,
+    enumOptions: ACQUISITION_METHOD_OPTIONS,
+  },
+  { 
+    key: 'dispositionType', 
+    label: 'Disposition Type', 
+    icon: TrendingDown, 
+    description: 'How funds were disposed (sale, payment, gift, donation, etc.)',
+    isArray: false,
+    hasMasterList: false,
+    enumOptions: DISPOSITION_TYPE_OPTIONS,
+  },
+  { 
+    key: 'counterpartyType', 
+    label: 'Counterparty Type', 
+    icon: UserCheck, 
+    description: 'Type of external party (exchange, individual, business, etc.)',
+    isArray: false,
+    hasMasterList: false,
+    enumOptions: COUNTERPARTY_TYPE_OPTIONS,
   },
 ];
 
@@ -162,8 +205,33 @@ export default function ValueUpdaterPage() {
       .sort((a, b) => a.value.localeCompare(b.value));
   };
 
+  // Get display label for a value (enum label or original value for non-enum fields)
+  const getDisplayLabel = (field: FieldType, value: string): string => {
+    const config = FIELD_CONFIGS.find(f => f.key === field);
+    if (config?.enumOptions) {
+      const option = config.enumOptions.find(opt => opt.value === value);
+      return option?.label || value;
+    }
+    return value;
+  };
+
+  // Check if a field uses predefined enum options (can't add new values)
+  const hasEnumOptions = (field: FieldType): boolean => {
+    const config = FIELD_CONFIGS.find(f => f.key === field);
+    return !!config?.enumOptions;
+  };
+
   const getUnusedMasterItems = (field: FieldType): string[] => {
     const usedValues = new Set(extractUniqueValues(field).map(v => v.value.toLowerCase()));
+    const config = FIELD_CONFIGS.find(f => f.key === field);
+    
+    // For enum-based fields, return unused enum option VALUES (not labels)
+    // The getDisplayLabel function will convert to labels for display
+    if (config?.enumOptions) {
+      return config.enumOptions
+        .filter(opt => !usedValues.has(opt.value.toLowerCase()))
+        .map(opt => opt.value);
+    }
     
     switch (field) {
       case 'tags':
@@ -205,10 +273,24 @@ export default function ValueUpdaterPage() {
 
     setIsUpdating(true);
     const trimmedNewValue = newValueInput.trim();
+    const config = FIELD_CONFIGS.find(f => f.key === field)!;
+    
+    // Validate enum fields - new value must be a valid enum option
+    if (config.enumOptions) {
+      const validValues = config.enumOptions.map(opt => opt.value);
+      if (!validValues.includes(trimmedNewValue)) {
+        toast({
+          variant: "destructive",
+          title: "Invalid Value",
+          description: `"${trimmedNewValue}" is not a valid ${config.label.toLowerCase()}. Valid options: ${validValues.join(', ')}`,
+        });
+        setIsUpdating(false);
+        return;
+      }
+    }
     
     try {
       let updateCount = 0;
-      const config = FIELD_CONFIGS.find(f => f.key === field)!;
       
       for (const record of records) {
         let needsUpdate = false;
@@ -729,7 +811,12 @@ export default function ValueUpdaterPage() {
                   ) : (
                     <>
                       <div className="flex items-center gap-2">
-                        <span className="font-medium">{value}</span>
+                        <span className="font-medium">{getDisplayLabel(config.key, value)}</span>
+                        {hasEnumOptions(config.key) && (
+                          <Badge variant="outline" className="text-xs text-muted-foreground">
+                            {value}
+                          </Badge>
+                        )}
                         <Badge variant="secondary" className="text-xs">
                           {count} record{count !== 1 ? 's' : ''}
                         </Badge>
@@ -768,7 +855,7 @@ export default function ValueUpdaterPage() {
                 <>
                   <div className="pt-2 mt-2 border-t">
                     <p className="text-xs text-muted-foreground mb-2">
-                      Unused (not in any records):
+                      {hasEnumOptions(config.key) ? 'Available options (not in use):' : 'Unused (not in any records):'}
                     </p>
                     {unusedItems.map((name) => (
                       <div 
@@ -776,7 +863,10 @@ export default function ValueUpdaterPage() {
                         className="flex items-center justify-between p-2 rounded-md bg-muted/20"
                         data-testid={`row-unused-${config.key}-${name}`}
                       >
-                        {editingUnusedField === config.key && editingUnusedValue === name ? (
+                        {/* Enum fields show as read-only since values are predefined */}
+                        {hasEnumOptions(config.key) ? (
+                          <span className="text-sm text-muted-foreground">{getDisplayLabel(config.key, name)}</span>
+                        ) : editingUnusedField === config.key && editingUnusedValue === name ? (
                           <div className="flex gap-2 flex-1">
                             <Input
                               value={newUnusedValue}

@@ -46,6 +46,7 @@ Data is stored locally using Dexie.js (IndexedDB) for structured data, with all 
 *   **Database Cleanup:** Dedicated page for querying and bulk deleting blockchain-discovered records without user metadata, with conservative eligibility rules and permanent deletion.
 *   **Transaction Classification Metadata:** Tax-neutral fact-recording system for `flowType`, `acquisitionMethod`, `dispositionType`, `costBasisUsd`, and `counterpartyType`.
 *   **Bulk Editor:** Batch editing system with filter/action builders, preview, and undo capabilities.
+*   **Value Updater Enhancement:** Extended to support transaction classification fields (flowType, acquisitionMethod, dispositionType, counterpartyType) with enum validation, display labels, and available options display.
 *   **Metadata Conflict Resolution System:** Detects and resolves conflicts for singular metadata fields from multiple import sources, using a `RecordOrigin` system, visual indicators, and a dedicated resolution interface.
 *   **Bitcoin Flow Visualizer:** Interactive UTXO provenance tracing tool with Sankey Diagram, Timeline Swimlanes, Line Chart, and Hop-Path Explorer visualizations, prioritizing local data.
 *   **Transaction Search Enhancement:** Includes blockchain transactions and participating addresses in search results.
