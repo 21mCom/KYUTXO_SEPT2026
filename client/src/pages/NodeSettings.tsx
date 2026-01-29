@@ -889,14 +889,22 @@ export default function NodeSettings() {
                       <Label htmlFor="electrumHost">Electrum Server Host</Label>
                       <Input
                         id="electrumHost"
-                        placeholder="e.g., 192.168.4.118"
+                        placeholder="192.168.4.118 (no http://)"
                         value={currentSettings.electrumHost || ''}
                         onChange={(e) => {
-                          setPendingChanges(prev => ({ ...prev, electrumHost: e.target.value }));
+                          // Auto-clean: strip http:// prefix as user types
+                          let value = e.target.value;
+                          if (value.toLowerCase().startsWith('http://') || value.toLowerCase().startsWith('https://')) {
+                            value = value.replace(/^https?:\/\//i, '');
+                          }
+                          setPendingChanges(prev => ({ ...prev, electrumHost: value }));
                           setElectrumTestResult(null);
                         }}
                         data-testid="input-electrum-host"
                       />
+                      <p className="text-xs text-muted-foreground">
+                        IP address or hostname only (no http:// prefix)
+                      </p>
                     </div>
                     <div className="space-y-2">
                       <Label htmlFor="electrumPort">Port</Label>

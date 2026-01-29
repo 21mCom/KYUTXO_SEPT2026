@@ -786,10 +786,25 @@ function addressToScripthash(address) {
   return reversed.toString('hex');
 }
 
+// Clean host input - strip protocol prefixes and trailing slashes
+// Electrum uses raw TCP, not HTTP - common mistake to include http://
+function cleanElectrumHost(host) {
+  if (!host) return host;
+  let cleaned = host.trim();
+  // Remove protocol prefixes (Electrum uses raw TCP, not HTTP)
+  cleaned = cleaned.replace(/^https?:\/\//i, '');
+  // Remove trailing slashes
+  cleaned = cleaned.replace(/\/+$/, '');
+  return cleaned;
+}
+
 // Create Electrum connection with proper cleanup
 function createElectrumConnection(host, port, useSSL, timeout = 30000) {
+  // Clean the host - remove http:// prefix and trailing slashes
+  const cleanedHost = cleanElectrumHost(host);
+  
   return new Promise((resolve, reject) => {
-    const key = `${host}:${port}`;
+    const key = `${cleanedHost}:${port}`;
     
     // Close existing connection if any
     if (electrumConnections.has(key)) {
@@ -799,7 +814,7 @@ function createElectrumConnection(host, port, useSSL, timeout = 30000) {
     }
     
     let socket;
-    const connectOptions = { host, port };
+    const connectOptions = { host: cleanedHost, port };
     
     if (useSSL) {
       socket = tls.connect(connectOptions, () => {
