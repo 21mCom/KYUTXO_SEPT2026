@@ -886,7 +886,7 @@ export default function NodeSettings() {
               <Badge variant="secondary" className="ml-2 text-xs">Fast Sync</Badge>
             </CardTitle>
             <CardDescription>
-              Connect directly to Electrs using the Electrum protocol for faster syncing
+              Connect directly to Electrs or Fulcrum using the Electrum protocol for faster syncing
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -957,7 +957,7 @@ export default function NodeSettings() {
                         Use SSL/TLS
                       </Label>
                       <p className="text-xs text-muted-foreground">
-                        Port 50002 typically uses SSL, port 50001 is unencrypted
+                        Electrs: 50001 (no SSL). Fulcrum: 50002 (SSL).
                       </p>
                     </div>
                     <Switch
@@ -1023,10 +1023,11 @@ export default function NodeSettings() {
                     <Info className="h-4 w-4" />
                     <AlertTitle>About Electrum Protocol</AlertTitle>
                     <AlertDescription className="space-y-2">
-                      <p>The Electrum protocol connects directly to Electrs for efficient address queries:</p>
+                      <p>Connects directly to your Electrum server for efficient address queries:</p>
                       <ul className="list-disc list-inside text-sm space-y-1 mt-2">
-                        <li><strong>Port 50001</strong> - Unencrypted TCP (for local network)</li>
-                        <li><strong>Port 50002</strong> - Encrypted SSL/TLS</li>
+                        <li><strong>Electrs</strong> - Port 50001, no SSL (default for Umbrel)</li>
+                        <li><strong>Fulcrum</strong> - Port 50002, SSL enabled (faster, recommended)</li>
+                        <li>Both speak the same protocol - settings depend on which you're running</li>
                         <li>Much faster than HTTP API for bulk address syncing</li>
                       </ul>
                     </AlertDescription>
