@@ -150,12 +150,13 @@ const ACTION_TYPES: { value: ActionType; label: string; description: string }[] 
   { value: 'clear', label: 'Clear', description: 'Set to empty' },
 ];
 
-// Filter condition
+// Filter condition - supports multiple values for multi-select filtering
 interface FilterCondition {
   id: string;
   field: keyof Record;
   operator: Operator;
   value: string;
+  values: string[]; // For multi-select support
 }
 
 // Action definition
@@ -224,7 +225,18 @@ export default function BulkEditor() {
         if (!fieldDef) return false;
         
         const fieldValue = record[condition.field];
-        const conditionValue = condition.value.toLowerCase();
+        const operator = OPERATORS.find(o => o.value === condition.operator);
+        
+        // Get all condition values (multi-select) or single value
+        const conditionValues = condition.values.length > 0 
+          ? condition.values.map(v => v.toLowerCase())
+          : condition.value ? [condition.value.toLowerCase()] : [];
+        
+        // If operator needs a value but none provided, don't match anything
+        // This prevents empty selections from matching all records
+        if (operator?.needsValue && conditionValues.length === 0) {
+          return false;
+        }
         
         // Handle array fields (tags, categories)
         if (fieldDef.type === 'array') {
@@ -233,13 +245,15 @@ export default function BulkEditor() {
           
           switch (condition.operator) {
             case 'contains':
-              return arrLower.some(v => v.includes(conditionValue));
+              // For multi-select: match if ANY of the condition values are in the array
+              return conditionValues.some(cv => arrLower.some(v => v.includes(cv)));
             case 'not_contains':
-              return !arrLower.some(v => v.includes(conditionValue));
+              return !conditionValues.some(cv => arrLower.some(v => v.includes(cv)));
             case 'equals':
-              return arrLower.includes(conditionValue);
+              // For multi-select: match if the field value equals ANY of the selected values
+              return conditionValues.some(cv => arrLower.includes(cv));
             case 'not_equals':
-              return !arrLower.includes(conditionValue);
+              return !conditionValues.some(cv => arrLower.includes(cv));
             case 'is_empty':
               return arr.length === 0;
             case 'is_not_empty':
@@ -249,20 +263,21 @@ export default function BulkEditor() {
           }
         }
         
-        // Handle string/enum fields
+        // Handle string/enum/select fields
         const strValue = (fieldValue as string | undefined)?.toLowerCase() || '';
         
         switch (condition.operator) {
           case 'equals':
-            return strValue === conditionValue;
+            // For multi-select: match if the field value equals ANY of the selected values
+            return conditionValues.includes(strValue);
           case 'not_equals':
-            return strValue !== conditionValue;
+            return !conditionValues.includes(strValue);
           case 'contains':
-            return strValue.includes(conditionValue);
+            return conditionValues.some(cv => strValue.includes(cv));
           case 'not_contains':
-            return !strValue.includes(conditionValue);
+            return !conditionValues.some(cv => strValue.includes(cv));
           case 'starts_with':
-            return strValue.startsWith(conditionValue);
+            return conditionValues.some(cv => strValue.startsWith(cv));
           case 'is_empty':
             return !strValue || strValue === '';
           case 'is_not_empty':
@@ -285,6 +300,7 @@ export default function BulkEditor() {
       field: 'owner',
       operator: 'equals',
       value: '',
+      values: [],
     }]);
   };
   
@@ -635,6 +651,244 @@ export default function BulkEditor() {
     );
   };
   
+  // Multi-select combobox for filter conditions - allows selecting multiple values
+  const MultiSelectCombobox = ({ 
+    fieldKey, 
+    values, 
+    onChange, 
+    options, 
+    placeholder,
+    vocabularyKey
+  }: { 
+    fieldKey: string;
+    values: string[]; 
+    onChange: (v: string[]) => void; 
+    options: { value: string; label: string }[];
+    placeholder: string;
+    vocabularyKey?: 'owners' | 'walletNames' | 'seedNames' | 'walletSoftware' | 'tags' | 'categories';
+  }) => {
+    const [open, setOpen] = useState(false);
+    const [searchInput, setSearchInput] = useState("");
+    const [isCreating, setIsCreating] = useState(false);
+    
+    // Filter options based on search input
+    const filteredOptions = useMemo(() => 
+      options.filter(opt => 
+        opt.label.toLowerCase().includes(searchInput.toLowerCase())
+      ),
+      [options, searchInput]
+    );
+    
+    // Show "create new" option if input doesn't match any existing option
+    const showCreateNew = vocabularyKey && searchInput.trim() !== '' && 
+      !options.some(opt => opt.value.toLowerCase() === searchInput.toLowerCase());
+    
+    const handleCreateNew = async () => {
+      if (!vocabularyKey || !searchInput.trim()) return;
+      
+      const trimmedValue = searchInput.trim();
+      setIsCreating(true);
+      
+      try {
+        switch (vocabularyKey) {
+          case 'tags':
+            await createTag(trimmedValue);
+            break;
+          case 'categories':
+            await createCategory(trimmedValue);
+            break;
+          case 'owners':
+            await createOwner(trimmedValue);
+            break;
+          case 'walletNames':
+            await createWalletNameEntry(trimmedValue);
+            break;
+          case 'seedNames':
+            await createSeedNameEntry(trimmedValue);
+            break;
+          case 'walletSoftware':
+            await createWalletSoftwareEntry(trimmedValue);
+            break;
+        }
+        // Add the newly created value to selection
+        if (!values.includes(trimmedValue)) {
+          onChange([...values, trimmedValue]);
+        }
+        setSearchInput("");
+        toast({
+          title: "Created",
+          description: `Added "${trimmedValue}" to vocabulary`,
+        });
+      } catch (error) {
+        console.error('Failed to create vocabulary item:', error);
+        toast({
+          title: "Failed to create",
+          description: "Could not create new vocabulary item",
+          variant: "destructive",
+        });
+      } finally {
+        setIsCreating(false);
+      }
+    };
+    
+    const toggleValue = (optValue: string) => {
+      if (values.includes(optValue)) {
+        onChange(values.filter(v => v !== optValue));
+      } else {
+        onChange([...values, optValue]);
+      }
+    };
+    
+    const removeValue = (optValue: string) => {
+      onChange(values.filter(v => v !== optValue));
+    };
+    
+    return (
+      <div className="flex flex-col gap-1">
+        <Popover open={open} onOpenChange={setOpen}>
+          <PopoverTrigger asChild>
+            <Button
+              variant="outline"
+              role="combobox"
+              aria-expanded={open}
+              className="w-[220px] justify-between h-auto min-h-9"
+              data-testid={`multiselect-filter-${fieldKey}`}
+            >
+              <span className="truncate text-left flex-1">
+                {values.length === 0 
+                  ? placeholder 
+                  : values.length === 1
+                  ? values[0]
+                  : `${values.length} selected`
+                }
+              </span>
+              <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent className="w-[220px] p-0" align="start">
+            <Command shouldFilter={false}>
+              <CommandInput 
+                placeholder="Search or type new..."
+                value={searchInput}
+                onValueChange={setSearchInput}
+                data-testid={`multiselect-search-${fieldKey}`}
+              />
+              <CommandList>
+                <CommandEmpty>
+                  {showCreateNew ? (
+                    <div className="text-sm text-muted-foreground py-2">
+                      Press enter or click below to create
+                    </div>
+                  ) : (
+                    "No results found"
+                  )}
+                </CommandEmpty>
+                {showCreateNew && (
+                  <CommandGroup heading="Create new">
+                    <CommandItem
+                      value={`create:${searchInput}`}
+                      onSelect={handleCreateNew}
+                      disabled={isCreating}
+                      data-testid={`multiselect-create-${fieldKey}`}
+                    >
+                      <Plus className="mr-2 h-4 w-4" />
+                      {isCreating ? "Creating..." : `Create "${searchInput.trim()}"`}
+                    </CommandItem>
+                  </CommandGroup>
+                )}
+                {filteredOptions.length > 0 && (
+                  <CommandGroup heading="Select values">
+                    {filteredOptions.map(opt => (
+                      <CommandItem
+                        key={opt.value}
+                        value={opt.value}
+                        onSelect={() => toggleValue(opt.value)}
+                        data-testid={`multiselect-option-${fieldKey}-${opt.value}`}
+                      >
+                        <Check 
+                          className={`mr-2 h-4 w-4 ${values.includes(opt.value) ? 'opacity-100' : 'opacity-0'}`} 
+                        />
+                        {opt.label}
+                      </CommandItem>
+                    ))}
+                  </CommandGroup>
+                )}
+              </CommandList>
+            </Command>
+          </PopoverContent>
+        </Popover>
+        {/* Show selected values as badges */}
+        {values.length > 0 && (
+          <div className="flex flex-wrap gap-1 max-w-[220px]">
+            {values.map(v => (
+              <Badge 
+                key={v} 
+                variant="secondary" 
+                className="text-xs gap-1 cursor-pointer"
+                onClick={() => removeValue(v)}
+                data-testid={`multiselect-badge-${fieldKey}-${v}`}
+              >
+                {v}
+                <X className="h-3 w-3" />
+              </Badge>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  };
+  
+  // Render filter value input with multi-select support for vocabulary fields
+  const renderFilterValueInput = (
+    condition: FilterCondition,
+    updateFn: (updates: Partial<FilterCondition>) => void
+  ) => {
+    const fieldDef = FIELD_DEFS.find(f => f.key === condition.field);
+    if (!fieldDef) return null;
+    
+    const options = getFieldOptions(fieldDef);
+    
+    // For enum fields (fixed options), use multi-select
+    if (fieldDef.type === 'enum' && options.length > 0) {
+      return (
+        <MultiSelectCombobox
+          fieldKey={condition.field as string}
+          values={condition.values}
+          onChange={(v) => updateFn({ values: v, value: v[0] || '' })}
+          options={options}
+          placeholder="Select values..."
+        />
+      );
+    }
+    
+    // For vocabulary fields (select/array with suggestions), use MultiSelectCombobox
+    if ((fieldDef.type === 'select' || fieldDef.type === 'array') && fieldDef.vocabularyKey) {
+      const optionsHash = options.map(o => o.value).join('|').slice(0, 100);
+      return (
+        <MultiSelectCombobox
+          key={`${condition.field}-${optionsHash}`}
+          fieldKey={condition.field as string}
+          values={condition.values}
+          onChange={(v) => updateFn({ values: v, value: v[0] || '' })}
+          options={options}
+          placeholder="Select values..."
+          vocabularyKey={fieldDef.vocabularyKey}
+        />
+      );
+    }
+    
+    // For text fields, use plain Input (single value only)
+    return (
+      <Input
+        value={condition.value}
+        onChange={e => updateFn({ value: e.target.value, values: e.target.value ? [e.target.value] : [] })}
+        placeholder="Enter value..."
+        className="w-[180px]"
+        data-testid={`input-filter-value-${condition.field}`}
+      />
+    );
+  };
+  
   // Render field value input (text, select, or combobox)
   const renderValueInput = (
     fieldKey: keyof Record, 
@@ -858,13 +1112,11 @@ export default function BulkEditor() {
                     </SelectContent>
                   </Select>
                   
-                  {/* Value input */}
+                  {/* Value input - multi-select for vocabulary/enum fields */}
                   {operator?.needsValue && (
-                    renderValueInput(
-                      condition.field,
-                      condition.value,
-                      (v) => updateCondition(condition.id, { value: v }),
-                      "Select or type..."
+                    renderFilterValueInput(
+                      condition,
+                      (updates) => updateCondition(condition.id, updates)
                     )
                   )}
                   
