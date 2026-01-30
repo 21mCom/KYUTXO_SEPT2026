@@ -365,15 +365,38 @@ function createWindow() {
     });
   }
 
-  // Enable right-click context menu with Cut/Copy/Paste
+  // Enable right-click context menu with Cut/Copy/Paste and spelling suggestions
   mainWindow.webContents.on('context-menu', (event, params) => {
-    const contextMenu = Menu.buildFromTemplate([
+    const menuItems = [];
+    
+    // Add spelling suggestions if word is misspelled
+    if (params.misspelledWord && params.dictionarySuggestions.length > 0) {
+      params.dictionarySuggestions.forEach((suggestion) => {
+        menuItems.push({
+          label: suggestion,
+          click: () => mainWindow.webContents.replaceMisspelling(suggestion),
+        });
+      });
+      menuItems.push({ type: 'separator' });
+      
+      // Add option to add word to dictionary
+      menuItems.push({
+        label: `Add "${params.misspelledWord}" to Dictionary`,
+        click: () => mainWindow.webContents.session.addWordToSpellCheckerDictionary(params.misspelledWord),
+      });
+      menuItems.push({ type: 'separator' });
+    }
+    
+    // Standard editing options
+    menuItems.push(
       { role: 'cut', enabled: params.editFlags.canCut },
       { role: 'copy', enabled: params.editFlags.canCopy },
       { role: 'paste', enabled: params.editFlags.canPaste },
       { type: 'separator' },
-      { role: 'selectAll', enabled: params.editFlags.canSelectAll },
-    ]);
+      { role: 'selectAll', enabled: params.editFlags.canSelectAll }
+    );
+    
+    const contextMenu = Menu.buildFromTemplate(menuItems);
     contextMenu.popup();
   });
 
