@@ -42,7 +42,16 @@ import { useWalletSoftware } from "@/hooks/use-wallet-software";
 import { useTags } from "@/hooks/use-tags";
 import { useCategories } from "@/hooks/use-categories";
 import { useToast } from "@/hooks/use-toast";
-import { updateRecord, bulkUpdateRecords } from "@/lib/encryptionFacade";
+import { 
+  updateRecord, 
+  bulkUpdateRecords,
+  createTag,
+  createCategory,
+  createOwner,
+  createWalletNameEntry,
+  createSeedNameEntry,
+  createWalletSoftwareEntry,
+} from "@/lib/encryptionFacade";
 import type { 
   Record, 
   AddressImportance, 
@@ -481,16 +490,19 @@ export default function BulkEditor() {
     value, 
     onChange, 
     options, 
-    placeholder 
+    placeholder,
+    vocabularyKey
   }: { 
     fieldKey: string;
     value: string; 
     onChange: (v: string) => void; 
     options: { value: string; label: string }[];
     placeholder: string;
+    vocabularyKey?: 'owners' | 'walletNames' | 'seedNames' | 'walletSoftware' | 'tags' | 'categories';
   }) => {
     const [open, setOpen] = useState(false);
     const [inputValue, setInputValue] = useState(value);
+    const [isCreating, setIsCreating] = useState(false);
     
     // Sync inputValue when value prop changes (e.g., reset or undo)
     useEffect(() => {
@@ -505,9 +517,54 @@ export default function BulkEditor() {
       [options, inputValue]
     );
     
-    // Show "create new" option if input doesn't match any existing option
-    const showCreateNew = inputValue.trim() !== '' && 
+    // Show "create new" option if input doesn't match any existing option and we have a vocabulary key
+    const showCreateNew = vocabularyKey && inputValue.trim() !== '' && 
       !options.some(opt => opt.value.toLowerCase() === inputValue.toLowerCase());
+    
+    const handleCreateNew = async () => {
+      if (!vocabularyKey || !inputValue.trim()) return;
+      
+      const trimmedValue = inputValue.trim();
+      setIsCreating(true);
+      
+      try {
+        switch (vocabularyKey) {
+          case 'tags':
+            await createTag(trimmedValue);
+            break;
+          case 'categories':
+            await createCategory(trimmedValue);
+            break;
+          case 'owners':
+            await createOwner(trimmedValue);
+            break;
+          case 'walletNames':
+            await createWalletNameEntry(trimmedValue);
+            break;
+          case 'seedNames':
+            await createSeedNameEntry(trimmedValue);
+            break;
+          case 'walletSoftware':
+            await createWalletSoftwareEntry(trimmedValue);
+            break;
+        }
+        
+        onChange(trimmedValue);
+        setOpen(false);
+        toast({
+          title: "Created",
+          description: `"${trimmedValue}" has been added`,
+        });
+      } catch (error) {
+        toast({
+          variant: "destructive",
+          title: "Creation failed",
+          description: error instanceof Error ? error.message : "Could not create item",
+        });
+      } finally {
+        setIsCreating(false);
+      }
+    };
     
     return (
       <Popover open={open} onOpenChange={setOpen}>
@@ -541,14 +598,12 @@ export default function BulkEditor() {
                 <CommandGroup heading="Create new">
                   <CommandItem
                     value={`create:${inputValue}`}
-                    onSelect={() => {
-                      onChange(inputValue.trim());
-                      setOpen(false);
-                    }}
+                    onSelect={handleCreateNew}
+                    disabled={isCreating}
                     data-testid={`option-create-new-${fieldKey}`}
                   >
                     <Plus className="mr-2 h-4 w-4" />
-                    Create "{inputValue.trim()}"
+                    {isCreating ? "Creating..." : `Create "${inputValue.trim()}"`}
                   </CommandItem>
                 </CommandGroup>
               )}
@@ -623,6 +678,7 @@ export default function BulkEditor() {
           onChange={onChange}
           options={options}
           placeholder={placeholder}
+          vocabularyKey={fieldDef.vocabularyKey}
         />
       );
     }
