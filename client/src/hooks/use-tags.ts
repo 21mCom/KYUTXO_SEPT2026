@@ -1,12 +1,48 @@
 import { useLiveQuery } from 'dexie-react-hooks';
+import { useState, useEffect } from 'react';
 import { db, type Tag } from '@/lib/database';
+import { 
+  getDecryptedTags,
+  isEncryptionReady,
+} from '@/lib/encryptionFacade';
 
 export function useTags() {
-  const tags = useLiveQuery(() => db.tags.orderBy('name').toArray());
+  const [decryptedTags, setDecryptedTags] = useState<Tag[]>([]);
+  const [isDecrypting, setIsDecrypting] = useState(false);
+  
+  const rawTags = useLiveQuery(() => db.tags.orderBy('name').toArray());
+  
+  useEffect(() => {
+    const decrypt = async () => {
+      if (!rawTags) {
+        setDecryptedTags([]);
+        return;
+      }
+      
+      if (!isEncryptionReady()) {
+        setDecryptedTags(rawTags);
+        return;
+      }
+      
+      setIsDecrypting(true);
+      try {
+        const decrypted = await getDecryptedTags();
+        decrypted.sort((a, b) => a.name.localeCompare(b.name));
+        setDecryptedTags(decrypted);
+      } catch (error) {
+        console.error('Failed to decrypt tags:', error);
+        setDecryptedTags(rawTags);
+      } finally {
+        setIsDecrypting(false);
+      }
+    };
+    
+    decrypt();
+  }, [rawTags]);
   
   return {
-    tags: tags || [],
-    isLoading: tags === undefined,
+    tags: decryptedTags,
+    isLoading: rawTags === undefined || isDecrypting,
   };
 }
 

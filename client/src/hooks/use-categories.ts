@@ -1,12 +1,48 @@
 import { useLiveQuery } from 'dexie-react-hooks';
+import { useState, useEffect } from 'react';
 import { db, type Category } from '@/lib/database';
+import { 
+  getDecryptedCategories,
+  isEncryptionReady,
+} from '@/lib/encryptionFacade';
 
 export function useCategories() {
-  const categories = useLiveQuery(() => db.categories.orderBy('name').toArray());
+  const [decryptedCategories, setDecryptedCategories] = useState<Category[]>([]);
+  const [isDecrypting, setIsDecrypting] = useState(false);
+  
+  const rawCategories = useLiveQuery(() => db.categories.orderBy('name').toArray());
+  
+  useEffect(() => {
+    const decrypt = async () => {
+      if (!rawCategories) {
+        setDecryptedCategories([]);
+        return;
+      }
+      
+      if (!isEncryptionReady()) {
+        setDecryptedCategories(rawCategories);
+        return;
+      }
+      
+      setIsDecrypting(true);
+      try {
+        const decrypted = await getDecryptedCategories();
+        decrypted.sort((a, b) => a.name.localeCompare(b.name));
+        setDecryptedCategories(decrypted);
+      } catch (error) {
+        console.error('Failed to decrypt categories:', error);
+        setDecryptedCategories(rawCategories);
+      } finally {
+        setIsDecrypting(false);
+      }
+    };
+    
+    decrypt();
+  }, [rawCategories]);
   
   return {
-    categories: categories || [],
-    isLoading: categories === undefined,
+    categories: decryptedCategories,
+    isLoading: rawCategories === undefined || isDecrypting,
   };
 }
 
