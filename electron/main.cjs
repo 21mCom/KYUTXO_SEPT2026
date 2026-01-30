@@ -1,4 +1,4 @@
-const { app, BrowserWindow, protocol, ipcMain, session, powerMonitor } = require('electron');
+const { app, BrowserWindow, protocol, ipcMain, session, powerMonitor, Menu } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const url = require('url');
@@ -364,6 +364,18 @@ function createWindow() {
       `);
     });
   }
+
+  // Enable right-click context menu with Cut/Copy/Paste
+  mainWindow.webContents.on('context-menu', (event, params) => {
+    const contextMenu = Menu.buildFromTemplate([
+      { role: 'cut', enabled: params.editFlags.canCut },
+      { role: 'copy', enabled: params.editFlags.canCopy },
+      { role: 'paste', enabled: params.editFlags.canPaste },
+      { type: 'separator' },
+      { role: 'selectAll', enabled: params.editFlags.canSelectAll },
+    ]);
+    contextMenu.popup();
+  });
 
   mainWindow.on('closed', () => {
     mainWindow = null;
