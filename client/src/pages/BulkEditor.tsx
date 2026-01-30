@@ -962,33 +962,18 @@ export default function BulkEditor() {
               
               return (
                 <div key={action.id} className="flex items-center gap-2 flex-wrap">
-                  {/* Action type */}
-                  <Select
-                    value={action.type}
-                    onValueChange={(v) => updateAction(action.id, { type: v as ActionType })}
-                  >
-                    <SelectTrigger className="w-[120px]" data-testid={`select-action-type-${index}`}>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {availableActions.map(at => (
-                        <SelectItem key={at.value} value={at.value}>
-                          {at.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  
-                  {/* Field selector */}
+                  {/* Field selector - comes first so action types update accordingly */}
                   <Select
                     value={action.field as string}
                     onValueChange={(v) => {
                       const newFieldDef = FIELD_DEFS.find(f => f.key === v);
                       const newIsArray = newFieldDef?.type === 'array';
-                      // Reset action type if incompatible
+                      // Reset action type if incompatible, or default to 'add' for array fields
                       let newType = action.type;
-                      if (!newIsArray && (action.type === 'add' || action.type === 'remove')) {
-                        newType = 'set';
+                      if (newIsArray && (action.type === 'set' || action.type === 'clear')) {
+                        newType = 'add'; // Default to 'add' for array fields
+                      } else if (!newIsArray && (action.type === 'add' || action.type === 'remove')) {
+                        newType = 'set'; // Default to 'set' for singular fields
                       }
                       updateAction(action.id, { field: v as keyof Record, type: newType });
                     }}
@@ -1000,6 +985,23 @@ export default function BulkEditor() {
                       {FIELD_DEFS.map(f => (
                         <SelectItem key={f.key as string} value={f.key as string}>
                           {f.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  
+                  {/* Action type - comes after field so options are contextual */}
+                  <Select
+                    value={action.type}
+                    onValueChange={(v) => updateAction(action.id, { type: v as ActionType })}
+                  >
+                    <SelectTrigger className="w-[120px]" data-testid={`select-action-type-${index}`}>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {availableActions.map(at => (
+                        <SelectItem key={at.value} value={at.value}>
+                          {at.label}
                         </SelectItem>
                       ))}
                     </SelectContent>
