@@ -33,7 +33,8 @@ import {
   Tags,
   Vault,
   Trash2,
-  Smartphone
+  Smartphone,
+  LayoutList
 } from "lucide-react";
 import logoUrl from "@assets/foot_1764929618997.png";
 import {
@@ -85,6 +86,7 @@ const navGroups: NavGroup[] = [
       { title: "Transactions", url: "/transactions", icon: List },
       { title: "UTXOs", url: "/utxos", icon: Coins },
       { title: "Vaults", url: "/vaults", icon: Vault },
+      { title: "Wallet Overview", url: "/wallet-overview", icon: LayoutList },
       { title: "Bulk Editor", url: "/bulk-editor", icon: Layers },
       { title: "Conflict Resolution", url: "/conflict-resolution", icon: AlertCircle },
     ]
