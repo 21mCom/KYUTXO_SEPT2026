@@ -29,7 +29,9 @@ import {
   Zap,
   Link as LinkIcon,
   FileCode,
-  Scale
+  Scale,
+  ChevronsDownUp,
+  ChevronsUpDown
 } from "lucide-react";
 import { decryptRecords } from "@/lib/encryptionFacade";
 import { ClickableAddress } from "@/components/ClickableAddress";
@@ -400,6 +402,32 @@ export default function Transactions() {
         >
           <FileCode className="h-4 w-4 mr-1" />
           OP_RETURN
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => {
+            const allTxids = paginatedTransactions.map(tx => tx.txid);
+            const allExpanded = allTxids.every(txid => expandedTxs.has(txid));
+            if (allExpanded) {
+              setExpandedTxs(new Set());
+            } else {
+              setExpandedTxs(new Set(allTxids));
+            }
+          }}
+          data-testid="button-expand-collapse-all"
+        >
+          {paginatedTransactions.length > 0 && paginatedTransactions.every(tx => expandedTxs.has(tx.txid)) ? (
+            <>
+              <ChevronsDownUp className="h-4 w-4 mr-1" />
+              Collapse All
+            </>
+          ) : (
+            <>
+              <ChevronsUpDown className="h-4 w-4 mr-1" />
+              Expand All
+            </>
+          )}
         </Button>
       </div>
 
