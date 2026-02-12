@@ -1004,9 +1004,9 @@ function createElectrumConnection(host, port, useSSL, timeout = 30000) {
     console.log(`[Electrum Pool] Creating new connection to ${cleanedHost}:${port}`);
     
     if (useSSL) {
-      socket = tls.connect(connectOptions, () => {
-        if (!socket.authorized && socket.authorizationError !== 'DEPTH_ZERO_SELF_SIGNED_CERT') {
-          console.log('[Electrum Pool] TLS warning:', socket.authorizationError);
+      socket = tls.connect({ ...connectOptions, rejectUnauthorized: false }, () => {
+        if (!socket.authorized) {
+          console.log('[Electrum Pool] TLS warning (self-signed cert accepted):', socket.authorizationError);
         }
         resolve(socket);
       });
@@ -1060,6 +1060,7 @@ async function getPooledConnection(host, port, useSSL, timeout = 30000) {
     useSSL,
     lastUsed: Date.now(),
     healthy: true,
+    versionSent: false,
   };
   
   electrumPool.connections.set(key, conn);
@@ -1073,6 +1074,22 @@ async function getPooledConnection(host, port, useSSL, timeout = 30000) {
   return { key, pooled: false };
 }
 
+// Send server.version handshake only once per connection
+async function ensureVersionHandshake(key, timeout = 15000) {
+  const conn = electrumPool.connections.get(key);
+  if (!conn) throw new Error('Connection not available');
+  
+  if (!conn.versionSent) {
+    const version = await pooledRequest(key, 'server.version', ['KYUTXO', '1.4'], timeout);
+    conn.versionSent = true;
+    return version;
+  }
+  
+  // Already sent version, just ping to verify connection is alive
+  await pooledRequest(key, 'server.ping', [], timeout);
+  return conn.cachedVersion || ['unknown', '1.4'];
+}
+
 // Electrum connection test (creates fresh connection to test connectivity)
 ipcMain.handle('electrum-test', async (event, { host, port, useSSL, timeout }) => {
   const startTime = Date.now();
@@ -1082,8 +1099,12 @@ ipcMain.handle('electrum-test', async (event, { host, port, useSSL, timeout }) =
     // Get or create pooled connection
     const { key, pooled } = await getPooledConnection(cleanedHost, port, useSSL, timeout || 15000);
     
-    // Test with server.version using multiplexed request
-    const version = await pooledRequest(key, 'server.version', ['KYUTXO', '1.4'], timeout || 15000);
+    // Send server.version only on fresh connections, ping on reused ones
+    const version = await ensureVersionHandshake(key, timeout || 15000);
+    
+    // Cache version for future reuse
+    const conn = electrumPool.connections.get(key);
+    if (conn) conn.cachedVersion = version;
     
     // Get block height to verify full functionality
     const headerResult = await pooledRequest(key, 'blockchain.headers.subscribe', [], timeout || 15000);
@@ -1101,6 +1122,13 @@ ipcMain.handle('electrum-test', async (event, { host, port, useSSL, timeout }) =
     };
   } catch (error) {
     const latency = Date.now() - startTime;
+    // If test fails, destroy the pooled connection so next attempt starts fresh
+    const key = `${cleanedHost}:${port}`;
+    const conn = electrumPool.connections.get(key);
+    if (conn) {
+      try { conn.socket.destroy(); } catch (e) {}
+      electrumPool.connections.delete(key);
+    }
     return {
       success: false,
       error: error.message,
@@ -1113,6 +1141,7 @@ ipcMain.handle('electrum-test', async (event, { host, port, useSSL, timeout }) =
 ipcMain.handle('electrum-get-history', async (event, { host, port, useSSL, address, timeout }) => {
   try {
     const { key } = await getPooledConnection(host, port, useSSL, timeout || 30000);
+    await ensureVersionHandshake(key, timeout || 15000);
     
     const scripthash = addressToScripthash(address);
     const history = await pooledRequest(key, 'blockchain.scripthash.get_history', [scripthash], timeout || 30000);
@@ -1134,6 +1163,7 @@ ipcMain.handle('electrum-get-history', async (event, { host, port, useSSL, addre
 ipcMain.handle('electrum-get-utxos', async (event, { host, port, useSSL, address, timeout }) => {
   try {
     const { key } = await getPooledConnection(host, port, useSSL, timeout || 30000);
+    await ensureVersionHandshake(key, timeout || 15000);
     
     const scripthash = addressToScripthash(address);
     const utxos = await pooledRequest(key, 'blockchain.scripthash.listunspent', [scripthash], timeout || 30000);
@@ -1155,6 +1185,7 @@ ipcMain.handle('electrum-get-utxos', async (event, { host, port, useSSL, address
 ipcMain.handle('electrum-get-transaction', async (event, { host, port, useSSL, txid, verbose, timeout }) => {
   try {
     const { key } = await getPooledConnection(host, port, useSSL, timeout || 30000);
+    await ensureVersionHandshake(key, timeout || 15000);
     
     const tx = await pooledRequest(key, 'blockchain.transaction.get', [txid, verbose !== false], timeout || 30000);
     
@@ -1176,6 +1207,7 @@ ipcMain.handle('electrum-batch-get-history', async (event, { host, port, useSSL,
   
   try {
     const { key, pooled } = await getPooledConnection(host, port, useSSL, timeout || 60000);
+    await ensureVersionHandshake(key, timeout || 15000);
     
     console.log(`[Electrum Pool] Batch fetching ${addresses.length} addresses (connection ${pooled ? 'reused' : 'new'})`);
     
