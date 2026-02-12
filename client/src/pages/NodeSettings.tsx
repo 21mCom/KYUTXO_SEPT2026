@@ -886,7 +886,7 @@ export default function NodeSettings() {
               <Badge variant="secondary" className="ml-2 text-xs">Fast Sync</Badge>
             </CardTitle>
             <CardDescription>
-              Connect directly to Electrs or Fulcrum using the Electrum protocol for faster syncing
+              Connect directly to your Electrum server for efficient bulk address syncing (10,000+)
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -896,7 +896,7 @@ export default function NodeSettings() {
                   Use Electrum Protocol
                 </Label>
                 <p className="text-xs text-muted-foreground">
-                  More efficient for syncing many addresses (10,000+)
+                  Much faster than HTTP API for syncing many addresses
                 </p>
               </div>
               <Switch
@@ -913,15 +913,55 @@ export default function NodeSettings() {
             {currentSettings.useElectrum && (
               <>
                 <div className="space-y-4 pt-2">
+                  <div className="space-y-2">
+                    <Label>Server Software</Label>
+                    <p className="text-xs text-muted-foreground mb-2">
+                      Select what your node is running. This sets recommended defaults but you can adjust port and SSL independently below.
+                    </p>
+                    <RadioGroup
+                      value={currentSettings.electrumServerType || 'electrs'}
+                      onValueChange={(v) => {
+                        const serverType = v as 'electrs' | 'fulcrum';
+                        const defaults = serverType === 'fulcrum'
+                          ? { electrumPort: 50002, electrumSSL: true }
+                          : { electrumPort: 50001, electrumSSL: false };
+                        setPendingChanges(prev => ({
+                          ...prev,
+                          electrumServerType: serverType,
+                          ...defaults,
+                        }));
+                        setElectrumTestResult(null);
+                      }}
+                      className="grid grid-cols-2 gap-3"
+                      data-testid="radio-electrum-server-type"
+                    >
+                      <div className="flex items-start space-x-3 p-3 border rounded-lg">
+                        <RadioGroupItem value="electrs" id="electrs" className="mt-0.5" data-testid="radio-electrs" />
+                        <div className="grid gap-0.5">
+                          <Label htmlFor="electrs" className="font-medium cursor-pointer">Electrs</Label>
+                          <p className="text-xs text-muted-foreground">Default: port 50001, no SSL</p>
+                        </div>
+                      </div>
+                      <div className="flex items-start space-x-3 p-3 border rounded-lg">
+                        <RadioGroupItem value="fulcrum" id="fulcrum" className="mt-0.5" data-testid="radio-fulcrum" />
+                        <div className="grid gap-0.5">
+                          <Label htmlFor="fulcrum" className="font-medium cursor-pointer">Fulcrum</Label>
+                          <p className="text-xs text-muted-foreground">Default: port 50002, SSL</p>
+                        </div>
+                      </div>
+                    </RadioGroup>
+                  </div>
+
+                  <Separator />
+
                   <div className="grid grid-cols-3 gap-3">
                     <div className="col-span-2 space-y-2">
-                      <Label htmlFor="electrumHost">Electrum Server Host</Label>
+                      <Label htmlFor="electrumHost">Server Host</Label>
                       <Input
                         id="electrumHost"
-                        placeholder="192.168.4.118 (no http://)"
+                        placeholder="192.168.4.118"
                         value={currentSettings.electrumHost || ''}
                         onChange={(e) => {
-                          // Auto-clean: strip http:// prefix as user types
                           let value = e.target.value;
                           if (value.toLowerCase().startsWith('http://') || value.toLowerCase().startsWith('https://')) {
                             value = value.replace(/^https?:\/\//i, '');
@@ -940,8 +980,8 @@ export default function NodeSettings() {
                       <Input
                         id="electrumPort"
                         type="number"
-                        placeholder="50001"
-                        value={currentSettings.electrumPort || 50001}
+                        placeholder={currentSettings.electrumServerType === 'fulcrum' ? '50002' : '50001'}
+                        value={currentSettings.electrumPort || (currentSettings.electrumServerType === 'fulcrum' ? 50002 : 50001)}
                         onChange={(e) => {
                           setPendingChanges(prev => ({ ...prev, electrumPort: parseInt(e.target.value) || 50001 }));
                           setElectrumTestResult(null);
@@ -957,24 +997,36 @@ export default function NodeSettings() {
                         Use SSL/TLS
                       </Label>
                       <p className="text-xs text-muted-foreground">
-                        Electrs: 50001 (no SSL). Fulcrum: 50002 (SSL).
+                        {currentSettings.electrumServerType === 'fulcrum'
+                          ? "Fulcrum usually has SSL enabled, but check your node's settings"
+                          : "Electrs typically does not use SSL"
+                        }
                       </p>
                     </div>
                     <Switch
                       id="electrum-ssl"
                       checked={currentSettings.electrumSSL ?? false}
                       onCheckedChange={(checked) => {
-                        const newPort = checked ? 50002 : 50001;
                         setPendingChanges(prev => ({ 
                           ...prev, 
                           electrumSSL: checked,
-                          electrumPort: prev.electrumPort === 50001 || prev.electrumPort === 50002 ? newPort : prev.electrumPort,
                         }));
                         setElectrumTestResult(null);
                       }}
                       data-testid="switch-electrum-ssl"
                     />
                   </div>
+
+                  {/* Contextual tip based on current settings */}
+                  {currentSettings.electrumServerType === 'fulcrum' && !(currentSettings.electrumSSL ?? false) && (
+                    <Alert>
+                      <Info className="h-4 w-4" />
+                      <AlertDescription className="text-sm">
+                        Fulcrum often uses SSL on port 50002, but some setups (like Umbrel) may have SSL disabled. 
+                        If connection fails, check your node's Fulcrum settings to confirm whether SSL is on or off.
+                      </AlertDescription>
+                    </Alert>
+                  )}
                   
                   {electrumTestResult && (
                     <div className={`p-3 rounded-md ${electrumTestResult.success ? 'bg-green-50 dark:bg-green-950 border border-green-200 dark:border-green-800' : 'bg-destructive/10 border border-destructive/20'}`}>
@@ -1009,7 +1061,7 @@ export default function NodeSettings() {
                     {isElectrumTesting ? (
                       <>
                         <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                        Testing Electrum Connection...
+                        Testing Connection...
                       </>
                     ) : (
                       <>
@@ -1018,20 +1070,6 @@ export default function NodeSettings() {
                       </>
                     )}
                   </Button>
-                  
-                  <Alert>
-                    <Info className="h-4 w-4" />
-                    <AlertTitle>About Electrum Protocol</AlertTitle>
-                    <AlertDescription className="space-y-2">
-                      <p>Connects directly to your Electrum server for efficient address queries:</p>
-                      <ul className="list-disc list-inside text-sm space-y-1 mt-2">
-                        <li><strong>Electrs</strong> - Port 50001, no SSL (default for Umbrel)</li>
-                        <li><strong>Fulcrum</strong> - Port 50002, SSL enabled (faster, recommended)</li>
-                        <li>Both speak the same protocol - settings depend on which you're running</li>
-                        <li>Much faster than HTTP API for bulk address syncing</li>
-                      </ul>
-                    </AlertDescription>
-                  </Alert>
                 </div>
               </>
             )}

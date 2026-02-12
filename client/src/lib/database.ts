@@ -417,6 +417,7 @@ export interface NodeSettings {
   electrumHost?: string;        // Electrum server host (e.g., "192.168.4.118")
   electrumPort?: number;        // Electrum server port (e.g., 50001)
   electrumSSL?: boolean;        // Whether to use SSL/TLS for Electrum connection
+  electrumServerType?: 'electrs' | 'fulcrum';  // Server implementation type
   // Last successful connection timestamp
   lastConnectedAt?: number;
   // Connection status message
