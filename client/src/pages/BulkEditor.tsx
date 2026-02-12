@@ -1,16 +1,14 @@
-import { useState, useMemo, useRef, useEffect } from "react";
+import { useState, useMemo } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Separator } from "@/components/ui/separator";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Switch } from "@/components/ui/switch";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { 
   AlertDialog,
   AlertDialogAction,
@@ -24,15 +22,12 @@ import {
 import { 
   Filter, 
   Plus, 
-  Trash2, 
   Search, 
   Edit3, 
   AlertTriangle,
   CheckCircle2,
   X,
   Undo2,
-  ChevronsUpDown,
-  Check
 } from "lucide-react";
 import { useRecords } from "@/hooks/use-records";
 import { useOwners } from "@/hooks/use-owners";
@@ -43,138 +38,21 @@ import { useTags } from "@/hooks/use-tags";
 import { useCategories } from "@/hooks/use-categories";
 import { useToast } from "@/hooks/use-toast";
 import { 
-  updateRecord, 
   bulkUpdateRecords,
-  createTag,
-  createCategory,
-  createOwner,
-  createWalletNameEntry,
-  createSeedNameEntry,
-  createWalletSoftwareEntry,
 } from "@/lib/encryptionFacade";
-import type { 
-  Record, 
-  AddressImportance, 
-  FlowType, 
-  CounterpartyType,
-  ChainType,
-  AcquisitionMethod,
-  DispositionType 
-} from "@/lib/database";
+import type { Record } from "@/lib/database";
 import {
-  FLOW_TYPE_OPTIONS,
-  COUNTERPARTY_TYPE_OPTIONS,
-  ACQUISITION_METHOD_OPTIONS,
-  DISPOSITION_TYPE_OPTIONS,
-} from "@/lib/database";
-
-// Field definitions for filter/action builders
-type FieldType = 'text' | 'select' | 'array' | 'enum';
-
-interface FieldDef {
-  key: keyof Record;
-  label: string;
-  type: FieldType;
-  options?: { value: string; label: string }[];
-  vocabularyKey?: 'owners' | 'walletNames' | 'seedNames' | 'walletSoftware' | 'tags' | 'categories';
-}
-
-const ADDRESS_IMPORTANCE_OPTIONS = [
-  { value: 'verified', label: 'Verified' },
-  { value: 'manual', label: 'Manual' },
-  { value: 'wallet-import', label: 'Wallet Import' },
-  { value: 'xpub-derived', label: 'XPUB Derived' },
-  { value: 'blockchain-discovered', label: 'Blockchain Discovered' },
-  { value: 'pending-review', label: 'Pending Review' },
-];
-
-const CHAIN_TYPE_OPTIONS = [
-  { value: 'receive', label: 'Receive (External)' },
-  { value: 'change', label: 'Change (Internal)' },
-];
-
-const TYPE_OPTIONS = [
-  { value: 'address', label: 'Address' },
-  { value: 'transaction', label: 'Transaction' },
-  { value: 'other', label: 'Other' },
-];
-
-const SOURCE_OPTIONS = [
-  { value: 'manual', label: 'Manual' },
-  { value: 'xpub-import', label: 'XPUB Import' },
-  { value: 'wallet-import', label: 'Wallet Import' },
-  { value: 'blockchain-sync', label: 'Blockchain Sync' },
-];
-
-// Base field definitions (vocabulary options added dynamically)
-const FIELD_DEFS: FieldDef[] = [
-  { key: 'type', label: 'Type', type: 'enum', options: TYPE_OPTIONS },
-  { key: 'owner', label: 'Owner', type: 'select', vocabularyKey: 'owners' },
-  { key: 'walletName', label: 'Wallet Name', type: 'select', vocabularyKey: 'walletNames' },
-  { key: 'seedName', label: 'Seed Name', type: 'select', vocabularyKey: 'seedNames' },
-  { key: 'walletSoftware', label: 'Wallet Software', type: 'select', vocabularyKey: 'walletSoftware' },
-  { key: 'privateKeyStatus', label: 'Private Key Status', type: 'text' },
-  { key: 'tags', label: 'Tags', type: 'array', vocabularyKey: 'tags' },
-  { key: 'categories', label: 'Categories', type: 'array', vocabularyKey: 'categories' },
-  { key: 'label', label: 'Label', type: 'text' },
-  { key: 'notes', label: 'Notes', type: 'text' },
-  { key: 'source', label: 'Source', type: 'enum', options: SOURCE_OPTIONS },
-  { key: 'chainType', label: 'Chain Type', type: 'enum', options: CHAIN_TYPE_OPTIONS },
-  { key: 'addressImportance', label: 'Address Importance', type: 'enum', options: ADDRESS_IMPORTANCE_OPTIONS },
-  { key: 'flowType', label: 'Flow Type', type: 'enum', options: FLOW_TYPE_OPTIONS },
-  { key: 'acquisitionMethod', label: 'Acquisition Method', type: 'enum', options: ACQUISITION_METHOD_OPTIONS },
-  { key: 'dispositionType', label: 'Disposition Type', type: 'enum', options: DISPOSITION_TYPE_OPTIONS },
-  { key: 'counterpartyType', label: 'Counterparty Type', type: 'enum', options: COUNTERPARTY_TYPE_OPTIONS },
-];
-
-// Filter operators
-type Operator = 'equals' | 'not_equals' | 'contains' | 'not_contains' | 'starts_with' | 'is_empty' | 'is_not_empty';
-
-const OPERATORS: { value: Operator; label: string; needsValue: boolean }[] = [
-  { value: 'equals', label: 'equals', needsValue: true },
-  { value: 'not_equals', label: 'does not equal', needsValue: true },
-  { value: 'contains', label: 'contains', needsValue: true },
-  { value: 'not_contains', label: 'does not contain', needsValue: true },
-  { value: 'starts_with', label: 'starts with', needsValue: true },
-  { value: 'is_empty', label: 'is empty', needsValue: false },
-  { value: 'is_not_empty', label: 'is not empty', needsValue: false },
-];
-
-// Action types
-type ActionType = 'set' | 'add' | 'remove' | 'clear';
-
-const ACTION_TYPES: { value: ActionType; label: string; description: string }[] = [
-  { value: 'set', label: 'Set', description: 'Replace the value' },
-  { value: 'add', label: 'Add', description: 'Add to array (tags/categories)' },
-  { value: 'remove', label: 'Remove', description: 'Remove from array (tags/categories)' },
-  { value: 'clear', label: 'Clear', description: 'Set to empty' },
-];
-
-// Filter condition - supports multiple values for multi-select filtering
-interface FilterCondition {
-  id: string;
-  field: keyof Record;
-  operator: Operator;
-  value: string;
-  values: string[]; // For multi-select support
-}
-
-// Action definition
-interface ActionDef {
-  id: string;
-  type: ActionType;
-  field: keyof Record;
-  value: string;
-}
-
-// Undo snapshot - stores details about what was changed for clear undo messaging
-interface UndoSnapshot {
-  timestamp: number;
-  recordSnapshots: { id: number; before: Partial<Record> }[];
-  description: string;
-  recordCount: number;
-  actionsApplied: { type: ActionType; field: string; value?: string }[];
-}
+  type FieldDef,
+  type Operator,
+  type ActionType,
+  type FilterCondition,
+  type ActionDef,
+  type UndoSnapshot,
+  FIELD_DEFS,
+  OPERATORS,
+  ACTION_TYPES,
+} from "./bulk-editor-types";
+import { VocabularyCombobox, VocabularyMultiSelect } from "@/components/VocabularyCombobox";
 
 export default function BulkEditor() {
   const { records, isLoading } = useRecords();
@@ -500,344 +378,6 @@ export default function BulkEditor() {
     }
   };
   
-  // Combobox component for vocabulary fields - allows typing new values OR selecting existing
-  const ComboboxInput = ({ 
-    fieldKey, 
-    value, 
-    onChange, 
-    options, 
-    placeholder,
-    vocabularyKey
-  }: { 
-    fieldKey: string;
-    value: string; 
-    onChange: (v: string) => void; 
-    options: { value: string; label: string }[];
-    placeholder: string;
-    vocabularyKey?: 'owners' | 'walletNames' | 'seedNames' | 'walletSoftware' | 'tags' | 'categories';
-  }) => {
-    const [open, setOpen] = useState(false);
-    const [inputValue, setInputValue] = useState(value);
-    const [isCreating, setIsCreating] = useState(false);
-    
-    // Sync inputValue when value prop changes (e.g., reset or undo)
-    useEffect(() => {
-      setInputValue(value);
-    }, [value]);
-    
-    // Filter options based on input - use fresh options from props
-    const filteredOptions = useMemo(() => 
-      options.filter(opt => 
-        opt.label.toLowerCase().includes(inputValue.toLowerCase())
-      ),
-      [options, inputValue]
-    );
-    
-    // Show "create new" option if input doesn't match any existing option and we have a vocabulary key
-    const showCreateNew = vocabularyKey && inputValue.trim() !== '' && 
-      !options.some(opt => opt.value.toLowerCase() === inputValue.toLowerCase());
-    
-    const handleCreateNew = async () => {
-      if (!vocabularyKey || !inputValue.trim()) return;
-      
-      const trimmedValue = inputValue.trim();
-      setIsCreating(true);
-      
-      try {
-        switch (vocabularyKey) {
-          case 'tags':
-            await createTag(trimmedValue);
-            break;
-          case 'categories':
-            await createCategory(trimmedValue);
-            break;
-          case 'owners':
-            await createOwner(trimmedValue);
-            break;
-          case 'walletNames':
-            await createWalletNameEntry(trimmedValue);
-            break;
-          case 'seedNames':
-            await createSeedNameEntry(trimmedValue);
-            break;
-          case 'walletSoftware':
-            await createWalletSoftwareEntry(trimmedValue);
-            break;
-        }
-        
-        onChange(trimmedValue);
-        setOpen(false);
-        toast({
-          title: "Created",
-          description: `"${trimmedValue}" has been added`,
-        });
-      } catch (error) {
-        toast({
-          variant: "destructive",
-          title: "Creation failed",
-          description: error instanceof Error ? error.message : "Could not create item",
-        });
-      } finally {
-        setIsCreating(false);
-      }
-    };
-    
-    return (
-      <Popover open={open} onOpenChange={setOpen}>
-        <PopoverTrigger asChild>
-          <Button
-            variant="outline"
-            role="combobox"
-            aria-expanded={open}
-            className="w-[180px] justify-between font-normal"
-            data-testid={`combobox-value-${fieldKey}`}
-          >
-            <span className="truncate">
-              {value || placeholder}
-            </span>
-            <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-          </Button>
-        </PopoverTrigger>
-        <PopoverContent className="w-[220px] p-0" align="start">
-          <Command shouldFilter={false}>
-            <CommandInput 
-              placeholder={`Type or search...`}
-              value={inputValue}
-              onValueChange={setInputValue}
-              data-testid={`input-combobox-${fieldKey}`}
-            />
-            <CommandList>
-              {filteredOptions.length === 0 && !showCreateNew && (
-                <CommandEmpty>No options found.</CommandEmpty>
-              )}
-              {showCreateNew && (
-                <CommandGroup heading="Create new">
-                  <CommandItem
-                    value={`create:${inputValue}`}
-                    onSelect={handleCreateNew}
-                    disabled={isCreating}
-                    data-testid={`option-create-new-${fieldKey}`}
-                  >
-                    <Plus className="mr-2 h-4 w-4" />
-                    {isCreating ? "Creating..." : `Create "${inputValue.trim()}"`}
-                  </CommandItem>
-                </CommandGroup>
-              )}
-              {filteredOptions.length > 0 && (
-                <CommandGroup heading="Existing values">
-                  {filteredOptions.map(opt => (
-                    <CommandItem
-                      key={opt.value}
-                      value={opt.value}
-                      onSelect={() => {
-                        onChange(opt.value);
-                        setInputValue(opt.value);
-                        setOpen(false);
-                      }}
-                      data-testid={`option-${fieldKey}-${opt.value}`}
-                    >
-                      <Check 
-                        className={`mr-2 h-4 w-4 ${value === opt.value ? 'opacity-100' : 'opacity-0'}`} 
-                      />
-                      {opt.label}
-                    </CommandItem>
-                  ))}
-                </CommandGroup>
-              )}
-            </CommandList>
-          </Command>
-        </PopoverContent>
-      </Popover>
-    );
-  };
-  
-  // Multi-select combobox for filter conditions - allows selecting multiple values
-  const MultiSelectCombobox = ({ 
-    fieldKey, 
-    values, 
-    onChange, 
-    options, 
-    placeholder,
-    vocabularyKey
-  }: { 
-    fieldKey: string;
-    values: string[]; 
-    onChange: (v: string[]) => void; 
-    options: { value: string; label: string }[];
-    placeholder: string;
-    vocabularyKey?: 'owners' | 'walletNames' | 'seedNames' | 'walletSoftware' | 'tags' | 'categories';
-  }) => {
-    const [open, setOpen] = useState(false);
-    const [searchInput, setSearchInput] = useState("");
-    const [isCreating, setIsCreating] = useState(false);
-    
-    // Filter options based on search input
-    const filteredOptions = useMemo(() => 
-      options.filter(opt => 
-        opt.label.toLowerCase().includes(searchInput.toLowerCase())
-      ),
-      [options, searchInput]
-    );
-    
-    // Show "create new" option if input doesn't match any existing option
-    const showCreateNew = vocabularyKey && searchInput.trim() !== '' && 
-      !options.some(opt => opt.value.toLowerCase() === searchInput.toLowerCase());
-    
-    const handleCreateNew = async () => {
-      if (!vocabularyKey || !searchInput.trim()) return;
-      
-      const trimmedValue = searchInput.trim();
-      setIsCreating(true);
-      
-      try {
-        switch (vocabularyKey) {
-          case 'tags':
-            await createTag(trimmedValue);
-            break;
-          case 'categories':
-            await createCategory(trimmedValue);
-            break;
-          case 'owners':
-            await createOwner(trimmedValue);
-            break;
-          case 'walletNames':
-            await createWalletNameEntry(trimmedValue);
-            break;
-          case 'seedNames':
-            await createSeedNameEntry(trimmedValue);
-            break;
-          case 'walletSoftware':
-            await createWalletSoftwareEntry(trimmedValue);
-            break;
-        }
-        // Add the newly created value to selection
-        if (!values.includes(trimmedValue)) {
-          onChange([...values, trimmedValue]);
-        }
-        setSearchInput("");
-        toast({
-          title: "Created",
-          description: `Added "${trimmedValue}" to vocabulary`,
-        });
-      } catch (error) {
-        console.error('Failed to create vocabulary item:', error);
-        toast({
-          title: "Failed to create",
-          description: "Could not create new vocabulary item",
-          variant: "destructive",
-        });
-      } finally {
-        setIsCreating(false);
-      }
-    };
-    
-    const toggleValue = (optValue: string) => {
-      if (values.includes(optValue)) {
-        onChange(values.filter(v => v !== optValue));
-      } else {
-        onChange([...values, optValue]);
-      }
-    };
-    
-    const removeValue = (optValue: string) => {
-      onChange(values.filter(v => v !== optValue));
-    };
-    
-    return (
-      <div className="flex flex-col gap-1">
-        <Popover open={open} onOpenChange={setOpen}>
-          <PopoverTrigger asChild>
-            <Button
-              variant="outline"
-              role="combobox"
-              aria-expanded={open}
-              className="w-[220px] justify-between h-auto min-h-9"
-              data-testid={`multiselect-filter-${fieldKey}`}
-            >
-              <span className="truncate text-left flex-1">
-                {values.length === 0 
-                  ? placeholder 
-                  : values.length === 1
-                  ? values[0]
-                  : `${values.length} selected`
-                }
-              </span>
-              <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-            </Button>
-          </PopoverTrigger>
-          <PopoverContent className="w-[220px] p-0" align="start">
-            <Command shouldFilter={false}>
-              <CommandInput 
-                placeholder="Search or type new..."
-                value={searchInput}
-                onValueChange={setSearchInput}
-                data-testid={`multiselect-search-${fieldKey}`}
-              />
-              <CommandList>
-                <CommandEmpty>
-                  {showCreateNew ? (
-                    <div className="text-sm text-muted-foreground py-2">
-                      Press enter or click below to create
-                    </div>
-                  ) : (
-                    "No results found"
-                  )}
-                </CommandEmpty>
-                {showCreateNew && (
-                  <CommandGroup heading="Create new">
-                    <CommandItem
-                      value={`create:${searchInput}`}
-                      onSelect={handleCreateNew}
-                      disabled={isCreating}
-                      data-testid={`multiselect-create-${fieldKey}`}
-                    >
-                      <Plus className="mr-2 h-4 w-4" />
-                      {isCreating ? "Creating..." : `Create "${searchInput.trim()}"`}
-                    </CommandItem>
-                  </CommandGroup>
-                )}
-                {filteredOptions.length > 0 && (
-                  <CommandGroup heading="Select values">
-                    {filteredOptions.map(opt => (
-                      <CommandItem
-                        key={opt.value}
-                        value={opt.value}
-                        onSelect={() => toggleValue(opt.value)}
-                        data-testid={`multiselect-option-${fieldKey}-${opt.value}`}
-                      >
-                        <Check 
-                          className={`mr-2 h-4 w-4 ${values.includes(opt.value) ? 'opacity-100' : 'opacity-0'}`} 
-                        />
-                        {opt.label}
-                      </CommandItem>
-                    ))}
-                  </CommandGroup>
-                )}
-              </CommandList>
-            </Command>
-          </PopoverContent>
-        </Popover>
-        {/* Show selected values as badges */}
-        {values.length > 0 && (
-          <div className="flex flex-wrap gap-1 max-w-[220px]">
-            {values.map(v => (
-              <Badge 
-                key={v} 
-                variant="secondary" 
-                className="text-xs gap-1 cursor-pointer"
-                onClick={() => removeValue(v)}
-                data-testid={`multiselect-badge-${fieldKey}-${v}`}
-              >
-                {v}
-                <X className="h-3 w-3" />
-              </Badge>
-            ))}
-          </div>
-        )}
-      </div>
-    );
-  };
-  
   // Render filter value input with multi-select support for vocabulary fields
   const renderFilterValueInput = (
     condition: FilterCondition,
@@ -851,7 +391,7 @@ export default function BulkEditor() {
     // For enum fields (fixed options), use multi-select
     if (fieldDef.type === 'enum' && options.length > 0) {
       return (
-        <MultiSelectCombobox
+        <VocabularyMultiSelect
           fieldKey={condition.field as string}
           values={condition.values}
           onChange={(v) => updateFn({ values: v, value: v[0] || '' })}
@@ -861,11 +401,11 @@ export default function BulkEditor() {
       );
     }
     
-    // For vocabulary fields (select/array with suggestions), use MultiSelectCombobox
+    // For vocabulary fields (select/array with suggestions), use VocabularyMultiSelect
     if ((fieldDef.type === 'select' || fieldDef.type === 'array') && fieldDef.vocabularyKey) {
       const optionsHash = options.map(o => o.value).join('|').slice(0, 100);
       return (
-        <MultiSelectCombobox
+        <VocabularyMultiSelect
           key={`${condition.field}-${optionsHash}`}
           fieldKey={condition.field as string}
           values={condition.values}
@@ -925,7 +465,7 @@ export default function BulkEditor() {
       // Create a simple hash from option values to detect content changes
       const optionsHash = options.map(o => o.value).join('|').slice(0, 100);
       return (
-        <ComboboxInput
+        <VocabularyCombobox
           key={`${fieldKey}-${optionsHash}`}
           fieldKey={fieldKey as string}
           value={value}

@@ -55,6 +55,15 @@ Data is stored locally using Dexie.js (IndexedDB) for structured data, with all 
 *   **Evidence/Document Storage System:** General-purpose encrypted document storage for proof-of-ownership and historical records, supporting various document types and attachments with full encryption.
 *   **Vault Management Page:** Dedicated UI for viewing and managing multisig vaults, aggregating addresses, displaying vault details, and providing navigation to filtered records.
 
+## Code Organization (Modular Architecture)
+
+*   **Electron Main Process:** `electron/main.cjs` (bootstrap + IPC registration) delegates to `tor-proxy.cjs` (Tor SOCKS proxy management), `file-handlers.cjs` (file system operations), `electrum-client.cjs` (Electrum TCP protocol).
+*   **Database Types:** All TypeScript interfaces/types in `client/src/lib/db-types.ts`, re-exported via `database.ts` using `export *` pattern (63+ consuming files unchanged).
+*   **Encryption:** `client/src/lib/encryptionFacade.ts` re-exports from `encryption/key-management.ts`, `record-encryption.ts`, `vocabulary-crud.ts`, `record-crud.ts`.
+*   **Blockchain Providers:** `client/src/lib/blockchain-api.ts` orchestrates providers in `providers/` directory (esplora-base.ts, mempool-space.ts, blockstream.ts, custom-electrs.ts, custom-mempool.ts, electrum.ts) with shared types.
+*   **Bulk Import:** `client/src/pages/BulkImport.tsx` uses extracted components from `bulk-import/` (MultisigConfigPanel, AddressPreviewTable, MetadataForm).
+*   **Bulk Editor:** Types in `bulk-editor-types.ts`, reusable vocabulary comboboxes in `components/VocabularyCombobox.tsx` (VocabularyCombobox, VocabularyMultiSelect).
+
 ## External Dependencies
 
 *   **Local File System:** For storing encrypted attachments.
