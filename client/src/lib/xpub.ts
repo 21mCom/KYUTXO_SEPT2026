@@ -3,6 +3,8 @@ import BIP32Factory from 'bip32';
 import * as ecc from '@bitcoinerlab/secp256k1';
 import bs58check from 'bs58check';
 
+bitcoin.initEccLib(ecc);
+
 export type ChainType = 'receive' | 'change';
 
 export interface DerivedAddress {
