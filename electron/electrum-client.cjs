@@ -1,6 +1,10 @@
 const net = require('net');
 const tls = require('tls');
 const crypto = require('crypto');
+const bitcoin = require('bitcoinjs-lib');
+const ecc = require('@bitcoinerlab/secp256k1');
+
+bitcoin.initEccLib(ecc);
 
 // Connection pool with health tracking and request multiplexing
 const electrumPool = {
@@ -165,11 +169,7 @@ function pooledRequest(key, method, params = [], timeout = 30000) {
   });
 }
 
-// Helper to create scripthash from address
 function addressToScripthash(address) {
-  // Import bitcoinjs-lib dynamically
-  const bitcoin = require('bitcoinjs-lib');
-  
   let scriptPubKey;
   try {
     // Decode the address to get the script
