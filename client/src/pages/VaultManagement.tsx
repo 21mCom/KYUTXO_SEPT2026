@@ -1,13 +1,15 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useCallback } from "react";
 import { useLocation } from "wouter";
-import { Layers, Users, ChevronDown, ChevronRight, Search, ExternalLink, Wallet } from "lucide-react";
+import { Layers, Users, ChevronDown, ChevronRight, Search, ExternalLink, Wallet, Pencil, Check, X, StickyNote } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { decryptRecords, isEncryptionReady } from "@/lib/encryptionFacade";
+import { useToast } from "@/hooks/use-toast";
+import { decryptRecords, isEncryptionReady, updateRecord } from "@/lib/encryptionFacade";
 import { db } from "@/lib/database";
 import type { VaultMetadata, Record as DbRecord } from "@/lib/database";
 
@@ -25,6 +27,7 @@ interface ParsedVaultNotes {
 }
 
 interface VaultSummary {
+  vaultKey: string;
   vaultName: string;
   m: number;
   n: number;
@@ -74,6 +77,10 @@ export default function VaultManagement() {
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [expandedVaults, setExpandedVaults] = useState<Set<string>>(new Set());
+  const [editingNotesVault, setEditingNotesVault] = useState<string | null>(null);
+  const [editNotesText, setEditNotesText] = useState("");
+  const [savingNotes, setSavingNotes] = useState(false);
+  const { toast } = useToast();
 
   useEffect(() => {
     async function loadVaults() {
@@ -95,6 +102,7 @@ export default function VaultManagement() {
             
             if (!vaultMap.has(key)) {
               vaultMap.set(key, {
+                vaultKey: key,
                 vaultName: record.vault.vaultName || 'Unnamed Vault',
                 m: record.vault.m,
                 n: record.vault.n,
@@ -133,7 +141,8 @@ export default function VaultManagement() {
     return vaults.filter(vault => 
       vault.vaultName.toLowerCase().includes(query) ||
       vault.cosigners.some(c => (c.name || '').toLowerCase().includes(query)) ||
-      (vault.scriptType || '').toLowerCase().includes(query)
+      (vault.scriptType || '').toLowerCase().includes(query) ||
+      (vault.userNotes || '').toLowerCase().includes(query)
     );
   }, [vaults, searchQuery]);
 
@@ -152,6 +161,69 @@ export default function VaultManagement() {
   const handleViewAddresses = (vault: VaultSummary) => {
     navigate(`/?vaultName=${encodeURIComponent(vault.vaultName)}`);
   };
+
+  const startEditingNotes = (vault: VaultSummary) => {
+    setEditingNotesVault(vault.vaultKey);
+    setEditNotesText(vault.userNotes || "");
+  };
+
+  const cancelEditingNotes = () => {
+    setEditingNotesVault(null);
+    setEditNotesText("");
+  };
+
+  const saveVaultNotes = useCallback(async (vault: VaultSummary) => {
+    setSavingNotes(true);
+    try {
+      const rawRecords = await db.records.toArray();
+      let records: DbRecord[];
+      if (isEncryptionReady()) {
+        records = await decryptRecords(rawRecords);
+      } else {
+        records = rawRecords;
+      }
+
+      const vaultRecords = records.filter(r => {
+        if (!r.vault?.isVaultXpub || !r.vault.m || !r.vault.n) return false;
+        return generateVaultKey(r.vault) === vault.vaultKey;
+      });
+
+      const trimmedNotes = editNotesText.trim();
+
+      for (const record of vaultRecords) {
+        if (!record.id) continue;
+        const existingParsed = parseVaultNotes(record.vault?.vaultNotes);
+        const newVaultNotesObj: ParsedVaultNotes = {
+          cosigners: existingParsed?.cosigners,
+          scriptType: existingParsed?.scriptType,
+          userNotes: trimmedNotes || undefined,
+        };
+        const newVaultNotes = JSON.stringify(newVaultNotesObj);
+        await updateRecord(record.id, {
+          vault: {
+            ...record.vault!,
+            vaultNotes: newVaultNotes,
+          },
+        });
+      }
+
+      setVaults(prev => prev.map(v => {
+        if (v.vaultKey === vault.vaultKey) {
+          return { ...v, userNotes: trimmedNotes || undefined };
+        }
+        return v;
+      }));
+
+      setEditingNotesVault(null);
+      setEditNotesText("");
+      toast({ title: "Notes saved", description: `Updated notes across ${vaultRecords.length} address records.` });
+    } catch (error) {
+      console.error("Failed to save vault notes:", error);
+      toast({ title: "Error", description: "Failed to save vault notes.", variant: "destructive" });
+    } finally {
+      setSavingNotes(false);
+    }
+  }, [editNotesText, toast]);
 
   if (loading) {
     return (
@@ -292,14 +364,78 @@ export default function VaultManagement() {
                       </CollapsibleContent>
                     </Collapsible>
                   )}
-                  {vault.userNotes && (
-                    <div className="pt-2 border-t">
-                      <p className="text-xs text-muted-foreground mb-1">Notes:</p>
-                      <p className="text-sm whitespace-pre-wrap" data-testid={`text-vault-notes-${idx}`}>
-                        {vault.userNotes}
-                      </p>
-                    </div>
-                  )}
+                  {(() => {
+                    const isEditing = editingNotesVault === vault.vaultKey;
+                    return (
+                      <div className="pt-2 border-t">
+                        <div className="flex items-center justify-between gap-2 mb-1">
+                          <p className="text-xs text-muted-foreground flex items-center gap-1">
+                            <StickyNote className="h-3 w-3" />
+                            Notes
+                          </p>
+                          {!isEditing && (
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => startEditingNotes(vault)}
+                              data-testid={`button-edit-notes-${idx}`}
+                            >
+                              <Pencil className="h-3 w-3" />
+                            </Button>
+                          )}
+                        </div>
+                        {isEditing ? (
+                          <div className="space-y-2">
+                            <Textarea
+                              value={editNotesText}
+                              onChange={(e) => setEditNotesText(e.target.value)}
+                              placeholder="Add notes about this vault..."
+                              className="text-sm min-h-[80px]"
+                              autoFocus
+                              data-testid={`textarea-vault-notes-${idx}`}
+                            />
+                            <div className="flex items-center justify-end gap-2">
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={cancelEditingNotes}
+                                disabled={savingNotes}
+                                data-testid={`button-cancel-notes-${idx}`}
+                              >
+                                <X className="h-3 w-3 mr-1" />
+                                Cancel
+                              </Button>
+                              <Button
+                                size="sm"
+                                onClick={() => saveVaultNotes(vault)}
+                                disabled={savingNotes}
+                                data-testid={`button-save-notes-${idx}`}
+                              >
+                                <Check className="h-3 w-3 mr-1" />
+                                {savingNotes ? "Saving..." : "Save"}
+                              </Button>
+                            </div>
+                          </div>
+                        ) : vault.userNotes ? (
+                          <p
+                            className="text-sm whitespace-pre-wrap cursor-pointer hover-elevate rounded p-1 -mx-1"
+                            onClick={() => startEditingNotes(vault)}
+                            data-testid={`text-vault-notes-${idx}`}
+                          >
+                            {vault.userNotes}
+                          </p>
+                        ) : (
+                          <p
+                            className="text-sm text-muted-foreground italic cursor-pointer hover-elevate rounded p-1 -mx-1"
+                            onClick={() => startEditingNotes(vault)}
+                            data-testid={`text-vault-notes-empty-${idx}`}
+                          >
+                            Click to add notes...
+                          </p>
+                        )}
+                      </div>
+                    );
+                  })()}
                 </CardContent>
               </Card>
             ))}
