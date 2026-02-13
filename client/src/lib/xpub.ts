@@ -399,7 +399,7 @@ export async function deriveTaprootAddressesForChain(
         path: `${pathPrefix}/${i}`,
         chainType,
         chainLabel,
-        internalPubkey: Buffer.from(xOnlyPubkey).toString('hex'),
+        internalPubkey: Array.from(xOnlyPubkey, b => b.toString(16).padStart(2, '0')).join(''),
       });
     }
     
