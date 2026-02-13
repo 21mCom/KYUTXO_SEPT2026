@@ -25,6 +25,16 @@ import {
 } from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
 
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Separator } from "@/components/ui/separator";
+import { useSettings, useCustomFields, toggleTableColumn, toggleCustomFieldColumn } from "@/hooks/use-settings";
+import { Settings2 } from "lucide-react";
+
 // User-curated importance tiers (exclude blockchain-discovered and pending-review by default)
 const USER_CURATED_TIERS: AddressImportance[] = ['verified', 'manual', 'wallet-import', 'xpub-derived'];
 const ALL_TIERS: AddressImportance[] = ['verified', 'manual', 'wallet-import', 'xpub-derived', 'blockchain-discovered', 'pending-review'];
@@ -140,6 +150,9 @@ export default function Records() {
       setUrlSearchQuery(null); // Clear after applying
     }
   }, [urlSearchQuery, records.length, isLoading]);
+
+  const { tableColumns, customFieldColumns } = useSettings();
+  const { enabledCustomFields } = useCustomFields();
 
   // Load records and custom field definitions with smart filtering
   useEffect(() => {
@@ -595,12 +608,163 @@ export default function Records() {
                 />
               </div>
             </div>
-            <div className="pt-6">
+            <div className="pt-6 flex items-center gap-2">
               <BlockchainToggle
                 checked={includeBlockchainDiscovered}
                 onCheckedChange={setIncludeBlockchainDiscovered}
                 hiddenCount={totalBlockchainDiscovered}
               />
+              
+              <Popover>
+                <PopoverTrigger asChild>
+                  <Button variant="outline" size="sm" className="gap-2" data-testid="button-column-settings">
+                    <Settings2 className="h-4 w-4" />
+                    Columns
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent align="end" className="w-64 max-h-[80vh] overflow-y-auto">
+                  <div className="space-y-4">
+                    <div>
+                      <p className="text-sm font-semibold mb-2">Metadata Columns</p>
+                      <div className="grid grid-cols-1 gap-2">
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <Checkbox
+                            checked={tableColumns.tags}
+                            onCheckedChange={() => toggleTableColumn('tags')}
+                            data-testid="checkbox-col-tags"
+                          />
+                          <span className="text-sm">Tags</span>
+                        </label>
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <Checkbox
+                            checked={tableColumns.categories}
+                            onCheckedChange={() => toggleTableColumn('categories')}
+                            data-testid="checkbox-col-categories"
+                          />
+                          <span className="text-sm">Categories</span>
+                        </label>
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <Checkbox
+                            checked={tableColumns.walletSoftware}
+                            onCheckedChange={() => toggleTableColumn('walletSoftware')}
+                            data-testid="checkbox-col-wallet"
+                          />
+                          <span className="text-sm">Wallet Software</span>
+                        </label>
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <Checkbox
+                            checked={tableColumns.seedName}
+                            onCheckedChange={() => toggleTableColumn('seedName')}
+                            data-testid="checkbox-col-seed"
+                          />
+                          <span className="text-sm">Seed Name</span>
+                        </label>
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <Checkbox
+                            checked={tableColumns.privateKeyStatus}
+                            onCheckedChange={() => toggleTableColumn('privateKeyStatus')}
+                            data-testid="checkbox-col-privatekey"
+                          />
+                          <span className="text-sm">Private Key</span>
+                        </label>
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <Checkbox
+                            checked={tableColumns.hasAttachments}
+                            onCheckedChange={() => toggleTableColumn('hasAttachments')}
+                            data-testid="checkbox-col-attachments"
+                          />
+                          <span className="text-sm">Attachments</span>
+                        </label>
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <Checkbox
+                            checked={tableColumns.source}
+                            onCheckedChange={() => toggleTableColumn('source')}
+                            data-testid="checkbox-col-source"
+                          />
+                          <span className="text-sm">Source</span>
+                        </label>
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <Checkbox
+                            checked={tableColumns.owner}
+                            onCheckedChange={() => toggleTableColumn('owner')}
+                            data-testid="checkbox-col-owner"
+                          />
+                          <span className="text-sm">Owner</span>
+                        </label>
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <Checkbox
+                            checked={tableColumns.walletName}
+                            onCheckedChange={() => toggleTableColumn('walletName')}
+                            data-testid="checkbox-col-walletname"
+                          />
+                          <span className="text-sm">Wallet Name</span>
+                        </label>
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <Checkbox
+                            checked={tableColumns.firstSeen}
+                            onCheckedChange={() => toggleTableColumn('firstSeen')}
+                            data-testid="checkbox-col-firstseen"
+                          />
+                          <span className="text-sm">First Seen</span>
+                        </label>
+                      </div>
+                    </div>
+
+                    <Separator />
+
+                    <div>
+                      <p className="text-sm font-semibold mb-2">Blockchain Data</p>
+                      <div className="grid grid-cols-1 gap-2">
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <Checkbox
+                            checked={tableColumns.balance}
+                            onCheckedChange={() => toggleTableColumn('balance')}
+                            data-testid="checkbox-col-balance"
+                          />
+                          <span className="text-sm">BTC Balance</span>
+                        </label>
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <Checkbox
+                            checked={tableColumns.lastTxDate}
+                            onCheckedChange={() => toggleTableColumn('lastTxDate')}
+                            data-testid="checkbox-col-lasttxdate"
+                          />
+                          <span className="text-sm">Last Tx Date</span>
+                        </label>
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <Checkbox
+                            checked={tableColumns.txCount}
+                            onCheckedChange={() => toggleTableColumn('txCount')}
+                            data-testid="checkbox-col-txcount"
+                          />
+                          <span className="text-sm">Tx Count</span>
+                        </label>
+                      </div>
+                    </div>
+
+                    {enabledCustomFields.length > 0 && (
+                      <>
+                        <Separator />
+                        <div>
+                          <p className="text-sm font-semibold mb-2">Custom Fields</p>
+                          <div className="grid grid-cols-1 gap-2">
+                            {enabledCustomFields.map((field) => (
+                              <label key={field.slug} className="flex items-center gap-2 cursor-pointer">
+                                <Checkbox
+                                  checked={customFieldColumns[field.slug] || false}
+                                  onCheckedChange={() => toggleCustomFieldColumn(field.slug)}
+                                  data-testid={`checkbox-col-custom-${field.slug}`}
+                                />
+                                <span className="text-sm">{field.name}</span>
+                              </label>
+                            ))}
+                          </div>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                </PopoverContent>
+              </Popover>
             </div>
           </div>
           
