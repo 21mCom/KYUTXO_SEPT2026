@@ -11,6 +11,10 @@ const defaultTableColumns = {
   owner: false,
   walletName: false,
   source: false,
+  firstSeen: false,
+  balance: false,
+  lastTxDate: false,
+  txCount: false,
 };
 
 const defaultFieldVisibility = {

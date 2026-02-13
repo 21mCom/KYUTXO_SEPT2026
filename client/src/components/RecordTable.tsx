@@ -30,9 +30,16 @@ import {
 import { useSettings, useCustomFields, toggleTableColumn, toggleCustomFieldColumn } from "@/hooks/use-settings";
 import { db, type CustomField } from "@/lib/database";
 import { Separator } from "@/components/ui/separator";
+import { formatBTC } from "@/lib/bitcoin";
 
 type SortDirection = "asc" | "desc" | null;
-type SortColumn = "type" | "label" | "inputString" | "tags" | "categories" | "walletSoftware" | "seedName" | "privateKeyStatus" | "attachments" | "source" | "owner" | string;
+type SortColumn = "type" | "label" | "inputString" | "tags" | "categories" | "walletSoftware" | "seedName" | "privateKeyStatus" | "attachments" | "source" | "owner" | "balance" | "lastTxDate" | "txCount" | string;
+
+interface AddressStats {
+  balanceSats: number;
+  lastTxDate: number;
+  txCount: number;
+}
 
 // Format Unix timestamp (seconds) to human-readable date
 function formatBlockTime(timestamp?: number): string {
@@ -163,9 +170,12 @@ export function RecordTable({
   // Use external sort if provided, otherwise use internal
   // Exception: attachments column is always handled internally (needs attachment counts)
   const isExternallyControlled = onSortChange !== undefined;
-  const isInternalAttachmentSort = isExternallyControlled && internalSortColumn === "attachments";
-  const sortColumn = isInternalAttachmentSort ? internalSortColumn : (isExternallyControlled ? (externalSortColumn ?? null) : internalSortColumn);
-  const sortDirection = isInternalAttachmentSort ? internalSortDirection : (isExternallyControlled ? (externalSortDirection ?? null) : internalSortDirection);
+  const internalOnlyColumns = ["attachments", "balance", "lastTxDate", "txCount"];
+  const isInternalComputedSort = isExternallyControlled && internalOnlyColumns.includes(internalSortColumn || "");
+  const sortColumn = isInternalComputedSort ? internalSortColumn : (isExternallyControlled ? (externalSortColumn ?? null) : internalSortColumn);
+  const sortDirection = isInternalComputedSort ? internalSortDirection : (isExternallyControlled ? (externalSortDirection ?? null) : internalSortDirection);
+
+  const [addressStats, setAddressStats] = useState<Map<string, AddressStats>>(new Map());
 
   useEffect(() => {
     const loadAttachmentCounts = async () => {
@@ -182,10 +192,85 @@ export function RecordTable({
     }
   }, [records]);
 
+  useEffect(() => {
+    const needsStats = tableColumns.balance || tableColumns.lastTxDate || tableColumns.txCount;
+    if (!needsStats || records.length === 0) {
+      setAddressStats(new Map());
+      return;
+    }
+
+    let cancelled = false;
+    const loadStats = async () => {
+      const addressRecords = records.filter(r => r.type === 'address' && r.inputString);
+      const addressStrings = addressRecords.map(r => r.inputString);
+      if (addressStrings.length === 0) {
+        setAddressStats(new Map());
+        return;
+      }
+
+      const participants = await db.transactionParticipants
+        .where('address')
+        .anyOf(addressStrings)
+        .toArray();
+
+      const txids = Array.from(new Set(participants.map(p => p.txid)));
+      const txMap = new Map<string, number>();
+      if (txids.length > 0) {
+        const txBatches: string[][] = [];
+        for (let i = 0; i < txids.length; i += 500) {
+          txBatches.push(txids.slice(i, i + 500));
+        }
+        for (const batch of txBatches) {
+          const txs = await db.blockchainTransactions
+            .where('txid')
+            .anyOf(batch)
+            .toArray();
+          txs.forEach(tx => txMap.set(tx.txid, tx.blockTime));
+        }
+      }
+
+      const stats = new Map<string, AddressStats>();
+      const addrAgg = new Map<string, { outputSats: number; inputSats: number; lastTxTime: number; txids: Set<string> }>();
+      participants.forEach(p => {
+        const agg = addrAgg.get(p.address) || { outputSats: 0, inputSats: 0, lastTxTime: 0, txids: new Set<string>() };
+        const blockTime = txMap.get(p.txid) || 0;
+        if (p.role === 'output') {
+          agg.outputSats += p.amount;
+        } else {
+          agg.inputSats += p.amount;
+        }
+        if (blockTime > agg.lastTxTime) {
+          agg.lastTxTime = blockTime;
+        }
+        agg.txids.add(p.txid);
+        addrAgg.set(p.address, agg);
+      });
+
+      for (const record of addressRecords) {
+        const agg = addrAgg.get(record.inputString);
+        if (agg) {
+          stats.set(record.id, {
+            balanceSats: agg.outputSats - agg.inputSats,
+            lastTxDate: agg.lastTxTime,
+            txCount: agg.txids.size,
+          });
+        }
+      }
+
+      if (!cancelled) {
+        setAddressStats(stats);
+      }
+    };
+
+    loadStats();
+    return () => { cancelled = true; };
+  }, [records, tableColumns.balance, tableColumns.lastTxDate, tableColumns.txCount]);
+
   const handleSort = (column: SortColumn) => {
     // Attachments sorting requires attachment counts which are only available here
     // So always handle it internally even when externally controlled
-    const shouldHandleInternally = !isExternallyControlled || column === "attachments";
+    const internalColumns = ["attachments", "balance", "lastTxDate", "txCount"];
+    const shouldHandleInternally = !isExternallyControlled || internalColumns.includes(column);
     
     if (shouldHandleInternally) {
       // Internal sort logic
@@ -210,8 +295,8 @@ export function RecordTable({
 
   const sortedRecords = useMemo(() => {
     // When externally controlled, parent already sorted records
-    // Exception: attachments sorting is always internal since it needs attachment counts
-    if (isExternallyControlled && internalSortColumn !== "attachments") {
+    // Exception: computed columns (attachments, balance, lastTxDate, txCount) are always internal
+    if (isExternallyControlled && !internalOnlyColumns.includes(internalSortColumn || "")) {
       return records;
     }
     
@@ -264,6 +349,18 @@ export function RecordTable({
           aVal = attachmentCounts.get(a.id) || 0;
           bVal = attachmentCounts.get(b.id) || 0;
           break;
+        case "balance":
+          aVal = addressStats.get(a.id)?.balanceSats || 0;
+          bVal = addressStats.get(b.id)?.balanceSats || 0;
+          break;
+        case "lastTxDate":
+          aVal = addressStats.get(a.id)?.lastTxDate || 0;
+          bVal = addressStats.get(b.id)?.lastTxDate || 0;
+          break;
+        case "txCount":
+          aVal = addressStats.get(a.id)?.txCount || 0;
+          bVal = addressStats.get(b.id)?.txCount || 0;
+          break;
         case "source":
           aVal = (a.source || "").toLowerCase();
           bVal = (b.source || "").toLowerCase();
@@ -292,7 +389,7 @@ export function RecordTable({
       if (aVal > bVal) return activeDirection === "asc" ? 1 : -1;
       return 0;
     });
-  }, [records, sortColumn, sortDirection, attachmentCounts, isExternallyControlled, internalSortColumn, internalSortDirection]);
+  }, [records, sortColumn, sortDirection, attachmentCounts, addressStats, isExternallyControlled, internalSortColumn, internalSortDirection]);
 
   const getPrivateKeyBadge = (status?: string) => {
     if (!status) return null;
@@ -432,6 +529,32 @@ export function RecordTable({
                     data-testid="checkbox-col-firstseen"
                   />
                   <span className="text-sm">First Seen</span>
+                </label>
+                <Separator className="my-1" />
+                <p className="text-xs font-medium text-muted-foreground mb-1">Blockchain Data</p>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <Checkbox
+                    checked={tableColumns.balance}
+                    onCheckedChange={() => toggleTableColumn('balance')}
+                    data-testid="checkbox-col-balance"
+                  />
+                  <span className="text-sm">BTC Balance</span>
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <Checkbox
+                    checked={tableColumns.lastTxDate}
+                    onCheckedChange={() => toggleTableColumn('lastTxDate')}
+                    data-testid="checkbox-col-lasttxdate"
+                  />
+                  <span className="text-sm">Last Tx Date</span>
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <Checkbox
+                    checked={tableColumns.txCount}
+                    onCheckedChange={() => toggleTableColumn('txCount')}
+                    data-testid="checkbox-col-txcount"
+                  />
+                  <span className="text-sm">Tx Count</span>
                 </label>
               </div>
               {enabledCustomFields.length > 0 && (
@@ -582,6 +705,33 @@ export function RecordTable({
                 onSort={handleSort}
               />
             )}
+            {tableColumns.balance && (
+              <SortableHeader
+                column="balance"
+                label="BTC Balance"
+                currentSort={sortColumn}
+                direction={sortDirection}
+                onSort={handleSort}
+              />
+            )}
+            {tableColumns.lastTxDate && (
+              <SortableHeader
+                column="lastTxDate"
+                label="Last Tx Date"
+                currentSort={sortColumn}
+                direction={sortDirection}
+                onSort={handleSort}
+              />
+            )}
+            {tableColumns.txCount && (
+              <SortableHeader
+                column="txCount"
+                label="Tx Count"
+                currentSort={sortColumn}
+                direction={sortDirection}
+                onSort={handleSort}
+              />
+            )}
             {enabledCustomFields.filter(f => customFieldColumns[f.slug]).map((field) => (
               <SortableHeader
                 key={field.slug}
@@ -719,6 +869,27 @@ export function RecordTable({
                 {tableColumns.firstSeen && (
                   <TableCell className="text-sm text-muted-foreground">
                     {formatBlockTime(record.firstSeenBlockTime)}
+                  </TableCell>
+                )}
+                {tableColumns.balance && (
+                  <TableCell className="text-sm text-right tabular-nums">
+                    {record.type === 'address' && addressStats.has(record.id)
+                      ? formatBTC(addressStats.get(record.id)!.balanceSats)
+                      : <span className="text-muted-foreground">-</span>}
+                  </TableCell>
+                )}
+                {tableColumns.lastTxDate && (
+                  <TableCell className="text-sm text-muted-foreground">
+                    {record.type === 'address' && addressStats.has(record.id) && addressStats.get(record.id)!.lastTxDate > 0
+                      ? formatBlockTime(addressStats.get(record.id)!.lastTxDate)
+                      : "-"}
+                  </TableCell>
+                )}
+                {tableColumns.txCount && (
+                  <TableCell className="text-sm text-right tabular-nums">
+                    {record.type === 'address' && addressStats.has(record.id)
+                      ? addressStats.get(record.id)!.txCount
+                      : <span className="text-muted-foreground">-</span>}
                   </TableCell>
                 )}
                 {enabledCustomFields.filter(f => customFieldColumns[f.slug]).map((field) => {

@@ -289,6 +289,9 @@ export interface Settings {
     walletName: boolean;
     source: boolean;
     firstSeen: boolean;
+    balance: boolean;
+    lastTxDate: boolean;
+    txCount: boolean;
   };
   customFieldColumns: { [key: string]: boolean };
   theme: 'light' | 'dark';
