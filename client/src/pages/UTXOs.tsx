@@ -796,7 +796,7 @@ export default function UTXOs() {
   );
 
   return (
-    <div className="flex flex-col h-full overflow-hidden p-4 gap-4">
+    <div className="flex flex-col p-4 gap-4 overflow-y-auto">
       <div className="flex-none flex items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2" data-testid="text-page-title">
@@ -1137,8 +1137,8 @@ export default function UTXOs() {
         </CardContent>
       </Card>
 
-      <div className="flex-1 overflow-hidden">
-        <Card className="h-full flex flex-col">
+      <div>
+        <Card className="flex flex-col">
           <CardHeader className="pb-2 flex-none">
             <div className="flex items-center justify-between">
               <CardTitle className="text-base">
@@ -1171,7 +1171,7 @@ export default function UTXOs() {
               </div>
             </div>
           </CardHeader>
-          <CardContent className="flex-1 overflow-auto p-0">
+          <CardContent className="p-0">
             {isLoading ? (
               <div className="flex items-center justify-center h-32">
                 <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary" />
