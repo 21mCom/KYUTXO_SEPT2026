@@ -1,4 +1,5 @@
-import { Edit, Paperclip, Wallet as WalletIcon, User, Users, Upload, QrCode, Key, GitBranch, ArrowDownLeft, ArrowUpRight, Shield, ChevronDown, ChevronRight, Link2, Layers, FileInput, ExternalLink, AlertCircle } from "lucide-react";
+import { Edit, Paperclip, Wallet as WalletIcon, User, Users, Upload, QrCode, Key, GitBranch, ArrowDownLeft, ArrowUpRight, Shield, ChevronDown, ChevronRight, Link2, Layers, FileInput, ExternalLink, AlertCircle, Network } from "lucide-react";
+import DiscoveryTreeDialog from "./DiscoveryTreeDialog";
 import { useLocation } from "wouter";
 import { getDecryptedRecordOrigins } from "@/lib/encryptionFacade";
 import { detectSingularFieldConflicts } from "@/lib/conflict-detection";
@@ -282,6 +283,7 @@ export function RecordDetailPanel({
   const [, navigate] = useLocation();
   const [showUpload, setShowUpload] = useState(false);
   const [qrDialogOpen, setQrDialogOpen] = useState(false);
+  const [discoveryTreeOpen, setDiscoveryTreeOpen] = useState(false);
   const [qrCodeDataUrl, setQrCodeDataUrl] = useState<string | null>(null);
   const [technicalOpen, setTechnicalOpen] = useState(false);
   const [conflictCount, setConflictCount] = useState(0);
@@ -711,8 +713,33 @@ export function RecordDetailPanel({
                       </Link>
                     </div>
                   )}
+                  {record.type === 'address' && record.id && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="w-full mt-2"
+                      onClick={() => setDiscoveryTreeOpen(true)}
+                      data-testid="button-show-discovery-tree"
+                    >
+                      <Network className="h-4 w-4 mr-2" />
+                      Show Discovered Records
+                    </Button>
+                  )}
                 </CollapsibleContent>
               </Collapsible>
+            )}
+
+            {record.type === 'address' && record.id && !hasBlockchainDiscoveryInfo && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="w-full"
+                onClick={() => setDiscoveryTreeOpen(true)}
+                data-testid="button-show-discovery-tree"
+              >
+                <Network className="h-4 w-4 mr-2" />
+                Show Discovered Records
+              </Button>
             )}
 
             <Separator />
@@ -791,6 +818,14 @@ export function RecordDetailPanel({
         </div>
       </DialogContent>
     </Dialog>
+    {record.type === 'address' && record.id && (
+      <DiscoveryTreeDialog
+        open={discoveryTreeOpen}
+        onClose={() => setDiscoveryTreeOpen(false)}
+        parentRecordId={parseInt(record.id)}
+        parentAddress={record.inputString}
+      />
+    )}
     </>
   );
 }

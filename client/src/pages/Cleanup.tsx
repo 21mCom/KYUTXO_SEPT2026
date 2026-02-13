@@ -1,10 +1,12 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useToast } from "@/hooks/use-toast";
 import { 
   AlertDialog,
@@ -16,19 +18,24 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Trash2, Search, RefreshCw, AlertTriangle, CheckCircle2 } from "lucide-react";
+import { Trash2, Search, RefreshCw, AlertTriangle, CheckCircle2, Network, ArrowUpDown, Link2 } from "lucide-react";
 import { db, Record, RecordOrigin } from "@/lib/database";
 import { deleteRecord, decryptRecords, getDecryptedRecordOrigins } from "@/lib/encryptionFacade";
 
 type Scope = 'addresses' | 'transactions' | 'both';
+type ScanMode = 'blockchain-only' | 'discovery-origin';
+type SortField = 'type' | 'address' | 'depth' | 'discoveredFrom';
+type SortDirection = 'asc' | 'desc';
 
 interface CleanupCandidate {
   record: Record;
   origins: RecordOrigin[];
+  hasOtherConnections: boolean;
 }
 
 export default function Cleanup() {
   const { toast } = useToast();
+  const [scanMode, setScanMode] = useState<ScanMode>('blockchain-only');
   const [scope, setScope] = useState<Scope>('both');
   const [candidates, setCandidates] = useState<CleanupCandidate[]>([]);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
@@ -36,6 +43,25 @@ export default function Cleanup() {
   const [isDeleting, setIsDeleting] = useState(false);
   const [showConfirmDialog, setShowConfirmDialog] = useState(false);
   const [hasScanned, setHasScanned] = useState(false);
+  const [originAddress, setOriginAddress] = useState('');
+  const [sortField, setSortField] = useState<SortField>('depth');
+  const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
+
+  const [syncedAddresses, setSyncedAddresses] = useState<{ id: number; address: string }[]>([]);
+
+  useEffect(() => {
+    const loadSyncedAddresses = async () => {
+      const allRecords = await db.records
+        .where('type').equals('address')
+        .toArray();
+      const decrypted = await decryptRecords(allRecords);
+      const synced = decrypted
+        .filter(r => r.id && (r.maxSyncedDepth !== undefined && r.maxSyncedDepth >= 0))
+        .map(r => ({ id: r.id!, address: r.inputString }));
+      setSyncedAddresses(synced);
+    };
+    loadSyncedAddresses();
+  }, []);
 
   const isBlockchainOnlyRecord = (record: Record, origins: RecordOrigin[]): boolean => {
     if (origins.length === 0) {
@@ -97,43 +123,146 @@ export default function Cleanup() {
     return false;
   };
 
+  const fetchDiscoveryTree = async (parentRecordId: number): Promise<Record[]> => {
+    const allDiscovered: Record[] = [];
+    let currentParentIds = [parentRecordId];
+    let depth = 0;
+
+    while (currentParentIds.length > 0 && depth < 50) {
+      const children: Record[] = [];
+      for (const pid of currentParentIds) {
+        const batch = await db.records
+          .filter((r) => r.discoveredFromRecordId === pid)
+          .toArray();
+        children.push(...batch);
+      }
+
+      if (children.length === 0) break;
+
+      const decrypted = await decryptRecords(children);
+      allDiscovered.push(...decrypted);
+
+      currentParentIds = decrypted
+        .map((r) => r.id)
+        .filter((id): id is number => id !== undefined);
+      depth++;
+    }
+
+    return allDiscovered;
+  };
+
+  const checkOtherConnections = async (recordId: number, discoveryTreeIds: Set<number>): Promise<boolean> => {
+    const record = await db.records.get(recordId);
+    if (!record) return false;
+
+    if (record.discoveredFromRecordId !== undefined && !discoveryTreeIds.has(record.discoveredFromRecordId)) {
+      return true;
+    }
+
+    const childrenOutsideTree = await db.records
+      .filter(r => r.discoveredFromRecordId === recordId && r.id !== undefined && !discoveryTreeIds.has(r.id))
+      .count();
+    if (childrenOutsideTree > 0) return true;
+
+    return false;
+  };
+
   const scanForCandidates = async () => {
     setIsScanning(true);
     setCandidates([]);
     setSelectedIds(new Set());
     
     try {
-      let records: Record[] = [];
-      
-      if (scope === 'addresses') {
-        records = await db.records.where('type').equals('address').toArray();
-      } else if (scope === 'transactions') {
-        records = await db.records.where('type').equals('transaction').toArray();
-      } else {
-        records = await db.records.where('type').anyOf(['address', 'transaction']).toArray();
-      }
-      
-      const decrypted = await decryptRecords(records);
-      
-      const cleanupCandidates: CleanupCandidate[] = [];
-      
-      for (const record of decrypted) {
-        if (!record.id) continue;
+      if (scanMode === 'blockchain-only') {
+        let records: Record[] = [];
         
-        const origins = await getDecryptedRecordOrigins(record.id);
-        
-        if (isBlockchainOnlyRecord(record, origins) && !hasUserMetadata(record, origins)) {
-          cleanupCandidates.push({ record, origins });
+        if (scope === 'addresses') {
+          records = await db.records.where('type').equals('address').toArray();
+        } else if (scope === 'transactions') {
+          records = await db.records.where('type').equals('transaction').toArray();
+        } else {
+          records = await db.records.where('type').anyOf(['address', 'transaction']).toArray();
         }
+        
+        const decrypted = await decryptRecords(records);
+        
+        const cleanupCandidates: CleanupCandidate[] = [];
+        
+        for (const record of decrypted) {
+          if (!record.id) continue;
+          
+          const origins = await getDecryptedRecordOrigins(record.id);
+          
+          if (isBlockchainOnlyRecord(record, origins) && !hasUserMetadata(record, origins)) {
+            cleanupCandidates.push({ record, origins, hasOtherConnections: false });
+          }
+        }
+        
+        setCandidates(cleanupCandidates);
+        setHasScanned(true);
+        
+        toast({
+          title: "Scan Complete",
+          description: `Found ${cleanupCandidates.length} records eligible for cleanup`,
+        });
+      } else {
+        const trimmed = originAddress.trim();
+        if (!trimmed) {
+          toast({
+            title: "No Address Selected",
+            description: "Enter a parent address to filter by discovery origin",
+            variant: "destructive",
+          });
+          setIsScanning(false);
+          return;
+        }
+
+        const parentRecords = await db.records
+          .filter(r => r.inputString === trimmed && r.type === 'address')
+          .toArray();
+        
+        if (parentRecords.length === 0) {
+          toast({
+            title: "Address Not Found",
+            description: "This address is not in your records",
+            variant: "destructive",
+          });
+          setIsScanning(false);
+          return;
+        }
+
+        const parentRecord = parentRecords[0];
+        if (!parentRecord.id) {
+          setIsScanning(false);
+          return;
+        }
+
+        const discoveredRecords = await fetchDiscoveryTree(parentRecord.id);
+        const discoveryTreeIds = new Set<number>([parentRecord.id, ...discoveredRecords.map(r => r.id!).filter(Boolean)]);
+
+        const cleanupCandidates: CleanupCandidate[] = [];
+
+        for (const record of discoveredRecords) {
+          if (!record.id) continue;
+
+          const origins = await getDecryptedRecordOrigins(record.id);
+          const otherConnections = await checkOtherConnections(record.id, discoveryTreeIds);
+
+          cleanupCandidates.push({
+            record,
+            origins,
+            hasOtherConnections: otherConnections,
+          });
+        }
+
+        setCandidates(cleanupCandidates);
+        setHasScanned(true);
+
+        toast({
+          title: "Discovery Scan Complete",
+          description: `Found ${cleanupCandidates.length} records discovered from this address`,
+        });
       }
-      
-      setCandidates(cleanupCandidates);
-      setHasScanned(true);
-      
-      toast({
-        title: "Scan Complete",
-        description: `Found ${cleanupCandidates.length} records eligible for cleanup`,
-      });
     } catch (error) {
       console.error('Error scanning for cleanup candidates:', error);
       toast({
@@ -165,6 +294,15 @@ export default function Cleanup() {
     setSelectedIds(new Set());
   };
 
+  const selectSafe = () => {
+    const safeIds = new Set(
+      candidates
+        .filter(c => !c.hasOtherConnections && !hasUserMetadata(c.record, c.origins))
+        .map(c => c.record.id!)
+    );
+    setSelectedIds(safeIds);
+  };
+
   const handleDelete = async () => {
     setShowConfirmDialog(false);
     setIsDeleting(true);
@@ -181,13 +319,15 @@ export default function Cleanup() {
           continue;
         }
         
-        const decrypted = await decryptRecords(records);
-        const record = decrypted[0];
-        const origins = await getDecryptedRecordOrigins(id);
-        
-        if (!isBlockchainOnlyRecord(record, origins) || hasUserMetadata(record, origins)) {
-          skipped++;
-          continue;
+        if (scanMode === 'blockchain-only') {
+          const decrypted = await decryptRecords(records);
+          const record = decrypted[0];
+          const origins = await getDecryptedRecordOrigins(id);
+          
+          if (!isBlockchainOnlyRecord(record, origins) || hasUserMetadata(record, origins)) {
+            skipped++;
+            continue;
+          }
         }
         
         await db.recordOrigins.where('recordId').equals(id).delete();
@@ -221,8 +361,34 @@ export default function Cleanup() {
     }
   };
 
+  const handleSort = (field: SortField) => {
+    if (sortField === field) {
+      setSortDirection(prev => prev === 'asc' ? 'desc' : 'asc');
+    } else {
+      setSortField(field);
+      setSortDirection('asc');
+    }
+  };
+
+  const sortedCandidates = [...candidates].sort((a, b) => {
+    const dir = sortDirection === 'asc' ? 1 : -1;
+    switch (sortField) {
+      case 'type':
+        return dir * a.record.type.localeCompare(b.record.type);
+      case 'address':
+        return dir * a.record.inputString.localeCompare(b.record.inputString);
+      case 'depth':
+        return dir * ((a.record.syncDepth ?? 0) - (b.record.syncDepth ?? 0));
+      case 'discoveredFrom':
+        return dir * ((a.record.discoveredFromRecordId ?? 0) - (b.record.discoveredFromRecordId ?? 0));
+      default:
+        return 0;
+    }
+  });
+
   const addressCount = candidates.filter(c => c.record.type === 'address').length;
   const txCount = candidates.filter(c => c.record.type === 'transaction').length;
+  const connectedCount = candidates.filter(c => c.hasOtherConnections).length;
   const selectedAddresses = Array.from(selectedIds).filter(id => 
     candidates.find(c => c.record.id === id && c.record.type === 'address')
   ).length;
@@ -230,14 +396,27 @@ export default function Cleanup() {
     candidates.find(c => c.record.id === id && c.record.type === 'transaction')
   ).length;
 
+  const SortButton = ({ field, label }: { field: SortField; label: string }) => (
+    <Button
+      variant="ghost"
+      size="sm"
+      onClick={() => handleSort(field)}
+      className="gap-1"
+      data-testid={`button-sort-${field}`}
+    >
+      {label}
+      <ArrowUpDown className="h-3 w-3" />
+    </Button>
+  );
+
   return (
     <div className="flex-1 overflow-y-auto p-6">
       <div className="max-w-4xl mx-auto space-y-6">
         <div>
           <h1 className="text-3xl font-bold">Database Cleanup</h1>
           <p className="text-muted-foreground mt-2">
-            Find and remove blockchain-discovered records that have no user-added metadata.
-            These records can be re-synced later if needed.
+            Find and remove blockchain-discovered records that have no user-added metadata,
+            or review records discovered from a specific address.
           </p>
         </div>
 
@@ -248,45 +427,133 @@ export default function Cleanup() {
               Scan Settings
             </CardTitle>
             <CardDescription>
-              Choose which types of records to scan for cleanup candidates
+              Choose a scan mode to find records for cleanup
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-6">
             <div className="space-y-3">
-              <Label>Record Types to Scan</Label>
+              <Label>Scan Mode</Label>
               <RadioGroup 
-                value={scope} 
-                onValueChange={(v) => setScope(v as Scope)}
-                className="flex flex-wrap gap-4"
+                value={scanMode} 
+                onValueChange={(v) => {
+                  setScanMode(v as ScanMode);
+                  setHasScanned(false);
+                  setCandidates([]);
+                  setSelectedIds(new Set());
+                }}
+                className="space-y-2"
               >
-                <div className="flex items-center space-x-2">
-                  <RadioGroupItem value="addresses" id="scope-addresses" data-testid="radio-scope-addresses" />
-                  <Label htmlFor="scope-addresses">Addresses Only</Label>
+                <div className="flex items-start space-x-2">
+                  <RadioGroupItem value="blockchain-only" id="mode-blockchain" data-testid="radio-mode-blockchain" />
+                  <div className="grid gap-0.5">
+                    <Label htmlFor="mode-blockchain">Blockchain-Only Records</Label>
+                    <p className="text-xs text-muted-foreground">
+                      Find records with no user metadata that were purely discovered via sync
+                    </p>
+                  </div>
                 </div>
-                <div className="flex items-center space-x-2">
-                  <RadioGroupItem value="transactions" id="scope-transactions" data-testid="radio-scope-transactions" />
-                  <Label htmlFor="scope-transactions">Transactions Only</Label>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <RadioGroupItem value="both" id="scope-both" data-testid="radio-scope-both" />
-                  <Label htmlFor="scope-both">Both</Label>
+                <div className="flex items-start space-x-2">
+                  <RadioGroupItem value="discovery-origin" id="mode-discovery" data-testid="radio-mode-discovery" />
+                  <div className="grid gap-0.5">
+                    <Label htmlFor="mode-discovery" className="flex items-center gap-1.5">
+                      <Network className="h-3.5 w-3.5" />
+                      Discovered From Address
+                    </Label>
+                    <p className="text-xs text-muted-foreground">
+                      Find all records discovered from syncing a specific address (including records with metadata)
+                    </p>
+                  </div>
                 </div>
               </RadioGroup>
             </div>
 
-            <div className="bg-muted/50 rounded-lg p-4 text-sm space-y-2">
-              <p className="font-medium">Records eligible for cleanup:</p>
-              <ul className="list-disc list-inside text-muted-foreground space-y-1">
-                <li>Have at least one origin, and all origins are "blockchain-sync" type</li>
-                <li>Were discovered via blockchain sync (not manually entered or imported)</li>
-                <li>Have no user-added metadata (labels, notes, tags, categories, etc.)</li>
-                <li>Have no classification data (flow type, cost basis, counterparty, etc.)</li>
-              </ul>
-            </div>
+            {scanMode === 'blockchain-only' && (
+              <>
+                <div className="space-y-3">
+                  <Label>Record Types to Scan</Label>
+                  <RadioGroup 
+                    value={scope} 
+                    onValueChange={(v) => setScope(v as Scope)}
+                    className="flex flex-wrap gap-4"
+                  >
+                    <div className="flex items-center space-x-2">
+                      <RadioGroupItem value="addresses" id="scope-addresses" data-testid="radio-scope-addresses" />
+                      <Label htmlFor="scope-addresses">Addresses Only</Label>
+                    </div>
+                    <div className="flex items-center space-x-2">
+                      <RadioGroupItem value="transactions" id="scope-transactions" data-testid="radio-scope-transactions" />
+                      <Label htmlFor="scope-transactions">Transactions Only</Label>
+                    </div>
+                    <div className="flex items-center space-x-2">
+                      <RadioGroupItem value="both" id="scope-both" data-testid="radio-scope-both" />
+                      <Label htmlFor="scope-both">Both</Label>
+                    </div>
+                  </RadioGroup>
+                </div>
+
+                <div className="bg-muted/50 rounded-lg p-4 text-sm space-y-2">
+                  <p className="font-medium">Records eligible for cleanup:</p>
+                  <ul className="list-disc list-inside text-muted-foreground space-y-1">
+                    <li>Have at least one origin, and all origins are "blockchain-sync" type</li>
+                    <li>Were discovered via blockchain sync (not manually entered or imported)</li>
+                    <li>Have no user-added metadata (labels, notes, tags, categories, etc.)</li>
+                    <li>Have no classification data (flow type, cost basis, counterparty, etc.)</li>
+                  </ul>
+                </div>
+              </>
+            )}
+
+            {scanMode === 'discovery-origin' && (
+              <div className="space-y-3">
+                <Label>Parent Address</Label>
+                <div className="space-y-2">
+                  <Input
+                    placeholder="Enter or paste a Bitcoin address..."
+                    value={originAddress}
+                    onChange={(e) => setOriginAddress(e.target.value)}
+                    className="font-mono text-xs"
+                    disabled={isScanning}
+                    data-testid="input-origin-address"
+                  />
+                  {syncedAddresses.length > 0 && (
+                    <div className="space-y-1">
+                      <span className="text-xs text-muted-foreground">Or select a previously synced address:</span>
+                      <div className="max-h-32 overflow-y-auto border rounded-lg divide-y">
+                        {syncedAddresses.slice(0, 20).map(sa => (
+                          <button
+                            key={sa.id}
+                            className="w-full text-left px-3 py-1.5 text-xs font-mono hover-elevate truncate"
+                            onClick={() => setOriginAddress(sa.address)}
+                            data-testid={`button-select-origin-${sa.id}`}
+                          >
+                            {sa.address}
+                          </button>
+                        ))}
+                        {syncedAddresses.length > 20 && (
+                          <div className="px-3 py-1.5 text-xs text-muted-foreground">
+                            +{syncedAddresses.length - 20} more (paste address above)
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <div className="bg-muted/50 rounded-lg p-4 text-sm space-y-2">
+                  <p className="font-medium">Discovery origin scan:</p>
+                  <ul className="list-disc list-inside text-muted-foreground space-y-1">
+                    <li>Finds all records discovered by syncing the selected address</li>
+                    <li>Includes records at all depths (direct and indirect discoveries)</li>
+                    <li>Shows records with metadata too — review before deleting</li>
+                    <li>Flags records that are also connected to other wanted addresses</li>
+                  </ul>
+                </div>
+              </div>
+            )}
 
             <Button 
               onClick={scanForCandidates} 
-              disabled={isScanning}
+              disabled={isScanning || (scanMode === 'discovery-origin' && !originAddress.trim())}
               className="w-full sm:w-auto"
               data-testid="button-scan"
             >
@@ -298,7 +565,7 @@ export default function Cleanup() {
               ) : (
                 <>
                   <Search className="h-4 w-4 mr-2" />
-                  Scan for Cleanup Candidates
+                  {scanMode === 'blockchain-only' ? 'Scan for Cleanup Candidates' : 'Scan Discovery Tree'}
                 </>
               )}
             </Button>
@@ -314,7 +581,7 @@ export default function Cleanup() {
                     {candidates.length === 0 ? (
                       <span className="flex items-center gap-2">
                         <CheckCircle2 className="h-5 w-5 text-green-500" />
-                        No Cleanup Needed
+                        {scanMode === 'blockchain-only' ? 'No Cleanup Needed' : 'No Discovered Records'}
                       </span>
                     ) : (
                       `${candidates.length} Records Found`
@@ -324,14 +591,21 @@ export default function Cleanup() {
                     {candidates.length > 0 ? (
                       <>
                         {addressCount} addresses, {txCount} transactions
+                        {connectedCount > 0 && (
+                          <span className="ml-2" data-testid="text-connected-count">
+                            ({connectedCount} also connected elsewhere)
+                          </span>
+                        )}
                         {selectedIds.size > 0 && (
                           <span className="ml-2 text-foreground">
-                            ({selectedAddresses} addresses, {selectedTxs} transactions selected)
+                            — {selectedAddresses} addresses, {selectedTxs} transactions selected
                           </span>
                         )}
                       </>
                     ) : (
-                      "All records have user metadata or non-blockchain origins"
+                      scanMode === 'blockchain-only'
+                        ? "All records have user metadata or non-blockchain origins"
+                        : "No records were discovered from syncing this address"
                     )}
                   </CardDescription>
                 </div>
@@ -346,6 +620,23 @@ export default function Cleanup() {
                     >
                       Select All
                     </Button>
+                    {scanMode === 'discovery-origin' && (
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button 
+                            variant="outline" 
+                            size="sm" 
+                            onClick={selectSafe}
+                            data-testid="button-select-safe"
+                          >
+                            Select Safe
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          Select only records with no other connections and no user metadata
+                        </TooltipContent>
+                      </Tooltip>
+                    )}
                     <Button 
                       variant="outline" 
                       size="sm" 
@@ -381,31 +672,68 @@ export default function Cleanup() {
             
             {candidates.length > 0 && (
               <CardContent>
-                <div className="border rounded-lg divide-y max-h-[500px] overflow-y-auto">
-                  {candidates.map((candidate) => (
-                    <div 
-                      key={candidate.record.id}
-                      className="flex items-center gap-3 p-3 hover-elevate"
-                      data-testid={`cleanup-row-${candidate.record.id}`}
-                    >
-                      <Checkbox
-                        checked={selectedIds.has(candidate.record.id!)}
-                        onCheckedChange={() => toggleSelection(candidate.record.id!)}
-                        data-testid={`checkbox-${candidate.record.id}`}
-                      />
-                      <Badge variant={candidate.record.type === 'address' ? 'default' : 'secondary'}>
-                        {candidate.record.type}
-                      </Badge>
-                      <span className="font-mono text-sm flex-1 truncate">
-                        {candidate.record.inputString}
-                      </span>
-                      {candidate.record.discoveredInTxid && (
-                        <span className="text-xs text-muted-foreground">
-                          via tx: {candidate.record.discoveredInTxid.substring(0, 8)}...
-                        </span>
-                      )}
+                <div className="border rounded-lg overflow-hidden">
+                  <div className="flex items-center gap-3 px-3 py-2 bg-muted/50 border-b text-xs">
+                    <div className="w-6" />
+                    <SortButton field="type" label="Type" />
+                    <div className="flex-1">
+                      <SortButton field="address" label="Address / TXID" />
                     </div>
-                  ))}
+                    <SortButton field="depth" label="Depth" />
+                    {scanMode === 'discovery-origin' && (
+                      <div className="w-24 text-center text-muted-foreground" data-testid="header-status">Status</div>
+                    )}
+                  </div>
+                  <div className="divide-y max-h-[500px] overflow-y-auto">
+                    {sortedCandidates.map((candidate) => (
+                      <div 
+                        key={candidate.record.id}
+                        className="flex items-center gap-3 p-3 hover-elevate"
+                        data-testid={`cleanup-row-${candidate.record.id}`}
+                      >
+                        <Checkbox
+                          checked={selectedIds.has(candidate.record.id!)}
+                          onCheckedChange={() => toggleSelection(candidate.record.id!)}
+                          data-testid={`checkbox-${candidate.record.id}`}
+                        />
+                        <Badge variant={candidate.record.type === 'address' ? 'default' : 'secondary'} data-testid={`badge-type-${candidate.record.id}`}>
+                          {candidate.record.type}
+                        </Badge>
+                        <span className="font-mono text-sm flex-1 truncate min-w-0" data-testid={`text-address-${candidate.record.id}`}>
+                          {candidate.record.inputString}
+                        </span>
+                        {candidate.record.syncDepth !== undefined && (
+                          <Badge variant="outline" className="shrink-0" data-testid={`badge-depth-${candidate.record.id}`}>
+                            D{candidate.record.syncDepth}
+                          </Badge>
+                        )}
+                        {scanMode === 'discovery-origin' && (
+                          <div className="flex items-center gap-1 shrink-0 w-24 justify-end" data-testid={`status-${candidate.record.id}`}>
+                            {hasUserMetadata(candidate.record, candidate.origins) && (
+                              <Tooltip>
+                                <TooltipTrigger>
+                                  <Badge variant="secondary" className="text-xs" data-testid={`badge-metadata-${candidate.record.id}`}>
+                                    metadata
+                                  </Badge>
+                                </TooltipTrigger>
+                                <TooltipContent>Has user-added metadata (labels, tags, etc.)</TooltipContent>
+                              </Tooltip>
+                            )}
+                            {candidate.hasOtherConnections && (
+                              <Tooltip>
+                                <TooltipTrigger>
+                                  <Badge variant="outline" className="text-xs" data-testid={`badge-connected-${candidate.record.id}`}>
+                                    <Link2 className="h-3 w-3" />
+                                  </Badge>
+                                </TooltipTrigger>
+                                <TooltipContent>Also connected to other addresses outside this discovery tree</TooltipContent>
+                              </Tooltip>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
                 </div>
               </CardContent>
             )}
@@ -421,6 +749,20 @@ export default function Cleanup() {
               </AlertDialogTitle>
               <AlertDialogDescription>
                 You are about to permanently delete {selectedIds.size} record{selectedIds.size === 1 ? '' : 's'}.
+                {scanMode === 'discovery-origin' && candidates.some(c => selectedIds.has(c.record.id!) && c.hasOtherConnections) && (
+                  <>
+                    <br /><br />
+                    <strong className="text-amber-600">Warning:</strong> Some selected records are also connected 
+                    to other addresses. Deleting them may affect data for those addresses.
+                  </>
+                )}
+                {scanMode === 'discovery-origin' && candidates.some(c => selectedIds.has(c.record.id!) && hasUserMetadata(c.record, c.origins)) && (
+                  <>
+                    <br /><br />
+                    <strong className="text-amber-600">Warning:</strong> Some selected records have user-added 
+                    metadata that will be lost.
+                  </>
+                )}
                 <br /><br />
                 <strong>This action cannot be undone.</strong> However, you can re-sync these 
                 records later from the blockchain if needed.
@@ -430,7 +772,7 @@ export default function Cleanup() {
               <AlertDialogCancel data-testid="button-cancel-delete">Cancel</AlertDialogCancel>
               <AlertDialogAction 
                 onClick={handleDelete}
-                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                className="bg-destructive text-destructive-foreground"
                 data-testid="button-confirm-delete"
               >
                 Delete {selectedIds.size} Record{selectedIds.size === 1 ? '' : 's'}

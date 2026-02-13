@@ -43,7 +43,8 @@ Data is stored locally using Dexie.js (IndexedDB) for structured data, with all 
 *   **Reports System:** Includes Source of Funds Report (acquisition history, cost basis, valuation) and Hop-Point Detection Report.
 *   **Quick Tagger:** Paste-based bulk tagging tool for addresses and transactions with full metadata support.
 *   **Nudgie (Transaction Labeling To-Do):** Workflow for systematically labeling unlabeled transactions.
-*   **Database Cleanup:** Dedicated page for querying and bulk deleting blockchain-discovered records without user metadata, with conservative eligibility rules and permanent deletion.
+*   **Database Cleanup:** Dedicated page for querying and bulk deleting blockchain-discovered records without user metadata, with conservative eligibility rules and permanent deletion. Features two scan modes: "Blockchain-Only" (original conservative cleanup) and "Discovery Origin" (find all records discovered from a specific parent address with recursive tree traversal). Discovery Origin mode shows visual indicators for records with user metadata and records connected to other addresses outside the discovery tree. Includes sortable columns, "Select Safe" bulk action, and contextual deletion warnings.
+*   **Discovery Tree Dialog:** Accessible from any address record's detail panel, shows all records (addresses and transactions) recursively discovered from that address, grouped by depth level with navigation links.
 *   **Transaction Classification Metadata:** Tax-neutral fact-recording system for `flowType`, `acquisitionMethod`, `dispositionType`, `costBasisUsd`, and `counterpartyType`.
 *   **Bulk Editor:** Batch editing system with filter/action builders, preview, and undo capabilities.
 *   **Value Updater Enhancement:** Extended to support transaction classification fields (flowType, acquisitionMethod, dispositionType, counterpartyType) with enum validation, display labels, and available options display.
