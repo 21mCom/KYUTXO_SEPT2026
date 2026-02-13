@@ -253,9 +253,10 @@ export default function BitcoinFlowVisualizer() {
   const [selectedRecord, setSelectedRecord] = useState<RecordViewData | null>(null);
   const [loadingRecord, setLoadingRecord] = useState(false);
 
-  const { owners } = useOwners();
-  const { walletNames } = useWalletNames();
-  const { tags } = useTags();
+  const { owners, isLoading: ownersLoading } = useOwners();
+  const { walletNames, isLoading: walletsLoading } = useWalletNames();
+  const { tags, isLoading: tagsLoading } = useTags();
+  const vocabLoading = ownersLoading || walletsLoading || tagsLoading;
 
   const [finderOpen, setFinderOpen] = useState(false);
   const [filterOwner, setFilterOwner] = useState<string>("__all__");
@@ -531,13 +532,13 @@ export default function BitcoinFlowVisualizer() {
                       <User className="h-3 w-3" />
                       Owner
                     </Label>
-                    <Select value={filterOwner} onValueChange={setFilterOwner}>
+                    <Select value={filterOwner} onValueChange={setFilterOwner} disabled={vocabLoading || !isEncryptionReady()}>
                       <SelectTrigger data-testid="select-filter-owner">
-                        <SelectValue placeholder="All owners" />
+                        <SelectValue placeholder={vocabLoading ? "Loading..." : !isEncryptionReady() ? "Locked" : "All owners"} />
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="__all__">All owners</SelectItem>
-                        {owners.map(o => (
+                        {owners.filter(o => o.name && o.name !== '[encrypted]').map(o => (
                           <SelectItem key={o.id} value={o.name}>{o.name}</SelectItem>
                         ))}
                       </SelectContent>
@@ -548,13 +549,13 @@ export default function BitcoinFlowVisualizer() {
                       <Wallet className="h-3 w-3" />
                       Wallet
                     </Label>
-                    <Select value={filterWallet} onValueChange={setFilterWallet}>
+                    <Select value={filterWallet} onValueChange={setFilterWallet} disabled={vocabLoading || !isEncryptionReady()}>
                       <SelectTrigger data-testid="select-filter-wallet">
-                        <SelectValue placeholder="All wallets" />
+                        <SelectValue placeholder={vocabLoading ? "Loading..." : !isEncryptionReady() ? "Locked" : "All wallets"} />
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="__all__">All wallets</SelectItem>
-                        {walletNames.map(w => (
+                        {walletNames.filter(w => w.name && w.name !== '[encrypted]').map(w => (
                           <SelectItem key={w.id} value={w.name}>{w.name}</SelectItem>
                         ))}
                       </SelectContent>
@@ -565,13 +566,13 @@ export default function BitcoinFlowVisualizer() {
                       <Tag className="h-3 w-3" />
                       Tag
                     </Label>
-                    <Select value={filterTag} onValueChange={setFilterTag}>
+                    <Select value={filterTag} onValueChange={setFilterTag} disabled={vocabLoading || !isEncryptionReady()}>
                       <SelectTrigger data-testid="select-filter-tag">
-                        <SelectValue placeholder="All tags" />
+                        <SelectValue placeholder={vocabLoading ? "Loading..." : !isEncryptionReady() ? "Locked" : "All tags"} />
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="__all__">All tags</SelectItem>
-                        {tags.map(t => (
+                        {tags.filter(t => t.name && t.name !== '[encrypted]').map(t => (
                           <SelectItem key={t.id} value={t.name}>{t.name}</SelectItem>
                         ))}
                       </SelectContent>
