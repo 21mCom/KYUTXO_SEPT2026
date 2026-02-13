@@ -1,11 +1,14 @@
-import { useState } from "react";
-import { Edit, Tag, FolderOpen, Wallet, Sprout, Users, Plus, Trash2, RefreshCw, KeySquare, ArrowLeftRight, TrendingUp, TrendingDown, UserCheck } from "lucide-react";
+import { useState, useEffect, useCallback } from "react";
+import { Edit, Tag, FolderOpen, Wallet, Sprout, Users, Plus, Trash2, RefreshCw, KeySquare, ArrowLeftRight, TrendingUp, TrendingDown, UserCheck, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { useEncryptedRecords, useEncryptedTags, useEncryptedCategories } from "@/hooks/use-encrypted-records";
+import { useEncryptedTags, useEncryptedCategories } from "@/hooks/use-encrypted-records";
+import { db, type Record as DbRecord } from "@/lib/database";
+import { isEncryptionReady } from "@/lib/encryption/key-management";
+import { decryptRecords } from "@/lib/encryption/record-encryption";
 import { useOwners } from "@/hooks/use-owners";
 import { useWalletNames } from "@/hooks/use-wallet-names";
 import { useSeedNames, SEED_NAME_MAX_LENGTH } from "@/hooks/use-seed-names";
@@ -155,7 +158,8 @@ const FIELD_CONFIGS: FieldConfig[] = [
 ];
 
 export default function ValueUpdaterPage() {
-  const { records, isLoading: recordsLoading } = useEncryptedRecords();
+  const [records, setRecords] = useState<DbRecord[]>([]);
+  const [recordsLoading, setRecordsLoading] = useState(true);
   const { tags, isLoading: tagsLoading } = useEncryptedTags();
   const { categories, isLoading: categoriesLoading } = useEncryptedCategories();
   const { owners, isLoading: ownersLoading } = useOwners();
@@ -163,6 +167,27 @@ export default function ValueUpdaterPage() {
   const { seedNames, isLoading: seedNamesLoading } = useSeedNames();
   const { walletSoftware, isLoading: walletSoftwareLoading } = useWalletSoftware();
   const { toast } = useToast();
+
+  const loadRecords = useCallback(async () => {
+    setRecordsLoading(true);
+    try {
+      const rawRecords = await db.records.toArray();
+      if (isEncryptionReady()) {
+        const decrypted = await decryptRecords(rawRecords);
+        setRecords(decrypted);
+      } else {
+        setRecords(rawRecords);
+      }
+    } catch (error) {
+      console.error('Failed to load records for value updater:', error);
+    } finally {
+      setRecordsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadRecords();
+  }, [loadRecords]);
   
   const [editingField, setEditingField] = useState<FieldType | null>(null);
   const [editingValue, setEditingValue] = useState<string>("");
@@ -372,6 +397,7 @@ export default function ValueUpdaterPage() {
       setEditingField(null);
       setEditingValue("");
       setNewValue("");
+      loadRecords();
     } catch (error) {
       toast({
         variant: "destructive",
@@ -470,6 +496,7 @@ export default function ValueUpdaterPage() {
       
       setDeleteDialogOpen(false);
       setDeleteTarget(null);
+      loadRecords();
     } catch (error) {
       toast({
         variant: "destructive",

@@ -73,6 +73,5 @@ export async function deleteWalletName(id: number) {
 }
 
 export async function getWalletNameUsageCount(walletNameValue: string): Promise<number> {
-  const allRecords = await db.records.toArray();
-  return allRecords.filter(r => r.walletName === walletNameValue).length;
+  return db.records.filter(r => r.walletName === walletNameValue).count();
 }

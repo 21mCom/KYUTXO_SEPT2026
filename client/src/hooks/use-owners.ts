@@ -73,6 +73,5 @@ export async function deleteOwner(id: number) {
 }
 
 export async function getOwnerUsageCount(ownerName: string): Promise<number> {
-  const allRecords = await db.records.toArray();
-  return allRecords.filter(r => r.owner === ownerName).length;
+  return db.records.where('owner').equals(ownerName).count();
 }

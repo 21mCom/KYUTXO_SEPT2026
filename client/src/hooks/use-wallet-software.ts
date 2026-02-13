@@ -73,6 +73,5 @@ export async function deleteWalletSoftware(id: number) {
 }
 
 export async function getWalletSoftwareUsageCount(walletSoftwareValue: string): Promise<number> {
-  const allRecords = await db.records.toArray();
-  return allRecords.filter(r => r.walletSoftware === walletSoftwareValue).length;
+  return db.records.filter(r => r.walletSoftware === walletSoftwareValue).count();
 }

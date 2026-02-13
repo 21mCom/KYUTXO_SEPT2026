@@ -1,6 +1,6 @@
 import { useLiveQuery } from 'dexie-react-hooks';
-import { useState, useEffect } from 'react';
-import { db, type Record, type RecordOriginType } from '@/lib/database';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { db, type Record, type RecordOriginType, subscribeToDbChanges } from '@/lib/database';
 import { uploadAttachment, deleteAttachment } from '@/lib/attachments';
 import { useAuth } from '@/contexts/AuthContext';
 import { 
@@ -13,50 +13,62 @@ import {
   createRecordOrigin,
 } from '@/lib/encryptionFacade';
 
-// Hook to get all records with automatic decryption
+// Hook to get all records with manual loading (no useLiveQuery)
+// Loads once on mount and can be reloaded via the returned reload function
 export function useRecords() {
-  const { encryptionKey } = useAuth();
   const [decryptedRecords, setDecryptedRecords] = useState<Record[]>([]);
-  const [isDecrypting, setIsDecrypting] = useState(false);
-  
-  // Get raw records from database
-  const rawRecords = useLiveQuery(
-    () => db.records.orderBy('updatedAt').reverse().toArray()
-  );
-  
-  // Decrypt records when they change
-  useEffect(() => {
-    const decrypt = async () => {
-      if (!rawRecords) {
-        setDecryptedRecords([]);
-        return;
-      }
-      
-      if (!isEncryptionReady()) {
-        // If encryption not ready, show records as-is (may be plaintext)
-        setDecryptedRecords(rawRecords);
-        return;
-      }
-      
-      setIsDecrypting(true);
-      try {
+  const [isLoading, setIsLoading] = useState(true);
+  const loadVersionRef = useRef(0);
+  const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const loadRecords = useCallback(async () => {
+    const version = ++loadVersionRef.current;
+    setIsLoading(true);
+    try {
+      const rawRecords = await db.records.orderBy('updatedAt').reverse().toArray();
+      if (loadVersionRef.current !== version) return;
+
+      if (isEncryptionReady()) {
         const decrypted = await decryptRecords(rawRecords);
+        if (loadVersionRef.current !== version) return;
         setDecryptedRecords(decrypted);
-      } catch (error) {
-        console.error('Failed to decrypt records:', error);
-        // Fall back to raw records
+      } else {
         setDecryptedRecords(rawRecords);
-      } finally {
-        setIsDecrypting(false);
       }
+    } catch (error) {
+      console.error('Failed to load records:', error);
+      if (loadVersionRef.current === version) {
+        setDecryptedRecords([]);
+      }
+    } finally {
+      if (loadVersionRef.current === version) {
+        setIsLoading(false);
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    loadRecords();
+
+    const unsubscribe = subscribeToDbChanges((tables) => {
+      if (tables.includes('records') || tables.length === 0) {
+        if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+        debounceTimerRef.current = setTimeout(() => {
+          loadRecords();
+        }, 500);
+      }
+    });
+
+    return () => {
+      unsubscribe();
+      if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
     };
-    
-    decrypt();
-  }, [rawRecords]);
-  
+  }, [loadRecords]);
+
   return {
     records: decryptedRecords,
-    isLoading: rawRecords === undefined || isDecrypting,
+    isLoading,
+    reload: loadRecords,
   };
 }
 
@@ -65,100 +77,94 @@ const USER_CURATED_TIERS: string[] = ['verified', 'manual', 'wallet-import', 'xp
 // Blockchain-discovered importance tiers
 const BLOCKCHAIN_DISCOVERED_TIERS: string[] = ['blockchain-discovered', 'pending-review'];
 
-// Hook to get filtered records with TRUE database-level filtering
+// Hook to get filtered records with debounced manual loading (no useLiveQuery)
 // Uses compound index [type+addressImportance] for zero-scan queries
 export function useFilteredRecords(includeBlockchainDiscovered: boolean) {
-  const { encryptionKey } = useAuth();
   const [decryptedRecords, setDecryptedRecords] = useState<Record[]>([]);
-  const [isDecrypting, setIsDecrypting] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
   const [blockchainDiscoveredCount, setBlockchainDiscoveredCount] = useState(0);
-  
-  // Get raw records using compound index [type+addressImportance]
-  // After v14 migration, all records have addressImportance set, enabling pure indexed queries
-  const rawRecords = useLiveQuery(
-    async () => {
-      if (includeBlockchainDiscovered) {
-        // Load all records when toggle is on
-        return db.records.orderBy('updatedAt').reverse().toArray();
+  const loadVersionRef = useRef(0);
+  const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const loadRecords = useCallback(async (includeBD: boolean) => {
+    const version = ++loadVersionRef.current;
+    setIsLoading(true);
+    try {
+      let rawRecords: Record[];
+      if (includeBD) {
+        rawRecords = await db.records.orderBy('updatedAt').reverse().toArray();
       } else {
-        // Use compound index for efficient filtering without table scans
-        // 1. Get address records with user-curated importance (indexed)
         const curatedAddresses = await db.records
           .where('[type+addressImportance]')
           .anyOf(USER_CURATED_TIERS.map(tier => ['address', tier]))
           .toArray();
-        
-        // 2. Get all transaction records (indexed by type)
+
         const transactions = await db.records
           .where('type')
           .equals('transaction')
           .toArray();
-        
-        // 3. Get all other type records (indexed by type)
+
         const otherRecords = await db.records
           .where('type')
           .equals('other')
           .toArray();
-        
-        // Combine results (no dedup needed - distinct queries)
+
         const combined = [...curatedAddresses, ...transactions, ...otherRecords];
         combined.sort((a, b) => b.updatedAt - a.updatedAt);
-        return combined;
+        rawRecords = combined;
       }
-    },
-    [includeBlockchainDiscovered]
-  );
-  
-  // Get count of blockchain-discovered records using compound index
-  const countResult = useLiveQuery(
-    async () => {
-      // Use compound index for efficient count
-      return db.records
+
+      if (loadVersionRef.current !== version) return;
+
+      const bdCount = await db.records
         .where('[type+addressImportance]')
         .anyOf(BLOCKCHAIN_DISCOVERED_TIERS.map(tier => ['address', tier]))
         .count();
-    },
-    []
-  );
-  
-  useEffect(() => {
-    if (countResult !== undefined) {
-      setBlockchainDiscoveredCount(countResult);
-    }
-  }, [countResult]);
-  
-  // Decrypt records when they change
-  useEffect(() => {
-    const decrypt = async () => {
-      if (!rawRecords) {
-        setDecryptedRecords([]);
-        return;
-      }
-      
-      if (!isEncryptionReady()) {
-        setDecryptedRecords(rawRecords);
-        return;
-      }
-      
-      setIsDecrypting(true);
-      try {
+      if (loadVersionRef.current !== version) return;
+      setBlockchainDiscoveredCount(bdCount);
+
+      if (isEncryptionReady()) {
         const decrypted = await decryptRecords(rawRecords);
+        if (loadVersionRef.current !== version) return;
         setDecryptedRecords(decrypted);
-      } catch (error) {
-        console.error('Failed to decrypt records:', error);
+      } else {
         setDecryptedRecords(rawRecords);
-      } finally {
-        setIsDecrypting(false);
       }
+    } catch (error) {
+      console.error('Failed to load filtered records:', error);
+      if (loadVersionRef.current === version) {
+        setDecryptedRecords([]);
+      }
+    } finally {
+      if (loadVersionRef.current === version) {
+        setIsLoading(false);
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    loadRecords(includeBlockchainDiscovered);
+
+    const unsubscribe = subscribeToDbChanges((tables) => {
+      if (tables.includes('records') || tables.length === 0) {
+        if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+        debounceTimerRef.current = setTimeout(() => {
+          loadRecords(includeBlockchainDiscovered);
+        }, 500);
+      }
+    });
+
+    return () => {
+      unsubscribe();
+      if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
     };
-    
-    decrypt();
-  }, [rawRecords]);
-  
+  }, [includeBlockchainDiscovered, loadRecords]);
+
   return {
     records: decryptedRecords,
-    isLoading: rawRecords === undefined || isDecrypting,
+    isLoading,
     blockchainDiscoveredCount,
+    reload: () => loadRecords(includeBlockchainDiscovered),
   };
 }
 

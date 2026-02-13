@@ -87,6 +87,5 @@ export async function deleteSeedName(id: number) {
 }
 
 export async function getSeedNameUsageCount(seedNameValue: string): Promise<number> {
-  const allRecords = await db.records.toArray();
-  return allRecords.filter(r => r.seedName === seedNameValue).length;
+  return db.records.filter(r => r.seedName === seedNameValue).count();
 }
