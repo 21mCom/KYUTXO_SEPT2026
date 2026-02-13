@@ -142,7 +142,7 @@ export default function WalletOverview() {
   const loadWalletStats = async () => {
     setLoading(true);
     try {
-      const rawRecords = await db.records.toArray();
+      const rawRecords = await db.records.where('type').equals('address').toArray();
       let records: DbRecord[];
       
       if (isEncryptionReady()) {
@@ -152,10 +152,7 @@ export default function WalletOverview() {
       }
 
       // Filter to only address records with wallet names
-      const addressRecords = records.filter(r => r.type === 'address' && r.walletName);
-      
-      // Get all transaction records for checking address usage
-      const txRecords = records.filter(r => r.type === 'transaction');
+      const addressRecords = records.filter(r => r.walletName);
       
       // Build a set of addresses that appear in transactions
       const usedAddresses = new Set<string>();
@@ -168,13 +165,6 @@ export default function WalletOverview() {
         if (record.firstSeenBlockTime || record.discoveredInTxid) {
           usedAddresses.add(record.inputString);
         }
-      }
-      
-      // Also check if any address appears as a participant in transaction labels/notes
-      // This is a fallback check
-      for (const tx of txRecords) {
-        // If this tx references addresses in its notes or other fields, those are used
-        // For now, we rely on firstSeenBlockTime as the primary indicator
       }
       
       // Group by wallet name

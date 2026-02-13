@@ -1,14 +1,14 @@
-import { useState, useMemo, useEffect, useRef } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { format } from "date-fns";
-import { db, Record } from "@/lib/database";
+import { db } from "@/lib/database";
 import { 
   scanForLightningActivity, 
   LightningDetectionResult,
   getClassificationLabel,
   getClassificationBadgeVariant
 } from "@/lib/lightning-detection";
-import { decryptRecords, getDecryptedOwners, getDecryptedWalletNames } from "@/lib/encryptionFacade";
+import { getDecryptedOwners, getDecryptedWalletNames } from "@/lib/encryptionFacade";
 import { ClickableAddress } from "@/components/ClickableAddress";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -91,36 +91,6 @@ export default function LightningSpeculator() {
   const [results, setResults] = useState<LightningDetectionResult[]>([]);
   const [expandedTxs, setExpandedTxs] = useState<Set<string>>(new Set());
   const [hasScanned, setHasScanned] = useState(false);
-
-  const rawRecords = useLiveQuery(
-    () => db.records.where('type').equals('address').toArray(),
-    []
-  );
-
-  const [decryptedRecords, setDecryptedRecords] = useState<Record[]>([]);
-  const decryptRequestId = useRef(0);
-
-  useEffect(() => {
-    if (!rawRecords) return;
-    
-    decryptRequestId.current += 1;
-    const thisRequestId = decryptRequestId.current;
-    
-    const decrypt = async () => {
-      try {
-        const decrypted = await decryptRecords(rawRecords);
-        if (thisRequestId === decryptRequestId.current) {
-          setDecryptedRecords(decrypted);
-        }
-      } catch {
-        if (thisRequestId === decryptRequestId.current) {
-          setDecryptedRecords(prev => prev.length === 0 ? rawRecords : prev);
-        }
-      }
-    };
-    
-    decrypt();
-  }, [rawRecords]);
 
   const [owners, setOwners] = useState<string[]>([]);
   const [walletNames, setWalletNames] = useState<string[]>([]);
