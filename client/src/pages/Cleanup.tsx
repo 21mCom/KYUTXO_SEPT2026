@@ -727,8 +727,8 @@ export default function Cleanup() {
                       Relationship safety check:
                     </p>
                     <p className="text-muted-foreground mt-1">
-                      Records that share transactions with your known addresses (imported, verified, or labeled) 
-                      are flagged so you can review them before deleting. Use "Select Safe" to skip these.
+                      Records that share transaction inputs or outputs with your known addresses (manually added, imported, verified, or labeled) 
+                      are flagged with a <Shield className="h-3 w-3 inline" /> icon so you can review them before deleting. Use "Select Safe" to skip these.
                     </p>
                   </div>
                 </div>
