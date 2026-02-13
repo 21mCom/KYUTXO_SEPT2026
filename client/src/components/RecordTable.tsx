@@ -446,7 +446,7 @@ export function RecordTable({
               Columns
             </Button>
           </PopoverTrigger>
-          <PopoverContent align="end" className="w-56">
+          <PopoverContent align="end" className="w-56 max-h-[80vh] overflow-y-auto">
             <div className="space-y-2">
               <p className="text-sm font-medium mb-3">Visible Columns</p>
               <div className="space-y-2">
