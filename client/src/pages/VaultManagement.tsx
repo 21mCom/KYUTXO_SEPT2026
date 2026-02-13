@@ -86,7 +86,12 @@ export default function VaultManagement() {
     async function loadVaults() {
       setLoading(true);
       try {
-        const rawRecords = await db.records.toArray();
+        const VAULT_TIERS = ['xpub-derived', 'verified'];
+        const rawRecords = await db.records
+          .where('[type+addressImportance]')
+          .anyOf(VAULT_TIERS.map(tier => ['address', tier]))
+          .toArray();
+
         let records: DbRecord[];
         if (isEncryptionReady()) {
           records = await decryptRecords(rawRecords);
@@ -175,7 +180,11 @@ export default function VaultManagement() {
   const saveVaultNotes = useCallback(async (vault: VaultSummary) => {
     setSavingNotes(true);
     try {
-      const rawRecords = await db.records.toArray();
+      const rawRecords = await db.records
+        .where('id')
+        .anyOf(vault.addressIds)
+        .toArray();
+
       let records: DbRecord[];
       if (isEncryptionReady()) {
         records = await decryptRecords(rawRecords);
