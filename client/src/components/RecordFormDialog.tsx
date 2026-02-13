@@ -56,7 +56,8 @@ import { formatFileSize } from "@/lib/attachments";
 import { MultiSelectCombobox } from "@/components/ui/multi-select-combobox";
 import { AttachmentList } from "./AttachmentList";
 import type { Attachment } from "@/lib/database";
-import { createProvider, parseTransaction, type ParsedTransaction, MINIMUM_CONFIRMATIONS } from "@/lib/blockchain-api";
+import { createProviderFromSettings, parseTransaction, type ParsedTransaction, MINIMUM_CONFIRMATIONS } from "@/lib/blockchain-api";
+import { useNodeSettings } from "@/hooks/use-node-settings";
 import { useToast } from "@/hooks/use-toast";
 import { SEED_NAME_MAX_LENGTH } from "@/hooks/use-seed-names";
 
@@ -156,6 +157,7 @@ export function RecordFormDialog({
   });
 
   const { toast } = useToast();
+  const { nodeSettings } = useNodeSettings();
   const [formData, setFormData] = useState(initialData || getDefaultFormData());
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
@@ -286,7 +288,7 @@ export function RecordFormDialog({
     setFetchedTxData(null);
 
     try {
-      const provider = createProvider('mempool');
+      const provider = createProviderFromSettings(nodeSettings);
       const currentHeight = await provider.getBlockHeight();
       const rawTx = await provider.getTransaction(txid);
       
