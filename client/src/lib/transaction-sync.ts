@@ -1506,12 +1506,10 @@ export const transactionSyncService = new TransactionSyncService();
 // Extract base wallet name from sources that contain derivation paths
 // e.g., "NamaDompet (0/1)" -> "NamaDompet", "Sparrow (m/84'/0'/0'/0/5)" -> "Sparrow"
 function extractBaseWalletName(source: string): string {
-  // Match patterns like "Name (derivation)" where derivation contains:
-  // - Numbers, slashes, apostrophes for BIP paths: m/84'/0'/0'/0/5
-  // - Uppercase M for some path notations
-  // - Hyphens, commas, spaces in descriptors
-  // Common patterns: (0/1), (m/84'/0'/0'/0/5), (0/0), (M/49H/0H/0H), etc.
-  const match = source.match(/^(.+?)\s*\([0-9mM/'hH,\s\-]+\)$/);
+  // Match patterns like "Name (derivation)" or "Name (derivation); suffix"
+  // where derivation contains BIP paths: m/84'/0'/0'/0/5, (0/1), (M/49H/0H/0H), etc.
+  // The derivation path may be followed by additional text like "; bip329Import_2026..."
+  const match = source.match(/^(.+?)\s*\([0-9mM/'hH,\s\-]+\)/);
   if (match) {
     return match[1].trim();
   }
