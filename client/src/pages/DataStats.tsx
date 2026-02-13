@@ -1,9 +1,9 @@
-import { useMemo, type ReactNode } from 'react';
-import { useLiveQuery } from 'dexie-react-hooks';
+import { useState, useEffect, type ReactNode } from 'react';
 import { db } from '@/lib/database';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { 
   Database, 
   Wallet, 
@@ -13,13 +13,13 @@ import {
   Paperclip,
   Link2,
   CheckCircle2,
-  Clock,
   Key,
   Search,
   Users,
   ArrowRightLeft,
   DollarSign,
-  BarChart3
+  BarChart3,
+  RefreshCw
 } from 'lucide-react';
 
 interface StatCardProps {
@@ -72,63 +72,118 @@ function BreakdownItem({ label, count, total, color }: BreakdownItemProps) {
   );
 }
 
+interface StatsData {
+  totalRecords: number;
+  addressCount: number;
+  transactionCount: number;
+  otherCount: number;
+  importanceBreakdown: { [key: string]: number };
+  sourceBreakdown: [string, number][];
+  ownerBreakdown: [string, number][];
+  tags: number;
+  categories: number;
+  attachments: number;
+  blockchainTransactions: number;
+  transactionParticipants: number;
+  addressSyncState: number;
+  priceData: number;
+}
+
+async function loadAllStats(): Promise<StatsData> {
+  const IMPORTANCE_TIERS = ['verified', 'manual', 'wallet-import', 'xpub-derived', 'blockchain-discovered', 'pending-review'];
+
+  const [
+    totalRecords,
+    addressCount,
+    transactionCount,
+    otherCount,
+    tags,
+    categories,
+    attachments,
+    blockchainTransactions,
+    transactionParticipants,
+    addressSyncState,
+    priceData,
+    ...importanceCounts
+  ] = await Promise.all([
+    db.records.count(),
+    db.records.where('type').equals('address').count(),
+    db.records.where('type').equals('transaction').count(),
+    db.records.where('type').equals('other').count(),
+    db.tags.count(),
+    db.categories.count(),
+    db.attachments.count(),
+    db.blockchainTransactions.count(),
+    db.transactionParticipants.count(),
+    db.addressSyncState.count(),
+    db.priceData.count(),
+    ...IMPORTANCE_TIERS.map(tier =>
+      db.records.where('addressImportance').equals(tier).count()
+    ),
+  ]);
+
+  const importanceBreakdown: { [key: string]: number } = {};
+  IMPORTANCE_TIERS.forEach((tier, i) => {
+    importanceBreakdown[tier] = importanceCounts[i];
+  });
+
+  const tieredTotal = Object.values(importanceBreakdown).reduce((sum, c) => sum + c, 0);
+  const legacyManual = addressCount - tieredTotal;
+  if (legacyManual > 0) {
+    importanceBreakdown['manual'] = (importanceBreakdown['manual'] || 0) + legacyManual;
+  }
+
+  const sourceBreakdown: { [key: string]: number } = {};
+  const ownerBreakdown: { [key: string]: number } = {};
+
+  await db.records.where('type').equals('address').each(record => {
+    const source = record.source || 'manual';
+    sourceBreakdown[source] = (sourceBreakdown[source] || 0) + 1;
+
+    const owner = record.owner || 'Unknown';
+    ownerBreakdown[owner] = (ownerBreakdown[owner] || 0) + 1;
+  });
+
+  const sortedSources = Object.entries(sourceBreakdown).sort((a, b) => b[1] - a[1]);
+  const sortedOwners = Object.entries(ownerBreakdown).sort((a, b) => b[1] - a[1]);
+
+  return {
+    totalRecords,
+    addressCount,
+    transactionCount,
+    otherCount,
+    importanceBreakdown,
+    sourceBreakdown: sortedSources,
+    ownerBreakdown: sortedOwners,
+    tags,
+    categories,
+    attachments,
+    blockchainTransactions,
+    transactionParticipants,
+    addressSyncState,
+    priceData,
+  };
+}
+
 export default function DataStats() {
-  const records = useLiveQuery(() => db.records.toArray(), []);
-  const tags = useLiveQuery(() => db.tags.count(), []);
-  const categories = useLiveQuery(() => db.categories.count(), []);
-  const attachments = useLiveQuery(() => db.attachments.count(), []);
-  const blockchainTransactions = useLiveQuery(() => db.blockchainTransactions.count(), []);
-  const transactionParticipants = useLiveQuery(() => db.transactionParticipants.count(), []);
-  const addressSyncState = useLiveQuery(() => db.addressSyncState.count(), []);
-  const priceData = useLiveQuery(() => db.priceData.count(), []);
+  const [stats, setStats] = useState<StatsData | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
 
-  const stats = useMemo(() => {
-    if (!records) return null;
+  const refresh = async () => {
+    setIsLoading(true);
+    try {
+      const data = await loadAllStats();
+      setStats(data);
+    } catch (error) {
+      console.error('Failed to load stats:', error);
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
-    const totalRecords = records.length;
-    const addresses = records.filter(r => r.type === 'address');
-    const transactions = records.filter(r => r.type === 'transaction');
-    const other = records.filter(r => r.type === 'other');
-
-    const importanceBreakdown: { [key: string]: number } = {
-      'verified': 0,
-      'manual': 0,
-      'wallet-import': 0,
-      'xpub-derived': 0,
-      'blockchain-discovered': 0,
-      'pending-review': 0,
-    };
-
-    const sourceBreakdown: { [key: string]: number } = {};
-    const ownerBreakdown: { [key: string]: number } = {};
-
-    addresses.forEach(record => {
-      const importance = record.addressImportance || 'manual';
-      importanceBreakdown[importance] = (importanceBreakdown[importance] || 0) + 1;
-
-      const source = record.source || 'manual';
-      sourceBreakdown[source] = (sourceBreakdown[source] || 0) + 1;
-
-      const owner = record.owner || 'Unknown';
-      ownerBreakdown[owner] = (ownerBreakdown[owner] || 0) + 1;
-    });
-
-    const sortedSources = Object.entries(sourceBreakdown)
-      .sort((a, b) => b[1] - a[1]);
-
-    const sortedOwners = Object.entries(ownerBreakdown)
-      .sort((a, b) => b[1] - a[1]);
-
-    return {
-      totalRecords,
-      addressCount: addresses.length,
-      transactionCount: transactions.length,
-      otherCount: other.length,
-      importanceBreakdown,
-      sourceBreakdown: sortedSources,
-      ownerBreakdown: sortedOwners,
-    };
-  }, [records]);
+  useEffect(() => {
+    refresh();
+  }, []);
 
   if (!stats) {
     return (
@@ -161,9 +216,15 @@ export default function DataStats() {
   return (
     <ScrollArea className="h-full">
       <div className="p-6 space-y-6">
-        <div>
-          <h1 className="text-2xl font-bold" data-testid="text-page-title">Data Stats</h1>
-          <p className="text-muted-foreground">Database statistics and record breakdowns</p>
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <div>
+            <h1 className="text-2xl font-bold" data-testid="text-page-title">Data Stats</h1>
+            <p className="text-muted-foreground">Database statistics and record breakdowns</p>
+          </div>
+          <Button variant="outline" size="sm" onClick={refresh} disabled={isLoading} data-testid="button-refresh-stats">
+            <RefreshCw className={`h-4 w-4 mr-2 ${isLoading ? 'animate-spin' : ''}`} />
+            Refresh
+          </Button>
         </div>
 
         <div className="grid gap-4 grid-cols-2 lg:grid-cols-4">
@@ -196,25 +257,25 @@ export default function DataStats() {
         <div className="grid gap-4 grid-cols-2 lg:grid-cols-4">
           <StatCard
             title="Tags"
-            value={tags ?? 0}
+            value={stats.tags}
             description="Custom tags created"
             icon={<Tag className="h-4 w-4" />}
           />
           <StatCard
             title="Categories"
-            value={categories ?? 0}
+            value={stats.categories}
             description="Categories defined"
             icon={<FolderOpen className="h-4 w-4" />}
           />
           <StatCard
             title="Attachments"
-            value={attachments ?? 0}
+            value={stats.attachments}
             description="Files attached to records"
             icon={<Paperclip className="h-4 w-4" />}
           />
           <StatCard
             title="Price Data Points"
-            value={priceData ?? 0}
+            value={stats.priceData}
             description="Historical price entries"
             icon={<DollarSign className="h-4 w-4" />}
           />
@@ -223,19 +284,19 @@ export default function DataStats() {
         <div className="grid gap-4 grid-cols-2 lg:grid-cols-3">
           <StatCard
             title="Blockchain Transactions"
-            value={blockchainTransactions ?? 0}
+            value={stats.blockchainTransactions}
             description="Synced from blockchain"
             icon={<ArrowRightLeft className="h-4 w-4" />}
           />
           <StatCard
             title="Transaction Participants"
-            value={transactionParticipants ?? 0}
+            value={stats.transactionParticipants}
             description="Inputs + outputs tracked"
             icon={<Link2 className="h-4 w-4" />}
           />
           <StatCard
             title="Synced Addresses"
-            value={addressSyncState ?? 0}
+            value={stats.addressSyncState}
             description="Addresses with sync state"
             icon={<Search className="h-4 w-4" />}
           />

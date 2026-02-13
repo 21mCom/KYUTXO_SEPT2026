@@ -72,8 +72,24 @@ export default function ConflictResolution() {
 
     setIsLoading(true);
     try {
-      const allRecords = await db.records.toArray();
-      const decrypted = await decryptRecords(allRecords);
+      const allOrigins = await db.recordOrigins.toArray();
+      const originCountByRecordId = new Map<number, number>();
+      allOrigins.forEach(o => {
+        originCountByRecordId.set(o.recordId, (originCountByRecordId.get(o.recordId) || 0) + 1);
+      });
+      
+      const multiOriginIds = Array.from(originCountByRecordId.entries())
+        .filter(([, count]) => count >= 2)
+        .map(([id]) => id);
+      
+      if (multiOriginIds.length === 0) {
+        setRecordsWithConflicts([]);
+        setIsLoading(false);
+        return;
+      }
+      
+      const rawRecords = await db.records.where('id').anyOf(multiOriginIds).toArray();
+      const decrypted = await decryptRecords(rawRecords);
       
       const recordsWithConflictData: RecordWithConflicts[] = [];
       

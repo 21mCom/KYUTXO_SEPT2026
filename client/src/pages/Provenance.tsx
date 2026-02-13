@@ -127,16 +127,13 @@ export default function Provenance() {
     const s = await getProvenanceStats();
     setStats(s);
     
-    // Load all addresses for selectors
-    const allRawRecords = await db.records.toArray();
-    let allRecords: DbRecord[];
+    const rawAddresses = await db.records.where('type').equals('address').toArray();
+    let addresses: DbRecord[];
     if (isEncryptionReady()) {
-      allRecords = await decryptRecords(allRawRecords);
+      addresses = await decryptRecords(rawAddresses);
     } else {
-      allRecords = allRawRecords;
+      addresses = rawAddresses;
     }
-    
-    const addresses = allRecords.filter(r => r.type === 'address');
     setAllAddresses(addresses);
     
     const labeled = addresses.filter(r => 
