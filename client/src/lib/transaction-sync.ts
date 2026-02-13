@@ -75,6 +75,12 @@ export interface SyncOptions {
   resumeContext?: ResumeContext;     // If provided, resume from paused state
 }
 
+export interface SyncDepthEstimate {
+  depth0: number;
+  perDepth: number[];
+  total: number;
+}
+
 export type SyncProgressCallback = (progress: SyncProgress) => void;
 
 export class TransactionSyncService {
@@ -1460,7 +1466,18 @@ export class TransactionSyncService {
    * Note: Additional addresses may be discovered during sync at higher depths.
    */
   async getFilteredAddressCount(options: SyncOptions): Promise<number> {
-    const { sourceFilter, sourceSelection } = options;
+    const estimate = await this.getMultiDepthEstimate(options);
+    return estimate.depth0;
+  }
+
+  /**
+   * Get per-depth estimates of how many addresses will be synced.
+   * Depth 0 = selected root addresses. Depth 1+ = previously discovered addresses
+   * whose discoveredFromRecordId traces back to the selected roots.
+   * Only counts addresses that haven't been synced yet at each depth level.
+   */
+  async getMultiDepthEstimate(options: SyncOptions): Promise<SyncDepthEstimate> {
+    const { sourceFilter, sourceSelection, maxDepth } = options;
     
     const allRawRecords = await db.records.where('type').equals('address').toArray();
     
@@ -1470,51 +1487,66 @@ export class TransactionSyncService {
     } else {
       allRecords = allRawRecords;
     }
-    
-    // Count only depth-0 addresses that match the filter
-    // These are the root addresses controlled by the source filter
-    let count = 0;
-    
-    for (const r of allRecords) {
-      if (r.type !== 'address') continue;
-      if (!r.id) continue;
-      
-      // Only count depth-0 (root) addresses 
-      const recordDepth = r.syncDepth ?? 0;
-      if (recordDepth !== 0) continue;
-      
-      // Apply source filter using the shared helper
-      if (sourceFilter === 'custom' && sourceSelection) {
-        if (!matchesSourceSelection(r, sourceSelection)) {
-          continue;
+
+    const scopeRecordIds = new Set<number>();
+    const depthCounts: number[] = [];
+
+    for (let depth = 0; depth < maxDepth; depth++) {
+      let needsSyncCount = 0;
+
+      for (const r of allRecords) {
+        if (r.type !== 'address' || !r.id) continue;
+        const recordDepth = r.syncDepth ?? 0;
+        if (recordDepth !== depth) continue;
+
+        let inScope = false;
+        if (depth === 0) {
+          if (sourceFilter === 'custom' && sourceSelection) {
+            inScope = matchesSourceSelection(r, sourceSelection);
+          } else {
+            switch (sourceFilter) {
+              case 'manual-only':
+                inScope = r.source !== 'blockchain-sync' && !r.source?.startsWith('tx-import:');
+                break;
+              case 'include-tx-import':
+                inScope = r.source !== 'blockchain-sync';
+                break;
+              case 'include-blockchain-sync':
+                inScope = !r.source?.startsWith('tx-import:');
+                break;
+              case 'all':
+              default:
+                inScope = true;
+                break;
+            }
+          }
+        } else {
+          inScope = !!r.discoveredFromRecordId && scopeRecordIds.has(r.discoveredFromRecordId);
         }
-      } else {
-        // Legacy filter modes
-        switch (sourceFilter) {
-          case 'manual-only':
-            if (r.source === 'blockchain-sync') continue;
-            if (r.source?.startsWith('tx-import:')) continue;
-            break;
-          case 'include-tx-import':
-            if (r.source === 'blockchain-sync') continue;
-            break;
-          case 'include-blockchain-sync':
-            if (r.source?.startsWith('tx-import:')) continue;
-            break;
-          case 'all':
-          default:
-            break;
+
+        if (inScope) {
+          scopeRecordIds.add(r.id);
+
+          const maxSyncedDepth = r.maxSyncedDepth ?? -1;
+          if (maxSyncedDepth < depth) {
+            const validation = validateAddress(r.inputString);
+            if (validation.isValid) {
+              needsSyncCount++;
+            }
+          }
         }
       }
-      
-      // Validate address format
-      const validation = validateAddress(r.inputString);
-      if (validation.isValid) {
-        count++;
-      }
+
+      depthCounts.push(needsSyncCount);
     }
-    
-    return count;
+
+    const result: SyncDepthEstimate = {
+      depth0: depthCounts[0] ?? 0,
+      perDepth: depthCounts,
+      total: depthCounts.reduce((a, b) => a + b, 0),
+    };
+
+    return result;
   }
 }
 

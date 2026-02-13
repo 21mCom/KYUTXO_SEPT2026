@@ -34,7 +34,7 @@ import {
 } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { transactionSyncService, type SyncProgress, type SyncResult, type SyncOptions, type SourceCategory, type SourceSelection, type SourceInfo, getAddressSources } from "@/lib/transaction-sync";
+import { transactionSyncService, type SyncProgress, type SyncResult, type SyncOptions, type SourceCategory, type SourceSelection, type SourceInfo, type SyncDepthEstimate, getAddressSources } from "@/lib/transaction-sync";
 import type { PausedSyncState, SkippedAddress, AddressBlacklist, SyncProtectionSettings } from "@/lib/database";
 import { DEFAULT_SYNC_PROTECTION } from "@/lib/database";
 import { useNodeSettings } from "@/hooks/use-node-settings";
@@ -78,6 +78,7 @@ export default function TransactionSync() {
   
   // Filtered count based on current selection
   const [filteredAddressCount, setFilteredAddressCount] = useState<number | null>(null);
+  const [depthEstimate, setDepthEstimate] = useState<SyncDepthEstimate | null>(null);
   
   // Sync protection
   const [syncProtection, setSyncProtection] = useState<SyncProtectionSettings>({ ...DEFAULT_SYNC_PROTECTION });
@@ -156,7 +157,7 @@ export default function TransactionSync() {
     loadBlacklist();
   }, [loadStats, loadSources, loadPausedState, loadSkippedAddresses, loadBlacklist]);
 
-  // Update filtered address count whenever selection changes
+  // Update filtered address count and depth estimates whenever selection changes
   useEffect(() => {
     const updateFilteredCount = async () => {
       const options: SyncOptions = {
@@ -167,8 +168,9 @@ export default function TransactionSync() {
         },
         maxDepth,
       };
-      const count = await transactionSyncService.getFilteredAddressCount(options);
-      setFilteredAddressCount(count);
+      const estimate = await transactionSyncService.getMultiDepthEstimate(options);
+      setFilteredAddressCount(estimate.depth0);
+      setDepthEstimate(estimate);
     };
     updateFilteredCount();
   }, [selectedSources, includeNoSource, maxDepth]);
@@ -428,10 +430,13 @@ export default function TransactionSync() {
       case 'idle': return 'Preparing...';
       case 'fetching-height': return 'Getting current block height...';
       case 'syncing-addresses': {
-        const depthText = syncProgress.maxDepth && syncProgress.maxDepth > 1 
-          ? ` (depth ${(syncProgress.currentDepth ?? 0) + 1}/${syncProgress.maxDepth})`
-          : '';
-        return `Syncing address ${syncProgress.addressesProcessed + 1} of ${syncProgress.addressesTotal}${depthText}`;
+        const currentDepthDisplay = (syncProgress.currentDepth ?? 0) + 1;
+        const maxDepthDisplay = syncProgress.maxDepth ?? 1;
+        const depthLabel = currentDepthDisplay === 1 ? 'your addresses' : `depth-${syncProgress.currentDepth ?? 0} addresses`;
+        if (maxDepthDisplay > 1) {
+          return `Depth ${currentDepthDisplay}/${maxDepthDisplay} (${depthLabel}): address ${syncProgress.addressesProcessed + 1} of ${syncProgress.addressesTotal.toLocaleString()}`;
+        }
+        return `Syncing address ${syncProgress.addressesProcessed + 1} of ${syncProgress.addressesTotal.toLocaleString()}`;
       }
       case 'processing': return 'Processing transactions...';
       case 'complete': return 'Sync complete!';
@@ -728,11 +733,31 @@ export default function TransactionSync() {
                   )}
                 </ScrollArea>
                 {filteredAddressCount !== null && (
-                  <div className="text-xs text-muted-foreground">
-                    <Badge variant="secondary" className="font-medium">
-                      {filteredAddressCount} address{filteredAddressCount !== 1 ? 'es' : ''}
-                    </Badge>
-                    {' '}will be synced based on current selection
+                  <div className="text-xs text-muted-foreground space-y-1" data-testid="text-sync-estimate">
+                    <div>
+                      <Badge variant="secondary" className="font-medium">
+                        {filteredAddressCount.toLocaleString()} address{filteredAddressCount !== 1 ? 'es' : ''}
+                      </Badge>
+                      {' '}will be synced based on current selection
+                    </div>
+                    {depthEstimate && maxDepth > 1 && (
+                      <div className="pl-1 space-y-0.5">
+                        {depthEstimate.perDepth.map((count, idx) => (
+                          <div key={idx} className="flex items-center gap-1.5">
+                            <span className="text-muted-foreground/60">
+                              {idx === 0 ? 'Depth 1:' : `Depth ${idx + 1}:`}
+                            </span>
+                            <span>
+                              {count.toLocaleString()} {idx === 0 ? 'selected' : 'previously discovered'}
+                            </span>
+                          </div>
+                        ))}
+                        <div className="flex items-center gap-1.5 pt-0.5 border-t border-muted">
+                          <span className="text-muted-foreground/60">Total:</span>
+                          <span className="font-medium">{depthEstimate.total.toLocaleString()} addresses across all depths</span>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
