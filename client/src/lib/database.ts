@@ -633,6 +633,9 @@ db.on('ready', async () => {
         walletName: false,
         source: false,
         firstSeen: true,
+        balance: false,
+        lastTxDate: false,
+        txCount: false,
       },
       customFieldColumns: {},
       theme: 'light',
@@ -677,6 +680,9 @@ db.on('ready', async () => {
         walletName: false,
         source: false,
         firstSeen: true,
+        balance: false,
+        lastTxDate: false,
+        txCount: false,
       };
     } else {
       const tableCols = settings.tableColumns as { owner?: boolean; walletName?: boolean; firstSeen?: boolean; [key: string]: boolean | undefined };

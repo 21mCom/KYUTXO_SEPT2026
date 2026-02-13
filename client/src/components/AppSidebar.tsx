@@ -102,6 +102,7 @@ const navGroups: NavGroup[] = [
       { title: "Flow Visualizer", url: "/flow-visualizer", icon: Network },
       { title: "Data Stats", url: "/data-stats", icon: BarChart3 },
       { title: "Reports", url: "/reports", icon: ClipboardList },
+      { title: "Statement", url: "/statement", icon: FileText },
       { title: "Lightning", url: "/lightning-speculator", icon: Zap },
     ]
   },
