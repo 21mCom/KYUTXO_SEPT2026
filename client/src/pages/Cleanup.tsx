@@ -18,9 +18,11 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Trash2, Search, RefreshCw, AlertTriangle, CheckCircle2, Network, ArrowUpDown, Link2 } from "lucide-react";
+import { Trash2, Search, RefreshCw, AlertTriangle, CheckCircle2, Network, ArrowUpDown, Link2, Shield } from "lucide-react";
 import { db, Record, RecordOrigin } from "@/lib/database";
 import { deleteRecord, decryptRecords, getDecryptedRecordOrigins } from "@/lib/encryptionFacade";
+import { decryptRecordOrigin } from "@/lib/dbEncryption";
+import { getKey, isEncryptionReady } from "@/lib/encryptionFacade";
 
 type Scope = 'addresses' | 'transactions' | 'both';
 type ScanMode = 'blockchain-only' | 'discovery-origin';
@@ -31,6 +33,7 @@ interface CleanupCandidate {
   record: Record;
   origins: RecordOrigin[];
   hasOtherConnections: boolean;
+  connectedToKnown: boolean;
 }
 
 export default function Cleanup() {
@@ -46,13 +49,21 @@ export default function Cleanup() {
   const [originAddress, setOriginAddress] = useState('');
   const [sortField, setSortField] = useState<SortField>('depth');
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
+  const [scanProgress, setScanProgress] = useState('');
+  const [deleteProgress, setDeleteProgress] = useState({ current: 0, total: 0 });
 
   const [syncedAddresses, setSyncedAddresses] = useState<{ id: number; address: string }[]>([]);
 
   useEffect(() => {
     const loadSyncedAddresses = async () => {
       const allRecords = await db.records
-        .where('type').equals('address')
+        .where('[type+addressImportance]')
+        .anyOf([
+          ['address', 'verified'],
+          ['address', 'manual'],
+          ['address', 'wallet-import'],
+          ['address', 'xpub-derived'],
+        ])
         .toArray();
       const decrypted = await decryptRecords(allRecords);
       const synced = decrypted
@@ -167,43 +178,213 @@ export default function Cleanup() {
     return false;
   };
 
+  const bulkGetOriginsByRecordId = async (recordIds: Set<number>): Promise<Map<number, RecordOrigin[]>> => {
+    const allOrigins = await db.recordOrigins.toArray();
+    const grouped = new Map<number, RecordOrigin[]>();
+    
+    const key = isEncryptionReady() ? getKey() : null;
+    
+    for (const origin of allOrigins) {
+      if (!recordIds.has(origin.recordId)) continue;
+      
+      let decrypted = origin;
+      if (origin.isEncrypted && key) {
+        try {
+          decrypted = await decryptRecordOrigin(origin, key);
+        } catch {
+          continue;
+        }
+      }
+      
+      if (!grouped.has(origin.recordId)) {
+        grouped.set(origin.recordId, []);
+      }
+      grouped.get(origin.recordId)!.push(decrypted);
+    }
+    
+    return grouped;
+  };
+
+  const buildKnownAddressSet = async (): Promise<Set<string>> => {
+    setScanProgress('Building known address index...');
+    await new Promise(r => setTimeout(r, 0));
+    
+    const knownRecords = await db.records
+      .where('[type+addressImportance]')
+      .anyOf([
+        ['address', 'verified'],
+        ['address', 'manual'],
+        ['address', 'wallet-import'],
+        ['address', 'xpub-derived'],
+      ])
+      .toArray();
+    
+    const decrypted = await decryptRecords(knownRecords);
+    const knownAddresses = new Set<string>();
+    for (const r of decrypted) {
+      if (r.inputString) {
+        knownAddresses.add(r.inputString.trim().toLowerCase());
+      }
+    }
+    return knownAddresses;
+  };
+
+  const checkTransactionConnections = async (
+    candidateIds: Set<number>,
+    candidateAddresses: Set<string>,
+  ): Promise<Set<number>> => {
+    setScanProgress('Checking transaction relationships...');
+    await new Promise(r => setTimeout(r, 0));
+    
+    const knownAddresses = await buildKnownAddressSet();
+    
+    const allParticipants = await db.transactionParticipants.toArray();
+    
+    const txToParticipants = new Map<string, Array<{ address: string; recordId?: number }>>();
+    for (const p of allParticipants) {
+      if (!txToParticipants.has(p.txid)) {
+        txToParticipants.set(p.txid, []);
+      }
+      txToParticipants.get(p.txid)!.push({ address: p.address, recordId: p.recordId });
+    }
+    
+    const connectedCandidateIds = new Set<number>();
+    
+    const candidateRecordToAddress = new Map<number, string>();
+    
+    const addressToCandidateId = new Map<string, number>();
+    
+    for (const p of allParticipants) {
+      if (p.recordId && candidateIds.has(p.recordId)) {
+        const addr = p.address.trim().toLowerCase();
+        candidateRecordToAddress.set(p.recordId, addr);
+        addressToCandidateId.set(addr, p.recordId);
+      }
+    }
+    
+    const txEntries = Array.from(txToParticipants.entries());
+    for (let i = 0; i < txEntries.length; i++) {
+      const participants = txEntries[i][1];
+      const candidateIdsInTx: number[] = [];
+      let hasKnownAddress = false;
+      
+      for (const p of participants) {
+        const normalizedAddr = p.address.trim().toLowerCase();
+        
+        if (p.recordId && candidateIds.has(p.recordId)) {
+          candidateIdsInTx.push(p.recordId);
+        } else if (addressToCandidateId.has(normalizedAddr)) {
+          candidateIdsInTx.push(addressToCandidateId.get(normalizedAddr)!);
+        }
+        
+        if (knownAddresses.has(normalizedAddr)) {
+          hasKnownAddress = true;
+        }
+        
+        if (p.recordId && !candidateIds.has(p.recordId)) {
+          hasKnownAddress = true;
+        }
+      }
+      
+      if (hasKnownAddress) {
+        for (const cid of candidateIdsInTx) {
+          connectedCandidateIds.add(cid);
+        }
+      }
+    }
+    
+    return connectedCandidateIds;
+  };
+
   const scanForCandidates = async () => {
     setIsScanning(true);
     setCandidates([]);
     setSelectedIds(new Set());
+    setScanProgress('');
     
     try {
       if (scanMode === 'blockchain-only') {
+        setScanProgress('Loading records...');
+        await new Promise(r => setTimeout(r, 0));
+        
         let records: Record[] = [];
         
-        if (scope === 'addresses') {
-          records = await db.records.where('type').equals('address').toArray();
-        } else if (scope === 'transactions') {
-          records = await db.records.where('type').equals('transaction').toArray();
-        } else {
-          records = await db.records.where('type').anyOf(['address', 'transaction']).toArray();
+        const CANDIDATE_TIERS = ['blockchain-discovered', 'pending-review'];
+        
+        if (scope === 'addresses' || scope === 'both') {
+          const addressRecords = await db.records
+            .where('[type+addressImportance]')
+            .anyOf(CANDIDATE_TIERS.map(tier => ['address', tier]))
+            .toArray();
+          records.push(...addressRecords);
         }
         
-        const decrypted = await decryptRecords(records);
+        if (scope === 'transactions' || scope === 'both') {
+          const txRecords = await db.records
+            .where('type').equals('transaction')
+            .toArray();
+          const txFiltered = txRecords.filter(r => {
+            if (r.addressImportance && !CANDIDATE_TIERS.includes(r.addressImportance)) return false;
+            return true;
+          });
+          records.push(...txFiltered);
+        }
+        
+        const withSyncDepth = records.filter(r => r.syncDepth !== undefined && r.syncDepth > 0);
+        
+        setScanProgress(`Decrypting ${withSyncDepth.length} potential candidates...`);
+        await new Promise(r => setTimeout(r, 0));
+        
+        const decrypted = await decryptRecords(withSyncDepth);
+        
+        const recordIds = new Set<number>();
+        for (const r of decrypted) {
+          if (r.id) recordIds.add(r.id);
+        }
+        
+        setScanProgress(`Loading origins for ${recordIds.size} records...`);
+        await new Promise(r => setTimeout(r, 0));
+        
+        const originsMap = await bulkGetOriginsByRecordId(recordIds);
+        
+        setScanProgress('Evaluating eligibility...');
+        await new Promise(r => setTimeout(r, 0));
         
         const cleanupCandidates: CleanupCandidate[] = [];
+        const candidateIds = new Set<number>();
+        const candidateAddresses = new Set<string>();
         
         for (const record of decrypted) {
           if (!record.id) continue;
           
-          const origins = await getDecryptedRecordOrigins(record.id);
+          const origins = originsMap.get(record.id) || [];
           
           if (isBlockchainOnlyRecord(record, origins) && !hasUserMetadata(record, origins)) {
-            cleanupCandidates.push({ record, origins, hasOtherConnections: false });
+            cleanupCandidates.push({ record, origins, hasOtherConnections: false, connectedToKnown: false });
+            candidateIds.add(record.id);
+            if (record.inputString) {
+              candidateAddresses.add(record.inputString.trim().toLowerCase());
+            }
+          }
+        }
+        
+        if (cleanupCandidates.length > 0) {
+          const connectedIds = await checkTransactionConnections(candidateIds, candidateAddresses);
+          
+          for (const candidate of cleanupCandidates) {
+            if (candidate.record.id && connectedIds.has(candidate.record.id)) {
+              candidate.connectedToKnown = true;
+            }
           }
         }
         
         setCandidates(cleanupCandidates);
         setHasScanned(true);
         
+        const connectedCount = cleanupCandidates.filter(c => c.connectedToKnown).length;
         toast({
           title: "Scan Complete",
-          description: `Found ${cleanupCandidates.length} records eligible for cleanup`,
+          description: `Found ${cleanupCandidates.length} records eligible for cleanup${connectedCount > 0 ? ` (${connectedCount} connected to known addresses)` : ''}`,
         });
       } else {
         const trimmed = originAddress.trim();
@@ -216,6 +397,9 @@ export default function Cleanup() {
           setIsScanning(false);
           return;
         }
+
+        setScanProgress('Finding parent address...');
+        await new Promise(r => setTimeout(r, 0));
 
         const parentRecords = await db.records
           .filter(r => r.inputString === trimmed && r.type === 'address')
@@ -237,22 +421,50 @@ export default function Cleanup() {
           return;
         }
 
+        setScanProgress('Traversing discovery tree...');
+        await new Promise(r => setTimeout(r, 0));
+
         const discoveredRecords = await fetchDiscoveryTree(parentRecord.id);
         const discoveryTreeIds = new Set<number>([parentRecord.id, ...discoveredRecords.map(r => r.id!).filter(Boolean)]);
 
+        setScanProgress(`Loading origins for ${discoveredRecords.length} records...`);
+        await new Promise(r => setTimeout(r, 0));
+
+        const recordIds = new Set<number>(discoveredRecords.map(r => r.id!).filter(Boolean));
+        const originsMap = await bulkGetOriginsByRecordId(recordIds);
+
         const cleanupCandidates: CleanupCandidate[] = [];
+        const candidateIds = new Set<number>();
+        const candidateAddresses = new Set<string>();
+
+        setScanProgress('Checking connections...');
+        await new Promise(r => setTimeout(r, 0));
 
         for (const record of discoveredRecords) {
           if (!record.id) continue;
 
-          const origins = await getDecryptedRecordOrigins(record.id);
+          const origins = originsMap.get(record.id) || [];
           const otherConnections = await checkOtherConnections(record.id, discoveryTreeIds);
 
           cleanupCandidates.push({
             record,
             origins,
             hasOtherConnections: otherConnections,
+            connectedToKnown: false,
           });
+          candidateIds.add(record.id);
+          if (record.inputString) {
+            candidateAddresses.add(record.inputString.trim().toLowerCase());
+          }
+        }
+
+        if (cleanupCandidates.length > 0) {
+          const connectedIds = await checkTransactionConnections(candidateIds, candidateAddresses);
+          for (const candidate of cleanupCandidates) {
+            if (candidate.record.id && connectedIds.has(candidate.record.id)) {
+              candidate.connectedToKnown = true;
+            }
+          }
         }
 
         setCandidates(cleanupCandidates);
@@ -272,6 +484,7 @@ export default function Cleanup() {
       });
     } finally {
       setIsScanning(false);
+      setScanProgress('');
     }
   };
 
@@ -297,7 +510,7 @@ export default function Cleanup() {
   const selectSafe = () => {
     const safeIds = new Set(
       candidates
-        .filter(c => !c.hasOtherConnections && !hasUserMetadata(c.record, c.origins))
+        .filter(c => !c.hasOtherConnections && !c.connectedToKnown && !hasUserMetadata(c.record, c.origins))
         .map(c => c.record.id!)
     );
     setSelectedIds(safeIds);
@@ -311,8 +524,16 @@ export default function Cleanup() {
       let deleted = 0;
       let skipped = 0;
       const idsToDelete = Array.from(selectedIds);
+      setDeleteProgress({ current: 0, total: idsToDelete.length });
       
-      for (const id of idsToDelete) {
+      for (let i = 0; i < idsToDelete.length; i++) {
+        const id = idsToDelete[i];
+        
+        if (i % 10 === 0) {
+          setDeleteProgress({ current: i + 1, total: idsToDelete.length });
+          await new Promise(r => setTimeout(r, 0));
+        }
+        
         const records = await db.records.where('id').equals(id).toArray();
         if (records.length === 0) {
           skipped++;
@@ -358,6 +579,7 @@ export default function Cleanup() {
       });
     } finally {
       setIsDeleting(false);
+      setDeleteProgress({ current: 0, total: 0 });
     }
   };
 
@@ -388,7 +610,7 @@ export default function Cleanup() {
 
   const addressCount = candidates.filter(c => c.record.type === 'address').length;
   const txCount = candidates.filter(c => c.record.type === 'transaction').length;
-  const connectedCount = candidates.filter(c => c.hasOtherConnections).length;
+  const connectedCount = candidates.filter(c => c.hasOtherConnections || c.connectedToKnown).length;
   const selectedAddresses = Array.from(selectedIds).filter(id => 
     candidates.find(c => c.record.id === id && c.record.type === 'address')
   ).length;
@@ -499,6 +721,16 @@ export default function Cleanup() {
                     <li>Have no user-added metadata (labels, notes, tags, categories, etc.)</li>
                     <li>Have no classification data (flow type, cost basis, counterparty, etc.)</li>
                   </ul>
+                  <div className="mt-3 pt-3 border-t border-muted">
+                    <p className="font-medium flex items-center gap-1.5">
+                      <Shield className="h-3.5 w-3.5" />
+                      Relationship safety check:
+                    </p>
+                    <p className="text-muted-foreground mt-1">
+                      Records that share transactions with your known addresses (imported, verified, or labeled) 
+                      are flagged so you can review them before deleting. Use "Select Safe" to skip these.
+                    </p>
+                  </div>
                 </div>
               </>
             )}
@@ -546,6 +778,7 @@ export default function Cleanup() {
                     <li>Includes records at all depths (direct and indirect discoveries)</li>
                     <li>Shows records with metadata too — review before deleting</li>
                     <li>Flags records that are also connected to other wanted addresses</li>
+                    <li>Flags records that share transactions with your known addresses</li>
                   </ul>
                 </div>
               </div>
@@ -560,7 +793,7 @@ export default function Cleanup() {
               {isScanning ? (
                 <>
                   <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
-                  Scanning...
+                  {scanProgress || 'Scanning...'}
                 </>
               ) : (
                 <>
@@ -593,7 +826,7 @@ export default function Cleanup() {
                         {addressCount} addresses, {txCount} transactions
                         {connectedCount > 0 && (
                           <span className="ml-2" data-testid="text-connected-count">
-                            ({connectedCount} also connected elsewhere)
+                            ({connectedCount} connected to known addresses or other trees)
                           </span>
                         )}
                         {selectedIds.size > 0 && (
@@ -620,23 +853,21 @@ export default function Cleanup() {
                     >
                       Select All
                     </Button>
-                    {scanMode === 'discovery-origin' && (
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Button 
-                            variant="outline" 
-                            size="sm" 
-                            onClick={selectSafe}
-                            data-testid="button-select-safe"
-                          >
-                            Select Safe
-                          </Button>
-                        </TooltipTrigger>
-                        <TooltipContent>
-                          Select only records with no other connections and no user metadata
-                        </TooltipContent>
-                      </Tooltip>
-                    )}
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button 
+                          variant="outline" 
+                          size="sm" 
+                          onClick={selectSafe}
+                          data-testid="button-select-safe"
+                        >
+                          Select Safe
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        Select only records with no connections to known addresses, no other tree connections, and no user metadata
+                      </TooltipContent>
+                    </Tooltip>
                     <Button 
                       variant="outline" 
                       size="sm" 
@@ -656,7 +887,7 @@ export default function Cleanup() {
                       {isDeleting ? (
                         <>
                           <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
-                          Deleting...
+                          Deleting {deleteProgress.current}/{deleteProgress.total}...
                         </>
                       ) : (
                         <>
@@ -680,9 +911,7 @@ export default function Cleanup() {
                       <SortButton field="address" label="Address / TXID" />
                     </div>
                     <SortButton field="depth" label="Depth" />
-                    {scanMode === 'discovery-origin' && (
-                      <div className="w-24 text-center text-muted-foreground" data-testid="header-status">Status</div>
-                    )}
+                    <div className="w-28 text-center text-muted-foreground" data-testid="header-status">Status</div>
                   </div>
                   <div className="divide-y max-h-[500px] overflow-y-auto">
                     {sortedCandidates.map((candidate) => (
@@ -707,30 +936,38 @@ export default function Cleanup() {
                             D{candidate.record.syncDepth}
                           </Badge>
                         )}
-                        {scanMode === 'discovery-origin' && (
-                          <div className="flex items-center gap-1 shrink-0 w-24 justify-end" data-testid={`status-${candidate.record.id}`}>
-                            {hasUserMetadata(candidate.record, candidate.origins) && (
-                              <Tooltip>
-                                <TooltipTrigger>
-                                  <Badge variant="secondary" className="text-xs" data-testid={`badge-metadata-${candidate.record.id}`}>
-                                    metadata
-                                  </Badge>
-                                </TooltipTrigger>
-                                <TooltipContent>Has user-added metadata (labels, tags, etc.)</TooltipContent>
-                              </Tooltip>
-                            )}
-                            {candidate.hasOtherConnections && (
-                              <Tooltip>
-                                <TooltipTrigger>
-                                  <Badge variant="outline" className="text-xs" data-testid={`badge-connected-${candidate.record.id}`}>
-                                    <Link2 className="h-3 w-3" />
-                                  </Badge>
-                                </TooltipTrigger>
-                                <TooltipContent>Also connected to other addresses outside this discovery tree</TooltipContent>
-                              </Tooltip>
-                            )}
-                          </div>
-                        )}
+                        <div className="flex items-center gap-1 shrink-0 w-28 justify-end" data-testid={`status-${candidate.record.id}`}>
+                          {hasUserMetadata(candidate.record, candidate.origins) && (
+                            <Tooltip>
+                              <TooltipTrigger>
+                                <Badge variant="secondary" className="text-xs" data-testid={`badge-metadata-${candidate.record.id}`}>
+                                  metadata
+                                </Badge>
+                              </TooltipTrigger>
+                              <TooltipContent>Has user-added metadata (labels, tags, etc.)</TooltipContent>
+                            </Tooltip>
+                          )}
+                          {candidate.connectedToKnown && (
+                            <Tooltip>
+                              <TooltipTrigger>
+                                <Badge variant="outline" className="text-xs text-amber-600 border-amber-600/30" data-testid={`badge-known-${candidate.record.id}`}>
+                                  <Shield className="h-3 w-3" />
+                                </Badge>
+                              </TooltipTrigger>
+                              <TooltipContent>Shares a transaction with one of your known/imported addresses</TooltipContent>
+                            </Tooltip>
+                          )}
+                          {candidate.hasOtherConnections && (
+                            <Tooltip>
+                              <TooltipTrigger>
+                                <Badge variant="outline" className="text-xs" data-testid={`badge-connected-${candidate.record.id}`}>
+                                  <Link2 className="h-3 w-3" />
+                                </Badge>
+                              </TooltipTrigger>
+                              <TooltipContent>Also connected to other addresses outside this discovery tree</TooltipContent>
+                            </Tooltip>
+                          )}
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -749,14 +986,21 @@ export default function Cleanup() {
               </AlertDialogTitle>
               <AlertDialogDescription>
                 You are about to permanently delete {selectedIds.size} record{selectedIds.size === 1 ? '' : 's'}.
-                {scanMode === 'discovery-origin' && candidates.some(c => selectedIds.has(c.record.id!) && c.hasOtherConnections) && (
+                {candidates.some(c => selectedIds.has(c.record.id!) && c.connectedToKnown) && (
+                  <>
+                    <br /><br />
+                    <strong className="text-amber-600">Warning:</strong> Some selected records share transactions 
+                    with your known/imported addresses. Deleting them will remove transaction data linked to those addresses.
+                  </>
+                )}
+                {candidates.some(c => selectedIds.has(c.record.id!) && c.hasOtherConnections) && (
                   <>
                     <br /><br />
                     <strong className="text-amber-600">Warning:</strong> Some selected records are also connected 
                     to other addresses. Deleting them may affect data for those addresses.
                   </>
                 )}
-                {scanMode === 'discovery-origin' && candidates.some(c => selectedIds.has(c.record.id!) && hasUserMetadata(c.record, c.origins)) && (
+                {candidates.some(c => selectedIds.has(c.record.id!) && hasUserMetadata(c.record, c.origins)) && (
                   <>
                     <br /><br />
                     <strong className="text-amber-600">Warning:</strong> Some selected records have user-added 
