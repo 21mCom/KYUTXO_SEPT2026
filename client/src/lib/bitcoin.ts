@@ -194,8 +194,8 @@ export function truncateAddress(address: string, startChars = 10, endChars = 10)
 /**
  * Formats BTC amount with proper decimal places
  */
-export function formatBTC(amount: number | string | undefined): string {
-  if (amount === undefined || amount === null) return '0.00000000';
-  const num = typeof amount === 'string' ? parseFloat(amount) : amount;
-  return num.toFixed(8);
+export function formatBTC(sats: number | string | undefined): string {
+  if (sats === undefined || sats === null) return '0.00000000';
+  const num = typeof sats === 'string' ? parseFloat(sats) : sats;
+  return (num / 100_000_000).toFixed(8);
 }
