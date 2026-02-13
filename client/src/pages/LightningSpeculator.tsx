@@ -8,7 +8,7 @@ import {
   getClassificationLabel,
   getClassificationBadgeVariant
 } from "@/lib/lightning-detection";
-import { decryptRecords } from "@/lib/encryptionFacade";
+import { decryptRecords, getDecryptedOwners, getDecryptedWalletNames } from "@/lib/encryptionFacade";
 import { ClickableAddress } from "@/components/ClickableAddress";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -122,21 +122,24 @@ export default function LightningSpeculator() {
     decrypt();
   }, [rawRecords]);
 
-  const owners = useMemo(() => {
-    const ownerSet = new Set<string>();
-    decryptedRecords.forEach(r => {
-      if (r.owner) ownerSet.add(r.owner);
-    });
-    return Array.from(ownerSet).sort();
-  }, [decryptedRecords]);
+  const [owners, setOwners] = useState<string[]>([]);
+  const [walletNames, setWalletNames] = useState<string[]>([]);
 
-  const walletNames = useMemo(() => {
-    const walletSet = new Set<string>();
-    decryptedRecords.forEach(r => {
-      if (r.walletName) walletSet.add(r.walletName);
-    });
-    return Array.from(walletSet).sort();
-  }, [decryptedRecords]);
+  useEffect(() => {
+    const loadVocabulary = async () => {
+      try {
+        const [decryptedOwners, decryptedWallets] = await Promise.all([
+          getDecryptedOwners(),
+          getDecryptedWalletNames()
+        ]);
+        setOwners(decryptedOwners.map(o => o.name).filter(Boolean).sort());
+        setWalletNames(decryptedWallets.map(w => w.name).filter(Boolean).sort());
+      } catch (error) {
+        console.error('Failed to load vocabulary:', error);
+      }
+    };
+    loadVocabulary();
+  }, []);
 
   const transactionCount = useLiveQuery(
     () => db.blockchainTransactions.count(),
