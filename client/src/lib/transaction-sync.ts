@@ -817,6 +817,12 @@ export class TransactionSyncService {
         return result;
       }
 
+      // Track which record IDs are "in scope" for this sync session.
+      // At depth 0, this is the filtered/selected set. At depth 1+, only addresses
+      // whose discoveredFromRecordId is in the previous depth's scope are included.
+      // This prevents syncing unrelated addresses from previous sync sessions.
+      const scopeRecordIds = new Set<number>();
+
       // Normal sync: Process each depth level from 0 up to maxDepth (exclusive)
       // Depth 0 = manually entered addresses, Depth 1 = first-hop discovered, etc.
       // maxDepth = N means "sync up to depth N-1" (e.g., maxDepth=2 syncs depths 0 and 1)
@@ -834,30 +840,14 @@ export class TransactionSyncService {
           allRecords = allRawRecords;
         }
         
-        // Filter to address records at this depth level that haven't been synced yet
-        let addressRecords = allRecords.filter(r => {
-          if (r.type !== 'address') return false;
-          if (!r.id) return false;
-          
-          // Skip if we already processed this record in this sync session
-          if (processedRecordIds.has(r.id)) return false;
-          
-          // Check depth - records with syncDepth matching currentDepth should be synced
-          const recordDepth = r.syncDepth ?? 0;
-          if (recordDepth !== currentDepth) return false;
-          
-          // Check if already synced at this depth or beyond
-          const maxSyncedDepth = r.maxSyncedDepth ?? -1;
-          if (maxSyncedDepth >= currentDepth) return false;
-          
-          // Apply source filter (for depth 0 records)
+        // First, build the scope set for this depth level.
+        // This includes ALL matching records (even already-synced ones) so that
+        // the next depth's discoveredFromRecordId check can trace lineage correctly.
+        const matchesSourceFilter = (r: Record): boolean => {
           if (currentDepth === 0) {
-            // Custom source selection mode
             if (sourceFilter === 'custom' && options.sourceSelection) {
               return matchesSourceSelection(r, options.sourceSelection);
             }
-            
-            // Legacy filter modes
             switch (sourceFilter) {
               case 'manual-only':
                 if (r.source === 'blockchain-sync') return false;
@@ -875,11 +865,38 @@ export class TransactionSyncService {
                 return true;
             }
           }
-          
-          return true;
+          // For depth > 0: only include addresses discovered from
+          // records that were in scope at the previous depth level.
+          if (r.discoveredFromRecordId) {
+            return scopeRecordIds.has(r.discoveredFromRecordId);
+          }
+          return false;
+        };
+
+        // Add ALL matching records at this depth to scope (including already-synced)
+        // so their children at the next depth can be traced back
+        for (const r of allRecords) {
+          if (r.type !== 'address' || !r.id) continue;
+          const recordDepth = r.syncDepth ?? 0;
+          if (recordDepth !== currentDepth) continue;
+          if (matchesSourceFilter(r)) {
+            scopeRecordIds.add(r.id);
+          }
+        }
+
+        // Filter to address records that actually need syncing at this depth
+        let addressRecords = allRecords.filter(r => {
+          if (r.type !== 'address') return false;
+          if (!r.id) return false;
+          if (processedRecordIds.has(r.id)) return false;
+          const recordDepth = r.syncDepth ?? 0;
+          if (recordDepth !== currentDepth) return false;
+          const maxSyncedDepth = r.maxSyncedDepth ?? -1;
+          if (maxSyncedDepth >= currentDepth) return false;
+          return scopeRecordIds.has(r.id);
         });
         
-        console.log(`[TransactionSync] Found ${addressRecords.length} addresses at depth ${currentDepth} to sync (filter: ${sourceFilter})`);
+        console.log(`[TransactionSync] Found ${addressRecords.length} addresses at depth ${currentDepth} to sync (${scopeRecordIds.size} in scope, filter: ${sourceFilter})`);
         if (sourceFilter === 'custom' && options.sourceSelection) {
           console.log(`[TransactionSync] Custom filter active - ${options.sourceSelection.selectedSources.size} source(s) selected, includeNoSource: ${options.sourceSelection.includeNoSource}`);
         }
