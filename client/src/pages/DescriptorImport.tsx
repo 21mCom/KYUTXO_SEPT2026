@@ -58,7 +58,7 @@ import { MultiSelectCombobox } from "@/components/ui/multi-select-combobox";
 import { useEncryptedTags, useEncryptedCategories, createEncryptedTag, createEncryptedCategory } from "@/hooks/use-encrypted-records";
 import { useAuth } from "@/contexts/AuthContext";
 import { useRecords, createRecord, updateRecord } from "@/hooks/use-records";
-import { syncTagsToMaster, syncCategoriesToMaster, isEncryptionReady, findRecordByInputString, createRecordOrigin } from "@/lib/encryptionFacade";
+import { syncTagsToMaster, syncCategoriesToMaster, isEncryptionReady, createRecordOrigin } from "@/lib/encryptionFacade";
 import { useOwners, createOwner } from "@/hooks/use-owners";
 import { useWalletNames, createWalletName } from "@/hooks/use-wallet-names";
 import { useSeedNames, createSeedName } from "@/hooks/use-seed-names";
@@ -107,6 +107,7 @@ export default function DescriptorImport() {
   const [showChangeAddresses, setShowChangeAddresses] = useState(false);
   const [isDerivingAddresses, setIsDerivingAddresses] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [saveProgress, setSaveProgress] = useState({ current: 0, total: 0 });
 
   const [seedName, setSeedName] = useState("");
   const [walletSoftware, setWalletSoftware] = useState("Sparrow");
@@ -516,6 +517,7 @@ export default function DescriptorImport() {
     }
     
     setIsSaving(true);
+    setSaveProgress({ current: 0, total: 0 });
     
     try {
       let allSelected: Array<{ address: string; chainType: string; index: number }> = [];
@@ -539,6 +541,15 @@ export default function DescriptorImport() {
         setIsSaving(false);
         return;
       }
+
+      setSaveProgress({ current: 0, total: allSelected.length });
+      
+      const recordLookup = new Map<string, typeof records[0]>();
+      for (const r of records) {
+        if (r.inputString) {
+          recordLookup.set(r.inputString.trim().toLowerCase(), r);
+        }
+      }
       
       const sourcePrefix = walletNameInput || seedName || 'descriptor-import';
       const now = new Date();
@@ -553,8 +564,13 @@ export default function DescriptorImport() {
       let updated = 0;
       let skipped = 0;
       
-      for (const addr of allSelected) {
-        const existingRecord = await findRecordByInputString(addr.address);
+      for (let ai = 0; ai < allSelected.length; ai++) {
+        const addr = allSelected[ai];
+        if (ai % 10 === 0) {
+          setSaveProgress({ current: ai + 1, total: allSelected.length });
+          await new Promise(r => setTimeout(r, 0));
+        }
+        const existingRecord = recordLookup.get(addr.address.trim().toLowerCase());
         
         if (existingRecord) {
           const existingTags = existingRecord.tags || [];
@@ -1395,13 +1411,13 @@ export default function DescriptorImport() {
             </Button>
             <Button
               onClick={handleSaveAddresses}
-              disabled={isSaving || (selectedReceiveAddresses.size === 0 && selectedChangeAddresses.size === 0)}
+              disabled={isSaving || isLoadingRecords || (selectedReceiveAddresses.size === 0 && selectedChangeAddresses.size === 0)}
               data-testid="button-import-addresses"
             >
               {isSaving ? (
                 <>
                   <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  Importing...
+                  Importing {saveProgress.current} of {saveProgress.total}...
                 </>
               ) : (
                 <>
