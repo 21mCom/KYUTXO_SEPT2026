@@ -36,13 +36,14 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { useToast } from "@/hooks/use-toast";
+import { useAddressStats } from "@/hooks/use-address-stats";
 import { validateBitcoinInput } from "@/lib/bitcoin";
 import { getRecordAttachments } from "@/lib/attachments";
 import type { Record } from "@/lib/database";
 import type { Attachment } from "@/lib/database";
 
 type SortDirection = "asc" | "desc" | null;
-type SortColumn = "type" | "label" | "inputString" | "tags" | "categories" | "walletSoftware" | "seedName" | "privateKeyStatus" | "attachments" | "source" | "owner" | "walletName" | string;
+type SortColumn = "type" | "label" | "inputString" | "tags" | "categories" | "walletSoftware" | "seedName" | "privateKeyStatus" | "attachments" | "source" | "owner" | "walletName" | "balance" | "lastTxDate" | "txCount" | string;
 
 export default function Dashboard() {
   const [search, setSearch] = useState("");
@@ -96,6 +97,9 @@ export default function Dashboard() {
   const { settings, tableColumns, customFieldColumns } = useSettings();
   const { toast } = useToast();
 
+  const statsEnabled = tableColumns.balance || tableColumns.lastTxDate || tableColumns.txCount;
+  const allAddressStats = useAddressStats(records, statsEnabled);
+
   // Load attachments when selected record changes
   useEffect(() => {
     const loadAttachments = async () => {
@@ -133,8 +137,16 @@ export default function Dashboard() {
   // Note: blockchain-discovered filtering is now done at the DATABASE level via useFilteredRecords
   useEffect(() => {
     const applyFiltersAsync = async () => {
-      // First apply column filters
-      let results = applyColumnFilters(records as unknown as Array<{ [key: string]: unknown }>, columnFilters) as unknown as typeof records;
+      const enrichedRecords = records.map(r => {
+        const stats = allAddressStats.get(String(r.id));
+        return {
+          ...r,
+          balance: stats ? stats.balanceSats : undefined,
+          lastTxDate: stats ? stats.lastTxDate : undefined,
+          txCount: stats ? stats.txCount : undefined,
+        };
+      });
+      let results = applyColumnFilters(enrichedRecords as unknown as Array<{ [key: string]: unknown }>, columnFilters) as unknown as typeof records;
 
       // Apply type filter
       if (filter.type && filter.type !== "all") {
@@ -174,7 +186,7 @@ export default function Dashboard() {
     };
 
     applyFiltersAsync();
-  }, [search, filter, records, includeBlockchainDiscovered, columnFilters]);
+  }, [search, filter, records, includeBlockchainDiscovered, columnFilters, allAddressStats]);
 
   // Reset to page 1 when filters change
   useEffect(() => {
@@ -257,6 +269,18 @@ export default function Dashboard() {
           aVal = a.firstSeenBlockTime || 0;
           bVal = b.firstSeenBlockTime || 0;
           break;
+        case "balance":
+          aVal = allAddressStats.get(String(a.id))?.balanceSats || 0;
+          bVal = allAddressStats.get(String(b.id))?.balanceSats || 0;
+          break;
+        case "lastTxDate":
+          aVal = allAddressStats.get(String(a.id))?.lastTxDate || 0;
+          bVal = allAddressStats.get(String(b.id))?.lastTxDate || 0;
+          break;
+        case "txCount":
+          aVal = allAddressStats.get(String(a.id))?.txCount || 0;
+          bVal = allAddressStats.get(String(b.id))?.txCount || 0;
+          break;
         default:
           if (sortColumn.startsWith("custom_")) {
             const fieldSlug = sortColumn.replace("custom_", "");
@@ -269,7 +293,7 @@ export default function Dashboard() {
       if (aVal > bVal) return sortDirection === "asc" ? 1 : -1;
       return 0;
     });
-  }, [filteredRecords, sortColumn, sortDirection]);
+  }, [filteredRecords, sortColumn, sortDirection, allAddressStats]);
 
   // Pagination calculations - using sorted records
   const totalPages = Math.max(1, Math.ceil(sortedFilteredRecords.length / ITEMS_PER_PAGE));
@@ -1094,6 +1118,7 @@ export default function Dashboard() {
                   selectionEnabled={true}
                   selectedIds={selectedIds}
                   onSelectionChange={setSelectedIds}
+                  precomputedAddressStats={allAddressStats}
                 />
               </>
             )}

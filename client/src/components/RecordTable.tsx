@@ -102,14 +102,13 @@ interface RecordTableProps {
   onDelete?: (id: string) => void;
   onRowClick?: (id: string) => void;
   onSyncDeeper?: (id: string) => void;
-  // Controlled sort props - when provided, sorting is managed by parent
   externalSortColumn?: SortColumn | null;
   externalSortDirection?: SortDirection;
   onSortChange?: (column: SortColumn) => void;
-  // Bulk selection props
   selectionEnabled?: boolean;
   selectedIds?: Set<string>;
   onSelectionChange?: (selectedIds: Set<string>) => void;
+  precomputedAddressStats?: Map<string, AddressStats>;
 }
 
 interface SortableHeaderProps {
@@ -158,24 +157,23 @@ export function RecordTable({
   selectionEnabled = false,
   selectedIds = new Set(),
   onSelectionChange,
+  precomputedAddressStats,
 }: RecordTableProps) {
   const { tableColumns, customFieldColumns } = useSettings();
   const { enabledCustomFields } = useCustomFields();
   const [attachmentCounts, setAttachmentCounts] = useState<Map<string, number>>(new Map());
   
-  // Internal sort state - used when external sort is not provided
   const [internalSortColumn, setInternalSortColumn] = useState<SortColumn | null>(null);
   const [internalSortDirection, setInternalSortDirection] = useState<SortDirection>(null);
   
-  // Use external sort if provided, otherwise use internal
-  // Exception: attachments column is always handled internally (needs attachment counts)
   const isExternallyControlled = onSortChange !== undefined;
-  const internalOnlyColumns = ["attachments", "balance", "lastTxDate", "txCount"];
+  const internalOnlyColumns = precomputedAddressStats ? ["attachments"] : ["attachments", "balance", "lastTxDate", "txCount"];
   const isInternalComputedSort = isExternallyControlled && internalOnlyColumns.includes(internalSortColumn || "");
   const sortColumn = isInternalComputedSort ? internalSortColumn : (isExternallyControlled ? (externalSortColumn ?? null) : internalSortColumn);
   const sortDirection = isInternalComputedSort ? internalSortDirection : (isExternallyControlled ? (externalSortDirection ?? null) : internalSortDirection);
 
-  const [addressStats, setAddressStats] = useState<Map<string, AddressStats>>(new Map());
+  const [localAddressStats, setLocalAddressStats] = useState<Map<string, AddressStats>>(new Map());
+  const addressStats = precomputedAddressStats || localAddressStats;
 
   useEffect(() => {
     const loadAttachmentCounts = async () => {
@@ -193,9 +191,10 @@ export function RecordTable({
   }, [records]);
 
   useEffect(() => {
+    if (precomputedAddressStats) return;
     const needsStats = tableColumns.balance || tableColumns.lastTxDate || tableColumns.txCount;
     if (!needsStats || records.length === 0) {
-      setAddressStats(new Map());
+      setLocalAddressStats(new Map());
       return;
     }
 
@@ -204,7 +203,7 @@ export function RecordTable({
       const addressRecords = records.filter(r => r.type === 'address' && r.inputString);
       const addressStrings = addressRecords.map(r => r.inputString);
       if (addressStrings.length === 0) {
-        setAddressStats(new Map());
+        setLocalAddressStats(new Map());
         return;
       }
 
@@ -258,19 +257,19 @@ export function RecordTable({
       }
 
       if (!cancelled) {
-        setAddressStats(stats);
+        setLocalAddressStats(stats);
       }
     };
 
     loadStats();
     return () => { cancelled = true; };
-  }, [records, tableColumns.balance, tableColumns.lastTxDate, tableColumns.txCount]);
+  }, [records, tableColumns.balance, tableColumns.lastTxDate, tableColumns.txCount, precomputedAddressStats]);
 
   const handleSort = (column: SortColumn) => {
     // Attachments sorting requires attachment counts which are only available here
     // So always handle it internally even when externally controlled
-    const internalColumns = ["attachments", "balance", "lastTxDate", "txCount"];
-    const shouldHandleInternally = !isExternallyControlled || internalColumns.includes(column);
+    const sortInternalColumns = precomputedAddressStats ? ["attachments"] : ["attachments", "balance", "lastTxDate", "txCount"];
+    const shouldHandleInternally = !isExternallyControlled || sortInternalColumns.includes(column);
     
     if (shouldHandleInternally) {
       // Internal sort logic
