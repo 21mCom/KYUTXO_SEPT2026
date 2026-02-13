@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from "react";
-import { Plus, Grid3x3, List, ChevronLeft, ChevronRight, Trash2, X } from "lucide-react";
+import { Plus, Grid3x3, List, ChevronLeft, ChevronRight, Trash2, X, Settings2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   AlertDialog,
@@ -27,7 +27,14 @@ import { useWalletNames } from "@/hooks/use-wallet-names";
 import { useSeedNames } from "@/hooks/use-seed-names";
 import { useWalletSoftware } from "@/hooks/use-wallet-software";
 import { syncTagsToMaster, syncCategoriesToMaster, isEncryptionReady, findRecordByInputString } from "@/lib/encryptionFacade";
-import { useCustomFields, useSettings } from "@/hooks/use-settings";
+import { useCustomFields, useSettings, toggleTableColumn, toggleCustomFieldColumn } from "@/hooks/use-settings";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Separator } from "@/components/ui/separator";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import { useToast } from "@/hooks/use-toast";
 import { validateBitcoinInput } from "@/lib/bitcoin";
 import { getRecordAttachments } from "@/lib/attachments";
@@ -86,7 +93,7 @@ export default function Dashboard() {
   const { seedNames } = useSeedNames();
   const { walletSoftware } = useWalletSoftware();
   const { enabledCustomFields } = useCustomFields();
-  const { settings } = useSettings();
+  const { settings, tableColumns, customFieldColumns } = useSettings();
   const { toast } = useToast();
 
   // Load attachments when selected record changes
@@ -890,6 +897,97 @@ export default function Dashboard() {
               onCheckedChange={setIncludeBlockchainDiscovered}
               hiddenCount={blockchainDiscoveredCount}
             />
+            <Popover>
+              <PopoverTrigger asChild>
+                <Button variant="outline" size="sm" className="gap-2" data-testid="button-column-settings">
+                  <Settings2 className="h-4 w-4" />
+                  Columns
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent align="end" className="w-64 max-h-[80vh] overflow-y-auto">
+                <div className="space-y-4">
+                  <div>
+                    <p className="text-sm font-semibold mb-2">Metadata Columns</p>
+                    <div className="grid grid-cols-1 gap-2">
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <Checkbox checked={tableColumns.tags} onCheckedChange={() => toggleTableColumn('tags')} data-testid="checkbox-col-tags" />
+                        <span className="text-sm">Tags</span>
+                      </label>
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <Checkbox checked={tableColumns.categories} onCheckedChange={() => toggleTableColumn('categories')} data-testid="checkbox-col-categories" />
+                        <span className="text-sm">Categories</span>
+                      </label>
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <Checkbox checked={tableColumns.walletSoftware} onCheckedChange={() => toggleTableColumn('walletSoftware')} data-testid="checkbox-col-wallet" />
+                        <span className="text-sm">Wallet Software</span>
+                      </label>
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <Checkbox checked={tableColumns.seedName} onCheckedChange={() => toggleTableColumn('seedName')} data-testid="checkbox-col-seed" />
+                        <span className="text-sm">Seed Name</span>
+                      </label>
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <Checkbox checked={tableColumns.privateKeyStatus} onCheckedChange={() => toggleTableColumn('privateKeyStatus')} data-testid="checkbox-col-privatekey" />
+                        <span className="text-sm">Private Key</span>
+                      </label>
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <Checkbox checked={tableColumns.hasAttachments} onCheckedChange={() => toggleTableColumn('hasAttachments')} data-testid="checkbox-col-attachments" />
+                        <span className="text-sm">Attachments</span>
+                      </label>
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <Checkbox checked={tableColumns.source} onCheckedChange={() => toggleTableColumn('source')} data-testid="checkbox-col-source" />
+                        <span className="text-sm">Source</span>
+                      </label>
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <Checkbox checked={tableColumns.owner} onCheckedChange={() => toggleTableColumn('owner')} data-testid="checkbox-col-owner" />
+                        <span className="text-sm">Owner</span>
+                      </label>
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <Checkbox checked={tableColumns.walletName} onCheckedChange={() => toggleTableColumn('walletName')} data-testid="checkbox-col-walletname" />
+                        <span className="text-sm">Wallet Name</span>
+                      </label>
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <Checkbox checked={tableColumns.firstSeen} onCheckedChange={() => toggleTableColumn('firstSeen')} data-testid="checkbox-col-firstseen" />
+                        <span className="text-sm">First Seen</span>
+                      </label>
+                    </div>
+                  </div>
+                  <Separator />
+                  <div>
+                    <p className="text-sm font-semibold mb-2">Blockchain Data</p>
+                    <div className="grid grid-cols-1 gap-2">
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <Checkbox checked={tableColumns.balance} onCheckedChange={() => toggleTableColumn('balance')} data-testid="checkbox-col-balance" />
+                        <span className="text-sm">BTC Balance</span>
+                      </label>
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <Checkbox checked={tableColumns.lastTxDate} onCheckedChange={() => toggleTableColumn('lastTxDate')} data-testid="checkbox-col-lasttxdate" />
+                        <span className="text-sm">Last Tx Date</span>
+                      </label>
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <Checkbox checked={tableColumns.txCount} onCheckedChange={() => toggleTableColumn('txCount')} data-testid="checkbox-col-txcount" />
+                        <span className="text-sm">Tx Count</span>
+                      </label>
+                    </div>
+                  </div>
+                  {enabledCustomFields.length > 0 && (
+                    <>
+                      <Separator />
+                      <div>
+                        <p className="text-sm font-semibold mb-2">Custom Fields</p>
+                        <div className="grid grid-cols-1 gap-2">
+                          {enabledCustomFields.map((field) => (
+                            <label key={field.slug} className="flex items-center gap-2 cursor-pointer">
+                              <Checkbox checked={customFieldColumns[field.slug] || false} onCheckedChange={() => toggleCustomFieldColumn(field.slug)} data-testid={`checkbox-col-custom-${field.slug}`} />
+                              <span className="text-sm">{field.name}</span>
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                    </>
+                  )}
+                </div>
+              </PopoverContent>
+            </Popover>
             <Tabs value={view} onValueChange={(v) => setView(v as "grid" | "table")}>
               <TabsList>
                 <TabsTrigger value="table" data-testid="button-view-table">
