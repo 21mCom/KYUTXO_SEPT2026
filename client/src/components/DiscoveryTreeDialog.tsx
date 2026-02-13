@@ -1,6 +1,6 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Link } from "wouter";
-import { GitBranch, ExternalLink, Loader2 } from "lucide-react";
+import { GitBranch, ExternalLink, Loader2, ChevronDown, ChevronUp } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -10,9 +10,14 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { db } from "@/lib/database";
 import type { Record } from "@/lib/database";
 import { decryptRecords } from "@/lib/encryptionFacade";
+
+const PREVIEW_COUNT = 4;
+const ROW_HEIGHT = 36;
+const MAX_VIRTUAL_HEIGHT = 300;
 
 interface DiscoveryTreeDialogProps {
   open: boolean;
@@ -57,6 +62,145 @@ async function fetchDiscoveryTree(parentRecordId: number): Promise<DiscoveredRec
   }
 
   return allDiscovered;
+}
+
+function truncate(str: string, len: number) {
+  if (str.length <= len) return str;
+  return str.slice(0, len) + "...";
+}
+
+function RecordRow({ rec }: { rec: DiscoveredRecord }) {
+  return (
+    <div
+      className="flex items-center gap-2 py-1"
+      data-testid={`record-row-${rec.id}`}
+    >
+      <Badge
+        variant={rec.type === "address" ? "default" : "secondary"}
+        data-testid={`badge-type-${rec.id}`}
+      >
+        {rec.type === "address" ? "Addr" : "Tx"}
+      </Badge>
+      <span
+        className="font-mono text-sm truncate flex-1 min-w-0"
+        data-testid={`text-input-${rec.id}`}
+      >
+        {truncate(rec.inputString, 32)}
+      </span>
+      {rec.syncDepth !== undefined && (
+        <Badge variant="outline" data-testid={`badge-depth-${rec.id}`}>
+          D{rec.syncDepth}
+        </Badge>
+      )}
+      <Link href={`/records?id=${rec.id}`}>
+        <Button size="icon" variant="ghost" data-testid={`link-view-${rec.id}`}>
+          <ExternalLink className="h-4 w-4" />
+        </Button>
+      </Link>
+    </div>
+  );
+}
+
+function VirtualizedRecordList({ records }: { records: DiscoveredRecord[] }) {
+  const parentRef = useRef<HTMLDivElement>(null);
+  const virtualHeight = Math.min(records.length * ROW_HEIGHT, MAX_VIRTUAL_HEIGHT);
+
+  const virtualizer = useVirtualizer({
+    count: records.length,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => ROW_HEIGHT,
+    overscan: 10,
+  });
+
+  return (
+    <div
+      ref={parentRef}
+      className="overflow-y-auto"
+      style={{ height: virtualHeight }}
+    >
+      <div
+        style={{
+          height: `${virtualizer.getTotalSize()}px`,
+          width: "100%",
+          position: "relative",
+        }}
+      >
+        {virtualizer.getVirtualItems().map((virtualItem) => (
+          <div
+            key={virtualItem.key}
+            style={{
+              position: "absolute",
+              top: 0,
+              left: 0,
+              width: "100%",
+              height: `${virtualItem.size}px`,
+              transform: `translateY(${virtualItem.start}px)`,
+            }}
+          >
+            <RecordRow rec={records[virtualItem.index]} />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function DepthGroup({
+  depth,
+  records,
+}: {
+  depth: number;
+  records: DiscoveredRecord[];
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const needsExpand = records.length > PREVIEW_COUNT;
+  const previewRecords = records.slice(0, PREVIEW_COUNT);
+  const remaining = records.length - PREVIEW_COUNT;
+
+  return (
+    <div data-testid={`depth-group-${depth}`}>
+      <h4 className="text-xs font-medium text-muted-foreground mb-2">
+        Depth {depth}
+        <span className="ml-1.5 text-muted-foreground/60">
+          ({records.length})
+        </span>
+      </h4>
+
+      {!expanded ? (
+        <div className="space-y-0">
+          {previewRecords.map((rec) => (
+            <RecordRow key={rec.id} rec={rec} />
+          ))}
+          {needsExpand && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setExpanded(true)}
+              className="w-full mt-1 text-muted-foreground"
+              data-testid={`button-expand-depth-${depth}`}
+            >
+              <ChevronDown className="mr-1.5" />
+              Show {remaining} more
+            </Button>
+          )}
+        </div>
+      ) : (
+        <div>
+          <VirtualizedRecordList records={records} />
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setExpanded(false)}
+            className="w-full mt-1 text-muted-foreground"
+            data-testid={`button-collapse-depth-${depth}`}
+          >
+            <ChevronUp className="mr-1.5" />
+            Show fewer
+          </Button>
+        </div>
+      )}
+    </div>
+  );
 }
 
 export default function DiscoveryTreeDialog({
@@ -105,11 +249,6 @@ export default function DiscoveryTreeDialog({
   }
   const sortedDepths = Array.from(depthGroups.keys()).sort((a, b) => a - b);
 
-  function truncate(str: string, len: number) {
-    if (str.length <= len) return str;
-    return str.slice(0, len) + "...";
-  }
-
   return (
     <Dialog open={open} onOpenChange={(isOpen) => !isOpen && onClose()}>
       <DialogContent className="max-w-lg" data-testid="dialog-discovery-tree">
@@ -134,49 +273,17 @@ export default function DiscoveryTreeDialog({
         ) : (
           <>
             <div className="text-sm text-muted-foreground" data-testid="text-discovery-summary">
-              {addressCount} address{addressCount !== 1 ? "es" : ""}, {txCount} transaction{txCount !== 1 ? "s" : ""} discovered from this address
+              {addressCount} address{addressCount !== 1 ? "es" : ""}, {txCount} transaction{txCount !== 1 ? "s" : ""} discovered
             </div>
 
-            <ScrollArea className="max-h-[400px]">
-              <div className="space-y-4">
+            <ScrollArea className="max-h-[450px]">
+              <div className="space-y-4 pr-3">
                 {sortedDepths.map((depth) => (
-                  <div key={depth} data-testid={`depth-group-${depth}`}>
-                    <h4 className="text-xs font-medium text-muted-foreground mb-2">
-                      Depth {depth}
-                    </h4>
-                    <div className="space-y-1">
-                      {depthGroups.get(depth)!.map((rec) => (
-                        <div
-                          key={rec.id}
-                          className="flex items-center gap-2 py-1"
-                          data-testid={`record-row-${rec.id}`}
-                        >
-                          <Badge
-                            variant={rec.type === "address" ? "default" : "secondary"}
-                            data-testid={`badge-type-${rec.id}`}
-                          >
-                            {rec.type === "address" ? "Address" : "Transaction"}
-                          </Badge>
-                          <span
-                            className="font-mono text-sm truncate flex-1 min-w-0"
-                            data-testid={`text-input-${rec.id}`}
-                          >
-                            {truncate(rec.inputString, 32)}
-                          </span>
-                          {rec.syncDepth !== undefined && (
-                            <Badge variant="outline" data-testid={`badge-depth-${rec.id}`}>
-                              D{rec.syncDepth}
-                            </Badge>
-                          )}
-                          <Link href={`/records?id=${rec.id}`}>
-                            <Button size="icon" variant="ghost" data-testid={`link-view-${rec.id}`}>
-                              <ExternalLink className="h-4 w-4" />
-                            </Button>
-                          </Link>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
+                  <DepthGroup
+                    key={depth}
+                    depth={depth}
+                    records={depthGroups.get(depth)!}
+                  />
                 ))}
               </div>
             </ScrollArea>
