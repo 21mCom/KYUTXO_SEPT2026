@@ -179,14 +179,17 @@ export default function Cleanup() {
   };
 
   const bulkGetOriginsByRecordId = async (recordIds: Set<number>): Promise<Map<number, RecordOrigin[]>> => {
-    const allOrigins = await db.recordOrigins.toArray();
-    const grouped = new Map<number, RecordOrigin[]>();
+    if (recordIds.size === 0) return new Map();
+    const idsArray = Array.from(recordIds);
+    const matchedOrigins = await db.recordOrigins
+      .where('recordId')
+      .anyOf(idsArray)
+      .toArray();
     
+    const grouped = new Map<number, RecordOrigin[]>();
     const key = isEncryptionReady() ? getKey() : null;
     
-    for (const origin of allOrigins) {
-      if (!recordIds.has(origin.recordId)) continue;
-      
+    for (const origin of matchedOrigins) {
       let decrypted = origin;
       if (origin.isEncrypted && key) {
         try {
@@ -321,49 +324,52 @@ export default function Cleanup() {
         
         if (scope === 'transactions' || scope === 'both') {
           const txRecords = await db.records
-            .where('type').equals('transaction')
+            .where('[type+addressImportance]')
+            .anyOf(CANDIDATE_TIERS.map(tier => ['transaction', tier]))
             .toArray();
-          const txFiltered = txRecords.filter(r => {
-            if (r.addressImportance && !CANDIDATE_TIERS.includes(r.addressImportance)) return false;
-            return true;
-          });
-          records.push(...txFiltered);
+          const txNoImportance = await db.records
+            .where('type').equals('transaction')
+            .filter(r => !r.addressImportance)
+            .toArray();
+          records.push(...txRecords, ...txNoImportance);
         }
         
-        const withSyncDepth = records.filter(r => r.syncDepth !== undefined && r.syncDepth > 0);
+        const potentialCandidates = records.filter(r => r.syncDepth !== 0);
         
-        setScanProgress(`Decrypting ${withSyncDepth.length} potential candidates...`);
-        await new Promise(r => setTimeout(r, 0));
-        
-        const decrypted = await decryptRecords(withSyncDepth);
-        
-        const recordIds = new Set<number>();
-        for (const r of decrypted) {
-          if (r.id) recordIds.add(r.id);
-        }
-        
-        setScanProgress(`Loading origins for ${recordIds.size} records...`);
-        await new Promise(r => setTimeout(r, 0));
-        
-        const originsMap = await bulkGetOriginsByRecordId(recordIds);
-        
-        setScanProgress('Evaluating eligibility...');
-        await new Promise(r => setTimeout(r, 0));
+        const BATCH_SIZE = 500;
+        const totalBatches = Math.ceil(potentialCandidates.length / BATCH_SIZE);
         
         const cleanupCandidates: CleanupCandidate[] = [];
         const candidateIds = new Set<number>();
         const candidateAddresses = new Set<string>();
         
-        for (const record of decrypted) {
-          if (!record.id) continue;
+        for (let batchIdx = 0; batchIdx < totalBatches; batchIdx++) {
+          const batchStart = batchIdx * BATCH_SIZE;
+          const batch = potentialCandidates.slice(batchStart, batchStart + BATCH_SIZE);
           
-          const origins = originsMap.get(record.id) || [];
+          setScanProgress(`Decrypting batch ${batchIdx + 1}/${totalBatches} (${batchStart + 1}-${Math.min(batchStart + batch.length, potentialCandidates.length)} of ${potentialCandidates.length.toLocaleString()})...`);
+          await new Promise(r => setTimeout(r, 0));
           
-          if (isBlockchainOnlyRecord(record, origins) && !hasUserMetadata(record, origins)) {
-            cleanupCandidates.push({ record, origins, hasOtherConnections: false, connectedToKnown: false });
-            candidateIds.add(record.id);
-            if (record.inputString) {
-              candidateAddresses.add(record.inputString.trim().toLowerCase());
+          const decrypted = await decryptRecords(batch);
+          
+          const batchRecordIds = new Set<number>();
+          for (const r of decrypted) {
+            if (r.id) batchRecordIds.add(r.id);
+          }
+          
+          const originsMap = await bulkGetOriginsByRecordId(batchRecordIds);
+          
+          for (const record of decrypted) {
+            if (!record.id) continue;
+            
+            const origins = originsMap.get(record.id) || [];
+            
+            if (isBlockchainOnlyRecord(record, origins) && !hasUserMetadata(record, origins)) {
+              cleanupCandidates.push({ record, origins, hasOtherConnections: false, connectedToKnown: false });
+              candidateIds.add(record.id);
+              if (record.inputString) {
+                candidateAddresses.add(record.inputString.trim().toLowerCase());
+              }
             }
           }
         }
@@ -384,7 +390,7 @@ export default function Cleanup() {
         const connectedCount = cleanupCandidates.filter(c => c.connectedToKnown).length;
         toast({
           title: "Scan Complete",
-          description: `Found ${cleanupCandidates.length} records eligible for cleanup${connectedCount > 0 ? ` (${connectedCount} connected to known addresses)` : ''}`,
+          description: `Found ${cleanupCandidates.length.toLocaleString()} records eligible for cleanup${connectedCount > 0 ? ` (${connectedCount.toLocaleString()} connected to known addresses)` : ''}`,
         });
       } else {
         const trimmed = originAddress.trim();
@@ -477,9 +483,10 @@ export default function Cleanup() {
       }
     } catch (error) {
       console.error('Error scanning for cleanup candidates:', error);
+      const errMsg = error instanceof Error ? error.message : 'Unknown error';
       toast({
         title: "Scan Failed",
-        description: "An error occurred while scanning records",
+        description: `An error occurred while scanning records: ${errMsg}`,
         variant: "destructive",
       });
     } finally {
