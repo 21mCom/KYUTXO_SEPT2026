@@ -49,7 +49,7 @@ Data is stored locally using Dexie.js (IndexedDB) for structured data, with all 
 *   **Bulk Editor:** Batch editing system with filter/action builders, preview, and undo capabilities.
 *   **Value Updater Enhancement:** Extended to support transaction classification fields (flowType, acquisitionMethod, dispositionType, counterpartyType) with enum validation, display labels, and available options display.
 *   **Metadata Conflict Resolution System:** Detects and resolves conflicts for singular metadata fields from multiple import sources, using a `RecordOrigin` system, visual indicators, and a dedicated resolution interface.
-*   **Bitcoin Flow Visualizer:** Interactive UTXO provenance tracing tool with Sankey Diagram, Timeline Swimlanes, Line Chart, and Hop-Path Explorer visualizations, prioritizing local data.
+*   **Bitcoin Flow Visualizer:** Interactive UTXO provenance tracing tool with Sankey Diagram, Timeline Swimlanes, Line Chart, and Hop-Path Explorer visualizations, prioritizing local data. Includes an Address Finder with filter-then-select UX: filter by owner, wallet, or tag to browse addresses with transaction history, showing BTC balance, last transaction date, and tx count. Uses virtualized list for large result sets.
 *   **Transaction Search Enhancement:** Includes blockchain transactions and participating addresses in search results.
 *   **Origin Tracking System:** Comprehensive UTXO lineage tracking with `utxoLineage` and `custodySegment` tables, a Lineage Engine, Continuity Proof component, Continuity Certificate Report, and Evidence Bundle Export.
 *   **Timestamp Standards:** `originDate` as Unix seconds (blockTime), `updatedAt` as Unix milliseconds (Date.now()).

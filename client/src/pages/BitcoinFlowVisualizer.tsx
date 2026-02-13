@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import { useLocation } from "wouter";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -11,16 +11,33 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Tooltip as RadixTooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { 
   Search, Info, GitBranch, Clock, TrendingUp, 
-  ArrowRight, Loader2, Database, Globe, AlertCircle, Route
+  ArrowRight, Loader2, Database, Globe, AlertCircle, Route,
+  Filter, ChevronDown, ChevronRight, Wallet, User, Tag
 } from "lucide-react";
 import { SiBitcoin } from "react-icons/si";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { useFlowData, type FlowNode } from "@/hooks/use-flow-data";
 import { HopPathExplorer } from "@/components/HopPathExplorer";
 import { RecordDetailPanel } from "@/components/RecordDetailPanel";
 import { db, type ChainType, type AddressImportance, type VaultMetadata, type FlowType, type AcquisitionMethod, type DispositionType, type CounterpartyType } from "@/lib/database";
 import { decryptRecords, isEncryptionReady } from "@/lib/encryptionFacade";
+import { useOwners } from "@/hooks/use-owners";
+import { useWalletNames } from "@/hooks/use-wallet-names";
+import { useTags } from "@/hooks/use-tags";
+
+interface FilteredAddress {
+  address: string;
+  label: string;
+  owner?: string;
+  walletName?: string;
+  balanceSats: number;
+  lastTxDate: number;
+  txCount: number;
+}
 
 interface RecordViewData {
   id: string;
@@ -157,6 +174,68 @@ const generateFlowPathData = (nodes: FlowNode[], centerAddress: string) => {
   return { nodes: pathNodes, links: pathLinks };
 };
 
+function AddressFinderList({ addresses, onSelect, satsToBtcDisplay, formatDate }: {
+  addresses: FilteredAddress[];
+  onSelect: (address: string) => void;
+  satsToBtcDisplay: (sats: number) => string;
+  formatDate: (ts: number) => string;
+}) {
+  const parentRef = useRef<HTMLDivElement>(null);
+  const rowHeight = 44;
+  const maxVisibleRows = 7;
+  const containerHeight = Math.min(addresses.length * rowHeight, maxVisibleRows * rowHeight);
+
+  const virtualizer = useVirtualizer({
+    count: addresses.length,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => rowHeight,
+    overscan: 5,
+  });
+
+  return (
+    <div className="border rounded-md overflow-hidden">
+      <div className="grid grid-cols-[1fr_auto_auto_auto] gap-2 px-3 py-2 bg-muted/50 text-xs font-medium text-muted-foreground">
+        <span>Address</span>
+        <span className="text-right min-w-[120px]">Balance</span>
+        <span className="text-right min-w-[90px]">Last Tx</span>
+        <span className="text-right min-w-[40px]">Txs</span>
+      </div>
+      <div ref={parentRef} className="overflow-auto" style={{ height: containerHeight }}>
+        <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
+          {virtualizer.getVirtualItems().map(virtualRow => {
+            const addr = addresses[virtualRow.index];
+            return (
+              <button
+                key={addr.address}
+                onClick={() => onSelect(addr.address)}
+                className="absolute left-0 w-full grid grid-cols-[1fr_auto_auto_auto] gap-2 px-3 text-sm hover-elevate border-t text-left items-center"
+                style={{ top: virtualRow.start, height: rowHeight }}
+                data-testid={`button-finder-address-${addr.address.slice(-8)}`}
+              >
+                <div className="min-w-0">
+                  <div className="font-mono text-xs truncate">{addr.address}</div>
+                  {addr.label && (
+                    <div className="text-xs text-muted-foreground truncate">{addr.label}</div>
+                  )}
+                </div>
+                <div className="text-right font-mono text-xs min-w-[120px]">
+                  {satsToBtcDisplay(addr.balanceSats)} BTC
+                </div>
+                <div className="text-right text-xs text-muted-foreground min-w-[90px]">
+                  {formatDate(addr.lastTxDate)}
+                </div>
+                <div className="text-right text-xs text-muted-foreground min-w-[40px]">
+                  {addr.txCount}
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function BitcoinFlowVisualizer() {
   const [, navigate] = useLocation();
   const [searchAddress, setSearchAddress] = useState("");
@@ -173,6 +252,146 @@ export default function BitcoinFlowVisualizer() {
   const [recordPanelOpen, setRecordPanelOpen] = useState(false);
   const [selectedRecord, setSelectedRecord] = useState<RecordViewData | null>(null);
   const [loadingRecord, setLoadingRecord] = useState(false);
+
+  const { owners } = useOwners();
+  const { walletNames } = useWalletNames();
+  const { tags } = useTags();
+
+  const [finderOpen, setFinderOpen] = useState(false);
+  const [filterOwner, setFilterOwner] = useState<string>("__all__");
+  const [filterWallet, setFilterWallet] = useState<string>("__all__");
+  const [filterTag, setFilterTag] = useState<string>("__all__");
+  const [filteredAddresses, setFilteredAddresses] = useState<FilteredAddress[]>([]);
+  const [finderLoading, setFinderLoading] = useState(false);
+
+  const hasActiveFilter = filterOwner !== "__all__" || filterWallet !== "__all__" || filterTag !== "__all__";
+
+  useEffect(() => {
+    if (!hasActiveFilter) {
+      setFilteredAddresses([]);
+      return;
+    }
+
+    let cancelled = false;
+    const loadFilteredAddresses = async () => {
+      setFinderLoading(true);
+      try {
+        if (!isEncryptionReady()) {
+          setFilteredAddresses([]);
+          return;
+        }
+
+        let records = await db.records
+          .where('type')
+          .equals('address')
+          .toArray();
+
+        const decrypted = await decryptRecords(records);
+
+        let filtered = decrypted.filter(r => r.inputString);
+
+        if (filterOwner !== "__all__") {
+          filtered = filtered.filter(r => r.owner === filterOwner);
+        }
+        if (filterWallet !== "__all__") {
+          filtered = filtered.filter(r => r.walletName === filterWallet);
+        }
+        if (filterTag !== "__all__") {
+          filtered = filtered.filter(r => r.tags && r.tags.includes(filterTag));
+        }
+
+        const addressStrings = filtered.map(r => r.inputString);
+        if (addressStrings.length === 0) {
+          setFilteredAddresses([]);
+          return;
+        }
+
+        const participants = await db.transactionParticipants
+          .where('address')
+          .anyOf(addressStrings)
+          .toArray();
+
+        const txids = Array.from(new Set(participants.map(p => p.txid)));
+        const txMap = new Map<string, number>();
+        if (txids.length > 0) {
+          const txBatches: string[][] = [];
+          for (let i = 0; i < txids.length; i += 500) {
+            txBatches.push(txids.slice(i, i + 500));
+          }
+          for (const batch of txBatches) {
+            const txs = await db.blockchainTransactions
+              .where('txid')
+              .anyOf(batch)
+              .toArray();
+            txs.forEach(tx => txMap.set(tx.txid, tx.blockTime));
+          }
+        }
+
+        const addressStats = new Map<string, { outputSats: number; inputSats: number; lastTxTime: number; txCount: number }>();
+        participants.forEach(p => {
+          const stats = addressStats.get(p.address) || { outputSats: 0, inputSats: 0, lastTxTime: 0, txCount: 0 };
+          const blockTime = txMap.get(p.txid) || 0;
+          if (p.role === 'output') {
+            stats.outputSats += p.amount;
+          } else {
+            stats.inputSats += p.amount;
+          }
+          if (blockTime > stats.lastTxTime) {
+            stats.lastTxTime = blockTime;
+          }
+          stats.txCount++;
+          addressStats.set(p.address, stats);
+        });
+
+        const results: FilteredAddress[] = [];
+        for (const record of filtered) {
+          const stats = addressStats.get(record.inputString);
+          if (!stats || stats.txCount === 0) continue;
+          results.push({
+            address: record.inputString,
+            label: record.label || '',
+            owner: record.owner,
+            walletName: record.walletName,
+            balanceSats: stats.outputSats - stats.inputSats,
+            lastTxDate: stats.lastTxTime,
+            txCount: stats.txCount,
+          });
+        }
+
+        results.sort((a, b) => b.lastTxDate - a.lastTxDate);
+
+        if (!cancelled) {
+          setFilteredAddresses(results);
+        }
+      } catch (err) {
+        console.error('[FlowVisualizer] Error loading filtered addresses:', err);
+        if (!cancelled) {
+          setFilteredAddresses([]);
+        }
+      } finally {
+        if (!cancelled) {
+          setFinderLoading(false);
+        }
+      }
+    };
+
+    loadFilteredAddresses();
+    return () => { cancelled = true; };
+  }, [filterOwner, filterWallet, filterTag, hasActiveFilter]);
+
+  const handleSelectAddress = (address: string) => {
+    setSearchAddress(address);
+    fetchFlow(address, hopDepth[0], allowBlockchainApi);
+  };
+
+  const satsToBtcDisplay = (sats: number): string => {
+    return (sats / 100_000_000).toFixed(8);
+  };
+
+  const formatDate = (unixSeconds: number): string => {
+    if (!unixSeconds) return 'N/A';
+    return new Date(unixSeconds * 1000).toLocaleDateString();
+  };
 
   const handleNodeClick = useCallback(async (address: string) => {
     if (!address) return;
@@ -284,6 +503,108 @@ export default function BitcoinFlowVisualizer() {
             Trace UTXO provenance through the blockchain. Enter an address to visualize its transaction flow.
           </p>
         </div>
+
+        <Collapsible open={finderOpen} onOpenChange={setFinderOpen}>
+          <Card>
+            <CollapsibleTrigger asChild>
+              <CardHeader className="cursor-pointer flex flex-row items-center justify-between gap-2 pb-2">
+                <div className="flex items-center gap-2">
+                  <Filter className="h-4 w-4 text-muted-foreground" />
+                  <CardTitle className="text-base">Address Finder</CardTitle>
+                  {hasActiveFilter && (
+                    <Badge variant="secondary">{filteredAddresses.length} addresses</Badge>
+                  )}
+                </div>
+                <Button variant="ghost" size="icon" data-testid="button-toggle-finder">
+                  {finderOpen ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                </Button>
+              </CardHeader>
+            </CollapsibleTrigger>
+            <CollapsibleContent>
+              <CardContent className="pt-0 space-y-4">
+                <CardDescription>
+                  Filter by owner, wallet, or tag to find addresses with transaction history.
+                </CardDescription>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div className="space-y-1">
+                    <Label className="text-xs font-medium flex items-center gap-1">
+                      <User className="h-3 w-3" />
+                      Owner
+                    </Label>
+                    <Select value={filterOwner} onValueChange={setFilterOwner}>
+                      <SelectTrigger data-testid="select-filter-owner">
+                        <SelectValue placeholder="All owners" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__all__">All owners</SelectItem>
+                        {owners.map(o => (
+                          <SelectItem key={o.id} value={o.name}>{o.name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-xs font-medium flex items-center gap-1">
+                      <Wallet className="h-3 w-3" />
+                      Wallet
+                    </Label>
+                    <Select value={filterWallet} onValueChange={setFilterWallet}>
+                      <SelectTrigger data-testid="select-filter-wallet">
+                        <SelectValue placeholder="All wallets" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__all__">All wallets</SelectItem>
+                        {walletNames.map(w => (
+                          <SelectItem key={w.id} value={w.name}>{w.name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-xs font-medium flex items-center gap-1">
+                      <Tag className="h-3 w-3" />
+                      Tag
+                    </Label>
+                    <Select value={filterTag} onValueChange={setFilterTag}>
+                      <SelectTrigger data-testid="select-filter-tag">
+                        <SelectValue placeholder="All tags" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__all__">All tags</SelectItem>
+                        {tags.map(t => (
+                          <SelectItem key={t.id} value={t.name}>{t.name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+
+                {finderLoading && (
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground py-4">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Loading addresses...
+                  </div>
+                )}
+
+                {hasActiveFilter && !finderLoading && !isEncryptionReady() && (
+                  <div className="text-sm text-muted-foreground py-4 text-center">
+                    Database is locked. Unlock with your password to search addresses.
+                  </div>
+                )}
+
+                {hasActiveFilter && !finderLoading && filteredAddresses.length === 0 && isEncryptionReady() && (
+                  <div className="text-sm text-muted-foreground py-4 text-center">
+                    No addresses with transaction history found for this filter.
+                  </div>
+                )}
+
+                {filteredAddresses.length > 0 && !finderLoading && (
+                  <AddressFinderList addresses={filteredAddresses} onSelect={handleSelectAddress} satsToBtcDisplay={satsToBtcDisplay} formatDate={formatDate} />
+                )}
+              </CardContent>
+            </CollapsibleContent>
+          </Card>
+        </Collapsible>
 
         <Card>
           <CardContent className="pt-6 space-y-6">
