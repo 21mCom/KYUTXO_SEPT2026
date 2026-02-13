@@ -1,4 +1,5 @@
-import { Edit, Paperclip, Wallet as WalletIcon, User, Users, Upload, QrCode, Key, GitBranch, ArrowDownLeft, ArrowUpRight, Shield, ChevronDown, ChevronRight, Link2, Layers, FileInput, ExternalLink, AlertCircle, Network } from "lucide-react";
+import { Edit, Paperclip, Wallet as WalletIcon, User, Users, Upload, QrCode, Key, GitBranch, ArrowDownLeft, ArrowUpRight, Shield, ChevronDown, ChevronRight, Link2, Layers, FileInput, ExternalLink, AlertCircle, Network, Clock, Copy, Check } from "lucide-react";
+import { formatBTC } from "@/lib/bitcoin";
 import DiscoveryTreeDialog from "./DiscoveryTreeDialog";
 import { useLocation } from "wouter";
 import { getDecryptedRecordOrigins } from "@/lib/encryptionFacade";
@@ -268,6 +269,196 @@ function VaultInfoSection({ vault }: { vault: VaultMetadata }) {
         </div>
       )}
     </div>
+  );
+}
+
+interface TxHistoryEntry {
+  txid: string;
+  date: number;
+  netAmount: number;
+}
+
+function TransactionHistorySection({ address }: { address: string }) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [entries, setEntries] = useState<TxHistoryEntry[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+  const [expandedTxid, setExpandedTxid] = useState<string | null>(null);
+  const [copiedTxid, setCopiedTxid] = useState<string | null>(null);
+
+  useEffect(() => {
+    setEntries([]);
+    setLoaded(false);
+    setExpandedTxid(null);
+  }, [address]);
+
+  useEffect(() => {
+    if (!isOpen || loaded) return;
+
+    async function loadHistory() {
+      setLoading(true);
+      try {
+        const participants = await db.transactionParticipants
+          .where('address')
+          .equals(address)
+          .toArray();
+
+        if (participants.length === 0) {
+          setEntries([]);
+          setLoaded(true);
+          setLoading(false);
+          return;
+        }
+
+        const txidSet = new Set(participants.map(p => p.txid));
+        const txids = Array.from(txidSet);
+
+        const txMap = new Map<string, number>();
+        const batchSize = 500;
+        for (let i = 0; i < txids.length; i += batchSize) {
+          const batch = txids.slice(i, i + batchSize);
+          const txs = await db.blockchainTransactions
+            .where('txid')
+            .anyOf(batch)
+            .toArray();
+          for (const tx of txs) {
+            txMap.set(tx.txid, tx.blockTime);
+          }
+        }
+
+        const netByTxid = new Map<string, number>();
+        const seen = new Set<string>();
+        for (const p of participants) {
+          if (p.role !== 'input' && p.role !== 'output') continue;
+          const key = `${p.txid}:${p.role}:${p.vout ?? p.prevTxid ?? ''}:${p.prevVout ?? ''}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          const current = netByTxid.get(p.txid) || 0;
+          if (p.role === 'output') {
+            netByTxid.set(p.txid, current + p.amount);
+          } else {
+            netByTxid.set(p.txid, current - p.amount);
+          }
+        }
+
+        const result: TxHistoryEntry[] = [];
+        netByTxid.forEach((netAmount, txid) => {
+          result.push({
+            txid,
+            date: txMap.get(txid) || 0,
+            netAmount,
+          });
+        });
+
+        result.sort((a, b) => b.date - a.date);
+        setEntries(result);
+        setLoaded(true);
+      } catch (error) {
+        console.error("Failed to load transaction history:", error);
+      }
+      setLoading(false);
+    }
+
+    loadHistory();
+  }, [isOpen, loaded, address]);
+
+  const handleCopy = async (txid: string) => {
+    try {
+      await navigator.clipboard.writeText(txid);
+      setCopiedTxid(txid);
+      setTimeout(() => setCopiedTxid(null), 2000);
+    } catch {
+      console.error("Failed to copy txid");
+    }
+  };
+
+  return (
+    <Collapsible open={isOpen} onOpenChange={setIsOpen}>
+      <CollapsibleTrigger asChild>
+        <Button variant="ghost" className="w-full justify-between px-0" data-testid="button-toggle-tx-history">
+          <span className="text-sm font-medium flex items-center gap-2">
+            <Clock className="h-4 w-4" />
+            Transaction History
+            {loaded && entries.length > 0 && (
+              <Badge variant="secondary" className="ml-1">{entries.length}</Badge>
+            )}
+          </span>
+          {isOpen ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+        </Button>
+      </CollapsibleTrigger>
+      <CollapsibleContent className="pt-2">
+        {loading && (
+          <div className="text-sm text-muted-foreground py-4 text-center" data-testid="tx-history-loading">
+            Loading transactions...
+          </div>
+        )}
+        {loaded && entries.length === 0 && (
+          <div className="text-sm text-muted-foreground py-4 text-center" data-testid="tx-history-empty">
+            No synced transactions found
+          </div>
+        )}
+        {loaded && entries.length > 0 && (
+          <div className="space-y-1 max-h-[300px] overflow-y-auto" data-testid="tx-history-list">
+            {entries.map((entry) => {
+              const isReceive = entry.netAmount > 0;
+              const dateStr = entry.date
+                ? new Date(entry.date * 1000).toLocaleDateString(undefined, {
+                    year: 'numeric',
+                    month: 'short',
+                    day: 'numeric',
+                  })
+                : 'Unknown';
+              const isExpanded = expandedTxid === entry.txid;
+
+              return (
+                <div key={entry.txid} data-testid={`tx-history-row-${entry.txid.slice(0, 8)}`}>
+                  <div
+                    role="button"
+                    tabIndex={0}
+                    className="w-full flex items-center justify-between gap-2 px-2 py-1.5 rounded-md cursor-pointer transition-colors hover:bg-muted/60"
+                    onClick={() => setExpandedTxid(isExpanded ? null : entry.txid)}
+                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setExpandedTxid(isExpanded ? null : entry.txid); }}
+                    data-testid={`button-expand-tx-${entry.txid.slice(0, 8)}`}
+                  >
+                    <span className="text-xs text-muted-foreground shrink-0">{dateStr}</span>
+                    <span className="text-xs font-mono text-muted-foreground truncate mx-1">
+                      {entry.txid.slice(0, 8)}...
+                    </span>
+                    <span
+                      className={`text-sm font-mono font-medium shrink-0 ${
+                        isReceive ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'
+                      }`}
+                      data-testid={`text-tx-amount-${entry.txid.slice(0, 8)}`}
+                    >
+                      {isReceive ? '+' : ''}{formatBTC(entry.netAmount)}
+                    </span>
+                  </div>
+                  {isExpanded && (
+                    <div className="flex items-center gap-1 px-2 py-1 bg-muted/50 rounded-md mt-0.5">
+                      <span className="text-xs font-mono break-all flex-1" data-testid={`text-txid-full-${entry.txid.slice(0, 8)}`}>
+                        {entry.txid}
+                      </span>
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        onClick={() => handleCopy(entry.txid)}
+                        data-testid={`button-copy-txid-${entry.txid.slice(0, 8)}`}
+                      >
+                        {copiedTxid === entry.txid ? (
+                          <Check className="h-3 w-3 text-green-600 dark:text-green-400" />
+                        ) : (
+                          <Copy className="h-3 w-3" />
+                        )}
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </CollapsibleContent>
+    </Collapsible>
   );
 }
 
@@ -621,6 +812,13 @@ export function RecordDetailPanel({
                   {COUNTERPARTY_TYPE_OPTIONS.find(o => o.value === record.counterpartyType)?.label || record.counterpartyType}
                 </Badge>
               </div>
+            )}
+
+            {record.type === 'address' && (
+              <>
+                <Separator />
+                <TransactionHistorySection address={record.inputString} />
+              </>
             )}
 
             {customFieldsToShow.length > 0 && (
