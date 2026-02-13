@@ -121,6 +121,22 @@ export class ElectrumProvider implements BlockchainProvider {
     return transactions;
   }
 
+  async getAddressTxCount(address: string): Promise<number> {
+    this.ensureElectron();
+    const api = getElectronAPI();
+    const historyResult = await api.electrumGetHistory({
+      host: this.host,
+      port: this.port,
+      useSSL: this.useSSL,
+      address,
+      timeout: this.timeout,
+    });
+    if (!historyResult.success) {
+      throw new Error(historyResult.error || 'Failed to get address history via Electrum');
+    }
+    return historyResult.history.length;
+  }
+
   async getTransaction(txid: string): Promise<ApiTransaction | null> {
     this.ensureElectron();
     

@@ -156,6 +156,12 @@ export abstract class EsploraProvider implements BlockchainProvider {
     return response.json();
   }
 
+  async getAddressTxCount(address: string): Promise<number> {
+    const response = await this.rateLimitedFetch(`${this.baseUrl}/address/${address}`);
+    const data = await response.json();
+    return (data.chain_stats?.tx_count ?? 0) + (data.mempool_stats?.tx_count ?? 0);
+  }
+
   async getTransaction(txid: string): Promise<ApiTransaction | null> {
     try {
       const response = await this.rateLimitedFetch(`${this.baseUrl}/tx/${txid}`);

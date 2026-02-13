@@ -1,7 +1,7 @@
 // Transaction Sync Service
 // Syncs blockchain transaction data for addresses in the local database
 
-import { db, notifyDbChange, type Record, type BlockchainTransaction, type TransactionParticipant, type AddressSyncState, type NodeSettings, type PausedSyncState } from './database';
+import { db, notifyDbChange, type Record, type BlockchainTransaction, type TransactionParticipant, type AddressSyncState, type NodeSettings, type PausedSyncState, type SkippedAddress, type AddressBlacklist, type SyncProtectionSettings, DEFAULT_SYNC_PROTECTION } from './database';
 import { createProvider, createProviderFromSettings, parseTransaction, MINIMUM_CONFIRMATIONS, type ProviderType, type ParsedTransaction, type BlockchainProvider } from './blockchain-api';
 import { validateAddress } from './bitcoin';
 import { decryptRecords, isEncryptionReady, createRecordOrigin } from './encryptionFacade';
@@ -41,6 +41,7 @@ export interface SyncProgress {
   transactionsFound: number;
   transactionsNew: number;
   newAddressRecords: number;
+  addressesSkipped?: number;
   error?: string;
 }
 
@@ -50,6 +51,7 @@ export interface SyncResult {
   transactionsImported: number;
   transactionsUpdated: number;
   newAddressRecords: number;
+  addressesSkipped: number;
   depthsProcessed: number[];
   errors: string[];
 }
@@ -124,6 +126,222 @@ export class TransactionSyncService {
   // Check if sync was cancelled (for external use)
   isCancelled(): boolean {
     return this.cancelled;
+  }
+
+  private syncProtection: SyncProtectionSettings = { ...DEFAULT_SYNC_PROTECTION };
+
+  setSyncProtection(settings: SyncProtectionSettings) {
+    this.syncProtection = { ...settings };
+  }
+
+  getSyncProtection(): SyncProtectionSettings {
+    return { ...this.syncProtection };
+  }
+
+  private async isBlacklisted(address: string): Promise<boolean> {
+    const entry = await db.addressBlacklist.where('address').equals(address).first();
+    return !!entry;
+  }
+
+  private async recordSkippedAddress(
+    address: string,
+    reason: SkippedAddress['reason'],
+    syncRunTimestamp: number,
+    opts?: { txCount?: number; errorMessage?: string; discoveredFromRecordId?: number; syncDepth?: number }
+  ): Promise<void> {
+    await db.skippedAddresses.add({
+      address,
+      reason,
+      txCount: opts?.txCount,
+      errorMessage: opts?.errorMessage,
+      syncRunTimestamp,
+      discoveredFromRecordId: opts?.discoveredFromRecordId,
+      syncDepth: opts?.syncDepth,
+      dismissed: false,
+      createdAt: Date.now(),
+    });
+  }
+
+  private async checkTxCountThreshold(address: string): Promise<{ exceeded: boolean; count: number }> {
+    if (this.syncProtection.txCountThreshold <= 0) {
+      return { exceeded: false, count: 0 };
+    }
+    try {
+      if (this.provider.getAddressTxCount) {
+        const count = await this.provider.getAddressTxCount(address);
+        return { exceeded: count > this.syncProtection.txCountThreshold, count };
+      }
+    } catch (e) {
+      console.warn(`[TransactionSync] Failed to pre-check tx count for ${address}:`, e);
+    }
+    return { exceeded: false, count: 0 };
+  }
+
+  private withTimeout<T>(promise: Promise<T>, timeoutMs: number, address: string): Promise<T> {
+    if (timeoutMs <= 0) return promise;
+    return new Promise<T>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        reject(new Error(`Sync timed out after ${Math.round(timeoutMs / 1000)}s for address ${address}`));
+      }, timeoutMs);
+      promise.then(
+        (val) => { clearTimeout(timer); resolve(val); },
+        (err) => { clearTimeout(timer); reject(err); }
+      );
+    });
+  }
+
+  async syncSingleAddress(
+    address: string,
+    onProgress?: SyncProgressCallback
+  ): Promise<SyncResult> {
+    const result: SyncResult = {
+      success: false,
+      addressesSynced: 0,
+      transactionsImported: 0,
+      transactionsUpdated: 0,
+      newAddressRecords: 0,
+      addressesSkipped: 0,
+      depthsProcessed: [0],
+      errors: [],
+    };
+
+    const validation = validateAddress(address);
+    if (!validation.isValid) {
+      result.errors.push(`Invalid Bitcoin address: ${address}`);
+      return result;
+    }
+
+    try {
+      await this.initializeProvider();
+    } catch (e) {
+      result.errors.push(`Failed to initialize provider: ${e instanceof Error ? e.message : 'Unknown error'}`);
+      return result;
+    }
+
+    if (onProgress) {
+      this.onProgress = onProgress;
+    }
+
+    try {
+      this.updateProgress({
+        phase: 'fetching-height',
+        addressesTotal: 1,
+        addressesProcessed: 0,
+        transactionsFound: 0,
+        transactionsNew: 0,
+        newAddressRecords: 0,
+      });
+
+      const currentHeight = await this.provider.getBlockHeight();
+      const minConfirmedHeight = currentHeight - MINIMUM_CONFIRMATIONS;
+
+      this.updateProgress({
+        phase: 'syncing-addresses',
+        currentAddress: address,
+        addressesTotal: 1,
+        addressesProcessed: 0,
+      });
+
+      const existingRecord = await db.records
+        .where('inputString')
+        .equals(address)
+        .first();
+      const recordId = existingRecord?.id;
+
+      if (!recordId) {
+        result.errors.push(`Address "${address}" not found in your records. Add it first, then sync.`);
+        this.updateProgress({ phase: 'error', error: result.errors[0] });
+        return result;
+      }
+
+      const syncRunTimestamp = Date.now();
+
+      // --- Sync Protection: Blacklist check (warn but allow for single-address) ---
+      if (await this.isBlacklisted(address)) {
+        console.log(`[TransactionSync] Single sync: address is blacklisted, proceeding anyway: ${address}`);
+      }
+
+      // --- Sync Protection: Tx count threshold check (warn but allow for single-address) ---
+      const txCheck = await this.checkTxCountThreshold(address);
+      if (txCheck.exceeded) {
+        console.log(`[TransactionSync] Single sync: high-volume address (${txCheck.count} txs), proceeding anyway: ${address}`);
+      }
+
+      // --- Sync Protection: Per-address timeout ---
+      const syncPromise = this.syncAddress(
+        address,
+        recordId,
+        minConfirmedHeight,
+        currentHeight,
+        1
+      );
+      const syncResult = await this.withTimeout(
+        syncPromise,
+        this.syncProtection.perAddressTimeoutMs,
+        address
+      );
+
+      result.transactionsImported = syncResult.imported;
+      result.transactionsUpdated = syncResult.updated;
+      result.newAddressRecords = syncResult.newRecords;
+      result.addressesSynced = 1;
+
+      await db.records.update(recordId, {
+        maxSyncedDepth: 0,
+        updatedAt: Date.now(),
+      });
+
+      this.updateProgress({
+        phase: 'complete',
+        addressesProcessed: 1,
+        transactionsFound: syncResult.imported + syncResult.updated,
+        transactionsNew: syncResult.imported,
+        newAddressRecords: syncResult.newRecords,
+      });
+
+      result.success = true;
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+      result.errors.push(errorMsg);
+      this.updateProgress({ phase: 'error', error: errorMsg });
+    }
+
+    return result;
+  }
+
+  // Blacklist management
+  async addToBlacklist(address: string, reason?: string): Promise<void> {
+    const existing = await db.addressBlacklist.where('address').equals(address).first();
+    if (!existing) {
+      await db.addressBlacklist.add({
+        address,
+        reason,
+        addedAt: Date.now(),
+      });
+    }
+  }
+
+  async removeFromBlacklist(address: string): Promise<void> {
+    await db.addressBlacklist.where('address').equals(address).delete();
+  }
+
+  async getBlacklist(): Promise<AddressBlacklist[]> {
+    return db.addressBlacklist.toArray();
+  }
+
+  async getSkippedAddresses(syncRunTimestamp?: number): Promise<SkippedAddress[]> {
+    if (syncRunTimestamp) {
+      return db.skippedAddresses.where('syncRunTimestamp').equals(syncRunTimestamp).toArray();
+    }
+    return db.skippedAddresses.where('dismissed').equals(0).toArray();
+  }
+
+  async dismissSkippedAddress(id: number): Promise<void> {
+    await db.skippedAddresses.update(id, { dismissed: true });
+  }
+
+  async dismissAllSkipped(): Promise<void> {
+    await db.skippedAddresses.where('dismissed').equals(0).modify({ dismissed: true });
   }
 
   // Pause sync and save state for resuming later
@@ -292,6 +510,7 @@ export class TransactionSyncService {
       transactionsImported: resumeContext?.previousResult?.transactionsImported ?? 0,
       transactionsUpdated: resumeContext?.previousResult?.transactionsUpdated ?? 0,
       newAddressRecords: resumeContext?.previousResult?.newAddressRecords ?? 0,
+      addressesSkipped: 0,
       depthsProcessed: [],
       errors: [],
     };
@@ -307,6 +526,7 @@ export class TransactionSyncService {
         maxDepth,
         addressesTotal: 0,
         addressesProcessed: 0,
+        addressesSkipped: 0,
         transactionsFound: initialTransactionsNew,
         transactionsNew: initialTransactionsNew,
         newAddressRecords: initialNewAddresses,
@@ -314,6 +534,7 @@ export class TransactionSyncService {
 
       const currentHeight = await this.provider.getBlockHeight();
       const minConfirmedHeight = currentHeight - MINIMUM_CONFIRMATIONS;
+      const syncRunTimestamp = Date.now();
 
       // Track which record IDs we've already processed in this sync session
       // Initialize from resumeContext if available (prevents reprocessing completed addresses)
@@ -472,10 +693,38 @@ export class TransactionSyncService {
             processedRecordIds.add(record.id);
             // Also add to validAncestorIds so grandchildren can reference this record
             validAncestorIds.add(record.id);
+
+            const address = record.inputString;
+
+            // --- Sync Protection: Blacklist check ---
+            if (await this.isBlacklisted(address)) {
+              console.log(`[TransactionSync] Skipping blacklisted address: ${address}`);
+              await this.recordSkippedAddress(address, 'blacklisted', syncRunTimestamp, {
+                syncDepth: currentDepth,
+                discoveredFromRecordId: record.discoveredFromRecordId,
+              });
+              result.addressesSkipped++;
+              this.updateProgress({ addressesSkipped: result.addressesSkipped });
+              continue;
+            }
+
+            // --- Sync Protection: Tx count threshold check ---
+            const txCheck = await this.checkTxCountThreshold(address);
+            if (txCheck.exceeded) {
+              console.log(`[TransactionSync] Skipping high-volume address (${txCheck.count} txs > ${this.syncProtection.txCountThreshold} threshold): ${address}`);
+              await this.recordSkippedAddress(address, 'tx-count-exceeded', syncRunTimestamp, {
+                txCount: txCheck.count,
+                syncDepth: currentDepth,
+                discoveredFromRecordId: record.discoveredFromRecordId,
+              });
+              result.addressesSkipped++;
+              this.updateProgress({ addressesSkipped: result.addressesSkipped });
+              continue;
+            }
             
             this.updateProgress({
               phase: 'syncing-addresses',
-              currentAddress: record.inputString,
+              currentAddress: address,
               currentDepth,
               maxDepth,
               addressesProcessed: i,
@@ -483,12 +732,17 @@ export class TransactionSyncService {
             });
             
             try {
-              const syncResult = await this.syncAddress(
-                record.inputString,
+              const syncPromise = this.syncAddress(
+                address,
                 record.id,
                 minConfirmedHeight,
                 currentHeight,
-                currentDepth + 1 // Newly discovered addresses will be at depth+1
+                currentDepth + 1
+              );
+              const syncResult = await this.withTimeout(
+                syncPromise,
+                this.syncProtection.perAddressTimeoutMs,
+                address
               );
               result.transactionsImported += syncResult.imported;
               result.transactionsUpdated += syncResult.updated;
@@ -507,9 +761,27 @@ export class TransactionSyncService {
                 newAddressRecords: result.newAddressRecords,
               });
             } catch (error) {
-              const errorMsg = `Failed to sync ${record.inputString}: ${error instanceof Error ? error.message : 'Unknown error'}`;
-              result.errors.push(errorMsg);
-              console.error(errorMsg);
+              const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+              const isTimeout = errorMsg.includes('timed out');
+              if (isTimeout) {
+                await this.recordSkippedAddress(address, 'timeout', syncRunTimestamp, {
+                  errorMessage: errorMsg,
+                  syncDepth: currentDepth,
+                  discoveredFromRecordId: record.discoveredFromRecordId,
+                });
+                result.addressesSkipped++;
+                this.updateProgress({ addressesSkipped: result.addressesSkipped });
+                console.warn(`[TransactionSync] ${errorMsg}`);
+              } else {
+                await this.recordSkippedAddress(address, 'error', syncRunTimestamp, {
+                  errorMessage: errorMsg,
+                  syncDepth: currentDepth,
+                  discoveredFromRecordId: record.discoveredFromRecordId,
+                });
+                result.addressesSkipped++;
+                result.errors.push(`Failed to sync ${address}: ${errorMsg}`);
+                console.error(`[TransactionSync] Failed to sync ${address}: ${errorMsg}`);
+              }
             }
           }
         }
@@ -678,6 +950,32 @@ export class TransactionSyncService {
           // Mark as processed to prevent re-enqueuing
           processedRecordIds.add(record.id);
 
+          // --- Sync Protection: Blacklist check ---
+          if (await this.isBlacklisted(address)) {
+            console.log(`[TransactionSync] Skipping blacklisted address: ${address}`);
+            await this.recordSkippedAddress(address, 'blacklisted', syncRunTimestamp, {
+              syncDepth: currentDepth,
+              discoveredFromRecordId: record.discoveredFromRecordId,
+            });
+            result.addressesSkipped++;
+            this.updateProgress({ addressesSkipped: result.addressesSkipped });
+            continue;
+          }
+
+          // --- Sync Protection: Tx count threshold check ---
+          const txCheck = await this.checkTxCountThreshold(address);
+          if (txCheck.exceeded) {
+            console.log(`[TransactionSync] Skipping high-volume address (${txCheck.count} txs > ${this.syncProtection.txCountThreshold} threshold): ${address}`);
+            await this.recordSkippedAddress(address, 'tx-count-exceeded', syncRunTimestamp, {
+              txCount: txCheck.count,
+              syncDepth: currentDepth,
+              discoveredFromRecordId: record.discoveredFromRecordId,
+            });
+            result.addressesSkipped++;
+            this.updateProgress({ addressesSkipped: result.addressesSkipped });
+            continue;
+          }
+
           this.updateProgress({
             phase: 'syncing-addresses',
             currentAddress: address,
@@ -688,12 +986,18 @@ export class TransactionSyncService {
           });
 
           try {
-            const syncResult = await this.syncAddress(
+            // --- Sync Protection: Per-address timeout ---
+            const syncPromise = this.syncAddress(
               address, 
               record.id, 
               minConfirmedHeight, 
               currentHeight,
-              currentDepth + 1 // New addresses discovered will be at depth+1
+              currentDepth + 1
+            );
+            const syncResult = await this.withTimeout(
+              syncPromise,
+              this.syncProtection.perAddressTimeoutMs,
+              address
             );
             result.transactionsImported += syncResult.imported;
             result.transactionsUpdated += syncResult.updated;
@@ -712,9 +1016,27 @@ export class TransactionSyncService {
               newAddressRecords: result.newAddressRecords,
             });
           } catch (error) {
-            const errorMsg = `Failed to sync ${address}: ${error instanceof Error ? error.message : 'Unknown error'}`;
-            result.errors.push(errorMsg);
-            console.error(errorMsg);
+            const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+            const isTimeout = errorMsg.includes('timed out');
+            if (isTimeout) {
+              await this.recordSkippedAddress(address, 'timeout', syncRunTimestamp, {
+                errorMessage: errorMsg,
+                syncDepth: currentDepth,
+                discoveredFromRecordId: record.discoveredFromRecordId,
+              });
+              result.addressesSkipped++;
+              this.updateProgress({ addressesSkipped: result.addressesSkipped });
+              console.warn(`[TransactionSync] ${errorMsg}`);
+            } else {
+              await this.recordSkippedAddress(address, 'error', syncRunTimestamp, {
+                errorMessage: errorMsg,
+                syncDepth: currentDepth,
+                discoveredFromRecordId: record.discoveredFromRecordId,
+              });
+              result.addressesSkipped++;
+              result.errors.push(`Failed to sync ${address}: ${errorMsg}`);
+              console.error(`[TransactionSync] Failed to sync ${address}: ${errorMsg}`);
+            }
           }
         }
       }

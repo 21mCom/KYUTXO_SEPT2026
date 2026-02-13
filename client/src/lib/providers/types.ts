@@ -4,6 +4,7 @@ export interface BlockchainProvider {
   name: string;
   getBlockHeight(): Promise<number>;
   getAddressTransactions(address: string): Promise<ApiTransaction[]>;
+  getAddressTxCount?(address: string): Promise<number>;
   getTransaction(txid: string): Promise<ApiTransaction | null>;
   testConnection(): Promise<{ success: boolean; blockHeight?: number; error?: string; latency?: number }>;
 }

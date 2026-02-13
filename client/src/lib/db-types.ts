@@ -641,6 +641,41 @@ export interface EvidenceAttachment {
   isEncrypted?: boolean;
 }
 
+// Skipped address from sync - tracked for user review
+export type SkipReason = 'tx-count-exceeded' | 'timeout' | 'blacklisted' | 'error';
+
+export interface SkippedAddress {
+  id?: number;
+  address: string;
+  reason: SkipReason;
+  txCount?: number;
+  errorMessage?: string;
+  syncRunTimestamp: number;
+  discoveredFromRecordId?: number;
+  syncDepth?: number;
+  dismissed: boolean;
+  createdAt: number;
+}
+
+// Address blacklist - permanently skip these addresses during sync
+export interface AddressBlacklist {
+  id?: number;
+  address: string;
+  reason?: string;
+  addedAt: number;
+}
+
+// Sync protection settings
+export interface SyncProtectionSettings {
+  txCountThreshold: number;
+  perAddressTimeoutMs: number;
+}
+
+export const DEFAULT_SYNC_PROTECTION: SyncProtectionSettings = {
+  txCountThreshold: 500,
+  perAddressTimeoutMs: 60000,
+};
+
 // Derivation template for optional encrypted xpub storage
 // WARNING: Storing xpubs doesn't risk funds but reveals wallet structure and all addresses
 export interface DerivationTemplate {

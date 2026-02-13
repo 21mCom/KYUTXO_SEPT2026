@@ -9,7 +9,7 @@ import type {
   RecordOrigin, CustomField, Settings, PriceData, BlockchainTransaction,
   TransactionParticipant, AddressSyncState, NodeSettings, DerivationTemplate,
   UtxoLineage, CustodySegment, LineageSnapshot, Evidence, EvidenceAttachment,
-  PausedSyncState,
+  PausedSyncState, SkippedAddress, AddressBlacklist,
 } from './db-types';
 
 export class KYUTXODatabase extends Dexie {
@@ -39,10 +39,42 @@ export class KYUTXODatabase extends Dexie {
   evidenceAttachments!: Table<EvidenceAttachment>;
   // Paused sync state for resume functionality
   pausedSyncState!: Table<PausedSyncState>;
+  // Sync protection tables
+  skippedAddresses!: Table<SkippedAddress>;
+  addressBlacklist!: Table<AddressBlacklist>;
 
   constructor() {
     super('KYUTXODatabase');
     
+    // Version 22 adds skippedAddresses and addressBlacklist tables for sync protection
+    this.version(22).stores({
+      records: '++id, type, inputString, label, owner, *tags, *categories, createdAt, updatedAt, isEncrypted, chainType, syncDepth, addressImportance, [type+addressImportance], flowType',
+      attachments: '++id, recordId, createdAt, isEncrypted',
+      tags: '++id, name, createdAt, isEncrypted',
+      categories: '++id, name, createdAt, isEncrypted',
+      owners: '++id, name, createdAt, isEncrypted',
+      walletNames: '++id, name, createdAt, isEncrypted',
+      seedNames: '++id, name, createdAt, isEncrypted',
+      walletSoftware: '++id, name, createdAt, isEncrypted',
+      recordOrigins: '++id, recordId, originType, createdAt, isEncrypted',
+      customFields: '++id, slug, enabled, createdAt',
+      settings: 'id',
+      priceData: '++id, [date+currency+asset], date, asset, currency, source, importedAt',
+      blockchainTransactions: '++id, &txid, blockHeight, blockTime, syncedAt, hasOpReturn',
+      transactionParticipants: '++id, [txid+role], txid, role, address, recordId, scriptType, [prevTxid+prevVout]',
+      addressSyncState: '++id, &address, recordId, lastSyncedAt',
+      nodeSettings: 'id',
+      derivationTemplates: '++id, fingerprint, scriptType, owner, walletName, seedName, createdAt, isEncrypted',
+      utxoLineage: '++id, [spentTxid+spentVout], [createdTxid+createdVout], consumingTxid, spentAddress, createdAddress, segmentId, spentOwned, createdOwned, isChange, blockTime, isEncrypted',
+      custodySegments: '++id, &segmentId, [originTxid+originVout], originAddress, currentAddress, status, parentSegmentId, owner, walletName, originDate, isEncrypted',
+      lineageSnapshots: '++id, &snapshotId, targetType, targetAddress, targetSegmentId, generatedAt, disclosureLevel, isEncrypted',
+      evidence: '++id, documentType, originalDate, *tags, importance, createdAt, updatedAt, isEncrypted',
+      evidenceAttachments: '++id, evidenceId, createdAt, isEncrypted',
+      pausedSyncState: 'id',
+      skippedAddresses: '++id, address, reason, syncRunTimestamp, dismissed, createdAt',
+      addressBlacklist: '++id, &address, addedAt'
+    });
+
     // Version 21 adds pausedSyncState table for pause/resume sync functionality
     this.version(21).stores({
       records: '++id, type, inputString, label, owner, *tags, *categories, createdAt, updatedAt, isEncrypted, chainType, syncDepth, addressImportance, [type+addressImportance], flowType',

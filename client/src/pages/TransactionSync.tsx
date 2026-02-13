@@ -8,6 +8,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
 import { 
   ArrowLeft,
@@ -24,12 +25,18 @@ import {
   Square,
   Pause,
   Play,
-  Trash2
+  Trash2,
+  ShieldAlert,
+  Search,
+  Ban,
+  X,
+  SkipForward
 } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { transactionSyncService, type SyncProgress, type SyncResult, type SyncOptions, type SourceCategory, type SourceSelection, type SourceInfo, getAddressSources } from "@/lib/transaction-sync";
-import type { PausedSyncState } from "@/lib/database";
+import type { PausedSyncState, SkippedAddress, AddressBlacklist, SyncProtectionSettings } from "@/lib/database";
+import { DEFAULT_SYNC_PROTECTION } from "@/lib/database";
 import { useNodeSettings } from "@/hooks/use-node-settings";
 import { getProviderDisplayName, getProviderPrivacyInfo } from "@/lib/blockchain-api";
 import { Link } from "wouter";
@@ -71,6 +78,20 @@ export default function TransactionSync() {
   
   // Filtered count based on current selection
   const [filteredAddressCount, setFilteredAddressCount] = useState<number | null>(null);
+  
+  // Sync protection
+  const [syncProtection, setSyncProtection] = useState<SyncProtectionSettings>({ ...DEFAULT_SYNC_PROTECTION });
+  const [showProtectionSettings, setShowProtectionSettings] = useState(false);
+  
+  // Single address sync
+  const [singleAddress, setSingleAddress] = useState('');
+  const [isSingleSyncing, setIsSingleSyncing] = useState(false);
+  const [singleSyncResult, setSingleSyncResult] = useState<SyncResult | null>(null);
+  
+  // Skipped addresses and blacklist
+  const [skippedAddresses, setSkippedAddresses] = useState<SkippedAddress[]>([]);
+  const [blacklist, setBlacklist] = useState<AddressBlacklist[]>([]);
+  const [showBlacklist, setShowBlacklist] = useState(false);
 
   // Build current source selection from state
   const currentSourceSelection = useCallback((): SourceSelection => {
@@ -117,11 +138,23 @@ export default function TransactionSync() {
     setPausedState(state ?? null);
   }, []);
 
+  const loadSkippedAddresses = useCallback(async () => {
+    const skipped = await transactionSyncService.getSkippedAddresses();
+    setSkippedAddresses(skipped);
+  }, []);
+
+  const loadBlacklist = useCallback(async () => {
+    const bl = await transactionSyncService.getBlacklist();
+    setBlacklist(bl);
+  }, []);
+
   useEffect(() => {
     loadStats();
     loadSources();
     loadPausedState();
-  }, [loadStats, loadSources, loadPausedState]);
+    loadSkippedAddresses();
+    loadBlacklist();
+  }, [loadStats, loadSources, loadPausedState, loadSkippedAddresses, loadBlacklist]);
 
   // Update filtered address count whenever selection changes
   useEffect(() => {
@@ -154,8 +187,9 @@ export default function TransactionSync() {
     });
     setLastResult(null);
 
-    // Update the sync service to use current node settings
+    // Update the sync service to use current node settings and protection
     transactionSyncService.updateProvider(nodeSettings);
+    transactionSyncService.setSyncProtection(syncProtection);
     
     transactionSyncService.setProgressCallback((progress) => {
       setSyncProgress(progress);
@@ -171,9 +205,10 @@ export default function TransactionSync() {
       setLastResult(result);
       
       if (result.success) {
+        const skippedMsg = result.addressesSkipped > 0 ? ` (${result.addressesSkipped} skipped)` : '';
         toast({
           title: "Sync Complete",
-          description: `Imported ${result.transactionsImported} new transactions from ${result.addressesSynced} addresses.`,
+          description: `Imported ${result.transactionsImported} new transactions from ${result.addressesSynced} addresses.${skippedMsg}`,
         });
       } else {
         toast({
@@ -195,6 +230,7 @@ export default function TransactionSync() {
       await loadStats();
       await loadSources();
       await loadPausedState();
+      await loadSkippedAddresses();
       
       // If sync was stopped/paused, update the result message
       if (wasStopped && lastResult === null) {
@@ -294,6 +330,86 @@ export default function TransactionSync() {
     });
   };
 
+  const handleSingleAddressSync = async () => {
+    if (!singleAddress.trim()) return;
+    setIsSingleSyncing(true);
+    setSingleSyncResult(null);
+
+    transactionSyncService.updateProvider(nodeSettings);
+
+    try {
+      const result = await transactionSyncService.syncSingleAddress(
+        singleAddress.trim(),
+        (progress) => setSyncProgress(progress)
+      );
+      setSingleSyncResult(result);
+      if (result.success) {
+        toast({
+          title: "Single Address Sync Complete",
+          description: `Found ${result.transactionsImported} new transactions.`,
+        });
+      } else {
+        toast({
+          title: "Single Address Sync Failed",
+          description: result.errors[0] || "Unknown error",
+          variant: "destructive",
+        });
+      }
+    } catch (error) {
+      toast({
+        title: "Sync Failed",
+        description: error instanceof Error ? error.message : "An error occurred",
+        variant: "destructive",
+      });
+    } finally {
+      setIsSingleSyncing(false);
+      await loadStats();
+    }
+  };
+
+  const handleAddToBlacklist = async (address: string, reason?: string) => {
+    await transactionSyncService.addToBlacklist(address, reason);
+    await loadBlacklist();
+    await loadSkippedAddresses();
+    toast({ title: "Added to Blacklist", description: `${address.substring(0, 12)}... will be skipped in future syncs.` });
+  };
+
+  const handleRemoveFromBlacklist = async (address: string) => {
+    await transactionSyncService.removeFromBlacklist(address);
+    await loadBlacklist();
+    toast({ title: "Removed from Blacklist", description: `${address.substring(0, 12)}... will be included in syncs again.` });
+  };
+
+  const handleDismissSkipped = async (id: number) => {
+    await transactionSyncService.dismissSkippedAddress(id);
+    await loadSkippedAddresses();
+  };
+
+  const handleDismissAllSkipped = async () => {
+    await transactionSyncService.dismissAllSkipped();
+    await loadSkippedAddresses();
+  };
+
+  const getSkipReasonLabel = (reason: string) => {
+    switch (reason) {
+      case 'tx-count-exceeded': return 'High Volume';
+      case 'timeout': return 'Timed Out';
+      case 'blacklisted': return 'Blacklisted';
+      case 'error': return 'Error';
+      default: return reason;
+    }
+  };
+
+  const getSkipReasonVariant = (reason: string): "default" | "destructive" | "outline" | "secondary" => {
+    switch (reason) {
+      case 'tx-count-exceeded': return 'secondary';
+      case 'timeout': return 'outline';
+      case 'blacklisted': return 'destructive';
+      case 'error': return 'destructive';
+      default: return 'default';
+    }
+  };
+
   const formatSats = (sats: number) => {
     if (sats >= 100000000) {
       return `${(sats / 100000000).toFixed(8)} BTC`;
@@ -348,7 +464,7 @@ export default function TransactionSync() {
               )}
             </span>
             <Link href="/node-settings">
-              <Button variant="ghost" size="sm" className="h-7 text-xs" data-testid="link-node-settings">
+              <Button variant="ghost" size="sm" data-testid="link-node-settings">
                 <Settings className="h-3 w-3 mr-1" />
                 Configure
               </Button>
@@ -435,14 +551,12 @@ export default function TransactionSync() {
                     <Button
                       variant="ghost"
                       size="sm"
-                      className="h-6 px-2 text-xs"
                       disabled={isSyncing}
                       onClick={() => {
                         const allSources = new Set<string>();
                         for (const cat of sourceCategories) {
                           for (const src of cat.sources) {
                             if (src.source !== '__no_source__') {
-                              // Add all raw sources, not just the grouped display name
                               const rawSources = src.rawSources || [src.source];
                               for (const raw of rawSources) {
                                 allSources.add(raw);
@@ -460,7 +574,6 @@ export default function TransactionSync() {
                     <Button
                       variant="ghost"
                       size="sm"
-                      className="h-6 px-2 text-xs"
                       disabled={isSyncing}
                       onClick={() => {
                         setSelectedSources(new Set());
@@ -660,6 +773,54 @@ export default function TransactionSync() {
                   {maxDepth === 2 && "Moderate: Discovers connected addresses"}
                   {maxDepth === 3 && "Deep: Traces further relationships"}
                 </p>
+
+                {/* Sync Protection Settings */}
+                <Collapsible open={showProtectionSettings} onOpenChange={setShowProtectionSettings}>
+                  <CollapsibleTrigger asChild>
+                    <Button variant="ghost" size="sm" className="w-full justify-start gap-2 mt-2" data-testid="button-toggle-protection">
+                      <ShieldAlert className="h-4 w-4" />
+                      {showProtectionSettings ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+                      Sync Protection
+                      {blacklist.length > 0 && (
+                        <Badge variant="secondary" className="ml-auto">{blacklist.length} blacklisted</Badge>
+                      )}
+                    </Button>
+                  </CollapsibleTrigger>
+                  <CollapsibleContent className="space-y-3 pt-2">
+                    <div className="space-y-2">
+                      <Label htmlFor="tx-threshold" className="text-xs">Transaction Count Threshold</Label>
+                      <div className="flex items-center gap-2">
+                        <Input
+                          id="tx-threshold"
+                          type="number"
+                          min={0}
+                          value={syncProtection.txCountThreshold}
+                          onChange={(e) => setSyncProtection(prev => ({ ...prev, txCountThreshold: parseInt(e.target.value) || 0 }))}
+                          disabled={isSyncing}
+                          className="w-24"
+                          data-testid="input-tx-threshold"
+                        />
+                        <span className="text-xs text-muted-foreground">Skip addresses with more transactions (0 = disabled)</span>
+                      </div>
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="timeout" className="text-xs">Per-Address Timeout (seconds)</Label>
+                      <div className="flex items-center gap-2">
+                        <Input
+                          id="timeout"
+                          type="number"
+                          min={0}
+                          value={Math.round(syncProtection.perAddressTimeoutMs / 1000)}
+                          onChange={(e) => setSyncProtection(prev => ({ ...prev, perAddressTimeoutMs: (parseInt(e.target.value) || 0) * 1000 }))}
+                          disabled={isSyncing}
+                          className="w-24"
+                          data-testid="input-timeout"
+                        />
+                        <span className="text-xs text-muted-foreground">Max time per address (0 = no limit)</span>
+                      </div>
+                    </div>
+                  </CollapsibleContent>
+                </Collapsible>
               </div>
             </div>
 
@@ -677,7 +838,7 @@ export default function TransactionSync() {
                   </p>
                 )}
                 
-                <div className="grid grid-cols-3 gap-4 text-sm">
+                <div className="grid grid-cols-4 gap-4 text-sm">
                   <div>
                     <p className="text-muted-foreground">Found</p>
                     <p className="font-medium">{syncProgress.transactionsFound} txs</p>
@@ -690,6 +851,12 @@ export default function TransactionSync() {
                     <p className="text-muted-foreground">New Addresses</p>
                     <p className="font-medium">{syncProgress.newAddressRecords}</p>
                   </div>
+                  {(syncProgress.addressesSkipped ?? 0) > 0 && (
+                    <div>
+                      <p className="text-muted-foreground">Skipped</p>
+                      <p className="font-medium text-amber-600">{syncProgress.addressesSkipped}</p>
+                    </div>
+                  )}
                 </div>
               </div>
             )}
@@ -704,6 +871,9 @@ export default function TransactionSync() {
                     Imported {lastResult.transactionsImported} new transactions
                     {lastResult.transactionsUpdated > 0 && `, updated ${lastResult.transactionsUpdated}`}.
                     {lastResult.newAddressRecords > 0 && ` Created ${lastResult.newAddressRecords} new address records for review.`}
+                    {lastResult.addressesSkipped > 0 && (
+                      <span className="text-amber-600"> Skipped {lastResult.addressesSkipped} address{lastResult.addressesSkipped !== 1 ? 'es' : ''} (see below).</span>
+                    )}
                   </p>
                   {lastResult.errors.length > 0 && (
                     <ul className="mt-2 list-disc list-inside text-sm">
@@ -797,6 +967,179 @@ export default function TransactionSync() {
           </CardFooter>
         </Card>
 
+        {/* Single Address Sync */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Search className="h-5 w-5" />
+              Sync Single Address
+            </CardTitle>
+            <CardDescription>
+              Sync a specific address that was skipped or needs re-syncing
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="flex gap-2">
+              <Input
+                placeholder="Enter Bitcoin address (bc1..., 1..., 3...)"
+                value={singleAddress}
+                onChange={(e) => setSingleAddress(e.target.value)}
+                disabled={isSingleSyncing || isSyncing}
+                className="font-mono text-xs"
+                data-testid="input-single-address"
+              />
+              <Button
+                onClick={handleSingleAddressSync}
+                disabled={isSingleSyncing || isSyncing || !singleAddress.trim()}
+                data-testid="button-single-sync"
+              >
+                {isSingleSyncing ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <RefreshCw className="h-4 w-4" />
+                )}
+              </Button>
+            </div>
+            {singleSyncResult && (
+              <Alert variant={singleSyncResult.success ? "default" : "destructive"}>
+                {singleSyncResult.success ? <Check className="h-4 w-4" /> : <AlertCircle className="h-4 w-4" />}
+                <AlertDescription>
+                  {singleSyncResult.success
+                    ? `Found ${singleSyncResult.transactionsImported} new transactions, ${singleSyncResult.transactionsUpdated} updated.`
+                    : singleSyncResult.errors[0] || 'Unknown error'}
+                </AlertDescription>
+              </Alert>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Skipped Addresses */}
+        {skippedAddresses.length > 0 && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center justify-between">
+                <span className="flex items-center gap-2">
+                  <SkipForward className="h-5 w-5" />
+                  Skipped Addresses ({skippedAddresses.length})
+                </span>
+                <Button variant="ghost" size="sm" onClick={handleDismissAllSkipped} data-testid="button-dismiss-all-skipped">
+                  Dismiss All
+                </Button>
+              </CardTitle>
+              <CardDescription>
+                These addresses were skipped during sync due to protection rules
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <ScrollArea className="max-h-64">
+                <div className="space-y-2">
+                  {skippedAddresses.map((skipped) => (
+                    <div key={skipped.id} className="flex items-center gap-2 py-1.5 border-b last:border-0">
+                      <Badge variant={getSkipReasonVariant(skipped.reason)} className="shrink-0">
+                        {getSkipReasonLabel(skipped.reason)}
+                      </Badge>
+                      <span className="font-mono text-xs truncate flex-1" title={skipped.address}>
+                        {skipped.address}
+                      </span>
+                      {skipped.txCount && (
+                        <span className="text-xs text-muted-foreground shrink-0">{skipped.txCount} txs</span>
+                      )}
+                      <div className="flex gap-1 shrink-0">
+                        {skipped.reason !== 'blacklisted' && (
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => handleAddToBlacklist(skipped.address, `Skipped: ${skipped.reason}`)}
+                                data-testid={`button-blacklist-${skipped.id}`}
+                              >
+                                <Ban className="h-3.5 w-3.5" />
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>Add to blacklist</TooltipContent>
+                          </Tooltip>
+                        )}
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => {
+                                setSingleAddress(skipped.address);
+                                handleDismissSkipped(skipped.id!);
+                              }}
+                              data-testid={`button-retry-${skipped.id}`}
+                            >
+                              <RefreshCw className="h-3.5 w-3.5" />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>Copy to single sync</TooltipContent>
+                        </Tooltip>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => handleDismissSkipped(skipped.id!)}
+                              data-testid={`button-dismiss-${skipped.id}`}
+                            >
+                              <X className="h-3.5 w-3.5" />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>Dismiss</TooltipContent>
+                        </Tooltip>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </ScrollArea>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Address Blacklist */}
+        {blacklist.length > 0 && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Ban className="h-5 w-5" />
+                Address Blacklist ({blacklist.length})
+              </CardTitle>
+              <CardDescription>
+                These addresses will always be skipped during sync
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <ScrollArea className="max-h-48">
+                <div className="space-y-2">
+                  {blacklist.map((entry) => (
+                    <div key={entry.id} className="flex items-center gap-2 py-1.5 border-b last:border-0">
+                      <span className="font-mono text-xs truncate flex-1" title={entry.address}>
+                        {entry.address}
+                      </span>
+                      {entry.reason && (
+                        <span className="text-xs text-muted-foreground truncate max-w-32" title={entry.reason}>
+                          {entry.reason}
+                        </span>
+                      )}
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="shrink-0"
+                        onClick={() => handleRemoveFromBlacklist(entry.address)}
+                        data-testid={`button-unblacklist-${entry.id}`}
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              </ScrollArea>
+            </CardContent>
+          </Card>
+        )}
+
         {/* How it works */}
         <Card>
           <CardHeader>
@@ -813,6 +1156,10 @@ export default function TransactionSync() {
             <p>
               New addresses discovered in transactions are automatically added as "Unknown" for later review. 
               Use deeper sync levels to trace connected addresses.
+            </p>
+            <p>
+              <strong>Sync Protection:</strong> High-volume addresses (over the threshold) and blacklisted addresses 
+              are automatically skipped to prevent sync stalls. Skipped addresses can be reviewed and synced individually.
             </p>
           </CardContent>
         </Card>
