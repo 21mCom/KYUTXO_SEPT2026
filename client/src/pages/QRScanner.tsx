@@ -1,12 +1,14 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { QrCode, Camera, X, CheckCircle } from "lucide-react";
+import { QrCode, Camera, X, CheckCircle, Copy, Download, Type } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import jsQR from "jsqr";
+import QRCode from "qrcode";
 
 export default function QRScanner() {
   const [scanning, setScanning] = useState(false);
@@ -17,6 +19,47 @@ export default function QRScanner() {
   const streamRef = useRef<MediaStream | null>(null);
   const animationRef = useRef<number | null>(null);
   const { toast } = useToast();
+
+  const [generatorInput, setGeneratorInput] = useState('');
+  const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
+  const [isGenerating, setIsGenerating] = useState(false);
+
+  const generateQR = useCallback(async (text: string) => {
+    if (!text.trim()) {
+      setQrDataUrl(null);
+      return;
+    }
+    setIsGenerating(true);
+    try {
+      const url = await QRCode.toDataURL(text.trim(), {
+        width: 400,
+        margin: 2,
+        color: { dark: '#000000', light: '#ffffff' },
+        errorCorrectionLevel: 'M',
+      });
+      setQrDataUrl(url);
+    } catch (err) {
+      console.error('QR generation failed:', err);
+      setQrDataUrl(null);
+    } finally {
+      setIsGenerating(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      generateQR(generatorInput);
+    }, 200);
+    return () => clearTimeout(timer);
+  }, [generatorInput, generateQR]);
+
+  const handleDownloadQR = () => {
+    if (!qrDataUrl) return;
+    const link = document.createElement('a');
+    link.download = `qr-${Date.now()}.png`;
+    link.href = qrDataUrl;
+    link.click();
+  };
 
   const stopCamera = useCallback(() => {
     if (animationRef.current) {
@@ -158,9 +201,9 @@ export default function QRScanner() {
     <div className="flex-1 overflow-auto p-6">
       <div className="max-w-2xl mx-auto space-y-6">
         <div>
-          <h1 className="text-3xl font-bold mb-2">QR Code Scanner</h1>
+          <h1 className="text-3xl font-bold mb-2">QR Code Tools</h1>
           <p className="text-muted-foreground">
-            Scan QR codes to quickly capture Bitcoin addresses and transaction IDs
+            Generate and scan QR codes for addresses, TXIDs, and other data
           </p>
         </div>
 
@@ -272,13 +315,74 @@ export default function QRScanner() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Tips</CardTitle>
+            <CardTitle className="flex items-center gap-2">
+              <Type className="h-5 w-5" />
+              QR Code Generator
+            </CardTitle>
+            <CardDescription>
+              Paste an address, TXID, or any text to generate a scannable QR code
+            </CardDescription>
           </CardHeader>
-          <CardContent className="space-y-2 text-sm text-muted-foreground">
-            <p>• Hold your device steady and ensure the QR code is well-lit</p>
-            <p>• Position the QR code within the scanning frame</p>
-            <p>• Supports Bitcoin addresses, transaction IDs, and bitcoin: URIs</p>
-            <p>• Camera access is required - you'll be prompted for permission</p>
+          <CardContent className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="qr-input">Text to encode</Label>
+              <Textarea
+                id="qr-input"
+                placeholder="Paste a Bitcoin address, TXID, xpub, or any text..."
+                value={generatorInput}
+                onChange={(e) => setGeneratorInput(e.target.value)}
+                className="font-mono text-sm resize-none"
+                rows={3}
+                data-testid="input-qr-generator"
+              />
+              <p className="text-xs text-muted-foreground">
+                {generatorInput.trim().length > 0
+                  ? `${generatorInput.trim().length} characters`
+                  : 'Enter text above to generate a QR code'}
+              </p>
+            </div>
+
+            {qrDataUrl && (
+              <div className="flex flex-col items-center space-y-4">
+                <div className="bg-white p-4 rounded-lg">
+                  <img
+                    src={qrDataUrl}
+                    alt="Generated QR Code"
+                    className="w-64 h-64"
+                    data-testid="img-generated-qr"
+                  />
+                </div>
+                <div className="flex gap-2">
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      navigator.clipboard.writeText(generatorInput.trim());
+                      toast({
+                        title: "Copied",
+                        description: "Text copied to clipboard",
+                      });
+                    }}
+                    data-testid="button-copy-qr-text"
+                  >
+                    <Copy className="h-4 w-4 mr-2" />
+                    Copy Text
+                  </Button>
+                  <Button
+                    onClick={handleDownloadQR}
+                    data-testid="button-download-qr"
+                  >
+                    <Download className="h-4 w-4 mr-2" />
+                    Save Image
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            {isGenerating && (
+              <div className="flex justify-center py-8">
+                <Badge variant="secondary" className="animate-pulse">Generating...</Badge>
+              </div>
+            )}
           </CardContent>
         </Card>
       </div>

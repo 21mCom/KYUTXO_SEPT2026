@@ -120,7 +120,7 @@ const navGroups: NavGroup[] = [
       { title: "Mobile Wallets", url: "/mobile-wallet-import", icon: Smartphone },
       { title: "Price Import", url: "/price-import", icon: DollarSign },
       { title: "Transaction Sync", url: "/transaction-sync", icon: ArrowDownUp },
-      { title: "QR Scanner", url: "/scanner", icon: QrCode },
+      { title: "QR Tools", url: "/scanner", icon: QrCode },
       { title: "Quick Tagger", url: "/quick-tagger", icon: Tags },
       { title: "Backup", url: "/export", icon: Download },
     ]
