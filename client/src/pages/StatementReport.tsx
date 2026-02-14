@@ -16,8 +16,7 @@ import { db } from "@/lib/database";
 import { useEncryptedTags } from "@/hooks/use-encrypted-records";
 import { useOwners } from "@/hooks/use-owners";
 import { useWalletNames } from "@/hooks/use-wallet-names";
-import jsPDF from "jspdf";
-import autoTable from "jspdf-autotable";
+import { decryptRecords } from "@/lib/encryptionFacade";
 import type { TransactionParticipant, BlockchainTransaction } from "@/lib/database";
 
 type BalanceMode = "modeA" | "modeB" | "modeC";
@@ -79,12 +78,13 @@ export default function StatementReport() {
   const resolveAddresses = useCallback(async (): Promise<string[]> => {
     if (addressMode === "paste") {
       return pastedAddresses
-        .split("\n")
+        .split(/[\n,;]+/)
         .map(a => a.trim())
         .filter(a => a.length > 0);
     }
 
-    let records = await db.records.where("type").equals("address").toArray();
+    const rawRecords = await db.records.where("type").equals("address").toArray();
+    let records = await decryptRecords(rawRecords);
     if (filterOwner) {
       records = records.filter(r => r.owner === filterOwner);
     }
@@ -92,7 +92,7 @@ export default function StatementReport() {
       records = records.filter(r => r.walletName === filterWallet);
     }
     if (filterTag) {
-      records = records.filter(r => r.tags.includes(filterTag));
+      records = records.filter(r => r.tags && r.tags.includes(filterTag));
     }
     return records.map(r => r.inputString).filter(s => s.length > 0);
   }, [addressMode, pastedAddresses, filterOwner, filterWallet, filterTag]);
@@ -200,21 +200,35 @@ export default function StatementReport() {
         }
       }
 
-      const seen = new Set<string>();
       const netByTxid = new Map<string, number>();
 
-      for (const p of allParticipants) {
-        if (p.role !== "input" && p.role !== "output") continue;
-        const key = `${p.txid}:${p.role}:${p.vout ?? p.prevTxid ?? ""}:${p.prevVout ?? ""}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
+      for (const [txid, participants] of Array.from(allTxParticipants.entries())) {
+        const seen = new Set<string>();
+        let net = 0;
 
-        if (!addressSet.has(p.address)) continue;
-        const current = netByTxid.get(p.txid) || 0;
-        if (p.role === "output") {
-          netByTxid.set(p.txid, current + p.amount);
-        } else {
-          netByTxid.set(p.txid, current - p.amount);
+        for (const p of participants) {
+          if (p.role !== "input" && p.role !== "output") continue;
+          if (!addressSet.has(p.address)) continue;
+
+          const dedupKey = p.role === "input"
+            ? `in:${p.prevTxid ?? ""}:${p.prevVout ?? ""}`
+            : `out:${p.vout ?? ""}`;
+          if (seen.has(dedupKey)) continue;
+          seen.add(dedupKey);
+
+          const amount = Number(p.amount) || 0;
+          if (p.role === "output") {
+            net += amount;
+          } else {
+            net -= amount;
+          }
+        }
+
+        const hasOurAddress = participants.some(p =>
+          (p.role === "input" || p.role === "output") && addressSet.has(p.address)
+        );
+        if (hasOurAddress) {
+          netByTxid.set(txid, net);
         }
       }
 
@@ -286,87 +300,104 @@ export default function StatementReport() {
     }
   }, [resolveAddresses, startDate, endDate, currency, batchLookupPrices]);
 
-  const exportPdf = useCallback(() => {
-    const doc = new jsPDF();
-    doc.setFontSize(18);
-    doc.text("Bitcoin Statement Report", 14, 20);
+  const exportPdf = useCallback(async () => {
+    try {
+      const jsPDFModule = await import("jspdf");
+      const autoTableModule = await import("jspdf-autotable");
+      const jsPDF = jsPDFModule.default;
+      const autoTable = autoTableModule.default;
 
-    doc.setFontSize(10);
-    let subtitle = "";
-    if (startDate || endDate) {
-      subtitle += `Date Range: ${startDate || "start"} to ${endDate || "present"}`;
-    }
-    if (usedAddresses.length > 0) {
-      const addrText = usedAddresses.length <= 3
-        ? usedAddresses.join(", ")
-        : `${usedAddresses.slice(0, 3).join(", ")} (+${usedAddresses.length - 3} more)`;
-      subtitle += subtitle ? " | " : "";
-      subtitle += `Addresses: ${addrText}`;
-    }
-    if (subtitle) {
-      doc.text(subtitle, 14, 28);
-    }
+      const doc = new jsPDF();
+      doc.setFontSize(18);
+      doc.text("Bitcoin Statement Report", 14, 20);
 
-    const headers: string[] = ["Date"];
-    if (showTxids) headers.push("TXID");
-    if (showAddresses) headers.push("Addresses");
-
-    if (currency === "BTC") {
-      headers.push("Net Amount (BTC)");
-      headers.push("Balance (BTC)");
-    } else {
-      headers.push("Net Amount (USD)");
-      if (balanceMode === "modeB") {
-        headers.push("Balance (BTC)");
-        headers.push("USD Value");
-      } else if (balanceMode === "modeC") {
-        headers.push("Balance (BTC)");
+      doc.setFontSize(10);
+      let subtitle = "";
+      if (startDate || endDate) {
+        subtitle += `Date Range: ${startDate || "start"} to ${endDate || "present"}`;
       }
-    }
-
-    const body = rows.map(row => {
-      const r: string[] = [row.dateStr];
-      if (showTxids) r.push(row.txid.slice(0, 16) + "...");
-      if (showAddresses) {
-        const addrs = Array.from(new Set(row.participants.map(p => p.address)));
-        r.push(addrs.length <= 2 ? addrs.join(", ") : `${addrs[0]}, +${addrs.length - 1}`);
+      if (usedAddresses.length > 0) {
+        const addrText = usedAddresses.length <= 3
+          ? usedAddresses.join(", ")
+          : `${usedAddresses.slice(0, 3).join(", ")} (+${usedAddresses.length - 3} more)`;
+        subtitle += subtitle ? " | " : "";
+        subtitle += `Addresses: ${addrText}`;
       }
+      if (subtitle) {
+        doc.text(subtitle, 14, 28);
+      }
+
+      const headers: string[] = ["Date"];
+      if (showTxids) headers.push("TXID");
+      if (showAddresses) headers.push("Addresses");
 
       if (currency === "BTC") {
-        const prefix = row.netSats >= 0 ? "+" : "";
-        r.push(prefix + formatBTC(row.netSats));
-        r.push(formatBTC(row.runningBalanceSats));
+        headers.push("Net Amount (BTC)");
+        headers.push("Balance (BTC)");
       } else {
-        if (row.netUsd !== null) {
-          const prefix = row.netUsd >= 0 ? "+" : "";
-          r.push(prefix + formatUsd(row.netUsd));
-        } else {
-          r.push("N/A");
-        }
+        headers.push("Net Amount (USD)");
         if (balanceMode === "modeB") {
-          r.push(formatBTC(row.runningBalanceSats));
-          r.push(row.runningBalanceUsd !== null ? formatUsd(row.runningBalanceUsd) : "N/A");
+          headers.push("Balance (BTC)");
+          headers.push("USD Value");
         } else if (balanceMode === "modeC") {
-          r.push(formatBTC(row.runningBalanceSats));
+          headers.push("Balance (BTC)");
         }
       }
-      return r;
-    });
 
-    autoTable(doc, {
-      startY: subtitle ? 34 : 26,
-      head: [headers],
-      body,
-      styles: { fontSize: 7, cellPadding: 2 },
-      headStyles: { fillColor: [41, 128, 185] },
-    });
+      const body = rows.map(row => {
+        const r: string[] = [row.dateStr];
+        if (showTxids) r.push(row.txid.slice(0, 16) + "...");
+        if (showAddresses) {
+          const addrs = Array.from(new Set(row.participants.map(p => p.address)));
+          r.push(addrs.length <= 2 ? addrs.join(", ") : `${addrs[0]}, +${addrs.length - 1}`);
+        }
 
-    const pageHeight = doc.internal.pageSize.getHeight();
-    doc.setFontSize(8);
-    doc.text(`Generated: ${new Date().toLocaleString()}`, 14, pageHeight - 10);
+        if (currency === "BTC") {
+          const prefix = row.netSats >= 0 ? "+" : "";
+          r.push(prefix + formatBTC(row.netSats));
+          r.push(formatBTC(row.runningBalanceSats));
+        } else {
+          if (row.netUsd !== null) {
+            const prefix = row.netUsd >= 0 ? "+" : "";
+            r.push(prefix + formatUsd(row.netUsd));
+          } else {
+            r.push("N/A");
+          }
+          if (balanceMode === "modeB") {
+            r.push(formatBTC(row.runningBalanceSats));
+            r.push(row.runningBalanceUsd !== null ? formatUsd(row.runningBalanceUsd) : "N/A");
+          } else if (balanceMode === "modeC") {
+            r.push(formatBTC(row.runningBalanceSats));
+          }
+        }
+        return r;
+      });
 
-    const today = new Date().toISOString().split("T")[0];
-    doc.save(`btc-statement-${today}.pdf`);
+      autoTable(doc, {
+        startY: subtitle ? 34 : 26,
+        head: [headers],
+        body,
+        styles: { fontSize: 7, cellPadding: 2 },
+        headStyles: { fillColor: [41, 128, 185] },
+      });
+
+      const pageHeight = doc.internal.pageSize.getHeight();
+      doc.setFontSize(8);
+      doc.text(`Generated: ${new Date().toLocaleString()}`, 14, pageHeight - 10);
+
+      const today = new Date().toISOString().split("T")[0];
+      const pdfBlob = doc.output("blob");
+      const url = URL.createObjectURL(pdfBlob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `btc-statement-${today}.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error("Failed to generate PDF:", error);
+    }
   }, [rows, showTxids, showAddresses, currency, balanceMode, startDate, endDate, usedAddresses]);
 
   const showRunningBtcBalance = currency === "BTC" || balanceMode === "modeB" || balanceMode === "modeC";
