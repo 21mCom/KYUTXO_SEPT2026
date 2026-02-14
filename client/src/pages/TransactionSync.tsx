@@ -34,8 +34,8 @@ import {
 } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { transactionSyncService, type SyncProgress, type SyncResult, type SyncOptions, type SourceCategory, type SourceSelection, type SourceInfo, type SyncDepthEstimate, getAddressSources } from "@/lib/transaction-sync";
-import type { PausedSyncState, SkippedAddress, AddressBlacklist, SyncProtectionSettings } from "@/lib/database";
+import { transactionSyncService, type SyncProgress, type SyncResult, type SyncOptions, type SourceCategory, type SourceSelection, type SourceInfo, type SyncDepthEstimate, loadDecryptedAddressRecords, getAddressSourcesFromRecords } from "@/lib/transaction-sync";
+import type { Record as DbRecord, PausedSyncState, SkippedAddress, AddressBlacklist, SyncProtectionSettings } from "@/lib/database";
 import { DEFAULT_SYNC_PROTECTION } from "@/lib/database";
 import { useNodeSettings } from "@/hooks/use-node-settings";
 import { getProviderDisplayName, getProviderPrivacyInfo } from "@/lib/blockchain-api";
@@ -76,7 +76,9 @@ export default function TransactionSync() {
   const [includeNoSource, setIncludeNoSource] = useState<boolean>(true);
   const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set(['manual', 'wallet-sync', 'xpub']));
   
-  // Filtered count based on current selection
+  const [cachedRecords, setCachedRecords] = useState<DbRecord[] | null>(null);
+  const [isLoadingSources, setIsLoadingSources] = useState(false);
+  
   const [filteredAddressCount, setFilteredAddressCount] = useState<number | null>(null);
   const [depthEstimate, setDepthEstimate] = useState<SyncDepthEstimate | null>(null);
   
@@ -107,30 +109,33 @@ export default function TransactionSync() {
     setStats(s);
   }, []);
   
-  // Load available sources and set initial selection
   const loadSources = useCallback(async () => {
-    const categories = await getAddressSources();
-    setSourceCategories(categories);
-    
-    // By default, select all non-blockchain-sync sources
-    // Always include manual/no-source entries by default (matches legacy 'manual-only' behavior)
-    // IMPORTANT: Store the RAW sources (e.g., "NamaDompet (0/1)") not grouped names
-    const newSelection = new Set<string>();
-    for (const cat of categories) {
-      for (const src of cat.sources) {
-        // Skip blockchain-sync and __no_source__ (handled separately)
-        if (cat.id !== 'blockchain-sync' && src.source !== '__no_source__') {
-          // Add all raw sources that map to this grouped source
-          const rawSources = src.rawSources || [src.source];
-          for (const raw of rawSources) {
-            newSelection.add(raw);
+    setIsLoadingSources(true);
+    try {
+      await new Promise(r => setTimeout(r, 0));
+      const records = await loadDecryptedAddressRecords();
+      setCachedRecords(records);
+      const categories = getAddressSourcesFromRecords(records);
+      setSourceCategories(categories);
+      
+      const newSelection = new Set<string>();
+      for (const cat of categories) {
+        for (const src of cat.sources) {
+          if (cat.id !== 'blockchain-sync' && src.source !== '__no_source__') {
+            const rawSources = src.rawSources || [src.source];
+            for (const raw of rawSources) {
+              newSelection.add(raw);
+            }
           }
         }
       }
+      setSelectedSources(newSelection);
+      setIncludeNoSource(true);
+    } catch (err) {
+      console.error('Failed to load address sources:', err);
+    } finally {
+      setIsLoadingSources(false);
     }
-    setSelectedSources(newSelection);
-    // Always include manual entries by default - this matches legacy 'manual-only' behavior
-    setIncludeNoSource(true);
   }, []);
 
   // Load paused state on mount
@@ -157,23 +162,20 @@ export default function TransactionSync() {
     loadBlacklist();
   }, [loadStats, loadSources, loadPausedState, loadSkippedAddresses, loadBlacklist]);
 
-  // Update filtered address count and depth estimates whenever selection changes
   useEffect(() => {
-    const updateFilteredCount = async () => {
-      const options: SyncOptions = {
-        sourceFilter: 'custom',
-        sourceSelection: {
-          selectedSources,
-          includeNoSource,
-        },
-        maxDepth,
-      };
-      const estimate = await transactionSyncService.getMultiDepthEstimate(options);
-      setFilteredAddressCount(estimate.depth0);
-      setDepthEstimate(estimate);
+    if (!cachedRecords) return;
+    const options: SyncOptions = {
+      sourceFilter: 'custom',
+      sourceSelection: {
+        selectedSources,
+        includeNoSource,
+      },
+      maxDepth,
     };
-    updateFilteredCount();
-  }, [selectedSources, includeNoSource, maxDepth]);
+    const estimate = transactionSyncService.getMultiDepthEstimateFromRecords(options, cachedRecords);
+    setFilteredAddressCount(estimate.depth0);
+    setDepthEstimate(estimate);
+  }, [selectedSources, includeNoSource, maxDepth, cachedRecords]);
 
   const handleSync = async () => {
     setIsSyncing(true);
@@ -592,7 +594,12 @@ export default function TransactionSync() {
                 </div>
                 
                 <ScrollArea className="h-48 border rounded-md p-2" data-testid="scroll-source-filter">
-                  {sourceCategories.length === 0 ? (
+                  {isLoadingSources ? (
+                    <div className="flex items-center justify-center py-4 gap-2">
+                      <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                      <p className="text-sm text-muted-foreground">Loading address sources...</p>
+                    </div>
+                  ) : sourceCategories.length === 0 ? (
                     <p className="text-sm text-muted-foreground text-center py-4">
                       No address sources found
                     </p>

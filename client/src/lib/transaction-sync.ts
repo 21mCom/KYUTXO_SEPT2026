@@ -1477,16 +1477,12 @@ export class TransactionSyncService {
    * Only counts addresses that haven't been synced yet at each depth level.
    */
   async getMultiDepthEstimate(options: SyncOptions): Promise<SyncDepthEstimate> {
+    const allRecords = await loadDecryptedAddressRecords();
+    return this.getMultiDepthEstimateFromRecords(options, allRecords);
+  }
+
+  getMultiDepthEstimateFromRecords(options: SyncOptions, allRecords: Record[]): SyncDepthEstimate {
     const { sourceFilter, sourceSelection, maxDepth } = options;
-    
-    const allRawRecords = await db.records.where('type').equals('address').toArray();
-    
-    let allRecords: Record[];
-    if (isEncryptionReady()) {
-      allRecords = await decryptRecords(allRawRecords);
-    } else {
-      allRecords = allRawRecords;
-    }
 
     const scopeRecordIds = new Set<number>();
     const depthCounts: number[] = [];
@@ -1540,13 +1536,11 @@ export class TransactionSyncService {
       depthCounts.push(needsSyncCount);
     }
 
-    const result: SyncDepthEstimate = {
+    return {
       depth0: depthCounts[0] ?? 0,
       perDepth: depthCounts,
       total: depthCounts.reduce((a, b) => a + b, 0),
     };
-
-    return result;
   }
 }
 
@@ -1565,16 +1559,34 @@ function extractBaseWalletName(source: string): string {
   return source;
 }
 
-// Helper function to scan all address records and categorize their sources
-export async function getAddressSources(): Promise<SourceCategory[]> {
+export async function loadDecryptedAddressRecords(): Promise<Record[]> {
   const allRawRecords = await db.records.where('type').equals('address').toArray();
-  
-  let allRecords: Record[];
   if (isEncryptionReady()) {
-    allRecords = await decryptRecords(allRawRecords);
-  } else {
-    allRecords = allRawRecords;
+    const CHUNK_SIZE = 500;
+    const results: Record[] = [];
+    for (let i = 0; i < allRawRecords.length; i += CHUNK_SIZE) {
+      const chunk = allRawRecords.slice(i, i + CHUNK_SIZE);
+      const decrypted = await decryptRecords(chunk);
+      results.push(...decrypted);
+      if (i + CHUNK_SIZE < allRawRecords.length) {
+        await new Promise(r => setTimeout(r, 0));
+      }
+    }
+    return results;
   }
+  return allRawRecords;
+}
+
+export function getAddressSourcesFromRecords(allRecords: Record[]): SourceCategory[] {
+  return _buildSourceCategories(allRecords);
+}
+
+export async function getAddressSources(): Promise<SourceCategory[]> {
+  const allRecords = await loadDecryptedAddressRecords();
+  return _buildSourceCategories(allRecords);
+}
+
+function _buildSourceCategories(allRecords: Record[]): SourceCategory[] {
   
   // First pass: count raw sources and track which base names they map to
   const rawSourceCounts = new Map<string, number>();
