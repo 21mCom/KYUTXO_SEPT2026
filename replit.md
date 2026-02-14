@@ -22,7 +22,7 @@ Data is stored locally using Dexie.js (IndexedDB) for structured data, with all 
 
 *   **UI/UX:** Responsive, offline-first UI with reorganized navigation, quick action patterns (hover card, side sheet, dropdowns), and branded elements.
 *   **Data Model:** Comprehensive records tracking ownership, wallet names, and other metadata.
-*   **Encryption:** Full AES-256-GCM encryption at rest for all data and attachments, including re-encryption on password change.
+*   **Encryption:** Full AES-256-GCM encryption at rest for all data and attachments, including re-encryption on password change. Session-level LRU decryption cache (10,000 entries, 5-min TTL) in `client/src/lib/encryption/decrypt-cache.ts` eliminates redundant decryption across page navigations. Cache is invalidated on record create/update/delete and cleared on logout/key change. All heavy pages use `decryptRecordsWithProgress()` for chunked decryption with UI progress indicators.
 *   **Offline First & Portability:** Designed for complete offline functionality and portable database storage.
 *   **Vocabulary Management:** Custom tags, categories, owners, wallet names, seed names, and wallet software with auto-sync.
 *   **Duplicate Detection & Merge:** Intelligent merging of new metadata with existing records.

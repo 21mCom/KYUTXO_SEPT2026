@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from "react";
 import { useLocation } from "wouter";
-import { AlertCircle, Check, ChevronRight, Filter, Loader2, Search, X, ExternalLink } from "lucide-react";
+import { AlertCircle, Check, ChevronRight, Filter, Loader2, Search, X, ExternalLink, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -26,7 +26,8 @@ import {
 } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import { db, type Record as DBRecord, type RecordOrigin } from "@/lib/database";
-import { decryptRecords, getDecryptedRecordOrigins, isEncryptionReady, updateRecord } from "@/lib/encryptionFacade";
+import { decryptRecords, decryptRecordsWithProgress, getDecryptedRecordOrigins, isEncryptionReady, updateRecord } from "@/lib/encryptionFacade";
+import type { DecryptProgress } from "@/lib/encryption/record-encryption";
 import { 
   SINGULAR_FIELDS, 
   detectSingularFieldConflicts, 
@@ -56,6 +57,7 @@ export default function ConflictResolution() {
   const [useCustom, setUseCustom] = useState(false);
   const [isResolving, setIsResolving] = useState(false);
   const [resolveDialogOpen, setResolveDialogOpen] = useState(false);
+  const [decryptProgress, setDecryptProgress] = useState<DecryptProgress | null>(null);
 
   const urlParams = new URLSearchParams(location.split('?')[1] || '');
   const filterRecordId = urlParams.get('recordId');
@@ -89,7 +91,8 @@ export default function ConflictResolution() {
       }
       
       const rawRecords = await db.records.where('id').anyOf(multiOriginIds).toArray();
-      const decrypted = await decryptRecords(rawRecords);
+      const decrypted = await decryptRecordsWithProgress(rawRecords, setDecryptProgress);
+      setDecryptProgress(null);
       
       const recordsWithConflictData: RecordWithConflicts[] = [];
       
@@ -247,6 +250,16 @@ export default function ConflictResolution() {
           </Button>
         )}
       </div>
+
+      {decryptProgress && (
+        <div className="flex items-center gap-2 text-sm text-muted-foreground px-4 py-2">
+          <RefreshCw className="h-4 w-4 animate-spin" />
+          <span>
+            Decrypting records {decryptProgress.current.toLocaleString()}/{decryptProgress.total.toLocaleString()}
+            {decryptProgress.cached > 0 && ` (${decryptProgress.cached.toLocaleString()} cached)`}...
+          </span>
+        </div>
+      )}
 
       <Card>
         <CardHeader className="pb-3">

@@ -42,7 +42,8 @@ import {
   HelpCircle
 } from "lucide-react";
 import { SiBitcoin } from "react-icons/si";
-import { decryptRecords, isEncryptionReady, getDecryptedOwners, getDecryptedWalletNames, getDecryptedTags, getDecryptedCategories } from "@/lib/encryptionFacade";
+import { decryptRecords, decryptRecordsWithProgress, isEncryptionReady, getDecryptedOwners, getDecryptedWalletNames, getDecryptedTags, getDecryptedCategories } from "@/lib/encryptionFacade";
+import type { DecryptProgress } from "@/lib/encryption/record-encryption";
 import { cn } from "@/lib/utils";
 import { UTXODetailPanel } from "@/components/UTXODetailPanel";
 import { ClickableAddress } from "@/components/ClickableAddress";
@@ -183,6 +184,8 @@ export default function UTXOs() {
   // Smart filtering: exclude blockchain-discovered addresses by default
   const [includeBlockchainDiscovered, setIncludeBlockchainDiscovered] = useState(false);
 
+  // NOTE: decryptProgress UI is rendered inline in JSX
+
   // Save settings when they change
   useEffect(() => {
     saveSettings({ displayUnit, sortColumn, sortDirection, ownerFilter, walletFilter, tagFilter, categoryFilter, utxoMode });
@@ -270,6 +273,7 @@ export default function UTXOs() {
   }, []);
 
   const [decryptedRecords, setDecryptedRecords] = useState<DbRecord[]>([]);
+  const [decryptProgress, setDecryptProgress] = useState<DecryptProgress | null>(null);
   const decryptRequestId = useRef(0);
   
   useEffect(() => {
@@ -281,7 +285,8 @@ export default function UTXOs() {
     const decrypt = async () => {
       try {
         if (isEncryptionReady()) {
-          const decrypted = await decryptRecords(rawRecords);
+          const decrypted = await decryptRecordsWithProgress(rawRecords, setDecryptProgress);
+          setDecryptProgress(null);
           if (thisRequestId === decryptRequestId.current) {
             setDecryptedRecords(decrypted);
           }
@@ -816,6 +821,16 @@ export default function UTXOs() {
           hiddenCount={blockchainDiscoveredCount ?? 0}
         />
       </div>
+
+      {decryptProgress && (
+        <div className="flex items-center gap-2 text-sm text-muted-foreground px-4 py-2">
+          <RefreshCw className="h-4 w-4 animate-spin" />
+          <span>
+            Decrypting records {decryptProgress.current.toLocaleString()}/{decryptProgress.total.toLocaleString()}
+            {decryptProgress.cached > 0 && ` (${decryptProgress.cached.toLocaleString()} cached)`}...
+          </span>
+        </div>
+      )}
 
       <div className="flex items-center gap-2 text-sm text-muted-foreground flex-none flex-wrap">
         <AlertCircle className="h-4 w-4" />

@@ -1,5 +1,5 @@
 import { useState, useMemo, useCallback } from "react";
-import { FileDown, Loader2 } from "lucide-react";
+import { FileDown, Loader2, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -16,7 +16,8 @@ import { db } from "@/lib/database";
 import { useEncryptedTags } from "@/hooks/use-encrypted-records";
 import { useOwners } from "@/hooks/use-owners";
 import { useWalletNames } from "@/hooks/use-wallet-names";
-import { decryptRecords } from "@/lib/encryptionFacade";
+import { decryptRecords, decryptRecordsWithProgress } from "@/lib/encryptionFacade";
+import type { DecryptProgress } from "@/lib/encryption/record-encryption";
 import type { TransactionParticipant, BlockchainTransaction } from "@/lib/database";
 
 type BalanceMode = "modeA" | "modeB" | "modeC";
@@ -66,6 +67,7 @@ export default function StatementReport() {
   const [rows, setRows] = useState<StatementRow[]>([]);
   const [hasGenerated, setHasGenerated] = useState(false);
   const [usedAddresses, setUsedAddresses] = useState<string[]>([]);
+  const [decryptProgress, setDecryptProgress] = useState<DecryptProgress | null>(null);
 
   const { tags } = useEncryptedTags();
   const { owners } = useOwners();
@@ -84,7 +86,8 @@ export default function StatementReport() {
     }
 
     const rawRecords = await db.records.where("type").equals("address").toArray();
-    let records = await decryptRecords(rawRecords);
+    let records = await decryptRecordsWithProgress(rawRecords, setDecryptProgress);
+    setDecryptProgress(null);
     if (filterOwner) {
       records = records.filter(r => r.owner === filterOwner);
     }
@@ -410,6 +413,15 @@ export default function StatementReport() {
           <CardTitle data-testid="text-page-title">Statement Report</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
+          {decryptProgress && (
+            <div className="flex items-center gap-2 text-sm text-muted-foreground px-4 py-2">
+              <RefreshCw className="h-4 w-4 animate-spin" />
+              <span>
+                Decrypting records {decryptProgress.current.toLocaleString()}/{decryptProgress.total.toLocaleString()}
+                {decryptProgress.cached > 0 && ` (${decryptProgress.cached.toLocaleString()} cached)`}...
+              </span>
+            </div>
+          )}
           <Tabs value={addressMode} onValueChange={setAddressMode}>
             <TabsList data-testid="tabs-address-mode">
               <TabsTrigger value="paste" data-testid="tab-paste-addresses">Paste Addresses</TabsTrigger>

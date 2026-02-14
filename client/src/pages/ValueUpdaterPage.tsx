@@ -8,7 +8,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useEncryptedTags, useEncryptedCategories } from "@/hooks/use-encrypted-records";
 import { db, type Record as DbRecord } from "@/lib/database";
 import { isEncryptionReady } from "@/lib/encryption/key-management";
-import { decryptRecords } from "@/lib/encryption/record-encryption";
+import { decryptRecords, decryptRecordsWithProgress } from "@/lib/encryption/record-encryption";
+import type { DecryptProgress } from "@/lib/encryption/record-encryption";
 import { useOwners } from "@/hooks/use-owners";
 import { useWalletNames } from "@/hooks/use-wallet-names";
 import { useSeedNames, SEED_NAME_MAX_LENGTH } from "@/hooks/use-seed-names";
@@ -167,13 +168,15 @@ export default function ValueUpdaterPage() {
   const { seedNames, isLoading: seedNamesLoading } = useSeedNames();
   const { walletSoftware, isLoading: walletSoftwareLoading } = useWalletSoftware();
   const { toast } = useToast();
+  const [decryptProgress, setDecryptProgress] = useState<DecryptProgress | null>(null);
 
   const loadRecords = useCallback(async () => {
     setRecordsLoading(true);
     try {
       const rawRecords = await db.records.toArray();
       if (isEncryptionReady()) {
-        const decrypted = await decryptRecords(rawRecords);
+        const decrypted = await decryptRecordsWithProgress(rawRecords, setDecryptProgress);
+        setDecryptProgress(null);
         setRecords(decrypted);
       } else {
         setRecords(rawRecords);
@@ -992,6 +995,16 @@ export default function ValueUpdaterPage() {
             Edit values across all records at once. Changes apply everywhere that value is used.
           </p>
         </div>
+
+        {decryptProgress && (
+          <div className="flex items-center gap-2 text-sm text-muted-foreground px-4 py-2">
+            <RefreshCw className="h-4 w-4 animate-spin" />
+            <span>
+              Decrypting records {decryptProgress.current.toLocaleString()}/{decryptProgress.total.toLocaleString()}
+              {decryptProgress.cached > 0 && ` (${decryptProgress.cached.toLocaleString()} cached)`}...
+            </span>
+          </div>
+        )}
 
         <Tabs value={activeTab} onValueChange={(val) => setActiveTab(val as FieldType)}>
           <TabsList className="flex-wrap h-auto gap-1">

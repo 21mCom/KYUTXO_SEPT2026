@@ -9,17 +9,23 @@ import {
   decryptEvidenceAttachment,
 } from '../dbEncryption';
 import { getKey } from './key-management';
+import { getCachedRecord, setCachedRecord } from './decrypt-cache';
 
 // ============ RECORD DECRYPTION ============
 
 export async function decryptRecordById(id: number): Promise<Record | undefined> {
+  const cached = getCachedRecord(id);
+  if (cached) return cached;
+
   const key = getKey();
   const record = await db.records.get(id);
   
   if (!record) return undefined;
   
   if (record.isEncrypted) {
-    return await decryptRecord(record, key);
+    const decrypted = await decryptRecord(record, key);
+    setCachedRecord(decrypted);
+    return decrypted;
   }
   
   return record;
@@ -30,12 +36,65 @@ export async function decryptRecords(records: Record[]): Promise<Record[]> {
   
   return Promise.all(
     records.map(async (record) => {
+      if (record.id !== undefined) {
+        const cached = getCachedRecord(record.id);
+        if (cached) return cached;
+      }
       if (record.isEncrypted) {
-        return await decryptRecord(record, key);
+        const decrypted = await decryptRecord(record, key);
+        setCachedRecord(decrypted);
+        return decrypted;
       }
       return record;
     })
   );
+}
+
+export interface DecryptProgress {
+  current: number;
+  total: number;
+  cached: number;
+}
+
+export async function decryptRecordsWithProgress(
+  records: Record[],
+  onProgress?: (progress: DecryptProgress) => void,
+  chunkSize: number = 500,
+): Promise<Record[]> {
+  const key = getKey();
+  const total = records.length;
+  const results: Record[] = [];
+  let cachedCount = 0;
+
+  for (let i = 0; i < total; i += chunkSize) {
+    const chunk = records.slice(i, i + chunkSize);
+    const decrypted = await Promise.all(
+      chunk.map(async (record) => {
+        if (record.id !== undefined) {
+          const cached = getCachedRecord(record.id);
+          if (cached) {
+            cachedCount++;
+            return cached;
+          }
+        }
+        if (record.isEncrypted) {
+          const dec = await decryptRecord(record, key);
+          setCachedRecord(dec);
+          return dec;
+        }
+        return record;
+      })
+    );
+    results.push(...decrypted);
+    if (onProgress) {
+      onProgress({ current: Math.min(i + chunkSize, total), total, cached: cachedCount });
+    }
+    if (i + chunkSize < total) {
+      await new Promise(r => setTimeout(r, 0));
+    }
+  }
+
+  return results;
 }
 
 // ============ ATTACHMENT OPERATIONS ============

@@ -16,6 +16,7 @@ import {
   decryptWalletSoftware,
 } from '../dbEncryption';
 import { getKey, getEncryptionKey } from './key-management';
+import { invalidateCachedRecord, invalidateCachedRecords } from './decrypt-cache';
 
 // ============ VOCABULARY SYNC ============
 
@@ -174,6 +175,7 @@ export async function createRecord(
   
   const encrypted = await encryptRecord(record, key);
   const id = await db.records.add(encrypted);
+  invalidateCachedRecord(id as number);
   
   notifyDbChange('records');
   
@@ -215,6 +217,7 @@ export async function updateRecord(
 
   const encrypted = await encryptRecord(updated, key);
   await db.records.put(encrypted);
+  invalidateCachedRecord(id);
   
   notifyDbChange('records');
 }
@@ -421,6 +424,7 @@ export async function bulkUpdateRecords(
   await db.transaction('rw', db.records, async () => {
     await db.records.bulkPut(encryptedRecords);
   });
+  invalidateCachedRecords(updates.map(u => u.id));
   
   const vocabularyValues = {
     owners: new Set<string>(),
@@ -479,6 +483,7 @@ export async function deleteRecord(id: number): Promise<void> {
 
   await db.attachments.where('recordId').equals(id).delete();
   await db.records.delete(id);
+  invalidateCachedRecord(id);
   
   notifyDbChange('records');
 }

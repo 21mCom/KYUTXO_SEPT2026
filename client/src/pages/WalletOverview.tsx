@@ -27,7 +27,8 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { decryptRecords, isEncryptionReady } from "@/lib/encryptionFacade";
+import { decryptRecords, decryptRecordsWithProgress, isEncryptionReady } from "@/lib/encryptionFacade";
+import type { DecryptProgress } from "@/lib/encryption/record-encryption";
 import { db } from "@/lib/database";
 import type { Record as DbRecord } from "@/lib/database";
 
@@ -138,6 +139,7 @@ export default function WalletOverview() {
   const [sortField, setSortField] = useState<SortField>('walletName');
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
   const [expandedWallets, setExpandedWallets] = useState<Set<string>>(new Set());
+  const [decryptProgress, setDecryptProgress] = useState<DecryptProgress | null>(null);
 
   const loadWalletStats = async () => {
     setLoading(true);
@@ -146,7 +148,8 @@ export default function WalletOverview() {
       let records: DbRecord[];
       
       if (isEncryptionReady()) {
-        records = await decryptRecords(rawRecords);
+        records = await decryptRecordsWithProgress(rawRecords, setDecryptProgress);
+        setDecryptProgress(null);
       } else {
         records = rawRecords;
       }
@@ -330,6 +333,16 @@ export default function WalletOverview() {
           </Button>
         </div>
       </div>
+
+      {decryptProgress && (
+        <div className="flex items-center gap-2 text-sm text-muted-foreground px-4 py-2">
+          <RefreshCw className="h-4 w-4 animate-spin" />
+          <span>
+            Decrypting records {decryptProgress.current.toLocaleString()}/{decryptProgress.total.toLocaleString()}
+            {decryptProgress.cached > 0 && ` (${decryptProgress.cached.toLocaleString()} cached)`}...
+          </span>
+        </div>
+      )}
 
       {/* Summary Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">

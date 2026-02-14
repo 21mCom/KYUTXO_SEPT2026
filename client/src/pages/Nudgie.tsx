@@ -13,7 +13,8 @@ import {
   ACQUISITION_METHOD_OPTIONS,
   DISPOSITION_TYPE_OPTIONS,
 } from "@/lib/database";
-import { decryptRecords, updateRecord, createRecord, getDecryptedTags, getDecryptedCategories, isEncryptionReady } from "@/lib/encryptionFacade";
+import { decryptRecords, decryptRecordsWithProgress, updateRecord, createRecord, getDecryptedTags, getDecryptedCategories, isEncryptionReady } from "@/lib/encryptionFacade";
+import type { DecryptProgress } from "@/lib/encryption/record-encryption";
 import { uploadAttachment } from "@/lib/attachments";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -68,7 +69,8 @@ import {
   Lock,
   Upload,
   X,
-  File as FileIcon
+  File as FileIcon,
+  RefreshCw
 } from "lucide-react";
 
 const USER_CURATED_TIERS = ['verified', 'manual', 'wallet-import', 'xpub-derived'];
@@ -181,6 +183,7 @@ export default function Nudgie() {
   const [decryptedTransactionRecords, setDecryptedTransactionRecords] = useState<Record[]>([]);
   const [decryptedTags, setDecryptedTags] = useState<TagType[]>([]);
   const [decryptedCategories, setDecryptedCategories] = useState<CategoryType[]>([]);
+  const [decryptProgress, setDecryptProgress] = useState<DecryptProgress | null>(null);
   const decryptRequestId = useRef(0);
 
   useEffect(() => {
@@ -191,10 +194,9 @@ export default function Nudgie() {
     
     const decrypt = async () => {
       try {
-        const [addresses, txRecords] = await Promise.all([
-          decryptRecords(rawAddressRecords),
-          decryptRecords(rawTransactionRecords)
-        ]);
+        const addresses = await decryptRecordsWithProgress(rawAddressRecords, setDecryptProgress);
+        const txRecords = await decryptRecordsWithProgress(rawTransactionRecords, setDecryptProgress);
+        setDecryptProgress(null);
         if (thisRequestId === decryptRequestId.current) {
           setDecryptedAddressRecords(addresses);
           setDecryptedTransactionRecords(txRecords);
@@ -1697,6 +1699,16 @@ export default function Nudgie() {
               Helping you towards clean, organized records.
             </p>
           </div>
+
+          {decryptProgress && (
+            <div className="flex items-center gap-2 text-sm text-muted-foreground px-4 py-2">
+              <RefreshCw className="h-4 w-4 animate-spin" />
+              <span>
+                Decrypting records {decryptProgress.current.toLocaleString()}/{decryptProgress.total.toLocaleString()}
+                {decryptProgress.cached > 0 && ` (${decryptProgress.cached.toLocaleString()} cached)`}...
+              </span>
+            </div>
+          )}
 
           <div className="flex items-center gap-3">
             <Select value={sourceFilter} onValueChange={(v) => setSourceFilter(v as SourceFilter)}>

@@ -31,9 +31,11 @@ import {
   Filter,
   Edit,
   X,
-  Loader2
+  Loader2,
+  RefreshCw
 } from "lucide-react";
-import { decryptRecords, updateRecord } from "@/lib/encryptionFacade";
+import { decryptRecords, decryptRecordsWithProgress, updateRecord } from "@/lib/encryptionFacade";
+import type { DecryptProgress } from "@/lib/encryption/record-encryption";
 import { useToast } from "@/hooks/use-toast";
 import { useOwners } from "@/hooks/use-owners";
 import { useWalletNames } from "@/hooks/use-wallet-names";
@@ -107,6 +109,7 @@ export default function AddressReuse() {
   const [reusedAddresses, setReusedAddresses] = useState<AddressReuseInfo[]>([]);
   const [decryptedRecords, setDecryptedRecords] = useState<Record[]>([]);
   const [addressToRecord, setAddressToRecord] = useState<Map<string, Record>>(new Map());
+  const [decryptProgress, setDecryptProgress] = useState<DecryptProgress | null>(null);
   const processingRef = useRef(0);
   
   // Toggle for including blockchain-discovered addresses
@@ -168,7 +171,8 @@ export default function AddressReuse() {
         // Decrypt records
         let decrypted: Record[];
         try {
-          decrypted = await decryptRecords(curatedRecords);
+          decrypted = await decryptRecordsWithProgress(curatedRecords, setDecryptProgress);
+          setDecryptProgress(null);
         } catch {
           decrypted = curatedRecords;
         }
@@ -491,6 +495,16 @@ export default function AddressReuse() {
               hiddenCount={totalBlockchainDiscovered}
             />
           </div>
+
+          {decryptProgress && (
+            <div className="flex items-center gap-2 text-sm text-muted-foreground px-4 py-2">
+              <RefreshCw className="h-4 w-4 animate-spin" />
+              <span>
+                Decrypting records {decryptProgress.current.toLocaleString()}/{decryptProgress.total.toLocaleString()}
+                {decryptProgress.cached > 0 && ` (${decryptProgress.cached.toLocaleString()} cached)`}...
+              </span>
+            </div>
+          )}
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <Card>
