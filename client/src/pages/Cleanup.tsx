@@ -75,13 +75,18 @@ export default function Cleanup() {
   }, []);
 
   const isBlockchainOnlyRecord = (record: Record, origins: RecordOrigin[]): boolean => {
-    if (origins.length === 0) {
-      return false;
-    }
-    
-    const hasNonBlockchainOrigin = origins.some(o => o.originType !== 'blockchain-sync');
-    if (hasNonBlockchainOrigin) {
-      return false;
+    if (origins.length > 0) {
+      const hasNonBlockchainOrigin = origins.some(o => o.originType !== 'blockchain-sync');
+      if (hasNonBlockchainOrigin) {
+        return false;
+      }
+    } else {
+      const hasBlockchainSource = record.source === 'blockchain-sync';
+      const hasBlockchainImportance = record.addressImportance !== undefined &&
+        ['blockchain-discovered', 'pending-review'].includes(record.addressImportance);
+      if (!hasBlockchainSource && !hasBlockchainImportance) {
+        return false;
+      }
     }
     
     if (record.source && !['blockchain-sync'].includes(record.source)) {
@@ -181,15 +186,21 @@ export default function Cleanup() {
   const bulkGetOriginsByRecordId = async (recordIds: Set<number>): Promise<Map<number, RecordOrigin[]>> => {
     if (recordIds.size === 0) return new Map();
     const idsArray = Array.from(recordIds);
-    const matchedOrigins = await db.recordOrigins
-      .where('recordId')
-      .anyOf(idsArray)
-      .toArray();
+    const CHUNK = 100;
+    const allOrigins: RecordOrigin[] = [];
+    for (let i = 0; i < idsArray.length; i += CHUNK) {
+      const chunk = idsArray.slice(i, i + CHUNK);
+      const batch = await db.recordOrigins
+        .where('recordId')
+        .anyOf(chunk)
+        .toArray();
+      allOrigins.push(...batch);
+    }
     
     const grouped = new Map<number, RecordOrigin[]>();
     const key = isEncryptionReady() ? getKey() : null;
     
-    for (const origin of matchedOrigins) {
+    for (const origin of allOrigins) {
       let decrypted = origin;
       if (origin.isEncrypted && key) {
         try {
