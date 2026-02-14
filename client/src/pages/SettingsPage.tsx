@@ -69,6 +69,7 @@ import { saveVaultSettings } from "@/lib/vault";
 import { initEncryptionFacade } from "@/lib/encryptionFacade";
 import { reEncryptAllAttachmentFiles, reEncryptAllEvidenceAttachmentFiles } from "@/lib/attachments";
 import JSZip from "jszip";
+import VocabularyManager from "@/components/VocabularyManager";
 
 const DELETE_CONFIRMATION_PHRASE = "DELETE ALL DATA";
 
@@ -1358,6 +1359,8 @@ export default function SettingsPage() {
             </div>
           </CardContent>
         </Card>
+
+        <VocabularyManager />
 
         <Card>
           <CardHeader>
