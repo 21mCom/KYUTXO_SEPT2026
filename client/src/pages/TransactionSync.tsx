@@ -34,7 +34,7 @@ import {
 } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { transactionSyncService, type SyncProgress, type SyncResult, type SyncOptions, type SourceCategory, type SourceSelection, type SourceInfo, type SyncDepthEstimate, loadDecryptedAddressRecords, getAddressSourcesFromRecords } from "@/lib/transaction-sync";
+import { transactionSyncService, type SyncProgress, type SyncResult, type SyncOptions, type SourceCategory, type SourceSelection, type SourceInfo, type SyncDepthEstimate, loadDecryptedAddressRecords, getAddressSourcesFromRecords, matchesSourceSelection } from "@/lib/transaction-sync";
 import type { Record as DbRecord, PausedSyncState, SkippedAddress, AddressBlacklist, SyncProtectionSettings } from "@/lib/database";
 import { DEFAULT_SYNC_PROTECTION } from "@/lib/database";
 import { useNodeSettings } from "@/hooks/use-node-settings";
@@ -165,17 +165,25 @@ export default function TransactionSync() {
 
   useEffect(() => {
     if (!cachedRecords) return;
+    const sourceSelection = { selectedSources, includeNoSource };
     const options: SyncOptions = {
       sourceFilter: 'custom',
-      sourceSelection: {
-        selectedSources,
-        includeNoSource,
-      },
+      sourceSelection,
       maxDepth,
     };
     const estimate = transactionSyncService.getMultiDepthEstimateFromRecords(options, cachedRecords);
-    setFilteredAddressCount(estimate.depth0);
     setDepthEstimate(estimate);
+
+    let matchCount = 0;
+    for (const r of cachedRecords) {
+      if (r.type !== 'address') continue;
+      const depth = r.syncDepth ?? 0;
+      if (depth !== 0) continue;
+      if (matchesSourceSelection(r, sourceSelection)) {
+        matchCount++;
+      }
+    }
+    setFilteredAddressCount(matchCount);
   }, [selectedSources, includeNoSource, maxDepth, cachedRecords]);
 
   const handleSync = async () => {
