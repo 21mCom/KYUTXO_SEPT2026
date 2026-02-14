@@ -203,6 +203,36 @@ export default function StatementReport() {
         }
       }
 
+      const inputAmountLookup = async (prevTxid: string, prevVout: number): Promise<number> => {
+        const spentOutputs = await db.transactionParticipants
+          .where("[txid+role]")
+          .equals([prevTxid, "output"])
+          .toArray();
+        const match = spentOutputs.find(o => o.vout === prevVout);
+        return match ? (Number(match.amount) || 0) : 0;
+      };
+
+      const missingAmountLookups: Array<{ txid: string; prevTxid: string; prevVout: number }> = [];
+      for (const [txid, participants] of Array.from(allTxParticipants.entries())) {
+        for (const p of participants) {
+          if (p.role !== "input") continue;
+          if (!addressSet.has(p.address)) continue;
+          const amt = Number(p.amount) || 0;
+          if (amt === 0 && p.prevTxid && p.prevVout !== undefined) {
+            missingAmountLookups.push({ txid, prevTxid: p.prevTxid, prevVout: p.prevVout });
+          }
+        }
+      }
+
+      const resolvedAmounts = new Map<string, number>();
+      for (const lookup of missingAmountLookups) {
+        const key = `${lookup.prevTxid}:${lookup.prevVout}`;
+        if (!resolvedAmounts.has(key)) {
+          const amount = await inputAmountLookup(lookup.prevTxid, lookup.prevVout);
+          resolvedAmounts.set(key, amount);
+        }
+      }
+
       const netByTxid = new Map<string, number>();
 
       for (const [txid, participants] of Array.from(allTxParticipants.entries())) {
@@ -214,12 +244,16 @@ export default function StatementReport() {
           if (!addressSet.has(p.address)) continue;
 
           const dedupKey = p.role === "input"
-            ? `in:${p.prevTxid ?? ""}:${p.prevVout ?? ""}`
-            : `out:${p.vout ?? ""}`;
+            ? `in:${p.prevTxid ?? p.id ?? ""}:${p.prevVout ?? ""}`
+            : `out:${p.vout ?? p.id ?? ""}`;
           if (seen.has(dedupKey)) continue;
           seen.add(dedupKey);
 
-          const amount = Number(p.amount) || 0;
+          let amount = Number(p.amount) || 0;
+          if (p.role === "input" && amount === 0 && p.prevTxid && p.prevVout !== undefined) {
+            amount = resolvedAmounts.get(`${p.prevTxid}:${p.prevVout}`) || 0;
+          }
+
           if (p.role === "output") {
             net += amount;
           } else {

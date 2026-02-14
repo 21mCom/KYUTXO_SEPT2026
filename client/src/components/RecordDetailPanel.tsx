@@ -326,18 +326,41 @@ function TransactionHistorySection({ address }: { address: string }) {
           }
         }
 
+        const inputsNeedingLookup: Array<{ prevTxid: string; prevVout: number }> = [];
+        for (const p of participants) {
+          if (p.role === 'input' && (Number(p.amount) || 0) === 0 && p.prevTxid && p.prevVout !== undefined) {
+            inputsNeedingLookup.push({ prevTxid: p.prevTxid, prevVout: p.prevVout });
+          }
+        }
+
+        const resolvedInputAmounts = new Map<string, number>();
+        for (const { prevTxid, prevVout } of inputsNeedingLookup) {
+          const key = `${prevTxid}:${prevVout}`;
+          if (resolvedInputAmounts.has(key)) continue;
+          const spentOutputs = await db.transactionParticipants
+            .where("[txid+role]")
+            .equals([prevTxid, "output"])
+            .toArray();
+          const match = spentOutputs.find(o => o.vout === prevVout);
+          resolvedInputAmounts.set(key, match ? (Number(match.amount) || 0) : 0);
+        }
+
         const netByTxid = new Map<string, number>();
         const seen = new Set<string>();
         for (const p of participants) {
           if (p.role !== 'input' && p.role !== 'output') continue;
-          const key = `${p.txid}:${p.role}:${p.vout ?? p.prevTxid ?? ''}:${p.prevVout ?? ''}`;
+          const key = `${p.txid}:${p.role}:${p.vout ?? p.prevTxid ?? p.id ?? ''}:${p.prevVout ?? ''}`;
           if (seen.has(key)) continue;
           seen.add(key);
+          let amount = Number(p.amount) || 0;
+          if (p.role === 'input' && amount === 0 && p.prevTxid && p.prevVout !== undefined) {
+            amount = resolvedInputAmounts.get(`${p.prevTxid}:${p.prevVout}`) || 0;
+          }
           const current = netByTxid.get(p.txid) || 0;
           if (p.role === 'output') {
-            netByTxid.set(p.txid, current + p.amount);
+            netByTxid.set(p.txid, current + amount);
           } else {
-            netByTxid.set(p.txid, current - p.amount);
+            netByTxid.set(p.txid, current - amount);
           }
         }
 
