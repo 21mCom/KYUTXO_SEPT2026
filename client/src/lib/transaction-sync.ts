@@ -2,7 +2,7 @@
 // Syncs blockchain transaction data for addresses in the local database
 
 import { db, notifyDbChange, type Record, type BlockchainTransaction, type TransactionParticipant, type AddressSyncState, type NodeSettings, type PausedSyncState, type SkippedAddress, type AddressBlacklist, type SyncProtectionSettings, DEFAULT_SYNC_PROTECTION } from './database';
-import { createProvider, createProviderFromSettings, parseTransaction, MINIMUM_CONFIRMATIONS, type ProviderType, type ParsedTransaction, type BlockchainProvider } from './blockchain-api';
+import { createProvider, createProviderFromSettings, parseTransaction, MINIMUM_CONFIRMATIONS, type ProviderType, type ParsedTransaction, type BlockchainProvider, type ApiTransaction } from './blockchain-api';
 import { validateAddress } from './bitcoin';
 import { decryptRecords, isEncryptionReady, createRecordOrigin } from './encryptionFacade';
 
@@ -42,6 +42,7 @@ export interface SyncProgress {
   transactionsNew: number;
   newAddressRecords: number;
   addressesSkipped?: number;
+  transactionsAlreadySynced?: number;
   error?: string;
 }
 
@@ -52,6 +53,7 @@ export interface SyncResult {
   transactionsUpdated: number;
   newAddressRecords: number;
   addressesSkipped: number;
+  transactionsAlreadySynced: number;
   depthsProcessed: number[];
   errors: string[];
 }
@@ -97,6 +99,10 @@ export class TransactionSyncService {
     transactionsNew: 0,
     newAddressRecords: 0,
   };
+
+  private yieldToUI(): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, 0));
+  }
   
   // Track current sync state for pause functionality
   private currentSyncState: {
@@ -280,6 +286,7 @@ export class TransactionSyncService {
       transactionsUpdated: 0,
       newAddressRecords: 0,
       addressesSkipped: 0,
+      transactionsAlreadySynced: 0,
       depthsProcessed: [0],
       errors: [],
     };
@@ -360,6 +367,7 @@ export class TransactionSyncService {
       result.transactionsImported = syncResult.imported;
       result.transactionsUpdated = syncResult.updated;
       result.newAddressRecords = syncResult.newRecords;
+      result.transactionsAlreadySynced = syncResult.skippedAlreadySynced;
       result.addressesSynced = 1;
 
       await db.records.update(recordId, {
@@ -483,6 +491,7 @@ export class TransactionSyncService {
         transactionsUpdated: 0,
         newAddressRecords: 0,
         addressesSkipped: 0,
+        transactionsAlreadySynced: 0,
         depthsProcessed: [],
         errors: ['No paused sync state found'],
       };
@@ -596,6 +605,7 @@ export class TransactionSyncService {
       transactionsUpdated: resumeContext?.previousResult?.transactionsUpdated ?? 0,
       newAddressRecords: resumeContext?.previousResult?.newAddressRecords ?? 0,
       addressesSkipped: 0,
+      transactionsAlreadySynced: 0,
       depthsProcessed: [],
       errors: [],
     };
@@ -741,6 +751,8 @@ export class TransactionSyncService {
           const allValidRecordIds = validAddresses.map(r => r.id).filter((id): id is number => id !== undefined);
           
           for (let i = 0; i < validAddresses.length; i++) {
+            await this.yieldToUI();
+
             // Check for cancellation before processing each address
             if (this.cancelled) {
               console.log('[TransactionSync] Sync cancelled by user');
@@ -834,13 +846,13 @@ export class TransactionSyncService {
               result.newAddressRecords += syncResult.newRecords;
               result.addressesSynced++;
               
-              // Mark as synced at this depth
               await db.records.update(record.id, {
                 maxSyncedDepth: currentDepth,
                 updatedAt: Date.now(),
               });
               
               this.updateProgress({
+                addressesProcessed: i + 1,
                 transactionsFound: result.transactionsImported + result.transactionsUpdated,
                 transactionsNew: result.transactionsImported,
                 newAddressRecords: result.newAddressRecords,
@@ -855,7 +867,7 @@ export class TransactionSyncService {
                   discoveredFromRecordId: record.discoveredFromRecordId,
                 });
                 result.addressesSkipped++;
-                this.updateProgress({ addressesSkipped: result.addressesSkipped });
+                this.updateProgress({ addressesProcessed: i + 1, addressesSkipped: result.addressesSkipped });
                 console.warn(`[TransactionSync] ${errorMsg}`);
               } else {
                 await this.recordSkippedAddress(address, 'error', syncRunTimestamp, {
@@ -865,6 +877,7 @@ export class TransactionSyncService {
                 });
                 result.addressesSkipped++;
                 result.errors.push(`Failed to sync ${address}: ${errorMsg}`);
+                this.updateProgress({ addressesProcessed: i + 1, addressesSkipped: result.addressesSkipped });
                 console.error(`[TransactionSync] Failed to sync ${address}: ${errorMsg}`);
               }
             }
@@ -1013,6 +1026,8 @@ export class TransactionSyncService {
         const allValidRecordIds = validAddressRecords.map(r => r.id!).filter(id => id !== undefined);
         
         for (let i = 0; i < validAddressRecords.length; i++) {
+          await this.yieldToUI();
+
           // Check for cancellation before processing each address
           if (this.cancelled) {
             // If pause was requested, save state for resume
@@ -1086,7 +1101,6 @@ export class TransactionSyncService {
           });
 
           try {
-            // --- Sync Protection: Per-address timeout ---
             const syncPromise = this.syncAddress(
               address, 
               record.id, 
@@ -1102,18 +1116,20 @@ export class TransactionSyncService {
             result.transactionsImported += syncResult.imported;
             result.transactionsUpdated += syncResult.updated;
             result.newAddressRecords += syncResult.newRecords;
+            result.transactionsAlreadySynced += syncResult.skippedAlreadySynced;
             result.addressesSynced++;
 
-            // Mark this record as synced at this depth
             await db.records.update(record.id, {
               maxSyncedDepth: currentDepth,
               updatedAt: Date.now(),
             });
 
             this.updateProgress({
+              addressesProcessed: i + 1,
               transactionsFound: result.transactionsImported + result.transactionsUpdated,
               transactionsNew: result.transactionsImported,
               newAddressRecords: result.newAddressRecords,
+              transactionsAlreadySynced: result.transactionsAlreadySynced,
             });
           } catch (error) {
             const errorMsg = error instanceof Error ? error.message : 'Unknown error';
@@ -1125,7 +1141,7 @@ export class TransactionSyncService {
                 discoveredFromRecordId: record.discoveredFromRecordId,
               });
               result.addressesSkipped++;
-              this.updateProgress({ addressesSkipped: result.addressesSkipped });
+              this.updateProgress({ addressesProcessed: i + 1, addressesSkipped: result.addressesSkipped });
               console.warn(`[TransactionSync] ${errorMsg}`);
             } else {
               await this.recordSkippedAddress(address, 'error', syncRunTimestamp, {
@@ -1135,20 +1151,19 @@ export class TransactionSyncService {
               });
               result.addressesSkipped++;
               result.errors.push(`Failed to sync ${address}: ${errorMsg}`);
+              this.updateProgress({ addressesProcessed: i + 1, addressesSkipped: result.addressesSkipped });
               console.error(`[TransactionSync] Failed to sync ${address}: ${errorMsg}`);
             }
           }
         }
       }
 
+      const totalProcessed = result.addressesSynced + result.addressesSkipped;
       this.updateProgress({
         phase: 'complete',
-        addressesProcessed: result.addressesSynced,
+        addressesProcessed: totalProcessed,
       });
 
-      // Note: Paused state is managed by resumeSync() - don't clear here
-      // as that would race with pause requests
-      
       result.success = true;
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : 'Unknown error';
@@ -1176,23 +1191,40 @@ export class TransactionSyncService {
     minConfirmedHeight: number,
     currentHeight: number,
     newAddressDepth: number = 1 // Depth for newly discovered addresses
-  ): Promise<{ imported: number; updated: number; newRecords: number }> {
-    const stats = { imported: 0, updated: 0, newRecords: 0 };
+  ): Promise<{ imported: number; updated: number; newRecords: number; apiTxCount: number; skippedAlreadySynced: number; skippedUnconfirmed: number }> {
+    const stats = { imported: 0, updated: 0, newRecords: 0, apiTxCount: 0, skippedAlreadySynced: 0, skippedUnconfirmed: 0 };
 
     const syncState = await db.addressSyncState.where('address').equals(address).first();
 
-    const apiTransactions = await this.provider.getAddressTransactions(address);
+    let apiTransactions: ApiTransaction[];
+    try {
+      apiTransactions = await this.provider.getAddressTransactions(address);
+    } catch (fetchError) {
+      console.error(`[TransactionSync] Failed to fetch transactions for ${address}:`, fetchError);
+      throw fetchError;
+    }
 
+    stats.apiTxCount = apiTransactions.length;
+    console.log(`[TransactionSync] ${address.substring(0, 12)}...: ${apiTransactions.length} txs from API${syncState ? `, last synced at height ${syncState.lastSyncedHeight}` : ' (first sync)'}`);
+
+    let txProcessed = 0;
     for (const apiTx of apiTransactions) {
+      if (this.cancelled) break;
+
       const parsed = parseTransaction(apiTx);
       
-      if (!parsed) continue;
+      if (!parsed) {
+        stats.skippedUnconfirmed++;
+        continue;
+      }
 
       if (parsed.blockHeight > minConfirmedHeight) {
+        stats.skippedUnconfirmed++;
         continue;
       }
 
       if (syncState && parsed.blockHeight <= syncState.lastSyncedHeight) {
+        stats.skippedAlreadySynced++;
         continue;
       }
 
@@ -1218,14 +1250,10 @@ export class TransactionSyncService {
       });
       stats.imported++;
 
-      // Create a transaction record in the records table so it appears in Records view
-      // Transaction depth = the address's depth (newAddressDepth - 1)
-      // Depth 0 = directly involves tracked addresses, depth 1+ = involves discovered addresses
       const txSyncDepth = Math.max(0, newAddressDepth - 1);
       const { isNew: isTxRecordNew } = await this.findOrCreateTransactionRecord(parsed.txid, parsed.blockTime, txSyncDepth, recordId);
       if (isTxRecordNew) stats.newRecords++;
 
-      // Update the parent address's firstSeenBlockTime if this tx is older
       await this.updateFirstSeenBlockTime(recordId, parsed.blockTime);
 
       for (const input of parsed.inputs) {
@@ -1237,7 +1265,6 @@ export class TransactionSyncService {
         );
         if (isNew) stats.newRecords++;
 
-        // Update address firstSeenBlockTime if this tx is older
         await this.updateFirstSeenBlockTime(inputRecordId, parsed.blockTime);
 
         await db.transactionParticipants.add({
@@ -1247,8 +1274,8 @@ export class TransactionSyncService {
           amount: input.amount,
           recordId: inputRecordId,
           scriptType: input.scriptType,
-          prevTxid: input.prevTxid,   // The txid of the UTXO being spent
-          prevVout: input.prevVout,   // The vout of the UTXO being spent
+          prevTxid: input.prevTxid,
+          prevVout: input.prevVout,
         });
       }
 
@@ -1261,7 +1288,6 @@ export class TransactionSyncService {
         );
         if (isNew) stats.newRecords++;
 
-        // Update address firstSeenBlockTime if this tx is older
         await this.updateFirstSeenBlockTime(outputRecordId, parsed.blockTime);
 
         await db.transactionParticipants.add({
@@ -1274,6 +1300,15 @@ export class TransactionSyncService {
           scriptType: output.scriptType,
         });
       }
+
+      txProcessed++;
+      if (txProcessed % 5 === 0) {
+        await this.yieldToUI();
+      }
+    }
+
+    if (stats.skippedAlreadySynced > 0 || stats.skippedUnconfirmed > 0) {
+      console.log(`[TransactionSync] ${address.substring(0, 12)}...: ${stats.imported} imported, ${stats.updated} existing, ${stats.skippedAlreadySynced} already synced, ${stats.skippedUnconfirmed} unconfirmed`);
     }
 
     const txCount = apiTransactions.filter(tx => {
@@ -1297,7 +1332,6 @@ export class TransactionSyncService {
       });
     }
 
-    // Notify listeners of transaction and participant changes (once per sync operation)
     if (stats.imported > 0) {
       notifyDbChange(['transactionParticipants', 'blockchainTransactions']);
     }
