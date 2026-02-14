@@ -88,6 +88,7 @@ export class TransactionSyncService {
   private onProgress?: SyncProgressCallback;
   private cancelled: boolean = false;
   private pauseRequested: boolean = false;
+  private abortController: AbortController | null = null;
   private currentProgress: SyncProgress = {
     phase: 'idle',
     addressesTotal: 0,
@@ -110,10 +111,52 @@ export class TransactionSyncService {
     this.provider = createProvider(providerType);
   }
 
+  private cancellableCall<T>(promise: Promise<T>, timeoutMs: number = 30000): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      if (this.cancelled) {
+        reject(new Error('Sync cancelled'));
+        return;
+      }
+
+      const timer = setTimeout(() => {
+        reject(new Error(`Network request timed out after ${Math.round(timeoutMs / 1000)}s. Check your node connection.`));
+      }, timeoutMs);
+
+      const onAbort = () => {
+        clearTimeout(timer);
+        reject(new Error('Sync cancelled'));
+      };
+
+      if (this.abortController) {
+        this.abortController.signal.addEventListener('abort', onAbort, { once: true });
+      }
+
+      promise.then(
+        (val) => {
+          clearTimeout(timer);
+          if (this.abortController) {
+            this.abortController.signal.removeEventListener('abort', onAbort);
+          }
+          resolve(val);
+        },
+        (err) => {
+          clearTimeout(timer);
+          if (this.abortController) {
+            this.abortController.signal.removeEventListener('abort', onAbort);
+          }
+          reject(err);
+        }
+      );
+    });
+  }
+
   // Stop the current sync operation (does not save state)
   stopSync() {
     this.cancelled = true;
     this.pauseRequested = false;
+    if (this.abortController) {
+      this.abortController.abort();
+    }
     console.log('[TransactionSync] Stop requested');
   }
   
@@ -121,6 +164,9 @@ export class TransactionSyncService {
   requestPause() {
     this.cancelled = true;
     this.pauseRequested = true;
+    if (this.abortController) {
+      this.abortController.abort();
+    }
     console.log('[TransactionSync] Pause requested');
   }
   
@@ -184,14 +230,41 @@ export class TransactionSyncService {
   }
 
   private withTimeout<T>(promise: Promise<T>, timeoutMs: number, address: string): Promise<T> {
-    if (timeoutMs <= 0) return promise;
+    if (timeoutMs <= 0 && !this.abortController) return promise;
     return new Promise<T>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        reject(new Error(`Sync timed out after ${Math.round(timeoutMs / 1000)}s for address ${address}`));
-      }, timeoutMs);
+      let timer: ReturnType<typeof setTimeout> | null = null;
+      
+      if (timeoutMs > 0) {
+        timer = setTimeout(() => {
+          reject(new Error(`Sync timed out after ${Math.round(timeoutMs / 1000)}s for address ${address}`));
+        }, timeoutMs);
+      }
+
+      const onAbort = () => {
+        if (timer) clearTimeout(timer);
+        reject(new Error('Sync cancelled'));
+      };
+
+      if (this.abortController) {
+        if (this.abortController.signal.aborted) {
+          if (timer) clearTimeout(timer);
+          reject(new Error('Sync cancelled'));
+          return;
+        }
+        this.abortController.signal.addEventListener('abort', onAbort, { once: true });
+      }
+
       promise.then(
-        (val) => { clearTimeout(timer); resolve(val); },
-        (err) => { clearTimeout(timer); reject(err); }
+        (val) => {
+          if (timer) clearTimeout(timer);
+          if (this.abortController) this.abortController.signal.removeEventListener('abort', onAbort);
+          resolve(val);
+        },
+        (err) => {
+          if (timer) clearTimeout(timer);
+          if (this.abortController) this.abortController.signal.removeEventListener('abort', onAbort);
+          reject(err);
+        }
       );
     });
   }
@@ -217,16 +290,13 @@ export class TransactionSyncService {
       return result;
     }
 
-    try {
-      await this.initializeProvider();
-    } catch (e) {
-      result.errors.push(`Failed to initialize provider: ${e instanceof Error ? e.message : 'Unknown error'}`);
-      return result;
-    }
-
     if (onProgress) {
       this.onProgress = onProgress;
     }
+
+    this.resetProgress();
+    this.cancelled = false;
+    this.pauseRequested = false;
 
     try {
       this.updateProgress({
@@ -238,7 +308,7 @@ export class TransactionSyncService {
         newAddressRecords: 0,
       });
 
-      const currentHeight = await this.provider.getBlockHeight();
+      const currentHeight = await this.cancellableCall(this.provider.getBlockHeight(), 30000);
       const minConfirmedHeight = currentHeight - MINIMUM_CONFIRMATIONS;
 
       this.updateProgress({
@@ -308,8 +378,15 @@ export class TransactionSyncService {
       result.success = true;
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : 'Unknown error';
-      result.errors.push(errorMsg);
-      this.updateProgress({ phase: 'error', error: errorMsg });
+      if (errorMsg === 'Sync cancelled') {
+        this.updateProgress({ phase: 'complete' });
+        result.success = result.addressesSynced > 0;
+      } else {
+        result.errors.push(errorMsg);
+        this.updateProgress({ phase: 'error', error: errorMsg });
+      }
+    } finally {
+      this.abortController = null;
     }
 
     return result;
@@ -405,6 +482,7 @@ export class TransactionSyncService {
         transactionsImported: 0,
         transactionsUpdated: 0,
         newAddressRecords: 0,
+        addressesSkipped: 0,
         depthsProcessed: [],
         errors: ['No paused sync state found'],
       };
@@ -483,6 +561,7 @@ export class TransactionSyncService {
       transactionsNew: 0,
       newAddressRecords: 0,
     };
+    this.abortController = new AbortController();
   }
 
   private updateProgress(progress: Partial<SyncProgress>) {
@@ -538,7 +617,7 @@ export class TransactionSyncService {
         newAddressRecords: initialNewAddresses,
       });
 
-      const currentHeight = await this.provider.getBlockHeight();
+      const currentHeight = await this.cancellableCall(this.provider.getBlockHeight(), 30000);
       const minConfirmedHeight = currentHeight - MINIMUM_CONFIRMATIONS;
       const syncRunTimestamp = Date.now();
 
@@ -1075,14 +1154,19 @@ export class TransactionSyncService {
       result.success = true;
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : 'Unknown error';
-      result.errors.push(errorMsg);
-      this.updateProgress({
-        phase: 'error',
-        error: errorMsg,
-      });
+      if (errorMsg === 'Sync cancelled') {
+        this.updateProgress({ phase: 'complete' });
+        result.success = result.addressesSynced > 0;
+      } else {
+        result.errors.push(errorMsg);
+        this.updateProgress({
+          phase: 'error',
+          error: errorMsg,
+        });
+      }
     } finally {
-      // Reset pause flag
       this.pauseRequested = false;
+      this.abortController = null;
     }
 
     return result;
