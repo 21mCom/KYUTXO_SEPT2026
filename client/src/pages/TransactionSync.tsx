@@ -34,7 +34,7 @@ import {
 } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { transactionSyncService, type SyncProgress, type SyncResult, type SyncOptions, type SourceCategory, type SourceSelection, type SourceInfo, type SyncDepthEstimate, loadDecryptedAddressRecords, getAddressSourcesFromRecords, matchesSourceSelection } from "@/lib/transaction-sync";
+import { transactionSyncService, type SyncProgress, type SyncResult, type SyncOptions, type SourceCategory, type SourceSelection, type SourceInfo, type SyncDepthEstimate, loadDecryptedAddressRecords, getAddressSourcesFromRecords } from "@/lib/transaction-sync";
 import type { Record as DbRecord, PausedSyncState, SkippedAddress, AddressBlacklist, SyncProtectionSettings } from "@/lib/database";
 import { DEFAULT_SYNC_PROTECTION } from "@/lib/database";
 import { useNodeSettings } from "@/hooks/use-node-settings";
@@ -173,17 +173,7 @@ export default function TransactionSync() {
     };
     const estimate = transactionSyncService.getMultiDepthEstimateFromRecords(options, cachedRecords);
     setDepthEstimate(estimate);
-
-    let matchCount = 0;
-    for (const r of cachedRecords) {
-      if (r.type !== 'address') continue;
-      const depth = r.syncDepth ?? 0;
-      if (depth !== 0) continue;
-      if (matchesSourceSelection(r, sourceSelection)) {
-        matchCount++;
-      }
-    }
-    setFilteredAddressCount(matchCount);
+    setFilteredAddressCount(estimate.depth0);
   }, [selectedSources, includeNoSource, maxDepth, cachedRecords]);
 
   const handleSync = async () => {
@@ -215,7 +205,7 @@ export default function TransactionSync() {
         sourceSelection: currentSourceSelection(),
         maxDepth,
       };
-      const result = await transactionSyncService.syncWithDepth(options);
+      const result = await transactionSyncService.syncWithDepth(options, cachedRecords ?? undefined);
       setLastResult(result);
       
       if (result.success && result.addressesSynced === 0 && result.errors.length > 0) {
