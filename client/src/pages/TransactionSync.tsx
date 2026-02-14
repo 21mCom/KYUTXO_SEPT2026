@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useLocation } from "wouter";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -62,6 +62,7 @@ export default function TransactionSync() {
   } | null>(null);
   
   const [isSyncing, setIsSyncing] = useState(false);
+  const isSyncingRef = useRef(false);
   const [isStopping, setIsStopping] = useState(false);
   const [syncProgress, setSyncProgress] = useState<SyncProgress | null>(null);
   const [lastResult, setLastResult] = useState<SyncResult | null>(null);
@@ -179,6 +180,7 @@ export default function TransactionSync() {
 
   const handleSync = async () => {
     setIsSyncing(true);
+    isSyncingRef.current = true;
     setSyncProgress({
       phase: 'idle',
       currentDepth: 0,
@@ -208,7 +210,12 @@ export default function TransactionSync() {
       const result = await transactionSyncService.syncWithDepth(options);
       setLastResult(result);
       
-      if (result.success) {
+      if (result.success && result.addressesSynced === 0 && result.errors.length > 0) {
+        toast({
+          title: "No Addresses to Sync",
+          description: result.errors[0],
+        });
+      } else if (result.success) {
         const skippedMsg = result.addressesSkipped > 0 ? ` (${result.addressesSkipped} skipped)` : '';
         toast({
           title: "Sync Complete",
@@ -230,6 +237,7 @@ export default function TransactionSync() {
     } finally {
       const wasStopped = isStopping;
       setIsSyncing(false);
+      isSyncingRef.current = false;
       setIsStopping(false);
       await loadStats();
       await loadSources();
@@ -269,12 +277,27 @@ export default function TransactionSync() {
     transactionSyncService.stopSync();
     toast({
       title: "Stopping Sync",
-      description: "Finishing current address, then stopping...",
+      description: "Cancelling sync...",
     });
+    
+    setTimeout(() => {
+      if (isSyncingRef.current) {
+        transactionSyncService.stopSync();
+        setIsSyncing(false);
+        isSyncingRef.current = false;
+        setIsStopping(false);
+        setSyncProgress(null);
+        toast({
+          title: "Sync Force Stopped",
+          description: "Sync was force stopped. Any transactions already found have been saved.",
+        });
+      }
+    }, 5000);
   };
   
   const handleResumeSync = async () => {
     setIsSyncing(true);
+    isSyncingRef.current = true;
     setSyncProgress({
       phase: 'idle',
       addressesTotal: pausedState?.remainingRecordIds.length ?? 0,
@@ -318,10 +341,11 @@ export default function TransactionSync() {
       });
     } finally {
       setIsSyncing(false);
+      isSyncingRef.current = false;
       setIsStopping(false);
       await loadStats();
       await loadSources();
-      await loadPausedState(); // Reload paused state (may have new state if paused again, or cleared if complete)
+      await loadPausedState();
     }
   };
   
@@ -921,7 +945,7 @@ export default function TransactionSync() {
           <CardFooter className="gap-2">
             <Button 
               onClick={handleSync} 
-              disabled={isSyncing || (stats?.totalAddresses ?? 0) === 0}
+              disabled={isSyncing || filteredAddressCount === 0}
               data-testid="button-sync"
             >
               {isSyncing ? (
@@ -994,6 +1018,11 @@ export default function TransactionSync() {
             {!isSyncing && !pausedState && (stats?.totalAddresses ?? 0) === 0 && (
               <p className="ml-2 text-sm text-muted-foreground">
                 Add some addresses first to sync their transactions
+              </p>
+            )}
+            {!isSyncing && !pausedState && (stats?.totalAddresses ?? 0) > 0 && (filteredAddressCount ?? 0) === 0 && (
+              <p className="ml-2 text-sm text-amber-600">
+                No addresses match your current source selection. Adjust the filters above.
               </p>
             )}
           </CardFooter>

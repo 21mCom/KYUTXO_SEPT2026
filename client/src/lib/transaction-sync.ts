@@ -605,6 +605,37 @@ export class TransactionSyncService {
     const initialNewAddresses = resumeContext?.previousResult?.newAddressRecords ?? 0;
 
     try {
+      // Pre-check: If no specific records and no resume context, verify we have addresses to sync
+      // before making any network calls. This prevents unnecessary getBlockHeight requests.
+      if (!specificRecordIds && !resumeContext) {
+        this.updateProgress({
+          phase: 'syncing-addresses',
+          currentDepth: 0,
+          maxDepth,
+          addressesTotal: 0,
+          addressesProcessed: 0,
+        });
+        
+        const preCheckRecords = await loadDecryptedAddressRecords();
+        const hasMatchingAddresses = preCheckRecords.some(r => {
+          if (r.type !== 'address') return false;
+          const recordDepth = r.syncDepth ?? 0;
+          if (recordDepth !== 0) return false;
+          if (sourceFilter === 'custom' && options.sourceSelection) {
+            return matchesSourceSelection(r, options.sourceSelection);
+          }
+          return true;
+        });
+
+        if (!hasMatchingAddresses) {
+          console.log('[TransactionSync] No addresses match current selection, skipping sync');
+          this.updateProgress({ phase: 'complete', addressesProcessed: 0, addressesTotal: 0 });
+          result.success = true;
+          result.errors.push('No addresses match your current source selection. Check your filters.');
+          return result;
+        }
+      }
+
       this.updateProgress({
         phase: 'fetching-height',
         currentDepth: resumeContext?.resumeFromDepth ?? 0,
