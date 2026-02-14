@@ -41,7 +41,7 @@ async function fetchDiscoveryTree(parentRecordId: number): Promise<DiscoveredRec
       const batch = await db.records
         .filter((r) => r.discoveredFromRecordId === pid)
         .toArray();
-      children.push(...batch);
+      for (const item of batch) children.push(item);
     }
 
     if (children.length === 0) break;
@@ -51,7 +51,7 @@ async function fetchDiscoveryTree(parentRecordId: number): Promise<DiscoveredRec
       ...r,
       discoveryDepth: depth,
     }));
-    allDiscovered.push(...withDepth);
+    for (const item of withDepth) allDiscovered.push(item);
 
     currentParentIds = decrypted
       .map((r) => r.id)

@@ -29,6 +29,12 @@ type ScanMode = 'blockchain-only' | 'discovery-origin';
 type SortField = 'type' | 'address' | 'depth' | 'discoveredFrom';
 type SortDirection = 'asc' | 'desc';
 
+function safeAppend<T>(target: T[], source: T[]): void {
+  for (let i = 0; i < source.length; i++) {
+    target.push(source[i]);
+  }
+}
+
 interface CleanupCandidate {
   record: Record;
   origins: RecordOrigin[];
@@ -150,13 +156,13 @@ export default function Cleanup() {
         const batch = await db.records
           .filter((r) => r.discoveredFromRecordId === pid)
           .toArray();
-        children.push(...batch);
+        safeAppend(children, batch);
       }
 
       if (children.length === 0) break;
 
       const decrypted = await decryptRecords(children);
-      allDiscovered.push(...decrypted);
+      safeAppend(allDiscovered, decrypted);
 
       currentParentIds = decrypted
         .map((r) => r.id)
@@ -194,7 +200,7 @@ export default function Cleanup() {
         .where('recordId')
         .anyOf(chunk)
         .toArray();
-      allOrigins.push(...batch);
+      safeAppend(allOrigins, batch);
     }
     
     const grouped = new Map<number, RecordOrigin[]>();
@@ -330,7 +336,7 @@ export default function Cleanup() {
             .where('[type+addressImportance]')
             .anyOf(CANDIDATE_TIERS.map(tier => ['address', tier]))
             .toArray();
-          records.push(...addressRecords);
+          safeAppend(records, addressRecords);
         }
         
         if (scope === 'transactions' || scope === 'both') {
@@ -342,7 +348,8 @@ export default function Cleanup() {
             .where('type').equals('transaction')
             .filter(r => !r.addressImportance)
             .toArray();
-          records.push(...txRecords, ...txNoImportance);
+          safeAppend(records, txRecords);
+          safeAppend(records, txNoImportance);
         }
         
         const potentialCandidates = records.filter(r => r.syncDepth !== 0);
