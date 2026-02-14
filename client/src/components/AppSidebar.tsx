@@ -37,6 +37,7 @@ import {
   LayoutList
 } from "lucide-react";
 import logoUrl from "@assets/foot_1764929618997.png";
+import { version as APP_VERSION } from "../../../package.json";
 import {
   Sidebar,
   SidebarContent,
@@ -268,7 +269,7 @@ export function AppSidebar() {
         <div className="text-xs text-muted-foreground">
           <p>Offline-first PWA</p>
           <p className="mt-1">All data stored locally</p>
-          <p className="mt-1">v1.1.11</p>
+          <p className="mt-1">v{APP_VERSION}</p>
         </div>
       </SidebarFooter>
     </Sidebar>
