@@ -87,5 +87,5 @@ export async function deleteSeedName(id: number) {
 }
 
 export async function getSeedNameUsageCount(seedNameValue: string): Promise<number> {
-  return db.records.filter(r => r.seedName === seedNameValue).count();
+  return db.records.where('seedName').equals(seedNameValue).count();
 }

@@ -73,5 +73,5 @@ export async function deleteWalletName(id: number) {
 }
 
 export async function getWalletNameUsageCount(walletNameValue: string): Promise<number> {
-  return db.records.filter(r => r.walletName === walletNameValue).count();
+  return db.records.where('walletName').equals(walletNameValue).count();
 }
