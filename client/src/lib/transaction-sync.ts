@@ -85,12 +85,49 @@ export interface SyncDepthEstimate {
 
 export type SyncProgressCallback = (progress: SyncProgress) => void;
 
+interface ParentMetadata {
+  walletName?: string;
+  seedName?: string;
+  walletSoftware?: string;
+  owner?: string;
+}
+
+function safeAppend<T>(target: T[], source: T[]): void {
+  for (let i = 0; i < source.length; i++) {
+    target.push(source[i]);
+  }
+}
+
+async function loadAddressRecordsAtDepth(depth: number): Promise<Record[]> {
+  return db.records
+    .where('type').equals('address')
+    .filter(r => (r.syncDepth ?? 0) === depth)
+    .toArray();
+}
+
+async function decryptRecordsSafe(records: Record[]): Promise<Record[]> {
+  if (!isEncryptionReady() || records.length === 0) return records;
+  const CHUNK = 500;
+  const results: Record[] = [];
+  for (let i = 0; i < records.length; i += CHUNK) {
+    const chunk = records.slice(i, i + CHUNK);
+    const decrypted = await decryptRecords(chunk);
+    safeAppend(results, decrypted);
+    if (i + CHUNK < records.length) {
+      await new Promise(r => setTimeout(r, 0));
+    }
+  }
+  return results;
+}
+
 export class TransactionSyncService {
   private provider: BlockchainProvider;
   private onProgress?: SyncProgressCallback;
   private cancelled: boolean = false;
   private pauseRequested: boolean = false;
   private abortController: AbortController | null = null;
+  private parentMetadataCache: Map<number, ParentMetadata> = new Map();
+  private pendingDbNotifications: Set<string> = new Set();
   private currentProgress: SyncProgress = {
     phase: 'idle',
     addressesTotal: 0,
@@ -102,6 +139,53 @@ export class TransactionSyncService {
 
   private yieldToUI(): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, 0));
+  }
+
+  private cacheParentMetadata(record: Record): void {
+    if (record.id === undefined) return;
+    this.parentMetadataCache.set(record.id, {
+      walletName: record.walletName,
+      seedName: record.seedName,
+      walletSoftware: record.walletSoftware,
+      owner: record.owner,
+    });
+  }
+
+  private async getParentMetadata(recordId: number): Promise<ParentMetadata | undefined> {
+    const cached = this.parentMetadataCache.get(recordId);
+    if (cached) return cached;
+    const record = await db.records.get(recordId);
+    if (!record) return undefined;
+    let metadata: ParentMetadata;
+    if (record.isEncrypted && isEncryptionReady()) {
+      const [decrypted] = await decryptRecords([record]);
+      metadata = {
+        walletName: decrypted.walletName,
+        seedName: decrypted.seedName,
+        walletSoftware: decrypted.walletSoftware,
+        owner: decrypted.owner,
+      };
+    } else {
+      metadata = {
+        walletName: record.walletName,
+        seedName: record.seedName,
+        walletSoftware: record.walletSoftware,
+        owner: record.owner,
+      };
+    }
+    this.parentMetadataCache.set(recordId, metadata);
+    return metadata;
+  }
+
+  private deferNotification(table: string): void {
+    this.pendingDbNotifications.add(table);
+  }
+
+  private flushNotifications(): void {
+    if (this.pendingDbNotifications.size > 0) {
+      notifyDbChange(Array.from(this.pendingDbNotifications));
+      this.pendingDbNotifications.clear();
+    }
   }
   
   // Track current sync state for pause functionality
@@ -395,6 +479,8 @@ export class TransactionSyncService {
       }
     } finally {
       this.abortController = null;
+      this.flushNotifications();
+      this.parentMetadataCache.clear();
     }
 
     return result;
@@ -640,18 +726,15 @@ export class TransactionSyncService {
       // 1. First sync the target record itself if not fully synced
       // 2. Then sync all addresses that were discovered from that record (depth = record.syncDepth + 1)
       if (specificRecordIds && specificRecordIds.length > 0) {
-        // Get the starting depth from the first specified record
-        const allRawRecords = await db.records.toArray();
-        let allRecords: Record[];
-        if (isEncryptionReady()) {
-          allRecords = await decryptRecords(allRawRecords);
-        } else {
-          allRecords = allRawRecords;
+        // Get the starting depth from the first specified record - use targeted query
+        const targetRawRecords = await db.records.bulkGet(specificRecordIds);
+        const validTargetRaw = targetRawRecords.filter((r): r is Record => !!r && r.type === 'address');
+        const targetRecords = await decryptRecordsSafe(validTargetRaw);
+
+        // Cache parent metadata for target records
+        for (const r of targetRecords) {
+          this.cacheParentMetadata(r);
         }
-        
-        const targetRecords = allRecords.filter(r => 
-          r.id && specificRecordIds.includes(r.id) && r.type === 'address'
-        );
         
         if (targetRecords.length === 0) {
           this.updateProgress({ phase: 'complete', addressesProcessed: 0 });
@@ -675,13 +758,13 @@ export class TransactionSyncService {
         for (let currentDepth = startDepth; currentDepth < maxDepth; currentDepth++) {
           console.log(`[TransactionSync] Sync Deeper: Processing depth ${currentDepth} (max: ${maxDepth})`);
           
-          // Refresh records each iteration (new ones may have been discovered)
-          const freshRawRecords = await db.records.toArray();
-          let freshRecords: Record[];
-          if (isEncryptionReady()) {
-            freshRecords = await decryptRecords(freshRawRecords);
-          } else {
-            freshRecords = freshRawRecords;
+          // Load only address records at this specific depth (indexed query)
+          const depthRawRecords = await loadAddressRecordsAtDepth(currentDepth);
+          const freshRecords = await decryptRecordsSafe(depthRawRecords);
+
+          // Cache parent metadata for discovered records
+          for (const r of freshRecords) {
+            this.cacheParentMetadata(r);
           }
           
           // First pass: identify records at this depth that are related to our targets
@@ -850,6 +933,9 @@ export class TransactionSyncService {
                 maxSyncedDepth: currentDepth,
                 updatedAt: Date.now(),
               });
+
+              // Flush deferred notifications after each address
+              this.flushNotifications();
               
               this.updateProgress({
                 addressesProcessed: i + 1,
@@ -858,6 +944,8 @@ export class TransactionSyncService {
                 newAddressRecords: result.newAddressRecords,
               });
             } catch (error) {
+              // Flush any partial notifications even on error
+              this.flushNotifications();
               const errorMsg = error instanceof Error ? error.message : 'Unknown error';
               const isTimeout = errorMsg.includes('timed out');
               if (isTimeout) {
@@ -921,6 +1009,9 @@ export class TransactionSyncService {
       // This prevents syncing unrelated addresses from previous sync sessions.
       const scopeRecordIds = new Set<number>();
 
+      // Clear parent metadata cache at start of normal sync
+      this.parentMetadataCache.clear();
+
       // Normal sync: Process each depth level from 0 up to maxDepth (exclusive)
       // Depth 0 = manually entered addresses, Depth 1 = first-hop discovered, etc.
       // maxDepth = N means "sync up to depth N-1" (e.g., maxDepth=2 syncs depths 0 and 1)
@@ -931,12 +1022,14 @@ export class TransactionSyncService {
         if (currentDepth === 0 && preloadedRecords) {
           allRecords = preloadedRecords;
         } else {
-          const allRawRecords = await db.records.toArray();
-          if (isEncryptionReady()) {
-            allRecords = await decryptRecords(allRawRecords);
-          } else {
-            allRecords = allRawRecords;
-          }
+          // Use indexed query to load only records at this depth level
+          const depthRawRecords = await loadAddressRecordsAtDepth(currentDepth);
+          allRecords = await decryptRecordsSafe(depthRawRecords);
+        }
+
+        // Cache parent metadata for all loaded records
+        for (const r of allRecords) {
+          this.cacheParentMetadata(r);
         }
         
         // First, build the scope set for this depth level.
@@ -1124,6 +1217,9 @@ export class TransactionSyncService {
               updatedAt: Date.now(),
             });
 
+            // Flush deferred notifications after each address
+            this.flushNotifications();
+
             this.updateProgress({
               addressesProcessed: i + 1,
               transactionsFound: result.transactionsImported + result.transactionsUpdated,
@@ -1132,6 +1228,8 @@ export class TransactionSyncService {
               transactionsAlreadySynced: result.transactionsAlreadySynced,
             });
           } catch (error) {
+            // Flush any partial notifications even on error
+            this.flushNotifications();
             const errorMsg = error instanceof Error ? error.message : 'Unknown error';
             const isTimeout = errorMsg.includes('timed out');
             if (isTimeout) {
@@ -1180,6 +1278,9 @@ export class TransactionSyncService {
     } finally {
       this.pauseRequested = false;
       this.abortController = null;
+      // Flush any remaining deferred notifications and clear caches
+      this.flushNotifications();
+      this.parentMetadataCache.clear();
     }
 
     return result;
@@ -1256,6 +1357,9 @@ export class TransactionSyncService {
 
       await this.updateFirstSeenBlockTime(recordId, parsed.blockTime);
 
+      // Collect participants for batch insert
+      const participantsBatch: TransactionParticipant[] = [];
+
       for (const input of parsed.inputs) {
         const { recordId: inputRecordId, isNew } = await this.findOrCreateAddressRecord(
           input.address, 
@@ -1267,7 +1371,7 @@ export class TransactionSyncService {
 
         await this.updateFirstSeenBlockTime(inputRecordId, parsed.blockTime);
 
-        await db.transactionParticipants.add({
+        participantsBatch.push({
           txid: parsed.txid,
           role: 'input',
           address: input.address,
@@ -1290,7 +1394,7 @@ export class TransactionSyncService {
 
         await this.updateFirstSeenBlockTime(outputRecordId, parsed.blockTime);
 
-        await db.transactionParticipants.add({
+        participantsBatch.push({
           txid: parsed.txid,
           role: 'output',
           address: output.address,
@@ -1299,6 +1403,11 @@ export class TransactionSyncService {
           recordId: outputRecordId,
           scriptType: output.scriptType,
         });
+      }
+
+      // Batch insert all participants for this transaction at once
+      if (participantsBatch.length > 0) {
+        await db.transactionParticipants.bulkAdd(participantsBatch);
       }
 
       txProcessed++;
@@ -1333,7 +1442,8 @@ export class TransactionSyncService {
     }
 
     if (stats.imported > 0) {
-      notifyDbChange(['transactionParticipants', 'blockchainTransactions']);
+      this.deferNotification('transactionParticipants');
+      this.deferNotification('blockchainTransactions');
     }
 
     return stats;
@@ -1357,13 +1467,11 @@ export class TransactionSyncService {
     let parentWalletSoftware: string | undefined;
     
     if (discoveredFromRecordId) {
-      const parentRecord = await db.records.get(discoveredFromRecordId);
-      if (parentRecord) {
-        // Inherit context fields for classification help, but NOT owner
-        // (discovered addresses could be counterparties)
-        parentWalletName = parentRecord.walletName;
-        parentSeedName = parentRecord.seedName;
-        parentWalletSoftware = parentRecord.walletSoftware;
+      const parentMeta = await this.getParentMetadata(discoveredFromRecordId);
+      if (parentMeta) {
+        parentWalletName = parentMeta.walletName;
+        parentSeedName = parentMeta.seedName;
+        parentWalletSoftware = parentMeta.walletSoftware;
       }
     }
 
@@ -1389,8 +1497,8 @@ export class TransactionSyncService {
       updatedAt: now,
     });
 
-    // Notify listeners of the change
-    notifyDbChange('records');
+    // Defer notification - will be flushed after address sync completes
+    this.deferNotification('records');
 
     // Create a record origin entry to track blockchain sync source
     if (isEncryptionReady()) {
@@ -1451,19 +1559,19 @@ export class TransactionSyncService {
       return { recordId: existing.id, isNew: false };
     }
 
-    // Look up parent record to inherit context
+    // Look up parent record to inherit context (use cache)
     let parentWalletName: string | undefined;
     let parentSeedName: string | undefined;
     let parentWalletSoftware: string | undefined;
     let parentOwner: string | undefined;
     
     if (discoveredFromRecordId) {
-      const parentRecord = await db.records.get(discoveredFromRecordId);
-      if (parentRecord) {
-        parentWalletName = parentRecord.walletName;
-        parentSeedName = parentRecord.seedName;
-        parentWalletSoftware = parentRecord.walletSoftware;
-        parentOwner = parentRecord.owner;
+      const parentMeta = await this.getParentMetadata(discoveredFromRecordId);
+      if (parentMeta) {
+        parentWalletName = parentMeta.walletName;
+        parentSeedName = parentMeta.seedName;
+        parentWalletSoftware = parentMeta.walletSoftware;
+        parentOwner = parentMeta.owner;
       }
     }
 
@@ -1490,8 +1598,8 @@ export class TransactionSyncService {
       updatedAt: now,
     });
 
-    // Notify listeners of the change
-    notifyDbChange('records');
+    // Defer notification - will be flushed after address sync completes
+    this.deferNotification('records');
 
     // Create a record origin entry to track blockchain sync source
     if (isEncryptionReady()) {
@@ -1675,17 +1783,7 @@ function extractBaseWalletName(source: string): string {
 export async function loadDecryptedAddressRecords(): Promise<Record[]> {
   const allRawRecords = await db.records.where('type').equals('address').toArray();
   if (isEncryptionReady()) {
-    const CHUNK_SIZE = 500;
-    const results: Record[] = [];
-    for (let i = 0; i < allRawRecords.length; i += CHUNK_SIZE) {
-      const chunk = allRawRecords.slice(i, i + CHUNK_SIZE);
-      const decrypted = await decryptRecords(chunk);
-      results.push(...decrypted);
-      if (i + CHUNK_SIZE < allRawRecords.length) {
-        await new Promise(r => setTimeout(r, 0));
-      }
-    }
-    return results;
+    return decryptRecordsSafe(allRawRecords);
   }
   return allRawRecords;
 }
