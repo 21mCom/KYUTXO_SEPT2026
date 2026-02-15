@@ -173,15 +173,16 @@ export function parseTransaction(tx: ApiTransaction): ParsedTransaction | null {
   const opReturnData: OpReturnOutput[] = [];
 
   for (const vin of tx.vin) {
-    if (vin.prevout?.scriptpubkey_address) {
-      inputs.push({
-        address: vin.prevout.scriptpubkey_address,
-        amount: vin.prevout.value,
-        scriptType: mapScriptType(vin.prevout.scriptpubkey_type),
-        prevTxid: vin.txid,
-        prevVout: vin.vout,
-      });
-    }
+    const isCoinbase = !vin.txid || /^0{64}$/.test(vin.txid);
+    if (isCoinbase) continue;
+
+    inputs.push({
+      address: vin.prevout?.scriptpubkey_address || '',
+      amount: vin.prevout?.value ?? 0,
+      scriptType: vin.prevout?.scriptpubkey_type ? mapScriptType(vin.prevout.scriptpubkey_type) : undefined,
+      prevTxid: vin.txid,
+      prevVout: vin.vout,
+    });
   }
 
   for (const vout of tx.vout) {

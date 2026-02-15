@@ -699,9 +699,9 @@ export default function StatementReport() {
           <CardContent className="py-3 flex items-start gap-2">
             <AlertTriangle className="h-4 w-4 text-amber-500 mt-0.5 shrink-0" />
             <p className="text-sm text-muted-foreground" data-testid="text-data-warning">
-              All transactions show as incoming. This may indicate incomplete transaction data.
-              If you synced with Electrs, input participant amounts may not be stored.
-              Re-syncing these addresses with an Esplora-compatible node can resolve this.
+              All transactions show as incoming. This may indicate that input prevout data
+              has not been resolved yet. Re-syncing these addresses will automatically resolve
+              prevout data and show correct incoming/outgoing amounts.
             </p>
           </CardContent>
         </Card>

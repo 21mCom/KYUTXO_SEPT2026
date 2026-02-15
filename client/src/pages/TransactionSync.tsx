@@ -463,6 +463,7 @@ export default function TransactionSync() {
         return `Syncing address ${syncProgress.addressesProcessed + 1} of ${syncProgress.addressesTotal.toLocaleString()}`;
       }
       case 'processing': return 'Processing transactions...';
+      case 'resolving-prevouts': return 'Resolving input prevout data...';
       case 'complete': return 'Sync complete!';
       case 'error': return `Error: ${syncProgress.error}`;
       default: return '';

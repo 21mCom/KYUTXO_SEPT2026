@@ -32,7 +32,7 @@ export interface SourceInfo {
 }
 
 export interface SyncProgress {
-  phase: 'idle' | 'fetching-height' | 'syncing-addresses' | 'processing' | 'complete' | 'error';
+  phase: 'idle' | 'fetching-height' | 'syncing-addresses' | 'processing' | 'resolving-prevouts' | 'complete' | 'error';
   currentAddress?: string;
   currentDepth?: number;
   maxDepth?: number;
@@ -458,6 +458,18 @@ export class TransactionSyncService {
         maxSyncedDepth: 0,
         updatedAt: Date.now(),
       });
+
+      if (syncResult.imported > 0) {
+        this.updateProgress({ phase: 'resolving-prevouts' });
+        try {
+          const prevoutStats = await this.resolvePrevouts();
+          if (prevoutStats.resolved > 0) {
+            console.log(`[TransactionSync] Single address prevout resolution: ${prevoutStats.resolved} resolved`);
+          }
+        } catch (err) {
+          console.warn('[TransactionSync] Prevout resolution failed (non-fatal):', err);
+        }
+      }
 
       this.updateProgress({
         phase: 'complete',
@@ -1257,6 +1269,19 @@ export class TransactionSyncService {
       }
 
       const totalProcessed = result.addressesSynced + result.addressesSkipped;
+
+      if (result.transactionsImported > 0 && !this.cancelled) {
+        this.updateProgress({ phase: 'resolving-prevouts' });
+        try {
+          const prevoutStats = await this.resolvePrevouts();
+          if (prevoutStats.resolved > 0) {
+            console.log(`[TransactionSync] Prevout resolution: ${prevoutStats.resolved} resolved, ${prevoutStats.fetchedFromNode} fetched from node`);
+          }
+        } catch (err) {
+          console.warn('[TransactionSync] Prevout resolution failed (non-fatal):', err);
+        }
+      }
+
       this.updateProgress({
         phase: 'complete',
         addressesProcessed: totalProcessed,
@@ -1361,15 +1386,18 @@ export class TransactionSyncService {
       const participantsBatch: TransactionParticipant[] = [];
 
       for (const input of parsed.inputs) {
-        const { recordId: inputRecordId, isNew } = await this.findOrCreateAddressRecord(
-          input.address, 
-          newAddressDepth,
-          parsed.txid,
-          recordId
-        );
-        if (isNew) stats.newRecords++;
-
-        await this.updateFirstSeenBlockTime(inputRecordId, parsed.blockTime);
+        let inputRecordId: number | undefined;
+        if (input.address) {
+          const { recordId: rid, isNew } = await this.findOrCreateAddressRecord(
+            input.address, 
+            newAddressDepth,
+            parsed.txid,
+            recordId
+          );
+          inputRecordId = rid;
+          if (isNew) stats.newRecords++;
+          await this.updateFirstSeenBlockTime(rid, parsed.blockTime);
+        }
 
         participantsBatch.push({
           txid: parsed.txid,
@@ -1444,6 +1472,144 @@ export class TransactionSyncService {
     if (stats.imported > 0) {
       this.deferNotification('transactionParticipants');
       this.deferNotification('blockchainTransactions');
+    }
+
+    return stats;
+  }
+
+  async resolvePrevouts(onProgress?: (resolved: number, total: number) => void): Promise<{ resolved: number; fetchedFromNode: number; errors: number }> {
+    const stats = { resolved: 0, fetchedFromNode: 0, errors: 0 };
+
+    const unresolvedInputs = await db.transactionParticipants
+      .where('role').equals('input')
+      .filter(p => (!p.address || p.address === '') && p.prevTxid !== undefined && p.prevVout !== undefined)
+      .toArray();
+
+    if (unresolvedInputs.length === 0) {
+      console.log('[TransactionSync] No unresolved prevouts found');
+      return stats;
+    }
+
+    console.log(`[TransactionSync] Resolving ${unresolvedInputs.length} unresolved prevout inputs`);
+
+    const localOutputCache = new Map<string, { address: string; amount: number; scriptType?: string }>();
+    const prevTxids = new Set<string>();
+    for (const inp of unresolvedInputs) {
+      if (inp.prevTxid) prevTxids.add(inp.prevTxid);
+    }
+    const prevTxidArr = Array.from(prevTxids);
+    for (let i = 0; i < prevTxidArr.length; i += 500) {
+      const batch = prevTxidArr.slice(i, i + 500);
+      const outputs = await db.transactionParticipants
+        .where('txid').anyOf(batch)
+        .and(p => p.role === 'output' && p.vout !== undefined)
+        .toArray();
+      for (const o of outputs) {
+        localOutputCache.set(`${o.txid}:${o.vout}`, {
+          address: o.address,
+          amount: Number(o.amount) || 0,
+          scriptType: o.scriptType,
+        });
+      }
+    }
+
+    const needFetch = new Set<string>();
+    for (const inp of unresolvedInputs) {
+      const key = `${inp.prevTxid}:${inp.prevVout}`;
+      if (!localOutputCache.has(key) && inp.prevTxid) {
+        needFetch.add(inp.prevTxid);
+      }
+    }
+
+    if (needFetch.size > 0) {
+      console.log(`[TransactionSync] Fetching ${needFetch.size} previous transactions from node for prevout resolution`);
+      const fetchArr = Array.from(needFetch);
+      const CONCURRENCY = 4;
+      for (let i = 0; i < fetchArr.length; i += CONCURRENCY) {
+        if (this.cancelled) break;
+        const chunk = fetchArr.slice(i, i + CONCURRENCY);
+        const results = await Promise.allSettled(
+          chunk.map(txid => this.provider.getTransaction(txid).then(apiTx => ({ txid, apiTx })))
+        );
+        for (const r of results) {
+          if (r.status === 'fulfilled' && r.value.apiTx) {
+            const { txid, apiTx } = r.value;
+            for (const vout of apiTx.vout) {
+              if (vout.scriptpubkey_address) {
+                localOutputCache.set(`${txid}:${vout.n}`, {
+                  address: vout.scriptpubkey_address,
+                  amount: vout.value,
+                  scriptType: vout.scriptpubkey_type,
+                });
+              }
+            }
+            stats.fetchedFromNode++;
+          } else if (r.status === 'rejected') {
+            stats.errors++;
+          }
+        }
+
+        if ((i + CONCURRENCY) % 20 === 0) {
+          await this.yieldToUI();
+          if (onProgress) onProgress(stats.resolved, unresolvedInputs.length);
+        }
+      }
+    }
+
+    const resolvedAddresses = new Set<string>();
+    for (const inp of unresolvedInputs) {
+      const key = `${inp.prevTxid}:${inp.prevVout}`;
+      const resolved = localOutputCache.get(key);
+      if (resolved && resolved.address) {
+        resolvedAddresses.add(resolved.address);
+      }
+    }
+
+    const addressToRecordId = new Map<string, number>();
+    const addrArr = Array.from(resolvedAddresses);
+    for (let i = 0; i < addrArr.length; i += 500) {
+      const batch = addrArr.slice(i, i + 500);
+      const records = await db.records
+        .where('inputString').anyOf(batch)
+        .toArray();
+      for (const r of records) {
+        if (r.id && r.inputString) {
+          addressToRecordId.set(r.inputString, r.id);
+        }
+      }
+    }
+
+    const updateBatch: Array<{ id: number; changes: Partial<TransactionParticipant> }> = [];
+    for (const inp of unresolvedInputs) {
+      const key = `${inp.prevTxid}:${inp.prevVout}`;
+      const resolved = localOutputCache.get(key);
+      if (resolved && resolved.address && inp.id) {
+        updateBatch.push({
+          id: inp.id,
+          changes: {
+            address: resolved.address,
+            amount: resolved.amount,
+            scriptType: resolved.scriptType as any,
+            recordId: addressToRecordId.get(resolved.address),
+          },
+        });
+        stats.resolved++;
+      }
+    }
+
+    if (updateBatch.length > 0) {
+      for (let i = 0; i < updateBatch.length; i += 200) {
+        const batch = updateBatch.slice(i, i + 200);
+        await db.transaction('rw', db.transactionParticipants, async () => {
+          for (const { id, changes } of batch) {
+            await db.transactionParticipants.update(id, changes);
+          }
+        });
+        if (onProgress) onProgress(Math.min(stats.resolved, unresolvedInputs.length), unresolvedInputs.length);
+      }
+      console.log(`[TransactionSync] Resolved ${stats.resolved} prevout inputs (${stats.fetchedFromNode} fetched from node, ${stats.errors} errors)`);
+      this.deferNotification('transactionParticipants');
+      this.flushNotifications();
     }
 
     return stats;
