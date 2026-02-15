@@ -1,5 +1,5 @@
 import { useState, useMemo, useCallback } from "react";
-import { FileDown, Loader2, RefreshCw } from "lucide-react";
+import { AlertTriangle, FileDown, Loader2, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -175,12 +175,51 @@ export default function StatementReport() {
       setUsedAddresses(addresses);
 
       const addressSet = new Set(addresses);
+
       const allParticipants = await db.transactionParticipants
         .where("address")
         .anyOf(addresses)
         .toArray();
 
       const txidSet = new Set(allParticipants.map(p => p.txid));
+
+      const ourOutputs: Array<{ txid: string; vout: number; amount: number; address: string }> = [];
+      for (const p of allParticipants) {
+        if (p.role === "output" && p.vout !== undefined) {
+          ourOutputs.push({ txid: p.txid, vout: p.vout, amount: Number(p.amount) || 0, address: p.address });
+        }
+      }
+
+      const spendingTxids = new Set<string>();
+      const spentOutputAmounts = new Map<string, { amount: number; address: string; spendingTxid: string }>();
+      for (let i = 0; i < ourOutputs.length; i += 200) {
+        const batch = ourOutputs.slice(i, i + 200);
+        const keys = batch.map(o => [o.txid, o.vout] as [string, number]);
+        const spendingInputs = await db.transactionParticipants
+          .where("[prevTxid+prevVout]")
+          .anyOf(keys)
+          .toArray();
+        for (const inp of spendingInputs) {
+          if (!txidSet.has(inp.txid)) {
+            spendingTxids.add(inp.txid);
+          }
+          if (inp.prevTxid && inp.prevVout !== undefined) {
+            const output = batch.find(o => o.txid === inp.prevTxid && o.vout === inp.prevVout);
+            if (output) {
+              spentOutputAmounts.set(`${inp.txid}:${inp.prevTxid}:${inp.prevVout}`, {
+                amount: output.amount,
+                address: output.address,
+                spendingTxid: inp.txid,
+              });
+            }
+          }
+        }
+      }
+
+      Array.from(spendingTxids).forEach(stxid => {
+        txidSet.add(stxid);
+      });
+
       const txids = Array.from(txidSet);
 
       const txMap = new Map<string, BlockchainTransaction>();
@@ -203,55 +242,74 @@ export default function StatementReport() {
         }
       }
 
-      const inputAmountLookup = async (prevTxid: string, prevVout: number): Promise<number> => {
-        const spentOutputs = await db.transactionParticipants
-          .where("[txid+role]")
-          .equals([prevTxid, "output"])
-          .toArray();
-        const match = spentOutputs.find(o => o.vout === prevVout);
-        return match ? (Number(match.amount) || 0) : 0;
-      };
+      const outputAmountLookup = new Map<string, number>();
+      for (const [, participants] of Array.from(allTxParticipants)) {
+        for (const p of participants) {
+          if (p.role === "output" && p.vout !== undefined) {
+            const key = `${p.txid}:${p.vout}`;
+            outputAmountLookup.set(key, Number(p.amount) || 0);
+          }
+        }
+      }
 
-      const missingAmountLookups: Array<{ txid: string; prevTxid: string; prevVout: number }> = [];
-      for (const [txid, participants] of Array.from(allTxParticipants.entries())) {
+      const unresolvedPrevOuts = new Set<string>();
+      for (const [, participants] of Array.from(allTxParticipants)) {
         for (const p of participants) {
           if (p.role !== "input") continue;
           if (!addressSet.has(p.address)) continue;
           const amt = Number(p.amount) || 0;
           if (amt === 0 && p.prevTxid && p.prevVout !== undefined) {
-            missingAmountLookups.push({ txid, prevTxid: p.prevTxid, prevVout: p.prevVout });
+            const lookupKey = `${p.prevTxid}:${p.prevVout}`;
+            if (!outputAmountLookup.has(lookupKey)) {
+              unresolvedPrevOuts.add(lookupKey);
+            }
           }
         }
       }
 
-      const resolvedAmounts = new Map<string, number>();
-      for (const lookup of missingAmountLookups) {
-        const key = `${lookup.prevTxid}:${lookup.prevVout}`;
-        if (!resolvedAmounts.has(key)) {
-          const amount = await inputAmountLookup(lookup.prevTxid, lookup.prevVout);
-          resolvedAmounts.set(key, amount);
+      if (unresolvedPrevOuts.size > 0) {
+        const lookupKeys = Array.from(unresolvedPrevOuts);
+        const prevTxids = Array.from(new Set(lookupKeys.map(k => k.split(":")[0])));
+        for (let i = 0; i < prevTxids.length; i += 500) {
+          const batch = prevTxids.slice(i, i + 500);
+          const prevOutputs = await db.transactionParticipants
+            .where("txid")
+            .anyOf(batch)
+            .filter(p => p.role === "output")
+            .toArray();
+          for (const po of prevOutputs) {
+            if (po.vout !== undefined) {
+              const key = `${po.txid}:${po.vout}`;
+              if (!outputAmountLookup.has(key)) {
+                outputAmountLookup.set(key, Number(po.amount) || 0);
+              }
+            }
+          }
         }
       }
 
       const netByTxid = new Map<string, number>();
 
-      for (const [txid, participants] of Array.from(allTxParticipants.entries())) {
+      for (const [txid, participants] of Array.from(allTxParticipants)) {
         const seen = new Set<string>();
         let net = 0;
+        let hasOurInputOrOutput = false;
 
         for (const p of participants) {
           if (p.role !== "input" && p.role !== "output") continue;
           if (!addressSet.has(p.address)) continue;
 
+          hasOurInputOrOutput = true;
+
           const dedupKey = p.role === "input"
-            ? `in:${p.prevTxid ?? p.id ?? ""}:${p.prevVout ?? ""}`
+            ? `in:${p.prevTxid ?? ""}:${p.prevVout ?? p.id ?? ""}`
             : `out:${p.vout ?? p.id ?? ""}`;
           if (seen.has(dedupKey)) continue;
           seen.add(dedupKey);
 
           let amount = Number(p.amount) || 0;
           if (p.role === "input" && amount === 0 && p.prevTxid && p.prevVout !== undefined) {
-            amount = resolvedAmounts.get(`${p.prevTxid}:${p.prevVout}`) || 0;
+            amount = outputAmountLookup.get(`${p.prevTxid}:${p.prevVout}`) || 0;
           }
 
           if (p.role === "output") {
@@ -261,10 +319,27 @@ export default function StatementReport() {
           }
         }
 
-        const hasOurAddress = participants.some(p =>
-          (p.role === "input" || p.role === "output") && addressSet.has(p.address)
-        );
-        if (hasOurAddress) {
+        if (!hasOurInputOrOutput && spendingTxids.has(txid)) {
+          const spentEntries = Array.from(spentOutputAmounts.entries())
+            .filter(([key]) => key.startsWith(`${txid}:`));
+          for (const [, info] of spentEntries) {
+            net -= info.amount;
+          }
+          const ourChangeOutputs = participants.filter(
+            (p: TransactionParticipant) => p.role === "output" && addressSet.has(p.address)
+          );
+          for (const co of ourChangeOutputs) {
+            const coAmount = Number(co.amount) || 0;
+            const coDedupKey = `out:${co.vout ?? co.id ?? ""}`;
+            if (!seen.has(coDedupKey)) {
+              seen.add(coDedupKey);
+              net += coAmount;
+            }
+          }
+          hasOurInputOrOutput = true;
+        }
+
+        if (hasOurInputOrOutput) {
           netByTxid.set(txid, net);
         }
       }
@@ -326,6 +401,11 @@ export default function StatementReport() {
           participants: allTxParticipants.get(entry.txid) || [],
         });
       }
+
+      const incoming = resultRows.filter(r => r.netSats > 0).length;
+      const outgoing = resultRows.filter(r => r.netSats < 0).length;
+      const zero = resultRows.filter(r => r.netSats === 0).length;
+      console.log(`[Statement] Generated ${resultRows.length} rows: ${incoming} incoming, ${outgoing} outgoing, ${zero} zero-net`);
 
       setRows(resultRows);
       setHasGenerated(true);
@@ -614,12 +694,35 @@ export default function StatementReport() {
         </Card>
       )}
 
+      {hasGenerated && !isGenerating && rows.length > 0 && rows.every(r => r.netSats >= 0) && rows.length > 2 && (
+        <Card className="border-amber-500/40">
+          <CardContent className="py-3 flex items-start gap-2">
+            <AlertTriangle className="h-4 w-4 text-amber-500 mt-0.5 shrink-0" />
+            <p className="text-sm text-muted-foreground" data-testid="text-data-warning">
+              All transactions show as incoming. This may indicate incomplete transaction data.
+              If you synced with Electrs, input participant amounts may not be stored.
+              Re-syncing these addresses with an Esplora-compatible node can resolve this.
+            </p>
+          </CardContent>
+        </Card>
+      )}
+
       {hasGenerated && !isGenerating && rows.length > 0 && (
         <Card>
           <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2">
             <div className="flex items-center gap-2 flex-wrap">
               <CardTitle data-testid="text-report-title">Transaction Statement</CardTitle>
               <Badge variant="secondary" data-testid="badge-tx-count">{rows.length} transactions</Badge>
+              {rows.filter(r => r.netSats > 0).length > 0 && (
+                <Badge variant="outline" className="text-green-600 dark:text-green-400 border-green-600/30" data-testid="badge-incoming-count">
+                  {rows.filter(r => r.netSats > 0).length} incoming
+                </Badge>
+              )}
+              {rows.filter(r => r.netSats < 0).length > 0 && (
+                <Badge variant="outline" className="text-red-600 dark:text-red-400 border-red-600/30" data-testid="badge-outgoing-count">
+                  {rows.filter(r => r.netSats < 0).length} outgoing
+                </Badge>
+              )}
             </div>
             <Button variant="outline" onClick={exportPdf} data-testid="button-export-pdf">
               <FileDown className="mr-2 h-4 w-4" />
