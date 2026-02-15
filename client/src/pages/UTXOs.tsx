@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from "react";
+import { useAsyncMemo, yieldToUI, checkAbort } from "@/hooks/use-async-memo";
 import { useLiveQuery } from "dexie-react-hooks";
 import { format } from "date-fns";
 import { Link } from "wouter";
@@ -380,37 +381,54 @@ export default function UTXOs() {
     return priceByDate.get(date);
   }, [priceByDate]);
 
-  // Check what percentage of inputs have outpoint data (prevTxid/prevVout) for exact UTXO matching
-  const outpointDataStatus = useMemo(() => {
+  const { value: outpointDataStatus, isComputing: outpointDataStatusComputing } = useAsyncMemo(async (signal) => {
     if (!participants) return { hasData: false, percentage: 0, total: 0, withData: 0 };
-    const inputs = participants.filter(p => p.role === 'input');
-    if (inputs.length === 0) return { hasData: true, percentage: 100, total: 0, withData: 0 };
-    
-    // Count inputs with prevTxid populated (excludes coinbase which legitimately have none)
-    const inputsWithOutpoint = inputs.filter(i => i.prevTxid !== undefined && i.prevTxid !== null);
-    const percentage = Math.round((inputsWithOutpoint.length / inputs.length) * 100);
-    
+    let inputCount = 0;
+    let withDataCount = 0;
+    for (let i = 0; i < participants.length; i++) {
+      const p = participants[i];
+      if (p.role === 'input') {
+        inputCount++;
+        if (p.prevTxid !== undefined && p.prevTxid !== null) {
+          withDataCount++;
+        }
+      }
+      if (i % 1000 === 999) {
+        checkAbort(signal);
+        await yieldToUI();
+      }
+    }
+    if (inputCount === 0) return { hasData: true, percentage: 100, total: 0, withData: 0 };
+    const percentage = Math.round((withDataCount / inputCount) * 100);
     return {
       hasData: percentage > 0,
       percentage,
-      total: inputs.length,
-      withData: inputsWithOutpoint.length
+      total: inputCount,
+      withData: withDataCount
     };
-  }, [participants]);
+  }, [participants], { hasData: false, percentage: 0, total: 0, withData: 0 });
 
   // For backward compatibility
   const hasOutpointData = outpointDataStatus.hasData && outpointDataStatus.percentage >= 50;
 
-  // HEURISTIC UTXO calculation (uses address:amount matching - may be approximate)
-  const utxosHeuristic = useMemo(() => {
+  const { value: utxosHeuristic, isComputing: utxosHeuristicComputing } = useAsyncMemo(async (signal) => {
     if (!participants || !transactions) return [];
 
     const cutoffTime = selectedDate 
       ? Math.floor(selectedDate.getTime() / 1000) + 86400
       : Infinity;
 
-    const outputs = participants.filter(p => p.role === 'output');
-    const inputs = participants.filter(p => p.role === 'input');
+    const outputs: typeof participants = [];
+    const inputs: typeof participants = [];
+    for (let i = 0; i < participants.length; i++) {
+      const p = participants[i];
+      if (p.role === 'output') outputs.push(p);
+      else if (p.role === 'input') inputs.push(p);
+      if (i % 1000 === 999) {
+        checkAbort(signal);
+        await yieldToUI();
+      }
+    }
 
     const outputsWithTime = outputs.map(output => {
       const tx = txidToTx.get(output.txid);
@@ -422,6 +440,9 @@ export default function UTXOs() {
       return (a.output.vout ?? 0) - (b.output.vout ?? 0);
     });
 
+    checkAbort(signal);
+    await yieldToUI();
+
     const inputsWithTime = inputs.map(input => {
       const tx = txidToTx.get(input.txid);
       return { input, blockTime: tx?.blockTime ?? 0 };
@@ -430,17 +451,23 @@ export default function UTXOs() {
     inputsWithTime.sort((a, b) => a.blockTime - b.blockTime);
 
     const inputsByAddressAmount = new Map<string, { input: TransactionParticipant; blockTime: number }[]>();
-    inputsWithTime.forEach(item => {
+    for (let i = 0; i < inputsWithTime.length; i++) {
+      const item = inputsWithTime[i];
       const key = `${item.input.address}:${item.input.amount}`;
       const existing = inputsByAddressAmount.get(key) || [];
       existing.push(item);
       inputsByAddressAmount.set(key, existing);
-    });
+      if (i % 1000 === 999) {
+        checkAbort(signal);
+        await yieldToUI();
+      }
+    }
 
     const result: UTXO[] = [];
     const matchedInputIndices = new Map<string, number>();
 
-    for (const { output, blockTime, blockHeight } of outputsWithTime) {
+    for (let i = 0; i < outputsWithTime.length; i++) {
+      const { output, blockTime, blockHeight } = outputsWithTime[i];
       const key = `${output.address}:${output.amount}`;
       const matchingInputs = inputsByAddressAmount.get(key) || [];
       
@@ -453,82 +480,86 @@ export default function UTXOs() {
       if (spendingInput) {
         const spendIdx = matchingInputs.indexOf(spendingInput);
         matchedInputIndices.set(key, spendIdx + 1);
-        continue;
+      } else {
+        const record = addressToRecord.get(output.address);
+        
+        if (record) {
+          const priceAtReceipt = getPriceForTimestamp(blockTime);
+          const btcAmount = output.amount / 100_000_000;
+          const valueAtReceipt = priceAtReceipt !== undefined ? btcAmount * priceAtReceipt : undefined;
+          
+          result.push({
+            id: `${output.txid}:${output.vout ?? 0}`,
+            txid: output.txid,
+            vout: output.vout ?? 0,
+            address: output.address,
+            amountSats: output.amount,
+            blockTime: blockTime,
+            blockHeight: blockHeight,
+            recordId: record?.id,
+            label: record?.label,
+            owner: record?.owner,
+            walletName: record?.walletName,
+            tags: record?.tags,
+            categories: record?.categories,
+            valueAtReceipt,
+            priceAtReceipt
+          });
+        }
       }
 
-      const record = addressToRecord.get(output.address);
-      
-      // Only include UTXOs for addresses we have records for (non-discovered)
-      if (!record) continue;
-      
-      const priceAtReceipt = getPriceForTimestamp(blockTime);
-      const btcAmount = output.amount / 100_000_000;
-      const valueAtReceipt = priceAtReceipt !== undefined ? btcAmount * priceAtReceipt : undefined;
-      
-      result.push({
-        id: `${output.txid}:${output.vout ?? 0}`,
-        txid: output.txid,
-        vout: output.vout ?? 0,
-        address: output.address,
-        amountSats: output.amount,
-        blockTime: blockTime,
-        blockHeight: blockHeight,
-        recordId: record?.id,
-        label: record?.label,
-        owner: record?.owner,
-        walletName: record?.walletName,
-        tags: record?.tags,
-        categories: record?.categories,
-        valueAtReceipt,
-        priceAtReceipt
-      });
+      if (i % 1000 === 999) {
+        checkAbort(signal);
+        await yieldToUI();
+      }
     }
 
     return result;
-  }, [participants, transactions, txidToTx, addressToRecord, selectedDate, getPriceForTimestamp]);
+  }, [participants, transactions, txidToTx, addressToRecord, selectedDate, getPriceForTimestamp], [] as UTXO[]);
 
-  // EXACT UTXO calculation (uses prevTxid:prevVout outpoint matching - 100% accurate)
-  const utxosExact = useMemo(() => {
+  const { value: utxosExact, isComputing: utxosExactComputing } = useAsyncMemo(async (signal) => {
     if (!participants || !transactions) return [];
 
     const cutoffTime = selectedDate 
       ? Math.floor(selectedDate.getTime() / 1000) + 86400
       : Infinity;
 
-    const outputs = participants.filter(p => p.role === 'output');
-    const inputs = participants.filter(p => p.role === 'input');
-
-    // Build a set of spent outpoints (prevTxid:prevVout) from inputs within the cutoff time
+    const outputs: typeof participants = [];
     const spentOutpoints = new Set<string>();
-    inputs.forEach(input => {
-      if (input.prevTxid !== undefined && input.prevVout !== undefined) {
-        const tx = txidToTx.get(input.txid);
-        const inputBlockTime = tx?.blockTime ?? 0;
-        // Only count as spent if the spending tx is within cutoff
-        if (inputBlockTime > 0 && inputBlockTime <= cutoffTime) {
-          const outpoint = `${input.prevTxid}:${input.prevVout}`;
-          spentOutpoints.add(outpoint);
+
+    for (let i = 0; i < participants.length; i++) {
+      const p = participants[i];
+      if (p.role === 'output') {
+        outputs.push(p);
+      } else if (p.role === 'input') {
+        if (p.prevTxid !== undefined && p.prevVout !== undefined) {
+          const tx = txidToTx.get(p.txid);
+          const inputBlockTime = tx?.blockTime ?? 0;
+          if (inputBlockTime > 0 && inputBlockTime <= cutoffTime) {
+            spentOutpoints.add(`${p.prevTxid}:${p.prevVout}`);
+          }
         }
       }
-    });
+      if (i % 1000 === 999) {
+        checkAbort(signal);
+        await yieldToUI();
+      }
+    }
 
     const result: UTXO[] = [];
 
-    for (const output of outputs) {
+    for (let i = 0; i < outputs.length; i++) {
+      const output = outputs[i];
       const tx = txidToTx.get(output.txid);
       const blockTime = tx?.blockTime ?? 0;
       const blockHeight = tx?.blockHeight ?? 0;
 
-      // Skip if output is not confirmed or after cutoff
       if (blockTime <= 0 || blockTime > cutoffTime) continue;
 
-      // Check if this output has been spent (its outpoint appears in spentOutpoints)
       const outpoint = `${output.txid}:${output.vout ?? 0}`;
       if (spentOutpoints.has(outpoint)) continue;
 
       const record = addressToRecord.get(output.address);
-      
-      // Only include UTXOs for addresses we have records for (non-discovered)
       if (!record) continue;
       
       const priceAtReceipt = getPriceForTimestamp(blockTime);
@@ -552,21 +583,26 @@ export default function UTXOs() {
         valueAtReceipt,
         priceAtReceipt
       });
+
+      if (i % 1000 === 999) {
+        checkAbort(signal);
+        await yieldToUI();
+      }
     }
 
     return result;
-  }, [participants, transactions, txidToTx, addressToRecord, selectedDate, getPriceForTimestamp]);
+  }, [participants, transactions, txidToTx, addressToRecord, selectedDate, getPriceForTimestamp], [] as UTXO[]);
 
   // Select which UTXO calculation to use based on mode
   const utxos = useMemo(() => {
     return utxoMode === 'exact' ? utxosExact : utxosHeuristic;
   }, [utxoMode, utxosExact, utxosHeuristic]);
 
-  // Group UTXOs by address
-  const addressGroups = useMemo(() => {
+  const { value: addressGroups, isComputing: addressGroupsComputing } = useAsyncMemo(async (signal) => {
     const groups = new Map<string, AddressGroup>();
     
-    utxos.forEach(utxo => {
+    for (let i = 0; i < utxos.length; i++) {
+      const utxo = utxos[i];
       const existing = groups.get(utxo.address);
       
       if (existing) {
@@ -593,9 +629,13 @@ export default function UTXOs() {
           totalValueAtReceipt: utxo.valueAtReceipt
         });
       }
-    });
 
-    // Calculate current values and gains
+      if (i % 1000 === 999) {
+        checkAbort(signal);
+        await yieldToUI();
+      }
+    }
+
     const groupsArray = Array.from(groups.values());
     groupsArray.forEach(group => {
       if (latestPrice) {
@@ -612,7 +652,7 @@ export default function UTXOs() {
     });
 
     return groupsArray;
-  }, [utxos, latestPrice]);
+  }, [utxos, latestPrice], [] as AddressGroup[]);
 
   const filteredGroups = useMemo(() => {
     let filtered = addressGroups;

@@ -698,7 +698,7 @@ export async function encryptParticipantsBatch(
 export async function decryptParticipantsBatch(
   participants: TransactionParticipant[],
   key: CryptoKey,
-  chunkSize: number = 500
+  chunkSize: number = 100
 ): Promise<TransactionParticipant[]> {
   const results: TransactionParticipant[] = [];
   for (let i = 0; i < participants.length; i += chunkSize) {

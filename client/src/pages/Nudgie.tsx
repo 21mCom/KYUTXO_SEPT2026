@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from "react";
+import { useAsyncMemo, yieldToUI, checkAbort } from "@/hooks/use-async-memo";
 import { useLiveQuery } from "dexie-react-hooks";
 import { format } from "date-fns";
 import { 
@@ -259,19 +260,25 @@ export default function Nudgie() {
     return map;
   }, [decryptedTransactionRecords]);
 
-  const transactionsWithContext = useMemo(() => {
+  const { value: transactionsWithContext, isComputing: transactionsWithContextComputing } = useAsyncMemo(async (signal) => {
     if (!transactions || !participants) return [];
     
     const participantsByTxid = new Map<string, TransactionParticipant[]>();
-    participants.forEach(p => {
+    for (let i = 0; i < participants.length; i++) {
+      const p = participants[i];
       const existing = participantsByTxid.get(p.txid) || [];
       existing.push(p);
       participantsByTxid.set(p.txid, existing);
-    });
+      if (i % 1000 === 999) {
+        checkAbort(signal);
+        await yieldToUI();
+      }
+    }
 
     const results: TransactionWithContext[] = [];
 
-    for (const tx of transactions) {
+    for (let ti = 0; ti < transactions.length; ti++) {
+      const tx = transactions[ti];
       const txParticipants = participantsByTxid.get(tx.txid) || [];
       const inputs = txParticipants.filter(p => p.role === 'input');
       const outputs = txParticipants.filter(p => p.role === 'output');
@@ -359,10 +366,15 @@ export default function Nudgie() {
         counterpartyAddresses,
         netFlow
       });
+
+      if (ti % 1000 === 999) {
+        checkAbort(signal);
+        await yieldToUI();
+      }
     }
 
     return results;
-  }, [transactions, participants, addressToRecord, txidToRecord, sourceFilter]);
+  }, [transactions, participants, addressToRecord, txidToRecord, sourceFilter], [] as TransactionWithContext[]);
 
   const groupedTransactions = useMemo(() => {
     const selfTransfers = transactionsWithContext.filter(tx => tx.groupType === 'self-transfer');

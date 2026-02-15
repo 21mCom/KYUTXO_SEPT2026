@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect, useRef } from "react";
+import { useAsyncMemo, yieldToUI, checkAbort } from "@/hooks/use-async-memo";
 import { useLiveQuery } from "dexie-react-hooks";
 import { format } from "date-fns";
 import { db, BlockchainTransaction, TransactionParticipant, Record } from "@/lib/database";
@@ -166,31 +167,44 @@ export default function Transactions() {
     return map;
   }, [decryptedRecords]);
 
-  // Combine transactions with their participants
-  const transactionsWithParticipants = useMemo(() => {
+  const { value: transactionsWithParticipants, isComputing: transactionsWithParticipantsComputing } = useAsyncMemo(async (signal) => {
     if (!transactions || !participants) return [];
     
     const participantsByTxid = new Map<string, TransactionParticipant[]>();
-    participants.forEach(p => {
+    for (let i = 0; i < participants.length; i++) {
+      const p = participants[i];
       const existing = participantsByTxid.get(p.txid) || [];
       existing.push(p);
       participantsByTxid.set(p.txid, existing);
-    });
+      if (i % 1000 === 999) {
+        checkAbort(signal);
+        await yieldToUI();
+      }
+    }
 
-    return transactions.map(tx => {
+    const result: TransactionWithParticipants[] = [];
+    for (let i = 0; i < transactions.length; i++) {
+      const tx = transactions[i];
       const txParticipants = participantsByTxid.get(tx.txid) || [];
       const inputs = txParticipants.filter(p => p.role === 'input');
       const outputs = txParticipants.filter(p => p.role === 'output');
       
-      return {
+      result.push({
         ...tx,
         inputs,
         outputs,
         totalInputValue: inputs.reduce((sum, p) => sum + p.amount, 0),
         totalOutputValue: outputs.reduce((sum, p) => sum + p.amount, 0),
-      } as TransactionWithParticipants;
-    });
-  }, [transactions, participants]);
+      } as TransactionWithParticipants);
+
+      if (i % 1000 === 999) {
+        checkAbort(signal);
+        await yieldToUI();
+      }
+    }
+
+    return result;
+  }, [transactions, participants], [] as TransactionWithParticipants[]);
 
   // Build set of user-curated addresses (for filtering transactions)
   const userCuratedAddresses = useMemo(() => {
@@ -207,29 +221,41 @@ export default function Transactions() {
     return set;
   }, [decryptedRecords]);
 
-  // Count transactions that only involve blockchain-discovered addresses
-  const blockchainOnlyTxCount = useMemo(() => {
-    return transactionsWithParticipants.filter(tx => {
+  const { value: blockchainOnlyTxCount, isComputing: blockchainOnlyTxCountComputing } = useAsyncMemo(async (signal) => {
+    let count = 0;
+    for (let i = 0; i < transactionsWithParticipants.length; i++) {
+      const tx = transactionsWithParticipants[i];
       const allAddresses = [...tx.inputs, ...tx.outputs].map(p => p.address);
-      // Transaction only involves blockchain-discovered if NONE of its addresses are user-curated
-      return !allAddresses.some(addr => userCuratedAddresses.has(addr));
-    }).length;
-  }, [transactionsWithParticipants, userCuratedAddresses]);
+      if (!allAddresses.some(addr => userCuratedAddresses.has(addr))) {
+        count++;
+      }
+      if (i % 1000 === 999) {
+        checkAbort(signal);
+        await yieldToUI();
+      }
+    }
+    return count;
+  }, [transactionsWithParticipants, userCuratedAddresses], 0);
 
-  // Filter by search, date/amount filters, and blockchain-discovered toggle
-  const filteredTransactions = useMemo(() => {
+  const { value: filteredTransactions, isComputing: filteredTransactionsComputing } = useAsyncMemo(async (signal) => {
     let results = transactionsWithParticipants;
     
-    // Apply smart filtering: only show transactions involving user-curated addresses
     if (!includeBlockchainDiscovered) {
-      results = results.filter(tx => {
+      const filtered: TransactionWithParticipants[] = [];
+      for (let i = 0; i < results.length; i++) {
+        const tx = results[i];
         const allAddresses = [...tx.inputs, ...tx.outputs].map(p => p.address);
-        // Keep transaction if at least one address is user-curated
-        return allAddresses.some(addr => userCuratedAddresses.has(addr));
-      });
+        if (allAddresses.some(addr => userCuratedAddresses.has(addr))) {
+          filtered.push(tx);
+        }
+        if (i % 1000 === 999) {
+          checkAbort(signal);
+          await yieldToUI();
+        }
+      }
+      results = filtered;
     }
     
-    // Apply date and amount filters
     if (hasActiveSearchFilters(searchFilters)) {
       results = filterByDateAndAmount(
         results,
@@ -239,31 +265,40 @@ export default function Transactions() {
       );
     }
     
-    // Apply OP_RETURN filter
     if (opReturnOnly) {
       results = results.filter(tx => tx.hasOpReturn === true);
     }
     
-    // Apply search filter
     if (search.trim()) {
       const searchLower = search.toLowerCase();
-      results = results.filter(tx => {
-        // Search in txid
-        if (tx.txid.toLowerCase().includes(searchLower)) return true;
-        // Search in participant addresses
-        const allAddresses = [...tx.inputs, ...tx.outputs].map(p => p.address);
-        if (allAddresses.some(addr => addr.toLowerCase().includes(searchLower))) return true;
-        // Search in linked record labels
-        const linkedRecords = [...tx.inputs, ...tx.outputs]
-          .map(p => addressToRecord.get(p.address))
-          .filter(Boolean);
-        if (linkedRecords.some(r => r?.label?.toLowerCase().includes(searchLower))) return true;
-        return false;
-      });
+      const searched: TransactionWithParticipants[] = [];
+      for (let i = 0; i < results.length; i++) {
+        const tx = results[i];
+        if (tx.txid.toLowerCase().includes(searchLower)) {
+          searched.push(tx);
+        } else {
+          const allAddresses = [...tx.inputs, ...tx.outputs].map(p => p.address);
+          if (allAddresses.some(addr => addr.toLowerCase().includes(searchLower))) {
+            searched.push(tx);
+          } else {
+            const linkedRecords = [...tx.inputs, ...tx.outputs]
+              .map(p => addressToRecord.get(p.address))
+              .filter(Boolean);
+            if (linkedRecords.some(r => r?.label?.toLowerCase().includes(searchLower))) {
+              searched.push(tx);
+            }
+          }
+        }
+        if (i % 1000 === 999) {
+          checkAbort(signal);
+          await yieldToUI();
+        }
+      }
+      results = searched;
     }
     
     return results;
-  }, [transactionsWithParticipants, search, searchFilters, addressToRecord, includeBlockchainDiscovered, userCuratedAddresses, opReturnOnly]);
+  }, [transactionsWithParticipants, search, searchFilters, addressToRecord, includeBlockchainDiscovered, userCuratedAddresses, opReturnOnly], [] as TransactionWithParticipants[]);
 
   // Pagination
   const totalPages = Math.max(1, Math.ceil(filteredTransactions.length / ITEMS_PER_PAGE));
