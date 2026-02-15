@@ -42,7 +42,7 @@ import {
   HelpCircle
 } from "lucide-react";
 import { SiBitcoin } from "react-icons/si";
-import { decryptRecords, decryptRecordsWithProgress, isEncryptionReady, getDecryptedOwners, getDecryptedWalletNames, getDecryptedTags, getDecryptedCategories } from "@/lib/encryptionFacade";
+import { decryptRecords, decryptRecordsWithProgress, isEncryptionReady, getDecryptedOwners, getDecryptedWalletNames, getDecryptedTags, getDecryptedCategories, getAllDecryptedParticipants } from "@/lib/encryptionFacade";
 import type { DecryptProgress } from "@/lib/encryption/record-encryption";
 import { cn } from "@/lib/utils";
 import { UTXODetailPanel } from "@/components/UTXODetailPanel";
@@ -197,7 +197,7 @@ export default function UTXOs() {
   );
 
   const participants = useLiveQuery(
-    () => db.transactionParticipants.toArray(),
+    () => getAllDecryptedParticipants(),
     []
   );
 

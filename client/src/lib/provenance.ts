@@ -2,7 +2,7 @@
 // Traces UTXO origins and connections between addresses
 
 import { db, type Record, type TransactionParticipant, type BlockchainTransaction, type AddressImportance } from './database';
-import { decryptRecords, isEncryptionReady } from './encryptionFacade';
+import { decryptRecords, isEncryptionReady, getDecryptedParticipantsByAddress, getDecryptedParticipantsByTxid } from './encryptionFacade';
 
 // Importance tier levels (higher number = higher importance)
 export const IMPORTANCE_TIERS: { [key in AddressImportance]: number } = {
@@ -63,10 +63,7 @@ export interface ConnectionResult {
 
 // Get all transaction participants for an address
 async function getAddressParticipants(address: string): Promise<TransactionParticipant[]> {
-  return db.transactionParticipants
-    .where('address')
-    .equals(address)
-    .toArray();
+  return getDecryptedParticipantsByAddress(address);
 }
 
 // Get transaction details
@@ -79,10 +76,7 @@ async function getTransaction(txid: string): Promise<BlockchainTransaction | und
 
 // Get all participants for a transaction
 async function getTransactionParticipants(txid: string): Promise<TransactionParticipant[]> {
-  return db.transactionParticipants
-    .where('txid')
-    .equals(txid)
-    .toArray();
+  return getDecryptedParticipantsByTxid(txid);
 }
 
 // Build address node with label info and importance tier

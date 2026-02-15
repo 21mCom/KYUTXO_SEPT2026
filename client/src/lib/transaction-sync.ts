@@ -4,7 +4,7 @@
 import { db, notifyDbChange, type Record, type BlockchainTransaction, type TransactionParticipant, type AddressSyncState, type NodeSettings, type PausedSyncState, type SkippedAddress, type AddressBlacklist, type SyncProtectionSettings, DEFAULT_SYNC_PROTECTION } from './database';
 import { createProvider, createProviderFromSettings, parseTransaction, MINIMUM_CONFIRMATIONS, type ProviderType, type ParsedTransaction, type BlockchainProvider, type ApiTransaction } from './blockchain-api';
 import { validateAddress } from './bitcoin';
-import { decryptRecords, isEncryptionReady, createRecordOrigin } from './encryptionFacade';
+import { decryptRecords, isEncryptionReady, createRecordOrigin, encryptParticipantsBatchData, encryptParticipantData } from './encryptionFacade';
 
 // Legacy source filter type - kept for backwards compatibility
 export type SourceFilter = 'manual-only' | 'include-tx-import' | 'include-blockchain-sync' | 'all' | 'custom';
@@ -1433,9 +1433,12 @@ export class TransactionSyncService {
         });
       }
 
-      // Batch insert all participants for this transaction at once
+      // Encrypt and batch insert all participants for this transaction at once
       if (participantsBatch.length > 0) {
-        await db.transactionParticipants.bulkAdd(participantsBatch);
+        const encryptedBatch = isEncryptionReady()
+          ? await encryptParticipantsBatchData(participantsBatch)
+          : participantsBatch;
+        await db.transactionParticipants.bulkAdd(encryptedBatch);
       }
 
       txProcessed++;
@@ -1480,10 +1483,15 @@ export class TransactionSyncService {
   async resolvePrevouts(onProgress?: (resolved: number, total: number) => void): Promise<{ resolved: number; fetchedFromNode: number; errors: number }> {
     const stats = { resolved: 0, fetchedFromNode: 0, errors: 0 };
 
-    const unresolvedInputs = await db.transactionParticipants
+    const allInputs = await db.transactionParticipants
       .where('role').equals('input')
-      .filter(p => (!p.address || p.address === '') && p.prevTxid !== undefined && p.prevVout !== undefined)
       .toArray();
+
+    const { decryptParticipantsData } = await import('./encryptionFacade');
+    const decryptedInputs = isEncryptionReady() ? await decryptParticipantsData(allInputs) : allInputs;
+    const unresolvedInputs = decryptedInputs.filter(
+      p => (!p.address || p.address === '') && p.prevTxid !== undefined && p.prevVout !== undefined
+    );
 
     if (unresolvedInputs.length === 0) {
       console.log('[TransactionSync] No unresolved prevouts found');
@@ -1500,16 +1508,19 @@ export class TransactionSyncService {
     const prevTxidArr = Array.from(prevTxids);
     for (let i = 0; i < prevTxidArr.length; i += 500) {
       const batch = prevTxidArr.slice(i, i + 500);
-      const outputs = await db.transactionParticipants
+      const rawOutputs = await db.transactionParticipants
         .where('txid').anyOf(batch)
-        .and(p => p.role === 'output' && p.vout !== undefined)
+        .and(p => p.role === 'output')
         .toArray();
-      for (const o of outputs) {
-        localOutputCache.set(`${o.txid}:${o.vout}`, {
-          address: o.address,
-          amount: Number(o.amount) || 0,
-          scriptType: o.scriptType,
-        });
+      const decryptedOutputs = isEncryptionReady() ? await decryptParticipantsData(rawOutputs) : rawOutputs;
+      for (const o of decryptedOutputs) {
+        if (o.vout !== undefined) {
+          localOutputCache.set(`${o.txid}:${o.vout}`, {
+            address: o.address,
+            amount: Number(o.amount) || 0,
+            scriptType: o.scriptType,
+          });
+        }
       }
     }
 
@@ -1579,30 +1590,32 @@ export class TransactionSyncService {
       }
     }
 
-    const updateBatch: Array<{ id: number; changes: Partial<TransactionParticipant> }> = [];
+    const resolvedParticipants: TransactionParticipant[] = [];
     for (const inp of unresolvedInputs) {
       const key = `${inp.prevTxid}:${inp.prevVout}`;
       const resolved = localOutputCache.get(key);
       if (resolved && resolved.address && inp.id) {
-        updateBatch.push({
-          id: inp.id,
-          changes: {
-            address: resolved.address,
-            amount: resolved.amount,
-            scriptType: resolved.scriptType as any,
-            recordId: addressToRecordId.get(resolved.address),
-          },
-        });
+        const updated: TransactionParticipant = {
+          ...inp,
+          address: resolved.address,
+          amount: resolved.amount,
+          scriptType: resolved.scriptType as any,
+          recordId: addressToRecordId.get(resolved.address),
+        };
+        resolvedParticipants.push(updated);
         stats.resolved++;
       }
     }
 
-    if (updateBatch.length > 0) {
-      for (let i = 0; i < updateBatch.length; i += 200) {
-        const batch = updateBatch.slice(i, i + 200);
+    if (resolvedParticipants.length > 0) {
+      for (let i = 0; i < resolvedParticipants.length; i += 200) {
+        const batch = resolvedParticipants.slice(i, i + 200);
+        const encryptedBatch = isEncryptionReady()
+          ? await encryptParticipantsBatchData(batch)
+          : batch;
         await db.transaction('rw', db.transactionParticipants, async () => {
-          for (const { id, changes } of batch) {
-            await db.transactionParticipants.update(id, changes);
+          for (const p of encryptedBatch) {
+            if (p.id) await db.transactionParticipants.put(p);
           }
         });
         if (onProgress) onProgress(Math.min(stats.resolved, unresolvedInputs.length), unresolvedInputs.length);
@@ -1812,10 +1825,8 @@ export class TransactionSyncService {
     role: 'input' | 'output';
     amount: number;
   }>> {
-    const participants = await db.transactionParticipants
-      .where('address')
-      .equals(address)
-      .toArray();
+    const { getDecryptedParticipantsByAddress } = await import('./encryptionFacade');
+    const participants = await getDecryptedParticipantsByAddress(address);
 
     const results: Array<{
       transaction: BlockchainTransaction;

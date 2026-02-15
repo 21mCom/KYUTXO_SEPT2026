@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { db } from "@/lib/database";
+import { getAllDecryptedParticipants } from "@/lib/encryptionFacade";
 
 export interface AddressStats {
   balanceSats: number;
@@ -28,10 +29,9 @@ export function useAddressStats(
         return;
       }
 
-      const participants = await db.transactionParticipants
-        .where('address')
-        .anyOf(addressStrings)
-        .toArray();
+      const addressSet = new Set(addressStrings);
+      const allParticipants = await getAllDecryptedParticipants();
+      const participants = allParticipants.filter(p => addressSet.has(p.address));
 
       const txids = Array.from(new Set(participants.map(p => p.txid)));
       const txMap = new Map<string, number>();

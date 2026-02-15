@@ -13,7 +13,7 @@ import {
   ACQUISITION_METHOD_OPTIONS,
   DISPOSITION_TYPE_OPTIONS,
 } from "@/lib/database";
-import { decryptRecords, decryptRecordsWithProgress, updateRecord, createRecord, getDecryptedTags, getDecryptedCategories, isEncryptionReady } from "@/lib/encryptionFacade";
+import { decryptRecords, decryptRecordsWithProgress, updateRecord, createRecord, getDecryptedTags, getDecryptedCategories, isEncryptionReady, getAllDecryptedParticipants } from "@/lib/encryptionFacade";
 import type { DecryptProgress } from "@/lib/encryption/record-encryption";
 import { uploadAttachment } from "@/lib/attachments";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -150,7 +150,7 @@ export default function Nudgie() {
   );
 
   const participants = useLiveQuery(
-    () => db.transactionParticipants.toArray(),
+    () => getAllDecryptedParticipants(),
     []
   );
 

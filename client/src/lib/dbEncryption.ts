@@ -2,7 +2,7 @@
 // Handles encryption/decryption of record data in IndexedDB
 
 import { encrypt, decrypt } from './crypto';
-import { db, type Record, type Attachment, type Tag, type Category, type RecordOrigin, type Owner, type WalletName, type SeedName, type WalletSoftware, type DerivationTemplate, type Evidence, type EvidenceAttachment } from './database';
+import { db, type Record, type Attachment, type Tag, type Category, type RecordOrigin, type Owner, type WalletName, type SeedName, type WalletSoftware, type DerivationTemplate, type Evidence, type EvidenceAttachment, type TransactionParticipant } from './database';
 
 // Fields to encrypt for each record type
 const RECORD_SENSITIVE_FIELDS: (keyof Record)[] = [
@@ -212,11 +212,13 @@ export async function migrateToEncrypted(key: CryptoKey): Promise<{
   attachments: number;
   tags: number;
   categories: number;
+  participants: number;
 }> {
   let recordCount = 0;
   let attachmentCount = 0;
   let tagCount = 0;
   let categoryCount = 0;
+  let participantCount = 0;
 
   // Migrate records
   const plaintextRecords = await db.records
@@ -262,11 +264,28 @@ export async function migrateToEncrypted(key: CryptoKey): Promise<{
     categoryCount++;
   }
 
+  // Migrate transaction participants (batched for performance)
+  const plaintextParticipants = await db.transactionParticipants
+    .filter(p => !p.isEncrypted)
+    .toArray();
+
+  for (let i = 0; i < plaintextParticipants.length; i += 200) {
+    const chunk = plaintextParticipants.slice(i, i + 200);
+    await db.transaction('rw', db.transactionParticipants, async () => {
+      for (const p of chunk) {
+        const encrypted = await encryptParticipant(p, key);
+        await db.transactionParticipants.put(encrypted);
+        participantCount++;
+      }
+    });
+  }
+
   return {
     records: recordCount,
     attachments: attachmentCount,
     tags: tagCount,
     categories: categoryCount,
+    participants: participantCount,
   };
 }
 
@@ -283,6 +302,9 @@ export async function hasPlaintextData(): Promise<boolean> {
 
   const plaintextCategories = await db.categories.filter(c => !c.isEncrypted).count();
   if (plaintextCategories > 0) return true;
+
+  const plaintextParticipants = await db.transactionParticipants.filter(p => !p.isEncrypted).count();
+  if (plaintextParticipants > 0) return true;
 
   return false;
 }
@@ -604,6 +626,97 @@ export async function decryptEvidenceAttachment(attachment: EvidenceAttachment, 
   }
 }
 
+// ============ TRANSACTION PARTICIPANT ENCRYPTION ============
+
+const PARTICIPANT_SENSITIVE_FIELDS: (keyof TransactionParticipant)[] = [
+  'address',
+  'amount',
+  'prevTxid',
+  'prevVout',
+  'scriptType',
+];
+
+export async function encryptParticipant(participant: TransactionParticipant, key: CryptoKey): Promise<TransactionParticipant> {
+  const sensitiveData: Partial<TransactionParticipant> = {};
+
+  for (const field of PARTICIPANT_SENSITIVE_FIELDS) {
+    if (participant[field] !== undefined) {
+      sensitiveData[field] = participant[field] as any;
+    }
+  }
+
+  const encryptedPayload = await encrypt(JSON.stringify(sensitiveData), key);
+
+  return {
+    ...participant,
+    address: '[encrypted]',
+    amount: 0,
+    prevTxid: participant.prevTxid !== undefined ? '[encrypted]' : undefined,
+    prevVout: participant.prevVout !== undefined ? 0 : undefined,
+    scriptType: undefined,
+    encryptedPayload,
+    isEncrypted: true,
+  };
+}
+
+export async function decryptParticipant(participant: TransactionParticipant, key: CryptoKey): Promise<TransactionParticipant> {
+  if (!participant.isEncrypted || !participant.encryptedPayload) {
+    return participant;
+  }
+
+  try {
+    const decryptedJson = await decrypt(participant.encryptedPayload, key);
+    const sensitiveData = JSON.parse(decryptedJson);
+
+    return {
+      ...participant,
+      ...sensitiveData,
+    };
+  } catch (error) {
+    console.error('Failed to decrypt transaction participant:', error);
+    throw new Error('Failed to decrypt transaction participant.');
+  }
+}
+
+export async function encryptParticipantsBatch(
+  participants: TransactionParticipant[],
+  key: CryptoKey,
+  chunkSize: number = 200
+): Promise<TransactionParticipant[]> {
+  const results: TransactionParticipant[] = [];
+  for (let i = 0; i < participants.length; i += chunkSize) {
+    const chunk = participants.slice(i, i + chunkSize);
+    const encrypted = await Promise.all(chunk.map(p => encryptParticipant(p, key)));
+    results.push(...encrypted);
+    if (i + chunkSize < participants.length) {
+      await new Promise(r => setTimeout(r, 0));
+    }
+  }
+  return results;
+}
+
+export async function decryptParticipantsBatch(
+  participants: TransactionParticipant[],
+  key: CryptoKey,
+  chunkSize: number = 500
+): Promise<TransactionParticipant[]> {
+  const results: TransactionParticipant[] = [];
+  for (let i = 0; i < participants.length; i += chunkSize) {
+    const chunk = participants.slice(i, i + chunkSize);
+    const decrypted = await Promise.all(
+      chunk.map(p => {
+        if (!p.isEncrypted || !p.encryptedPayload) return Promise.resolve(p);
+        return decryptParticipant(p, key);
+      })
+    );
+    results.push(...decrypted);
+    if (i + chunkSize < participants.length) {
+      await new Promise(r => setTimeout(r, 0));
+    }
+  }
+  return results;
+}
+
 // ============ RE-ENCRYPTION FOR PASSWORD CHANGE ============
 
 export interface ReEncryptionProgress {
@@ -632,6 +745,7 @@ export async function reEncryptAllData(
   recordOrigins: number;
   evidence: number;
   evidenceAttachments: number;
+  participants: number;
 }> {
   let recordCount = 0;
   let attachmentCount = 0;
@@ -789,6 +903,22 @@ export async function reEncryptAllData(
     evidenceAttachmentCount++;
   }
 
+  // Re-encrypt transaction participants
+  let participantCount = 0;
+  const participants = await db.transactionParticipants.filter(p => p.isEncrypted === true).toArray();
+  for (let i = 0; i < participants.length; i += 200) {
+    const chunk = participants.slice(i, i + 200);
+    reportProgress('Transaction Participants', i + chunk.length, participants.length);
+    await db.transaction('rw', db.transactionParticipants, async () => {
+      for (const p of chunk) {
+        const decrypted = await decryptParticipant(p, oldKey);
+        const reEncrypted = await encryptParticipant(decrypted, newKey);
+        await db.transactionParticipants.put(reEncrypted);
+        participantCount++;
+      }
+    });
+  }
+
   reportProgress('Complete', 1, 1);
 
   return {
@@ -804,5 +934,6 @@ export async function reEncryptAllData(
     recordOrigins: recordOriginCount,
     evidence: evidenceCount,
     evidenceAttachments: evidenceAttachmentCount,
+    participants: participantCount,
   };
 }

@@ -34,7 +34,7 @@ import {
   ChevronsUpDown,
   RefreshCw
 } from "lucide-react";
-import { decryptRecords, decryptRecordsWithProgress } from "@/lib/encryptionFacade";
+import { decryptRecords, decryptRecordsWithProgress, getAllDecryptedParticipants } from "@/lib/encryptionFacade";
 import type { DecryptProgress } from "@/lib/encryption/record-encryption";
 import { ClickableAddress } from "@/components/ClickableAddress";
 
@@ -88,9 +88,9 @@ export default function Transactions() {
     []
   );
 
-  // Fetch all participants
+  // Fetch all participants (decrypted)
   const participants = useLiveQuery(
-    () => db.transactionParticipants.toArray(),
+    () => getAllDecryptedParticipants(),
     []
   );
 

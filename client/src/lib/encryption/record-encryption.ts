@@ -1,4 +1,4 @@
-import { db, notifyDbChange, type Record, type Attachment, type Evidence, type EvidenceAttachment } from '../database';
+import { db, notifyDbChange, type Record, type Attachment, type Evidence, type EvidenceAttachment, type TransactionParticipant } from '../database';
 import {
   encryptAttachment,
   decryptAttachment,
@@ -7,6 +7,10 @@ import {
   decryptEvidence,
   encryptEvidenceAttachment,
   decryptEvidenceAttachment,
+  encryptParticipant,
+  decryptParticipant,
+  encryptParticipantsBatch,
+  decryptParticipantsBatch,
 } from '../dbEncryption';
 import { getKey } from './key-management';
 import { getCachedRecord, setCachedRecord } from './decrypt-cache';
@@ -265,4 +269,57 @@ export async function getDecryptedEvidenceAttachments(evidenceId: number): Promi
 
 export async function deleteEvidenceAttachment(id: number): Promise<void> {
   await db.evidenceAttachments.delete(id);
+}
+
+// ============ TRANSACTION PARTICIPANT ENCRYPTION ============
+
+export async function encryptParticipantData(participant: TransactionParticipant): Promise<TransactionParticipant> {
+  const key = getKey();
+  return encryptParticipant(participant, key);
+}
+
+export async function decryptParticipantData(participant: TransactionParticipant): Promise<TransactionParticipant> {
+  if (!participant.isEncrypted || !participant.encryptedPayload) return participant;
+  const key = getKey();
+  return decryptParticipant(participant, key);
+}
+
+export async function encryptParticipantsBatchData(
+  participants: TransactionParticipant[],
+): Promise<TransactionParticipant[]> {
+  const key = getKey();
+  return encryptParticipantsBatch(participants, key);
+}
+
+export async function decryptParticipantsData(
+  participants: TransactionParticipant[],
+): Promise<TransactionParticipant[]> {
+  if (participants.length === 0) return participants;
+  const key = getKey();
+  return decryptParticipantsBatch(participants, key);
+}
+
+export async function getAllDecryptedParticipants(): Promise<TransactionParticipant[]> {
+  const raw = await db.transactionParticipants.toArray();
+  return decryptParticipantsData(raw);
+}
+
+export async function getDecryptedParticipantsByTxid(txid: string): Promise<TransactionParticipant[]> {
+  const raw = await db.transactionParticipants.where('txid').equals(txid).toArray();
+  return decryptParticipantsData(raw);
+}
+
+export async function getDecryptedParticipantsByTxids(txids: string[]): Promise<TransactionParticipant[]> {
+  const raw = await db.transactionParticipants.where('txid').anyOf(txids).toArray();
+  return decryptParticipantsData(raw);
+}
+
+export async function getDecryptedParticipantsByAddress(address: string): Promise<TransactionParticipant[]> {
+  const all = await getAllDecryptedParticipants();
+  return all.filter(p => p.address === address);
+}
+
+export async function getDecryptedParticipantsByRecordId(recordId: number): Promise<TransactionParticipant[]> {
+  const raw = await db.transactionParticipants.where('recordId').equals(recordId).toArray();
+  return decryptParticipantsData(raw);
 }

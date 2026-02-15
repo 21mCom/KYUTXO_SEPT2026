@@ -9,7 +9,7 @@ import {
   type CustodyStatus,
   type AddressImportance
 } from './database';
-import { decryptRecords, isEncryptionReady } from './encryptionFacade';
+import { decryptRecords, isEncryptionReady, getDecryptedParticipantsByTxid, decryptParticipantsData } from './encryptionFacade';
 
 // Generate a simple UUID for segment IDs
 function generateSegmentId(): string {
@@ -95,11 +95,8 @@ export async function buildLineageForTransaction(txid: string): Promise<UtxoLine
     return [];
   }
   
-  // Get all participants for this transaction
-  const participants = await db.transactionParticipants
-    .where('txid')
-    .equals(txid)
-    .toArray();
+  // Get all participants for this transaction (decrypted)
+  const participants = await getDecryptedParticipantsByTxid(txid);
   
   const inputs = participants.filter(p => p.role === 'input');
   const outputs = participants.filter(p => p.role === 'output');
@@ -312,12 +309,11 @@ export async function buildCustodySegment(
   const evidenceTxids: string[] = [originTxid];
   const childSegmentIds: string[] = [];
   
-  // Get original amount from participants
-  const originOutput = await db.transactionParticipants
-    .where('[txid+role]')
-    .equals([originTxid, 'output'])
-    .filter(p => p.address === originAddress && p.vout === originVout)
-    .first();
+  // Get original amount from participants (load by txid, decrypt, filter)
+  const originTxParticipants = await getDecryptedParticipantsByTxid(originTxid);
+  const originOutput = originTxParticipants.find(
+    p => p.role === 'output' && p.address === originAddress && p.vout === originVout
+  );
   
   const originAmount = originOutput?.amount || 0;
   currentAmount = originAmount;

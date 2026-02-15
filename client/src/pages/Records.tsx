@@ -7,7 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { ArrowLeft, Search as SearchIcon, Database, Hash, ExternalLink, AlertCircle, Trash2, X, RefreshCw } from "lucide-react";
 import { BlockchainToggle } from "@/components/BlockchainToggle";
 import { db, subscribeToDbChanges, type Record as DbRecord, type VaultMetadata, type AddressImportance, type ChainType, type CustomField, type BlockchainTransaction, type TransactionParticipant } from "@/lib/database";
-import { decryptRecords, decryptRecordsWithProgress, isEncryptionReady, deleteRecord } from "@/lib/encryptionFacade";
+import { decryptRecords, decryptRecordsWithProgress, isEncryptionReady, deleteRecord, getDecryptedParticipantsByTxids } from "@/lib/encryptionFacade";
 import type { DecryptProgress } from "@/lib/encryption/record-encryption";
 import { RecordTable } from "@/components/RecordTable";
 import { RecordDetailPanel } from "@/components/RecordDetailPanel";
@@ -286,10 +286,7 @@ export default function Records() {
             setMatchingTxids(txids);
             
             // Get participant addresses for matching transactions
-            const participants = await db.transactionParticipants
-              .where('txid')
-              .anyOf(txids)
-              .toArray();
+            const participants = await getDecryptedParticipantsByTxids(txids);
             
             const txResults = matchingTxs.map(tx => ({
               txid: tx.txid,

@@ -1,4 +1,5 @@
 import { db, type Record } from './database';
+import { encryptParticipantData, isEncryptionReady, getDecryptedParticipantsByTxid } from './encryptionFacade';
 
 /**
  * Test data seeding utility for demonstrating KYUTXO features.
@@ -285,42 +286,43 @@ export async function seedTestData(options: { clearExisting?: boolean } = {}): P
     }
     
     // Add inputs
+    const existingTxParticipants = await getDecryptedParticipantsByTxid(tx.txid);
     for (const input of tx.inputs) {
-      const existingParticipant = await db.transactionParticipants
-        .where('[txid+role]')
-        .equals([tx.txid, 'input'])
-        .filter(p => p.address === input.address)
-        .first();
+      const existingParticipant = existingTxParticipants.find(
+        p => p.role === 'input' && p.address === input.address
+      );
       
       if (!existingParticipant) {
-        await db.transactionParticipants.add({
+        const p = {
           txid: tx.txid,
-          role: 'input',
+          role: 'input' as const,
           address: input.address,
           amount: input.amount,
           vout: input.vout,
           recordId: addressToRecordId.get(input.address)
-        });
+        };
+        const toAdd = isEncryptionReady() ? await encryptParticipantData(p) : p;
+        await db.transactionParticipants.add(toAdd);
       }
     }
     
     // Add outputs
     for (const output of tx.outputs) {
-      const existingParticipant = await db.transactionParticipants
-        .where('[txid+role]')
-        .equals([tx.txid, 'output'])
-        .filter(p => p.address === output.address && p.vout === output.vout)
-        .first();
+      const existingParticipant = existingTxParticipants.find(
+        p => p.role === 'output' && p.address === output.address && p.vout === output.vout
+      );
       
       if (!existingParticipant) {
-        await db.transactionParticipants.add({
+        const p = {
           txid: tx.txid,
-          role: 'output',
+          role: 'output' as const,
           address: output.address,
           amount: output.amount,
           vout: output.vout,
           recordId: addressToRecordId.get(output.address)
-        });
+        };
+        const toAdd = isEncryptionReady() ? await encryptParticipantData(p) : p;
+        await db.transactionParticipants.add(toAdd);
       }
     }
   }

@@ -1,7 +1,7 @@
 import { useState, useMemo } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { db, type Record as DBRecord, type TransactionParticipant, type BlockchainTransaction, type AddressImportance } from "@/lib/database";
-import { decryptRecords, isEncryptionReady } from "@/lib/encryptionFacade";
+import { decryptRecords, isEncryptionReady, getDecryptedParticipantsByAddress, getDecryptedParticipantsByTxid } from "@/lib/encryptionFacade";
 import { useRecordPreview } from "@/contexts/RecordPreviewContext";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -105,16 +105,10 @@ export function HopPointReport() {
       }>();
 
       for (const knownAddress of Array.from(knownAddresses)) {
-        const participants = await db.transactionParticipants
-          .where('address')
-          .equals(knownAddress)
-          .toArray();
+        const participants = await getDecryptedParticipantsByAddress(knownAddress);
 
         for (const participant of participants) {
-          const txParticipants = await db.transactionParticipants
-            .where('txid')
-            .equals(participant.txid)
-            .toArray();
+          const txParticipants = await getDecryptedParticipantsByTxid(participant.txid);
 
           for (const other of txParticipants) {
             if (other.address === knownAddress) continue;
@@ -199,10 +193,7 @@ export function HopPointReport() {
     const connectionList: ConnectionContext[] = [];
 
     for (const txid of hopPoint.connectingTxids) {
-      const participants = await db.transactionParticipants
-        .where('txid')
-        .equals(txid)
-        .toArray();
+      const participants = await getDecryptedParticipantsByTxid(txid);
 
       const inputs = participants.filter(p => p.role === 'input');
       const outputs = participants.filter(p => p.role === 'output');

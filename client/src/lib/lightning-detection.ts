@@ -1,4 +1,5 @@
 import { db, BlockchainTransaction, TransactionParticipant, Record } from './database';
+import { getDecryptedParticipantsByTxid, getAllDecryptedParticipants } from './encryptionFacade';
 
 // Lightning Channel Classification Types
 export type LightningClassification = 
@@ -433,7 +434,7 @@ export async function detectLightningActivity(
   const tx = await db.blockchainTransactions.where('txid').equals(txid).first();
   if (!tx) return null;
 
-  const participants = await db.transactionParticipants.where('txid').equals(txid).toArray();
+  const participants = await getDecryptedParticipantsByTxid(txid);
   const inputs = participants.filter(p => p.role === 'input');
   const outputs = participants.filter(p => p.role === 'output');
 
@@ -532,14 +533,11 @@ export async function scanForLightningActivity(
 
   // Find all transactions involving these addresses
   let participants: TransactionParticipant[];
+  const allParticipants = await getAllDecryptedParticipants();
   if (filteredAddresses.size > 0) {
-    participants = await db.transactionParticipants
-      .where('address')
-      .anyOf(Array.from(filteredAddresses))
-      .toArray();
+    participants = allParticipants.filter(p => filteredAddresses.has(p.address));
   } else {
-    // No filter - get all participants
-    participants = await db.transactionParticipants.toArray();
+    participants = allParticipants;
   }
 
   // Get unique transaction IDs

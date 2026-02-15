@@ -16,7 +16,7 @@ import { db } from "@/lib/database";
 import { useEncryptedTags } from "@/hooks/use-encrypted-records";
 import { useOwners } from "@/hooks/use-owners";
 import { useWalletNames } from "@/hooks/use-wallet-names";
-import { decryptRecords, decryptRecordsWithProgress } from "@/lib/encryptionFacade";
+import { decryptRecords, decryptRecordsWithProgress, getDecryptedParticipantsByTxids, getAllDecryptedParticipants } from "@/lib/encryptionFacade";
 import type { DecryptProgress } from "@/lib/encryption/record-encryption";
 import type { TransactionParticipant, BlockchainTransaction } from "@/lib/database";
 
@@ -176,10 +176,8 @@ export default function StatementReport() {
 
       const addressSet = new Set(addresses);
 
-      const allParticipants = await db.transactionParticipants
-        .where("address")
-        .anyOf(addresses)
-        .toArray();
+      const allDecrypted = await getAllDecryptedParticipants();
+      const allParticipants = allDecrypted.filter(p => addressSet.has(p.address));
 
       const txidSet = new Set(allParticipants.map(p => p.txid));
 
@@ -195,10 +193,9 @@ export default function StatementReport() {
       for (let i = 0; i < ourOutputs.length; i += 200) {
         const batch = ourOutputs.slice(i, i + 200);
         const keys = batch.map(o => [o.txid, o.vout] as [string, number]);
-        const spendingInputs = await db.transactionParticipants
-          .where("[prevTxid+prevVout]")
-          .anyOf(keys)
-          .toArray();
+        const keySet = new Set(keys.map(k => `${k[0]}:${k[1]}`));
+        const allParts = await getAllDecryptedParticipants();
+        const spendingInputs = allParts.filter(p => p.prevTxid && p.prevVout !== undefined && keySet.has(`${p.prevTxid}:${p.prevVout}`));
         for (const inp of spendingInputs) {
           if (!txidSet.has(inp.txid)) {
             spendingTxids.add(inp.txid);
@@ -234,7 +231,7 @@ export default function StatementReport() {
       const allTxParticipants = new Map<string, TransactionParticipant[]>();
       for (let i = 0; i < txids.length; i += 500) {
         const batch = txids.slice(i, i + 500);
-        const parts = await db.transactionParticipants.where("txid").anyOf(batch).toArray();
+        const parts = await getDecryptedParticipantsByTxids(batch);
         for (const p of parts) {
           const list = allTxParticipants.get(p.txid) || [];
           list.push(p);
@@ -272,11 +269,8 @@ export default function StatementReport() {
         const prevTxids = Array.from(new Set(lookupKeys.map(k => k.split(":")[0])));
         for (let i = 0; i < prevTxids.length; i += 500) {
           const batch = prevTxids.slice(i, i + 500);
-          const prevOutputs = await db.transactionParticipants
-            .where("txid")
-            .anyOf(batch)
-            .filter(p => p.role === "output")
-            .toArray();
+          const prevOutputs = (await getDecryptedParticipantsByTxids(batch))
+            .filter(p => p.role === "output");
           for (const po of prevOutputs) {
             if (po.vout !== undefined) {
               const key = `${po.txid}:${po.vout}`;

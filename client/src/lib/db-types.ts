@@ -357,16 +357,19 @@ export interface TransactionParticipant {
   id?: number;
   txid: string;           // Foreign key to BlockchainTransaction
   role: 'input' | 'output';
-  address: string;        // Bitcoin address
-  amount: number;         // Amount in satoshis
-  vout?: number;          // Output index (for outputs)
+  address: string;        // Bitcoin address (encrypted: '[encrypted]')
+  amount: number;         // Amount in satoshis (encrypted: 0)
+  vout?: number;          // Output index (for outputs) - stays plaintext for indexing
   // For inputs: the outpoint being spent (identifies which UTXO is consumed)
-  prevTxid?: string;      // The txid of the transaction that created the UTXO being spent
-  prevVout?: number;      // The output index in that transaction
+  prevTxid?: string;      // The txid of the transaction that created the UTXO being spent (encrypted: '[encrypted]')
+  prevVout?: number;      // The output index in that transaction (encrypted: 0)
   // Link to our records table if address exists there
   recordId?: number;
   // Script/address type information
-  scriptType?: ScriptType; // Type of script (p2pkh, p2sh, v0_p2wpkh, v1_p2tr, etc.)
+  scriptType?: ScriptType; // Type of script (p2pkh, p2sh, v0_p2wpkh, v1_p2tr, etc.) (encrypted)
+  // Encryption fields
+  isEncrypted?: boolean;
+  encryptedPayload?: string;
 }
 
 // Tracks sync state per address for incremental syncing

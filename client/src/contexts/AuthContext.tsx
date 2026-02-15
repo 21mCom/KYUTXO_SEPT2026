@@ -12,7 +12,6 @@ import {
   getVaultSettings, 
   saveVaultSettings,
   setMigrationComplete,
-  isMigrationComplete,
 } from '@/lib/vault';
 import { migrateToEncrypted, hasPlaintextData } from '@/lib/dbEncryption';
 import { initEncryptionFacade, clearEncryptionFacade } from '@/lib/encryptionFacade';
@@ -58,9 +57,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   // Run migration after successful login if needed
   const runMigration = useCallback(async (key: CryptoKey) => {
-    const migrated = await isMigrationComplete();
-    if (migrated) return;
-
     const hasPlaintext = await hasPlaintextData();
     if (!hasPlaintext) {
       await setMigrationComplete(true);
@@ -74,7 +70,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const result = await migrateToEncrypted(key);
       await setMigrationComplete(true);
       
-      const total = result.records + result.attachments + result.tags + result.categories;
+      const total = result.records + result.attachments + result.tags + result.categories + result.participants;
       setMigrationProgress(`Encrypted ${total} items successfully!`);
       
       // Clear progress message after a short delay

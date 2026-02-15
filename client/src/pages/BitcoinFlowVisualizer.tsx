@@ -24,7 +24,7 @@ import { useFlowData, type FlowNode } from "@/hooks/use-flow-data";
 import { HopPathExplorer } from "@/components/HopPathExplorer";
 import { RecordDetailPanel } from "@/components/RecordDetailPanel";
 import { db, type ChainType, type AddressImportance, type VaultMetadata, type FlowType, type AcquisitionMethod, type DispositionType, type CounterpartyType } from "@/lib/database";
-import { decryptRecords, decryptRecordsWithProgress, isEncryptionReady } from "@/lib/encryptionFacade";
+import { decryptRecords, decryptRecordsWithProgress, isEncryptionReady, getAllDecryptedParticipants } from "@/lib/encryptionFacade";
 import type { DecryptProgress } from "@/lib/encryption/record-encryption";
 import { useOwners } from "@/hooks/use-owners";
 import { useWalletNames } from "@/hooks/use-wallet-names";
@@ -310,10 +310,9 @@ export default function BitcoinFlowVisualizer() {
           return;
         }
 
-        const participants = await db.transactionParticipants
-          .where('address')
-          .anyOf(addressStrings)
-          .toArray();
+        const addrSet = new Set(addressStrings);
+        const allParts = await getAllDecryptedParticipants();
+        const participants = allParts.filter(p => addrSet.has(p.address));
 
         const txids = Array.from(new Set(participants.map(p => p.txid)));
         const txMap = new Map<string, number>();

@@ -20,7 +20,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Trash2, Search, RefreshCw, AlertTriangle, CheckCircle2, Network, ArrowUpDown, Link2, Shield } from "lucide-react";
 import { db, Record, RecordOrigin } from "@/lib/database";
-import { deleteRecord, decryptRecords, getDecryptedRecordOrigins } from "@/lib/encryptionFacade";
+import { deleteRecord, decryptRecords, getDecryptedRecordOrigins, getAllDecryptedParticipants } from "@/lib/encryptionFacade";
 import { decryptRecordOrigin } from "@/lib/dbEncryption";
 import { getKey, isEncryptionReady } from "@/lib/encryptionFacade";
 
@@ -258,7 +258,7 @@ export default function Cleanup() {
     
     const knownAddresses = await buildKnownAddressSet();
     
-    const allParticipants = await db.transactionParticipants.toArray();
+    const allParticipants = await getAllDecryptedParticipants();
     
     const txToParticipants = new Map<string, Array<{ address: string; recordId?: number }>>();
     for (const p of allParticipants) {
