@@ -6,7 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useEncryptedTags, useEncryptedCategories } from "@/hooks/use-encrypted-records";
-import { db, type Record as DbRecord } from "@/lib/database";
+import { db, type Record as DbRecord, beginBulkOperation, endBulkOperation } from "@/lib/database";
 import { isEncryptionReady } from "@/lib/encryption/key-management";
 import { decryptRecordsWithProgress } from "@/lib/encryption/record-encryption";
 import type { DecryptProgress } from "@/lib/encryption/record-encryption";
@@ -393,29 +393,36 @@ export default function ValueUpdaterPage() {
       let updateCount = 0;
       const fieldRecords = await getRecordsForField(field);
       
-      for (const record of fieldRecords) {
-        let needsUpdate = false;
-        let updatedData: Partial<Record> = {};
-        
-        if (config.isArray) {
-          const currentValues = (record[field] as string[] | undefined) || [];
-          if (currentValues.includes(oldValue)) {
-            const newValues = currentValues.map(v => v === oldValue ? trimmedNewValue : v);
-            const uniqueValues = Array.from(new Set(newValues));
-            updatedData[field] = uniqueValues as any;
-            needsUpdate = true;
+      beginBulkOperation();
+      try {
+        for (let idx = 0; idx < fieldRecords.length; idx++) {
+          const record = fieldRecords[idx];
+          let needsUpdate = false;
+          let updatedData: Partial<Record> = {};
+          
+          if (config.isArray) {
+            const currentValues = (record[field] as string[] | undefined) || [];
+            if (currentValues.includes(oldValue)) {
+              const newValues = currentValues.map(v => v === oldValue ? trimmedNewValue : v);
+              const uniqueValues = Array.from(new Set(newValues));
+              updatedData[field] = uniqueValues as any;
+              needsUpdate = true;
+            }
+          } else {
+            if (record[field] === oldValue) {
+              updatedData[field] = trimmedNewValue as any;
+              needsUpdate = true;
+            }
           }
-        } else {
-          if (record[field] === oldValue) {
-            updatedData[field] = trimmedNewValue as any;
-            needsUpdate = true;
+          
+          if (needsUpdate && record.id) {
+            await updateRecord(record.id, updatedData);
+            updateCount++;
           }
+          if (idx % 10 === 9) await new Promise(r => setTimeout(r, 0));
         }
-        
-        if (needsUpdate && record.id) {
-          await updateRecord(record.id, updatedData);
-          updateCount++;
-        }
+      } finally {
+        endBulkOperation();
       }
 
       if (config.hasMasterList) {
@@ -496,27 +503,34 @@ export default function ValueUpdaterPage() {
       const config = FIELD_CONFIGS.find(f => f.key === field)!;
       const fieldRecords = await getRecordsForField(field);
       
-      for (const record of fieldRecords) {
-        let needsUpdate = false;
-        let updatedData: Partial<Record> = {};
-        
-        if (config.isArray) {
-          const currentValues = (record[field] as string[] | undefined) || [];
-          if (currentValues.includes(value)) {
-            updatedData[field] = currentValues.filter(v => v !== value) as any;
-            needsUpdate = true;
+      beginBulkOperation();
+      try {
+        for (let idx = 0; idx < fieldRecords.length; idx++) {
+          const record = fieldRecords[idx];
+          let needsUpdate = false;
+          let updatedData: Partial<Record> = {};
+          
+          if (config.isArray) {
+            const currentValues = (record[field] as string[] | undefined) || [];
+            if (currentValues.includes(value)) {
+              updatedData[field] = currentValues.filter(v => v !== value) as any;
+              needsUpdate = true;
+            }
+          } else {
+            if (record[field] === value) {
+              updatedData[field] = undefined as any;
+              needsUpdate = true;
+            }
           }
-        } else {
-          if (record[field] === value) {
-            updatedData[field] = undefined as any;
-            needsUpdate = true;
+          
+          if (needsUpdate && record.id) {
+            await updateRecord(record.id, updatedData);
+            updateCount++;
           }
+          if (idx % 10 === 9) await new Promise(r => setTimeout(r, 0));
         }
-        
-        if (needsUpdate && record.id) {
-          await updateRecord(record.id, updatedData);
-          updateCount++;
-        }
+      } finally {
+        endBulkOperation();
       }
 
       if (config.hasMasterList) {

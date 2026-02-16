@@ -18,6 +18,7 @@ import { walletOfSatoshiAdapter } from './adapters/wallet-of-satoshi';
 import { nunchukAdapter } from './adapters/nunchuk';
 import { checkForDuplicates, mergeRecordData, createNewRecordData } from './merge-utils';
 import { createRecord, updateRecord, isEncryptionReady, createRecordOrigin } from '../encryptionFacade';
+import { beginBulkOperation, endBulkOperation } from '../database';
 
 export function scanForPrivateKeys(content: string): { hasPrivateKeys: boolean; warnings: string[] } {
   const warnings: string[] = [];
@@ -170,11 +171,14 @@ export async function executeImport(
   
   const total = duplicateInfos.length;
   
+  beginBulkOperation();
+  try {
   for (let i = 0; i < duplicateInfos.length; i++) {
     const info = duplicateInfos[i];
     const { parsedRecord, existingRecord, isNew } = info;
     
     onProgress?.(i + 1, total, `Processing ${parsedRecord.type}: ${parsedRecord.inputString.substring(0, 20)}...`);
+    if (i % 10 === 9) await new Promise(r => setTimeout(r, 0));
     
     try {
       if (isNew) {
@@ -261,6 +265,9 @@ export async function executeImport(
       const errorMsg = e instanceof Error ? e.message : 'Unknown error';
       result.errors.push(`Failed to import ${parsedRecord.inputString}: ${errorMsg}`);
     }
+  }
+  } finally {
+    endBulkOperation();
   }
   
   return result;

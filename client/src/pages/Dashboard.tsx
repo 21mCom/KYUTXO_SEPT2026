@@ -26,7 +26,8 @@ import { useOwners } from "@/hooks/use-owners";
 import { useWalletNames } from "@/hooks/use-wallet-names";
 import { useSeedNames } from "@/hooks/use-seed-names";
 import { useWalletSoftware } from "@/hooks/use-wallet-software";
-import { syncTagsToMaster, syncCategoriesToMaster, isEncryptionReady, findRecordByInputString } from "@/lib/encryptionFacade";
+import { syncTagsToMaster, syncCategoriesToMaster, isEncryptionReady } from "@/lib/encryptionFacade";
+import { beginBulkOperation, endBulkOperation } from "@/lib/database";
 import { useCustomFields, useSettings, toggleTableColumn, toggleCustomFieldColumn } from "@/hooks/use-settings";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Separator } from "@/components/ui/separator";
@@ -335,15 +336,74 @@ export default function Dashboard() {
     setShowDetail(true);
   };
 
-  // Check for duplicate record by inputString
+  const recordLookupMap = useMemo(() => {
+    const map = new Map<string, Record>();
+    for (const r of records) {
+      if (r.inputString) {
+        map.set(r.inputString.trim().toLowerCase(), r);
+      }
+    }
+    return map;
+  }, [records]);
+
   const handleCheckDuplicate = async (inputString: string) => {
     if (!isEncryptionReady()) return undefined;
+    return recordLookupMap.get(inputString.trim().toLowerCase());
+  };
+
+  const createAddressRecordsFromTx = async (
+    transactionAddresses: TransactionAddresses,
+    logPrefix: string
+  ): Promise<{ created: number; skipped: number }> => {
+    let addressesCreated = 0;
+    let addressesSkipped = 0;
+    const txidShort = transactionAddresses.txid.substring(0, 8);
+    const txDate = new Date(transactionAddresses.blockTime * 1000).toLocaleDateString();
+    const localLookup = new Map(recordLookupMap);
+
+    console.log(`${logPrefix} Creating address records from tx ${txidShort}: ${transactionAddresses.inputs.length} inputs, ${transactionAddresses.outputs.length} outputs`);
+
+    const allAddrs = [
+      ...transactionAddresses.inputs.map(i => ({ address: i.address, role: 'Input' })),
+      ...transactionAddresses.outputs.map(o => ({ address: o.address, role: 'Output' })),
+    ];
+
+    beginBulkOperation();
     try {
-      return await findRecordByInputString(inputString);
-    } catch (error) {
-      console.error("Error checking for duplicate:", error);
-      return undefined;
+      for (let i = 0; i < allAddrs.length; i++) {
+        const { address, role } = allAddrs[i];
+        const key = address.trim().toLowerCase();
+
+        if (localLookup.has(key)) {
+          addressesSkipped++;
+        } else {
+          try {
+            await createRecord({
+              type: 'address',
+              inputString: address,
+              label: `TX ${role} ${txDate}`,
+              notes: `${role} address from transaction ${txidShort}...`,
+              tags: [],
+              categories: [],
+              owner: 'Pending Review',
+              walletName: '',
+              source: `tx-import:${transactionAddresses.txid}`,
+              addressImportance: 'pending-review',
+            });
+            localLookup.set(key, { inputString: address } as Record);
+            addressesCreated++;
+          } catch (createError) {
+            console.error(`Failed to create ${role.toLowerCase()} address record for ${address}:`, createError);
+          }
+        }
+        if (i % 10 === 9) await new Promise(r => setTimeout(r, 0));
+      }
+    } finally {
+      endBulkOperation();
     }
+
+    console.log(`${logPrefix} Address creation complete: ${addressesCreated} created, ${addressesSkipped} skipped`);
+    return { created: addressesCreated, skipped: addressesSkipped };
   };
 
   const handleCreateRecord = async (data: any, files: File[] = [], transactionAddresses?: TransactionAddresses) => {
@@ -367,14 +427,9 @@ export default function Dashboard() {
 
       setIsSubmitting(true);
 
-      // Check if this is actually an update (duplicate was detected and user is editing)
       let existingRecord: Record | undefined;
       if (isEncryptionReady()) {
-        try {
-          existingRecord = await findRecordByInputString(data.inputString);
-        } catch (error) {
-          console.error("Error checking for duplicate:", error);
-        }
+        existingRecord = recordLookupMap.get(data.inputString.trim().toLowerCase());
       }
 
       // Handle addressImportance - verified if explicitly marked, otherwise manual for new records
@@ -434,75 +489,8 @@ export default function Dashboard() {
             description: `${data.label} updated with ${uploadedCount} new file(s)`,
           });
         } else {
-          // Also create address records for transactions when updating (in case they weren't created before)
           if (transactionAddresses && recordType === 'transaction') {
-            let addressesCreated = 0;
-            let addressesSkipped = 0;
-            const txidShort = transactionAddresses.txid.substring(0, 8);
-            const txDate = new Date(transactionAddresses.blockTime * 1000).toLocaleDateString();
-            
-            console.log(`[Update path] Creating address records from tx ${txidShort}: ${transactionAddresses.inputs.length} inputs, ${transactionAddresses.outputs.length} outputs`);
-            
-            for (const input of transactionAddresses.inputs) {
-              let existingAddr: Record | undefined;
-              try {
-                existingAddr = await findRecordByInputString(input.address);
-              } catch (e) { /* ignore */ }
-              
-              if (!existingAddr) {
-                try {
-                  await createRecord({
-                    type: 'address',
-                    inputString: input.address,
-                    label: `TX Input ${txDate}`,
-                    notes: `Input address from transaction ${txidShort}...`,
-                    tags: [],
-                    categories: [],
-                    owner: 'Pending Review',
-                    walletName: '',
-                    source: `tx-import:${transactionAddresses.txid}`,
-                    addressImportance: 'pending-review',
-                  });
-                  addressesCreated++;
-                } catch (createError) {
-                  console.error(`Failed to create input address record:`, createError);
-                }
-              } else {
-                addressesSkipped++;
-              }
-            }
-            
-            for (const output of transactionAddresses.outputs) {
-              let existingAddr: Record | undefined;
-              try {
-                existingAddr = await findRecordByInputString(output.address);
-              } catch (e) { /* ignore */ }
-              
-              if (!existingAddr) {
-                try {
-                  await createRecord({
-                    type: 'address',
-                    inputString: output.address,
-                    label: `TX Output ${txDate}`,
-                    notes: `Output address from transaction ${txidShort}...`,
-                    tags: [],
-                    categories: [],
-                    owner: 'Pending Review',
-                    walletName: '',
-                    source: `tx-import:${transactionAddresses.txid}`,
-                    addressImportance: 'pending-review',
-                  });
-                  addressesCreated++;
-                } catch (createError) {
-                  console.error(`Failed to create output address record:`, createError);
-                }
-              } else {
-                addressesSkipped++;
-              }
-            }
-            
-            console.log(`[Update path] Address creation complete: ${addressesCreated} created, ${addressesSkipped} skipped`);
-            
+            const { created: addressesCreated } = await createAddressRecordsFromTx(transactionAddresses, '[Update path]');
             toast({
               title: "Record Updated",
               description: `${data.label} updated with ${addressesCreated} new address records`,
@@ -539,83 +527,8 @@ export default function Dashboard() {
         } else {
           await createRecord(recordData);
           
-          // If transaction addresses were fetched, create address records for inputs/outputs
           if (transactionAddresses && recordType === 'transaction') {
-            let addressesCreated = 0;
-            let addressesSkipped = 0;
-            const txidShort = transactionAddresses.txid.substring(0, 8);
-            const txDate = new Date(transactionAddresses.blockTime * 1000).toLocaleDateString();
-            
-            console.log(`Creating address records from tx ${txidShort}: ${transactionAddresses.inputs.length} inputs, ${transactionAddresses.outputs.length} outputs`);
-            
-            // Create input address records
-            for (const input of transactionAddresses.inputs) {
-              // Check if address already exists
-              let existingAddr: Record | undefined;
-              try {
-                existingAddr = await findRecordByInputString(input.address);
-              } catch (e) {
-                console.log(`Error checking for existing address ${input.address}:`, e);
-              }
-              
-              if (!existingAddr) {
-                try {
-                  await createRecord({
-                    type: 'address',
-                    inputString: input.address,
-                    label: `TX Input ${txDate}`,
-                    notes: `Input address from transaction ${txidShort}...`,
-                    tags: [],
-                    categories: [],
-                    owner: 'Pending Review',
-                    walletName: '',
-                    source: `tx-import:${transactionAddresses.txid}`,
-                    addressImportance: 'pending-review',
-                  });
-                  addressesCreated++;
-                } catch (createError) {
-                  console.error(`Failed to create input address record for ${input.address}:`, createError);
-                }
-              } else {
-                addressesSkipped++;
-              }
-            }
-            
-            // Create output address records
-            for (const output of transactionAddresses.outputs) {
-              // Check if address already exists
-              let existingAddr: Record | undefined;
-              try {
-                existingAddr = await findRecordByInputString(output.address);
-              } catch (e) {
-                console.log(`Error checking for existing address ${output.address}:`, e);
-              }
-              
-              if (!existingAddr) {
-                try {
-                  await createRecord({
-                    type: 'address',
-                    inputString: output.address,
-                    label: `TX Output ${txDate}`,
-                    notes: `Output address from transaction ${txidShort}...`,
-                    tags: [],
-                    categories: [],
-                    owner: 'Pending Review',
-                    walletName: '',
-                    source: `tx-import:${transactionAddresses.txid}`,
-                    addressImportance: 'pending-review',
-                  });
-                  addressesCreated++;
-                } catch (createError) {
-                  console.error(`Failed to create output address record for ${output.address}:`, createError);
-                }
-              } else {
-                addressesSkipped++;
-              }
-            }
-            
-            console.log(`Address creation complete: ${addressesCreated} created, ${addressesSkipped} skipped (already exist)`);
-            
+            const { created: addressesCreated, skipped: addressesSkipped } = await createAddressRecordsFromTx(transactionAddresses, '[Create path]');
             toast({
               title: "Records Created",
               description: `Transaction saved with ${addressesCreated} new address records (${addressesSkipped} already existed)`,

@@ -1,6 +1,7 @@
 import type { ParsedRecord, DuplicateInfo, VaultMetadata } from './types';
 import type { Record as DBRecord, AddressImportance } from '../database';
-import { findRecordByInputString, isEncryptionReady } from '../encryptionFacade';
+import { db } from '../database';
+import { isEncryptionReady, decryptRecords } from '../encryptionFacade';
 import { IMPORTANCE_TIERS } from '../provenance';
 import { expandLabelTokens } from '../label-tokens';
 
@@ -31,8 +32,6 @@ export function isVerified(record: DBRecord | null | undefined): boolean {
 export async function checkForDuplicates(
   parsedRecords: ParsedRecord[]
 ): Promise<DuplicateInfo[]> {
-  const results: DuplicateInfo[] = [];
-  
   if (!isEncryptionReady()) {
     return parsedRecords.map(record => ({
       parsedRecord: record,
@@ -41,36 +40,26 @@ export async function checkForDuplicates(
       willMerge: false,
     }));
   }
-  
-  const checkedInputStrings = new Map<string, DBRecord | null>();
-  
-  for (const parsedRecord of parsedRecords) {
-    const normalizedInput = parsedRecord.inputString.trim().toLowerCase();
-    
-    let existingRecord: DBRecord | null = null;
-    
-    if (checkedInputStrings.has(normalizedInput)) {
-      existingRecord = checkedInputStrings.get(normalizedInput) || null;
-    } else {
-      try {
-        const found = await findRecordByInputString(parsedRecord.inputString);
-        existingRecord = found || null;
-        checkedInputStrings.set(normalizedInput, existingRecord);
-      } catch (e) {
-        console.error('Error checking for duplicate:', e);
-        checkedInputStrings.set(normalizedInput, null);
-      }
+
+  const allRaw = await db.records.toArray();
+  const allDecrypted = await decryptRecords(allRaw);
+  const lookupMap = new Map<string, DBRecord>();
+  for (const r of allDecrypted) {
+    if (r.inputString) {
+      lookupMap.set(r.inputString.trim().toLowerCase(), r);
     }
-    
-    results.push({
+  }
+
+  return parsedRecords.map(parsedRecord => {
+    const normalizedInput = parsedRecord.inputString.trim().toLowerCase();
+    const existingRecord = lookupMap.get(normalizedInput) || null;
+    return {
       parsedRecord,
       existingRecord,
       isNew: existingRecord === null,
       willMerge: existingRecord !== null,
-    });
-  }
-  
-  return results;
+    };
+  });
 }
 
 export function mergeRecordData(
