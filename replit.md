@@ -36,7 +36,7 @@ KYUTXO employs a security-focused architecture with all data and attachments sec
 *   **Reports System:** Includes Source of Funds Report (acquisition history, cost basis, valuation) and Hop-Point Detection Report.
 *   **Quick Tagger:** Paste-based bulk tagging tool for addresses and transactions.
 *   **Nudgie (Transaction Labeling To-Do):** Workflow for labeling unlabeled transactions.
-*   **Database Cleanup:** Dedicated page for querying and bulk deleting blockchain-discovered records without user metadata, offering "Blockchain-Only" and "Discovery Origin" scan modes.
+*   **Database Cleanup:** Dedicated page for querying and bulk deleting blockchain-discovered records without user metadata, offering "Blockchain-Only", "Unconnected Records" (filters to records with no transaction connections to known addresses), and "Discovery Origin" scan modes. Features cancellable scans with AbortController, chunked processing with UI yielding for responsiveness, paginated results (100 per page), and `discoveredFromRecordId` index (DB v25) for fast discovery tree traversal.
 *   **Discovery Tree Dialog:** Visualizes all recursively discovered records from a given address.
 *   **Transaction Classification Metadata:** Tax-neutral fact-recording system for `flowType`, `acquisitionMethod`, `dispositionType`, `costBasisUsd`, and `counterpartyType`.
 *   **Bulk Editor:** Batch editing system with filter/action builders, preview, and undo.
