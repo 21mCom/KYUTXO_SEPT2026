@@ -59,6 +59,7 @@ import { useEncryptedTags, useEncryptedCategories, createEncryptedTag, createEnc
 import { useAuth } from "@/contexts/AuthContext";
 import { useRecords, createRecord, updateRecord } from "@/hooks/use-records";
 import { syncTagsToMaster, syncCategoriesToMaster, isEncryptionReady, createRecordOrigin } from "@/lib/encryptionFacade";
+import { beginBulkOperation, endBulkOperation } from "@/lib/database";
 import { useOwners, createOwner } from "@/hooks/use-owners";
 import { useWalletNames, createWalletName } from "@/hooks/use-wallet-names";
 import { useSeedNames, createSeedName } from "@/hooks/use-seed-names";
@@ -129,7 +130,7 @@ export default function DescriptorImport() {
 
   const { tags } = useEncryptedTags();
   const { categories } = useEncryptedCategories();
-  const { records, isLoading: isLoadingRecords } = useRecords();
+  const { records } = useRecords();
   const { encryptionKey } = useAuth();
   const { toast } = useToast();
 
@@ -518,6 +519,7 @@ export default function DescriptorImport() {
     
     setIsSaving(true);
     setSaveProgress({ current: 0, total: 0 });
+    beginBulkOperation();
     
     try {
       let allSelected: Array<{ address: string; chainType: string; index: number }> = [];
@@ -711,6 +713,7 @@ export default function DescriptorImport() {
         variant: "destructive",
       });
     } finally {
+      endBulkOperation();
       setIsSaving(false);
     }
   };
@@ -1411,7 +1414,7 @@ export default function DescriptorImport() {
             </Button>
             <Button
               onClick={handleSaveAddresses}
-              disabled={isSaving || isLoadingRecords || (selectedReceiveAddresses.size === 0 && selectedChangeAddresses.size === 0)}
+              disabled={isSaving || (selectedReceiveAddresses.size === 0 && selectedChangeAddresses.size === 0)}
               data-testid="button-import-addresses"
             >
               {isSaving ? (

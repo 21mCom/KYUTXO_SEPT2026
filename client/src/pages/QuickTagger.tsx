@@ -39,7 +39,8 @@ import { useOwners, createOwner } from "@/hooks/use-owners";
 import { useWalletNames, createWalletName } from "@/hooks/use-wallet-names";
 import { useSeedNames, createSeedName } from "@/hooks/use-seed-names";
 import { useWalletSoftware, createWalletSoftware } from "@/hooks/use-wallet-software";
-import { syncTagsToMaster, syncCategoriesToMaster, findRecordByInputString, createRecordOrigin, isEncryptionReady } from "@/lib/encryptionFacade";
+import { syncTagsToMaster, syncCategoriesToMaster, createRecordOrigin, isEncryptionReady } from "@/lib/encryptionFacade";
+import { beginBulkOperation, endBulkOperation } from "@/lib/database";
 import { validateBitcoinInput } from "@/lib/bitcoin";
 import { 
   COUNTERPARTY_TYPE_OPTIONS,
@@ -187,6 +188,13 @@ export default function QuickTagger() {
       .map(line => line.trim())
       .filter(line => line.length > 0);
 
+    const recordLookup = new Map<string, typeof records[0]>();
+    for (const r of records) {
+      if (r.inputString) {
+        recordLookup.set(r.inputString.trim().toLowerCase(), r);
+      }
+    }
+
     const seen = new Set<string>();
     const parsed: ParsedEntry[] = [];
 
@@ -202,20 +210,11 @@ export default function QuickTagger() {
         entryType = validation.type;
       }
 
-      // Check if record exists - use encrypted DB lookup for accuracy
       let existingRecordId: number | undefined;
       if (entryType !== 'invalid') {
-        try {
-          const existing = await findRecordByInputString(line);
-          if (existing) {
-            existingRecordId = existing.id;
-          }
-        } catch {
-          // Fallback to hook cache if DB lookup fails
-          const cached = records.find(r => r.inputString.toLowerCase() === line.toLowerCase());
-          if (cached) {
-            existingRecordId = cached.id;
-          }
+        const cached = recordLookup.get(line.toLowerCase());
+        if (cached) {
+          existingRecordId = cached.id;
         }
       }
 
@@ -278,6 +277,7 @@ export default function QuickTagger() {
     let updated = 0;
     let skipped = 0;
 
+    beginBulkOperation();
     try {
       // Sync new tags and categories
       if (selectedTags.length > 0) {
@@ -328,20 +328,22 @@ export default function QuickTagger() {
         }
       }
 
+      const applyLookup = new Map<string, typeof records[0]>();
+      for (const r of records) {
+        if (r.inputString) {
+          applyLookup.set(r.inputString.trim().toLowerCase(), r);
+        }
+      }
+
       for (const entry of entriesToProcess) {
         const isAddress = entry.type === 'address';
         const isTransaction = entry.type === 'transaction';
 
-        // Re-check for existing record right before write to ensure accurate dedupe
         let currentRecordId = entry.existingRecordId;
         if (!currentRecordId) {
-          try {
-            const existing = await findRecordByInputString(entry.raw);
-            if (existing) {
-              currentRecordId = existing.id;
-            }
-          } catch {
-            // Continue with entry.existingRecordId
+          const cached = applyLookup.get(entry.raw.trim().toLowerCase());
+          if (cached) {
+            currentRecordId = cached.id;
           }
         }
 
@@ -388,8 +390,7 @@ export default function QuickTagger() {
             updated++;
           }
         } else if (createNewRecords) {
-          // Create new record
-          const newRecord = await createRecord({
+          const newRecordId = await createRecord({
             type: entry.type as 'address' | 'transaction',
             inputString: entry.raw,
             label: label || "",
@@ -408,14 +409,17 @@ export default function QuickTagger() {
             dispositionType: isTransaction ? (dispositionType as DispositionType || undefined) : undefined,
             costBasisUsd: isTransaction && costBasisUsd ? parseFloat(costBasisUsd) : undefined,
           });
-
-          // Create origin record
-          if (newRecord?.id) {
-            await createRecordOrigin({
-              recordId: newRecord.id,
-              originType: 'bulk-import',
-              source: 'quick-tagger',
-            });
+          if (newRecordId) {
+            applyLookup.set(entry.raw.trim().toLowerCase(), { id: newRecordId as number, inputString: entry.raw } as typeof records[0]);
+            try {
+              await createRecordOrigin({
+                recordId: newRecordId as number,
+                originType: 'bulk-import',
+                source: 'quick-tagger',
+              });
+            } catch (e) {
+              console.error('Failed to create record origin:', e);
+            }
           }
           created++;
         } else {
@@ -437,6 +441,7 @@ export default function QuickTagger() {
         variant: "destructive",
       });
     } finally {
+      endBulkOperation();
       setIsProcessing(false);
     }
   };

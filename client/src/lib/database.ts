@@ -799,6 +799,8 @@ db.on('ready', async () => {
 // Components can subscribe to be notified when data changes
 type ChangeListener = (tables: string[]) => void;
 const changeListeners: Set<ChangeListener> = new Set();
+let bulkOperationDepth = 0;
+let pendingBulkTables = new Set<string>();
 
 export function subscribeToDbChanges(listener: ChangeListener): () => void {
   changeListeners.add(listener);
@@ -809,6 +811,10 @@ export function subscribeToDbChanges(listener: ChangeListener): () => void {
 
 export function notifyDbChange(tables: string | string[]): void {
   const tableArray = Array.isArray(tables) ? tables : [tables];
+  if (bulkOperationDepth > 0) {
+    tableArray.forEach(t => pendingBulkTables.add(t));
+    return;
+  }
   changeListeners.forEach(listener => {
     try {
       listener(tableArray);
@@ -816,4 +822,30 @@ export function notifyDbChange(tables: string | string[]): void {
       console.error('Error in database change listener:', e);
     }
   });
+}
+
+export function beginBulkOperation(): void {
+  bulkOperationDepth++;
+}
+
+export function endBulkOperation(): void {
+  bulkOperationDepth--;
+  if (bulkOperationDepth < 0) {
+    console.warn('endBulkOperation called without matching beginBulkOperation');
+    bulkOperationDepth = 0;
+  }
+  if (bulkOperationDepth <= 0) {
+    bulkOperationDepth = 0;
+    if (pendingBulkTables.size > 0) {
+      const tables = Array.from(pendingBulkTables);
+      pendingBulkTables = new Set();
+      changeListeners.forEach(listener => {
+        try {
+          listener(tables);
+        } catch (e) {
+          console.error('Error in database change listener:', e);
+        }
+      });
+    }
+  }
 }

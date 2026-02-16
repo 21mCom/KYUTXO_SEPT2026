@@ -29,7 +29,8 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
 import { useRecords, createRecord } from "@/hooks/use-records";
-import { syncTagsToMaster, syncCategoriesToMaster, isEncryptionReady, findRecordByInputString, createRecordOrigin, saveDerivationTemplate } from "@/lib/encryptionFacade";
+import { syncTagsToMaster, syncCategoriesToMaster, isEncryptionReady, createRecordOrigin, saveDerivationTemplate } from "@/lib/encryptionFacade";
+import { beginBulkOperation, endBulkOperation } from "@/lib/database";
 import { updateRecord } from "@/hooks/use-records";
 import { 
   deriveDualChainAddresses,
@@ -324,7 +325,17 @@ export default function BulkImport() {
     
     if (!activeReceive) return;
 
+    if (isLoadingRecords) {
+      toast({
+        variant: "destructive",
+        title: "Please Wait",
+        description: "Records are still loading. Duplicate detection requires records to be loaded first.",
+      });
+      return;
+    }
+
     setIsSaving(true);
+    beginBulkOperation();
     try {
       const receiveToSave = activeReceive.filter((_, i) => selectedReceiveAddresses.has(i));
       const changeToSave = (activeChange || []).filter((_, i) => selectedChangeAddresses.has(i));
@@ -370,11 +381,21 @@ export default function BulkImport() {
         vaultNotes: null,
       };
 
+      const recordLookup = new Map<string, typeof records[0]>();
+      for (const r of records) {
+        if (r.inputString) {
+          recordLookup.set(r.inputString.trim().toLowerCase(), r);
+        }
+      }
+
       let createdCount = 0;
       let mergedCount = 0;
       let errorCount = 0;
 
       for (let i = 0; i < allAddresses.length; i++) {
+        if (i % 10 === 0) {
+          await new Promise(r => setTimeout(r, 0));
+        }
         const addr = allAddresses[i];
         const chainSuffix = addr.chainType === 'receive' ? ' (Receive)' : ' (Change)';
         // Get derivation path (singlesig has path, multisig uses index)
@@ -391,15 +412,7 @@ export default function BulkImport() {
         }) + chainSuffix;
         
         try {
-          // Check if this address already exists
-          let existingRecord = null;
-          if (isEncryptionReady()) {
-            try {
-              existingRecord = await findRecordByInputString(addr.address);
-            } catch (e) {
-              console.error("Error checking for duplicate:", e);
-            }
-          }
+          const existingRecord = recordLookup.get(addr.address.trim().toLowerCase()) || null;
 
           if (existingRecord?.id) {
             // Address exists - merge metadata
@@ -587,6 +600,7 @@ export default function BulkImport() {
         description: error instanceof Error ? error.message : "Failed to save addresses",
       });
     } finally {
+      endBulkOperation();
       setIsSaving(false);
     }
   };
