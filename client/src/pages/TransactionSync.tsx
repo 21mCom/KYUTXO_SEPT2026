@@ -92,6 +92,9 @@ export default function TransactionSync() {
   const [isSingleSyncing, setIsSingleSyncing] = useState(false);
   const [singleSyncResult, setSingleSyncResult] = useState<SyncResult | null>(null);
   
+  // Connected-only sync mode
+  const [connectedOnly, setConnectedOnly] = useState(false);
+
   // Skipped addresses and blacklist
   const [skippedAddresses, setSkippedAddresses] = useState<SkippedAddress[]>([]);
   const [blacklist, setBlacklist] = useState<AddressBlacklist[]>([]);
@@ -204,6 +207,7 @@ export default function TransactionSync() {
         sourceFilter: 'custom',
         sourceSelection: currentSourceSelection(),
         maxDepth,
+        connectedOnly: maxDepth > 1 ? connectedOnly : undefined,
       };
       const result = await transactionSyncService.syncWithDepth(options, cachedRecords ?? undefined);
       setLastResult(result);
@@ -215,9 +219,10 @@ export default function TransactionSync() {
         });
       } else if (result.success) {
         const skippedMsg = result.addressesSkipped > 0 ? ` (${result.addressesSkipped} skipped)` : '';
+        const filteredMsg = result.addressesFiltered > 0 ? ` ${result.addressesFiltered} unknown addresses filtered.` : '';
         toast({
           title: "Sync Complete",
-          description: `Imported ${result.transactionsImported} new transactions from ${result.addressesSynced} addresses.${skippedMsg}`,
+          description: `Imported ${result.transactionsImported} new transactions from ${result.addressesSynced} addresses.${skippedMsg}${filteredMsg}`,
         });
       } else {
         toast({
@@ -829,6 +834,28 @@ export default function TransactionSync() {
                   {maxDepth === 3 && "Deep: Traces further relationships"}
                 </p>
 
+                {maxDepth > 1 && (
+                  <div className="flex items-start gap-2 mt-3 p-2 rounded-md bg-muted/50">
+                    <Checkbox
+                      id="connected-only"
+                      checked={connectedOnly}
+                      onCheckedChange={(checked) => setConnectedOnly(checked === true)}
+                      disabled={isSyncing}
+                      data-testid="checkbox-connected-only"
+                    />
+                    <div className="grid gap-1 leading-none">
+                      <Label htmlFor="connected-only" className="text-sm cursor-pointer">
+                        Connected-only mode
+                      </Label>
+                      <p className="text-xs text-muted-foreground">
+                        Only create address records for addresses already in your database. 
+                        Transactions are still saved, but unknown addresses won't generate 
+                        new records that cascade into deeper sync levels.
+                      </p>
+                    </div>
+                  </div>
+                )}
+
                 {/* Sync Protection Settings */}
                 <Collapsible open={showProtectionSettings} onOpenChange={setShowProtectionSettings}>
                   <CollapsibleTrigger asChild>
@@ -912,6 +939,12 @@ export default function TransactionSync() {
                       <p className="font-medium text-amber-600">{syncProgress.addressesSkipped}</p>
                     </div>
                   )}
+                  {(syncProgress.addressesFiltered ?? 0) > 0 && (
+                    <div>
+                      <p className="text-muted-foreground">Filtered</p>
+                      <p className="font-medium text-muted-foreground">{syncProgress.addressesFiltered}</p>
+                    </div>
+                  )}
                 </div>
               </div>
             )}
@@ -928,6 +961,9 @@ export default function TransactionSync() {
                     {lastResult.newAddressRecords > 0 && ` Created ${lastResult.newAddressRecords} new address records for review.`}
                     {lastResult.addressesSkipped > 0 && (
                       <span className="text-amber-600"> Skipped {lastResult.addressesSkipped} address{lastResult.addressesSkipped !== 1 ? 'es' : ''} (see below).</span>
+                    )}
+                    {lastResult.addressesFiltered > 0 && (
+                      <span className="text-muted-foreground"> {lastResult.addressesFiltered} unknown address{lastResult.addressesFiltered !== 1 ? 'es' : ''} filtered (connected-only mode).</span>
                     )}
                   </p>
                   {lastResult.errors.length > 0 && (

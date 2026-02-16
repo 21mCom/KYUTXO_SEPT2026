@@ -42,6 +42,7 @@ export interface SyncProgress {
   transactionsNew: number;
   newAddressRecords: number;
   addressesSkipped?: number;
+  addressesFiltered?: number;
   transactionsAlreadySynced?: number;
   error?: string;
 }
@@ -53,6 +54,7 @@ export interface SyncResult {
   transactionsUpdated: number;
   newAddressRecords: number;
   addressesSkipped: number;
+  addressesFiltered: number;
   transactionsAlreadySynced: number;
   depthsProcessed: number[];
   errors: string[];
@@ -75,6 +77,7 @@ export interface SyncOptions {
   maxDepth: number; // How many levels deep to sync (1 = only sync depth-0 addresses, 2 = sync depth-0 and discovered depth-1, etc.)
   specificRecordIds?: number[]; // If provided, only sync these specific records (for "Sync Deeper" on individual records)
   resumeContext?: ResumeContext;     // If provided, resume from paused state
+  connectedOnly?: boolean; // If true, only create address records for addresses that already exist in user's curated record set
 }
 
 export interface SyncDepthEstimate {
@@ -128,6 +131,9 @@ export class TransactionSyncService {
   private abortController: AbortController | null = null;
   private parentMetadataCache: Map<number, ParentMetadata> = new Map();
   private pendingDbNotifications: Set<string> = new Set();
+  private knownAddressSet: Set<string> | null = null;
+  private connectedOnlyMode: boolean = false;
+  private addressesFilteredCount: number = 0;
   private currentProgress: SyncProgress = {
     phase: 'idle',
     addressesTotal: 0,
@@ -370,6 +376,7 @@ export class TransactionSyncService {
       transactionsUpdated: 0,
       newAddressRecords: 0,
       addressesSkipped: 0,
+      addressesFiltered: 0,
       transactionsAlreadySynced: 0,
       depthsProcessed: [0],
       errors: [],
@@ -589,6 +596,7 @@ export class TransactionSyncService {
         transactionsUpdated: 0,
         newAddressRecords: 0,
         addressesSkipped: 0,
+        addressesFiltered: 0,
         transactionsAlreadySynced: 0,
         depthsProcessed: [],
         errors: ['No paused sync state found'],
@@ -669,6 +677,9 @@ export class TransactionSyncService {
       newAddressRecords: 0,
     };
     this.abortController = new AbortController();
+    this.knownAddressSet = null;
+    this.connectedOnlyMode = false;
+    this.addressesFilteredCount = 0;
   }
 
   private updateProgress(progress: Partial<SyncProgress>) {
@@ -703,6 +714,7 @@ export class TransactionSyncService {
       transactionsUpdated: resumeContext?.previousResult?.transactionsUpdated ?? 0,
       newAddressRecords: resumeContext?.previousResult?.newAddressRecords ?? 0,
       addressesSkipped: 0,
+      addressesFiltered: 0,
       transactionsAlreadySynced: 0,
       depthsProcessed: [],
       errors: [],
@@ -1024,6 +1036,23 @@ export class TransactionSyncService {
       // Clear parent metadata cache at start of normal sync
       this.parentMetadataCache.clear();
 
+      // Connected-only mode: build a set of all known (curated) addresses
+      // When enabled, findOrCreateAddressRecord will skip creating records for
+      // addresses not in this set, preventing cascade into unknown territory
+      this.connectedOnlyMode = !!options.connectedOnly;
+      this.addressesFilteredCount = 0;
+      if (this.connectedOnlyMode) {
+        const allCuratedRecords = await db.records
+          .where('type').equals('address')
+          .filter(r => r.source !== 'blockchain-sync')
+          .toArray();
+        const decrypted = await decryptRecordsSafe(allCuratedRecords);
+        this.knownAddressSet = new Set(decrypted.map(r => r.inputString));
+        console.log(`[TransactionSync] Connected-only mode: ${this.knownAddressSet.size} known addresses loaded`);
+      } else {
+        this.knownAddressSet = null;
+      }
+
       // Normal sync: Process each depth level from 0 up to maxDepth (exclusive)
       // Depth 0 = manually entered addresses, Depth 1 = first-hop discovered, etc.
       // maxDepth = N means "sync up to depth N-1" (e.g., maxDepth=2 syncs depths 0 and 1)
@@ -1238,6 +1267,7 @@ export class TransactionSyncService {
               transactionsNew: result.transactionsImported,
               newAddressRecords: result.newAddressRecords,
               transactionsAlreadySynced: result.transactionsAlreadySynced,
+              addressesFiltered: this.addressesFilteredCount,
             });
           } catch (error) {
             // Flush any partial notifications even on error
@@ -1268,6 +1298,7 @@ export class TransactionSyncService {
         }
       }
 
+      result.addressesFiltered = this.addressesFilteredCount;
       const totalProcessed = result.addressesSynced + result.addressesSkipped;
 
       if (result.transactionsImported > 0 && !this.cancelled) {
@@ -1388,15 +1419,17 @@ export class TransactionSyncService {
       for (const input of parsed.inputs) {
         let inputRecordId: number | undefined;
         if (input.address) {
-          const { recordId: rid, isNew } = await this.findOrCreateAddressRecord(
+          const result = await this.findOrCreateAddressRecord(
             input.address, 
             newAddressDepth,
             parsed.txid,
             recordId
           );
-          inputRecordId = rid;
-          if (isNew) stats.newRecords++;
-          await this.updateFirstSeenBlockTime(rid, parsed.blockTime);
+          if (result) {
+            inputRecordId = result.recordId;
+            if (result.isNew) stats.newRecords++;
+            await this.updateFirstSeenBlockTime(result.recordId, parsed.blockTime);
+          }
         }
 
         participantsBatch.push({
@@ -1412,15 +1445,18 @@ export class TransactionSyncService {
       }
 
       for (const output of parsed.outputs) {
-        const { recordId: outputRecordId, isNew } = await this.findOrCreateAddressRecord(
+        const result = await this.findOrCreateAddressRecord(
           output.address,
           newAddressDepth,
           parsed.txid,
           recordId
         );
-        if (isNew) stats.newRecords++;
-
-        await this.updateFirstSeenBlockTime(outputRecordId, parsed.blockTime);
+        let outputRecordId: number | undefined;
+        if (result) {
+          outputRecordId = result.recordId;
+          if (result.isNew) stats.newRecords++;
+          await this.updateFirstSeenBlockTime(result.recordId, parsed.blockTime);
+        }
 
         participantsBatch.push({
           txid: parsed.txid,
@@ -1633,11 +1669,19 @@ export class TransactionSyncService {
     syncDepth: number = 1,
     discoveredInTxid?: string,
     discoveredFromRecordId?: number
-  ): Promise<{ recordId: number; isNew: boolean }> {
+  ): Promise<{ recordId: number; isNew: boolean } | null> {
     const existing = await db.records.where('inputString').equals(address).first();
     
     if (existing && existing.id) {
       return { recordId: existing.id, isNew: false };
+    }
+
+    // Connected-only mode: skip creating records for addresses not in known set
+    // This prevents cascade into unknown address territory while still saving
+    // transaction participant data (with null recordId)
+    if (this.connectedOnlyMode && this.knownAddressSet && !this.knownAddressSet.has(address)) {
+      this.addressesFilteredCount++;
+      return null;
     }
 
     // Look up parent record to inherit context (but NOT owner - discovered addresses need review)
