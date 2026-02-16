@@ -8,7 +8,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useEncryptedTags, useEncryptedCategories } from "@/hooks/use-encrypted-records";
 import { db, type Record as DbRecord } from "@/lib/database";
 import { isEncryptionReady } from "@/lib/encryption/key-management";
-import { decryptRecords, decryptRecordsWithProgress } from "@/lib/encryption/record-encryption";
+import { decryptRecordsWithProgress } from "@/lib/encryption/record-encryption";
 import type { DecryptProgress } from "@/lib/encryption/record-encryption";
 import { useOwners } from "@/hooks/use-owners";
 import { useWalletNames } from "@/hooks/use-wallet-names";
@@ -158,9 +158,18 @@ const FIELD_CONFIGS: FieldConfig[] = [
   },
 ];
 
+const PLAINTEXT_FIELDS_LIST: FieldType[] = ['tags', 'categories', 'flowType', 'acquisitionMethod', 'dispositionType', 'counterpartyType'];
+const ENCRYPTED_FIELDS_LIST: FieldType[] = ['owner', 'walletName', 'seedName', 'walletSoftware'];
+const PLAINTEXT_FIELDS = new Set<FieldType>(PLAINTEXT_FIELDS_LIST);
+const ENCRYPTED_FIELDS = new Set<FieldType>(ENCRYPTED_FIELDS_LIST);
+
 export default function ValueUpdaterPage() {
-  const [records, setRecords] = useState<DbRecord[]>([]);
-  const [recordsLoading, setRecordsLoading] = useState(true);
+  const [plaintextValues, setPlaintextValues] = useState<Map<FieldType, UniqueValue[]>>(new Map());
+  const [encryptedValues, setEncryptedValues] = useState<Map<FieldType, UniqueValue[]>>(new Map());
+  const [decryptedRecords, setDecryptedRecords] = useState<DbRecord[] | null>(null);
+  const [plaintextLoading, setPlaintextLoading] = useState(true);
+  const [encryptedLoading, setEncryptedLoading] = useState(false);
+  const [encryptedLoaded, setEncryptedLoaded] = useState(false);
   const { tags, isLoading: tagsLoading } = useEncryptedTags();
   const { categories, isLoading: categoriesLoading } = useEncryptedCategories();
   const { owners, isLoading: ownersLoading } = useOwners();
@@ -170,27 +179,91 @@ export default function ValueUpdaterPage() {
   const { toast } = useToast();
   const [decryptProgress, setDecryptProgress] = useState<DecryptProgress | null>(null);
 
-  const loadRecords = useCallback(async () => {
-    setRecordsLoading(true);
-    try {
-      const rawRecords = await db.records.toArray();
-      if (isEncryptionReady()) {
-        const decrypted = await decryptRecordsWithProgress(rawRecords, setDecryptProgress);
-        setDecryptProgress(null);
-        setRecords(decrypted);
-      } else {
-        setRecords(rawRecords);
-      }
-    } catch (error) {
-      console.error('Failed to load records for value updater:', error);
-    } finally {
-      setRecordsLoading(false);
+  const extractValuesFromRecords = useCallback((records: DbRecord[], fieldsList: FieldType[]): Map<FieldType, UniqueValue[]> => {
+    const result = new Map<FieldType, UniqueValue[]>();
+    const counters = new Map<FieldType, Map<string, number>>();
+    for (const field of fieldsList) {
+      counters.set(field, new Map());
     }
+
+    for (const record of records) {
+      for (const field of fieldsList) {
+        const counter = counters.get(field)!;
+        const config = FIELD_CONFIGS.find(f => f.key === field);
+        if (config?.isArray) {
+          const values = (record as any)[field] as string[] | undefined;
+          if (values && Array.isArray(values)) {
+            for (const v of values) {
+              if (v && typeof v === 'string' && v.trim()) {
+                const normalized = v.trim();
+                counter.set(normalized, (counter.get(normalized) || 0) + 1);
+              }
+            }
+          }
+        } else {
+          const value = (record as any)[field] as string | undefined;
+          if (value && typeof value === 'string' && value.trim()) {
+            const normalized = value.trim();
+            counter.set(normalized, (counter.get(normalized) || 0) + 1);
+          }
+        }
+      }
+    }
+
+    for (const field of fieldsList) {
+      const counter = counters.get(field)!;
+      result.set(field, Array.from(counter.entries())
+        .map(([value, count]) => ({ value, count }))
+        .sort((a, b) => a.value.localeCompare(b.value)));
+    }
+    return result;
   }, []);
 
+  const loadPlaintextValues = useCallback(async () => {
+    setPlaintextLoading(true);
+    try {
+      const rawRecords = await db.records.toArray();
+      const values = extractValuesFromRecords(rawRecords, PLAINTEXT_FIELDS_LIST);
+      setPlaintextValues(values);
+    } catch (error) {
+      console.error('Failed to load plaintext values:', error);
+    } finally {
+      setPlaintextLoading(false);
+    }
+  }, [extractValuesFromRecords]);
+
+  const loadEncryptedValues = useCallback(async () => {
+    if (encryptedLoaded || encryptedLoading) return;
+    setEncryptedLoading(true);
+    try {
+      const rawRecords = await db.records.toArray();
+      let records: DbRecord[];
+      if (isEncryptionReady()) {
+        records = await decryptRecordsWithProgress(rawRecords, setDecryptProgress);
+        setDecryptProgress(null);
+      } else {
+        records = rawRecords;
+      }
+      setDecryptedRecords(records);
+      const values = extractValuesFromRecords(records, ENCRYPTED_FIELDS_LIST);
+      setEncryptedValues(values);
+      setEncryptedLoaded(true);
+    } catch (error) {
+      console.error('Failed to load encrypted values:', error);
+    } finally {
+      setEncryptedLoading(false);
+    }
+  }, [encryptedLoaded, encryptedLoading, extractValuesFromRecords]);
+
+  const reloadAll = useCallback(async () => {
+    setEncryptedLoaded(false);
+    setDecryptedRecords(null);
+    await loadPlaintextValues();
+  }, [loadPlaintextValues]);
+
   useEffect(() => {
-    loadRecords();
-  }, [loadRecords]);
+    loadPlaintextValues();
+  }, [loadPlaintextValues]);
   
   const [editingField, setEditingField] = useState<FieldType | null>(null);
   const [editingValue, setEditingValue] = useState<string>("");
@@ -205,32 +278,17 @@ export default function ValueUpdaterPage() {
   const [newUnusedValue, setNewUnusedValue] = useState<string>("");
   const [activeTab, setActiveTab] = useState<FieldType>('tags');
 
-  const extractUniqueValues = (field: FieldType): UniqueValue[] => {
-    const valueCounts = new Map<string, number>();
-    
-    for (const record of records) {
-      if (FIELD_CONFIGS.find(f => f.key === field)?.isArray) {
-        const values = record[field] as string[] | undefined;
-        if (values && Array.isArray(values)) {
-          for (const v of values) {
-            if (v && typeof v === 'string' && v.trim()) {
-              const normalized = v.trim();
-              valueCounts.set(normalized, (valueCounts.get(normalized) || 0) + 1);
-            }
-          }
-        }
-      } else {
-        const value = record[field] as string | undefined;
-        if (value && typeof value === 'string' && value.trim()) {
-          const normalized = value.trim();
-          valueCounts.set(normalized, (valueCounts.get(normalized) || 0) + 1);
-        }
-      }
+  useEffect(() => {
+    if (ENCRYPTED_FIELDS.has(activeTab) && !encryptedLoaded && !encryptedLoading) {
+      loadEncryptedValues();
     }
-    
-    return Array.from(valueCounts.entries())
-      .map(([value, count]) => ({ value, count }))
-      .sort((a, b) => a.value.localeCompare(b.value));
+  }, [activeTab, encryptedLoaded, encryptedLoading, loadEncryptedValues]);
+
+  const getUniqueValues = (field: FieldType): UniqueValue[] => {
+    if (PLAINTEXT_FIELDS.has(field)) {
+      return plaintextValues.get(field) || [];
+    }
+    return encryptedValues.get(field) || [];
   };
 
   // Get display label for a value (enum label or original value for non-enum fields)
@@ -250,7 +308,7 @@ export default function ValueUpdaterPage() {
   };
 
   const getUnusedMasterItems = (field: FieldType): string[] => {
-    const usedValues = new Set(extractUniqueValues(field).map(v => v.value.toLowerCase()));
+    const usedValues = new Set(getUniqueValues(field).map(v => v.value.toLowerCase()));
     const config = FIELD_CONFIGS.find(f => f.key === field);
     
     // For enum-based fields, return unused enum option VALUES (not labels)
@@ -291,6 +349,21 @@ export default function ValueUpdaterPage() {
     }
   };
 
+  const getRecordsForField = useCallback(async (field: FieldType): Promise<DbRecord[]> => {
+    if (ENCRYPTED_FIELDS.has(field)) {
+      if (decryptedRecords) return decryptedRecords;
+      const rawRecords = await db.records.toArray();
+      if (isEncryptionReady()) {
+        const decrypted = await decryptRecordsWithProgress(rawRecords, setDecryptProgress);
+        setDecryptProgress(null);
+        setDecryptedRecords(decrypted);
+        return decrypted;
+      }
+      return rawRecords;
+    }
+    return db.records.toArray();
+  }, [decryptedRecords]);
+
   const handleUpdateValue = async (field: FieldType, oldValue: string, newValueInput: string) => {
     if (!newValueInput.trim() || newValueInput.trim() === oldValue) {
       setEditingField(null);
@@ -303,7 +376,6 @@ export default function ValueUpdaterPage() {
     const trimmedNewValue = newValueInput.trim();
     const config = FIELD_CONFIGS.find(f => f.key === field)!;
     
-    // Validate enum fields - new value must be a valid enum option
     if (config.enumOptions) {
       const validValues = config.enumOptions.map(opt => opt.value);
       if (!validValues.includes(trimmedNewValue)) {
@@ -319,8 +391,9 @@ export default function ValueUpdaterPage() {
     
     try {
       let updateCount = 0;
+      const fieldRecords = await getRecordsForField(field);
       
-      for (const record of records) {
+      for (const record of fieldRecords) {
         let needsUpdate = false;
         let updatedData: Partial<Record> = {};
         
@@ -400,7 +473,7 @@ export default function ValueUpdaterPage() {
       setEditingField(null);
       setEditingValue("");
       setNewValue("");
-      loadRecords();
+      reloadAll();
     } catch (error) {
       toast({
         variant: "destructive",
@@ -421,8 +494,9 @@ export default function ValueUpdaterPage() {
     try {
       let updateCount = 0;
       const config = FIELD_CONFIGS.find(f => f.key === field)!;
+      const fieldRecords = await getRecordsForField(field);
       
-      for (const record of records) {
+      for (const record of fieldRecords) {
         let needsUpdate = false;
         let updatedData: Partial<Record> = {};
         
@@ -499,7 +573,7 @@ export default function ValueUpdaterPage() {
       
       setDeleteDialogOpen(false);
       setDeleteTarget(null);
-      loadRecords();
+      reloadAll();
     } catch (error) {
       toast({
         variant: "destructive",
@@ -715,10 +789,30 @@ export default function ValueUpdaterPage() {
     }
   };
 
-  const isLoading = recordsLoading || tagsLoading || categoriesLoading || ownersLoading || walletNamesLoading || seedNamesLoading || walletSoftwareLoading;
+  const isLoading = plaintextLoading || tagsLoading || categoriesLoading || ownersLoading || walletNamesLoading || seedNamesLoading || walletSoftwareLoading;
 
   const renderFieldSection = (config: FieldConfig) => {
-    const values = extractUniqueValues(config.key);
+    const isEncryptedField = ENCRYPTED_FIELDS.has(config.key);
+    if (isEncryptedField && !encryptedLoaded) {
+      return (
+        <Card key={config.key}>
+          <CardContent className="py-8">
+            <div className="flex items-center justify-center gap-2 text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              <span>
+                {encryptedLoading ? (
+                  decryptProgress
+                    ? `Decrypting records ${decryptProgress.current.toLocaleString()}/${decryptProgress.total.toLocaleString()}${decryptProgress.cached > 0 ? ` (${decryptProgress.cached.toLocaleString()} cached)` : ''}...`
+                    : 'Loading encrypted values...'
+                ) : 'Preparing to load...'}
+              </span>
+            </div>
+          </CardContent>
+        </Card>
+      );
+    }
+
+    const values = getUniqueValues(config.key);
     const Icon = config.icon;
     const unusedItems = config.hasMasterList 
       ? getUnusedMasterItems(config.key)
@@ -995,16 +1089,6 @@ export default function ValueUpdaterPage() {
             Edit values across all records at once. Changes apply everywhere that value is used.
           </p>
         </div>
-
-        {decryptProgress && (
-          <div className="flex items-center gap-2 text-sm text-muted-foreground px-4 py-2">
-            <RefreshCw className="h-4 w-4 animate-spin" />
-            <span>
-              Decrypting records {decryptProgress.current.toLocaleString()}/{decryptProgress.total.toLocaleString()}
-              {decryptProgress.cached > 0 && ` (${decryptProgress.cached.toLocaleString()} cached)`}...
-            </span>
-          </div>
-        )}
 
         <Tabs value={activeTab} onValueChange={(val) => setActiveTab(val as FieldType)}>
           <TabsList className="flex-wrap h-auto gap-1">

@@ -40,7 +40,7 @@ KYUTXO employs a security-focused architecture with all data and attachments sec
 *   **Discovery Tree Dialog:** Visualizes all recursively discovered records from a given address.
 *   **Transaction Classification Metadata:** Tax-neutral fact-recording system for `flowType`, `acquisitionMethod`, `dispositionType`, `costBasisUsd`, and `counterpartyType`.
 *   **Bulk Editor:** Batch editing system with filter/action builders, preview, and undo.
-*   **Value Updater Enhancement:** Extended support for transaction classification fields.
+*   **Value Updater Enhancement:** Extended support for transaction classification fields. Lazy-load optimization: plaintext fields render instantly without decryption; encrypted fields (owner, walletName, seedName, walletSoftware) decrypt on-demand when their tab is selected.
 *   **Metadata Conflict Resolution System:** Detects and resolves conflicts for singular metadata fields from multiple import sources using a `RecordOrigin` system.
 *   **Bitcoin Flow Visualizer:** Interactive UTXO provenance tracing tool with Sankey Diagram, Timeline Swimlanes, Line Chart, and Hop-Path Explorer visualizations.
 *   **Transaction Search Enhancement:** Includes blockchain transactions and participating addresses in search results.
