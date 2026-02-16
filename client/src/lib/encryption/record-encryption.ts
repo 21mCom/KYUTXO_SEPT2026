@@ -315,8 +315,24 @@ export async function getDecryptedParticipantsByTxids(txids: string[]): Promise<
 }
 
 export async function getDecryptedParticipantsByAddress(address: string): Promise<TransactionParticipant[]> {
-  const all = await getAllDecryptedParticipants();
-  return all.filter(p => p.address === address);
+  const raw = await db.transactionParticipants.where('address').equals(address).toArray();
+  return decryptParticipantsData(raw);
+}
+
+export async function getDecryptedParticipantsByAddresses(addresses: string[]): Promise<TransactionParticipant[]> {
+  if (addresses.length === 0) return [];
+  const results: TransactionParticipant[] = [];
+  const batchSize = 500;
+  for (let i = 0; i < addresses.length; i += batchSize) {
+    const batch = addresses.slice(i, i + batchSize);
+    const raw = await db.transactionParticipants.where('address').anyOf(batch).toArray();
+    const decrypted = await decryptParticipantsData(raw);
+    results.push(...decrypted);
+    if (i + batchSize < addresses.length) {
+      await new Promise(r => setTimeout(r, 0));
+    }
+  }
+  return results;
 }
 
 export async function getDecryptedParticipantsByRecordId(recordId: number): Promise<TransactionParticipant[]> {

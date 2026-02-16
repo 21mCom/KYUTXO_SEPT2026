@@ -24,7 +24,7 @@ import { useFlowData, type FlowNode } from "@/hooks/use-flow-data";
 import { HopPathExplorer } from "@/components/HopPathExplorer";
 import { RecordDetailPanel } from "@/components/RecordDetailPanel";
 import { db, type ChainType, type AddressImportance, type VaultMetadata, type FlowType, type AcquisitionMethod, type DispositionType, type CounterpartyType } from "@/lib/database";
-import { decryptRecords, decryptRecordsWithProgress, isEncryptionReady, getAllDecryptedParticipants } from "@/lib/encryptionFacade";
+import { decryptRecords, decryptRecordsWithProgress, isEncryptionReady, getDecryptedParticipantsByAddresses } from "@/lib/encryptionFacade";
 import type { DecryptProgress } from "@/lib/encryption/record-encryption";
 import { useOwners } from "@/hooks/use-owners";
 import { useWalletNames } from "@/hooks/use-wallet-names";
@@ -310,9 +310,7 @@ export default function BitcoinFlowVisualizer() {
           return;
         }
 
-        const addrSet = new Set(addressStrings);
-        const allParts = await getAllDecryptedParticipants();
-        const participants = allParts.filter(p => addrSet.has(p.address));
+        const participants = await getDecryptedParticipantsByAddresses(addressStrings);
 
         const txids = Array.from(new Set(participants.map(p => p.txid)));
         const txMap = new Map<string, number>();
@@ -484,17 +482,23 @@ export default function BitcoinFlowVisualizer() {
     }
   };
 
-  const inputNodes = flowData?.nodes.filter(n => n.type === "input") || [];
-  const outputNodes = flowData?.nodes.filter(n => n.type === "output") || [];
-  const selectedNode = flowData?.nodes.find(n => n.type === "selected");
-  
-  // Count owned vs external
-  const ownedInputs = inputNodes.filter(n => n.isLabeled || n.owner);
-  const externalInputs = inputNodes.filter(n => !n.isLabeled && !n.owner);
-  const ownedOutputs = outputNodes.filter(n => n.isLabeled || n.owner);
-  const externalOutputs = outputNodes.filter(n => !n.isLabeled && !n.owner);
+  const { inputNodes, outputNodes, selectedNode: selectedFlowNode, ownedInputs, externalInputs, ownedOutputs, externalOutputs } = useMemo(() => {
+    const inputs = flowData?.nodes.filter(n => n.type === "input") || [];
+    const outputs = flowData?.nodes.filter(n => n.type === "output") || [];
+    const selected = flowData?.nodes.find(n => n.type === "selected");
+    return {
+      inputNodes: inputs,
+      outputNodes: outputs,
+      selectedNode: selected,
+      ownedInputs: inputs.filter(n => n.isLabeled || n.owner),
+      externalInputs: inputs.filter(n => !n.isLabeled && !n.owner),
+      ownedOutputs: outputs.filter(n => n.isLabeled || n.owner),
+      externalOutputs: outputs.filter(n => !n.isLabeled && !n.owner),
+    };
+  }, [flowData]);
 
   return (
+    <>
     <ScrollArea className="h-full">
       <div className="p-6 space-y-6 max-w-7xl mx-auto">
         <div className="space-y-2">
@@ -831,8 +835,8 @@ export default function BitcoinFlowVisualizer() {
                         );
                       })}
 
-                      {selectedNode && (
-                        <g className="cursor-pointer" onClick={() => handleNodeClick(selectedNode.address)} data-testid="sankey-selected-node">
+                      {selectedFlowNode && (
+                        <g className="cursor-pointer" onClick={() => handleNodeClick(selectedFlowNode.address)} data-testid="sankey-selected-node">
                           <rect
                             x="350"
                             y="150"
@@ -847,7 +851,7 @@ export default function BitcoinFlowVisualizer() {
                             SELECTED
                           </text>
                           <text x="400" y="215" textAnchor="middle" className="fill-primary-foreground text-xs font-mono pointer-events-none">
-                            {selectedNode.amount.toFixed(4)} BTC
+                            {selectedFlowNode.amount.toFixed(4)} BTC
                           </text>
                         </g>
                       )}
@@ -1000,15 +1004,15 @@ export default function BitcoinFlowVisualizer() {
                           );
                         })}
 
-                        {selectedNode && (
+                        {selectedFlowNode && (
                           <div 
                             className="flex items-center gap-2 px-2 py-3 rounded bg-primary/10 border border-primary/20 cursor-pointer hover-elevate"
-                            onClick={() => handleNodeClick(selectedNode.address)}
+                            onClick={() => handleNodeClick(selectedFlowNode.address)}
                             data-testid="timeline-selected-row"
                           >
                             <Badge className="w-8 justify-center text-xs">0</Badge>
-                            <div className="w-24 text-xs">{selectedNode.timestamp}</div>
-                            <div className="w-32 text-xs font-bold font-mono truncate">{selectedNode.address}</div>
+                            <div className="w-24 text-xs">{selectedFlowNode.timestamp}</div>
+                            <div className="w-32 text-xs font-bold font-mono truncate">{selectedFlowNode.address}</div>
                             <div className="flex-1 flex items-center gap-1">
                               <div 
                                 className="h-6 rounded flex items-center justify-center text-xs text-primary-foreground font-medium"
@@ -1020,9 +1024,9 @@ export default function BitcoinFlowVisualizer() {
                                 SELECTED
                               </div>
                             </div>
-                            <div className="w-24 text-right font-mono text-sm font-bold">{selectedNode.amount.toFixed(4)} BTC</div>
+                            <div className="w-24 text-right font-mono text-sm font-bold">{selectedFlowNode.amount.toFixed(4)} BTC</div>
                             <div className="w-24 text-right">
-                              {selectedNode.owner && <Badge>{selectedNode.owner}</Badge>}
+                              {selectedFlowNode.owner && <Badge>{selectedFlowNode.owner}</Badge>}
                             </div>
                           </div>
                         )}
@@ -1311,13 +1315,14 @@ export default function BitcoinFlowVisualizer() {
           </Card>
         )}
       </div>
-      
-      <RecordDetailPanel
-        open={recordPanelOpen}
-        record={selectedRecord || undefined}
-        onClose={() => setRecordPanelOpen(false)}
-        onEdit={handleEditRecord}
-      />
     </ScrollArea>
+      
+    <RecordDetailPanel
+      open={recordPanelOpen}
+      record={selectedRecord || undefined}
+      onClose={() => setRecordPanelOpen(false)}
+      onEdit={handleEditRecord}
+    />
+    </>
   );
 }
