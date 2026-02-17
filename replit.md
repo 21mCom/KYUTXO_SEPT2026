@@ -48,6 +48,7 @@ KYUTXO employs a security-focused architecture with all data and attachments sec
 *   **Evidence/Document Storage System:** General-purpose encrypted document storage for proof-of-ownership and historical records.
 *   **Vault Management Page:** Dedicated UI for viewing and managing multisig vaults.
 *   **Statement Report:** Bank-statement-like transaction report generator with configurable options (date range, currency, balance modes, columns), PDF export, and spending discovery.
+*   **Quantum Risk Scanner:** Dedicated page that scans address records for quantum computing vulnerability. Classifies by address type (P2PK=critical, P2TR=high, P2PKH/P2WPKH with spend history=high, P2PKH/P2WPKH receive-only=medium, P2SH=variable/needs review) and auto-tags records with `quantum:critical/high/medium/variable/low` tags. Uses bulk operations for performance.
 
 ## External Dependencies
 

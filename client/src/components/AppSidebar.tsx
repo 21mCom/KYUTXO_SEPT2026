@@ -34,7 +34,8 @@ import {
   Vault,
   Trash2,
   Smartphone,
-  LayoutList
+  LayoutList,
+  ShieldAlert
 } from "lucide-react";
 import logoUrl from "@assets/foot_1764929618997.png";
 import { version as APP_VERSION } from "../../../package.json";
@@ -102,6 +103,7 @@ const navGroups: NavGroup[] = [
       { title: "Provenance", url: "/provenance", icon: Map },
       { title: "Flow Visualizer", url: "/flow-visualizer", icon: Network },
       { title: "Data Stats", url: "/data-stats", icon: BarChart3 },
+      { title: "Quantum Risk", url: "/quantum-risk", icon: ShieldAlert },
       { title: "Reports", url: "/reports", icon: ClipboardList },
       { title: "Statement", url: "/statement", icon: FileText },
       { title: "Lightning", url: "/lightning-speculator", icon: Zap },
