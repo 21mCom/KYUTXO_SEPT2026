@@ -85,6 +85,7 @@ const navGroups: NavGroup[] = [
     icon: Database,
     defaultOpen: true,
     items: [
+      { title: "Balance", url: "/balance", icon: Wallet },
       { title: "Transactions", url: "/transactions", icon: List },
       { title: "UTXOs", url: "/utxos", icon: Coins },
       { title: "Vaults", url: "/vaults", icon: Vault },

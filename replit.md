@@ -49,6 +49,7 @@ KYUTXO employs a security-focused architecture with all data and attachments sec
 *   **Vault Management Page:** Dedicated UI for viewing and managing multisig vaults.
 *   **Statement Report:** Bank-statement-like transaction report generator with configurable options (date range, currency, balance modes, columns), PDF export, and spending discovery.
 *   **Quantum Risk Scanner:** Dedicated page that scans address records for quantum computing vulnerability. Classifies by address type (P2PK=critical, P2TR=high, P2PKH/P2WPKH with spend history=high, P2PKH/P2WPKH receive-only=medium, P2SH=variable/needs review) and auto-tags records with `quantum:critical/high/medium/variable/low` tags. Uses bulk operations for performance.
+*   **Balance Overview:** Clean BTC balance summary page that computes UTXO balances from transaction participants and groups them by wallet, seed, owner, tag, or category. Supports both heuristic and exact UTXO modes (auto-detects), BTC/sats display toggle, optional USD valuation from imported price data, and expandable address breakdowns per group.
 
 ## External Dependencies
 
