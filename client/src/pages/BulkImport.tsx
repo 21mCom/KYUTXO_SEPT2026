@@ -28,10 +28,11 @@ import {
 } from "@/components/ui/alert";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
-import { useRecords, createRecord } from "@/hooks/use-records";
+import { createRecord } from "@/hooks/use-records";
 import { syncTagsToMaster, syncCategoriesToMaster, isEncryptionReady, createRecordOrigin, saveDerivationTemplate } from "@/lib/encryptionFacade";
-import { beginBulkOperation, endBulkOperation } from "@/lib/database";
+import { db, beginBulkOperation, endBulkOperation } from "@/lib/database";
 import { updateRecord } from "@/hooks/use-records";
+import { decryptRecordsWithProgress } from "@/lib/encryption/record-encryption";
 import { 
   deriveDualChainAddresses,
   deriveDualChainAdvanced,
@@ -110,7 +111,6 @@ export default function BulkImport() {
   // Save template for future derivations (xpub storage)
   const [saveTemplate, setSaveTemplate] = useState(false);
 
-  const { records, isLoading: isLoadingRecords } = useRecords();
   const { encryptionKey } = useAuth();
   const { toast } = useToast();
 
@@ -325,15 +325,6 @@ export default function BulkImport() {
     
     if (!activeReceive) return;
 
-    if (isLoadingRecords) {
-      toast({
-        variant: "destructive",
-        title: "Please Wait",
-        description: "Records are still loading. Duplicate detection requires records to be loaded first.",
-      });
-      return;
-    }
-
     setIsSaving(true);
     beginBulkOperation();
     try {
@@ -341,16 +332,13 @@ export default function BulkImport() {
       const changeToSave = (activeChange || []).filter((_, i) => selectedChangeAddresses.has(i));
       const allAddresses = [...receiveToSave, ...changeToSave];
       
-      // Build multisig vault notes with cosigner details as structured JSON
       const buildMultisigVaultNotes = () => {
-        // Extract cosigner metadata (names, notes)
         const cosignerDetails = multisigXpubs
           .filter(x => x.xpub.trim())
           .map((x, idx) => ({
             index: idx + 1,
             name: x.name || `Cosigner ${idx + 1}`,
             notes: x.notes || undefined,
-            // Include truncated xpub preview for visual reference (not a cryptographic fingerprint)
             xpubPreview: x.xpub.substring(0, 12) + '...',
           }));
         
@@ -366,7 +354,6 @@ export default function BulkImport() {
       const parsedTags = selectedTags;
       const parsedCategories = selectedCategories;
 
-      // Build vault metadata object for all derived addresses
       const vaultMetadata = isVaultXpub ? {
         isVaultXpub: true,
         vaultName: vaultName || null,
@@ -381,8 +368,12 @@ export default function BulkImport() {
         vaultNotes: null,
       };
 
-      const recordLookup = new Map<string, typeof records[0]>();
-      for (const r of records) {
+      const rawRecords = await db.records.where('type').equals('address').toArray();
+      const decryptedRecords = isEncryptionReady()
+        ? await decryptRecordsWithProgress(rawRecords)
+        : rawRecords;
+      const recordLookup = new Map<string, (typeof decryptedRecords)[0]>();
+      for (const r of decryptedRecords) {
         if (r.inputString) {
           recordLookup.set(r.inputString.trim().toLowerCase(), r);
         }
