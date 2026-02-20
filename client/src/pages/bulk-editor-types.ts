@@ -75,13 +75,14 @@ const OPERATORS: { value: Operator; label: string; needsValue: boolean }[] = [
   { value: 'is_not_empty', label: 'is not empty', needsValue: false },
 ];
 
-type ActionType = 'set' | 'add' | 'remove' | 'clear';
+type ActionType = 'set' | 'add' | 'remove' | 'clear' | 'attach_file';
 
 const ACTION_TYPES: { value: ActionType; label: string; description: string }[] = [
   { value: 'set', label: 'Set', description: 'Replace the value' },
   { value: 'add', label: 'Add', description: 'Add to array (tags/categories)' },
   { value: 'remove', label: 'Remove', description: 'Remove from array (tags/categories)' },
   { value: 'clear', label: 'Clear', description: 'Set to empty' },
+  { value: 'attach_file', label: 'Attach File', description: 'Attach file(s) to matching records' },
 ];
 
 interface FilterCondition {
@@ -97,6 +98,7 @@ interface ActionDef {
   type: ActionType;
   field: keyof Record;
   value: string;
+  files?: File[];
 }
 
 interface UndoSnapshot {

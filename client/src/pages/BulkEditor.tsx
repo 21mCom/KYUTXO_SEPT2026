@@ -28,6 +28,9 @@ import {
   CheckCircle2,
   X,
   Undo2,
+  Paperclip,
+  FileIcon,
+  Loader2,
 } from "lucide-react";
 import { useRecords } from "@/hooks/use-records";
 import { useOwners } from "@/hooks/use-owners";
@@ -41,6 +44,8 @@ import {
   bulkUpdateRecords,
 } from "@/lib/encryptionFacade";
 import type { Record } from "@/lib/database";
+import { uploadAttachment, formatFileSize } from "@/lib/attachments";
+import { Progress } from "@/components/ui/progress";
 import {
   type FieldDef,
   type Operator,
@@ -75,6 +80,7 @@ export default function BulkEditor() {
   const [showConfirmDialog, setShowConfirmDialog] = useState(false);
   const [isApplying, setIsApplying] = useState(false);
   const [lastUndo, setLastUndo] = useState<UndoSnapshot | null>(null);
+  const [attachProgress, setAttachProgress] = useState<{ current: number; total: number } | null>(null);
   
   // Build vocabulary options map
   const vocabularyOptions = useMemo(() => ({
@@ -216,21 +222,28 @@ export default function BulkEditor() {
     setActions(actions.filter(a => a.id !== id));
   };
   
-  // Check if actions are valid
+  const hasAttachFileAction = actions.some(a => a.type === 'attach_file');
+  const attachFileActions = actions.filter(a => a.type === 'attach_file');
+  const metadataActions = actions.filter(a => a.type !== 'attach_file');
+
+  const totalAttachFiles = attachFileActions.reduce((sum, a) => sum + (a.files?.length || 0), 0);
+  const totalAttachSize = attachFileActions.reduce((sum, a) => 
+    sum + (a.files?.reduce((fs, f) => fs + f.size, 0) || 0), 0);
+
   const isValidSetup = conditions.length > 0 && actions.length > 0 && 
     actions.every(a => {
       if (a.type === 'clear') return true;
+      if (a.type === 'attach_file') return (a.files?.length || 0) > 0;
       return a.value.trim() !== '';
     });
   
-  // Apply actions to matching records (optimized batch processing)
   const applyChanges = async () => {
     if (!isValidSetup || matchingRecords.length === 0) return;
     
     setIsApplying(true);
+    setAttachProgress(null);
     
     try {
-      // Create undo snapshot with detailed info for clear undo messaging
       const snapshot: UndoSnapshot = {
         timestamp: Date.now(),
         recordSnapshots: [],
@@ -238,98 +251,131 @@ export default function BulkEditor() {
         recordCount: matchingRecords.length,
         actionsApplied: actions.map(a => ({
           type: a.type,
-          field: FIELD_DEFS.find(f => f.key === a.field)?.label || a.field as string,
-          value: a.type !== 'clear' ? a.value : undefined,
+          field: a.type === 'attach_file' 
+            ? `Attach ${a.files?.map(f => f.name).join(', ') || 'file'}`
+            : (FIELD_DEFS.find(f => f.key === a.field)?.label || a.field as string),
+          value: a.type === 'attach_file' ? undefined : (a.type !== 'clear' ? a.value : undefined),
         })),
       };
       
-      // Step 1: Compute all updates in memory
-      const bulkUpdates: Array<{ id: number; changes: Partial<Record> }> = [];
-      
-      for (const record of matchingRecords) {
-        // Build the update object for this record
-        const updates: Partial<Record> = {};
-        const beforeState: Partial<Record> = {};
+      let metadataSuccessCount = 0;
+      let metadataErrorCount = 0;
+
+      if (metadataActions.length > 0) {
+        const bulkUpdates: Array<{ id: number; changes: Partial<Record> }> = [];
         
-        for (const action of actions) {
-          const fieldDef = FIELD_DEFS.find(f => f.key === action.field);
-          if (!fieldDef) continue;
+        for (const record of matchingRecords) {
+          const updates: Partial<Record> = {};
+          const beforeState: Partial<Record> = {};
           
-          // Store before state for undo (only store original value, not intermediate)
-          if (!(action.field in beforeState)) {
-            beforeState[action.field] = record[action.field] as any;
+          for (const action of metadataActions) {
+            const fieldDef = FIELD_DEFS.find(f => f.key === action.field);
+            if (!fieldDef) continue;
+            
+            if (!(action.field in beforeState)) {
+              beforeState[action.field] = record[action.field] as any;
+            }
+            
+            if (fieldDef.type === 'array') {
+              const currentArray = (action.field in updates) 
+                ? ((updates as any)[action.field] as string[] || [])
+                : ((record[action.field] as string[] | undefined) || []);
+              
+              switch (action.type) {
+                case 'add':
+                  if (!currentArray.includes(action.value)) {
+                    (updates as any)[action.field] = [...currentArray, action.value];
+                  } else {
+                    (updates as any)[action.field] = currentArray;
+                  }
+                  break;
+                case 'remove':
+                  (updates as any)[action.field] = currentArray.filter(v => v !== action.value);
+                  break;
+                case 'set':
+                  (updates as any)[action.field] = action.value ? [action.value] : [];
+                  break;
+                case 'clear':
+                  (updates as any)[action.field] = [];
+                  break;
+              }
+            } else {
+              const currentValue = (action.field in updates)
+                ? (updates as any)[action.field]
+                : (record[action.field] as string | undefined) || '';
+              
+              switch (action.type) {
+                case 'set':
+                  (updates as any)[action.field] = action.value;
+                  break;
+                case 'clear':
+                  (updates as any)[action.field] = '';
+                  break;
+                default:
+                  (updates as any)[action.field] = currentValue;
+                  break;
+              }
+            }
           }
           
-          if (fieldDef.type === 'array') {
-            // Use the accumulated value if already modified, otherwise use original
-            const currentArray = (action.field in updates) 
-              ? ((updates as any)[action.field] as string[] || [])
-              : ((record[action.field] as string[] | undefined) || []);
-            
-            switch (action.type) {
-              case 'add':
-                if (!currentArray.includes(action.value)) {
-                  (updates as any)[action.field] = [...currentArray, action.value];
-                } else {
-                  // Preserve current state even if value already exists
-                  (updates as any)[action.field] = currentArray;
-                }
-                break;
-              case 'remove':
-                (updates as any)[action.field] = currentArray.filter(v => v !== action.value);
-                break;
-              case 'set':
-                (updates as any)[action.field] = action.value ? [action.value] : [];
-                break;
-              case 'clear':
-                (updates as any)[action.field] = [];
-                break;
-            }
-          } else {
-            // Use the accumulated value if already modified, otherwise use original
-            const currentValue = (action.field in updates)
-              ? (updates as any)[action.field]
-              : (record[action.field] as string | undefined) || '';
-            
-            switch (action.type) {
-              case 'set':
-                (updates as any)[action.field] = action.value;
-                break;
-              case 'clear':
-                (updates as any)[action.field] = '';
-                break;
-              default:
-                // add/remove not valid for non-array fields, preserve current
-                (updates as any)[action.field] = currentValue;
-                break;
-            }
+          snapshot.recordSnapshots.push({
+            id: record.id!,
+            before: beforeState,
+          });
+          
+          if (Object.keys(updates).length > 0) {
+            bulkUpdates.push({ id: record.id!, changes: updates });
           }
         }
         
-        // Add to undo snapshot
-        snapshot.recordSnapshots.push({
-          id: record.id!,
-          before: beforeState,
-        });
-        
-        // Add to bulk updates if there are changes
-        if (Object.keys(updates).length > 0) {
-          bulkUpdates.push({ id: record.id!, changes: updates });
+        const result = await bulkUpdateRecords(bulkUpdates);
+        metadataSuccessCount = result.successCount;
+        metadataErrorCount = result.errorCount;
+      }
+
+      let attachSuccessCount = 0;
+      let attachErrorCount = 0;
+
+      if (attachFileActions.length > 0) {
+        const allFiles = attachFileActions.flatMap(a => a.files || []);
+        const totalOps = matchingRecords.length * allFiles.length;
+        let completedOps = 0;
+        setAttachProgress({ current: 0, total: totalOps });
+
+        for (const record of matchingRecords) {
+          for (const file of allFiles) {
+            try {
+              const identifier = `bulk_${record.id}_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+              await uploadAttachment(record.id!, file, identifier);
+              attachSuccessCount++;
+            } catch (err) {
+              console.error(`Failed to attach ${file.name} to record ${record.id}:`, err);
+              attachErrorCount++;
+            }
+            completedOps++;
+            setAttachProgress({ current: completedOps, total: totalOps });
+            if (completedOps % 5 === 0) {
+              await new Promise(r => setTimeout(r, 0));
+            }
+          }
         }
       }
       
-      // Step 2: Apply all updates in a single batch operation
-      const { successCount, errorCount } = await bulkUpdateRecords(bulkUpdates);
+      setLastUndo(metadataActions.length > 0 ? snapshot : null);
       
-      // Store undo snapshot
-      setLastUndo(snapshot);
-      
+      const parts: string[] = [];
+      if (metadataActions.length > 0) {
+        parts.push(`Updated ${metadataSuccessCount} record(s)${metadataErrorCount > 0 ? ` (${metadataErrorCount} failed)` : ''}`);
+      }
+      if (attachFileActions.length > 0) {
+        parts.push(`Attached ${attachSuccessCount} file(s)${attachErrorCount > 0 ? ` (${attachErrorCount} failed)` : ''}`);
+      }
+
       toast({
         title: "Bulk Edit Complete",
-        description: `Updated ${successCount} record(s)${errorCount > 0 ? `, ${errorCount} failed` : ''}`,
+        description: parts.join('. '),
       });
       
-      // Reset actions but keep filters for follow-up edits
       setActions([]);
       
     } catch (error) {
@@ -341,6 +387,7 @@ export default function BulkEditor() {
       });
     } finally {
       setIsApplying(false);
+      setAttachProgress(null);
       setShowConfirmDialog(false);
     }
   };
@@ -734,18 +781,100 @@ export default function BulkEditor() {
                 <Badge variant="outline" className="text-xs mr-2">Clear</Badge>
                 <span>Removes all values from field. <span className="text-muted-foreground/70 italic">Ex: Tags [Work, Personal] + Clear = [ ]</span></span>
               </div>
+              <div>
+                <Badge variant="outline" className="text-xs mr-2">Attach File</Badge>
+                <span>Attach one or more files to every matching record. <span className="text-muted-foreground/70 italic">Ex: Attach myfile.pdf to 200 records</span></span>
+              </div>
             </div>
           </div>
           
           {/* Actions */}
           <div className="space-y-3">
             {actions.map((action, index) => {
+              if (action.type === 'attach_file') {
+                return (
+                  <div key={action.id} className="flex items-start gap-2 flex-wrap">
+                    <Select
+                      value="attach_file"
+                      onValueChange={(v) => {
+                        if (v !== 'attach_file') {
+                          updateAction(action.id, { type: v as ActionType, files: undefined });
+                        }
+                      }}
+                    >
+                      <SelectTrigger className="w-[160px]" data-testid={`select-action-type-${index}`}>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {ACTION_TYPES.map(at => (
+                          <SelectItem key={at.value} value={at.value}>
+                            {at.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+
+                    <div className="flex flex-col gap-2 flex-1 min-w-[200px]">
+                      <label
+                        className="flex items-center gap-2 border border-dashed rounded-md px-3 py-2 cursor-pointer text-sm text-muted-foreground hover-elevate transition-colors"
+                        data-testid={`button-pick-files-${index}`}
+                      >
+                        <Paperclip className="h-4 w-4 shrink-0" />
+                        <span>Choose file(s)...</span>
+                        <input
+                          type="file"
+                          multiple
+                          className="hidden"
+                          onChange={(e) => {
+                            const newFiles = Array.from(e.target.files || []);
+                            const existing = action.files || [];
+                            updateAction(action.id, { files: [...existing, ...newFiles] });
+                            e.target.value = '';
+                          }}
+                        />
+                      </label>
+                      {(action.files?.length || 0) > 0 && (
+                        <div className="flex flex-wrap gap-1.5">
+                          {action.files!.map((file, fi) => (
+                            <Badge key={`${file.name}-${fi}`} variant="secondary" className="gap-1 text-xs">
+                              <FileIcon className="h-3 w-3 shrink-0" />
+                              <span className="truncate max-w-[120px]">{file.name}</span>
+                              <span className="text-muted-foreground">({formatFileSize(file.size)})</span>
+                              <button
+                                onClick={() => {
+                                  const updated = [...(action.files || [])];
+                                  updated.splice(fi, 1);
+                                  updateAction(action.id, { files: updated });
+                                }}
+                                className="ml-0.5 hover:text-destructive"
+                                data-testid={`button-remove-file-${index}-${fi}`}
+                              >
+                                <X className="h-3 w-3" />
+                              </button>
+                            </Badge>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => removeAction(action.id)}
+                      data-testid={`button-remove-action-${index}`}
+                    >
+                      <X className="h-4 w-4" />
+                    </Button>
+                  </div>
+                );
+              }
+
               const fieldDef = FIELD_DEFS.find(f => f.key === action.field);
               const isArrayField = fieldDef?.type === 'array';
               const showValue = action.type !== 'clear';
               
-              // Filter action types based on field type
               const availableActions = ACTION_TYPES.filter(at => {
+                if (at.value === 'attach_file') return true;
                 if (at.value === 'add' || at.value === 'remove') {
                   return isArrayField;
                 }
@@ -754,18 +883,16 @@ export default function BulkEditor() {
               
               return (
                 <div key={action.id} className="flex items-center gap-2 flex-wrap">
-                  {/* Field selector - comes first so action types update accordingly */}
                   <Select
                     value={action.field as string}
                     onValueChange={(v) => {
                       const newFieldDef = FIELD_DEFS.find(f => f.key === v);
                       const newIsArray = newFieldDef?.type === 'array';
-                      // Reset action type if incompatible, or default to 'add' for array fields
                       let newType = action.type;
                       if (newIsArray && (action.type === 'set' || action.type === 'clear')) {
-                        newType = 'add'; // Default to 'add' for array fields
+                        newType = 'add';
                       } else if (!newIsArray && (action.type === 'add' || action.type === 'remove')) {
-                        newType = 'set'; // Default to 'set' for singular fields
+                        newType = 'set';
                       }
                       updateAction(action.id, { field: v as keyof Record, type: newType });
                     }}
@@ -782,10 +909,15 @@ export default function BulkEditor() {
                     </SelectContent>
                   </Select>
                   
-                  {/* Action type - comes after field so options are contextual */}
                   <Select
                     value={action.type}
-                    onValueChange={(v) => updateAction(action.id, { type: v as ActionType })}
+                    onValueChange={(v) => {
+                      if (v === 'attach_file') {
+                        updateAction(action.id, { type: 'attach_file' as ActionType, files: [] });
+                      } else {
+                        updateAction(action.id, { type: v as ActionType });
+                      }
+                    }}
                   >
                     <SelectTrigger className="w-[120px]" data-testid={`select-action-type-${index}`}>
                       <SelectValue />
@@ -799,7 +931,6 @@ export default function BulkEditor() {
                     </SelectContent>
                   </Select>
                   
-                  {/* Value input */}
                   {showValue && (
                     <>
                       <span className="text-muted-foreground">=</span>
@@ -812,7 +943,6 @@ export default function BulkEditor() {
                     </>
                   )}
                   
-                  {/* Remove button */}
                   <Button
                     variant="ghost"
                     size="icon"
@@ -893,6 +1023,28 @@ export default function BulkEditor() {
             </div>
           )}
           
+          {/* Attachment storage estimate */}
+          {hasAttachFileAction && matchingRecords.length > 0 && totalAttachFiles > 0 && (
+            <Alert>
+              <Paperclip className="h-4 w-4" />
+              <AlertTitle>Attachment Summary</AlertTitle>
+              <AlertDescription>
+                {totalAttachFiles} file{totalAttachFiles !== 1 ? 's' : ''} will be attached to {matchingRecords.length} record{matchingRecords.length !== 1 ? 's' : ''} ({totalAttachFiles * matchingRecords.length} total copies, ~{formatFileSize(totalAttachSize * matchingRecords.length)} estimated storage)
+              </AlertDescription>
+            </Alert>
+          )}
+
+          {/* Attachment progress */}
+          {attachProgress && (
+            <div className="space-y-2">
+              <div className="flex items-center gap-2 text-sm">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                <span>Attaching files... {attachProgress.current}/{attachProgress.total}</span>
+              </div>
+              <Progress value={(attachProgress.current / attachProgress.total) * 100} />
+            </div>
+          )}
+          
           {/* Validation warnings */}
           {conditions.length === 0 && (
             <Alert>
@@ -965,6 +1117,22 @@ export default function BulkEditor() {
                   <h4 className="font-medium mb-2 text-sm text-foreground">Changes to Apply:</h4>
                   <div className="bg-muted rounded-lg p-3 space-y-2">
                     {actions.map((action, i) => {
+                      if (action.type === 'attach_file') {
+                        const fileNames = action.files?.map(f => f.name) || [];
+                        const totalSize = action.files?.reduce((s, f) => s + f.size, 0) || 0;
+                        return (
+                          <div key={action.id} className="flex items-start gap-2 text-sm">
+                            <Badge variant="outline" className="shrink-0 text-xs">
+                              {i + 1}
+                            </Badge>
+                            <div>
+                              <span className="font-medium">Attach</span>{' '}
+                              <span className="text-primary">{fileNames.join(', ')}</span>
+                              <span className="text-muted-foreground"> ({formatFileSize(totalSize)} each, ~{formatFileSize(totalSize * matchingRecords.length)} total)</span>
+                            </div>
+                          </div>
+                        );
+                      }
                       const fieldDef = FIELD_DEFS.find(f => f.key === action.field);
                       const actionLabels: { [key: string]: string } = {
                         'set': 'Set',
@@ -998,7 +1166,7 @@ export default function BulkEditor() {
                       <thead className="bg-muted/50 sticky top-0">
                         <tr>
                           <th className="text-left p-2 font-medium">Record</th>
-                          {actions.map(action => {
+                          {metadataActions.map(action => {
                             const fieldDef = FIELD_DEFS.find(f => f.key === action.field);
                             return (
                               <th key={action.id} className="text-left p-2 font-medium">
@@ -1006,6 +1174,9 @@ export default function BulkEditor() {
                               </th>
                             );
                           })}
+                          {hasAttachFileAction && (
+                            <th className="text-left p-2 font-medium">Attachments</th>
+                          )}
                         </tr>
                       </thead>
                       <tbody>
@@ -1014,13 +1185,12 @@ export default function BulkEditor() {
                             <td className="p-2 font-mono text-xs truncate max-w-[150px]">
                               {record.inputString?.substring(0, 20)}...
                             </td>
-                            {actions.map(action => {
+                            {metadataActions.map(action => {
                               const currentValue = record[action.field];
                               const displayCurrent = Array.isArray(currentValue) 
                                 ? (currentValue as string[]).join(', ') || '(empty)'
                                 : (currentValue as string) || '(empty)';
                               
-                              // Compute new value
                               let newValue = displayCurrent;
                               if (action.type === 'set') {
                                 newValue = action.value || '(empty)';
@@ -1057,6 +1227,14 @@ export default function BulkEditor() {
                                 </td>
                               );
                             })}
+                            {hasAttachFileAction && (
+                              <td className="p-2">
+                                <div className="flex items-center gap-1 text-xs text-primary">
+                                  <Paperclip className="h-3 w-3" />
+                                  +{totalAttachFiles} file{totalAttachFiles !== 1 ? 's' : ''}
+                                </div>
+                              </td>
+                            )}
                           </tr>
                         ))}
                       </tbody>
