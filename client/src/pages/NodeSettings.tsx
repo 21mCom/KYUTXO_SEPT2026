@@ -910,6 +910,23 @@ export default function NodeSettings() {
               />
             </div>
             
+            <Alert>
+              <AlertTriangle className="h-4 w-4" />
+              <AlertDescription className="text-sm">
+                Electrum connections do not support Tor routing. All Electrum connections are made directly over the internet. For maximum privacy, use an HTTP-based provider (Mempool/Esplora) with Tor enabled instead.
+              </AlertDescription>
+            </Alert>
+
+            {currentSettings.useTor && currentSettings.useElectrum && (
+              <Alert variant="destructive">
+                <AlertTriangle className="h-4 w-4" />
+                <AlertTitle>Privacy Conflict</AlertTitle>
+                <AlertDescription className="text-sm">
+                  You have Tor enabled but are using Electrum, which bypasses Tor entirely. Your Electrum connections will reveal your IP address and DNS queries to the server. Either disable Electrum and use an HTTP provider with Tor, or accept the reduced privacy.
+                </AlertDescription>
+              </Alert>
+            )}
+
             {currentSettings.useElectrum && (
               <>
                 <div className="space-y-4 pt-2">

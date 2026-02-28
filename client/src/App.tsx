@@ -34,15 +34,17 @@ import Reports from "@/pages/Reports";
 import LightningSpeculator from "@/pages/LightningSpeculator";
 import UTXOs from "@/pages/UTXOs";
 import Nudgie from "@/pages/Nudgie";
-import UIAssets from "@/pages/UIAssets";
-import IconsReference from "@/pages/IconsReference";
-import NavigationPatterns from "@/pages/NavigationPatterns";
-import GroupedSidebarPreview from "@/pages/GroupedSidebarPreview";
-import FlowVisualizations from "@/pages/FlowVisualizations";
 import BitcoinFlowVisualizer from "@/pages/BitcoinFlowVisualizer";
 import BulkEditor from "@/pages/BulkEditor";
 import QuickTagger from "@/pages/QuickTagger";
-import DevTestData from "@/pages/DevTestData";
+import { lazy, Suspense } from "react";
+
+const UIAssets = lazy(() => import("@/pages/UIAssets"));
+const IconsReference = lazy(() => import("@/pages/IconsReference"));
+const NavigationPatterns = lazy(() => import("@/pages/NavigationPatterns"));
+const GroupedSidebarPreview = lazy(() => import("@/pages/GroupedSidebarPreview"));
+const FlowVisualizations = lazy(() => import("@/pages/FlowVisualizations"));
+const DevTestData = lazy(() => import("@/pages/DevTestData"));
 import ConflictResolution from "@/pages/ConflictResolution";
 import EvidencePage from "@/pages/Evidence";
 import VaultManagement from "@/pages/VaultManagement";
@@ -78,12 +80,16 @@ function AppRoutes() {
       <Route path="/settings" component={SettingsPage} />
       <Route path="/node-settings" component={NodeSettings} />
       <Route path="/reports" component={Reports} />
-      <Route path="/dev/ui-assets" component={UIAssets} />
-      <Route path="/dev/icons" component={IconsReference} />
-      <Route path="/dev/nav-patterns" component={NavigationPatterns} />
-      <Route path="/dev/grouped-sidebar" component={GroupedSidebarPreview} />
-      <Route path="/dev/flow-viz" component={FlowVisualizations} />
-      <Route path="/dev/test-data" component={DevTestData} />
+      {import.meta.env.DEV && (
+        <>
+          <Route path="/dev/ui-assets">{() => <Suspense fallback={<div />}><UIAssets /></Suspense>}</Route>
+          <Route path="/dev/icons">{() => <Suspense fallback={<div />}><IconsReference /></Suspense>}</Route>
+          <Route path="/dev/nav-patterns">{() => <Suspense fallback={<div />}><NavigationPatterns /></Suspense>}</Route>
+          <Route path="/dev/grouped-sidebar">{() => <Suspense fallback={<div />}><GroupedSidebarPreview /></Suspense>}</Route>
+          <Route path="/dev/flow-viz">{() => <Suspense fallback={<div />}><FlowVisualizations /></Suspense>}</Route>
+          <Route path="/dev/test-data">{() => <Suspense fallback={<div />}><DevTestData /></Suspense>}</Route>
+        </>
+      )}
       <Route path="/flow-visualizer" component={BitcoinFlowVisualizer} />
       <Route path="/bulk-editor" component={BulkEditor} />
       <Route path="/quick-tagger" component={QuickTagger} />

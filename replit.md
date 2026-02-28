@@ -29,7 +29,7 @@ KYUTXO employs a security-focused architecture with all data and attachments sec
 *   **Historical Price Import:** Imports Bitcoin OHLCV price data from CSV files.
 *   **Transaction Sync System:** Fetches and imports confirmed transactions from blockchain data sources for tracked addresses, intelligently matching and creating "Pending Review" records. Features pause/resume, performance optimizations (parallel fetching, caching, batched writes), and comprehensive prevout resolution to ensure accurate input addresses and amounts. Includes sync protection with configurable transaction count thresholds, per-address timeouts, and an address blacklist. Connected-only mode (for depth > 1) prevents record creation for unknown addresses while still saving transaction data, avoiding cascade into deeper sync levels.
 *   **Tor Proxy Integration:** Privacy-enhanced node connectivity via SOCKS5 proxy, with auto-detection, connection testing, .onion support, and SSRF protection. Local network access is opt-in.
-*   **Electrum Protocol Support:** Alternative, efficient protocol for bulk address syncing (10,000+ addresses) via Electrum JSON-RPC over TCP.
+*   **Electrum Protocol Support:** Alternative, efficient protocol for bulk address syncing (10,000+ addresses) via Electrum JSON-RPC over TCP. Note: Electrum does not support Tor routing; UI warnings are shown when both Tor and Electrum are enabled.
 *   **Exact UTXO Tracking:** Dual-mode UTXO calculation (Standard/Exact) with outpoint-based matching.
 *   **Record Detail Panel:** Comprehensive metadata display including expandable and lazy-loaded transaction history.
 *   **Blockchain Toggle Component:** Filters blockchain-discovered records using optimized indexing.
@@ -53,7 +53,8 @@ KYUTXO employs a security-focused architecture with all data and attachments sec
 
 ## External Dependencies
 
-*   **Local File System:** For storing encrypted attachments.
+*   **Security Hardening:** Attachment directories use SHA-256 hashed identifiers and opaque filenames to prevent filesystem metadata leakage. IPC file handlers have path traversal protection on all operations. Dev/test pages are stripped from production builds. Unencrypted exports show prominent warnings.
+*   **Local File System:** For storing encrypted attachments (directory names are SHA-256 hashes, filenames are random hex).
 *   **Google Fonts CDN:** For the Inter font family.
 *   **bitcoinjs-lib:** Bitcoin address validation and network detection.
 *   **bip32:** HD wallet key derivation.

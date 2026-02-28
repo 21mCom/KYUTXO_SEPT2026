@@ -3,6 +3,20 @@ import { encryptBinary, decryptBinary } from '@/lib/crypto';
 import { isEncryptionReady, getEncryptionKey } from '@/lib/encryptionFacade';
 import { isElectron, getElectronAPI } from '@/lib/electron';
 
+async function hashIdentifier(identifier: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(identifier);
+  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+function generateOpaqueFilename(extension: string): string {
+  const randomBytes = crypto.getRandomValues(new Uint8Array(16));
+  const hex = Array.from(randomBytes).map(b => b.toString(16).padStart(2, '0')).join('');
+  return extension ? `${hex}${extension}` : hex;
+}
+
 export interface AttachmentUploadResult {
   id: number;
   filename: string;
@@ -31,11 +45,12 @@ export async function uploadAttachment(
     }
     
     let objectStoragePath: string;
+    const hashedId = await hashIdentifier(identifier);
+    const opaqueFilename = generateOpaqueFilename(file.name.includes('.') ? file.name.substring(file.name.lastIndexOf('.')) : '');
     
     if (isElectron()) {
-      // Electron mode: save via IPC
       const api = getElectronAPI();
-      const result = await api.saveAttachment(identifier, file.name, fileData);
+      const result = await api.saveAttachment(hashedId, opaqueFilename, fileData);
       
       if (!result.success) {
         throw new Error(result.error || 'Upload failed');
@@ -43,14 +58,13 @@ export async function uploadAttachment(
       
       objectStoragePath = result.path!;
     } else {
-      // Web mode: upload via API
       const fileToUpload = new Blob([fileData], { 
         type: isEncrypted ? 'application/octet-stream' : file.type 
       });
       
       const formData = new FormData();
-      formData.append('file', fileToUpload, file.name);
-      formData.append('identifier', identifier);
+      formData.append('file', fileToUpload, opaqueFilename);
+      formData.append('identifier', hashedId);
       formData.append('recordId', recordId.toString());
       formData.append('encrypted', isEncrypted.toString());
 
@@ -229,10 +243,11 @@ export async function uploadEncryptedFile(file: File): Promise<string> {
     }
     
     if (isElectron()) {
-      // Electron mode: save via IPC
       const api = getElectronAPI();
-      const identifier = `evidence_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-      const result = await api.saveAttachment(identifier, file.name, fileData);
+      const evidenceId = `evidence_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      const hashedId = await hashIdentifier(evidenceId);
+      const opaqueFilename = generateOpaqueFilename(file.name.includes('.') ? file.name.substring(file.name.lastIndexOf('.')) : '');
+      const result = await api.saveAttachment(hashedId, opaqueFilename, fileData);
       
       if (!result.success) {
         throw new Error(result.error || 'Upload failed');
@@ -240,15 +255,17 @@ export async function uploadEncryptedFile(file: File): Promise<string> {
       
       return result.path!;
     } else {
-      // Web mode: upload via API
       const fileToUpload = new Blob([fileData], { 
         type: isEncrypted ? 'application/octet-stream' : file.type 
       });
       
+      const evidenceId = `evidence_${Date.now()}`;
+      const hashedId = await hashIdentifier(evidenceId);
+      const opaqueFilename = generateOpaqueFilename(file.name.includes('.') ? file.name.substring(file.name.lastIndexOf('.')) : '');
       const formData = new FormData();
-      formData.append('file', fileToUpload, file.name);
-      formData.append('identifier', `evidence_${Date.now()}`);
-      formData.append('recordId', '0'); // No associated record
+      formData.append('file', fileToUpload, opaqueFilename);
+      formData.append('identifier', hashedId);
+      formData.append('recordId', '0');
       formData.append('encrypted', isEncrypted.toString());
 
       const response = await fetch('/api/attachments/upload', {

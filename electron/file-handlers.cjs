@@ -45,7 +45,15 @@ function registerFileHandlers(ipcMain, { dataDir, attachmentsDir, portableMode }
 
   ipcMain.handle('read-attachment', async (event, relativePath) => {
     try {
+      if (!relativePath || relativePath.includes('..') || path.isAbsolute(relativePath)) {
+        return { success: false, error: 'Invalid relative path' };
+      }
       const filePath = path.join(attachmentsDir, relativePath);
+      const resolvedPath = path.resolve(filePath);
+      const resolvedAttachmentsDir = path.resolve(attachmentsDir);
+      if (!resolvedPath.startsWith(resolvedAttachmentsDir + path.sep) && resolvedPath !== resolvedAttachmentsDir) {
+        return { success: false, error: 'Path traversal detected' };
+      }
       const data = fs.readFileSync(filePath);
       return { success: true, data: data.buffer };
     } catch (error) {
@@ -55,7 +63,15 @@ function registerFileHandlers(ipcMain, { dataDir, attachmentsDir, portableMode }
 
   ipcMain.handle('delete-attachment', async (event, relativePath) => {
     try {
+      if (!relativePath || relativePath.includes('..') || path.isAbsolute(relativePath)) {
+        return { success: false, error: 'Invalid relative path' };
+      }
       const filePath = path.join(attachmentsDir, relativePath);
+      const resolvedPath = path.resolve(filePath);
+      const resolvedAttachmentsDir = path.resolve(attachmentsDir);
+      if (!resolvedPath.startsWith(resolvedAttachmentsDir + path.sep) && resolvedPath !== resolvedAttachmentsDir) {
+        return { success: false, error: 'Path traversal detected' };
+      }
       if (fs.existsSync(filePath)) {
         fs.unlinkSync(filePath);
       }

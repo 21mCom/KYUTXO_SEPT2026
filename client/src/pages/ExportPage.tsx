@@ -690,6 +690,15 @@ when you import this backup.
               />
             </div>
 
+            {!encrypted && (
+              <Alert variant="destructive" data-testid="alert-unencrypted-export">
+                <AlertCircle className="h-4 w-4" />
+                <AlertDescription className="text-sm">
+                  Your backup will contain unencrypted plaintext data including Bitcoin addresses, transaction IDs, labels, notes, wallet names, owner information, and financial data. Anyone who obtains this file can read all of its contents. Consider enabling encryption above or storing the exported file in a secure location.
+                </AlertDescription>
+              </Alert>
+            )}
+
             {encrypted && (
               <div className="space-y-4 p-4 border rounded-lg bg-muted/50">
                 <div className="flex items-center gap-2 mb-3">

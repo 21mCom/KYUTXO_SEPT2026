@@ -265,7 +265,7 @@ export function AppSidebar() {
       <SidebarContent className="px-2">
         <div className="space-y-1">
           {navGroups.map(renderGroup)}
-          {renderGroup(devToolsGroup)}
+          {import.meta.env.DEV && renderGroup(devToolsGroup)}
         </div>
       </SidebarContent>
       <SidebarFooter className="p-4">
