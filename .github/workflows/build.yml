@@ -1,0 +1,79 @@
+name: Build KYUTXO for Windows
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    if: "!contains(github.event.head_commit.message, '[skip ci]')"
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Bump patch version
+        if: github.event_name == 'push'
+        id: version
+        shell: bash
+        run: |
+          NEW_VERSION=$(node scripts/bump-version.js)
+          echo "version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
+          echo "Bumped version to $NEW_VERSION"
+
+      - name: Read current version (PR builds)
+        if: github.event_name != 'push'
+        id: current_version
+        shell: bash
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Build application for Electron
+        run: npx vite build --config vite.config.electron.ts
+
+      - name: Build Electron app
+        run: npx electron-builder --config electron-builder.json --win
+
+      - name: Commit version bump
+        if: github.event_name == 'push'
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add package.json
+          git diff --cached --quiet || git commit -m "chore: bump version to ${{ steps.version.outputs.version }} [skip ci]"
+          git push
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: KYUTXO-${{ steps.version.outputs.version || steps.current_version.outputs.version }}-Portable
+          path: release/*.exe
+
+      - name: Create GitHub Release
+        if: github.event_name == 'push'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version.outputs.version }}
+          name: KYUTXO v${{ steps.version.outputs.version }}
+          files: release/*.exe
+          generate_release_notes: true
