@@ -97,6 +97,53 @@ function registerFileHandlers(ipcMain, { dataDir, attachmentsDir, portableMode }
     }
   });
 
+  ipcMain.handle('rename-attachment', async (event, { oldPath, newPath }) => {
+    try {
+      if (!oldPath || oldPath.includes('..') || path.isAbsolute(oldPath)) {
+        return { success: false, error: 'Invalid old path' };
+      }
+      if (!newPath || newPath.includes('..') || path.isAbsolute(newPath)) {
+        return { success: false, error: 'Invalid new path' };
+      }
+
+      const oldFilePath = path.join(attachmentsDir, oldPath);
+      const newFilePath = path.join(attachmentsDir, newPath);
+
+      const resolvedOld = path.resolve(oldFilePath);
+      const resolvedNew = path.resolve(newFilePath);
+      const resolvedBase = path.resolve(attachmentsDir);
+      if (!resolvedOld.startsWith(resolvedBase + path.sep) || !resolvedNew.startsWith(resolvedBase + path.sep)) {
+        return { success: false, error: 'Path traversal detected' };
+      }
+
+      if (!fs.existsSync(oldFilePath)) {
+        return { success: false, error: 'Source file not found' };
+      }
+
+      const newDir = path.dirname(newFilePath);
+      if (!fs.existsSync(newDir)) {
+        fs.mkdirSync(newDir, { recursive: true });
+      }
+
+      fs.renameSync(oldFilePath, newFilePath);
+
+      // Try to remove old directory if empty
+      const oldDir = path.dirname(oldFilePath);
+      try {
+        const remaining = fs.readdirSync(oldDir);
+        if (remaining.length === 0) {
+          fs.rmdirSync(oldDir);
+        }
+      } catch {
+        // Ignore cleanup errors
+      }
+
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
   // List ALL attachments recursively (for backup)
   ipcMain.handle('list-all-attachments', async () => {
     try {

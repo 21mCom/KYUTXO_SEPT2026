@@ -9,6 +9,7 @@ export interface VaultSettings {
   passwordHash: string; // PBKDF2 hash for verification
   createdAt: number;
   migrationComplete?: boolean; // Flag indicating if plaintext data has been migrated
+  attachmentPathsMigrated?: boolean; // Flag indicating attachment dirs have been hashed
 }
 
 class VaultDatabase extends Dexie {
@@ -61,5 +62,17 @@ export async function setMigrationComplete(complete: boolean): Promise<void> {
   const settings = await vaultDb.vault.get('main');
   if (settings) {
     await vaultDb.vault.update('main', { migrationComplete: complete });
+  }
+}
+
+export async function isAttachmentPathsMigrated(): Promise<boolean> {
+  const settings = await vaultDb.vault.get('main');
+  return settings?.attachmentPathsMigrated ?? false;
+}
+
+export async function setAttachmentPathsMigrated(migrated: boolean): Promise<void> {
+  const settings = await vaultDb.vault.get('main');
+  if (settings) {
+    await vaultDb.vault.update('main', { attachmentPathsMigrated: migrated });
   }
 }

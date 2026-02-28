@@ -155,6 +155,7 @@ interface ElectronAPI {
   // Backup/restore operations
   listAllAttachments: () => Promise<{ success: boolean; files?: string[]; error?: string }>;
   writeAttachment: (relativePath: string, data: ArrayBuffer) => Promise<{ success: boolean; error?: string }>;
+  renameAttachment: (oldPath: string, newPath: string) => Promise<{ success: boolean; error?: string }>;
   isPortableMode: () => Promise<boolean>;
   // Tor proxy operations
   torTest: (torProxyUrl?: string) => Promise<TorTestResult>;

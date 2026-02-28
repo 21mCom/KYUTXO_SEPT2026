@@ -481,6 +481,155 @@ export async function reEncryptAllAttachmentFiles(
   return count;
 }
 
+// ============ LEGACY PATH MIGRATION ============
+
+function isAlreadyHashed(dirName: string): boolean {
+  return /^[0-9a-f]{64}$/.test(dirName);
+}
+
+function isOpaqueFilename(filename: string): boolean {
+  const baseName = filename.includes('.') ? filename.substring(0, filename.lastIndexOf('.')) : filename;
+  return /^[0-9a-f]{32}$/.test(baseName);
+}
+
+async function renameAttachmentFile(oldRelPath: string, newRelPath: string): Promise<void> {
+  if (isElectron()) {
+    const api = getElectronAPI();
+    const result = await api.renameAttachment(oldRelPath, newRelPath);
+    if (!result.success) {
+      throw new Error(result.error || 'Rename failed');
+    }
+  } else {
+    const response = await fetch('/api/attachments/rename', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ oldPath: oldRelPath, newPath: newRelPath }),
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Rename failed');
+    }
+  }
+}
+
+export async function migrateAttachmentPaths(
+  onProgress?: (current: number, total: number, message: string) => void
+): Promise<number> {
+  const allAttachments = await db.attachments.toArray();
+  const allEvidence = await db.evidenceAttachments.toArray();
+
+  const needsMigration: Array<{
+    table: 'attachments' | 'evidenceAttachments';
+    id: number;
+    objectStoragePath: string;
+    recordId?: number;
+  }> = [];
+
+  for (const att of allAttachments) {
+    const pathParts = att.objectStoragePath.replace(/\\/g, '/').split('/');
+    const hasPrefix = pathParts[0] === 'attachments';
+    const dirName = hasPrefix ? pathParts[1] : pathParts[0];
+    const fileName = hasPrefix ? pathParts[2] : pathParts[1];
+
+    if (!dirName || !fileName) continue;
+    if (isAlreadyHashed(dirName) && isOpaqueFilename(fileName)) continue;
+
+    needsMigration.push({
+      table: 'attachments',
+      id: att.id!,
+      objectStoragePath: att.objectStoragePath,
+      recordId: att.recordId,
+    });
+  }
+
+  for (const att of allEvidence) {
+    const pathParts = att.objectStoragePath.replace(/\\/g, '/').split('/');
+    const hasPrefix = pathParts[0] === 'attachments';
+    const dirName = hasPrefix ? pathParts[1] : pathParts[0];
+    const fileName = hasPrefix ? pathParts[2] : pathParts[1];
+
+    if (!dirName || !fileName) continue;
+    if (isAlreadyHashed(dirName) && isOpaqueFilename(fileName)) continue;
+
+    needsMigration.push({
+      table: 'evidenceAttachments',
+      id: att.id!,
+      objectStoragePath: att.objectStoragePath,
+    });
+  }
+
+  if (needsMigration.length === 0) {
+    return { migrated: 0, failed: 0 };
+  }
+
+  let migrated = 0;
+  let failed = 0;
+
+  for (let i = 0; i < needsMigration.length; i++) {
+    const item = needsMigration[i];
+    if (onProgress) {
+      onProgress(i + 1, needsMigration.length, `Migrating attachment ${i + 1} of ${needsMigration.length}`);
+    }
+
+    try {
+      const pathParts = item.objectStoragePath.replace(/\\/g, '/').split('/');
+      const hasPrefix = pathParts[0] === 'attachments';
+      const dirName = hasPrefix ? pathParts[1] : pathParts[0];
+      const oldFileName = hasPrefix ? pathParts[2] : pathParts[1];
+
+      let newDirName = dirName;
+      if (!isAlreadyHashed(dirName)) {
+        newDirName = await hashIdentifier(dirName);
+      }
+
+      let newFileName = oldFileName;
+      if (!isOpaqueFilename(oldFileName)) {
+        const ext = oldFileName.includes('.') ? oldFileName.substring(oldFileName.lastIndexOf('.')) : '';
+        newFileName = generateOpaqueFilename(ext);
+      }
+
+      const oldRelPath = `${dirName}/${oldFileName}`;
+      const newRelPath = `${newDirName}/${newFileName}`;
+
+      let didRenameFile = false;
+      if (oldRelPath !== newRelPath) {
+        await renameAttachmentFile(oldRelPath, newRelPath);
+        didRenameFile = true;
+      }
+
+      const newStoragePath = hasPrefix ? `attachments/${newRelPath}` : newRelPath;
+
+      try {
+        if (item.table === 'attachments') {
+          await db.attachments.update(item.id, { objectStoragePath: newStoragePath });
+        } else {
+          await db.evidenceAttachments.update(item.id, { objectStoragePath: newStoragePath });
+        }
+      } catch (dbError) {
+        if (didRenameFile) {
+          try {
+            await renameAttachmentFile(newRelPath, oldRelPath);
+          } catch (rollbackError) {
+            console.error(`Rollback failed for attachment ${item.id}:`, rollbackError);
+          }
+        }
+        throw dbError;
+      }
+
+      migrated++;
+    } catch (error) {
+      console.error(`Failed to migrate attachment ${item.id} (${item.table}):`, error);
+      failed++;
+    }
+
+    if (i % 10 === 0) {
+      await new Promise(r => setTimeout(r, 0));
+    }
+  }
+
+  return { migrated, failed };
+}
+
 // Re-encrypt all evidence attachment files (for password change)
 export async function reEncryptAllEvidenceAttachmentFiles(
   oldKey: CryptoKey,

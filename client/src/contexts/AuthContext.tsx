@@ -12,9 +12,12 @@ import {
   getVaultSettings, 
   saveVaultSettings,
   setMigrationComplete,
+  isAttachmentPathsMigrated,
+  setAttachmentPathsMigrated,
 } from '@/lib/vault';
 import { migrateToEncrypted, hasPlaintextData } from '@/lib/dbEncryption';
 import { initEncryptionFacade, clearEncryptionFacade } from '@/lib/encryptionFacade';
+import { migrateAttachmentPaths } from '@/lib/attachments';
 
 interface AuthContextType {
   isInitialized: boolean | null; // null = loading
@@ -55,33 +58,53 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     checkVault();
   }, []);
 
+  const runAttachmentPathMigration = useCallback(async () => {
+    const alreadyMigrated = await isAttachmentPathsMigrated();
+    if (alreadyMigrated) return;
+
+    try {
+      const result = await migrateAttachmentPaths((current, total, message) => {
+        setMigrationProgress(message);
+      });
+      if (result.failed === 0) {
+        await setAttachmentPathsMigrated(true);
+      }
+      if (result.migrated > 0) {
+        setMigrationProgress(`Secured ${result.migrated} attachment path${result.migrated > 1 ? 's' : ''}.${result.failed > 0 ? ` ${result.failed} failed — will retry next login.` : ''}`);
+        setTimeout(() => setMigrationProgress(null), 3000);
+      }
+    } catch (error) {
+      console.error('Attachment path migration failed:', error);
+    }
+  }, []);
+
   // Run migration after successful login if needed
   const runMigration = useCallback(async (key: CryptoKey) => {
     const hasPlaintext = await hasPlaintextData();
     if (!hasPlaintext) {
       await setMigrationComplete(true);
-      return;
+    } else {
+      setIsMigrating(true);
+      setMigrationProgress('Encrypting your data...');
+
+      try {
+        const result = await migrateToEncrypted(key);
+        await setMigrationComplete(true);
+        
+        const total = result.records + result.attachments + result.tags + result.categories + result.participants;
+        setMigrationProgress(`Encrypted ${total} items successfully!`);
+        
+        setTimeout(() => setMigrationProgress(null), 2000);
+      } catch (error) {
+        console.error('Migration failed:', error);
+        setMigrationProgress('Migration failed. Some data may not be encrypted.');
+      } finally {
+        setIsMigrating(false);
+      }
     }
 
-    setIsMigrating(true);
-    setMigrationProgress('Encrypting your data...');
-
-    try {
-      const result = await migrateToEncrypted(key);
-      await setMigrationComplete(true);
-      
-      const total = result.records + result.attachments + result.tags + result.categories + result.participants;
-      setMigrationProgress(`Encrypted ${total} items successfully!`);
-      
-      // Clear progress message after a short delay
-      setTimeout(() => setMigrationProgress(null), 2000);
-    } catch (error) {
-      console.error('Migration failed:', error);
-      setMigrationProgress('Migration failed. Some data may not be encrypted.');
-    } finally {
-      setIsMigrating(false);
-    }
-  }, []);
+    await runAttachmentPathMigration();
+  }, [runAttachmentPathMigration]);
 
   // Setup a new password (first-time setup)
   const setupPassword = useCallback(async (password: string) => {

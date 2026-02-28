@@ -23,6 +23,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('list-all-attachments'),
   writeAttachment: (relativePath, data) => 
     ipcRenderer.invoke('write-attachment', { relativePath, data }),
+  renameAttachment: (oldPath, newPath) =>
+    ipcRenderer.invoke('rename-attachment', { oldPath, newPath }),
   
   // Portable mode support
   isPortableMode: () => ipcRenderer.invoke('is-portable-mode'),

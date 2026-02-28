@@ -195,6 +195,58 @@ router.post('/rewrite', upload.single('file'), async (req: Request, res) => {
   }
 });
 
+// Rename/move an attachment file (for path migration)
+router.post('/rename', async (req: Request, res) => {
+  try {
+    const { oldPath, newPath } = req.body;
+    
+    if (!oldPath || !newPath) {
+      return res.status(400).json({ error: 'Both oldPath and newPath are required' });
+    }
+
+    if (oldPath.includes('..') || newPath.includes('..') || path.isAbsolute(oldPath) || path.isAbsolute(newPath)) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    const oldFilePath = path.join(ATTACHMENTS_DIR, oldPath);
+    const newFilePath = path.join(ATTACHMENTS_DIR, newPath);
+
+    const resolvedOld = path.resolve(oldFilePath);
+    const resolvedNew = path.resolve(newFilePath);
+    const resolvedBase = path.resolve(ATTACHMENTS_DIR);
+    if (!resolvedOld.startsWith(resolvedBase + path.sep) || !resolvedNew.startsWith(resolvedBase + path.sep)) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    try {
+      await fs.access(oldFilePath);
+    } catch {
+      return res.status(404).json({ error: 'Source file not found' });
+    }
+
+    const newDir = path.dirname(newFilePath);
+    await ensureDir(newDir);
+
+    await fs.rename(oldFilePath, newFilePath);
+
+    // Try to remove old directory if empty
+    const oldDir = path.dirname(oldFilePath);
+    try {
+      const remaining = await fs.readdir(oldDir);
+      if (remaining.length === 0) {
+        await fs.rmdir(oldDir);
+      }
+    } catch {
+      // Ignore cleanup errors
+    }
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Rename error:', error);
+    res.status(500).json({ error: error instanceof Error ? error.message : 'Rename failed' });
+  }
+});
+
 // Download attachment
 router.get('/download/:path(*)', async (req, res) => {
   try {
