@@ -65,3 +65,38 @@ KYUTXO employs a security-focused architecture with all data and attachments sec
 *   **Lucide React & React Icons:** Icon libraries.
 *   **cmdk:** Command palette component.
 *   **class-variance-authority & clsx:** Utilities for dynamic className composition.
+
+## Git Privacy Cleanup (Action Required)
+
+**Status:** 53 files in `attached_assets/` are tracked in git history despite being listed in `.gitignore`. These include screenshots (potentially showing addresses/balances), AI build prompts, nginx config dumps, and a security audit prompt describing encryption internals. They are pushed to the GitHub remote (`21mCom/KYUTXO_PORTABLE`).
+
+**Step 1 — Remove from current tracking (run in your local clone):**
+```bash
+git rm --cached -r attached_assets/
+git commit -m "Remove attached_assets from tracking (privacy cleanup)"
+git push origin main
+```
+This stops the files from appearing in the current tree but they remain in git history.
+
+**Step 2 — Purge from git history entirely (optional but recommended):**
+```bash
+# Install git-filter-repo if not already installed:
+# pip install git-filter-repo
+
+# Clone a fresh copy to work on:
+git clone https://github.com/21mCom/KYUTXO_PORTABLE.git kyutxo-cleanup
+cd kyutxo-cleanup
+
+# Remove attached_assets/ from all history:
+git filter-repo --path attached_assets/ --invert-paths
+
+# Force push the rewritten history:
+git remote add origin https://github.com/21mCom/KYUTXO_PORTABLE.git
+git push origin --force --all
+git push origin --force --tags
+```
+After force-pushing, all collaborators must re-clone. The old commits with attached_assets will be garbage-collected by GitHub after ~90 days.
+
+**Files verified as safe to keep tracked:**
+- `client/src/lib/testSeedData.ts` — uses only publicly known demo addresses (Satoshi genesis, common examples), no real keys
+- `client/src/pages/DevTestData.tsx` — dev-only UI, gated behind `import.meta.env.DEV`, no secrets
