@@ -37,7 +37,7 @@ import {
   LayoutList,
   ShieldAlert
 } from "lucide-react";
-import logoUrl from "@assets/foot_1764929618997.png";
+import logoUrl from "@/assets/foot_1764929618997.png";
 import { version as APP_VERSION } from "../../../package.json";
 import {
   Sidebar,
