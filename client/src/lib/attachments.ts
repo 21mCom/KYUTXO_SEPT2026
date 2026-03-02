@@ -457,6 +457,7 @@ export interface ReEncryptFileResult {
   processed: number;
   completedIds: number[];
   cancelled: boolean;
+  failed: number;
 }
 
 export async function reEncryptAllAttachmentFiles(
@@ -473,9 +474,11 @@ export async function reEncryptAllAttachmentFiles(
   let processed = 0;
   const completedIds: number[] = [];
 
+  let failedCount = 0;
+
   for (let i = 0; i < toProcess.length; i++) {
     if (signal?.aborted) {
-      return { processed, completedIds, cancelled: true };
+      return { processed, completedIds, cancelled: true, failed: failedCount };
     }
 
     const attachment = toProcess[i];
@@ -488,12 +491,12 @@ export async function reEncryptAllAttachmentFiles(
       completedIds.push(attachment.id!);
       processed++;
     } catch (error) {
-      console.error(`Failed to re-encrypt attachment ${attachment.id}:`, error);
-      throw new Error(`Failed to re-encrypt attachment "${attachment.filename}": ${error instanceof Error ? error.message : 'Unknown error'}`);
+      console.error(`[ReEncrypt] Failed attachment id=${attachment.id} "${attachment.filename}":`, error);
+      failedCount++;
     }
   }
   
-  return { processed, completedIds, cancelled: false };
+  return { processed, completedIds, cancelled: false, failed: failedCount };
 }
 
 // ============ LEGACY PATH MIGRATION ============
@@ -529,7 +532,7 @@ async function renameAttachmentFile(oldRelPath: string, newRelPath: string): Pro
 
 export async function migrateAttachmentPaths(
   onProgress?: (current: number, total: number, message: string) => void
-): Promise<number> {
+): Promise<{ migrated: number; failed: number }> {
   const allAttachments = await db.attachments.toArray();
   const allEvidence = await db.evidenceAttachments.toArray();
 
@@ -608,6 +611,7 @@ export async function migrateAttachmentPaths(
 
       let didRenameFile = false;
       if (oldRelPath !== newRelPath) {
+        console.log(`[Migration] Renaming: ${oldRelPath} -> ${newRelPath}`);
         await renameAttachmentFile(oldRelPath, newRelPath);
         didRenameFile = true;
       }
@@ -631,6 +635,7 @@ export async function migrateAttachmentPaths(
         throw dbError;
       }
 
+      console.log(`[Migration] Successfully migrated attachment ${item.id}: ${item.objectStoragePath} -> ${newStoragePath}`);
       migrated++;
     } catch (error) {
       console.error(`Failed to migrate attachment ${item.id} (${item.table}):`, error);
@@ -659,9 +664,11 @@ export async function reEncryptAllEvidenceAttachmentFiles(
   let processed = 0;
   const completedIds: number[] = [];
 
+  let failedCount = 0;
+
   for (let i = 0; i < toProcess.length; i++) {
     if (signal?.aborted) {
-      return { processed, completedIds, cancelled: true };
+      return { processed, completedIds, cancelled: true, failed: failedCount };
     }
 
     const attachment = toProcess[i];
@@ -674,10 +681,10 @@ export async function reEncryptAllEvidenceAttachmentFiles(
       completedIds.push(attachment.id!);
       processed++;
     } catch (error) {
-      console.error(`Failed to re-encrypt evidence attachment ${attachment.id}:`, error);
-      throw new Error(`Failed to re-encrypt evidence attachment "${attachment.filename}": ${error instanceof Error ? error.message : 'Unknown error'}`);
+      console.error(`[ReEncrypt] Failed evidence attachment id=${attachment.id} "${attachment.filename}":`, error);
+      failedCount++;
     }
   }
   
-  return { processed, completedIds, cancelled: false };
+  return { processed, completedIds, cancelled: false, failed: failedCount };
 }

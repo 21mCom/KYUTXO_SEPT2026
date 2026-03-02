@@ -16,7 +16,7 @@ KYUTXO employs a security-focused architecture with all data and attachments sec
 
 *   **UI/UX:** Responsive, offline-first UI with reorganized navigation and quick action patterns.
 *   **Data Model:** Comprehensive records for tracking ownership, wallet names, and metadata.
-*   **Encryption:** Full AES-256-GCM encryption at rest for all data and attachments, including re-encryption on password change, and a session-level LRU decryption cache. Password change is atomic and resumable: vault stores `pendingPasswordChange` with per-file tracking before re-encryption starts; login accepts both old and pending passwords during an interrupted change; re-encryption supports pause/resume via AbortController.
+*   **Encryption:** Full AES-256-GCM encryption at rest for all data and attachments, including re-encryption on password change, and a session-level LRU decryption cache. Password change is atomic and resumable: vault stores `pendingPasswordChange` with per-file tracking before re-encryption starts; login accepts both old and pending passwords during an interrupted change; re-encryption supports pause/resume via AbortController. File and DB re-encryption are fault-tolerant (skip corrupt items, log errors, report failure count); finalization is blocked when any items fail to prevent data loss.
 *   **Offline First & Portability:** Designed for complete offline functionality and portable database storage.
 *   **Vocabulary Management:** Custom tags, categories, owners, and wallet details with auto-sync.
 *   **Duplicate Detection & Merge:** Intelligent merging of new metadata.

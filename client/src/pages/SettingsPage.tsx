@@ -415,6 +415,12 @@ export default function SettingsPage() {
         return;
       }
 
+      if (attResult.failed > 0) {
+        toast({ variant: "destructive", title: "Password Change Incomplete", description: `${attResult.failed} attachment files failed re-encryption. Progress saved. Check browser console and try resuming.` });
+        setChangePasswordProgress(null);
+        return;
+      }
+
       setChangePasswordProgress({ stage: 'Evidence Files', current: 0, total: 0, percentage: 0 });
       const evResult = await reEncryptAllEvidenceAttachmentFiles(oldKey, newKey, (current, total) => {
         setChangePasswordProgress({ stage: 'Evidence Files', current, total, percentage: total > 0 ? Math.round((current / total) * 100) : 0 });
@@ -430,6 +436,12 @@ export default function SettingsPage() {
         return;
       }
 
+      if (evResult.failed > 0) {
+        toast({ variant: "destructive", title: "Password Change Incomplete", description: `${evResult.failed} evidence files failed re-encryption. Progress saved. Check browser console and try resuming.` });
+        setChangePasswordProgress(null);
+        return;
+      }
+
       const result = await reEncryptAllData(oldKey, newKey, (progress) => {
         setChangePasswordProgress(progress);
       });
@@ -437,16 +449,28 @@ export default function SettingsPage() {
       pending.dbReEncrypted = true;
       await savePendingPasswordChange(pending);
 
-      await finalizePendingPasswordChange();
-      setPendingChange(null);
-
-      initEncryptionFacade(newKey);
-
       const totalReEncrypted = 
         result.records + result.attachments + result.tags + result.categories +
         result.owners + result.walletNames + result.seedNames + result.walletSoftware +
         result.derivationTemplates + result.recordOrigins + result.evidence + result.evidenceAttachments +
         attResult.processed + evResult.processed;
+
+      const totalFailed = result.failedItems + attResult.failed + evResult.failed;
+
+      if (totalFailed > 0) {
+        toast({
+          variant: "destructive",
+          title: "Password Change Incomplete",
+          description: `Re-encrypted ${totalReEncrypted} items, but ${totalFailed} failed. The password change was NOT finalized. Check browser console for details and try resuming.`,
+        });
+        setChangePasswordProgress(null);
+        return;
+      }
+
+      await finalizePendingPasswordChange();
+      setPendingChange(null);
+
+      initEncryptionFacade(newKey);
 
       toast({
         title: "Password Changed",
@@ -531,6 +555,13 @@ export default function SettingsPage() {
           return;
         }
 
+        if (attResult.failed > 0) {
+          toast({ variant: "destructive", title: "Resume Incomplete", description: `${attResult.failed} attachment files failed re-encryption. Progress saved. Check browser console and try again.` });
+          setIsChangingPassword(false);
+          setChangePasswordProgress(null);
+          return;
+        }
+
         setChangePasswordProgress({ stage: 'Evidence Files (resuming)', current: 0, total: 0, percentage: 0 });
         const evResult = await reEncryptAllEvidenceAttachmentFiles(oldKey, newKey, (current, total) => {
           setChangePasswordProgress({ stage: 'Evidence Files (resuming)', current, total, percentage: total > 0 ? Math.round((current / total) * 100) : 0 });
@@ -547,12 +578,30 @@ export default function SettingsPage() {
           return;
         }
 
-        await reEncryptAllData(oldKey, newKey, (progress) => {
+        if (evResult.failed > 0) {
+          toast({ variant: "destructive", title: "Resume Incomplete", description: `${evResult.failed} evidence files failed re-encryption. Progress saved. Check browser console and try again.` });
+          setIsChangingPassword(false);
+          setChangePasswordProgress(null);
+          return;
+        }
+
+        const dbResult = await reEncryptAllData(oldKey, newKey, (progress) => {
           setChangePasswordProgress(progress);
         });
 
         tracker.dbReEncrypted = true;
         await savePendingPasswordChange(tracker);
+
+        if (dbResult.failedItems > 0) {
+          toast({
+            variant: "destructive",
+            title: "Resume Incomplete",
+            description: `${dbResult.failedItems} database items failed re-encryption. The password change was NOT finalized. Check browser console and try again.`,
+          });
+          setChangePasswordProgress(null);
+          setIsChangingPassword(false);
+          return;
+        }
       }
 
       await finalizePendingPasswordChange();
@@ -595,23 +644,27 @@ export default function SettingsPage() {
   const handleManualAttachmentMigration = async () => {
     setIsMigratingAttachments(true);
     try {
-      const result = await migrateAttachmentPaths();
+      await setAttachmentPathsMigrated(false);
+      const result = await migrateAttachmentPaths((current, total, message) => {
+        console.log(`[Migration] ${message}`);
+      });
       if (result.failed === 0 && result.migrated > 0) {
         await setAttachmentPathsMigrated(true);
         toast({
           title: "Migration Complete",
-          description: `Successfully migrated ${result.migrated} attachment paths to hashed names.`,
+          description: `Successfully migrated ${result.migrated} attachment path${result.migrated > 1 ? 's' : ''} to hashed names.`,
         });
       } else if (result.failed > 0) {
         toast({
           variant: "destructive",
           title: "Migration Partially Failed",
-          description: `Migrated ${result.migrated} paths, but ${result.failed} failed. Try again or check file permissions.`,
+          description: `Migrated ${result.migrated} path${result.migrated !== 1 ? 's' : ''}, but ${result.failed} failed. Check browser console for details. Try again or check file permissions.`,
         });
-      } else {
+      } else if (result.migrated === 0) {
+        await setAttachmentPathsMigrated(true);
         toast({
           title: "No Migration Needed",
-          description: "All attachment paths are already using hashed names.",
+          description: "All attachment paths are already using hashed names, or no attachments exist in the database.",
         });
       }
     } catch (error) {

@@ -746,6 +746,7 @@ export async function reEncryptAllData(
   evidence: number;
   evidenceAttachments: number;
   participants: number;
+  failedItems: number;
 }> {
   let recordCount = 0;
   let attachmentCount = 0;
@@ -771,152 +772,67 @@ export async function reEncryptAllData(
     }
   };
 
-  // Re-encrypt records
-  const records = await db.records.filter(r => r.isEncrypted === true).toArray();
-  for (let i = 0; i < records.length; i++) {
-    const record = records[i];
-    reportProgress('Records', i + 1, records.length);
-    const decrypted = await decryptRecord(record, oldKey);
-    const reEncrypted = await encryptRecord(decrypted, newKey);
-    await db.records.put(reEncrypted);
-    recordCount++;
+  let failedItems: Array<{ table: string; id: any; error: string }> = [];
+
+  async function reEncryptTable<T extends { id?: number; isEncrypted?: boolean }>(
+    tableName: string,
+    table: any,
+    decryptFn: (item: T, key: CryptoKey) => Promise<T>,
+    encryptFn: (item: T, key: CryptoKey) => Promise<T>,
+  ): Promise<number> {
+    const items = await table.filter((r: any) => r.isEncrypted === true).toArray();
+    let count = 0;
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i] as T;
+      reportProgress(tableName, i + 1, items.length);
+      try {
+        const decrypted = await decryptFn(item, oldKey);
+        const reEncrypted = await encryptFn(decrypted, newKey);
+        await table.put(reEncrypted);
+        count++;
+      } catch (error) {
+        const errMsg = error instanceof Error ? error.message : String(error);
+        console.error(`[ReEncrypt] Failed ${tableName} id=${item.id}: ${errMsg}`);
+        failedItems.push({ table: tableName, id: item.id, error: errMsg });
+      }
+      if (i % 50 === 0) await new Promise(r => setTimeout(r, 0));
+    }
+    return count;
   }
 
-  // Re-encrypt attachments (metadata only - file contents use same key via encryptionFacade)
-  const attachments = await db.attachments.filter(a => a.isEncrypted === true).toArray();
-  for (let i = 0; i < attachments.length; i++) {
-    const attachment = attachments[i];
-    reportProgress('Attachments', i + 1, attachments.length);
-    const decrypted = await decryptAttachment(attachment, oldKey);
-    const reEncrypted = await encryptAttachment(decrypted, newKey);
-    await db.attachments.put(reEncrypted);
-    attachmentCount++;
-  }
+  recordCount = await reEncryptTable('Records', db.records, decryptRecord, encryptRecord);
+  attachmentCount = await reEncryptTable('Attachments', db.attachments, decryptAttachment, encryptAttachment);
+  tagCount = await reEncryptTable('Tags', db.tags, decryptTag, encryptTag);
+  categoryCount = await reEncryptTable('Categories', db.categories, decryptCategory, encryptCategory);
+  ownerCount = await reEncryptTable('Owners', db.owners, decryptOwner, encryptOwner);
+  walletNameCount = await reEncryptTable('Wallet Names', db.walletNames, decryptWalletName, encryptWalletName);
+  seedNameCount = await reEncryptTable('Seed Names', db.seedNames, decryptSeedName, encryptSeedName);
+  walletSoftwareCount = await reEncryptTable('Wallet Software', db.walletSoftware, decryptWalletSoftware, encryptWalletSoftware);
+  derivationTemplateCount = await reEncryptTable('Derivation Templates', db.derivationTemplates, decryptDerivationTemplate, encryptDerivationTemplate);
+  recordOriginCount = await reEncryptTable('Record Origins', db.recordOrigins, decryptRecordOrigin, encryptRecordOrigin);
+  evidenceCount = await reEncryptTable('Evidence', db.evidence, decryptEvidence, encryptEvidence);
+  evidenceAttachmentCount = await reEncryptTable('Evidence Attachments', db.evidenceAttachments, decryptEvidenceAttachment, encryptEvidenceAttachment);
 
-  // Re-encrypt tags
-  const tags = await db.tags.filter(t => t.isEncrypted === true).toArray();
-  for (let i = 0; i < tags.length; i++) {
-    const tag = tags[i];
-    reportProgress('Tags', i + 1, tags.length);
-    const decrypted = await decryptTag(tag, oldKey);
-    const reEncrypted = await encryptTag(decrypted, newKey);
-    await db.tags.put(reEncrypted);
-    tagCount++;
-  }
-
-  // Re-encrypt categories
-  const categories = await db.categories.filter(c => c.isEncrypted === true).toArray();
-  for (let i = 0; i < categories.length; i++) {
-    const category = categories[i];
-    reportProgress('Categories', i + 1, categories.length);
-    const decrypted = await decryptCategory(category, oldKey);
-    const reEncrypted = await encryptCategory(decrypted, newKey);
-    await db.categories.put(reEncrypted);
-    categoryCount++;
-  }
-
-  // Re-encrypt owners
-  const owners = await db.owners.filter(o => o.isEncrypted === true).toArray();
-  for (let i = 0; i < owners.length; i++) {
-    const owner = owners[i];
-    reportProgress('Owners', i + 1, owners.length);
-    const decrypted = await decryptOwner(owner, oldKey);
-    const reEncrypted = await encryptOwner(decrypted, newKey);
-    await db.owners.put(reEncrypted);
-    ownerCount++;
-  }
-
-  // Re-encrypt wallet names
-  const walletNames = await db.walletNames.filter(w => w.isEncrypted === true).toArray();
-  for (let i = 0; i < walletNames.length; i++) {
-    const walletName = walletNames[i];
-    reportProgress('Wallet Names', i + 1, walletNames.length);
-    const decrypted = await decryptWalletName(walletName, oldKey);
-    const reEncrypted = await encryptWalletName(decrypted, newKey);
-    await db.walletNames.put(reEncrypted);
-    walletNameCount++;
-  }
-
-  // Re-encrypt seed names
-  const seedNames = await db.seedNames.filter(s => s.isEncrypted === true).toArray();
-  for (let i = 0; i < seedNames.length; i++) {
-    const seedName = seedNames[i];
-    reportProgress('Seed Names', i + 1, seedNames.length);
-    const decrypted = await decryptSeedName(seedName, oldKey);
-    const reEncrypted = await encryptSeedName(decrypted, newKey);
-    await db.seedNames.put(reEncrypted);
-    seedNameCount++;
-  }
-
-  // Re-encrypt wallet software
-  const walletSoftwareItems = await db.walletSoftware.filter(w => w.isEncrypted === true).toArray();
-  for (let i = 0; i < walletSoftwareItems.length; i++) {
-    const item = walletSoftwareItems[i];
-    reportProgress('Wallet Software', i + 1, walletSoftwareItems.length);
-    const decrypted = await decryptWalletSoftware(item, oldKey);
-    const reEncrypted = await encryptWalletSoftware(decrypted, newKey);
-    await db.walletSoftware.put(reEncrypted);
-    walletSoftwareCount++;
-  }
-
-  // Re-encrypt derivation templates
-  const templates = await db.derivationTemplates.filter(t => t.isEncrypted === true).toArray();
-  for (let i = 0; i < templates.length; i++) {
-    const template = templates[i];
-    reportProgress('Derivation Templates', i + 1, templates.length);
-    const decrypted = await decryptDerivationTemplate(template, oldKey);
-    const reEncrypted = await encryptDerivationTemplate(decrypted, newKey);
-    await db.derivationTemplates.put(reEncrypted);
-    derivationTemplateCount++;
-  }
-
-  // Re-encrypt record origins
-  const origins = await db.recordOrigins.filter(o => o.isEncrypted === true).toArray();
-  for (let i = 0; i < origins.length; i++) {
-    const origin = origins[i];
-    reportProgress('Record Origins', i + 1, origins.length);
-    const decrypted = await decryptRecordOrigin(origin, oldKey);
-    const reEncrypted = await encryptRecordOrigin(decrypted, newKey);
-    await db.recordOrigins.put(reEncrypted);
-    recordOriginCount++;
-  }
-
-  // Re-encrypt evidence
-  const evidenceItems = await db.evidence.filter(e => e.isEncrypted === true).toArray();
-  for (let i = 0; i < evidenceItems.length; i++) {
-    const item = evidenceItems[i];
-    reportProgress('Evidence', i + 1, evidenceItems.length);
-    const decrypted = await decryptEvidence(item, oldKey);
-    const reEncrypted = await encryptEvidence(decrypted, newKey);
-    await db.evidence.put(reEncrypted);
-    evidenceCount++;
-  }
-
-  // Re-encrypt evidence attachments
-  const evidenceAttachments = await db.evidenceAttachments.filter(a => a.isEncrypted === true).toArray();
-  for (let i = 0; i < evidenceAttachments.length; i++) {
-    const attachment = evidenceAttachments[i];
-    reportProgress('Evidence Attachments', i + 1, evidenceAttachments.length);
-    const decrypted = await decryptEvidenceAttachment(attachment, oldKey);
-    const reEncrypted = await encryptEvidenceAttachment(decrypted, newKey);
-    await db.evidenceAttachments.put(reEncrypted);
-    evidenceAttachmentCount++;
-  }
-
-  // Re-encrypt transaction participants
   let participantCount = 0;
   const participants = await db.transactionParticipants.filter(p => p.isEncrypted === true).toArray();
-  for (let i = 0; i < participants.length; i += 200) {
-    const chunk = participants.slice(i, i + 200);
-    reportProgress('Transaction Participants', i + chunk.length, participants.length);
-    await db.transaction('rw', db.transactionParticipants, async () => {
-      for (const p of chunk) {
-        const decrypted = await decryptParticipant(p, oldKey);
-        const reEncrypted = await encryptParticipant(decrypted, newKey);
-        await db.transactionParticipants.put(reEncrypted);
-        participantCount++;
-      }
-    });
+  for (let i = 0; i < participants.length; i++) {
+    const p = participants[i];
+    reportProgress('Transaction Participants', i + 1, participants.length);
+    try {
+      const decrypted = await decryptParticipant(p, oldKey);
+      const reEncrypted = await encryptParticipant(decrypted, newKey);
+      await db.transactionParticipants.put(reEncrypted);
+      participantCount++;
+    } catch (error) {
+      const errMsg = error instanceof Error ? error.message : String(error);
+      console.error(`[ReEncrypt] Failed Participant id=${p.id}: ${errMsg}`);
+      failedItems.push({ table: 'Transaction Participants', id: p.id, error: errMsg });
+    }
+    if (i % 50 === 0) await new Promise(r => setTimeout(r, 0));
+  }
+
+  if (failedItems.length > 0) {
+    console.warn(`[ReEncrypt] ${failedItems.length} items failed re-encryption:`, failedItems);
   }
 
   reportProgress('Complete', 1, 1);
@@ -935,5 +851,6 @@ export async function reEncryptAllData(
     evidence: evidenceCount,
     evidenceAttachments: evidenceAttachmentCount,
     participants: participantCount,
+    failedItems: failedItems.length,
   };
 }

@@ -69,12 +69,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const result = await migrateAttachmentPaths((current, total, message) => {
         setMigrationProgress(message);
       });
-      if (result.failed === 0) {
+      if (result.failed === 0 && result.migrated >= 0) {
         await setAttachmentPathsMigrated(true);
       }
       if (result.migrated > 0) {
         setMigrationProgress(`Secured ${result.migrated} attachment path${result.migrated > 1 ? 's' : ''}.${result.failed > 0 ? ` ${result.failed} failed — will retry next login.` : ''}`);
-        setTimeout(() => setMigrationProgress(null), 3000);
+        setTimeout(() => setMigrationProgress(null), 5000);
+      } else if (result.failed > 0) {
+        setMigrationProgress(`Attachment migration: ${result.failed} file${result.failed > 1 ? 's' : ''} failed. Will retry next login.`);
+        setTimeout(() => setMigrationProgress(null), 5000);
       }
     } catch (error) {
       console.error('Attachment path migration failed:', error);
@@ -159,6 +162,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
         runMigration(key);
         return true;
+      }
+
+      const pending = await getPendingPasswordChange();
+      if (pending) {
+        const pendingSalt = base64ToBuffer(pending.newSalt);
+        const pendingValid = await verifyPassword(password, pendingSalt, pending.newHash);
+        if (pendingValid) {
+          const key = await deriveKey(password, pendingSalt);
+          initEncryptionFacade(key);
+          setEncryptionKey(key);
+          setIsAuthenticated(true);
+          setHasPendingPasswordChange(true);
+          console.warn('Logged in with pending new password. Visit Settings to resume or abandon the password change.');
+          runMigration(key);
+          return true;
+        }
       }
 
       return false;
