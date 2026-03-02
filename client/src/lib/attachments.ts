@@ -453,32 +453,47 @@ export async function reEncryptAttachmentFile(
   await writeRawFile(objectPath, reEncryptedData);
 }
 
-// Re-encrypt all attachment files (for password change)
+export interface ReEncryptFileResult {
+  processed: number;
+  completedIds: number[];
+  cancelled: boolean;
+}
+
 export async function reEncryptAllAttachmentFiles(
   oldKey: CryptoKey,
   newKey: CryptoKey,
-  onProgress?: (current: number, total: number) => void
-): Promise<number> {
-  // Get all encrypted attachments
+  onProgress?: (current: number, total: number) => void,
+  skipIds?: Set<number>,
+  signal?: AbortSignal
+): Promise<ReEncryptFileResult> {
   const attachments = await db.attachments.filter(a => a.isEncrypted === true).toArray();
+  const toProcess = skipIds ? attachments.filter(a => !skipIds.has(a.id!)) : attachments;
+  const totalCount = toProcess.length;
   
-  let count = 0;
-  for (let i = 0; i < attachments.length; i++) {
-    const attachment = attachments[i];
+  let processed = 0;
+  const completedIds: number[] = [];
+
+  for (let i = 0; i < toProcess.length; i++) {
+    if (signal?.aborted) {
+      return { processed, completedIds, cancelled: true };
+    }
+
+    const attachment = toProcess[i];
     if (onProgress) {
-      onProgress(i + 1, attachments.length);
+      onProgress(i + 1, totalCount);
     }
     
     try {
       await reEncryptAttachmentFile(attachment.objectStoragePath, oldKey, newKey);
-      count++;
+      completedIds.push(attachment.id!);
+      processed++;
     } catch (error) {
       console.error(`Failed to re-encrypt attachment ${attachment.id}:`, error);
       throw new Error(`Failed to re-encrypt attachment "${attachment.filename}": ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
   
-  return count;
+  return { processed, completedIds, cancelled: false };
 }
 
 // ============ LEGACY PATH MIGRATION ============
@@ -630,30 +645,39 @@ export async function migrateAttachmentPaths(
   return { migrated, failed };
 }
 
-// Re-encrypt all evidence attachment files (for password change)
 export async function reEncryptAllEvidenceAttachmentFiles(
   oldKey: CryptoKey,
   newKey: CryptoKey,
-  onProgress?: (current: number, total: number) => void
-): Promise<number> {
-  // Get all encrypted evidence attachments
+  onProgress?: (current: number, total: number) => void,
+  skipIds?: Set<number>,
+  signal?: AbortSignal
+): Promise<ReEncryptFileResult> {
   const evidenceAttachments = await db.evidenceAttachments.filter(a => a.isEncrypted === true).toArray();
+  const toProcess = skipIds ? evidenceAttachments.filter(a => !skipIds.has(a.id!)) : evidenceAttachments;
+  const totalCount = toProcess.length;
   
-  let count = 0;
-  for (let i = 0; i < evidenceAttachments.length; i++) {
-    const attachment = evidenceAttachments[i];
+  let processed = 0;
+  const completedIds: number[] = [];
+
+  for (let i = 0; i < toProcess.length; i++) {
+    if (signal?.aborted) {
+      return { processed, completedIds, cancelled: true };
+    }
+
+    const attachment = toProcess[i];
     if (onProgress) {
-      onProgress(i + 1, evidenceAttachments.length);
+      onProgress(i + 1, totalCount);
     }
     
     try {
       await reEncryptAttachmentFile(attachment.objectStoragePath, oldKey, newKey);
-      count++;
+      completedIds.push(attachment.id!);
+      processed++;
     } catch (error) {
       console.error(`Failed to re-encrypt evidence attachment ${attachment.id}:`, error);
       throw new Error(`Failed to re-encrypt evidence attachment "${attachment.filename}": ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
   
-  return count;
+  return { processed, completedIds, cancelled: false };
 }

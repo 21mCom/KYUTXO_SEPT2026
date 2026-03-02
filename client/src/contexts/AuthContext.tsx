@@ -14,6 +14,7 @@ import {
   setMigrationComplete,
   isAttachmentPathsMigrated,
   setAttachmentPathsMigrated,
+  getPendingPasswordChange,
 } from '@/lib/vault';
 import { migrateToEncrypted, hasPlaintextData } from '@/lib/dbEncryption';
 import { initEncryptionFacade, clearEncryptionFacade } from '@/lib/encryptionFacade';
@@ -29,6 +30,7 @@ interface AuthContextType {
   isLoading: boolean;
   isMigrating: boolean;
   migrationProgress: string | null;
+  hasPendingPasswordChange: boolean;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -40,6 +42,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [isLoading, setIsLoading] = useState(true);
   const [isMigrating, setIsMigrating] = useState(false);
   const [migrationProgress, setMigrationProgress] = useState<string | null>(null);
+  const [hasPendingPasswordChange, setHasPendingPasswordChange] = useState(false);
 
   // Check if vault is initialized on mount
   useEffect(() => {
@@ -131,7 +134,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [runMigration]);
 
-  // Login with existing password
   const login = useCallback(async (password: string): Promise<boolean> => {
     setIsLoading(true);
     try {
@@ -145,14 +147,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       if (isValid) {
         const key = await deriveKey(password, salt);
-        
-        // Initialize the encryption facade with the key
         initEncryptionFacade(key);
-        
         setEncryptionKey(key);
         setIsAuthenticated(true);
 
-        // Run migration in background
+        const pending = await getPendingPasswordChange();
+        if (pending) {
+          setHasPendingPasswordChange(true);
+          console.warn('Detected interrupted password change. Visit Settings to resume or abandon.');
+        }
+
         runMigration(key);
         return true;
       }
@@ -182,6 +186,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         isLoading,
         isMigrating,
         migrationProgress,
+        hasPendingPasswordChange,
       }}
     >
       {children}

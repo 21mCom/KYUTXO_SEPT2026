@@ -3,6 +3,14 @@
 
 import Dexie, { type Table } from 'dexie';
 
+export interface PendingPasswordChange {
+  newSalt: string;
+  newHash: string;
+  reEncryptedAttachmentIds: number[];
+  reEncryptedEvidenceIds: number[];
+  dbReEncrypted: boolean;
+}
+
 export interface VaultSettings {
   id: string;
   salt: string; // Base64 encoded salt
@@ -10,6 +18,7 @@ export interface VaultSettings {
   createdAt: number;
   migrationComplete?: boolean; // Flag indicating if plaintext data has been migrated
   attachmentPathsMigrated?: boolean; // Flag indicating attachment dirs have been hashed
+  pendingPasswordChange?: PendingPasswordChange;
 }
 
 class VaultDatabase extends Dexie {
@@ -75,4 +84,28 @@ export async function setAttachmentPathsMigrated(migrated: boolean): Promise<voi
   if (settings) {
     await vaultDb.vault.update('main', { attachmentPathsMigrated: migrated });
   }
+}
+
+export async function getPendingPasswordChange(): Promise<PendingPasswordChange | undefined> {
+  const settings = await vaultDb.vault.get('main');
+  return settings?.pendingPasswordChange;
+}
+
+export async function savePendingPasswordChange(pending: PendingPasswordChange): Promise<void> {
+  await vaultDb.vault.update('main', { pendingPasswordChange: pending });
+}
+
+export async function clearPendingPasswordChange(): Promise<void> {
+  await vaultDb.vault.update('main', { pendingPasswordChange: undefined });
+}
+
+export async function finalizePendingPasswordChange(): Promise<void> {
+  const settings = await vaultDb.vault.get('main');
+  if (!settings?.pendingPasswordChange) return;
+  const { newSalt, newHash } = settings.pendingPasswordChange;
+  await vaultDb.vault.update('main', {
+    salt: newSalt,
+    passwordHash: newHash,
+    pendingPasswordChange: undefined,
+  });
 }
