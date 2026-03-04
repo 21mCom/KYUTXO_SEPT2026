@@ -52,6 +52,7 @@ import WalletOverview from "@/pages/WalletOverview";
 import Cleanup from "@/pages/Cleanup";
 import StatementReport from "@/pages/StatementReport";
 import QuantumRiskScanner from "@/pages/QuantumRiskScanner";
+import PrivacyAudit from "@/pages/PrivacyAudit";
 import BalanceOverview from "@/pages/BalanceOverview";
 import NotFound from "@/pages/not-found";
 
@@ -100,6 +101,7 @@ function AppRoutes() {
       <Route path="/cleanup" component={Cleanup} />
       <Route path="/statement" component={StatementReport} />
       <Route path="/quantum-risk" component={QuantumRiskScanner} />
+      <Route path="/privacy-audit" component={PrivacyAudit} />
       <Route path="/balance" component={BalanceOverview} />
       <Route component={NotFound} />
     </Switch>
