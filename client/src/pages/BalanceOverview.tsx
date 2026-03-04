@@ -2,6 +2,7 @@ import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { useAsyncMemo, yieldToUI, checkAbort } from "@/hooks/use-async-memo";
 import { db, BlockchainTransaction, TransactionParticipant, Record as DbRecord } from "@/lib/database";
+
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -16,7 +17,7 @@ import {
   Check,
 } from "lucide-react";
 import { SiBitcoin } from "react-icons/si";
-import { decryptRecordsWithProgress, isEncryptionReady, getAllDecryptedParticipants } from "@/lib/encryptionFacade";
+import { decryptRecordsWithProgress, isEncryptionReady, getDecryptedParticipantsByAddresses } from "@/lib/encryptionFacade";
 import type { DecryptProgress } from "@/lib/encryption/record-encryption";
 
 type GroupBy = "wallet" | "seed" | "owner" | "tag" | "category";
@@ -60,10 +61,8 @@ export default function BalanceOverview() {
     []
   );
 
-  const participants = useLiveQuery(
-    () => getAllDecryptedParticipants(),
-    []
-  );
+  const [participants, setParticipants] = useState<TransactionParticipant[] | undefined>(undefined);
+  const participantsRequestId = useRef(0);
 
   const rawRecords = useLiveQuery(
     () => db.records.where('type').equals('address').toArray(),
@@ -110,6 +109,37 @@ export default function BalanceOverview() {
     };
     decrypt();
   }, [rawRecords]);
+
+  useEffect(() => {
+    if (!decryptedRecords || decryptedRecords.length === 0) {
+      setParticipants(undefined);
+      return;
+    }
+
+    const addresses = decryptedRecords
+      .filter(r => r.type === 'address' && r.inputString)
+      .map(r => r.inputString!);
+
+    if (addresses.length === 0) {
+      setParticipants([]);
+      return;
+    }
+
+    participantsRequestId.current += 1;
+    const thisRequestId = participantsRequestId.current;
+
+    getDecryptedParticipantsByAddresses(addresses)
+      .then(result => {
+        if (thisRequestId === participantsRequestId.current) {
+          setParticipants(result);
+        }
+      })
+      .catch(() => {
+        if (thisRequestId === participantsRequestId.current) {
+          setParticipants([]);
+        }
+      });
+  }, [decryptedRecords]);
 
   const addressToRecord = useMemo(() => {
     const map = new Map<string, DbRecord>();

@@ -14,7 +14,7 @@ import {
   ACQUISITION_METHOD_OPTIONS,
   DISPOSITION_TYPE_OPTIONS,
 } from "@/lib/database";
-import { decryptRecords, decryptRecordsWithProgress, updateRecord, createRecord, getDecryptedTags, getDecryptedCategories, isEncryptionReady, getAllDecryptedParticipants } from "@/lib/encryptionFacade";
+import { decryptRecords, decryptRecordsWithProgress, updateRecord, createRecord, getDecryptedTags, getDecryptedCategories, isEncryptionReady, getDecryptedParticipantsByAddresses } from "@/lib/encryptionFacade";
 import type { DecryptProgress } from "@/lib/encryption/record-encryption";
 import { uploadAttachment } from "@/lib/attachments";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -150,11 +150,6 @@ export default function Nudgie() {
     []
   );
 
-  const participants = useLiveQuery(
-    () => getAllDecryptedParticipants(),
-    []
-  );
-
   const rawAddressRecords = useLiveQuery(
     async () => {
       const [curatedRecords, blockchainRecords] = await Promise.all([
@@ -186,6 +181,8 @@ export default function Nudgie() {
   const [decryptedCategories, setDecryptedCategories] = useState<CategoryType[]>([]);
   const [decryptProgress, setDecryptProgress] = useState<DecryptProgress | null>(null);
   const decryptRequestId = useRef(0);
+  const [participants, setParticipants] = useState<TransactionParticipant[] | undefined>(undefined);
+  const participantsRequestId = useRef(0);
 
   useEffect(() => {
     if (!rawAddressRecords || !rawTransactionRecords) return;
@@ -239,6 +236,37 @@ export default function Nudgie() {
     };
     decryptVocabulary();
   }, [tags, categories]);
+
+  useEffect(() => {
+    if (!decryptedAddressRecords || decryptedAddressRecords.length === 0) {
+      setParticipants(undefined);
+      return;
+    }
+
+    const addresses = decryptedAddressRecords
+      .filter(r => r.type === 'address' && r.inputString)
+      .map(r => r.inputString!);
+
+    if (addresses.length === 0) {
+      setParticipants([]);
+      return;
+    }
+
+    participantsRequestId.current += 1;
+    const thisRequestId = participantsRequestId.current;
+
+    getDecryptedParticipantsByAddresses(addresses)
+      .then(result => {
+        if (thisRequestId === participantsRequestId.current) {
+          setParticipants(result);
+        }
+      })
+      .catch(() => {
+        if (thisRequestId === participantsRequestId.current) {
+          setParticipants([]);
+        }
+      });
+  }, [decryptedAddressRecords]);
 
   const addressToRecord = useMemo(() => {
     const map = new Map<string, Record>();

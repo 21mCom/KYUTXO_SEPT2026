@@ -34,7 +34,7 @@ import {
   Loader2,
   RefreshCw
 } from "lucide-react";
-import { decryptRecords, decryptRecordsWithProgress, updateRecord, getAllDecryptedParticipants } from "@/lib/encryptionFacade";
+import { decryptRecords, decryptRecordsWithProgress, updateRecord, getDecryptedParticipantsByAddresses } from "@/lib/encryptionFacade";
 import type { DecryptProgress } from "@/lib/encryption/record-encryption";
 import { useToast } from "@/hooks/use-toast";
 import { useOwners } from "@/hooks/use-owners";
@@ -201,8 +201,7 @@ export default function AddressReuse() {
         // Step 2: Load only participants for addresses we care about
         // Use indexed query on address field
         const addressArray = Array.from(addressSet);
-        const allParts = await getAllDecryptedParticipants();
-        const relevantParticipants = allParts.filter(p => addressSet.has(p.address));
+        const relevantParticipants = await getDecryptedParticipantsByAddresses(addressArray);
         
         if (thisProcessingId !== processingRef.current) return;
         

@@ -20,7 +20,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Trash2, Search, RefreshCw, AlertTriangle, CheckCircle2, Network, ArrowUpDown, Link2, Shield, XCircle, ChevronLeft, ChevronRight, Unplug } from "lucide-react";
 import { db, Record, RecordOrigin } from "@/lib/database";
-import { deleteRecord, decryptRecords, getAllDecryptedParticipants } from "@/lib/encryptionFacade";
+import { deleteRecord, decryptRecords, getDecryptedParticipantsByTxids } from "@/lib/encryptionFacade";
 import { decryptRecordOrigin } from "@/lib/dbEncryption";
 import { getKey, isEncryptionReady } from "@/lib/encryptionFacade";
 import { yieldToUI } from "@/hooks/use-async-memo";
@@ -180,10 +180,8 @@ async function checkTransactionConnections(
   onProgress(`Loading participants for ${candidateTxids.size.toLocaleString()} transactions...`);
   await yieldToUI();
 
-  const allParticipants = await getAllDecryptedParticipants();
+  const relevantParticipants = await getDecryptedParticipantsByTxids(Array.from(candidateTxids));
   if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
-
-  const relevantParticipants = allParticipants.filter(p => candidateTxids.has(p.txid));
 
   onProgress('Analyzing transaction connections...');
   await yieldToUI();

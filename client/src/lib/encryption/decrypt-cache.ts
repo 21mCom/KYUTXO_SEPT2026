@@ -17,14 +17,20 @@ export function getCachedRecord(id: number): Record | undefined {
     _cache.delete(id);
     return undefined;
   }
+  _cache.delete(id);
   entry.accessedAt = Date.now();
+  _cache.set(id, entry);
   return entry.record;
 }
 
 export function setCachedRecord(record: Record): void {
   if (record.id === undefined) return;
-  if (_cache.size >= MAX_ENTRIES && !_cache.has(record.id)) {
+  const exists = _cache.has(record.id);
+  if (_cache.size >= MAX_ENTRIES && !exists) {
     evictOldest();
+  }
+  if (exists) {
+    _cache.delete(record.id);
   }
   _cache.set(record.id, { record, accessedAt: Date.now() });
 }
@@ -48,14 +54,7 @@ export function getCacheStats(): { size: number; maxSize: number } {
 }
 
 function evictOldest(): void {
-  let oldestKey: number | undefined;
-  let oldestTime = Infinity;
-  _cache.forEach((entry, key) => {
-    if (entry.accessedAt < oldestTime) {
-      oldestTime = entry.accessedAt;
-      oldestKey = key;
-    }
-  });
+  const oldestKey = _cache.keys().next().value;
   if (oldestKey !== undefined) {
     _cache.delete(oldestKey);
   }
