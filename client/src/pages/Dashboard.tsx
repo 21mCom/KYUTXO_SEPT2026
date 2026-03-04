@@ -87,7 +87,19 @@ export default function Dashboard() {
   // Column filters state
   const [columnFilters, setColumnFilters] = useState<ColumnFilter[]>([]);
 
-  const { records, isLoading, blockchainDiscoveredCount } = useFilteredRecords(includeBlockchainDiscovered);
+  const hasClientSideFilters = search.trim() !== '' || 
+    (filter.type !== undefined && filter.type !== 'all') || 
+    filter.tags.length > 0 || 
+    filter.categories.length > 0 || 
+    columnFilters.length > 0 ||
+    sortColumn !== null;
+
+  const paginationOptions = useMemo(() => {
+    if (hasClientSideFilters) return undefined;
+    return { offset: (currentPage - 1) * ITEMS_PER_PAGE, limit: ITEMS_PER_PAGE };
+  }, [hasClientSideFilters, currentPage, ITEMS_PER_PAGE]);
+
+  const { records, isLoading, blockchainDiscoveredCount, totalCount } = useFilteredRecords(includeBlockchainDiscovered, paginationOptions);
   const { tags } = useEncryptedTags();
   const { categories } = useEncryptedCategories();
   const { owners } = useOwners();
@@ -297,11 +309,14 @@ export default function Dashboard() {
   }, [filteredRecords, sortColumn, sortDirection, allAddressStats]);
 
   // Pagination calculations - using sorted records
-  const totalPages = Math.max(1, Math.ceil(sortedFilteredRecords.length / ITEMS_PER_PAGE));
+  // When DB-level pagination is active (no client-side filters), use totalCount from hook
+  // When client-side filters are active, use the filtered records length
+  const effectiveTotal = hasClientSideFilters ? sortedFilteredRecords.length : totalCount;
+  const totalPages = Math.max(1, Math.ceil(effectiveTotal / ITEMS_PER_PAGE));
   // Clamp currentPage to valid range
   const safePage = Math.min(currentPage, totalPages);
-  const startIndex = (safePage - 1) * ITEMS_PER_PAGE;
-  const endIndex = startIndex + ITEMS_PER_PAGE;
+  const startIndex = hasClientSideFilters ? (safePage - 1) * ITEMS_PER_PAGE : 0;
+  const endIndex = hasClientSideFilters ? startIndex + ITEMS_PER_PAGE : sortedFilteredRecords.length;
   const paginatedRecords = sortedFilteredRecords.slice(startIndex, endIndex);
   
   // Auto-correct page if it's out of bounds (e.g., after filter changes)
@@ -1037,10 +1052,10 @@ export default function Dashboard() {
             )}
 
             {/* Pagination Controls */}
-            {filteredRecords.length > ITEMS_PER_PAGE && (
+            {effectiveTotal > ITEMS_PER_PAGE && (
               <div className="flex items-center justify-between border-t pt-4 mt-4">
                 <div className="text-sm text-muted-foreground">
-                  Showing {startIndex + 1}-{Math.min(endIndex, filteredRecords.length)} of {filteredRecords.length} records
+                  Showing {((safePage - 1) * ITEMS_PER_PAGE) + 1}-{Math.min(safePage * ITEMS_PER_PAGE, effectiveTotal)} of {effectiveTotal} records
                 </div>
                 <div className="flex items-center gap-2">
                   <Button

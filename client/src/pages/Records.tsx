@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { ArrowLeft, Search as SearchIcon, Database, Hash, ExternalLink, AlertCircle, Trash2, X, RefreshCw } from "lucide-react";
+import { ArrowLeft, Search as SearchIcon, Database, Hash, ExternalLink, AlertCircle, Trash2, X, RefreshCw, ChevronLeft, ChevronRight } from "lucide-react";
 import { BlockchainToggle } from "@/components/BlockchainToggle";
 import { db, subscribeToDbChanges, type Record as DbRecord, type VaultMetadata, type AddressImportance, type ChainType, type CustomField, type BlockchainTransaction, type TransactionParticipant } from "@/lib/database";
 import { decryptRecords, decryptRecordsWithProgress, isEncryptionReady, deleteRecord, getDecryptedParticipantsByTxids } from "@/lib/encryptionFacade";
@@ -57,6 +57,10 @@ interface ConvertedRecord {
 
 export default function Records() {
   const [location, navigate] = useLocation();
+  
+  const PAGE_SIZE = 50;
+  const [currentPage, setCurrentPage] = useState(1);
+  const [totalCount, setTotalCount] = useState(0);
   
   const [records, setRecords] = useState<ConvertedRecord[]>([]);
   const [filteredRecords, setFilteredRecords] = useState<ConvertedRecord[]>([]);
@@ -143,6 +147,13 @@ export default function Records() {
     }
   }, [urlSearchQuery, records.length, isLoading]);
 
+  const hasActiveFilters = searchQuery !== '' || columnFilters.length > 0;
+
+  // Reset page when search/filter/toggle changes
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery, columnFilters, includeBlockchainDiscovered]);
+
   // Load records and custom field definitions with smart filtering
   useEffect(() => {
     const loadRecords = async () => {
@@ -159,39 +170,74 @@ export default function Records() {
           .count();
         setTotalBlockchainDiscovered(blockchainCount);
         
-        // Query only the relevant importance tiers based on filter setting
-        // Use indexed queries for performance - avoid full table scans
         let rawRecords: DbRecord[];
+        let count: number;
         
-        if (includeBlockchainDiscovered) {
-          // Load all records
-          rawRecords = await db.records.toArray();
+        if (!hasActiveFilters) {
+          if (includeBlockchainDiscovered) {
+            count = await db.records.count();
+            rawRecords = await db.records
+              .orderBy('id')
+              .reverse()
+              .offset((currentPage - 1) * PAGE_SIZE)
+              .limit(PAGE_SIZE)
+              .toArray();
+          } else {
+            const curatedAddresses = await db.records
+              .where('addressImportance')
+              .anyOf(USER_CURATED_TIERS)
+              .toArray();
+            
+            const legacyAddresses = await db.records
+              .filter(r => r.type === 'address' && !r.addressImportance)
+              .toArray();
+            
+            const transactions = await db.records
+              .where('type')
+              .equals('transaction')
+              .toArray();
+            
+            const otherRecords = await db.records
+              .where('type')
+              .equals('other')
+              .toArray();
+            
+            const combined = [...curatedAddresses, ...legacyAddresses, ...transactions, ...otherRecords];
+            combined.sort((a, b) => (b.id ?? 0) - (a.id ?? 0));
+            count = combined.length;
+            const offset = (currentPage - 1) * PAGE_SIZE;
+            rawRecords = combined.slice(offset, offset + PAGE_SIZE);
+          }
+          
+          setTotalCount(count);
         } else {
-          // Strategy: Use indexed queries only to avoid full table scans
-          // 1. Get address records with user-curated importance tiers (indexed)
-          const curatedAddresses = await db.records
-            .where('addressImportance')
-            .anyOf(USER_CURATED_TIERS)
-            .toArray();
-          
-          // 2. Get legacy address records with null/undefined addressImportance (treat as manual)
-          const legacyAddresses = await db.records
-            .filter(r => r.type === 'address' && !r.addressImportance)
-            .toArray();
-          
-          // 3. Get all transaction records (indexed by type)
-          const transactions = await db.records
-            .where('type')
-            .equals('transaction')
-            .toArray();
-          
-          // 4. Get all "other" type records (indexed by type)
-          const otherRecords = await db.records
-            .where('type')
-            .equals('other')
-            .toArray();
-          
-          rawRecords = [...curatedAddresses, ...legacyAddresses, ...transactions, ...otherRecords];
+          // Search/filters active: load all matching records for client-side filtering
+          if (includeBlockchainDiscovered) {
+            rawRecords = await db.records.toArray();
+          } else {
+            const curatedAddresses = await db.records
+              .where('addressImportance')
+              .anyOf(USER_CURATED_TIERS)
+              .toArray();
+            
+            const legacyAddresses = await db.records
+              .filter(r => r.type === 'address' && !r.addressImportance)
+              .toArray();
+            
+            const transactions = await db.records
+              .where('type')
+              .equals('transaction')
+              .toArray();
+            
+            const otherRecords = await db.records
+              .where('type')
+              .equals('other')
+              .toArray();
+            
+            rawRecords = [...curatedAddresses, ...legacyAddresses, ...transactions, ...otherRecords];
+          }
+          count = rawRecords.length;
+          setTotalCount(count);
         }
         
         let decrypted: DbRecord[];
@@ -237,7 +283,7 @@ export default function Records() {
     };
     
     loadRecords();
-  }, [includeBlockchainDiscovered, dbChangeSignal]);
+  }, [includeBlockchainDiscovered, dbChangeSignal, currentPage, hasActiveFilters]);
 
   // Extract unique values from records for filter dropdowns
   const uniqueFilterValues = useMemo(() => {
@@ -446,6 +492,25 @@ export default function Records() {
       return prev;
     });
   }, [records]);
+
+  // Pagination computations
+  const displayTotalCount = hasActiveFilters ? filteredRecords.length : totalCount;
+  const displayTotalPages = Math.max(1, Math.ceil(displayTotalCount / PAGE_SIZE));
+  const displayStartIndex = (currentPage - 1) * PAGE_SIZE;
+  
+  const displayRecords = useMemo(() => {
+    if (!hasActiveFilters) {
+      return filteredRecords;
+    }
+    return filteredRecords.slice(displayStartIndex, displayStartIndex + PAGE_SIZE);
+  }, [hasActiveFilters, filteredRecords, displayStartIndex, PAGE_SIZE]);
+
+  // Auto-correct page if it's out of bounds
+  useEffect(() => {
+    if (currentPage > displayTotalPages && displayTotalPages > 0) {
+      setCurrentPage(displayTotalPages);
+    }
+  }, [currentPage, displayTotalPages]);
 
   // Delete handlers
   const handleSingleDelete = async () => {
@@ -710,7 +775,7 @@ export default function Records() {
                     ? txidSearchResults.length > 0 
                       ? `Related Address Records (${filteredRecords.length})`
                       : `Search Results (${filteredRecords.length})` 
-                    : `All Records (${filteredRecords.length})`}
+                    : `All Records (${hasActiveFilters ? filteredRecords.length : totalCount})`}
                 </CardTitle>
                 <CardDescription>
                   {txidSearchResults.length > 0 
@@ -723,7 +788,7 @@ export default function Records() {
                   <div className="text-center py-8 text-muted-foreground">
                     Loading records...
                   </div>
-                ) : filteredRecords.length === 0 ? (
+                ) : displayRecords.length === 0 ? (
                   <div className="text-center py-8 text-muted-foreground">
                     {searchQuery 
                       ? txidSearchResults.length > 0
@@ -732,14 +797,49 @@ export default function Records() {
                       : "No records found"}
                   </div>
                 ) : (
-                  <RecordTable 
-                    records={filteredRecords}
-                    onRowClick={setSelectedRecordId}
-                    onDelete={handleDeleteRequest}
-                    selectionEnabled={true}
-                    selectedIds={selectedIds}
-                    onSelectionChange={setSelectedIds}
-                  />
+                  <>
+                    <RecordTable 
+                      records={displayRecords}
+                      onRowClick={setSelectedRecordId}
+                      onDelete={handleDeleteRequest}
+                      selectionEnabled={true}
+                      selectedIds={selectedIds}
+                      onSelectionChange={setSelectedIds}
+                    />
+                    
+                    {displayTotalPages > 1 && (
+                      <div className="flex items-center justify-between border-t pt-4 mt-4">
+                        <div className="text-sm text-muted-foreground" data-testid="text-pagination-info">
+                          Showing {displayStartIndex + 1}-{Math.min(displayStartIndex + displayRecords.length, displayTotalCount)} of {displayTotalCount} records
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                            disabled={currentPage === 1}
+                            data-testid="button-prev-page"
+                          >
+                            <ChevronLeft className="h-4 w-4 mr-1" />
+                            Previous
+                          </Button>
+                          <span className="text-sm px-2" data-testid="text-page-indicator">
+                            Page {currentPage} of {displayTotalPages}
+                          </span>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setCurrentPage(p => Math.min(displayTotalPages, p + 1))}
+                            disabled={currentPage === displayTotalPages}
+                            data-testid="button-next-page"
+                          >
+                            Next
+                            <ChevronRight className="h-4 w-4 ml-1" />
+                          </Button>
+                        </div>
+                      </div>
+                    )}
+                  </>
                 )}
               </CardContent>
             </Card>

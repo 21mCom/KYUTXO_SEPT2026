@@ -79,42 +79,96 @@ const BLOCKCHAIN_DISCOVERED_TIERS: string[] = ['blockchain-discovered', 'pending
 
 // Hook to get filtered records with debounced manual loading (no useLiveQuery)
 // Uses compound index [type+addressImportance] for zero-scan queries
-export function useFilteredRecords(includeBlockchainDiscovered: boolean) {
+// Supports optional pagination via offset/limit params for performance with large datasets
+export function useFilteredRecords(
+  includeBlockchainDiscovered: boolean,
+  options?: { offset?: number; limit?: number }
+) {
   const [decryptedRecords, setDecryptedRecords] = useState<Record[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [blockchainDiscoveredCount, setBlockchainDiscoveredCount] = useState(0);
+  const [totalCount, setTotalCount] = useState(0);
   const loadVersionRef = useRef(0);
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const loadRecords = useCallback(async (includeBD: boolean) => {
+  const offset = options?.offset;
+  const limit = options?.limit;
+
+  const loadRecords = useCallback(async (includeBD: boolean, pgOffset?: number, pgLimit?: number) => {
     const version = ++loadVersionRef.current;
     setIsLoading(true);
     try {
       let rawRecords: Record[];
+      let total: number;
+
       if (includeBD) {
-        rawRecords = await db.records.orderBy('updatedAt').reverse().toArray();
+        total = await db.records.count();
+        if (loadVersionRef.current !== version) return;
+
+        if (pgOffset !== undefined && pgLimit !== undefined) {
+          rawRecords = await db.records.orderBy('updatedAt').reverse().offset(pgOffset).limit(pgLimit).toArray();
+        } else {
+          rawRecords = await db.records.orderBy('updatedAt').reverse().toArray();
+        }
       } else {
-        const curatedAddresses = await db.records
+        const curatedAddressCount = await db.records
           .where('[type+addressImportance]')
           .anyOf(USER_CURATED_TIERS.map(tier => ['address', tier]))
-          .toArray();
-
-        const transactions = await db.records
+          .count();
+        const transactionCount = await db.records
           .where('type')
           .equals('transaction')
-          .toArray();
-
-        const otherRecords = await db.records
+          .count();
+        const otherCount = await db.records
           .where('type')
           .equals('other')
-          .toArray();
+          .count();
+        total = curatedAddressCount + transactionCount + otherCount;
+        if (loadVersionRef.current !== version) return;
 
-        const combined = [...curatedAddresses, ...transactions, ...otherRecords];
-        combined.sort((a, b) => b.updatedAt - a.updatedAt);
-        rawRecords = combined;
+        if (pgOffset !== undefined && pgLimit !== undefined) {
+          const curatedAddresses = await db.records
+            .where('[type+addressImportance]')
+            .anyOf(USER_CURATED_TIERS.map(tier => ['address', tier]))
+            .toArray();
+
+          const transactions = await db.records
+            .where('type')
+            .equals('transaction')
+            .toArray();
+
+          const otherRecords = await db.records
+            .where('type')
+            .equals('other')
+            .toArray();
+
+          const combined = [...curatedAddresses, ...transactions, ...otherRecords];
+          combined.sort((a, b) => b.updatedAt - a.updatedAt);
+          rawRecords = combined.slice(pgOffset, pgOffset + pgLimit);
+        } else {
+          const curatedAddresses = await db.records
+            .where('[type+addressImportance]')
+            .anyOf(USER_CURATED_TIERS.map(tier => ['address', tier]))
+            .toArray();
+
+          const transactions = await db.records
+            .where('type')
+            .equals('transaction')
+            .toArray();
+
+          const otherRecords = await db.records
+            .where('type')
+            .equals('other')
+            .toArray();
+
+          const combined = [...curatedAddresses, ...transactions, ...otherRecords];
+          combined.sort((a, b) => b.updatedAt - a.updatedAt);
+          rawRecords = combined;
+        }
       }
 
       if (loadVersionRef.current !== version) return;
+      setTotalCount(total);
 
       const bdCount = await db.records
         .where('[type+addressImportance]')
@@ -143,13 +197,13 @@ export function useFilteredRecords(includeBlockchainDiscovered: boolean) {
   }, []);
 
   useEffect(() => {
-    loadRecords(includeBlockchainDiscovered);
+    loadRecords(includeBlockchainDiscovered, offset, limit);
 
     const unsubscribe = subscribeToDbChanges((tables) => {
       if (tables.includes('records') || tables.length === 0) {
         if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
         debounceTimerRef.current = setTimeout(() => {
-          loadRecords(includeBlockchainDiscovered);
+          loadRecords(includeBlockchainDiscovered, offset, limit);
         }, 500);
       }
     });
@@ -158,13 +212,14 @@ export function useFilteredRecords(includeBlockchainDiscovered: boolean) {
       unsubscribe();
       if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
     };
-  }, [includeBlockchainDiscovered, loadRecords]);
+  }, [includeBlockchainDiscovered, offset, limit, loadRecords]);
 
   return {
     records: decryptedRecords,
     isLoading,
     blockchainDiscoveredCount,
-    reload: () => loadRecords(includeBlockchainDiscovered),
+    totalCount,
+    reload: () => loadRecords(includeBlockchainDiscovered, offset, limit),
   };
 }
 

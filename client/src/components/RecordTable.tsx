@@ -29,7 +29,7 @@ import {
 } from "@/components/ui/popover";
 import { useSettings, useCustomFields, toggleTableColumn, toggleCustomFieldColumn } from "@/hooks/use-settings";
 import { db, type CustomField } from "@/lib/database";
-import { getAllDecryptedParticipants } from "@/lib/encryptionFacade";
+import { getDecryptedParticipantsByAddresses } from "@/lib/encryptionFacade";
 import { Separator } from "@/components/ui/separator";
 import { formatBTC } from "@/lib/bitcoin";
 
@@ -208,9 +208,7 @@ export function RecordTable({
         return;
       }
 
-      const addrSet = new Set(addressStrings);
-      const allParts = await getAllDecryptedParticipants();
-      const participants = allParts.filter(p => addrSet.has(p.address));
+      const participants = await getDecryptedParticipantsByAddresses(addressStrings);
 
       const txids = Array.from(new Set(participants.map(p => p.txid)));
       const txMap = new Map<string, number>();

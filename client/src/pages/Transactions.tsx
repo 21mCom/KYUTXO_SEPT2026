@@ -35,7 +35,7 @@ import {
   ChevronsUpDown,
   RefreshCw
 } from "lucide-react";
-import { decryptRecords, decryptRecordsWithProgress, getAllDecryptedParticipants } from "@/lib/encryptionFacade";
+import { decryptRecordsWithProgress, getDecryptedParticipantsByTxids } from "@/lib/encryptionFacade";
 import type { DecryptProgress } from "@/lib/encryption/record-encryption";
 import { ClickableAddress } from "@/components/ClickableAddress";
 
@@ -83,15 +83,8 @@ export default function Transactions() {
   // OP_RETURN filter: only show transactions with OP_RETURN data
   const [opReturnOnly, setOpReturnOnly] = useState(false);
 
-  // Fetch all transactions
-  const transactions = useLiveQuery(
+  const allTransactions = useLiveQuery(
     () => db.blockchainTransactions.orderBy('blockTime').reverse().toArray(),
-    []
-  );
-
-  // Fetch all participants (decrypted)
-  const participants = useLiveQuery(
-    () => getAllDecryptedParticipants(),
     []
   );
 
@@ -113,17 +106,6 @@ export default function Transactions() {
     [includeBlockchainDiscovered]
   );
   
-  // Count blockchain-discovered records using compound index
-  const blockchainDiscoveredCount = useLiveQuery(
-    async () => {
-      return db.records
-        .where('[type+addressImportance]')
-        .anyOf([['address', 'blockchain-discovered'], ['address', 'pending-review']])
-        .count();
-    },
-    []
-  );
-
   // Decrypt records to get addresses
   const [decryptedRecords, setDecryptedRecords] = useState<Record[]>([]);
   const [decryptProgress, setDecryptProgress] = useState<DecryptProgress | null>(null);
@@ -167,146 +149,172 @@ export default function Transactions() {
     return map;
   }, [decryptedRecords]);
 
-  const { value: transactionsWithParticipants, isComputing: transactionsWithParticipantsComputing } = useAsyncMemo(async (signal) => {
-    if (!transactions || !participants) return [];
+  const { value: userCuratedTxidSet, isComputing: userCuratedTxidSetComputing } = useAsyncMemo(async (signal) => {
+    if (!decryptedRecords || decryptedRecords.length === 0) return new Set<string>();
     
-    const participantsByTxid = new Map<string, TransactionParticipant[]>();
-    for (let i = 0; i < participants.length; i++) {
-      const p = participants[i];
-      const existing = participantsByTxid.get(p.txid) || [];
-      existing.push(p);
-      participantsByTxid.set(p.txid, existing);
-      if (i % 1000 === 999) {
-        checkAbort(signal);
-        await yieldToUI();
-      }
+    const recordIds = decryptedRecords
+      .filter(r => r.id !== undefined)
+      .map(r => r.id as number);
+    
+    if (recordIds.length === 0) return new Set<string>();
+    
+    const txids = new Set<string>();
+    const batchSize = 500;
+    for (let i = 0; i < recordIds.length; i += batchSize) {
+      checkAbort(signal);
+      const batch = recordIds.slice(i, i + batchSize);
+      const matchingParticipants = await db.transactionParticipants
+        .where('recordId')
+        .anyOf(batch)
+        .toArray();
+      matchingParticipants.forEach(p => txids.add(p.txid));
+      if (i + batchSize < recordIds.length) await yieldToUI();
     }
+    return txids;
+  }, [decryptedRecords], new Set<string>());
 
-    const result: TransactionWithParticipants[] = [];
-    for (let i = 0; i < transactions.length; i++) {
-      const tx = transactions[i];
-      const txParticipants = participantsByTxid.get(tx.txid) || [];
-      const inputs = txParticipants.filter(p => p.role === 'input');
-      const outputs = txParticipants.filter(p => p.role === 'output');
-      
-      result.push({
-        ...tx,
-        inputs,
-        outputs,
-        totalInputValue: inputs.reduce((sum, p) => sum + p.amount, 0),
-        totalOutputValue: outputs.reduce((sum, p) => sum + p.amount, 0),
-      } as TransactionWithParticipants);
-
-      if (i % 1000 === 999) {
-        checkAbort(signal);
-        await yieldToUI();
-      }
-    }
-
-    return result;
-  }, [transactions, participants], [] as TransactionWithParticipants[]);
-
-  // Build set of user-curated addresses (for filtering transactions)
-  const userCuratedAddresses = useMemo(() => {
-    const set = new Set<string>();
-    decryptedRecords.forEach(record => {
-      if (record.type === 'address' && record.inputString) {
-        const importance = record.addressImportance;
-        // Include if no importance set (legacy) or if user-curated tier
-        if (!importance || USER_CURATED_TIERS.includes(importance)) {
-          set.add(record.inputString);
-        }
-      }
-    });
-    return set;
-  }, [decryptedRecords]);
-
-  const { value: blockchainOnlyTxCount, isComputing: blockchainOnlyTxCountComputing } = useAsyncMemo(async (signal) => {
+  const blockchainOnlyTxCount = useMemo(() => {
+    if (!allTransactions || userCuratedTxidSetComputing) return 0;
     let count = 0;
-    for (let i = 0; i < transactionsWithParticipants.length; i++) {
-      const tx = transactionsWithParticipants[i];
-      const allAddresses = [...tx.inputs, ...tx.outputs].map(p => p.address);
-      if (!allAddresses.some(addr => userCuratedAddresses.has(addr))) {
-        count++;
-      }
-      if (i % 1000 === 999) {
-        checkAbort(signal);
-        await yieldToUI();
-      }
+    for (const tx of allTransactions) {
+      if (!userCuratedTxidSet.has(tx.txid)) count++;
     }
     return count;
-  }, [transactionsWithParticipants, userCuratedAddresses], 0);
+  }, [allTransactions, userCuratedTxidSet, userCuratedTxidSetComputing]);
 
-  const { value: filteredTransactions, isComputing: filteredTransactionsComputing } = useAsyncMemo(async (signal) => {
-    let results = transactionsWithParticipants;
+  const needsBroadParticipants = search.trim() !== '' || searchFilters.amountMode !== 'any';
+
+  const preFilteredTransactions = useMemo(() => {
+    if (!allTransactions) return [];
+    let results = [...allTransactions];
     
     if (!includeBlockchainDiscovered) {
-      const filtered: TransactionWithParticipants[] = [];
-      for (let i = 0; i < results.length; i++) {
-        const tx = results[i];
-        const allAddresses = [...tx.inputs, ...tx.outputs].map(p => p.address);
-        if (allAddresses.some(addr => userCuratedAddresses.has(addr))) {
-          filtered.push(tx);
-        }
-        if (i % 1000 === 999) {
-          checkAbort(signal);
-          await yieldToUI();
-        }
-      }
-      results = filtered;
-    }
-    
-    if (hasActiveSearchFilters(searchFilters)) {
-      results = filterByDateAndAmount(
-        results,
-        searchFilters,
-        (tx) => tx.blockTime,
-        (tx) => tx.totalOutputValue
-      );
+      results = results.filter(tx => userCuratedTxidSet.has(tx.txid));
     }
     
     if (opReturnOnly) {
       results = results.filter(tx => tx.hasOpReturn === true);
     }
     
-    if (search.trim()) {
-      const searchLower = search.toLowerCase();
-      const searched: TransactionWithParticipants[] = [];
-      for (let i = 0; i < results.length; i++) {
-        const tx = results[i];
-        if (tx.txid.toLowerCase().includes(searchLower)) {
-          searched.push(tx);
-        } else {
-          const allAddresses = [...tx.inputs, ...tx.outputs].map(p => p.address);
-          if (allAddresses.some(addr => addr.toLowerCase().includes(searchLower))) {
-            searched.push(tx);
-          } else {
-            const linkedRecords = [...tx.inputs, ...tx.outputs]
-              .map(p => addressToRecord.get(p.address))
-              .filter(Boolean);
-            if (linkedRecords.some(r => r?.label?.toLowerCase().includes(searchLower))) {
-              searched.push(tx);
-            }
-          }
-        }
-        if (i % 1000 === 999) {
-          checkAbort(signal);
-          await yieldToUI();
-        }
-      }
-      results = searched;
+    const hasDateFilter = searchFilters.dateMode !== 'any';
+    if (hasDateFilter) {
+      const dateOnlyFilters: SearchFilters = { ...searchFilters, amountMode: 'any' as const };
+      results = filterByDateAndAmount(results, dateOnlyFilters, tx => tx.blockTime, () => 0);
     }
     
     return results;
-  }, [transactionsWithParticipants, search, searchFilters, addressToRecord, includeBlockchainDiscovered, userCuratedAddresses, opReturnOnly], [] as TransactionWithParticipants[]);
+  }, [allTransactions, includeBlockchainDiscovered, userCuratedTxidSet, searchFilters, opReturnOnly]);
+
+  const { value: broadParticipantMap } = useAsyncMemo(async (signal) => {
+    if (!needsBroadParticipants || preFilteredTransactions.length === 0) {
+      return new Map<string, TransactionParticipant[]>();
+    }
+    
+    const maxTxidsForBroadLoad = 2000;
+    const txidsToLoad = preFilteredTransactions.slice(0, maxTxidsForBroadLoad).map(tx => tx.txid);
+    const loadedParticipants = await getDecryptedParticipantsByTxids(txidsToLoad);
+    checkAbort(signal);
+    
+    const map = new Map<string, TransactionParticipant[]>();
+    for (const p of loadedParticipants) {
+      const existing = map.get(p.txid) || [];
+      existing.push(p);
+      map.set(p.txid, existing);
+    }
+    return map;
+  }, [needsBroadParticipants, preFilteredTransactions], new Map<string, TransactionParticipant[]>());
+
+  const filteredTransactions = useMemo(() => {
+    let results = preFilteredTransactions;
+    
+    if (searchFilters.amountMode !== 'any' && broadParticipantMap.size > 0) {
+      const amountOnlyFilters: SearchFilters = { ...searchFilters, dateMode: 'any' as const };
+      results = filterByDateAndAmount(
+        results.filter(tx => broadParticipantMap.has(tx.txid)),
+        amountOnlyFilters,
+        (tx) => tx.blockTime,
+        (tx) => {
+          const parts = broadParticipantMap.get(tx.txid) || [];
+          return parts.filter(p => p.role === 'output').reduce((sum, p) => sum + p.amount, 0);
+        }
+      );
+    }
+    
+    if (search.trim()) {
+      const searchLower = search.toLowerCase();
+      results = results.filter(tx => {
+        if (tx.txid.toLowerCase().includes(searchLower)) return true;
+        
+        const txParts = broadParticipantMap.get(tx.txid);
+        if (txParts) {
+          if (txParts.some(p => p.address.toLowerCase().includes(searchLower))) return true;
+          const linkedRecords = txParts.map(p => addressToRecord.get(p.address)).filter(Boolean);
+          if (linkedRecords.some(r => r?.label?.toLowerCase().includes(searchLower))) return true;
+        }
+        
+        return false;
+      });
+    }
+    
+    return results;
+  }, [preFilteredTransactions, search, searchFilters, broadParticipantMap, addressToRecord]);
 
   // Pagination
   const totalPages = Math.max(1, Math.ceil(filteredTransactions.length / ITEMS_PER_PAGE));
   const safePage = Math.min(currentPage, totalPages);
   const startIndex = (safePage - 1) * ITEMS_PER_PAGE;
-  const paginatedTransactions = filteredTransactions.slice(startIndex, startIndex + ITEMS_PER_PAGE);
+  const paginatedTransactionSlice = filteredTransactions.slice(startIndex, startIndex + ITEMS_PER_PAGE);
 
-  // Toggle transaction expansion
+  const { value: pageParticipantMap } = useAsyncMemo(async (signal) => {
+    const txids = paginatedTransactionSlice.map(tx => tx.txid);
+    if (txids.length === 0) return new Map<string, TransactionParticipant[]>();
+    
+    if (needsBroadParticipants && broadParticipantMap.size > 0) {
+      const map = new Map<string, TransactionParticipant[]>();
+      for (const txid of txids) {
+        if (broadParticipantMap.has(txid)) {
+          map.set(txid, broadParticipantMap.get(txid)!);
+        }
+      }
+      const missingTxids = txids.filter(t => !map.has(t));
+      if (missingTxids.length > 0) {
+        const extra = await getDecryptedParticipantsByTxids(missingTxids);
+        checkAbort(signal);
+        for (const p of extra) {
+          const existing = map.get(p.txid) || [];
+          existing.push(p);
+          map.set(p.txid, existing);
+        }
+      }
+      return map;
+    }
+    
+    const loaded = await getDecryptedParticipantsByTxids(txids);
+    checkAbort(signal);
+    const map = new Map<string, TransactionParticipant[]>();
+    for (const p of loaded) {
+      const existing = map.get(p.txid) || [];
+      existing.push(p);
+      map.set(p.txid, existing);
+    }
+    return map;
+  }, [paginatedTransactionSlice, needsBroadParticipants, broadParticipantMap], new Map<string, TransactionParticipant[]>());
+
+  const paginatedTransactions = useMemo(() => {
+    return paginatedTransactionSlice.map(tx => {
+      const txParts = pageParticipantMap.get(tx.txid) || [];
+      const inputs = txParts.filter(p => p.role === 'input');
+      const outputs = txParts.filter(p => p.role === 'output');
+      return {
+        ...tx,
+        inputs,
+        outputs,
+        totalInputValue: inputs.reduce((sum, p) => sum + p.amount, 0),
+        totalOutputValue: outputs.reduce((sum, p) => sum + p.amount, 0),
+      } as TransactionWithParticipants;
+    });
+  }, [paginatedTransactionSlice, pageParticipantMap]);
+
   const toggleExpanded = (txid: string) => {
     setExpandedTxs(prev => {
       const newSet = new Set(prev);
@@ -319,15 +327,13 @@ export default function Transactions() {
     });
   };
 
-  // Stats - calculated from filtered transactions to reflect toggle state
   const stats = useMemo(() => {
     const txCount = filteredTransactions.length;
-    const volume = filteredTransactions.reduce((sum, tx) => sum + tx.totalOutputValue, 0);
     const fees = filteredTransactions.reduce((sum, tx) => sum + tx.fee, 0);
+    const pageVolume = paginatedTransactions.reduce((sum, tx) => sum + tx.totalOutputValue, 0);
     
-    // Get linked address count from filtered transactions
     const linkedAddresses = new Set<string>();
-    filteredTransactions.forEach(tx => {
+    paginatedTransactions.forEach(tx => {
       [...tx.inputs, ...tx.outputs].forEach(p => {
         if (addressToRecord.has(p.address)) {
           linkedAddresses.add(p.address);
@@ -337,13 +343,13 @@ export default function Transactions() {
     
     return {
       txCount,
-      volume,
+      pageVolume,
       fees,
       linkedAddressCount: linkedAddresses.size
     };
-  }, [filteredTransactions, addressToRecord]);
+  }, [filteredTransactions, paginatedTransactions, addressToRecord]);
 
-  const isLoading = !transactions || !participants;
+  const isLoading = !allTransactions;
 
   return (
     <div className="flex flex-col h-full overflow-hidden p-4 gap-4">
@@ -387,9 +393,9 @@ export default function Transactions() {
         
         <Card>
           <CardHeader className="pb-2">
-            <CardDescription>Total Volume</CardDescription>
+            <CardDescription>Page Volume</CardDescription>
             <CardTitle className="text-2xl" data-testid="text-total-volume">
-              {satsToBtc(stats.volume)} BTC
+              {satsToBtc(stats.pageVolume)} BTC
             </CardTitle>
           </CardHeader>
         </Card>

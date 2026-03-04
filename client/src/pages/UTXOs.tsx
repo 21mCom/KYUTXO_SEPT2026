@@ -43,7 +43,7 @@ import {
   HelpCircle
 } from "lucide-react";
 import { SiBitcoin } from "react-icons/si";
-import { decryptRecords, decryptRecordsWithProgress, isEncryptionReady, getDecryptedOwners, getDecryptedWalletNames, getDecryptedTags, getDecryptedCategories, getAllDecryptedParticipants } from "@/lib/encryptionFacade";
+import { decryptRecords, decryptRecordsWithProgress, isEncryptionReady, getDecryptedOwners, getDecryptedWalletNames, getDecryptedTags, getDecryptedCategories, getDecryptedParticipantsByAddresses } from "@/lib/encryptionFacade";
 import type { DecryptProgress } from "@/lib/encryption/record-encryption";
 import { cn } from "@/lib/utils";
 import { UTXODetailPanel } from "@/components/UTXODetailPanel";
@@ -197,10 +197,9 @@ export default function UTXOs() {
     []
   );
 
-  const participants = useLiveQuery(
-    () => getAllDecryptedParticipants(),
-    []
-  );
+  const [participants, setParticipants] = useState<TransactionParticipant[] | undefined>(undefined);
+  const [participantsLoading, setParticipantsLoading] = useState(false);
+  const participantsRequestId = useRef(0);
 
   // Load address records using compound index [type+addressImportance] for zero-scan filtering
   // After v14 migration, all records have addressImportance set
@@ -305,6 +304,40 @@ export default function UTXOs() {
     
     decrypt();
   }, [rawRecords]);
+
+  useEffect(() => {
+    if (!decryptedRecords || decryptedRecords.length === 0) {
+      setParticipants(undefined);
+      return;
+    }
+
+    const addresses = decryptedRecords
+      .filter(r => r.type === 'address' && r.inputString)
+      .map(r => r.inputString!);
+
+    if (addresses.length === 0) {
+      setParticipants([]);
+      return;
+    }
+
+    participantsRequestId.current += 1;
+    const thisRequestId = participantsRequestId.current;
+    setParticipantsLoading(true);
+
+    getDecryptedParticipantsByAddresses(addresses)
+      .then(result => {
+        if (thisRequestId === participantsRequestId.current) {
+          setParticipants(result);
+          setParticipantsLoading(false);
+        }
+      })
+      .catch(() => {
+        if (thisRequestId === participantsRequestId.current) {
+          setParticipants([]);
+          setParticipantsLoading(false);
+        }
+      });
+  }, [decryptedRecords]);
 
   const addressToRecord = useMemo(() => {
     const map = new Map<string, DbRecord>();
@@ -786,7 +819,9 @@ export default function UTXOs() {
 
   const hasActiveFilters = search || ownerFilter !== "all" || walletFilter !== "all" || tagFilter !== "all" || categoryFilter !== "all" || selectedDate || hasActiveSearchFilters(searchFilters);
 
-  const isLoading = !transactions || !participants;
+  const isDataLoading = !transactions || !participants;
+  const isComputing = utxosHeuristicComputing || utxosExactComputing || addressGroupsComputing || outpointDataStatusComputing;
+  const isLoading = isDataLoading || participantsLoading;
 
   useEffect(() => {
     setCurrentPage(1);
@@ -862,14 +897,34 @@ export default function UTXOs() {
         />
       </div>
 
-      {decryptProgress && (
-        <div className="flex items-center gap-2 text-sm text-muted-foreground px-4 py-2">
-          <RefreshCw className="h-4 w-4 animate-spin" />
-          <span>
-            Decrypting records {decryptProgress.current.toLocaleString()}/{decryptProgress.total.toLocaleString()}
-            {decryptProgress.cached > 0 && ` (${decryptProgress.cached.toLocaleString()} cached)`}...
-          </span>
-        </div>
+      {(decryptProgress || participantsLoading || isComputing) && (
+        <Card>
+          <CardContent className="py-4">
+            <div className="flex flex-col gap-2">
+              {decryptProgress && (
+                <div className="flex items-center gap-2 text-sm text-muted-foreground" data-testid="status-decrypt-progress">
+                  <RefreshCw className="h-4 w-4 animate-spin" />
+                  <span>
+                    Decrypting records {decryptProgress.current.toLocaleString()}/{decryptProgress.total.toLocaleString()}
+                    {decryptProgress.cached > 0 && ` (${decryptProgress.cached.toLocaleString()} cached)`}...
+                  </span>
+                </div>
+              )}
+              {participantsLoading && (
+                <div className="flex items-center gap-2 text-sm text-muted-foreground" data-testid="status-participants-loading">
+                  <RefreshCw className="h-4 w-4 animate-spin" />
+                  <span>Loading transaction participants for {decryptedRecords.length.toLocaleString()} addresses...</span>
+                </div>
+              )}
+              {isComputing && !participantsLoading && !decryptProgress && (
+                <div className="flex items-center gap-2 text-sm text-muted-foreground" data-testid="status-computing">
+                  <RefreshCw className="h-4 w-4 animate-spin" />
+                  <span>Computing UTXO set...</span>
+                </div>
+              )}
+            </div>
+          </CardContent>
+        </Card>
       )}
 
       <div className="flex items-center gap-2 text-sm text-muted-foreground flex-none flex-wrap">
@@ -1227,9 +1282,12 @@ export default function UTXOs() {
             </div>
           </CardHeader>
           <CardContent className="p-0">
-            {isLoading ? (
-              <div className="flex items-center justify-center h-32">
+            {isLoading || isComputing ? (
+              <div className="flex flex-col items-center justify-center h-32 gap-2" data-testid="status-loading">
                 <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary" />
+                <p className="text-sm text-muted-foreground">
+                  {!transactions ? "Loading transactions..." : participantsLoading ? "Loading participants..." : isComputing ? "Computing UTXOs..." : "Loading..."}
+                </p>
               </div>
             ) : paginatedGroups.length === 0 ? (
               <div className="flex flex-col items-center justify-center h-32 text-muted-foreground">
