@@ -4,7 +4,7 @@
 import { db, notifyDbChange, type Record, type BlockchainTransaction, type TransactionParticipant, type AddressSyncState, type NodeSettings, type PausedSyncState, type SkippedAddress, type AddressBlacklist, type SyncProtectionSettings, DEFAULT_SYNC_PROTECTION } from './database';
 import { createProvider, createProviderFromSettings, parseTransaction, MINIMUM_CONFIRMATIONS, type ProviderType, type ParsedTransaction, type BlockchainProvider, type ApiTransaction } from './blockchain-api';
 import { validateAddress } from './bitcoin';
-import { decryptRecords, isEncryptionReady, createRecordOrigin, encryptParticipantsBatchData, encryptParticipantData } from './encryptionFacade';
+import { createRecordOrigin } from './encryptionFacade';
 
 // Legacy source filter type - kept for backwards compatibility
 export type SourceFilter = 'manual-only' | 'include-tx-import' | 'include-blockchain-sync' | 'all' | 'custom';
@@ -109,18 +109,7 @@ async function loadAddressRecordsAtDepth(depth: number): Promise<Record[]> {
 }
 
 async function decryptRecordsSafe(records: Record[]): Promise<Record[]> {
-  if (!isEncryptionReady() || records.length === 0) return records;
-  const CHUNK = 500;
-  const results: Record[] = [];
-  for (let i = 0; i < records.length; i += CHUNK) {
-    const chunk = records.slice(i, i + CHUNK);
-    const decrypted = await decryptRecords(chunk);
-    safeAppend(results, decrypted);
-    if (i + CHUNK < records.length) {
-      await new Promise(r => setTimeout(r, 0));
-    }
-  }
-  return results;
+  return records;
 }
 
 export class TransactionSyncService {
@@ -162,23 +151,12 @@ export class TransactionSyncService {
     if (cached) return cached;
     const record = await db.records.get(recordId);
     if (!record) return undefined;
-    let metadata: ParentMetadata;
-    if (record.isEncrypted && isEncryptionReady()) {
-      const [decrypted] = await decryptRecords([record]);
-      metadata = {
-        walletName: decrypted.walletName,
-        seedName: decrypted.seedName,
-        walletSoftware: decrypted.walletSoftware,
-        owner: decrypted.owner,
-      };
-    } else {
-      metadata = {
-        walletName: record.walletName,
-        seedName: record.seedName,
-        walletSoftware: record.walletSoftware,
-        owner: record.owner,
-      };
-    }
+    const metadata: ParentMetadata = {
+      walletName: record.walletName,
+      seedName: record.seedName,
+      walletSoftware: record.walletSoftware,
+      owner: record.owner,
+    };
     this.parentMetadataCache.set(recordId, metadata);
     return metadata;
   }
@@ -1471,10 +1449,7 @@ export class TransactionSyncService {
 
       // Encrypt and batch insert all participants for this transaction at once
       if (participantsBatch.length > 0) {
-        const encryptedBatch = isEncryptionReady()
-          ? await encryptParticipantsBatchData(participantsBatch)
-          : participantsBatch;
-        await db.transactionParticipants.bulkAdd(encryptedBatch);
+        await db.transactionParticipants.bulkAdd(participantsBatch);
       }
 
       txProcessed++;
@@ -1523,8 +1498,7 @@ export class TransactionSyncService {
       .where('role').equals('input')
       .toArray();
 
-    const { decryptParticipantsData } = await import('./encryptionFacade');
-    const decryptedInputs = isEncryptionReady() ? await decryptParticipantsData(allInputs) : allInputs;
+    const decryptedInputs = allInputs;
     const unresolvedInputs = decryptedInputs.filter(
       p => (!p.address || p.address === '') && p.prevTxid !== undefined && p.prevVout !== undefined
     );
@@ -1548,7 +1522,7 @@ export class TransactionSyncService {
         .where('txid').anyOf(batch)
         .and(p => p.role === 'output')
         .toArray();
-      const decryptedOutputs = isEncryptionReady() ? await decryptParticipantsData(rawOutputs) : rawOutputs;
+      const decryptedOutputs = rawOutputs;
       for (const o of decryptedOutputs) {
         if (o.vout !== undefined) {
           localOutputCache.set(`${o.txid}:${o.vout}`, {
@@ -1646,11 +1620,8 @@ export class TransactionSyncService {
     if (resolvedParticipants.length > 0) {
       for (let i = 0; i < resolvedParticipants.length; i += 200) {
         const batch = resolvedParticipants.slice(i, i + 200);
-        const encryptedBatch = isEncryptionReady()
-          ? await encryptParticipantsBatchData(batch)
-          : batch;
         await db.transaction('rw', db.transactionParticipants, async () => {
-          for (const p of encryptedBatch) {
+          for (const p of batch) {
             if (p.id) await db.transactionParticipants.put(p);
           }
         });
@@ -1723,22 +1694,18 @@ export class TransactionSyncService {
     // Defer notification - will be flushed after address sync completes
     this.deferNotification('records');
 
-    // Create a record origin entry to track blockchain sync source
-    if (isEncryptionReady()) {
-      try {
-        await createRecordOrigin({
-          recordId: newRecordId,
-          originType: 'blockchain-sync',
-          source: 'blockchain-sync',
-          owner: 'Pending Review',
-          walletName: parentWalletName,
-          seedName: parentSeedName,
-          walletSoftware: parentWalletSoftware,
-        });
-      } catch (originError) {
-        console.error('[TransactionSync] Failed to create record origin:', originError);
-        // Don't fail the record creation if origin creation fails
-      }
+    try {
+      await createRecordOrigin({
+        recordId: newRecordId,
+        originType: 'blockchain-sync',
+        source: 'blockchain-sync',
+        owner: 'Pending Review',
+        walletName: parentWalletName,
+        seedName: parentSeedName,
+        walletSoftware: parentWalletSoftware,
+      });
+    } catch (originError) {
+      console.error('[TransactionSync] Failed to create record origin:', originError);
     }
 
     return { recordId: newRecordId, isNew: true };
@@ -1824,21 +1791,18 @@ export class TransactionSyncService {
     // Defer notification - will be flushed after address sync completes
     this.deferNotification('records');
 
-    // Create a record origin entry to track blockchain sync source
-    if (isEncryptionReady()) {
-      try {
-        await createRecordOrigin({
-          recordId: newRecordId,
-          originType: 'blockchain-sync',
-          source: 'blockchain-sync',
-          owner: parentOwner || 'Pending Review',
-          walletName: parentWalletName,
-          seedName: parentSeedName,
-          walletSoftware: parentWalletSoftware,
-        });
-      } catch (originError) {
-        console.error('[TransactionSync] Failed to create transaction record origin:', originError);
-      }
+    try {
+      await createRecordOrigin({
+        recordId: newRecordId,
+        originType: 'blockchain-sync',
+        source: 'blockchain-sync',
+        owner: parentOwner || 'Pending Review',
+        walletName: parentWalletName,
+        seedName: parentSeedName,
+        walletSoftware: parentWalletSoftware,
+      });
+    } catch (originError) {
+      console.error('[TransactionSync] Failed to create transaction record origin:', originError);
     }
 
     return { recordId: newRecordId, isNew: true };
@@ -2002,11 +1966,7 @@ function extractBaseWalletName(source: string): string {
 }
 
 export async function loadDecryptedAddressRecords(): Promise<Record[]> {
-  const allRawRecords = await db.records.where('type').equals('address').toArray();
-  if (isEncryptionReady()) {
-    return decryptRecordsSafe(allRawRecords);
-  }
-  return allRawRecords;
+  return db.records.where('type').equals('address').toArray();
 }
 
 export function getAddressSourcesFromRecords(allRecords: Record[]): SourceCategory[] {

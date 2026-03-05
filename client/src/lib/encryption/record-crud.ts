@@ -1,54 +1,19 @@
 import { db, notifyDbChange, type Record, type Attachment, type RecordOrigin, type RecordOriginType, type Owner, type WalletName, type SeedName, type WalletSoftware, type DerivationTemplate, type AddressImportance } from '../database';
-import { encrypt } from '../crypto';
-import {
-  encryptRecord,
-  decryptRecord,
-  decryptAttachment,
-  encryptRecordOrigin,
-  decryptRecordOrigin,
-  encryptOwner,
-  decryptOwner,
-  encryptWalletName,
-  decryptWalletName,
-  encryptSeedName,
-  decryptSeedName,
-  encryptWalletSoftware,
-  decryptWalletSoftware,
-} from '../dbEncryption';
 import { getKey, getEncryptionKey } from './key-management';
-import { invalidateCachedRecord, invalidateCachedRecords } from './decrypt-cache';
-
-// ============ VOCABULARY SYNC ============
 
 async function syncRecordVocabulary(
-  data: Partial<Record>,
-  key: CryptoKey
+  data: Partial<Record>
 ): Promise<void> {
   const syncTasks: Promise<void>[] = [];
 
   if (data.owner && data.owner !== 'Unknown' && data.owner !== '[encrypted]') {
     syncTasks.push((async () => {
       const owners = await db.owners.toArray();
-      const decryptedNames = await Promise.all(
-        owners.map(async (o) => {
-          if (o.isEncrypted) {
-            try {
-              const decrypted = await decryptOwner(o, key);
-              return decrypted.name;
-            } catch {
-              return null;
-            }
-          }
-          return o.name;
-        })
-      );
-      const exists = decryptedNames.some(
-        (name) => name && name.toLowerCase() === data.owner!.toLowerCase()
+      const exists = owners.some(
+        (o) => o.name && o.name.toLowerCase() === data.owner!.toLowerCase()
       );
       if (!exists) {
-        const owner: Owner = { name: data.owner!, createdAt: Date.now() };
-        const encrypted = await encryptOwner(owner, key);
-        await db.owners.add(encrypted);
+        await db.owners.add({ name: data.owner!, createdAt: Date.now(), isEncrypted: false } as Owner);
       }
     })());
   }
@@ -56,26 +21,11 @@ async function syncRecordVocabulary(
   if (data.walletName && data.walletName !== '[encrypted]') {
     syncTasks.push((async () => {
       const walletNames = await db.walletNames.toArray();
-      const decryptedNames = await Promise.all(
-        walletNames.map(async (wn) => {
-          if (wn.isEncrypted) {
-            try {
-              const decrypted = await decryptWalletName(wn, key);
-              return decrypted.name;
-            } catch {
-              return null;
-            }
-          }
-          return wn.name;
-        })
-      );
-      const exists = decryptedNames.some(
-        (name) => name && name.toLowerCase() === data.walletName!.toLowerCase()
+      const exists = walletNames.some(
+        (wn) => wn.name && wn.name.toLowerCase() === data.walletName!.toLowerCase()
       );
       if (!exists) {
-        const walletName: WalletName = { name: data.walletName!, createdAt: Date.now() };
-        const encrypted = await encryptWalletName(walletName, key);
-        await db.walletNames.add(encrypted);
+        await db.walletNames.add({ name: data.walletName!, createdAt: Date.now(), isEncrypted: false } as WalletName);
       }
     })());
   }
@@ -83,26 +33,11 @@ async function syncRecordVocabulary(
   if (data.seedName && data.seedName !== '[encrypted]') {
     syncTasks.push((async () => {
       const seedNames = await db.seedNames.toArray();
-      const decryptedNames = await Promise.all(
-        seedNames.map(async (sn) => {
-          if (sn.isEncrypted) {
-            try {
-              const decrypted = await decryptSeedName(sn, key);
-              return decrypted.name;
-            } catch {
-              return null;
-            }
-          }
-          return sn.name;
-        })
-      );
-      const exists = decryptedNames.some(
-        (name) => name && name.toLowerCase() === data.seedName!.toLowerCase()
+      const exists = seedNames.some(
+        (sn) => sn.name && sn.name.toLowerCase() === data.seedName!.toLowerCase()
       );
       if (!exists) {
-        const seedName: SeedName = { name: data.seedName!, createdAt: Date.now() };
-        const encrypted = await encryptSeedName(seedName, key);
-        await db.seedNames.add(encrypted);
+        await db.seedNames.add({ name: data.seedName!, createdAt: Date.now(), isEncrypted: false } as SeedName);
       }
     })());
   }
@@ -110,26 +45,11 @@ async function syncRecordVocabulary(
   if (data.walletSoftware && data.walletSoftware !== '[encrypted]') {
     syncTasks.push((async () => {
       const walletSoftwareList = await db.walletSoftware.toArray();
-      const decryptedNames = await Promise.all(
-        walletSoftwareList.map(async (ws) => {
-          if (ws.isEncrypted) {
-            try {
-              const decrypted = await decryptWalletSoftware(ws, key);
-              return decrypted.name;
-            } catch {
-              return null;
-            }
-          }
-          return ws.name;
-        })
-      );
-      const exists = decryptedNames.some(
-        (name) => name && name.toLowerCase() === data.walletSoftware!.toLowerCase()
+      const exists = walletSoftwareList.some(
+        (ws) => ws.name && ws.name.toLowerCase() === data.walletSoftware!.toLowerCase()
       );
       if (!exists) {
-        const walletSoftware: WalletSoftware = { name: data.walletSoftware!, createdAt: Date.now() };
-        const encrypted = await encryptWalletSoftware(walletSoftware, key);
-        await db.walletSoftware.add(encrypted);
+        await db.walletSoftware.add({ name: data.walletSoftware!, createdAt: Date.now(), isEncrypted: false } as WalletSoftware);
       }
     })());
   }
@@ -137,12 +57,9 @@ async function syncRecordVocabulary(
   await Promise.all(syncTasks);
 }
 
-// ============ RECORD OPERATIONS ============
-
 export async function createRecord(
   data: Omit<Record, 'id' | 'createdAt' | 'updatedAt'>
 ): Promise<number> {
-  const key = getKey();
   const now = Date.now();
   
   let addressImportance = data.addressImportance;
@@ -165,28 +82,20 @@ export async function createRecord(
     addressImportance,
     createdAt: now,
     updatedAt: now,
+    isEncrypted: false,
   };
 
   console.log(`[createRecord] Creating record: type=${data.type}, inputString=${data.inputString?.substring(0, 20)}...`);
   
-  syncRecordVocabulary(data, key).catch((err) => {
+  syncRecordVocabulary(data).catch((err) => {
     console.warn('[createRecord] Vocabulary sync failed:', err);
   });
   
-  const encrypted = await encryptRecord(record, key);
-  const id = await db.records.add(encrypted);
-  invalidateCachedRecord(id as number);
+  const id = await db.records.add(record);
   
   notifyDbChange('records');
   
   console.log(`[createRecord] Record created with id=${id}`);
-  
-  const saved = await db.records.get(id as number);
-  if (saved) {
-    console.log(`[createRecord] Verified: record ${id} exists in database, isEncrypted=${saved.isEncrypted}`);
-  } else {
-    console.error(`[createRecord] ERROR: record ${id} NOT FOUND after creation!`);
-  }
   
   return id as number;
 }
@@ -195,29 +104,22 @@ export async function updateRecord(
   id: number,
   updates: Partial<Record>
 ): Promise<void> {
-  const key = getKey();
-  
   const existing = await db.records.get(id);
   if (!existing) throw new Error('Record not found');
 
-  const decrypted = existing.isEncrypted
-    ? await decryptRecord(existing, key)
-    : existing;
-
   const updated: Record = {
-    ...decrypted,
+    ...existing,
     ...updates,
     id,
     updatedAt: Date.now(),
+    isEncrypted: false,
   };
 
-  syncRecordVocabulary(updates, key).catch((err) => {
+  syncRecordVocabulary(updates).catch((err) => {
     console.warn('[updateRecord] Vocabulary sync failed:', err);
   });
 
-  const encrypted = await encryptRecord(updated, key);
-  await db.records.put(encrypted);
-  invalidateCachedRecord(id);
+  await db.records.put(updated);
   
   notifyDbChange('records');
 }
@@ -228,8 +130,7 @@ async function batchSyncVocabulary(
     walletNames: Set<string>;
     seedNames: Set<string>;
     walletSoftware: Set<string>;
-  },
-  key: CryptoKey
+  }
 ): Promise<void> {
   const tasks: Promise<void>[] = [];
   
@@ -238,26 +139,18 @@ async function batchSyncVocabulary(
       const existing = await db.owners.toArray();
       const existingNames = new Set<string>();
       for (const o of existing) {
-        if (o.isEncrypted) {
-          try {
-            const decrypted = await decryptOwner(o, key);
-            existingNames.add(decrypted.name.toLowerCase());
-          } catch { /* ignore */ }
-        } else {
-          existingNames.add(o.name.toLowerCase());
-        }
+        if (o.name) existingNames.add(o.name.toLowerCase());
       }
       
       const toAdd: Owner[] = [];
       for (const name of Array.from(values.owners)) {
         if (!existingNames.has(name.toLowerCase())) {
-          toAdd.push({ name, createdAt: Date.now() });
+          toAdd.push({ name, createdAt: Date.now(), isEncrypted: false } as Owner);
         }
       }
       
       if (toAdd.length > 0) {
-        const encrypted = await Promise.all(toAdd.map(o => encryptOwner(o, key)));
-        await db.owners.bulkAdd(encrypted);
+        await db.owners.bulkAdd(toAdd);
       }
     })());
   }
@@ -267,26 +160,18 @@ async function batchSyncVocabulary(
       const existing = await db.walletNames.toArray();
       const existingNames = new Set<string>();
       for (const wn of existing) {
-        if (wn.isEncrypted) {
-          try {
-            const decrypted = await decryptWalletName(wn, key);
-            existingNames.add(decrypted.name.toLowerCase());
-          } catch { /* ignore */ }
-        } else {
-          existingNames.add(wn.name.toLowerCase());
-        }
+        if (wn.name) existingNames.add(wn.name.toLowerCase());
       }
       
       const toAdd: WalletName[] = [];
       for (const name of Array.from(values.walletNames)) {
         if (!existingNames.has(name.toLowerCase())) {
-          toAdd.push({ name, createdAt: Date.now() });
+          toAdd.push({ name, createdAt: Date.now(), isEncrypted: false } as WalletName);
         }
       }
       
       if (toAdd.length > 0) {
-        const encrypted = await Promise.all(toAdd.map(wn => encryptWalletName(wn, key)));
-        await db.walletNames.bulkAdd(encrypted);
+        await db.walletNames.bulkAdd(toAdd);
       }
     })());
   }
@@ -296,26 +181,18 @@ async function batchSyncVocabulary(
       const existing = await db.seedNames.toArray();
       const existingNames = new Set<string>();
       for (const sn of existing) {
-        if (sn.isEncrypted) {
-          try {
-            const decrypted = await decryptSeedName(sn, key);
-            existingNames.add(decrypted.name.toLowerCase());
-          } catch { /* ignore */ }
-        } else {
-          existingNames.add(sn.name.toLowerCase());
-        }
+        if (sn.name) existingNames.add(sn.name.toLowerCase());
       }
       
       const toAdd: SeedName[] = [];
       for (const name of Array.from(values.seedNames)) {
         if (!existingNames.has(name.toLowerCase())) {
-          toAdd.push({ name, createdAt: Date.now() });
+          toAdd.push({ name, createdAt: Date.now(), isEncrypted: false } as SeedName);
         }
       }
       
       if (toAdd.length > 0) {
-        const encrypted = await Promise.all(toAdd.map(sn => encryptSeedName(sn, key)));
-        await db.seedNames.bulkAdd(encrypted);
+        await db.seedNames.bulkAdd(toAdd);
       }
     })());
   }
@@ -325,26 +202,18 @@ async function batchSyncVocabulary(
       const existing = await db.walletSoftware.toArray();
       const existingNames = new Set<string>();
       for (const ws of existing) {
-        if (ws.isEncrypted) {
-          try {
-            const decrypted = await decryptWalletSoftware(ws, key);
-            existingNames.add(decrypted.name.toLowerCase());
-          } catch { /* ignore */ }
-        } else {
-          existingNames.add(ws.name.toLowerCase());
-        }
+        if (ws.name) existingNames.add(ws.name.toLowerCase());
       }
       
       const toAdd: WalletSoftware[] = [];
       for (const name of Array.from(values.walletSoftware)) {
         if (!existingNames.has(name.toLowerCase())) {
-          toAdd.push({ name, createdAt: Date.now() });
+          toAdd.push({ name, createdAt: Date.now(), isEncrypted: false } as WalletSoftware);
         }
       }
       
       if (toAdd.length > 0) {
-        const encrypted = await Promise.all(toAdd.map(ws => encryptWalletSoftware(ws, key)));
-        await db.walletSoftware.bulkAdd(encrypted);
+        await db.walletSoftware.bulkAdd(toAdd);
       }
     })());
   }
@@ -355,7 +224,6 @@ async function batchSyncVocabulary(
 export async function bulkUpdateRecords(
   updates: Array<{ id: number; changes: Partial<Record> }>
 ): Promise<{ successCount: number; errorCount: number }> {
-  const key = getKey();
   const now = Date.now();
   
   if (updates.length === 0) {
@@ -373,58 +241,33 @@ export async function bulkUpdateRecords(
     existingMap.set(record.id!, record);
   }
   
-  const decryptedRecords = await Promise.all(
-    existingRecords.map(async (record) => {
-      if (record.isEncrypted) {
-        return await decryptRecord(record, key);
-      }
-      return record;
-    })
-  );
-  
-  const decryptedMap = new Map<number, Record>();
-  for (const record of decryptedRecords) {
-    decryptedMap.set(record.id!, record);
-  }
-  
   const recordsToSave: Record[] = [];
   const allChanges: Partial<Record>[] = [];
   let errorCount = 0;
   
   for (const { id, changes } of updates) {
-    const decrypted = decryptedMap.get(id);
-    if (!decrypted) {
+    const existing = existingMap.get(id);
+    if (!existing) {
       console.warn(`[bulkUpdateRecords] Record ${id} not found, skipping`);
       errorCount++;
       continue;
     }
     
     const updated: Record = {
-      ...decrypted,
+      ...existing,
       ...changes,
       id,
       updatedAt: now,
+      isEncrypted: false,
     };
     
     recordsToSave.push(updated);
     allChanges.push(changes);
   }
   
-  const CONCURRENCY_LIMIT = 8;
-  const encryptedRecords: Record[] = [];
-  
-  for (let i = 0; i < recordsToSave.length; i += CONCURRENCY_LIMIT) {
-    const batch = recordsToSave.slice(i, i + CONCURRENCY_LIMIT);
-    const encryptedBatch = await Promise.all(
-      batch.map(record => encryptRecord(record, key))
-    );
-    encryptedRecords.push(...encryptedBatch);
-  }
-  
   await db.transaction('rw', db.records, async () => {
-    await db.records.bulkPut(encryptedRecords);
+    await db.records.bulkPut(recordsToSave);
   });
-  invalidateCachedRecords(updates.map(u => u.id));
   
   const vocabularyValues = {
     owners: new Set<string>(),
@@ -448,16 +291,16 @@ export async function bulkUpdateRecords(
     }
   }
   
-  batchSyncVocabulary(vocabularyValues, key).catch((err) => {
+  batchSyncVocabulary(vocabularyValues).catch((err) => {
     console.warn('[bulkUpdateRecords] Vocabulary sync failed:', err);
   });
   
   notifyDbChange('records');
   
   const duration = performance.now() - startTime;
-  console.log(`[bulkUpdateRecords] Completed: ${encryptedRecords.length} records in ${duration.toFixed(0)}ms (${(duration / encryptedRecords.length).toFixed(1)}ms/record)`);
+  console.log(`[bulkUpdateRecords] Completed: ${recordsToSave.length} records in ${duration.toFixed(0)}ms (${(duration / recordsToSave.length).toFixed(1)}ms/record)`);
   
-  return { successCount: encryptedRecords.length, errorCount };
+  return { successCount: recordsToSave.length, errorCount };
 }
 
 export async function deleteRecord(id: number): Promise<void> {
@@ -465,12 +308,7 @@ export async function deleteRecord(id: number): Promise<void> {
 
   for (const attachment of attachments) {
     try {
-      const _encryptionKey = getEncryptionKey();
-      const decryptedAttachment = attachment.isEncrypted && _encryptionKey
-        ? await decryptAttachment(attachment, _encryptionKey)
-        : attachment;
-      
-      const response = await fetch(`/api/attachments/${decryptedAttachment.objectStoragePath}`, {
+      const response = await fetch(`/api/attachments/${attachment.objectStoragePath}`, {
         method: 'DELETE',
       });
       if (!response.ok) {
@@ -483,39 +321,19 @@ export async function deleteRecord(id: number): Promise<void> {
 
   await db.attachments.where('recordId').equals(id).delete();
   await db.records.delete(id);
-  invalidateCachedRecord(id);
   
   notifyDbChange('records');
 }
 
-// ============ DUPLICATE DETECTION ============
-
 export async function findRecordByInputString(inputString: string): Promise<Record | undefined> {
   if (!inputString) return undefined;
   
-  const key = getKey();
   const normalizedInput = inputString.trim().toLowerCase();
   
   const allRecords = await db.records.toArray();
   
   for (const record of allRecords) {
-    let decryptedInputString: string;
-    
-    if (record.isEncrypted) {
-      try {
-        const decrypted = await decryptRecord(record, key);
-        decryptedInputString = decrypted.inputString;
-      } catch {
-        continue;
-      }
-    } else {
-      decryptedInputString = record.inputString;
-    }
-    
-    if (decryptedInputString.trim().toLowerCase() === normalizedInput) {
-      if (record.isEncrypted) {
-        return await decryptRecord(record, key);
-      }
+    if (record.inputString && record.inputString.trim().toLowerCase() === normalizedInput) {
       return record;
     }
   }
@@ -523,35 +341,21 @@ export async function findRecordByInputString(inputString: string): Promise<Reco
   return undefined;
 }
 
-// ============ RECORD ORIGIN OPERATIONS ============
-
 export async function createRecordOrigin(
   data: Omit<RecordOrigin, 'id' | 'createdAt'>
 ): Promise<number> {
-  const key = getKey();
-  
   const origin: RecordOrigin = {
     ...data,
     createdAt: Date.now(),
+    isEncrypted: false,
   };
 
-  const encrypted = await encryptRecordOrigin(origin, key);
-  const id = await db.recordOrigins.add(encrypted);
+  const id = await db.recordOrigins.add(origin);
   return id as number;
 }
 
 export async function getDecryptedRecordOrigins(recordId: number): Promise<RecordOrigin[]> {
-  const key = getKey();
-  const origins = await db.recordOrigins.where('recordId').equals(recordId).toArray();
-  
-  return Promise.all(
-    origins.map(async (origin) => {
-      if (origin.isEncrypted) {
-        return await decryptRecordOrigin(origin, key);
-      }
-      return origin;
-    })
-  );
+  return db.recordOrigins.where('recordId').equals(recordId).toArray();
 }
 
 export function mergeRecordWithOrigins(
@@ -606,8 +410,6 @@ export function mergeRecordWithOrigins(
   return merged;
 }
 
-// ============ DERIVATION TEMPLATE HELPERS ============
-
 export async function saveDerivationTemplate(template: {
   fingerprint: string;
   scriptType: 'P2WPKH' | 'P2PKH' | 'P2SH-P2WPKH' | 'P2TR';
@@ -620,8 +422,6 @@ export async function saveDerivationTemplate(template: {
   seedName?: string;
   notes?: string;
 }): Promise<number> {
-  const key = getKey();
-  
   const now = Date.now();
   const derivationTemplate: DerivationTemplate = {
     fingerprint: template.fingerprint,
@@ -636,28 +436,8 @@ export async function saveDerivationTemplate(template: {
     notes: template.notes,
     createdAt: now,
     updatedAt: now,
+    isEncrypted: false,
   };
   
-  const sensitivePayload = JSON.stringify({
-    xpub: derivationTemplate.xpub,
-    notes: derivationTemplate.notes,
-    owner: derivationTemplate.owner,
-    walletName: derivationTemplate.walletName,
-    seedName: derivationTemplate.seedName,
-  });
-  
-  const encryptedPayload = await encrypt(sensitivePayload, key);
-  
-  const encryptedTemplate: DerivationTemplate = {
-    ...derivationTemplate,
-    xpub: '[encrypted]',
-    notes: derivationTemplate.notes ? '[encrypted]' : undefined,
-    owner: derivationTemplate.owner ? '[encrypted]' : undefined,
-    walletName: derivationTemplate.walletName ? '[encrypted]' : undefined,
-    seedName: derivationTemplate.seedName ? '[encrypted]' : undefined,
-    encryptedPayload,
-    isEncrypted: true,
-  };
-  
-  return await db.derivationTemplates.add(encryptedTemplate);
+  return await db.derivationTemplates.add(derivationTemplate);
 }

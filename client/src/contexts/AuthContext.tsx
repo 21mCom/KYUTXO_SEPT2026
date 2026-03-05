@@ -16,21 +16,30 @@ import {
   setAttachmentPathsMigrated,
   getPendingPasswordChange,
 } from '@/lib/vault';
-import { migrateToEncrypted, hasPlaintextData } from '@/lib/dbEncryption';
+import { hasPlaintextData, migrateToEncrypted } from '@/lib/dbEncryption';
 import { initEncryptionFacade, clearEncryptionFacade } from '@/lib/encryptionFacade';
 import { migrateAttachmentPaths } from '@/lib/attachments';
+import {
+  bulkDecryptDatabase,
+  bulkEncryptDatabase,
+  getDbDecryptionState,
+  setDbDecryptionState,
+  type BulkCryptoProgress,
+} from '@/lib/encryption/bulk-crypto';
 
 interface AuthContextType {
-  isInitialized: boolean | null; // null = loading
+  isInitialized: boolean | null;
   isAuthenticated: boolean;
   encryptionKey: CryptoKey | null;
   setupPassword: (password: string) => Promise<void>;
   login: (password: string) => Promise<boolean>;
-  logout: () => void;
+  logout: () => Promise<void>;
   isLoading: boolean;
   isMigrating: boolean;
   migrationProgress: string | null;
   hasPendingPasswordChange: boolean;
+  bulkCryptoProgress: BulkCryptoProgress | null;
+  bulkCryptoMode: 'decrypt' | 'encrypt' | null;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -43,8 +52,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [isMigrating, setIsMigrating] = useState(false);
   const [migrationProgress, setMigrationProgress] = useState<string | null>(null);
   const [hasPendingPasswordChange, setHasPendingPasswordChange] = useState(false);
+  const [bulkCryptoProgress, setBulkCryptoProgress] = useState<BulkCryptoProgress | null>(null);
+  const [bulkCryptoMode, setBulkCryptoMode] = useState<'decrypt' | 'encrypt' | null>(null);
 
-  // Check if vault is initialized on mount
   useEffect(() => {
     const checkVault = async () => {
       try {
@@ -84,8 +94,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  // Run migration after successful login if needed
-  const runMigration = useCallback(async (key: CryptoKey) => {
+  const runLegacyMigration = useCallback(async (key: CryptoKey) => {
     const hasPlaintext = await hasPlaintextData();
     if (!hasPlaintext) {
       await setMigrationComplete(true);
@@ -112,7 +121,60 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await runAttachmentPathMigration();
   }, [runAttachmentPathMigration]);
 
-  // Setup a new password (first-time setup)
+  const performBulkDecrypt = useCallback(async (key: CryptoKey) => {
+    const state = await getDbDecryptionState();
+
+    if (state === 'decrypted') {
+      return;
+    }
+
+    setBulkCryptoMode('decrypt');
+    setBulkCryptoProgress(null);
+
+    try {
+      const result = await bulkDecryptDatabase(key, (progress) => {
+        setBulkCryptoProgress(progress);
+      });
+
+      if (result.totalFailed > 0) {
+        console.warn(`[BulkDecrypt] ${result.totalFailed} items failed to decrypt`);
+      }
+      console.log(`[BulkDecrypt] Decrypted ${result.totalDecrypted} items`);
+    } catch (error) {
+      console.error('[BulkDecrypt] Fatal error:', error);
+    } finally {
+      setBulkCryptoMode(null);
+      setBulkCryptoProgress(null);
+    }
+  }, []);
+
+  const performBulkEncrypt = useCallback(async (key: CryptoKey) => {
+    const state = await getDbDecryptionState();
+
+    if (state === 'encrypted') {
+      return;
+    }
+
+    setBulkCryptoMode('encrypt');
+    setBulkCryptoProgress(null);
+
+    try {
+      const result = await bulkEncryptDatabase(key, (progress) => {
+        setBulkCryptoProgress(progress);
+      });
+
+      if (result.totalFailed > 0) {
+        console.warn(`[BulkEncrypt] ${result.totalFailed} items failed to encrypt`);
+      }
+      console.log(`[BulkEncrypt] Encrypted ${result.totalEncrypted} items`);
+    } catch (error) {
+      console.error('[BulkEncrypt] Fatal error:', error);
+    } finally {
+      setBulkCryptoMode(null);
+      setBulkCryptoProgress(null);
+    }
+  }, []);
+
   const setupPassword = useCallback(async (password: string) => {
     setIsLoading(true);
     try {
@@ -120,22 +182,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const hash = await hashPassword(password, salt);
       const key = await deriveKey(password, salt);
 
-      // Save salt and hash to vault
       await saveVaultSettings(bufferToBase64(salt), hash);
+      await setDbDecryptionState('encrypted');
 
-      // Initialize the encryption facade with the key
       initEncryptionFacade(key);
       
       setEncryptionKey(key);
       setIsInitialized(true);
       setIsAuthenticated(true);
 
-      // Run migration in background
-      runMigration(key);
+      runLegacyMigration(key);
     } finally {
       setIsLoading(false);
     }
-  }, [runMigration]);
+  }, [runLegacyMigration]);
 
   const login = useCallback(async (password: string): Promise<boolean> => {
     setIsLoading(true);
@@ -152,7 +212,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const key = await deriveKey(password, salt);
         initEncryptionFacade(key);
         setEncryptionKey(key);
-        setIsAuthenticated(true);
 
         const pending = await getPendingPasswordChange();
         if (pending) {
@@ -160,7 +219,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           console.warn('Detected interrupted password change. Visit Settings to resume or abandon.');
         }
 
-        runMigration(key);
+        await runLegacyMigration(key);
+        await performBulkDecrypt(key);
+
+        setIsAuthenticated(true);
         return true;
       }
 
@@ -172,10 +234,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           const key = await deriveKey(password, pendingSalt);
           initEncryptionFacade(key);
           setEncryptionKey(key);
-          setIsAuthenticated(true);
           setHasPendingPasswordChange(true);
           console.warn('Logged in with pending new password. Visit Settings to resume or abandon the password change.');
-          runMigration(key);
+          
+          await runLegacyMigration(key);
+          await performBulkDecrypt(key);
+
+          setIsAuthenticated(true);
           return true;
         }
       }
@@ -184,14 +249,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } finally {
       setIsLoading(false);
     }
-  }, [runMigration]);
+  }, [runLegacyMigration, performBulkDecrypt]);
 
-  // Logout
-  const logout = useCallback(() => {
+  const logout = useCallback(async () => {
+    if (encryptionKey) {
+      await performBulkEncrypt(encryptionKey);
+    }
     clearEncryptionFacade();
     setEncryptionKey(null);
     setIsAuthenticated(false);
-  }, []);
+  }, [encryptionKey, performBulkEncrypt]);
 
   return (
     <AuthContext.Provider
@@ -206,6 +273,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         isMigrating,
         migrationProgress,
         hasPendingPasswordChange,
+        bulkCryptoProgress,
+        bulkCryptoMode,
       }}
     >
       {children}

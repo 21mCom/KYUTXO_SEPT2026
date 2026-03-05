@@ -9,6 +9,7 @@ import { ThemeToggle } from "@/components/ThemeToggle";
 import { AuthProvider, useAuth } from "@/contexts/AuthContext";
 import { RecordPreviewProvider } from "@/contexts/RecordPreviewContext";
 import { LoginScreen } from "@/components/LoginScreen";
+import { DecryptionProgress } from "@/components/DecryptionProgress";
 import { Button } from "@/components/ui/button";
 import { LogOut } from "lucide-react";
 import { useAdaptiveLocation } from "@/lib/hashLocation";
@@ -150,7 +151,7 @@ function AuthenticatedApp() {
 }
 
 function AppContent() {
-  const { isAuthenticated, isInitialized, isLoading } = useAuth();
+  const { isAuthenticated, isInitialized, isLoading, bulkCryptoProgress, bulkCryptoMode } = useAuth();
 
   // Still loading vault status
   if (isInitialized === null || isLoading) {
@@ -169,7 +170,10 @@ function AppContent() {
     return <LoginScreen />;
   }
 
-  // Authenticated - show main app
+  if (bulkCryptoMode) {
+    return <DecryptionProgress progress={bulkCryptoProgress} mode={bulkCryptoMode} />;
+  }
+
   return <AuthenticatedApp />;
 }
 

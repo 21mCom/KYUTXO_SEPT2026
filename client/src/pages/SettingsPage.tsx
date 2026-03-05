@@ -43,27 +43,7 @@ import { db } from "@/lib/database";
 import { deriveKey, decrypt, base64ToBuffer, verifyPassword } from "@/lib/crypto";
 import { getVaultSettings } from "@/lib/vault";
 import { getEncryptionKey } from "@/lib/encryptionFacade";
-import { 
-  encryptRecord, 
-  encryptTag, 
-  encryptCategory, 
-  encryptAttachment,
-  encryptOwner,
-  encryptWalletName,
-  encryptSeedName,
-  encryptWalletSoftware,
-  encryptDerivationTemplate,
-  encryptEvidence,
-  encryptEvidenceAttachment,
-  decryptTag,
-  decryptCategory,
-  decryptOwner,
-  decryptWalletName,
-  decryptSeedName,
-  decryptWalletSoftware,
-  reEncryptAllData,
-  type ReEncryptionProgress,
-} from "@/lib/dbEncryption";
+import type { ReEncryptionProgress } from "@/lib/dbEncryption";
 import { generateSalt, hashPassword, bufferToBase64 } from "@/lib/crypto";
 import { saveVaultSettings } from "@/lib/vault";
 import { initEncryptionFacade } from "@/lib/encryptionFacade";
@@ -442,20 +422,11 @@ export default function SettingsPage() {
         return;
       }
 
-      const result = await reEncryptAllData(oldKey, newKey, (progress) => {
-        setChangePasswordProgress(progress);
-      });
-
       pending.dbReEncrypted = true;
       await savePendingPasswordChange(pending);
 
-      const totalReEncrypted = 
-        result.records + result.attachments + result.tags + result.categories +
-        result.owners + result.walletNames + result.seedNames + result.walletSoftware +
-        result.derivationTemplates + result.recordOrigins + result.evidence + result.evidenceAttachments +
-        attResult.processed + evResult.processed;
-
-      const totalFailed = result.failedItems + attResult.failed + evResult.failed;
+      const totalReEncrypted = attResult.processed + evResult.processed;
+      const totalFailed = attResult.failed + evResult.failed;
 
       if (totalFailed > 0) {
         toast({
@@ -585,23 +556,8 @@ export default function SettingsPage() {
           return;
         }
 
-        const dbResult = await reEncryptAllData(oldKey, newKey, (progress) => {
-          setChangePasswordProgress(progress);
-        });
-
         tracker.dbReEncrypted = true;
         await savePendingPasswordChange(tracker);
-
-        if (dbResult.failedItems > 0) {
-          toast({
-            variant: "destructive",
-            title: "Resume Incomplete",
-            description: `${dbResult.failedItems} database items failed re-encryption. The password change was NOT finalized. Check browser console and try again.`,
-          });
-          setChangePasswordProgress(null);
-          setIsChangingPassword(false);
-          return;
-        }
       }
 
       await finalizePendingPasswordChange();
@@ -885,9 +841,7 @@ export default function SettingsPage() {
             updatedAt: recordData.updatedAt || Date.now(),
           };
 
-          // Encrypt using proper encryption utility
-          const encrypted = await encryptRecord(newRecord as any, currentKey);
-          await db.records.add(encrypted);
+          await db.records.add({ ...newRecord, isEncrypted: false } as any);
           recordsAdded++;
           setRestoreProgress(50 + Math.floor((i / records.length) * 20));
         }
@@ -901,35 +855,14 @@ export default function SettingsPage() {
       let existingCategoryNames = new Set<string>();
       
       if (restoreMode === "merge") {
-        // Decrypt existing tags to get their names
         const existingTags = await db.tags.toArray();
         for (const tag of existingTags) {
-          if (tag.isEncrypted && tag.encryptedPayload) {
-            try {
-              const decrypted = await decryptTag(tag, currentKey);
-              existingTagNames.add(decrypted.name);
-            } catch {
-              // Keep the placeholder if decryption fails
-              existingTagNames.add(tag.name);
-            }
-          } else {
-            existingTagNames.add(tag.name);
-          }
+          existingTagNames.add(tag.name);
         }
         
-        // Decrypt existing categories to get their names
         const existingCategories = await db.categories.toArray();
         for (const cat of existingCategories) {
-          if (cat.isEncrypted && cat.encryptedPayload) {
-            try {
-              const decrypted = await decryptCategory(cat, currentKey);
-              existingCategoryNames.add(decrypted.name);
-            } catch {
-              existingCategoryNames.add(cat.name);
-            }
-          } else {
-            existingCategoryNames.add(cat.name);
-          }
+          existingCategoryNames.add(cat.name);
         }
       }
 
@@ -953,8 +886,7 @@ export default function SettingsPage() {
             createdAt: tagData.createdAt || Date.now(),
           };
           
-          const encrypted = await encryptTag(newTag as any, currentKey);
-          await db.tags.add(encrypted);
+          await db.tags.add({ ...newTag, isEncrypted: false } as any);
           tagsAdded++;
         }
       }
@@ -975,8 +907,7 @@ export default function SettingsPage() {
             createdAt: catData.createdAt || Date.now(),
           };
           
-          const encrypted = await encryptCategory(newCategory as any, currentKey);
-          await db.categories.add(encrypted);
+          await db.categories.add({ ...newCategory, isEncrypted: false } as any);
           categoriesAdded++;
         }
       }
@@ -1016,8 +947,7 @@ export default function SettingsPage() {
             createdAt: attData.createdAt || Date.now(),
           };
           
-          const encrypted = await encryptAttachment(newAttachment as any, currentKey);
-          await db.attachments.add(encrypted);
+          await db.attachments.add({ ...newAttachment, isEncrypted: false } as any);
           attachmentsAdded++;
         }
       }
@@ -1113,58 +1043,22 @@ export default function SettingsPage() {
       if (restoreMode === "merge") {
         const existingOwners = await db.owners.toArray();
         for (const owner of existingOwners) {
-          if (owner.isEncrypted && owner.encryptedPayload) {
-            try {
-              const decrypted = await decryptOwner(owner, currentKey);
-              existingOwnerNames.add(decrypted.name);
-            } catch {
-              existingOwnerNames.add(owner.name);
-            }
-          } else {
-            existingOwnerNames.add(owner.name);
-          }
+          existingOwnerNames.add(owner.name);
         }
         
         const existingWalletNames = await db.walletNames.toArray();
         for (const wn of existingWalletNames) {
-          if (wn.isEncrypted && wn.encryptedPayload) {
-            try {
-              const decrypted = await decryptWalletName(wn, currentKey);
-              existingWalletNameNames.add(decrypted.name);
-            } catch {
-              existingWalletNameNames.add(wn.name);
-            }
-          } else {
-            existingWalletNameNames.add(wn.name);
-          }
+          existingWalletNameNames.add(wn.name);
         }
         
         const existingSeedNames = await db.seedNames.toArray();
         for (const sn of existingSeedNames) {
-          if (sn.isEncrypted && sn.encryptedPayload) {
-            try {
-              const decrypted = await decryptSeedName(sn, currentKey);
-              existingSeedNameNames.add(decrypted.name);
-            } catch {
-              existingSeedNameNames.add(sn.name);
-            }
-          } else {
-            existingSeedNameNames.add(sn.name);
-          }
+          existingSeedNameNames.add(sn.name);
         }
         
         const existingWalletSoftware = await db.walletSoftware.toArray();
         for (const ws of existingWalletSoftware) {
-          if (ws.isEncrypted && ws.encryptedPayload) {
-            try {
-              const decrypted = await decryptWalletSoftware(ws, currentKey);
-              existingWalletSoftwareNames.add(decrypted.name);
-            } catch {
-              existingWalletSoftwareNames.add(ws.name);
-            }
-          } else {
-            existingWalletSoftwareNames.add(ws.name);
-          }
+          existingWalletSoftwareNames.add(ws.name);
         }
       }
 
@@ -1183,8 +1077,7 @@ export default function SettingsPage() {
             createdAt: ownerData.createdAt || Date.now(),
           };
           
-          const encrypted = await encryptOwner(newOwner as any, currentKey);
-          await db.owners.add(encrypted);
+          await db.owners.add({ ...newOwner, isEncrypted: false } as any);
           vocabularyAdded++;
         }
       }
@@ -1204,8 +1097,7 @@ export default function SettingsPage() {
             createdAt: wnData.createdAt || Date.now(),
           };
           
-          const encrypted = await encryptWalletName(newWalletName as any, currentKey);
-          await db.walletNames.add(encrypted);
+          await db.walletNames.add({ ...newWalletName, isEncrypted: false } as any);
           vocabularyAdded++;
         }
       }
@@ -1225,8 +1117,7 @@ export default function SettingsPage() {
             createdAt: snData.createdAt || Date.now(),
           };
           
-          const encrypted = await encryptSeedName(newSeedName as any, currentKey);
-          await db.seedNames.add(encrypted);
+          await db.seedNames.add({ ...newSeedName, isEncrypted: false } as any);
           vocabularyAdded++;
         }
       }
@@ -1246,8 +1137,7 @@ export default function SettingsPage() {
             createdAt: wsData.createdAt || Date.now(),
           };
           
-          const encrypted = await encryptWalletSoftware(newWalletSoftware as any, currentKey);
-          await db.walletSoftware.add(encrypted);
+          await db.walletSoftware.add({ ...newWalletSoftware, isEncrypted: false } as any);
           vocabularyAdded++;
         }
       }
@@ -1291,8 +1181,7 @@ export default function SettingsPage() {
             updatedAt: templateData.updatedAt || Date.now(),
           };
           
-          const encrypted = await encryptDerivationTemplate(newTemplate as any, currentKey);
-          await db.derivationTemplates.add(encrypted);
+          await db.derivationTemplates.add({ ...newTemplate, isEncrypted: false } as any);
           templatesAdded++;
         }
       }
@@ -1323,8 +1212,7 @@ export default function SettingsPage() {
             updatedAt: evData.updatedAt || Date.now(),
           };
           
-          const encrypted = await encryptEvidence(newEvidence as any, currentKey);
-          await db.evidence.add(encrypted);
+          await db.evidence.add({ ...newEvidence, isEncrypted: false } as any);
           evidenceAdded++;
         }
       }
@@ -1344,8 +1232,7 @@ export default function SettingsPage() {
             isEncrypted: eaData.isEncrypted ?? true,
           };
           
-          const encrypted = await encryptEvidenceAttachment(newEvidenceAttachment as any, currentKey);
-          await db.evidenceAttachments.add(encrypted);
+          await db.evidenceAttachments.add({ ...newEvidenceAttachment, isEncrypted: false } as any);
           evidenceAttachmentsAdded++;
         }
       }
@@ -2169,7 +2056,7 @@ export default function SettingsPage() {
                       </span>
                     )}
                     {pendingChange.dbReEncrypted && (
-                      <span className="block">Database records already re-encrypted.</span>
+                      <span className="block">File re-encryption complete.</span>
                     )}
                   </p>
                 </div>
@@ -2179,8 +2066,8 @@ export default function SettingsPage() {
             {!pendingChange && (
               <div className="p-4 bg-muted rounded-lg border">
                 <p className="text-sm text-muted-foreground">
-                  Changing your password will re-encrypt all your data with the new password. 
-                  This may take a while depending on how much data you have stored. 
+                  Changing your password will re-encrypt your file attachments with the new password. 
+                  Database records will be encrypted with the new key when you lock your vault. 
                   You can safely cancel and resume later.
                 </p>
               </div>
