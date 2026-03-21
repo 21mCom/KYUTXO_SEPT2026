@@ -70,7 +70,9 @@ KYUTXO employs a security-focused architecture with all data and attachments sec
 
 ## Git Privacy Cleanup (Action Required)
 
-**Status:** 53 files in `attached_assets/` are tracked in git history despite being listed in `.gitignore`. These include screenshots (potentially showing addresses/balances), AI build prompts, nginx config dumps, and a security audit prompt describing encryption internals. They are pushed to the GitHub remote (`21mCom/KYUTXO_PORTABLE`).
+**Status:** 53 files in `attached_assets/` are tracked in git history despite being listed in `.gitignore`. These include screenshots (potentially showing addresses/balances), AI build prompts, nginx config dumps, and a security audit prompt describing encryption internals. They exist in the git history of the current GitHub remote (`21mCom/21mCom-KYUTXO-PORTABLE`).
+
+**Note:** The old repo `21mCom/KYUTXO_PORTABLE` has been deleted. All active development continues in `21mCom/21mCom-KYUTXO-PORTABLE`.
 
 **Step 1 — Remove from current tracking (run in your local clone):**
 ```bash
@@ -86,14 +88,14 @@ This stops the files from appearing in the current tree but they remain in git h
 # pip install git-filter-repo
 
 # Clone a fresh copy to work on:
-git clone https://github.com/21mCom/KYUTXO_PORTABLE.git kyutxo-cleanup
+git clone https://github.com/21mCom/21mCom-KYUTXO-PORTABLE.git kyutxo-cleanup
 cd kyutxo-cleanup
 
 # Remove attached_assets/ from all history:
 git filter-repo --path attached_assets/ --invert-paths
 
 # Force push the rewritten history:
-git remote add origin https://github.com/21mCom/KYUTXO_PORTABLE.git
+git remote add origin https://github.com/21mCom/21mCom-KYUTXO-PORTABLE.git
 git push origin --force --all
 git push origin --force --tags
 ```
