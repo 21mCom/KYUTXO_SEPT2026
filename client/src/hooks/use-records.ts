@@ -1,6 +1,6 @@
 import { useLiveQuery } from 'dexie-react-hooks';
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { db, type Record, type RecordOriginType, subscribeToDbChanges } from '@/lib/database';
+import { db, type Record, type RecordOriginType } from '@/lib/database';
 import { uploadAttachment, deleteAttachment } from '@/lib/attachments';
 import { 
   createRecord as facadeCreateRecord,
@@ -8,12 +8,16 @@ import {
   deleteRecord as facadeDeleteRecord,
   createRecordOrigin,
 } from '@/lib/dataFacade';
+import { useDbChangeSignal } from '@/hooks/use-db-change-signal';
+
+const RECORDS_TABLES = ['records'];
+const DEBOUNCE_MS = 500;
 
 export function useRecords() {
   const [records, setRecords] = useState<Record[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const loadVersionRef = useRef(0);
-  const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const dbChangeSignal = useDbChangeSignal(RECORDS_TABLES, DEBOUNCE_MS);
 
   const loadRecords = useCallback(async () => {
     const version = ++loadVersionRef.current;
@@ -36,21 +40,7 @@ export function useRecords() {
 
   useEffect(() => {
     loadRecords();
-
-    const unsubscribe = subscribeToDbChanges((tables) => {
-      if (tables.includes('records') || tables.length === 0) {
-        if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
-        debounceTimerRef.current = setTimeout(() => {
-          loadRecords();
-        }, 500);
-      }
-    });
-
-    return () => {
-      unsubscribe();
-      if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
-    };
-  }, [loadRecords]);
+  }, [loadRecords, dbChangeSignal]);
 
   return {
     records,
@@ -71,7 +61,7 @@ export function useFilteredRecords(
   const [blockchainDiscoveredCount, setBlockchainDiscoveredCount] = useState(0);
   const [totalCount, setTotalCount] = useState(0);
   const loadVersionRef = useRef(0);
-  const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const dbChangeSignal = useDbChangeSignal(RECORDS_TABLES, DEBOUNCE_MS);
 
   const offset = options?.offset;
   const limit = options?.limit;
@@ -174,21 +164,7 @@ export function useFilteredRecords(
 
   useEffect(() => {
     loadRecords(includeBlockchainDiscovered, offset, limit);
-
-    const unsubscribe = subscribeToDbChanges((tables) => {
-      if (tables.includes('records') || tables.length === 0) {
-        if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
-        debounceTimerRef.current = setTimeout(() => {
-          loadRecords(includeBlockchainDiscovered, offset, limit);
-        }, 500);
-      }
-    });
-
-    return () => {
-      unsubscribe();
-      if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
-    };
-  }, [includeBlockchainDiscovered, offset, limit, loadRecords]);
+  }, [includeBlockchainDiscovered, offset, limit, loadRecords, dbChangeSignal]);
 
   return {
     records,
