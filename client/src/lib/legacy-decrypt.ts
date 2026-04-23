@@ -15,61 +15,110 @@ export interface LegacyDecryptProgress {
 export interface LegacyDecryptResult {
   totalDecrypted: number;
   totalFailed: number;
+  tableErrors: string[];
 }
 
 interface TableConfig {
   name: string;
   table: any;
+  sensitiveFields: string[];
 }
 
 function getTableConfigs(): TableConfig[] {
   return [
-    { name: 'Records', table: db.records },
-    { name: 'Attachments', table: db.attachments },
-    { name: 'Tags', table: db.tags },
-    { name: 'Categories', table: db.categories },
-    { name: 'Owners', table: db.owners },
-    { name: 'Wallet Names', table: db.walletNames },
-    { name: 'Seed Names', table: db.seedNames },
-    { name: 'Wallet Software', table: db.walletSoftware },
-    { name: 'Record Origins', table: db.recordOrigins },
-    { name: 'Transaction Participants', table: db.transactionParticipants },
-    { name: 'Derivation Templates', table: db.derivationTemplates },
-    { name: 'UTXO Lineage', table: db.utxoLineage },
-    { name: 'Custody Segments', table: db.custodySegments },
-    { name: 'Lineage Snapshots', table: db.lineageSnapshots },
-    { name: 'Evidence', table: db.evidence },
-    { name: 'Evidence Attachments', table: db.evidenceAttachments },
+    {
+      name: 'Records',
+      table: db.records,
+      sensitiveFields: ['inputString', 'label', 'notes', 'seedName', 'walletSoftware', 'owner', 'walletName', 'source', 'customFields', 'costBasisUsd'],
+    },
+    {
+      name: 'Attachments',
+      table: db.attachments,
+      sensitiveFields: ['filename', 'objectStoragePath'],
+    },
+    {
+      name: 'Tags',
+      table: db.tags,
+      sensitiveFields: ['name'],
+    },
+    {
+      name: 'Categories',
+      table: db.categories,
+      sensitiveFields: ['name'],
+    },
+    {
+      name: 'Owners',
+      table: db.owners,
+      sensitiveFields: ['name'],
+    },
+    {
+      name: 'Wallet Names',
+      table: db.walletNames,
+      sensitiveFields: ['name'],
+    },
+    {
+      name: 'Seed Names',
+      table: db.seedNames,
+      sensitiveFields: ['name'],
+    },
+    {
+      name: 'Wallet Software',
+      table: db.walletSoftware,
+      sensitiveFields: ['name'],
+    },
+    {
+      name: 'Record Origins',
+      table: db.recordOrigins,
+      sensitiveFields: ['label', 'notes', 'seedName', 'walletSoftware', 'owner', 'walletName', 'source', 'xpub', 'derivationPath'],
+    },
+    {
+      name: 'Transaction Participants',
+      table: db.transactionParticipants,
+      sensitiveFields: ['address', 'amount', 'prevTxid', 'prevVout', 'scriptType'],
+    },
+    {
+      name: 'Derivation Templates',
+      table: db.derivationTemplates,
+      sensitiveFields: ['xpub', 'notes', 'owner', 'walletName', 'seedName'],
+    },
+    {
+      name: 'UTXO Lineage',
+      table: db.utxoLineage,
+      sensitiveFields: [],
+    },
+    {
+      name: 'Custody Segments',
+      table: db.custodySegments,
+      sensitiveFields: [],
+    },
+    {
+      name: 'Lineage Snapshots',
+      table: db.lineageSnapshots,
+      sensitiveFields: [],
+    },
+    {
+      name: 'Evidence',
+      table: db.evidence,
+      sensitiveFields: ['title', 'notes', 'partiesInvolved', 'source'],
+    },
+    {
+      name: 'Evidence Attachments',
+      table: db.evidenceAttachments,
+      sensitiveFields: ['filename', 'objectStoragePath'],
+    },
   ];
 }
 
 export async function hasLegacyEncryptedRecords(): Promise<boolean> {
   const configs = getTableConfigs();
   for (const config of configs) {
-    try {
-      let found = false;
-      await config.table.each((item: any) => {
-        if (item._legacyEncryptedPayload) {
-          found = true;
-          return false;
-        }
-      });
-      if (found) return true;
-    } catch {
-      continue;
-    }
+    const firstLegacy = await config.table
+      .filter((item: any) => !!item._legacyEncryptedPayload)
+      .limit(1)
+      .toArray();
+    if (firstLegacy.length > 0) return true;
   }
   return false;
-}
-
-async function collectLegacyIds(table: any): Promise<number[]> {
-  const ids: number[] = [];
-  await table.each((item: any) => {
-    if (item._legacyEncryptedPayload) {
-      ids.push(item.id);
-    }
-  });
-  return ids;
 }
 
 export async function decryptLegacyRecords(
@@ -79,46 +128,80 @@ export async function decryptLegacyRecords(
   const configs = getTableConfigs();
   let totalDecrypted = 0;
   let totalFailed = 0;
+  const tableErrors: string[] = [];
 
   for (let tableIdx = 0; tableIdx < configs.length; tableIdx++) {
     const config = configs[tableIdx];
 
-    let legacyIds: number[];
-    try {
-      legacyIds = await collectLegacyIds(config.table);
-    } catch {
-      continue;
-    }
+    let lastProcessedId = 0;
+    let tableDecrypted = 0;
+    let tableFailed = 0;
+    let hasMore = true;
 
-    if (legacyIds.length === 0) continue;
-
-    const tableTotal = legacyIds.length;
-
-    for (let i = 0; i < legacyIds.length; i += BATCH_SIZE) {
-      const batchIds = legacyIds.slice(i, i + BATCH_SIZE);
-      const items = await config.table.bulkGet(batchIds);
-      const updatedBatch: any[] = [];
-
-      for (const item of items) {
-        if (!item || !item._legacyEncryptedPayload) continue;
-
-        try {
-          const decryptedJson = await decrypt(item._legacyEncryptedPayload, key);
-          const sensitiveData = JSON.parse(decryptedJson);
-
-          const restored = { ...item, ...sensitiveData };
-          delete restored._legacyEncryptedPayload;
-          delete restored.isEncrypted;
-          delete restored.encryptedPayload;
-          updatedBatch.push(restored);
-        } catch {
-          totalFailed++;
-        }
+    while (hasMore) {
+      let chunk: any[];
+      try {
+        chunk = await config.table
+          .where('id')
+          .above(lastProcessedId)
+          .limit(BATCH_SIZE)
+          .toArray();
+      } catch (err) {
+        const msg = `Failed to read ${config.name}: ${err instanceof Error ? err.message : String(err)}`;
+        console.error(`[LegacyDecrypt] ${msg}`);
+        tableErrors.push(msg);
+        break;
       }
 
-      if (updatedBatch.length > 0) {
-        await config.table.bulkPut(updatedBatch);
-        totalDecrypted += updatedBatch.length;
+      if (chunk.length === 0) {
+        hasMore = false;
+        break;
+      }
+
+      lastProcessedId = chunk[chunk.length - 1].id;
+
+      const legacyItems = chunk.filter((item: any) => !!item._legacyEncryptedPayload);
+
+      if (legacyItems.length > 0) {
+        const updatedBatch: any[] = [];
+
+        for (const item of legacyItems) {
+          try {
+            const decryptedJson = await decrypt(item._legacyEncryptedPayload, key);
+            const sensitiveData = JSON.parse(decryptedJson);
+
+            const restored = { ...item };
+
+            for (const field of config.sensitiveFields) {
+              if (field in sensitiveData) {
+                restored[field] = sensitiveData[field];
+              }
+            }
+
+            if (config.sensitiveFields.length === 0) {
+              Object.assign(restored, sensitiveData);
+            }
+
+            delete restored._legacyEncryptedPayload;
+            delete restored.isEncrypted;
+            delete restored.encryptedPayload;
+            updatedBatch.push(restored);
+          } catch {
+            tableFailed++;
+          }
+        }
+
+        if (updatedBatch.length > 0) {
+          try {
+            await config.table.bulkPut(updatedBatch);
+            tableDecrypted += updatedBatch.length;
+          } catch (err) {
+            const msg = `Failed to write ${config.name}: ${err instanceof Error ? err.message : String(err)}`;
+            console.error(`[LegacyDecrypt] ${msg}`);
+            tableErrors.push(msg);
+            tableFailed += updatedBatch.length;
+          }
+        }
       }
 
       if (onProgress) {
@@ -126,15 +209,22 @@ export async function decryptLegacyRecords(
           tableName: config.name,
           tableIndex: tableIdx,
           tableCount: configs.length,
-          current: Math.min(i + BATCH_SIZE, tableTotal),
-          total: tableTotal,
-          failed: totalFailed,
+          current: tableDecrypted + tableFailed,
+          total: tableDecrypted + tableFailed,
+          failed: tableFailed,
         });
+      }
+
+      if (chunk.length < BATCH_SIZE) {
+        hasMore = false;
       }
 
       await new Promise(r => setTimeout(r, 0));
     }
+
+    totalDecrypted += tableDecrypted;
+    totalFailed += tableFailed;
   }
 
-  return { totalDecrypted, totalFailed };
+  return { totalDecrypted, totalFailed, tableErrors };
 }

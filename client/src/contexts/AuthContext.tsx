@@ -27,7 +27,7 @@ interface AuthContextType {
   logout: () => void;
   isLoading: boolean;
   legacyMigrationProgress: LegacyDecryptProgress | null;
-  legacyMigrationResult: { totalDecrypted: number; totalFailed: number } | null;
+  legacyMigrationResult: { totalDecrypted: number; totalFailed: number; unexpectedError?: boolean } | null;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -37,7 +37,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [legacyMigrationProgress, setLegacyMigrationProgress] = useState<LegacyDecryptProgress | null>(null);
-  const [legacyMigrationResult, setLegacyMigrationResult] = useState<{ totalDecrypted: number; totalFailed: number } | null>(null);
+  const [legacyMigrationResult, setLegacyMigrationResult] = useState<{ totalDecrypted: number; totalFailed: number; unexpectedError?: boolean } | null>(null);
 
   useEffect(() => {
     const checkVault = async () => {
@@ -87,16 +87,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setLegacyMigrationProgress(progress);
       });
 
-      console.log(`[LegacyDecrypt] Complete: ${result.totalDecrypted} decrypted, ${result.totalFailed} failed`);
+      console.log(`[LegacyDecrypt] Complete: ${result.totalDecrypted} decrypted, ${result.totalFailed} failed, ${result.tableErrors.length} table errors`);
 
-      if (result.totalFailed === 0) {
+      if (result.totalFailed === 0 && result.tableErrors.length === 0) {
         await setLegacyDecryptComplete(true);
       }
 
-      setLegacyMigrationResult({ totalDecrypted: result.totalDecrypted, totalFailed: result.totalFailed });
+      const hasIssues = result.totalFailed > 0 || result.tableErrors.length > 0;
+      if (hasIssues) {
+        setLegacyMigrationResult({
+          totalDecrypted: result.totalDecrypted,
+          totalFailed: result.totalFailed + result.tableErrors.length,
+        });
+      }
     } catch (error) {
       console.error('[LegacyDecrypt] Migration failed:', error);
-      setLegacyMigrationResult({ totalDecrypted: 0, totalFailed: -1 });
+      setLegacyMigrationResult({ totalDecrypted: 0, totalFailed: 0, unexpectedError: true });
     } finally {
       setLegacyMigrationProgress(null);
     }

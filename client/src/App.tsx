@@ -165,20 +165,23 @@ function LegacyMigrationOverlay() {
   }
 
   if (legacyMigrationResult) {
-    if (legacyMigrationResult.totalFailed > 0) {
+    const showOverlay = legacyMigrationResult.totalFailed > 0 || legacyMigrationResult.unexpectedError;
+    if (showOverlay) {
       return (
         <div className="fixed inset-0 z-[9999] bg-background/95 flex items-center justify-center" data-testid="legacy-migration-overlay">
           <div className="text-center max-w-md space-y-4 p-6">
             <div className="text-2xl font-semibold text-foreground">Data Migration Complete</div>
-            {legacyMigrationResult.totalFailed === -1 ? (
+            {legacyMigrationResult.unexpectedError ? (
               <p className="text-destructive">
                 Migration encountered an unexpected error. Your data is safe — it will be retried on your next login.
               </p>
             ) : (
               <>
-                <p className="text-muted-foreground">
-                  Successfully restored {legacyMigrationResult.totalDecrypted} records.
-                </p>
+                {legacyMigrationResult.totalDecrypted > 0 && (
+                  <p className="text-muted-foreground">
+                    Successfully restored {legacyMigrationResult.totalDecrypted} records.
+                  </p>
+                )}
                 <p className="text-destructive">
                   {legacyMigrationResult.totalFailed} records could not be decrypted and were left unchanged.
                   They will be retried on your next login.
