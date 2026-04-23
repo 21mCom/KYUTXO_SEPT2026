@@ -530,9 +530,9 @@ Files:
 - derivation_templates.csv.encrypted: Encrypted derivation templates
 - attachments/: Folder containing ${attachmentFiles.length} attachment file(s)
 
-Note: Attachment files are included in this backup and are already 
-encrypted at rest (AES-256-GCM). They will be restored automatically 
-when you import this backup.
+Note: Attachment files are included in this backup and stored unencrypted. 
+They will be restored automatically when you import this backup. 
+Keep this backup in a secure location.
 `);
 
       } else {
@@ -566,9 +566,9 @@ Files:
 - derivation_templates.csv: Derivation templates
 - attachments/: Folder containing ${attachmentFiles.length} attachment file(s)
 
-Note: Attachment files are included in this backup and are already 
-encrypted at rest (AES-256-GCM). They will be restored automatically 
-when you import this backup.
+Note: Attachment files are included in this backup and stored unencrypted.
+They will be restored automatically when you import this backup.
+Keep this backup in a secure location.
 `);
       }
 
@@ -830,8 +830,8 @@ when you import this backup.
                 in the ZIP file and automatically restored when you import this backup.
               </p>
               <p className="text-xs text-muted-foreground">
-                Attachment files are encrypted at rest with AES-256-GCM and can only be 
-                read by the application with your password.
+                Attachment files are stored unencrypted. Use the ZIP password protection option 
+                above to secure your exported backup.
               </p>
             </CardContent>
           </Card>
