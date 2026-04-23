@@ -113,21 +113,34 @@ export class KYUTXODatabase extends Dexie {
       let totalEncrypted = 0;
       for (const tableName of tablesToClean) {
         let tableEncrypted = 0;
-        await tx.table(tableName).toCollection().modify((item: any) => {
-          if (item.isEncrypted && item.encryptedPayload) {
+        console.log(`[v27 migration] Scanning ${tableName}...`);
+        let tableFlaggedNoPayload = 0;
+        await tx.table(tableName).toCollection().modify((item: Record<string, unknown>) => {
+          if (item.isEncrypted !== true) return;
+          if (item.encryptedPayload) {
             tableEncrypted++;
             item._legacyEncryptedPayload = item.encryptedPayload;
+          } else {
+            tableFlaggedNoPayload++;
           }
           delete item.isEncrypted;
           delete item.encryptedPayload;
         });
         if (tableEncrypted > 0) {
           totalEncrypted += tableEncrypted;
-          console.warn(`[v27 migration] ${tableName}: ${tableEncrypted} records had encrypted data preserved in _legacyEncryptedPayload`);
+          console.warn(`[v27 migration] ${tableName}: ${tableEncrypted} encrypted records preserved in _legacyEncryptedPayload`);
+        }
+        if (tableFlaggedNoPayload > 0) {
+          console.warn(`[v27 migration] ${tableName}: ${tableFlaggedNoPayload} records flagged encrypted but had no payload (cleaned)`);
+        }
+        if (tableEncrypted === 0 && tableFlaggedNoPayload === 0) {
+          console.log(`[v27 migration] ${tableName}: no encrypted records`);
         }
       }
       if (totalEncrypted > 0) {
         console.warn(`[v27 migration] Total: ${totalEncrypted} encrypted records found. To recover: restore from backup with the previous app version, unlock the vault to decrypt, then upgrade.`);
+      } else {
+        console.log('[v27 migration] Complete: no encrypted records found in any table');
       }
     });
 
@@ -357,8 +370,7 @@ export class KYUTXODatabase extends Dexie {
       evidence: '++id, documentType, originalDate, *tags, importance, createdAt, updatedAt, isEncrypted',
       evidenceAttachments: '++id, evidenceId, createdAt, isEncrypted'
     }).upgrade(async tx => {
-      // Set defaults on existing blockchain transactions for the new index
-      // hasOpReturn defaults to false for existing records (requires resync to detect OP_RETURN)
+      console.log('[v19 migration] Adding OP_RETURN and size defaults to blockchainTransactions...');
       await tx.table('blockchainTransactions').toCollection().modify(record => {
         if (record.hasOpReturn === undefined) {
           record.hasOpReturn = false;
@@ -367,16 +379,16 @@ export class KYUTXODatabase extends Dexie {
         if (record.size === undefined) record.size = 0;
         if (record.weight === undefined) record.weight = 0;
         if (record.vsize === undefined) {
-          // Compute vsize from weight if available, otherwise use size
           record.vsize = record.weight > 0 ? Math.ceil(record.weight / 4) : record.size;
         }
       });
-      // Set scriptType default on existing transaction participants
+      console.log('[v19 migration] Adding scriptType defaults to transactionParticipants...');
       await tx.table('transactionParticipants').toCollection().modify(record => {
         if (record.scriptType === undefined) {
           record.scriptType = 'unknown';
         }
       });
+      console.log('[v19 migration] Complete');
     });
     
     // Version 18 adds Evidence and EvidenceAttachment tables for general document storage
