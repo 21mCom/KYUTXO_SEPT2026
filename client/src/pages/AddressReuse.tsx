@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import { format } from "date-fns";
 import { db, Record, AddressImportance, subscribeToDbChanges } from "@/lib/database";
+import { useAsyncMemo, checkAbort } from "@/hooks/use-async-memo";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -102,25 +103,15 @@ export default function AddressReuse() {
   const { seedNames } = useSeedNames();
   const { walletSoftware } = useWalletSoftware();
   
-  // Processing state for deferred computation
-  const [isProcessing, setIsProcessing] = useState(true);
-  const [reusedAddresses, setReusedAddresses] = useState<AddressReuseInfo[]>([]);
-  const [processedRecords, setProcessedRecords] = useState<Record[]>([]);
-  const [addressToRecord, setAddressToRecord] = useState<Map<string, Record>>(new Map());
-  const processingRef = useRef(0);
-  
   // Toggle for including blockchain-discovered addresses
   const [includeBlockchainDiscovered, setIncludeBlockchainDiscovered] = useState(false);
-  const [totalBlockchainDiscovered, setTotalBlockchainDiscovered] = useState(0);
   
   // Track database changes to trigger reloads
   const changeVersionRef = useRef(0);
   const [dbChangeSignal, setDbChangeSignal] = useState(0);
   
   useEffect(() => {
-    // Subscribe to database changes
     const unsubscribe = subscribeToDbChanges((tables) => {
-      // Check if any change affects records or transactionParticipants
       if (tables.includes('records') || tables.includes('transactionParticipants') || tables.length === 0) {
         changeVersionRef.current += 1;
         setDbChangeSignal(changeVersionRef.current);
@@ -130,184 +121,153 @@ export default function AddressReuse() {
     return unsubscribe;
   }, []);
 
-  // Load and process data based on filter settings
-  useEffect(() => {
-    const loadAndProcess = async () => {
-      processingRef.current += 1;
-      const thisProcessingId = processingRef.current;
-      setIsProcessing(true);
-      
-      try {
-        // Count blockchain-discovered addresses for toggle label
-        const blockchainCount = await db.records
-          .where('addressImportance')
-          .anyOf(['blockchain-discovered', 'pending-review'])
-          .and(r => r.type === 'address')
-          .count();
-        setTotalBlockchainDiscovered(blockchainCount);
-        
-        // Step 1: Load address records based on filter setting
-        // Also include records with null/undefined addressImportance (legacy data)
-        const tiersToLoad = includeBlockchainDiscovered ? ALL_TIERS : USER_CURATED_TIERS;
-        
-        // First get indexed records
-        let curatedRecords = await db.records
-          .where('addressImportance')
-          .anyOf(tiersToLoad)
-          .and(r => r.type === 'address')
-          .toArray();
-        
-        // Also include legacy records with null addressImportance (treat as manual)
-        const legacyRecords = await db.records
-          .filter(r => r.type === 'address' && !r.addressImportance)
-          .toArray();
-        curatedRecords = [...curatedRecords, ...legacyRecords];
-        
-        if (thisProcessingId !== processingRef.current) return;
-        
-        setProcessedRecords(curatedRecords);
-        
-        // Build address map from records
-        const addrToRecord = new Map<string, Record>();
-        const addressSet = new Set<string>();
-        curatedRecords.forEach(record => {
-          if (record.inputString) {
-            addrToRecord.set(record.inputString, record);
-            addressSet.add(record.inputString);
-          }
-        });
-        setAddressToRecord(addrToRecord);
-        
-        if (addressSet.size === 0) {
-          setReusedAddresses([]);
-          setIsProcessing(false);
-          return;
-        }
-        
-        // Step 2: Load only participants for addresses we care about
-        // Use indexed query on address field
-        const addressArray = Array.from(addressSet);
-        const relevantParticipants = await getParticipantsByAddresses(addressArray);
-        
-        if (thisProcessingId !== processingRef.current) return;
-        
-        // Step 3: Get unique txids from relevant participants and load only those transactions
-        const relevantTxids = new Set<string>();
-        relevantParticipants.forEach(p => relevantTxids.add(p.txid));
-        
-        const txidToBlockTime = new Map<string, number>();
-        if (relevantTxids.size > 0) {
-          // Batch load only the transactions we need using indexed query
-          const transactions = await db.blockchainTransactions
-            .where('txid')
-            .anyOf(Array.from(relevantTxids))
-            .toArray();
-          transactions.forEach(tx => {
-            txidToBlockTime.set(tx.txid, tx.blockTime);
-          });
-        }
-        
-        if (thisProcessingId !== processingRef.current) return;
-        
-        // Step 4: Build address map tracking input/output txids (only for our addresses)
-        const addressMap = new Map<string, {
-          inputTxids: Set<string>;
-          outputTxids: Set<string>;
-        }>();
+  const initialData = { reusedAddresses: [] as AddressReuseInfo[], totalBlockchainDiscovered: 0 };
 
-        relevantParticipants.forEach(p => {
-          if (!addressMap.has(p.address)) {
-            addressMap.set(p.address, { inputTxids: new Set(), outputTxids: new Set() });
-          }
-          const entry = addressMap.get(p.address)!;
-          if (p.role === 'input') {
-            entry.inputTxids.add(p.txid);
-          } else {
-            entry.outputTxids.add(p.txid);
-          }
-        });
+  const { value: computedData, isComputing: isProcessing } = useAsyncMemo(async (signal) => {
+    try {
+    const blockchainCount = await db.records
+      .where('addressImportance')
+      .anyOf(['blockchain-discovered', 'pending-review'])
+      .and(r => r.type === 'address')
+      .count();
+    checkAbort(signal);
 
-        const result: AddressReuseInfo[] = [];
+    const tiersToLoad = includeBlockchainDiscovered ? ALL_TIERS : USER_CURATED_TIERS;
 
-        addressMap.forEach((data, address) => {
-          // Find transactions where address appears as BOTH input and output (change-to-self)
-          const selfChangeTxids: string[] = [];
-          data.inputTxids.forEach(txid => {
-            if (data.outputTxids.has(txid)) {
-              selfChangeTxids.push(txid);
-            }
-          });
-          
-          const hasSelfChange = selfChangeTxids.length > 0;
-          const hasMultiReceive = data.outputTxids.size >= 2;
-          
-          // Only flag as reuse if: received 2+ times OR has change-to-self
-          if (!hasMultiReceive && !hasSelfChange) {
-            return; // Not reuse - skip this address
-          }
-          
-          // Determine reuse reason
-          let reuseReason: ReuseReason;
-          if (hasMultiReceive && hasSelfChange) {
-            reuseReason = 'both';
-          } else if (hasMultiReceive) {
-            reuseReason = 'multi-receive';
-          } else {
-            reuseReason = 'change-to-self';
-          }
+    let curatedRecords = await db.records
+      .where('addressImportance')
+      .anyOf(tiersToLoad)
+      .and(r => r.type === 'address')
+      .toArray();
 
-          const allTxids = new Set([...Array.from(data.inputTxids), ...Array.from(data.outputTxids)]);
-          const txList: AddressReuseInfo['transactions'] = [];
-          
-          allTxids.forEach(txid => {
-            const blockTime = txidToBlockTime.get(txid) || 0;
-            const isInput = data.inputTxids.has(txid);
-            const isOutput = data.outputTxids.has(txid);
-            const isSelfChange = isInput && isOutput;
-            
-            if (isOutput) {
-              txList.push({ txid, blockTime, role: 'output', isSelfChange });
-            }
-            if (isInput) {
-              txList.push({ txid, blockTime, role: 'input', isSelfChange });
-            }
-          });
+    const legacyRecords = await db.records
+      .filter(r => r.type === 'address' && !r.addressImportance)
+      .toArray();
+    curatedRecords = [...curatedRecords, ...legacyRecords];
+    checkAbort(signal);
 
-          txList.sort((a, b) => b.blockTime - a.blockTime);
-
-          result.push({
-            address,
-            totalCount: allTxids.size,
-            inputCount: data.inputTxids.size,
-            outputCount: data.outputTxids.size,
-            reuseReason,
-            selfChangeTxids,
-            transactions: txList,
-            record: addrToRecord.get(address),
-          });
-        });
-
-        // Sort by most recent transaction activity first (for default view)
-        result.sort((a, b) => {
-          const aLatest = a.transactions[0]?.blockTime || 0;
-          const bLatest = b.transactions[0]?.blockTime || 0;
-          return bLatest - aLatest;
-        });
-
-        if (thisProcessingId === processingRef.current) {
-          setReusedAddresses(result);
-          setIsProcessing(false);
-        }
-      } catch (error) {
-        console.error('[AddressReuse] Failed to load data:', error);
-        if (thisProcessingId === processingRef.current) {
-          setIsProcessing(false);
-        }
+    const addrToRecord = new Map<string, Record>();
+    const addressSet = new Set<string>();
+    curatedRecords.forEach(record => {
+      if (record.inputString) {
+        addrToRecord.set(record.inputString, record);
+        addressSet.add(record.inputString);
       }
-    };
-    
-    loadAndProcess();
-  }, [includeBlockchainDiscovered, dbChangeSignal]);
+    });
+
+    if (addressSet.size === 0) {
+      return { reusedAddresses: [], totalBlockchainDiscovered: blockchainCount };
+    }
+
+    const addressArray = Array.from(addressSet);
+    const relevantParticipants = await getParticipantsByAddresses(addressArray);
+    checkAbort(signal);
+
+    const relevantTxids = new Set<string>();
+    relevantParticipants.forEach(p => relevantTxids.add(p.txid));
+
+    const txidToBlockTime = new Map<string, number>();
+    if (relevantTxids.size > 0) {
+      const transactions = await db.blockchainTransactions
+        .where('txid')
+        .anyOf(Array.from(relevantTxids))
+        .toArray();
+      transactions.forEach(tx => {
+        txidToBlockTime.set(tx.txid, tx.blockTime);
+      });
+    }
+    checkAbort(signal);
+
+    const addressMap = new Map<string, {
+      inputTxids: Set<string>;
+      outputTxids: Set<string>;
+    }>();
+
+    relevantParticipants.forEach(p => {
+      if (!addressMap.has(p.address)) {
+        addressMap.set(p.address, { inputTxids: new Set(), outputTxids: new Set() });
+      }
+      const entry = addressMap.get(p.address)!;
+      if (p.role === 'input') {
+        entry.inputTxids.add(p.txid);
+      } else {
+        entry.outputTxids.add(p.txid);
+      }
+    });
+
+    const result: AddressReuseInfo[] = [];
+
+    addressMap.forEach((data, address) => {
+      const selfChangeTxids: string[] = [];
+      data.inputTxids.forEach(txid => {
+        if (data.outputTxids.has(txid)) {
+          selfChangeTxids.push(txid);
+        }
+      });
+
+      const hasSelfChange = selfChangeTxids.length > 0;
+      const hasMultiReceive = data.outputTxids.size >= 2;
+
+      if (!hasMultiReceive && !hasSelfChange) {
+        return;
+      }
+
+      let reuseReason: ReuseReason;
+      if (hasMultiReceive && hasSelfChange) {
+        reuseReason = 'both';
+      } else if (hasMultiReceive) {
+        reuseReason = 'multi-receive';
+      } else {
+        reuseReason = 'change-to-self';
+      }
+
+      const allTxids = new Set([...Array.from(data.inputTxids), ...Array.from(data.outputTxids)]);
+      const txList: AddressReuseInfo['transactions'] = [];
+
+      allTxids.forEach(txid => {
+        const blockTime = txidToBlockTime.get(txid) || 0;
+        const isInput = data.inputTxids.has(txid);
+        const isOutput = data.outputTxids.has(txid);
+        const isSelfChange = isInput && isOutput;
+
+        if (isOutput) {
+          txList.push({ txid, blockTime, role: 'output', isSelfChange });
+        }
+        if (isInput) {
+          txList.push({ txid, blockTime, role: 'input', isSelfChange });
+        }
+      });
+
+      txList.sort((a, b) => b.blockTime - a.blockTime);
+
+      result.push({
+        address,
+        totalCount: allTxids.size,
+        inputCount: data.inputTxids.size,
+        outputCount: data.outputTxids.size,
+        reuseReason,
+        selfChangeTxids,
+        transactions: txList,
+        record: addrToRecord.get(address),
+      });
+    });
+
+    result.sort((a, b) => {
+      const aLatest = a.transactions[0]?.blockTime || 0;
+      const bLatest = b.transactions[0]?.blockTime || 0;
+      return bLatest - aLatest;
+    });
+
+    return { reusedAddresses: result, totalBlockchainDiscovered: blockchainCount };
+    } catch (error) {
+      if (signal.aborted) throw error;
+      console.error('[AddressReuse] Failed to load data:', error);
+      throw error;
+    }
+  }, [includeBlockchainDiscovered, dbChangeSignal], initialData);
+
+  const reusedAddresses = computedData.reusedAddresses;
+  const totalBlockchainDiscovered = computedData.totalBlockchainDiscovered;
 
   // Split into YOUR addresses (with records) vs OTHER addresses (counterparties)
   const { yourReusedAddresses, otherReusedAddresses } = useMemo(() => {
