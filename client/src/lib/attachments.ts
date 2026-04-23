@@ -272,8 +272,8 @@ export async function downloadDecryptedFile(objectPath: string, filename: string
   }
 }
 
-// Get decrypted file blob for preview (no download triggered)
-export async function getDecryptedFileBlob(
+// Get file blob for preview (no download triggered)
+export async function getFileBlob(
   objectPath: string, 
   mimeType: string,
   _isEncrypted: boolean = true

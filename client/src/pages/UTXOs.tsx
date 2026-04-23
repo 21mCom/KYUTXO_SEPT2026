@@ -43,7 +43,7 @@ import {
   HelpCircle
 } from "lucide-react";
 import { SiBitcoin } from "react-icons/si";
-import { getDecryptedOwners, getDecryptedWalletNames, getDecryptedTags, getDecryptedCategories, getDecryptedParticipantsByAddresses } from "@/lib/dataFacade";
+import { getOwners, getWalletNames, getTags, getCategories, getParticipantsByAddresses } from "@/lib/dataFacade";
 import { cn } from "@/lib/utils";
 import { UTXODetailPanel } from "@/components/UTXODetailPanel";
 import { ClickableAddress } from "@/components/ClickableAddress";
@@ -252,10 +252,10 @@ export default function UTXOs() {
     const loadVocabulary = async () => {
       try {
         const [decryptedOwners, decryptedWalletNames, decryptedTags, decryptedCategories] = await Promise.all([
-          getDecryptedOwners(),
-          getDecryptedWalletNames(),
-          getDecryptedTags(),
-          getDecryptedCategories()
+          getOwners(),
+          getWalletNames(),
+          getTags(),
+          getCategories()
         ]);
         setOwners(decryptedOwners.map(o => o.name).filter(Boolean).sort());
         setWalletNames(decryptedWalletNames.map(w => w.name).filter(Boolean).sort());
@@ -313,7 +313,7 @@ export default function UTXOs() {
     const thisRequestId = participantsRequestId.current;
     setParticipantsLoading(true);
 
-    getDecryptedParticipantsByAddresses(addresses)
+    getParticipantsByAddresses(addresses)
       .then(result => {
         if (thisRequestId === participantsRequestId.current) {
           setParticipants(result);

@@ -11,7 +11,7 @@ export async function createTag(name: string, color?: string): Promise<number> {
   return id as number;
 }
 
-export async function getDecryptedTags(): Promise<Tag[]> {
+export async function getTags(): Promise<Tag[]> {
   return db.tags.toArray();
 }
 
@@ -42,7 +42,7 @@ export async function createCategory(name: string): Promise<number> {
   return id as number;
 }
 
-export async function getDecryptedCategories(): Promise<Category[]> {
+export async function getCategories(): Promise<Category[]> {
   return db.categories.toArray();
 }
 
@@ -73,7 +73,7 @@ export async function createOwner(name: string): Promise<number> {
   return id as number;
 }
 
-export async function getDecryptedOwners(): Promise<Owner[]> {
+export async function getOwners(): Promise<Owner[]> {
   return db.owners.toArray();
 }
 
@@ -104,7 +104,7 @@ export async function createWalletNameEntry(name: string): Promise<number> {
   return id as number;
 }
 
-export async function getDecryptedWalletNames(): Promise<WalletName[]> {
+export async function getWalletNames(): Promise<WalletName[]> {
   return db.walletNames.toArray();
 }
 
@@ -135,7 +135,7 @@ export async function createSeedNameEntry(name: string): Promise<number> {
   return id as number;
 }
 
-export async function getDecryptedSeedNames(): Promise<SeedName[]> {
+export async function getSeedNames(): Promise<SeedName[]> {
   return db.seedNames.toArray();
 }
 
@@ -166,7 +166,7 @@ export async function createWalletSoftwareEntry(name: string): Promise<number> {
   return id as number;
 }
 
-export async function getDecryptedWalletSoftware(): Promise<WalletSoftware[]> {
+export async function getWalletSoftware(): Promise<WalletSoftware[]> {
   return db.walletSoftware.toArray();
 }
 

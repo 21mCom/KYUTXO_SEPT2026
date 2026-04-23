@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { db } from "@/lib/database";
-import { getDecryptedParticipantsByAddresses } from "@/lib/dataFacade";
+import { getParticipantsByAddresses } from "@/lib/dataFacade";
 
 export interface AddressStats {
   balanceSats: number;
@@ -29,7 +29,7 @@ export function useAddressStats(
         return;
       }
 
-      const participants = await getDecryptedParticipantsByAddresses(addressStrings);
+      const participants = await getParticipantsByAddresses(addressStrings);
 
       const txids = Array.from(new Set(participants.map(p => p.txid)));
       const txMap = new Map<string, number>();

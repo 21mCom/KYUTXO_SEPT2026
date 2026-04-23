@@ -1,5 +1,5 @@
 import { db, type Record } from './database';
-import { getDecryptedParticipantsByTxid } from './dataFacade';
+import { getParticipantsByTxid } from './dataFacade';
 
 /**
  * Test data seeding utility for demonstrating KYUTXO features.
@@ -286,7 +286,7 @@ export async function seedTestData(options: { clearExisting?: boolean } = {}): P
     }
     
     // Add inputs
-    const existingTxParticipants = await getDecryptedParticipantsByTxid(tx.txid);
+    const existingTxParticipants = await getParticipantsByTxid(tx.txid);
     for (const input of tx.inputs) {
       const existingParticipant = existingTxParticipants.find(
         p => p.role === 'input' && p.address === input.address

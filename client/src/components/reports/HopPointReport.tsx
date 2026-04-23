@@ -1,7 +1,7 @@
 import { useState, useMemo } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { db, type Record as DBRecord, type TransactionParticipant, type BlockchainTransaction, type AddressImportance } from "@/lib/database";
-import { getDecryptedParticipantsByAddress, getDecryptedParticipantsByTxid } from "@/lib/dataFacade";
+import { getParticipantsByAddress, getParticipantsByTxid } from "@/lib/dataFacade";
 import { useRecordPreview } from "@/contexts/RecordPreviewContext";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -105,10 +105,10 @@ export function HopPointReport() {
       }>();
 
       for (const knownAddress of Array.from(knownAddresses)) {
-        const participants = await getDecryptedParticipantsByAddress(knownAddress);
+        const participants = await getParticipantsByAddress(knownAddress);
 
         for (const participant of participants) {
-          const txParticipants = await getDecryptedParticipantsByTxid(participant.txid);
+          const txParticipants = await getParticipantsByTxid(participant.txid);
 
           for (const other of txParticipants) {
             if (other.address === knownAddress) continue;
@@ -193,7 +193,7 @@ export function HopPointReport() {
     const connectionList: ConnectionContext[] = [];
 
     for (const txid of hopPoint.connectingTxids) {
-      const participants = await getDecryptedParticipantsByTxid(txid);
+      const participants = await getParticipantsByTxid(txid);
 
       const inputs = participants.filter(p => p.role === 'input');
       const outputs = participants.filter(p => p.role === 'output');

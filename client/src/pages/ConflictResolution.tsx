@@ -26,7 +26,7 @@ import {
 } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import { db, type Record as DBRecord, type RecordOrigin } from "@/lib/database";
-import { getDecryptedRecordOrigins, updateRecord } from "@/lib/dataFacade";
+import { getRecordOrigins, updateRecord } from "@/lib/dataFacade";
 import { 
   SINGULAR_FIELDS, 
   detectSingularFieldConflicts, 
@@ -91,7 +91,7 @@ export default function ConflictResolution() {
       for (const record of decrypted) {
         if (!record.id) continue;
         
-        const origins = await getDecryptedRecordOrigins(record.id);
+        const origins = await getRecordOrigins(record.id);
         if (origins.length < 2) continue;
         
         const conflicts = detectSingularFieldConflicts(record, origins);

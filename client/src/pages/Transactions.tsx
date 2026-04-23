@@ -34,7 +34,7 @@ import {
   ChevronsDownUp,
   ChevronsUpDown
 } from "lucide-react";
-import { getDecryptedParticipantsByTxids } from "@/lib/dataFacade";
+import { getParticipantsByTxids } from "@/lib/dataFacade";
 import { ClickableAddress } from "@/components/ClickableAddress";
 
 const ITEMS_PER_PAGE = 25;
@@ -208,7 +208,7 @@ export default function Transactions() {
     
     const maxTxidsForBroadLoad = 2000;
     const txidsToLoad = preFilteredTransactions.slice(0, maxTxidsForBroadLoad).map(tx => tx.txid);
-    const loadedParticipants = await getDecryptedParticipantsByTxids(txidsToLoad);
+    const loadedParticipants = await getParticipantsByTxids(txidsToLoad);
     checkAbort(signal);
     
     const map = new Map<string, TransactionParticipant[]>();
@@ -274,7 +274,7 @@ export default function Transactions() {
       }
       const missingTxids = txids.filter(t => !map.has(t));
       if (missingTxids.length > 0) {
-        const extra = await getDecryptedParticipantsByTxids(missingTxids);
+        const extra = await getParticipantsByTxids(missingTxids);
         checkAbort(signal);
         for (const p of extra) {
           const existing = map.get(p.txid) || [];
@@ -285,7 +285,7 @@ export default function Transactions() {
       return map;
     }
     
-    const loaded = await getDecryptedParticipantsByTxids(txids);
+    const loaded = await getParticipantsByTxids(txids);
     checkAbort(signal);
     const map = new Map<string, TransactionParticipant[]>();
     for (const p of loaded) {

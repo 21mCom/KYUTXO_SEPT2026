@@ -33,7 +33,7 @@ import {
   X,
   Loader2
 } from "lucide-react";
-import { updateRecord, getDecryptedParticipantsByAddresses } from "@/lib/dataFacade";
+import { updateRecord, getParticipantsByAddresses } from "@/lib/dataFacade";
 import { useToast } from "@/hooks/use-toast";
 import { useOwners } from "@/hooks/use-owners";
 import { useWalletNames } from "@/hooks/use-wallet-names";
@@ -197,7 +197,7 @@ export default function AddressReuse() {
         // Step 2: Load only participants for addresses we care about
         // Use indexed query on address field
         const addressArray = Array.from(addressSet);
-        const relevantParticipants = await getDecryptedParticipantsByAddresses(addressArray);
+        const relevantParticipants = await getParticipantsByAddresses(addressArray);
         
         if (thisProcessingId !== processingRef.current) return;
         

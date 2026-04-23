@@ -1830,8 +1830,8 @@ export class TransactionSyncService {
     role: 'input' | 'output';
     amount: number;
   }>> {
-    const { getDecryptedParticipantsByAddress } = await import('./dataFacade');
-    const participants = await getDecryptedParticipantsByAddress(address);
+    const { getParticipantsByAddress } = await import('./dataFacade');
+    const participants = await getParticipantsByAddress(address);
 
     const results: Array<{
       transaction: BlockchainTransaction;

@@ -7,7 +7,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/component
 import { Separator } from '@/components/ui/separator';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { type RecordOrigin, type RecordOriginType, type Record as DBRecord } from '@/lib/database';
-import { getDecryptedRecordOrigins } from '@/lib/dataFacade';
+import { getRecordOrigins } from '@/lib/dataFacade';
 import { SINGULAR_FIELDS, type FieldConfig } from '@/lib/conflict-detection';
 
 interface RecordFields {
@@ -291,13 +291,13 @@ export function MetadataSourcesPanel({ recordId, record }: MetadataSourcesPanelP
       setIsLoading(true);
       setError(null);
       try {
-        const decryptedOrigins = await getDecryptedRecordOrigins(recordId);
-        decryptedOrigins.sort((a, b) => b.createdAt - a.createdAt);
-        setOrigins(decryptedOrigins);
+        const loadedOrigins = await getRecordOrigins(recordId);
+        loadedOrigins.sort((a, b) => b.createdAt - a.createdAt);
+        setOrigins(loadedOrigins);
         
         if (record) {
           let conflictCount = 0;
-          for (const origin of decryptedOrigins) {
+          for (const origin of loadedOrigins) {
             for (const field of SINGULAR_FIELDS) {
               if (isFieldDifferent(origin, record, field.key)) {
                 conflictCount++;

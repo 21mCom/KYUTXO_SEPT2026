@@ -29,7 +29,7 @@ import {
 } from "@/components/ui/popover";
 import { useSettings, useCustomFields, toggleTableColumn, toggleCustomFieldColumn } from "@/hooks/use-settings";
 import { db, type CustomField } from "@/lib/database";
-import { getDecryptedParticipantsByAddresses } from "@/lib/dataFacade";
+import { getParticipantsByAddresses } from "@/lib/dataFacade";
 import { Separator } from "@/components/ui/separator";
 import { formatBTC } from "@/lib/bitcoin";
 
@@ -208,7 +208,7 @@ export function RecordTable({
         return;
       }
 
-      const participants = await getDecryptedParticipantsByAddresses(addressStrings);
+      const participants = await getParticipantsByAddresses(addressStrings);
 
       const txids = Array.from(new Set(participants.map(p => p.txid)));
       const txMap = new Map<string, number>();

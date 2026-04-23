@@ -9,7 +9,7 @@ import {
   type CustodyStatus,
   type AddressImportance
 } from './database';
-import { getDecryptedParticipantsByTxid } from './dataFacade';
+import { getParticipantsByTxid } from './dataFacade';
 
 // Generate a simple UUID for segment IDs
 function generateSegmentId(): string {
@@ -89,8 +89,8 @@ export async function buildLineageForTransaction(txid: string): Promise<UtxoLine
     return [];
   }
   
-  // Get all participants for this transaction (decrypted)
-  const participants = await getDecryptedParticipantsByTxid(txid);
+  // Get all participants for this transaction
+  const participants = await getParticipantsByTxid(txid);
   
   const inputs = participants.filter(p => p.role === 'input');
   const outputs = participants.filter(p => p.role === 'output');
@@ -303,8 +303,8 @@ export async function buildCustodySegment(
   const evidenceTxids: string[] = [originTxid];
   const childSegmentIds: string[] = [];
   
-  // Get original amount from participants (load by txid, decrypt, filter)
-  const originTxParticipants = await getDecryptedParticipantsByTxid(originTxid);
+  // Get original amount from participants (load by txid, filter)
+  const originTxParticipants = await getParticipantsByTxid(originTxid);
   const originOutput = originTxParticipants.find(
     p => p.role === 'output' && p.address === originAddress && p.vout === originVout
   );

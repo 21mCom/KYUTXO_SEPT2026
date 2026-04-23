@@ -79,11 +79,11 @@ import {
   createEvidence, 
   updateEvidence, 
   deleteEvidence, 
-  getDecryptedEvidenceAttachments,
+  getEvidenceAttachments,
   createEvidenceAttachment,
   deleteEvidenceAttachment,
 } from "@/lib/dataFacade";
-import { uploadEncryptedFile, downloadDecryptedFile, deleteEncryptedFile, getDecryptedFileBlob, isPreviewableType, getPreviewType } from "@/lib/attachments";
+import { uploadEncryptedFile, downloadDecryptedFile, deleteEncryptedFile, getFileBlob, isPreviewableType, getPreviewType } from "@/lib/attachments";
 import { useDropzone } from "react-dropzone";
 
 const evidenceFormSchema = z.object({
@@ -262,7 +262,7 @@ export default function EvidencePage() {
     setIsEditing(true);
     
     if (evidence.id) {
-      const attachments = await getDecryptedEvidenceAttachments(evidence.id);
+      const attachments = await getEvidenceAttachments(evidence.id);
       setSelectedAttachments(attachments);
     }
     
@@ -273,7 +273,7 @@ export default function EvidencePage() {
     setSelectedEvidence(evidence);
     
     if (evidence.id) {
-      const attachments = await getDecryptedEvidenceAttachments(evidence.id);
+      const attachments = await getEvidenceAttachments(evidence.id);
       setSelectedAttachments(attachments);
     }
     
@@ -459,7 +459,7 @@ export default function EvidencePage() {
       // Evidence attachments are always encrypted on storage
       // Note: attachment file storage path used for download,
       // but the file itself is always encrypted when uploaded via uploadEncryptedFile
-      const blob = await getDecryptedFileBlob(
+      const blob = await getFileBlob(
         attachment.objectStoragePath, 
         attachment.mimeType,
         true // Always decrypt - files are encrypted on upload
@@ -523,7 +523,7 @@ export default function EvidencePage() {
     }
     
     try {
-      const attachments = await getDecryptedEvidenceAttachments(evidence.id);
+      const attachments = await getEvidenceAttachments(evidence.id);
       const previewable = attachments.find(att => isPreviewableType(att.mimeType));
       
       // Always set the preview evidence for metadata display

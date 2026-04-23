@@ -1,7 +1,7 @@
 import { useState, useMemo } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { db, type Record as DBRecord, type TransactionParticipant, type BlockchainTransaction, type PriceData } from "@/lib/database";
-import { getDecryptedParticipantsByAddress, getDecryptedParticipantsByTxid } from "@/lib/dataFacade";
+import { getParticipantsByAddress, getParticipantsByTxid } from "@/lib/dataFacade";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -94,7 +94,7 @@ export function SourceOfFundsReport() {
         return;
       }
 
-      const participants = await getDecryptedParticipantsByAddress(selectedAddress);
+      const participants = await getParticipantsByAddress(selectedAddress);
 
       const inputTxids = Array.from(new Set(participants.filter(p => p.role === 'output').map(p => p.txid)));
 
@@ -109,7 +109,7 @@ export function SourceOfFundsReport() {
         const tx = await db.blockchainTransactions.where('txid').equals(txid).first();
         if (!tx) continue;
 
-        const txParticipants = await getDecryptedParticipantsByTxid(txid);
+        const txParticipants = await getParticipantsByTxid(txid);
         
         const myOutput = txParticipants.find(p => p.role === 'output' && p.address === selectedAddress);
         if (!myOutput) continue;

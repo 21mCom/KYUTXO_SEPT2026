@@ -1,5 +1,5 @@
 import { db, BlockchainTransaction, TransactionParticipant, Record } from './database';
-import { getDecryptedParticipantsByTxid, getDecryptedParticipantsByAddresses } from './dataFacade';
+import { getParticipantsByTxid, getParticipantsByAddresses } from './dataFacade';
 
 // Lightning Channel Classification Types
 export type LightningClassification = 
@@ -434,7 +434,7 @@ export async function detectLightningActivity(
   const tx = await db.blockchainTransactions.where('txid').equals(txid).first();
   if (!tx) return null;
 
-  const participants = await getDecryptedParticipantsByTxid(txid);
+  const participants = await getParticipantsByTxid(txid);
   const inputs = participants.filter(p => p.role === 'input');
   const outputs = participants.filter(p => p.role === 'output');
 
@@ -534,7 +534,7 @@ export async function scanForLightningActivity(
   // Find all transactions involving these addresses
   let participants: TransactionParticipant[];
   if (filteredAddresses.size > 0) {
-    participants = await getDecryptedParticipantsByAddresses(Array.from(filteredAddresses));
+    participants = await getParticipantsByAddresses(Array.from(filteredAddresses));
   } else {
     participants = [];
   }

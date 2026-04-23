@@ -33,7 +33,7 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { db, Record as DbRecord, TransactionParticipant, BlockchainTransaction, PriceData } from "@/lib/database";
-import { getDecryptedParticipantsByTxid } from "@/lib/dataFacade";
+import { getParticipantsByTxid } from "@/lib/dataFacade";
 import { cn } from "@/lib/utils";
 
 interface UTXO {
@@ -106,7 +106,7 @@ export function UTXODetailPanel({ open, onClose, utxo, latestPrice }: UTXODetail
         const tx = await db.blockchainTransactions.where('txid').equals(utxo.txid).first();
         setFundingTx(tx || null);
 
-        const txParticipants = await getDecryptedParticipantsByTxid(utxo.txid);
+        const txParticipants = await getParticipantsByTxid(utxo.txid);
         const inputs = txParticipants.filter(p => p.role === 'input');
 
         const addressSet = new Set(inputs.map(i => i.address));

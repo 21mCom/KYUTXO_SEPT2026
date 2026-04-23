@@ -12,7 +12,7 @@ export async function createAttachment(
   return id as number;
 }
 
-export async function getDecryptedAttachments(recordId: number): Promise<Attachment[]> {
+export async function getAttachments(recordId: number): Promise<Attachment[]> {
   return db.attachments.where('recordId').equals(recordId).toArray();
 }
 
@@ -31,11 +31,11 @@ export async function createEvidence(
   return id as number;
 }
 
-export async function getDecryptedEvidence(id: number): Promise<Evidence | undefined> {
+export async function getEvidence(id: number): Promise<Evidence | undefined> {
   return db.evidence.get(id);
 }
 
-export async function getAllDecryptedEvidence(): Promise<Evidence[]> {
+export async function getAllEvidence(): Promise<Evidence[]> {
   return db.evidence.toArray();
 }
 
@@ -82,7 +82,7 @@ export async function createEvidenceAttachment(
   return id as number;
 }
 
-export async function getDecryptedEvidenceAttachments(evidenceId: number): Promise<EvidenceAttachment[]> {
+export async function getEvidenceAttachments(evidenceId: number): Promise<EvidenceAttachment[]> {
   return db.evidenceAttachments.where('evidenceId').equals(evidenceId).toArray();
 }
 
@@ -90,23 +90,23 @@ export async function deleteEvidenceAttachment(id: number): Promise<void> {
   await db.evidenceAttachments.delete(id);
 }
 
-export async function getAllDecryptedParticipants(): Promise<TransactionParticipant[]> {
+export async function getAllParticipants(): Promise<TransactionParticipant[]> {
   return db.transactionParticipants.toArray();
 }
 
-export async function getDecryptedParticipantsByTxid(txid: string): Promise<TransactionParticipant[]> {
+export async function getParticipantsByTxid(txid: string): Promise<TransactionParticipant[]> {
   return db.transactionParticipants.where('txid').equals(txid).toArray();
 }
 
-export async function getDecryptedParticipantsByTxids(txids: string[]): Promise<TransactionParticipant[]> {
+export async function getParticipantsByTxids(txids: string[]): Promise<TransactionParticipant[]> {
   return db.transactionParticipants.where('txid').anyOf(txids).toArray();
 }
 
-export async function getDecryptedParticipantsByAddress(address: string): Promise<TransactionParticipant[]> {
+export async function getParticipantsByAddress(address: string): Promise<TransactionParticipant[]> {
   return db.transactionParticipants.where('address').equals(address).toArray();
 }
 
-export async function getDecryptedParticipantsByAddresses(addresses: string[]): Promise<TransactionParticipant[]> {
+export async function getParticipantsByAddresses(addresses: string[]): Promise<TransactionParticipant[]> {
   if (addresses.length === 0) return [];
   const results: TransactionParticipant[] = [];
   const batchSize = 500;
@@ -121,6 +121,6 @@ export async function getDecryptedParticipantsByAddresses(addresses: string[]): 
   return results;
 }
 
-export async function getDecryptedParticipantsByRecordId(recordId: number): Promise<TransactionParticipant[]> {
+export async function getParticipantsByRecordId(recordId: number): Promise<TransactionParticipant[]> {
   return db.transactionParticipants.where('recordId').equals(recordId).toArray();
 }

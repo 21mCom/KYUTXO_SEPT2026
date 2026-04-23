@@ -14,7 +14,7 @@ import {
   ACQUISITION_METHOD_OPTIONS,
   DISPOSITION_TYPE_OPTIONS,
 } from "@/lib/database";
-import { updateRecord, createRecord, getDecryptedTags, getDecryptedCategories, getDecryptedParticipantsByAddresses } from "@/lib/dataFacade";
+import { updateRecord, createRecord, getTags, getCategories, getParticipantsByAddresses } from "@/lib/dataFacade";
 import { uploadAttachment } from "@/lib/attachments";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -173,64 +173,64 @@ export default function Nudgie() {
     []
   );
 
-  const [decryptedAddressRecords, setDecryptedAddressRecords] = useState<Record[]>([]);
-  const [decryptedTransactionRecords, setDecryptedTransactionRecords] = useState<Record[]>([]);
-  const [decryptedTags, setDecryptedTags] = useState<TagType[]>([]);
-  const [decryptedCategories, setDecryptedCategories] = useState<CategoryType[]>([]);
-  const decryptRequestId = useRef(0);
+  const [addressRecords, setAddressRecords] = useState<Record[]>([]);
+  const [transactionRecords, setTransactionRecords] = useState<Record[]>([]);
+  const [loadedTags, setLoadedTags] = useState<TagType[]>([]);
+  const [loadedCategories, setLoadedCategories] = useState<CategoryType[]>([]);
+  const loadRequestId = useRef(0);
   const [participants, setParticipants] = useState<TransactionParticipant[] | undefined>(undefined);
   const participantsRequestId = useRef(0);
 
   useEffect(() => {
     if (!rawAddressRecords || !rawTransactionRecords) return;
     
-    decryptRequestId.current += 1;
-    const thisRequestId = decryptRequestId.current;
+    loadRequestId.current += 1;
+    const thisRequestId = loadRequestId.current;
     
-    const decrypt = async () => {
+    const loadRecords = async () => {
       try {
         const addresses = rawAddressRecords;
         const txRecords = rawTransactionRecords;
-        if (thisRequestId === decryptRequestId.current) {
-          setDecryptedAddressRecords(addresses);
-          setDecryptedTransactionRecords(txRecords);
+        if (thisRequestId === loadRequestId.current) {
+          setAddressRecords(addresses);
+          setTransactionRecords(txRecords);
         }
       } catch {
-        if (thisRequestId === decryptRequestId.current) {
-          setDecryptedAddressRecords(rawAddressRecords);
-          setDecryptedTransactionRecords(rawTransactionRecords);
+        if (thisRequestId === loadRequestId.current) {
+          setAddressRecords(rawAddressRecords);
+          setTransactionRecords(rawTransactionRecords);
         }
       }
     };
     
-    decrypt();
+    loadRecords();
   }, [rawAddressRecords, rawTransactionRecords]);
 
   useEffect(() => {
-    const decryptVocabulary = async () => {
+    const loadVocabulary = async () => {
       try {
         const [dTags, dCategories] = await Promise.all([
-          getDecryptedTags(),
-          getDecryptedCategories()
+          getTags(),
+          getCategories()
         ]);
-        setDecryptedTags(dTags);
-        setDecryptedCategories(dCategories);
+        setLoadedTags(dTags);
+        setLoadedCategories(dCategories);
       } catch {
-        // Fallback to raw data if decryption fails
-        setDecryptedTags(tags);
-        setDecryptedCategories(categories);
+        // Fallback to raw data if loading fails
+        setLoadedTags(tags);
+        setLoadedCategories(categories);
       }
     };
-    decryptVocabulary();
+    loadVocabulary();
   }, [tags, categories]);
 
   useEffect(() => {
-    if (!decryptedAddressRecords || decryptedAddressRecords.length === 0) {
+    if (!addressRecords || addressRecords.length === 0) {
       setParticipants(undefined);
       return;
     }
 
-    const addresses = decryptedAddressRecords
+    const addresses = addressRecords
       .filter(r => r.type === 'address' && r.inputString)
       .map(r => r.inputString!);
 
@@ -242,7 +242,7 @@ export default function Nudgie() {
     participantsRequestId.current += 1;
     const thisRequestId = participantsRequestId.current;
 
-    getDecryptedParticipantsByAddresses(addresses)
+    getParticipantsByAddresses(addresses)
       .then(result => {
         if (thisRequestId === participantsRequestId.current) {
           setParticipants(result);
@@ -253,27 +253,27 @@ export default function Nudgie() {
           setParticipants([]);
         }
       });
-  }, [decryptedAddressRecords]);
+  }, [addressRecords]);
 
   const addressToRecord = useMemo(() => {
     const map = new Map<string, Record>();
-    decryptedAddressRecords.forEach(record => {
+    addressRecords.forEach(record => {
       if (record.type === 'address' && record.inputString) {
         map.set(record.inputString, record);
       }
     });
     return map;
-  }, [decryptedAddressRecords]);
+  }, [addressRecords]);
 
   const txidToRecord = useMemo(() => {
     const map = new Map<string, Record>();
-    decryptedTransactionRecords.forEach(record => {
+    transactionRecords.forEach(record => {
       if (record.type === 'transaction' && record.inputString) {
         map.set(record.inputString, record);
       }
     });
     return map;
-  }, [decryptedTransactionRecords]);
+  }, [transactionRecords]);
 
   const { value: transactionsWithContext, isComputing: transactionsWithContextComputing } = useAsyncMemo(async (signal) => {
     if (!transactions || !participants) return [];
@@ -471,13 +471,13 @@ export default function Nudgie() {
   };
 
   const availableTagNames = useMemo(() => 
-    decryptedTags.map(t => t.name).filter(n => n),
-    [decryptedTags]
+    loadedTags.map(t => t.name).filter(n => n),
+    [loadedTags]
   );
 
   const availableCategoryNames = useMemo(() => 
-    decryptedCategories.map(c => c.name).filter(n => n),
-    [decryptedCategories]
+    loadedCategories.map(c => c.name).filter(n => n),
+    [loadedCategories]
   );
 
   const handleSaveTransaction = async (tx: TransactionWithContext) => {
@@ -678,19 +678,19 @@ export default function Nudgie() {
 
   const uniqueSeedNames = Array.from(new Set([
     ...seedNames.map(s => s.name).filter(n => n),
-    ...decryptedAddressRecords.map(r => r.seedName).filter((s): s is string => !!s)
+    ...addressRecords.map(r => r.seedName).filter((s): s is string => !!s)
   ]));
   const uniqueWalletSoftware = Array.from(new Set([
     ...walletSoftware.map(w => w.name).filter(n => n),
-    ...decryptedAddressRecords.map(r => r.walletSoftware).filter((s): s is string => !!s)
+    ...addressRecords.map(r => r.walletSoftware).filter((s): s is string => !!s)
   ]));
   const uniqueOwners = Array.from(new Set([
     ...owners.map(o => o.name).filter(n => n),
-    ...decryptedAddressRecords.map(r => r.owner).filter((s): s is string => !!s)
+    ...addressRecords.map(r => r.owner).filter((s): s is string => !!s)
   ]));
   const uniqueWalletNames = Array.from(new Set([
     ...walletNames.map(w => w.name).filter(n => n),
-    ...decryptedAddressRecords.map(r => r.walletName).filter((s): s is string => !!s)
+    ...addressRecords.map(r => r.walletName).filter((s): s is string => !!s)
   ]));
 
   const handleCreateAddressRecord = async (address: string) => {

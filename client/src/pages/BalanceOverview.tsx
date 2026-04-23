@@ -16,7 +16,7 @@ import {
   Check,
 } from "lucide-react";
 import { SiBitcoin } from "react-icons/si";
-import { getDecryptedParticipantsByAddresses } from "@/lib/dataFacade";
+import { getParticipantsByAddresses } from "@/lib/dataFacade";
 
 type GroupBy = "wallet" | "seed" | "owner" | "tag" | "category";
 type SortBy = "balance-desc" | "balance-asc" | "name-asc" | "name-desc" | "addresses-desc";
@@ -116,7 +116,7 @@ export default function BalanceOverview() {
     participantsRequestId.current += 1;
     const thisRequestId = participantsRequestId.current;
 
-    getDecryptedParticipantsByAddresses(addresses)
+    getParticipantsByAddresses(addresses)
       .then(result => {
         if (thisRequestId === participantsRequestId.current) {
           setParticipants(result);

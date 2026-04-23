@@ -16,7 +16,7 @@ import { db } from "@/lib/database";
 import { useTags } from "@/hooks/use-tags";
 import { useOwners } from "@/hooks/use-owners";
 import { useWalletNames } from "@/hooks/use-wallet-names";
-import { getDecryptedParticipantsByTxids, getDecryptedParticipantsByAddresses } from "@/lib/dataFacade";
+import { getParticipantsByTxids, getParticipantsByAddresses } from "@/lib/dataFacade";
 import type { TransactionParticipant, BlockchainTransaction } from "@/lib/database";
 
 type BalanceMode = "modeA" | "modeB" | "modeC";
@@ -172,7 +172,7 @@ export default function StatementReport() {
 
       const addressSet = new Set(addresses);
 
-      const allParticipants = await getDecryptedParticipantsByAddresses(addresses);
+      const allParticipants = await getParticipantsByAddresses(addresses);
 
       const txidSet = new Set(allParticipants.map(p => p.txid));
 
@@ -239,7 +239,7 @@ export default function StatementReport() {
       const allTxParticipants = new Map<string, TransactionParticipant[]>();
       for (let i = 0; i < txids.length; i += 500) {
         const batch = txids.slice(i, i + 500);
-        const parts = await getDecryptedParticipantsByTxids(batch);
+        const parts = await getParticipantsByTxids(batch);
         for (const p of parts) {
           const list = allTxParticipants.get(p.txid) || [];
           list.push(p);
@@ -277,7 +277,7 @@ export default function StatementReport() {
         const prevTxids = Array.from(new Set(lookupKeys.map(k => k.split(":")[0])));
         for (let i = 0; i < prevTxids.length; i += 500) {
           const batch = prevTxids.slice(i, i + 500);
-          const prevOutputs = (await getDecryptedParticipantsByTxids(batch))
+          const prevOutputs = (await getParticipantsByTxids(batch))
             .filter(p => p.role === "output");
           for (const po of prevOutputs) {
             if (po.vout !== undefined) {

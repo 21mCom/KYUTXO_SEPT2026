@@ -2,7 +2,7 @@ import { Edit, Paperclip, Wallet as WalletIcon, User, Users, Upload, QrCode, Key
 import { formatBTC } from "@/lib/bitcoin";
 import DiscoveryTreeDialog from "./DiscoveryTreeDialog";
 import { useLocation } from "wouter";
-import { getDecryptedRecordOrigins, getDecryptedParticipantsByAddress, getDecryptedParticipantsByTxid } from "@/lib/dataFacade";
+import { getRecordOrigins, getParticipantsByAddress, getParticipantsByTxid } from "@/lib/dataFacade";
 import { detectSingularFieldConflicts } from "@/lib/conflict-detection";
 import { Link } from "wouter";
 import { useState, useEffect } from "react";
@@ -298,7 +298,7 @@ function TransactionHistorySection({ address }: { address: string }) {
     async function loadHistory() {
       setLoading(true);
       try {
-        const participants = await getDecryptedParticipantsByAddress(address);
+        const participants = await getParticipantsByAddress(address);
 
         if (participants.length === 0) {
           setEntries([]);
@@ -334,7 +334,7 @@ function TransactionHistorySection({ address }: { address: string }) {
         for (const { prevTxid, prevVout } of inputsNeedingLookup) {
           const key = `${prevTxid}:${prevVout}`;
           if (resolvedInputAmounts.has(key)) continue;
-          const prevTxParts = await getDecryptedParticipantsByTxid(prevTxid);
+          const prevTxParts = await getParticipantsByTxid(prevTxid);
           const spentOutputs = prevTxParts.filter(p => p.role === "output");
           const match = spentOutputs.find(o => o.vout === prevVout);
           resolvedInputAmounts.set(key, match ? (Number(match.amount) || 0) : 0);
@@ -520,7 +520,7 @@ export function RecordDetailPanel({
         return;
       }
       try {
-        const origins = await getDecryptedRecordOrigins(Number(record.id));
+        const origins = await getRecordOrigins(Number(record.id));
         if (origins.length < 2) {
           setConflictCount(0);
           return;

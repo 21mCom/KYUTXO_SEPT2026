@@ -349,7 +349,7 @@ export async function createRecordOrigin(
   return id as number;
 }
 
-export async function getDecryptedRecordOrigins(recordId: number): Promise<RecordOrigin[]> {
+export async function getRecordOrigins(recordId: number): Promise<RecordOrigin[]> {
   return db.recordOrigins.where('recordId').equals(recordId).toArray();
 }
 

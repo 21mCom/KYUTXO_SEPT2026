@@ -8,7 +8,7 @@ import {
   getClassificationLabel,
   getClassificationBadgeVariant
 } from "@/lib/lightning-detection";
-import { getDecryptedOwners, getDecryptedWalletNames } from "@/lib/dataFacade";
+import { getOwners, getWalletNames } from "@/lib/dataFacade";
 import { ClickableAddress } from "@/components/ClickableAddress";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -99,8 +99,8 @@ export default function LightningSpeculator() {
     const loadVocabulary = async () => {
       try {
         const [decryptedOwners, decryptedWallets] = await Promise.all([
-          getDecryptedOwners(),
-          getDecryptedWalletNames()
+          getOwners(),
+          getWalletNames()
         ]);
         setOwners(decryptedOwners.map(o => o.name).filter(Boolean).sort());
         setWalletNames(decryptedWallets.map(w => w.name).filter(Boolean).sort());

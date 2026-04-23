@@ -1,6 +1,6 @@
 import { db } from "@/lib/database";
 import type { TransactionParticipant } from "@/lib/db-types";
-import { getDecryptedParticipantsByAddresses } from "@/lib/data/record-encryption";
+import { getParticipantsByAddresses } from "@/lib/data/record-encryption";
 
 export type PrivacySeverity = "CRITICAL" | "HIGH" | "MEDIUM" | "LOW";
 
@@ -43,7 +43,7 @@ async function buildAuditContext(
   const addressSet = new Set(userAddresses);
 
   onProgress?.("Loading transaction participants...");
-  const participants = await getDecryptedParticipantsByAddresses(userAddresses);
+  const participants = await getParticipantsByAddresses(userAddresses);
 
   const ourTxids = new Set(participants.map((p: TransactionParticipant) => p.txid));
 

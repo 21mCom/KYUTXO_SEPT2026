@@ -148,43 +148,41 @@ export function RecordPreviewProvider({ children }: { children: ReactNode }) {
         return;
       }
 
-      const decryptedRecord: DbRecord = rawRecord;
+      const dbRecord: DbRecord = rawRecord;
 
       const panelRecord: RecordForPanel = {
-        id: String(decryptedRecord.id),
-        type: decryptedRecord.type as "address" | "transaction" | "other",
-        inputString: decryptedRecord.inputString || "",
-        label: decryptedRecord.label || "Unlabeled",
-        notes: decryptedRecord.notes || undefined,
-        tags: decryptedRecord.tags || [],
-        categories: decryptedRecord.categories || [],
-        seedName: decryptedRecord.seedName || undefined,
-        walletSoftware: decryptedRecord.walletSoftware || undefined,
-        owner: decryptedRecord.owner || undefined,
-        walletName: decryptedRecord.walletName || undefined,
-        privateKeyStatus: decryptedRecord.privateKeyStatus || undefined,
-        source: decryptedRecord.source || undefined,
-        derivationPath: decryptedRecord.derivationPath || undefined,
-        chainType: decryptedRecord.chainType || undefined,
-        vault: decryptedRecord.vault || undefined,
-        addressImportance: decryptedRecord.addressImportance || undefined,
-        customFields: decryptedRecord.customFields || undefined,
-        syncDepth: decryptedRecord.syncDepth,
-        maxSyncedDepth: decryptedRecord.maxSyncedDepth,
-        discoveredInTxid: decryptedRecord.discoveredInTxid || undefined,
-        discoveredFromRecordId: decryptedRecord.discoveredFromRecordId,
-        // Transaction classification metadata
-        flowType: decryptedRecord.flowType || undefined,
-        acquisitionMethod: decryptedRecord.acquisitionMethod || undefined,
-        dispositionType: decryptedRecord.dispositionType || undefined,
-        costBasisUsd: decryptedRecord.costBasisUsd,
-        // Address counterparty metadata
-        counterpartyType: decryptedRecord.counterpartyType || undefined,
+        id: String(dbRecord.id),
+        type: dbRecord.type as "address" | "transaction" | "other",
+        inputString: dbRecord.inputString || "",
+        label: dbRecord.label || "Unlabeled",
+        notes: dbRecord.notes || undefined,
+        tags: dbRecord.tags || [],
+        categories: dbRecord.categories || [],
+        seedName: dbRecord.seedName || undefined,
+        walletSoftware: dbRecord.walletSoftware || undefined,
+        owner: dbRecord.owner || undefined,
+        walletName: dbRecord.walletName || undefined,
+        privateKeyStatus: dbRecord.privateKeyStatus || undefined,
+        source: dbRecord.source || undefined,
+        derivationPath: dbRecord.derivationPath || undefined,
+        chainType: dbRecord.chainType || undefined,
+        vault: dbRecord.vault || undefined,
+        addressImportance: dbRecord.addressImportance || undefined,
+        customFields: dbRecord.customFields || undefined,
+        syncDepth: dbRecord.syncDepth,
+        maxSyncedDepth: dbRecord.maxSyncedDepth,
+        discoveredInTxid: dbRecord.discoveredInTxid || undefined,
+        discoveredFromRecordId: dbRecord.discoveredFromRecordId,
+        flowType: dbRecord.flowType || undefined,
+        acquisitionMethod: dbRecord.acquisitionMethod || undefined,
+        dispositionType: dbRecord.dispositionType || undefined,
+        costBasisUsd: dbRecord.costBasisUsd,
+        counterpartyType: dbRecord.counterpartyType || undefined,
       };
 
       setRecord(panelRecord);
       setIsOpen(true);
-      await loadAttachments(recordId, decryptedRecord.inputString || "");
+      await loadAttachments(recordId, dbRecord.inputString || "");
     } catch (error) {
       console.error('[RecordPreview] Failed to load record:', error);
       toast({
@@ -213,46 +211,43 @@ export function RecordPreviewProvider({ children }: { children: ReactNode }) {
         return;
       }
 
-      const decryptedRecords: DbRecord[] = rawRecords;
+      const dbRecords: DbRecord[] = rawRecords;
       
-      // Select the record with the richest metadata (prefer wallet-import over blockchain-sync)
-      const decryptedRecord = selectBestRecord(decryptedRecords);
+      const dbRecord = selectBestRecord(dbRecords);
 
       const panelRecord: RecordForPanel = {
-        id: String(decryptedRecord.id),
-        type: decryptedRecord.type as "address" | "transaction" | "other",
-        inputString: decryptedRecord.inputString || "",
-        label: decryptedRecord.label || "Unlabeled",
-        notes: decryptedRecord.notes || undefined,
-        tags: decryptedRecord.tags || [],
-        categories: decryptedRecord.categories || [],
-        seedName: decryptedRecord.seedName || undefined,
-        walletSoftware: decryptedRecord.walletSoftware || undefined,
-        owner: decryptedRecord.owner || undefined,
-        walletName: decryptedRecord.walletName || undefined,
-        privateKeyStatus: decryptedRecord.privateKeyStatus || undefined,
-        source: decryptedRecord.source || undefined,
-        derivationPath: decryptedRecord.derivationPath || undefined,
-        chainType: decryptedRecord.chainType || undefined,
-        vault: decryptedRecord.vault || undefined,
-        addressImportance: decryptedRecord.addressImportance || undefined,
-        customFields: decryptedRecord.customFields || undefined,
-        syncDepth: decryptedRecord.syncDepth,
-        maxSyncedDepth: decryptedRecord.maxSyncedDepth,
-        discoveredInTxid: decryptedRecord.discoveredInTxid || undefined,
-        discoveredFromRecordId: decryptedRecord.discoveredFromRecordId,
-        // Transaction classification metadata
-        flowType: decryptedRecord.flowType || undefined,
-        acquisitionMethod: decryptedRecord.acquisitionMethod || undefined,
-        dispositionType: decryptedRecord.dispositionType || undefined,
-        costBasisUsd: decryptedRecord.costBasisUsd,
-        // Address counterparty metadata
-        counterpartyType: decryptedRecord.counterpartyType || undefined,
+        id: String(dbRecord.id),
+        type: dbRecord.type as "address" | "transaction" | "other",
+        inputString: dbRecord.inputString || "",
+        label: dbRecord.label || "Unlabeled",
+        notes: dbRecord.notes || undefined,
+        tags: dbRecord.tags || [],
+        categories: dbRecord.categories || [],
+        seedName: dbRecord.seedName || undefined,
+        walletSoftware: dbRecord.walletSoftware || undefined,
+        owner: dbRecord.owner || undefined,
+        walletName: dbRecord.walletName || undefined,
+        privateKeyStatus: dbRecord.privateKeyStatus || undefined,
+        source: dbRecord.source || undefined,
+        derivationPath: dbRecord.derivationPath || undefined,
+        chainType: dbRecord.chainType || undefined,
+        vault: dbRecord.vault || undefined,
+        addressImportance: dbRecord.addressImportance || undefined,
+        customFields: dbRecord.customFields || undefined,
+        syncDepth: dbRecord.syncDepth,
+        maxSyncedDepth: dbRecord.maxSyncedDepth,
+        discoveredInTxid: dbRecord.discoveredInTxid || undefined,
+        discoveredFromRecordId: dbRecord.discoveredFromRecordId,
+        flowType: dbRecord.flowType || undefined,
+        acquisitionMethod: dbRecord.acquisitionMethod || undefined,
+        dispositionType: dbRecord.dispositionType || undefined,
+        costBasisUsd: dbRecord.costBasisUsd,
+        counterpartyType: dbRecord.counterpartyType || undefined,
       };
 
       setRecord(panelRecord);
       setIsOpen(true);
-      await loadAttachments(decryptedRecord.id!, decryptedRecord.inputString || "");
+      await loadAttachments(dbRecord.id!, dbRecord.inputString || "");
     } catch (error) {
       console.error('[RecordPreview] Failed to load record by address:', error);
       toast({
