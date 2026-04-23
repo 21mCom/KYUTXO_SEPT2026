@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef } from "react";
 import { Moon, Eye, Database, Plus, Trash2, Pencil, AlertTriangle, Upload, RefreshCw, Loader2, Paperclip, KeyRound } from "lucide-react";
 import { isElectron, getElectronAPI } from "@/lib/electron";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -41,17 +41,11 @@ import {
 import { useAuth } from "@/contexts/AuthContext";
 import { db } from "@/lib/database";
 import { deriveKey, decrypt, base64ToBuffer, verifyPassword } from "@/lib/crypto";
-import { getVaultSettings } from "@/lib/vault";
+import { getVaultSettings, vaultDb } from "@/lib/vault";
 import { generateSalt, hashPassword, bufferToBase64 } from "@/lib/crypto";
-import { saveVaultSettings } from "@/lib/vault";
-import { reEncryptAllAttachmentFiles, reEncryptAllEvidenceAttachmentFiles, migrateAttachmentPaths, type ReEncryptFileResult } from "@/lib/attachments";
+import { migrateAttachmentPaths } from "@/lib/attachments";
 import { 
-  savePendingPasswordChange, 
-  getPendingPasswordChange, 
-  finalizePendingPasswordChange,
-  clearPendingPasswordChange,
   setAttachmentPathsMigrated,
-  type PendingPasswordChange
 } from "@/lib/vault";
 import JSZip from "jszip";
 import VocabularyManager from "@/components/VocabularyManager";
@@ -90,22 +84,7 @@ export default function SettingsPage() {
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [isChangingPassword, setIsChangingPassword] = useState(false);
-  const [pendingChange, setPendingChange] = useState<PendingPasswordChange | null>(null);
-  const changePasswordAbortRef = useRef<AbortController | null>(null);
-  const [changePasswordProgress, setChangePasswordProgress] = useState<any>(null);
   const [isMigratingAttachments, setIsMigratingAttachments] = useState(false);
-
-  useEffect(() => {
-    getPendingPasswordChange().then(pending => {
-      if (pending) setPendingChange(pending);
-    });
-  }, []);
-
-  const handleCancelPasswordChange = () => {
-    if (changePasswordAbortRef.current) {
-      changePasswordAbortRef.current.abort();
-    }
-  };
 
   const handleToggleBuiltInField = async (field: keyof typeof fieldVisibility) => {
     try {
@@ -341,9 +320,6 @@ export default function SettingsPage() {
     }
 
     setIsChangingPassword(true);
-    setChangePasswordProgress(null);
-    const abortController = new AbortController();
-    changePasswordAbortRef.current = abortController;
 
     try {
       const settings = await getVaultSettings();
@@ -364,204 +340,14 @@ export default function SettingsPage() {
         return;
       }
 
-      const oldKey = await deriveKey(currentPassword, salt);
-
       const newSalt = generateSalt();
       const newHash = await hashPassword(newPassword, newSalt);
-      const newKey = await deriveKey(newPassword, newSalt);
+      const newSaltBase64 = bufferToBase64(newSalt);
 
-      const pending: PendingPasswordChange = {
-        newSalt: bufferToBase64(newSalt),
-        newHash,
-        reEncryptedAttachmentIds: [],
-        reEncryptedEvidenceIds: [],
-        dbReEncrypted: false,
-      };
-      await savePendingPasswordChange(pending);
-      setPendingChange(pending);
-
-      setChangePasswordProgress({ stage: 'Attachment Files', current: 0, total: 0, percentage: 0 });
-      const attResult = await reEncryptAllAttachmentFiles(oldKey, newKey, (current, total) => {
-        setChangePasswordProgress({ stage: 'Attachment Files', current, total, percentage: total > 0 ? Math.round((current / total) * 100) : 0 });
-      }, undefined, abortController.signal);
-
-      pending.reEncryptedAttachmentIds = attResult.completedIds;
-      await savePendingPasswordChange(pending);
-
-      if (attResult.cancelled) {
-        toast({ title: "Password Change Paused", description: `Re-encrypted ${attResult.processed} attachment files. You can resume next time.` });
-        setIsChangingPassword(false);
-        setChangePasswordProgress(null);
-        return;
-      }
-
-      if (attResult.failed > 0) {
-        toast({ variant: "destructive", title: "Password Change Incomplete", description: `${attResult.failed} attachment files failed re-encryption. Progress saved. Check browser console and try resuming.` });
-        setChangePasswordProgress(null);
-        return;
-      }
-
-      setChangePasswordProgress({ stage: 'Evidence Files', current: 0, total: 0, percentage: 0 });
-      const evResult = await reEncryptAllEvidenceAttachmentFiles(oldKey, newKey, (current, total) => {
-        setChangePasswordProgress({ stage: 'Evidence Files', current, total, percentage: total > 0 ? Math.round((current / total) * 100) : 0 });
-      }, undefined, abortController.signal);
-
-      pending.reEncryptedEvidenceIds = evResult.completedIds;
-      await savePendingPasswordChange(pending);
-
-      if (evResult.cancelled) {
-        toast({ title: "Password Change Paused", description: `Re-encrypted ${evResult.processed} evidence files. You can resume next time.` });
-        setIsChangingPassword(false);
-        setChangePasswordProgress(null);
-        return;
-      }
-
-      if (evResult.failed > 0) {
-        toast({ variant: "destructive", title: "Password Change Incomplete", description: `${evResult.failed} evidence files failed re-encryption. Progress saved. Check browser console and try resuming.` });
-        setChangePasswordProgress(null);
-        return;
-      }
-
-      pending.dbReEncrypted = true;
-      await savePendingPasswordChange(pending);
-
-      const totalReEncrypted = attResult.processed + evResult.processed;
-      const totalFailed = attResult.failed + evResult.failed;
-
-      if (totalFailed > 0) {
-        toast({
-          variant: "destructive",
-          title: "Password Change Incomplete",
-          description: `Re-encrypted ${totalReEncrypted} items, but ${totalFailed} failed. The password change was NOT finalized. Check browser console for details and try resuming.`,
-        });
-        setChangePasswordProgress(null);
-        return;
-      }
-
-      await finalizePendingPasswordChange();
-      setPendingChange(null);
+      await vaultDb.vault.update('main', { salt: newSaltBase64, passwordHash: newHash });
 
       toast({
         title: "Password Changed",
-        description: `Password updated successfully.`,
-      });
-
-      setChangePasswordDialogOpen(false);
-      setCurrentPassword("");
-      setNewPassword("");
-      setConfirmPassword("");
-      setChangePasswordProgress(null);
-
-    } catch (error) {
-      console.error("Failed to change password:", error);
-      toast({
-        variant: "destructive",
-        title: "Password Change Failed",
-        description: `${error instanceof Error ? error.message : "An error occurred."} Your progress has been saved. You can resume the password change by logging in and trying again.`,
-      });
-    } finally {
-      setIsChangingPassword(false);
-      changePasswordAbortRef.current = null;
-    }
-  };
-
-  const handleResumePasswordChange = async () => {
-    if (!pendingChange || !currentPassword || !newPassword) {
-      toast({
-        variant: "destructive",
-        title: "Passwords Required",
-        description: "Enter both your old password and the new password to resume.",
-      });
-      return;
-    }
-
-    setIsChangingPassword(true);
-    setChangePasswordProgress(null);
-    const abortController = new AbortController();
-    changePasswordAbortRef.current = abortController;
-
-    try {
-      const settings = await getVaultSettings();
-      if (!settings) throw new Error("Vault settings not found");
-
-      const salt = base64ToBuffer(settings.salt);
-      const isValid = await verifyPassword(currentPassword, salt, settings.passwordHash);
-      if (!isValid) {
-        toast({ variant: "destructive", title: "Invalid Password", description: "Current (old) password is incorrect." });
-        setIsChangingPassword(false);
-        return;
-      }
-
-      const newSalt = base64ToBuffer(pendingChange.newSalt);
-      const newValid = await verifyPassword(newPassword, newSalt, pendingChange.newHash);
-      if (!newValid) {
-        toast({ variant: "destructive", title: "Invalid New Password", description: "The new password does not match the one used when the change was started." });
-        setIsChangingPassword(false);
-        return;
-      }
-
-      const oldKey = await deriveKey(currentPassword, salt);
-      const newKey = await deriveKey(newPassword, newSalt);
-
-      const tracker = { ...pendingChange };
-      const skipAttIds = new Set(tracker.reEncryptedAttachmentIds);
-      const skipEvIds = new Set(tracker.reEncryptedEvidenceIds);
-
-      if (!tracker.dbReEncrypted) {
-        setChangePasswordProgress({ stage: 'Attachment Files (resuming)', current: 0, total: 0, percentage: 0 });
-        const attResult = await reEncryptAllAttachmentFiles(oldKey, newKey, (current, total) => {
-          setChangePasswordProgress({ stage: 'Attachment Files (resuming)', current, total, percentage: total > 0 ? Math.round((current / total) * 100) : 0 });
-        }, skipAttIds, abortController.signal);
-
-        tracker.reEncryptedAttachmentIds = [...tracker.reEncryptedAttachmentIds, ...attResult.completedIds];
-        await savePendingPasswordChange(tracker);
-        setPendingChange(tracker);
-
-        if (attResult.cancelled) {
-          toast({ title: "Password Change Paused", description: "Progress saved. You can resume again later." });
-          setIsChangingPassword(false);
-          setChangePasswordProgress(null);
-          return;
-        }
-
-        if (attResult.failed > 0) {
-          toast({ variant: "destructive", title: "Resume Incomplete", description: `${attResult.failed} attachment files failed re-encryption. Progress saved. Check browser console and try again.` });
-          setIsChangingPassword(false);
-          setChangePasswordProgress(null);
-          return;
-        }
-
-        setChangePasswordProgress({ stage: 'Evidence Files (resuming)', current: 0, total: 0, percentage: 0 });
-        const evResult = await reEncryptAllEvidenceAttachmentFiles(oldKey, newKey, (current, total) => {
-          setChangePasswordProgress({ stage: 'Evidence Files (resuming)', current, total, percentage: total > 0 ? Math.round((current / total) * 100) : 0 });
-        }, skipEvIds, abortController.signal);
-
-        tracker.reEncryptedEvidenceIds = [...tracker.reEncryptedEvidenceIds, ...evResult.completedIds];
-        await savePendingPasswordChange(tracker);
-        setPendingChange(tracker);
-
-        if (evResult.cancelled) {
-          toast({ title: "Password Change Paused", description: "Progress saved. You can resume again later." });
-          setIsChangingPassword(false);
-          setChangePasswordProgress(null);
-          return;
-        }
-
-        if (evResult.failed > 0) {
-          toast({ variant: "destructive", title: "Resume Incomplete", description: `${evResult.failed} evidence files failed re-encryption. Progress saved. Check browser console and try again.` });
-          setIsChangingPassword(false);
-          setChangePasswordProgress(null);
-          return;
-        }
-
-        tracker.dbReEncrypted = true;
-        await savePendingPasswordChange(tracker);
-      }
-
-      await finalizePendingPasswordChange();
-      setPendingChange(null);
-      toast({
-        title: "Password Change Complete",
         description: "Password updated successfully.",
       });
 
@@ -569,28 +355,16 @@ export default function SettingsPage() {
       setCurrentPassword("");
       setNewPassword("");
       setConfirmPassword("");
-      setChangePasswordProgress(null);
     } catch (error) {
-      console.error("Failed to resume password change:", error);
+      console.error("Failed to change password:", error);
       toast({
         variant: "destructive",
-        title: "Resume Failed",
-        description: `${error instanceof Error ? error.message : "An error occurred."} Progress saved. Try again.`,
+        title: "Password Change Failed",
+        description: error instanceof Error ? error.message : "An error occurred.",
       });
     } finally {
       setIsChangingPassword(false);
-      changePasswordAbortRef.current = null;
     }
-  };
-
-  const handleAbandonPasswordChange = async () => {
-    await clearPendingPasswordChange();
-    setPendingChange(null);
-    toast({
-      title: "Password Change Abandoned",
-      description: "Warning: Some files may be encrypted with a different key and may not be accessible. Consider restoring from backup.",
-      variant: "destructive",
-    });
   };
 
   const handleManualAttachmentMigration = async () => {
@@ -1532,38 +1306,6 @@ export default function SettingsPage() {
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            {pendingChange && (
-              <div className="p-3 bg-destructive/10 border border-destructive/30 rounded-md" data-testid="banner-pending-password-change">
-                <div className="flex items-start gap-2">
-                  <AlertTriangle className="h-4 w-4 text-destructive mt-0.5 shrink-0" />
-                  <div className="space-y-2">
-                    <p className="text-sm font-medium text-destructive">Interrupted Password Change Detected</p>
-                    <p className="text-sm text-muted-foreground">
-                      A previous password change was interrupted. Some files may be encrypted with a different key. 
-                      Resume to complete the process, or abandon if you want to restore from backup.
-                    </p>
-                    <div className="flex flex-wrap gap-2">
-                      <Button
-                        variant="default"
-                        size="sm"
-                        onClick={() => setChangePasswordDialogOpen(true)}
-                        data-testid="button-resume-password-change"
-                      >
-                        Resume Password Change
-                      </Button>
-                      <Button
-                        variant="destructive"
-                        size="sm"
-                        onClick={handleAbandonPasswordChange}
-                        data-testid="button-abandon-password-change"
-                      >
-                        Abandon
-                      </Button>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
             <div className="flex items-center justify-between gap-2 flex-wrap">
               <div>
                 <Label className="text-base">Change Password</Label>
@@ -2021,51 +1763,16 @@ export default function SettingsPage() {
           setCurrentPassword("");
           setNewPassword("");
           setConfirmPassword("");
-          setChangePasswordProgress(null);
         }
       }}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <KeyRound className="h-5 w-5" />
-              {pendingChange ? "Resume Password Change" : "Change Vault Password"}
+              Change Vault Password
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-4 py-4">
-            {pendingChange && !isChangingPassword && (
-              <div className="p-3 bg-destructive/10 border border-destructive/30 rounded-md">
-                <div className="flex items-start gap-2">
-                  <AlertTriangle className="h-4 w-4 text-destructive mt-0.5 shrink-0" />
-                  <p className="text-sm text-muted-foreground">
-                    A previous password change was interrupted. Enter your current password below and click "Resume" to continue where it left off.
-                    {pendingChange.reEncryptedAttachmentIds.length > 0 && (
-                      <span className="block mt-1">
-                        {pendingChange.reEncryptedAttachmentIds.length} attachment files already re-encrypted.
-                      </span>
-                    )}
-                    {pendingChange.reEncryptedEvidenceIds.length > 0 && (
-                      <span className="block">
-                        {pendingChange.reEncryptedEvidenceIds.length} evidence files already re-encrypted.
-                      </span>
-                    )}
-                    {pendingChange.dbReEncrypted && (
-                      <span className="block">File re-encryption complete.</span>
-                    )}
-                  </p>
-                </div>
-              </div>
-            )}
-
-            {!pendingChange && (
-              <div className="p-4 bg-muted rounded-lg border">
-                <p className="text-sm text-muted-foreground">
-                  Changing your password will re-encrypt your file attachments with the new password. 
-                  Database records will be encrypted with the new key when you lock your vault. 
-                  You can safely cancel and resume later.
-                </p>
-              </div>
-            )}
-
             <div className="space-y-2">
               <Label htmlFor="current-password">Current Password</Label>
               <Input
@@ -2080,97 +1787,57 @@ export default function SettingsPage() {
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="new-password">{pendingChange ? "New Password (from original change)" : "New Password"}</Label>
+              <Label htmlFor="new-password">New Password</Label>
               <Input
                 id="new-password"
                 type="password"
                 value={newPassword}
                 onChange={(e) => setNewPassword(e.target.value)}
-                placeholder={pendingChange ? "Enter the new password you chose" : "Enter new password (min 8 characters)"}
+                placeholder="Enter new password (min 8 characters)"
                 disabled={isChangingPassword}
                 data-testid="input-new-password"
               />
             </div>
 
-            {!pendingChange && (
-              <div className="space-y-2">
-                <Label htmlFor="confirm-password">Confirm New Password</Label>
-                <Input
-                  id="confirm-password"
-                  type="password"
-                  value={confirmPassword}
-                  onChange={(e) => setConfirmPassword(e.target.value)}
-                  placeholder="Confirm new password"
-                  disabled={isChangingPassword}
-                  data-testid="input-confirm-password"
-                />
-              </div>
-            )}
-
-            {isChangingPassword && changePasswordProgress && (
-              <div className="space-y-2">
-                <div className="flex items-center justify-between gap-2 text-sm">
-                  <span>Re-encrypting: {changePasswordProgress.stage}</span>
-                  <span>{changePasswordProgress.current}/{changePasswordProgress.total} ({changePasswordProgress.percentage}%)</span>
-                </div>
-                <Progress value={changePasswordProgress.percentage} />
-              </div>
-            )}
+            <div className="space-y-2">
+              <Label htmlFor="confirm-password">Confirm New Password</Label>
+              <Input
+                id="confirm-password"
+                type="password"
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                placeholder="Confirm new password"
+                disabled={isChangingPassword}
+                data-testid="input-confirm-password"
+              />
+            </div>
           </div>
           <DialogFooter className="gap-2">
-            {isChangingPassword ? (
-              <Button
-                variant="destructive"
-                onClick={handleCancelPasswordChange}
-                data-testid="button-cancel-reencryption"
-              >
-                Pause
-              </Button>
-            ) : (
-              <Button variant="outline" onClick={() => {
-                setChangePasswordDialogOpen(false);
-                setCurrentPassword("");
-                setNewPassword("");
-                setConfirmPassword("");
-                setChangePasswordProgress(null);
-              }}>
-                Close
-              </Button>
-            )}
-            {pendingChange ? (
-              <Button
-                onClick={handleResumePasswordChange}
-                disabled={isChangingPassword || !currentPassword || !newPassword}
-                data-testid="button-resume-change-password"
-              >
-                {isChangingPassword ? (
-                  <>
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    Resuming...
-                  </>
-                ) : (
-                  "Resume"
-                )}
-              </Button>
-            ) : (
-              <Button
-                onClick={handleChangePassword}
-                disabled={isChangingPassword || !currentPassword || !newPassword || !confirmPassword}
-                data-testid="button-confirm-change-password"
-              >
-                {isChangingPassword ? (
-                  <>
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    Changing...
-                  </>
-                ) : (
-                  <>
-                    <KeyRound className="h-4 w-4 mr-2" />
-                    Change Password
-                  </>
-                )}
-              </Button>
-            )}
+            <Button variant="outline" onClick={() => {
+              setChangePasswordDialogOpen(false);
+              setCurrentPassword("");
+              setNewPassword("");
+              setConfirmPassword("");
+            }} disabled={isChangingPassword}>
+              Cancel
+            </Button>
+            <Button
+              onClick={handleChangePassword}
+              disabled={isChangingPassword || !currentPassword || !newPassword || !confirmPassword}
+              data-testid="button-confirm-change-password"
+            >
+              {isChangingPassword ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Changing...
+                </>
+              ) : (
+                <>
+                  <KeyRound className="h-4 w-4 mr-2" />
+                  Change Password
+                </>
+              )}
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
