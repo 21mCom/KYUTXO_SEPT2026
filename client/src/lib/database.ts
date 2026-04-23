@@ -46,6 +46,82 @@ export class KYUTXODatabase extends Dexie {
   constructor() {
     super('KYUTXODatabase');
     
+    this.version(28).stores({
+      records: '++id, type, inputString, label, owner, walletName, seedName, walletSoftware, *tags, *categories, createdAt, updatedAt, chainType, syncDepth, addressImportance, [type+addressImportance], flowType, discoveredFromRecordId',
+      attachments: '++id, recordId, createdAt',
+      tags: '++id, name, createdAt',
+      categories: '++id, name, createdAt',
+      owners: '++id, name, createdAt',
+      walletNames: '++id, name, createdAt',
+      seedNames: '++id, name, createdAt',
+      walletSoftware: '++id, name, createdAt',
+      recordOrigins: '++id, recordId, originType, createdAt',
+      customFields: '++id, slug, enabled, createdAt',
+      settings: 'id',
+      priceData: '++id, [date+currency+asset], date, asset, currency, source, importedAt',
+      blockchainTransactions: '++id, &txid, blockHeight, blockTime, syncedAt, hasOpReturn',
+      transactionParticipants: '++id, [txid+role], txid, role, address, recordId, [prevTxid+prevVout]',
+      addressSyncState: '++id, &address, recordId, lastSyncedAt',
+      nodeSettings: 'id',
+      derivationTemplates: '++id, fingerprint, scriptType, owner, walletName, seedName, createdAt',
+      utxoLineage: '++id, [spentTxid+spentVout], [createdTxid+createdVout], consumingTxid, spentAddress, createdAddress, segmentId, spentOwned, createdOwned, isChange, blockTime',
+      custodySegments: '++id, &segmentId, [originTxid+originVout], originAddress, currentAddress, status, parentSegmentId, owner, walletName, originDate',
+      lineageSnapshots: '++id, &snapshotId, targetType, targetAddress, targetSegmentId, generatedAt, disclosureLevel',
+      evidence: '++id, documentType, originalDate, *tags, importance, createdAt, updatedAt',
+      evidenceAttachments: '++id, evidenceId, createdAt',
+      pausedSyncState: 'id',
+      skippedAddresses: '++id, address, reason, syncRunTimestamp, dismissed, createdAt',
+      addressBlacklist: '++id, &address, addedAt'
+    }).upgrade(async tx => {
+      const tablesWithTextFields: Record<string, string[]> = {
+        records: ['label', 'inputString', 'notes'],
+        tags: ['name'],
+        categories: ['name'],
+        owners: ['name'],
+        walletNames: ['name'],
+        seedNames: ['name'],
+        walletSoftware: ['name'],
+      };
+      let totalDeleted = 0;
+      for (const [tableName, fields] of Object.entries(tablesWithTextFields)) {
+        const table = tx.table(tableName);
+        const keysToDelete: number[] = [];
+        await table.toCollection().each((item: any) => {
+          const hasEncryptedField = fields.some(f => item[f] === '[encrypted]');
+          if (hasEncryptedField) {
+            keysToDelete.push(item.id);
+          }
+        });
+        if (keysToDelete.length > 0) {
+          await table.bulkDelete(keysToDelete);
+          totalDeleted += keysToDelete.length;
+          console.log(`[v28 cleanup] Deleted ${keysToDelete.length} unrecoverable records from ${tableName}`);
+        }
+      }
+      const relatedTables = [
+        'attachments', 'recordOrigins', 'transactionParticipants',
+        'evidence', 'evidenceAttachments', 'derivationTemplates',
+        'utxoLineage', 'custodySegments', 'lineageSnapshots',
+      ];
+      for (const tableName of relatedTables) {
+        const table = tx.table(tableName);
+        const keysToDelete: number[] = [];
+        await table.toCollection().each((item: any) => {
+          if (item._legacyEncryptedPayload) {
+            keysToDelete.push(item.id);
+          }
+        });
+        if (keysToDelete.length > 0) {
+          await table.bulkDelete(keysToDelete);
+          totalDeleted += keysToDelete.length;
+          console.log(`[v28 cleanup] Deleted ${keysToDelete.length} unrecoverable records from ${tableName}`);
+        }
+      }
+      if (totalDeleted > 0) {
+        console.log(`[v28 cleanup] Total: removed ${totalDeleted} unrecoverable encrypted records`);
+      }
+    });
+
     // Version 27 removes field-level encryption (isEncrypted/encryptedPayload stripped from all tables)
     // Users needing data-at-rest protection should use encrypted containers (VeraCrypt, BitLocker, FileVault, LUKS)
     this.version(27).stores({
@@ -81,15 +157,24 @@ export class KYUTXODatabase extends Dexie {
         'derivationTemplates', 'utxoLineage', 'custodySegments', 'lineageSnapshots',
         'evidence', 'evidenceAttachments',
       ];
+      let totalEncrypted = 0;
       for (const tableName of tablesToClean) {
+        let tableEncrypted = 0;
         await tx.table(tableName).toCollection().modify((item: any) => {
           if (item.isEncrypted && item.encryptedPayload) {
-            console.warn(`[v27 migration] Record in ${tableName} (id=${item.id}) has encrypted data that was not decrypted before upgrade. The encrypted payload will be preserved in _legacyEncryptedPayload for manual recovery. To migrate properly: restore from backup with the previous app version, unlock the vault to decrypt data, then upgrade.`);
+            tableEncrypted++;
             item._legacyEncryptedPayload = item.encryptedPayload;
           }
           delete item.isEncrypted;
           delete item.encryptedPayload;
         });
+        if (tableEncrypted > 0) {
+          totalEncrypted += tableEncrypted;
+          console.warn(`[v27 migration] ${tableName}: ${tableEncrypted} records had encrypted data preserved in _legacyEncryptedPayload`);
+        }
+      }
+      if (totalEncrypted > 0) {
+        console.warn(`[v27 migration] Total: ${totalEncrypted} encrypted records found. To recover: restore from backup with the previous app version, unlock the vault to decrypt, then upgrade.`);
       }
     });
 
