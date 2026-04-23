@@ -80,6 +80,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return;
       }
 
+      setLegacyMigrationProgress({
+        tableName: 'Preparing',
+        tableIndex: 0,
+        tableCount: 13,
+        current: 0,
+        total: 0,
+        failed: 0,
+      });
+
       const salt = base64ToBuffer(saltBase64);
       const encryptionKey = await deriveKey(password, salt);
 
