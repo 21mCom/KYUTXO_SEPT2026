@@ -36,7 +36,8 @@ import {
   Smartphone,
   LayoutList,
   ShieldAlert,
-  Eye
+  Eye,
+  GitBranch
 } from "lucide-react";
 import logoUrl from "@/assets/foot_1764929618997.png";
 import { version as APP_VERSION } from "../../../package.json";
@@ -104,6 +105,7 @@ const navGroups: NavGroup[] = [
       { title: "Address Reuse", url: "/address-reuse", icon: Repeat2 },
       { title: "Provenance", url: "/provenance", icon: Map },
       { title: "Flow Visualizer", url: "/flow-visualizer", icon: Network },
+      { title: "Network Analysis", url: "/network-analysis", icon: GitBranch },
       { title: "Data Stats", url: "/data-stats", icon: BarChart3 },
       { title: "Privacy Audit", url: "/privacy-audit", icon: Eye },
       { title: "Quantum Risk", url: "/quantum-risk", icon: ShieldAlert },

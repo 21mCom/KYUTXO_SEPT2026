@@ -55,6 +55,7 @@ import StatementReport from "@/pages/StatementReport";
 import QuantumRiskScanner from "@/pages/QuantumRiskScanner";
 import PrivacyAudit from "@/pages/PrivacyAudit";
 import BalanceOverview from "@/pages/BalanceOverview";
+import NetworkAnalysis from "@/pages/NetworkAnalysis";
 import NotFound from "@/pages/not-found";
 
 function AppRoutes() {
@@ -104,6 +105,7 @@ function AppRoutes() {
       <Route path="/quantum-risk" component={QuantumRiskScanner} />
       <Route path="/privacy-audit" component={PrivacyAudit} />
       <Route path="/balance" component={BalanceOverview} />
+      <Route path="/network-analysis" component={NetworkAnalysis} />
       <Route component={NotFound} />
     </Switch>
   );
