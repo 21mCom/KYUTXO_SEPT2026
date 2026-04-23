@@ -46,6 +46,36 @@ export class KYUTXODatabase extends Dexie {
   constructor() {
     super('KYUTXODatabase');
     
+    // Version 26 restores address and [prevTxid+prevVout] indexes on transactionParticipants
+    // These were accidentally removed in v24/v25 during the encryption overhaul
+    this.version(26).stores({
+      records: '++id, type, inputString, label, owner, walletName, seedName, walletSoftware, *tags, *categories, createdAt, updatedAt, isEncrypted, chainType, syncDepth, addressImportance, [type+addressImportance], flowType, discoveredFromRecordId',
+      attachments: '++id, recordId, createdAt, isEncrypted',
+      tags: '++id, name, createdAt, isEncrypted',
+      categories: '++id, name, createdAt, isEncrypted',
+      owners: '++id, name, createdAt, isEncrypted',
+      walletNames: '++id, name, createdAt, isEncrypted',
+      seedNames: '++id, name, createdAt, isEncrypted',
+      walletSoftware: '++id, name, createdAt, isEncrypted',
+      recordOrigins: '++id, recordId, originType, createdAt, isEncrypted',
+      customFields: '++id, slug, enabled, createdAt',
+      settings: 'id',
+      priceData: '++id, [date+currency+asset], date, asset, currency, source, importedAt',
+      blockchainTransactions: '++id, &txid, blockHeight, blockTime, syncedAt, hasOpReturn',
+      transactionParticipants: '++id, [txid+role], txid, role, address, recordId, [prevTxid+prevVout], isEncrypted',
+      addressSyncState: '++id, &address, recordId, lastSyncedAt',
+      nodeSettings: 'id',
+      derivationTemplates: '++id, fingerprint, scriptType, owner, walletName, seedName, createdAt, isEncrypted',
+      utxoLineage: '++id, [spentTxid+spentVout], [createdTxid+createdVout], consumingTxid, spentAddress, createdAddress, segmentId, spentOwned, createdOwned, isChange, blockTime, isEncrypted',
+      custodySegments: '++id, &segmentId, [originTxid+originVout], originAddress, currentAddress, status, parentSegmentId, owner, walletName, originDate, isEncrypted',
+      lineageSnapshots: '++id, &snapshotId, targetType, targetAddress, targetSegmentId, generatedAt, disclosureLevel, isEncrypted',
+      evidence: '++id, documentType, originalDate, *tags, importance, createdAt, updatedAt, isEncrypted',
+      evidenceAttachments: '++id, evidenceId, createdAt, isEncrypted',
+      pausedSyncState: 'id',
+      skippedAddresses: '++id, address, reason, syncRunTimestamp, dismissed, createdAt',
+      addressBlacklist: '++id, &address, addedAt'
+    });
+
     // Version 24 adds isEncrypted to transactionParticipants for encrypted participant data
     this.version(25).stores({
       records: '++id, type, inputString, label, owner, walletName, seedName, walletSoftware, *tags, *categories, createdAt, updatedAt, isEncrypted, chainType, syncDepth, addressImportance, [type+addressImportance], flowType, discoveredFromRecordId',
@@ -61,7 +91,7 @@ export class KYUTXODatabase extends Dexie {
       settings: 'id',
       priceData: '++id, [date+currency+asset], date, asset, currency, source, importedAt',
       blockchainTransactions: '++id, &txid, blockHeight, blockTime, syncedAt, hasOpReturn',
-      transactionParticipants: '++id, [txid+role], txid, role, address, recordId, [prevTxid+prevVout], isEncrypted',
+      transactionParticipants: '++id, [txid+role], txid, role, recordId, isEncrypted',
       addressSyncState: '++id, &address, recordId, lastSyncedAt',
       nodeSettings: 'id',
       derivationTemplates: '++id, fingerprint, scriptType, owner, walletName, seedName, createdAt, isEncrypted',
