@@ -547,7 +547,7 @@ export default function SettingsPage() {
 
       // Restore records
       if (records && records.length > 0) {
-        // Build set of existing inputStrings for merge mode (need to decrypt them first)
+        // Build set of existing inputStrings for merge mode
         let existingInputStrings = new Set<string>();
         if (restoreMode === "merge") {
           const existingRecords = await db.records.toArray();

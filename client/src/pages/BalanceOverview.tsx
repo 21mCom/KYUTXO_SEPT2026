@@ -75,36 +75,36 @@ export default function BalanceOverview() {
     []
   );
 
-  const [decryptedRecords, setDecryptedRecords] = useState<DbRecord[]>([]);
-  const decryptRequestId = useRef(0);
+  const [processedRecords, setProcessedRecords] = useState<DbRecord[]>([]);
+  const requestId = useRef(0);
 
   useEffect(() => {
     if (!rawRecords) return;
-    decryptRequestId.current += 1;
-    const thisRequestId = decryptRequestId.current;
+    requestId.current += 1;
+    const thisRequestId = requestId.current;
 
-    const decrypt = async () => {
+    const processRecords = async () => {
       try {
-        const decrypted = rawRecords;
-        if (thisRequestId === decryptRequestId.current) {
-          setDecryptedRecords(decrypted);
+        const records = rawRecords;
+        if (thisRequestId === requestId.current) {
+          setProcessedRecords(records);
         }
       } catch {
-        if (thisRequestId === decryptRequestId.current) {
-          setDecryptedRecords(rawRecords);
+        if (thisRequestId === requestId.current) {
+          setProcessedRecords(rawRecords);
         }
       }
     };
-    decrypt();
+    processRecords();
   }, [rawRecords]);
 
   useEffect(() => {
-    if (!decryptedRecords || decryptedRecords.length === 0) {
+    if (!processedRecords || processedRecords.length === 0) {
       setParticipants(undefined);
       return;
     }
 
-    const addresses = decryptedRecords
+    const addresses = processedRecords
       .filter(r => r.type === 'address' && r.inputString)
       .map(r => r.inputString!);
 
@@ -127,27 +127,27 @@ export default function BalanceOverview() {
           setParticipants([]);
         }
       });
-  }, [decryptedRecords]);
+  }, [processedRecords]);
 
   const addressToRecord = useMemo(() => {
     const map = new Map<string, DbRecord>();
-    decryptedRecords.forEach(record => {
+    processedRecords.forEach(record => {
       if (record.type === 'address' && record.inputString) {
         map.set(record.inputString, record);
       }
     });
     return map;
-  }, [decryptedRecords]);
+  }, [processedRecords]);
 
   const recordIdToRecord = useMemo(() => {
     const map = new Map<number, DbRecord>();
-    decryptedRecords.forEach(record => {
+    processedRecords.forEach(record => {
       if (record.type === 'address' && record.id !== undefined) {
         map.set(record.id, record);
       }
     });
     return map;
-  }, [decryptedRecords]);
+  }, [processedRecords]);
 
   const txidToTx = useMemo(() => {
     const map = new Map<string, BlockchainTransaction>();

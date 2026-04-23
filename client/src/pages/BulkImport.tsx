@@ -365,10 +365,9 @@ export default function BulkImport() {
         vaultNotes: null,
       };
 
-      const rawRecords = await db.records.where('type').equals('address').toArray();
-      const decryptedRecords = rawRecords;
-      const recordLookup = new Map<string, (typeof decryptedRecords)[0]>();
-      for (const r of decryptedRecords) {
+      const existingRecords = await db.records.where('type').equals('address').toArray();
+      const recordLookup = new Map<string, (typeof existingRecords)[0]>();
+      for (const r of existingRecords) {
         if (r.inputString) {
           recordLookup.set(r.inputString.trim().toLowerCase(), r);
         }

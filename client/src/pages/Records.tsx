@@ -238,9 +238,9 @@ export default function Records() {
           setTotalCount(count);
         }
         
-        const decrypted = rawRecords;
+        const records = rawRecords;
         
-        const convertedRecords: ConvertedRecord[] = decrypted.map(r => ({
+        const convertedRecords: ConvertedRecord[] = records.map(r => ({
           id: String(r.id),
           type: r.type as "address" | "transaction" | "other",
           inputString: r.inputString,
@@ -420,10 +420,10 @@ export default function Records() {
         const record = await db.records.get(parseInt(selectedRecordId));
         if (!record) return;
         
-        const decrypted = [record];
+        const records = [record];
         
-        if (decrypted.length > 0) {
-          const r = decrypted[0];
+        if (records.length > 0) {
+          const r = records[0];
           setDirectLoadedRecord({
             id: String(r.id),
             type: r.type as "address" | "transaction" | "other",

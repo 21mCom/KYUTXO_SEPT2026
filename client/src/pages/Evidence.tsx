@@ -124,17 +124,17 @@ export default function EvidencePage() {
   const [attachmentCounts, setAttachmentCounts] = useState<Map<number, number>>(new Map());
 
   const rawEvidence = useLiveQuery(() => db.evidence.toArray(), []);
-  const [decryptedEvidence, setDecryptedEvidence] = useState<Evidence[]>([]);
+  const [loadedEvidence, setLoadedEvidence] = useState<Evidence[]>([]);
 
   useLiveQuery(async () => {
     if (rawEvidence && rawEvidence.length > 0) {
-      setDecryptedEvidence(rawEvidence);
+      setLoadedEvidence(rawEvidence);
     } else {
-      setDecryptedEvidence([]);
+      setLoadedEvidence([]);
     }
   }, [rawEvidence]);
 
-  const filteredEvidence = decryptedEvidence.filter((evidence) => {
+  const filteredEvidence = loadedEvidence.filter((evidence) => {
     const matchesSearch = 
       searchTerm === "" ||
       evidence.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -185,9 +185,9 @@ export default function EvidencePage() {
 
   // Load attachment counts for list view
   useLiveQuery(async () => {
-    if (viewMode === 'list' && decryptedEvidence.length > 0) {
+    if (viewMode === 'list' && loadedEvidence.length > 0) {
       const counts = new Map<number, number>();
-      for (const ev of decryptedEvidence) {
+      for (const ev of loadedEvidence) {
         if (ev.id) {
           const count = await db.evidenceAttachments.where('evidenceId').equals(ev.id).count();
           counts.set(ev.id, count);
@@ -195,7 +195,7 @@ export default function EvidencePage() {
       }
       setAttachmentCounts(counts);
     }
-  }, [viewMode, decryptedEvidence]);
+  }, [viewMode, loadedEvidence]);
 
   const form = useForm<EvidenceFormValues>({
     resolver: zodResolver(evidenceFormSchema),
@@ -649,11 +649,11 @@ export default function EvidencePage() {
                 <FileText className="h-12 w-12 text-muted-foreground mb-4" />
                 <h3 className="text-lg font-medium mb-2">No evidence found</h3>
                 <p className="text-sm text-muted-foreground text-center max-w-md mb-4">
-                  {decryptedEvidence.length === 0 
+                  {loadedEvidence.length === 0 
                     ? "Add your first piece of evidence to keep track of important documents, emails, and receipts."
                     : "No evidence matches your current filters."}
                 </p>
-                {decryptedEvidence.length === 0 && (
+                {loadedEvidence.length === 0 && (
                   <Button onClick={openAddDialog} variant="outline">
                     <Plus className="h-4 w-4 mr-2" />
                     Add Evidence

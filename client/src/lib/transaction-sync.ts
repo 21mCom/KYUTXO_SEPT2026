@@ -1021,8 +1021,7 @@ export class TransactionSyncService {
           .where('type').equals('address')
           .filter(r => r.source !== 'blockchain-sync')
           .toArray();
-        const decrypted = allCuratedRecords;
-        this.knownAddressSet = new Set(decrypted.map(r => r.inputString));
+        this.knownAddressSet = new Set(allCuratedRecords.map(r => r.inputString));
         console.log(`[TransactionSync] Connected-only mode: ${this.knownAddressSet.size} known addresses loaded`);
       } else {
         this.knownAddressSet = null;
@@ -1495,8 +1494,7 @@ export class TransactionSyncService {
       .where('role').equals('input')
       .toArray();
 
-    const decryptedInputs = allInputs;
-    const unresolvedInputs = decryptedInputs.filter(
+    const unresolvedInputs = allInputs.filter(
       p => (!p.address || p.address === '') && p.prevTxid !== undefined && p.prevVout !== undefined
     );
 
@@ -1519,8 +1517,7 @@ export class TransactionSyncService {
         .where('txid').anyOf(batch)
         .and(p => p.role === 'output')
         .toArray();
-      const decryptedOutputs = rawOutputs;
-      for (const o of decryptedOutputs) {
+      for (const o of rawOutputs) {
         if (o.vout !== undefined) {
           localOutputCache.set(`${o.txid}:${o.vout}`, {
             address: o.address,
@@ -1883,7 +1880,7 @@ export class TransactionSyncService {
    * Only counts addresses that haven't been synced yet at each depth level.
    */
   async getMultiDepthEstimate(options: SyncOptions): Promise<SyncDepthEstimate> {
-    const allRecords = await loadDecryptedAddressRecords();
+    const allRecords = await loadAddressRecords();
     return this.getMultiDepthEstimateFromRecords(options, allRecords);
   }
 
@@ -1962,7 +1959,7 @@ function extractBaseWalletName(source: string): string {
   return source;
 }
 
-export async function loadDecryptedAddressRecords(): Promise<Record[]> {
+export async function loadAddressRecords(): Promise<Record[]> {
   return db.records.where('type').equals('address').toArray();
 }
 
@@ -1971,7 +1968,7 @@ export function getAddressSourcesFromRecords(allRecords: Record[]): SourceCatego
 }
 
 export async function getAddressSources(): Promise<SourceCategory[]> {
-  const allRecords = await loadDecryptedAddressRecords();
+  const allRecords = await loadAddressRecords();
   return _buildSourceCategories(allRecords);
 }
 

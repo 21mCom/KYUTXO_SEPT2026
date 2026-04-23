@@ -340,7 +340,7 @@ export async function findLabeledConnections(
 ): Promise<ConnectionResult[]> {
   const results: ConnectionResult[] = [];
 
-  // Get all records and decrypt
+  // Get all records
   const allRawRecords = await db.records.toArray();
   const allRecords = allRawRecords;
 

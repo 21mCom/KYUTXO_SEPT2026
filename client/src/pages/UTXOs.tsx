@@ -251,16 +251,16 @@ export default function UTXOs() {
   useEffect(() => {
     const loadVocabulary = async () => {
       try {
-        const [decryptedOwners, decryptedWalletNames, decryptedTags, decryptedCategories] = await Promise.all([
+        const [allOwners, allWalletNames, allTags, allCategories] = await Promise.all([
           getOwners(),
           getWalletNames(),
           getTags(),
           getCategories()
         ]);
-        setOwners(decryptedOwners.map(o => o.name).filter(Boolean).sort());
-        setWalletNames(decryptedWalletNames.map(w => w.name).filter(Boolean).sort());
-        setTags(decryptedTags.map(t => t.name).filter(Boolean).sort());
-        setCategories(decryptedCategories.map(c => c.name).filter(Boolean).sort());
+        setOwners(allOwners.map(o => o.name).filter(Boolean).sort());
+        setWalletNames(allWalletNames.map(w => w.name).filter(Boolean).sort());
+        setTags(allTags.map(t => t.name).filter(Boolean).sort());
+        setCategories(allCategories.map(c => c.name).filter(Boolean).sort());
         setVocabLoaded(true);
       } catch (error) {
         console.error('Failed to load vocabulary:', error);
@@ -269,38 +269,38 @@ export default function UTXOs() {
     loadVocabulary();
   }, []);
 
-  const [decryptedRecords, setDecryptedRecords] = useState<DbRecord[]>([]);
-  const decryptRequestId = useRef(0);
+  const [processedRecords, setProcessedRecords] = useState<DbRecord[]>([]);
+  const requestId = useRef(0);
   
   useEffect(() => {
     if (!rawRecords) return;
     
-    decryptRequestId.current += 1;
-    const thisRequestId = decryptRequestId.current;
+    requestId.current += 1;
+    const thisRequestId = requestId.current;
     
-    const decrypt = async () => {
+    const processRecords = async () => {
       try {
-        const decrypted = rawRecords;
-        if (thisRequestId === decryptRequestId.current) {
-          setDecryptedRecords(decrypted);
+        const records = rawRecords;
+        if (thisRequestId === requestId.current) {
+          setProcessedRecords(records);
         }
       } catch {
-        if (thisRequestId === decryptRequestId.current) {
-          setDecryptedRecords(rawRecords);
+        if (thisRequestId === requestId.current) {
+          setProcessedRecords(rawRecords);
         }
       }
     };
     
-    decrypt();
+    processRecords();
   }, [rawRecords]);
 
   useEffect(() => {
-    if (!decryptedRecords || decryptedRecords.length === 0) {
+    if (!processedRecords || processedRecords.length === 0) {
       setParticipants(undefined);
       return;
     }
 
-    const addresses = decryptedRecords
+    const addresses = processedRecords
       .filter(r => r.type === 'address' && r.inputString)
       .map(r => r.inputString!);
 
@@ -326,22 +326,22 @@ export default function UTXOs() {
           setParticipantsLoading(false);
         }
       });
-  }, [decryptedRecords]);
+  }, [processedRecords]);
 
   const addressToRecord = useMemo(() => {
     const map = new Map<string, DbRecord>();
-    decryptedRecords.forEach(record => {
+    processedRecords.forEach(record => {
       if (record.type === 'address' && record.inputString) {
         map.set(record.inputString, record);
       }
     });
     return map;
-  }, [decryptedRecords]);
+  }, [processedRecords]);
 
   // Build set of user-curated addresses (for filtering UTXOs)
   const userCuratedAddresses = useMemo(() => {
     const set = new Set<string>();
-    decryptedRecords.forEach(record => {
+    processedRecords.forEach(record => {
       if (record.type === 'address' && record.inputString) {
         const importance = record.addressImportance;
         // Include if no importance set (legacy) or if user-curated tier
@@ -351,12 +351,12 @@ export default function UTXOs() {
       }
     });
     return set;
-  }, [decryptedRecords]);
+  }, [processedRecords]);
 
   // Count blockchain-discovered addresses that have UTXOs
   const blockchainDiscoveredWithUtxos = useMemo(() => {
     const set = new Set<string>();
-    decryptedRecords.forEach(record => {
+    processedRecords.forEach(record => {
       if (record.type === 'address' && record.inputString) {
         const importance = record.addressImportance;
         // Only count blockchain-discovered and pending-review tiers
@@ -366,7 +366,7 @@ export default function UTXOs() {
       }
     });
     return set;
-  }, [decryptedRecords]);
+  }, [processedRecords]);
 
   const txidToTx = useMemo(() => {
     const map = new Map<string, BlockchainTransaction>();
@@ -893,7 +893,7 @@ export default function UTXOs() {
               {participantsLoading && (
                 <div className="flex items-center gap-2 text-sm text-muted-foreground" data-testid="status-participants-loading">
                   <RefreshCw className="h-4 w-4 animate-spin" />
-                  <span>Loading transaction participants for {decryptedRecords.length.toLocaleString()} addresses...</span>
+                  <span>Loading transaction participants for {processedRecords.length.toLocaleString()} addresses...</span>
                 </div>
               )}
               {isComputing && !participantsLoading && (

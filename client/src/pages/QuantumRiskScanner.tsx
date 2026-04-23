@@ -102,8 +102,6 @@ export default function QuantumRiskScanner() {
         return;
       }
 
-      const decrypted = allRecords;
-
       const inputParticipants = await db.transactionParticipants.where("role").equals("input").toArray();
       const spentRecordIds = new Set(
         inputParticipants
@@ -112,7 +110,7 @@ export default function QuantumRiskScanner() {
       );
 
       const scanResults: ScanResult[] = [];
-      for (const record of decrypted) {
+      for (const record of allRecords) {
         if (!record.id) continue;
         const address = record.inputString;
         const addressType = detectAddressType(address);

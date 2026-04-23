@@ -32,9 +32,8 @@ export async function checkForDuplicates(
   parsedRecords: ParsedRecord[]
 ): Promise<DuplicateInfo[]> {
   const allRaw = await db.records.toArray();
-  const allDecrypted = allRaw;
   const lookupMap = new Map<string, DBRecord>();
-  for (const r of allDecrypted) {
+  for (const r of allRaw) {
     if (r.inputString) {
       lookupMap.set(r.inputString.trim().toLowerCase(), r);
     }

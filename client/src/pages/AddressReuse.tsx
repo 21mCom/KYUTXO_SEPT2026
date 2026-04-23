@@ -105,7 +105,7 @@ export default function AddressReuse() {
   // Processing state for deferred computation
   const [isProcessing, setIsProcessing] = useState(true);
   const [reusedAddresses, setReusedAddresses] = useState<AddressReuseInfo[]>([]);
-  const [decryptedRecords, setDecryptedRecords] = useState<Record[]>([]);
+  const [processedRecords, setProcessedRecords] = useState<Record[]>([]);
   const [addressToRecord, setAddressToRecord] = useState<Map<string, Record>>(new Map());
   const processingRef = useRef(0);
   
@@ -165,22 +165,16 @@ export default function AddressReuse() {
         
         if (thisProcessingId !== processingRef.current) return;
         
-        // Decrypt records
-        let decrypted: Record[];
-        try {
-          decrypted = curatedRecords;
-        } catch {
-          decrypted = curatedRecords;
-        }
+        const records = curatedRecords;
         
         if (thisProcessingId !== processingRef.current) return;
         
-        setDecryptedRecords(decrypted);
+        setProcessedRecords(records);
         
         // Build address map from records
         const addrToRecord = new Map<string, Record>();
         const addressSet = new Set<string>();
-        decrypted.forEach(record => {
+        records.forEach(record => {
           if (record.inputString) {
             addrToRecord.set(record.inputString, record);
             addressSet.add(record.inputString);

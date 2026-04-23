@@ -98,12 +98,12 @@ export default function LightningSpeculator() {
   useEffect(() => {
     const loadVocabulary = async () => {
       try {
-        const [decryptedOwners, decryptedWallets] = await Promise.all([
+        const [allOwners, allWallets] = await Promise.all([
           getOwners(),
           getWalletNames()
         ]);
-        setOwners(decryptedOwners.map(o => o.name).filter(Boolean).sort());
-        setWalletNames(decryptedWallets.map(w => w.name).filter(Boolean).sort());
+        setOwners(allOwners.map(o => o.name).filter(Boolean).sort());
+        setWalletNames(allWallets.map(w => w.name).filter(Boolean).sort());
       } catch (error) {
         console.error('Failed to load vocabulary:', error);
       }

@@ -115,10 +115,10 @@ export function UTXODetailPanel({ open, onClose, utxo, latestPrice }: UTXODetail
           .filter(r => Boolean(r.inputString && addressSet.has(r.inputString)))
           .toArray();
 
-        const decryptedRecords = rawRecords;
+        const records = rawRecords;
 
         const recordMap = new Map<string, DbRecord>();
-        decryptedRecords.forEach(r => {
+        records.forEach(r => {
           if (r.inputString) {
             recordMap.set(r.inputString, r);
           }

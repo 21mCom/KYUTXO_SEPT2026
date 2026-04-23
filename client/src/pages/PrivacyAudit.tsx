@@ -175,10 +175,9 @@ export default function PrivacyAudit() {
       }
 
       const records = await db.records.where("type").equals("address").toArray();
-      const decrypted = records;
 
       const addressToRecord = new Map<string, DbRecord>();
-      for (const r of decrypted) {
+      for (const r of records) {
         if (r.inputString) {
           addressToRecord.set(r.inputString, r);
         }

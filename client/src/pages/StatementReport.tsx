@@ -192,8 +192,8 @@ export default function StatementReport() {
           const batch = ourOutputs.slice(i, i + 500);
           const keys = batch.map(o => [o.txid, o.vout] as [string, number]);
           const raw = await db.transactionParticipants.where('[prevTxid+prevVout]').anyOf(keys).toArray();
-          const decrypted = raw;
-          allSpendingInputs.push(...decrypted);
+          const spendingInputs = raw;
+          allSpendingInputs.push(...spendingInputs);
           if (i + 500 < ourOutputs.length) {
             await new Promise(r => setTimeout(r, 0));
           }

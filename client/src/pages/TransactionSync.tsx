@@ -34,7 +34,7 @@ import {
 } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { transactionSyncService, type SyncProgress, type SyncResult, type SyncOptions, type SourceCategory, type SourceSelection, type SourceInfo, type SyncDepthEstimate, loadDecryptedAddressRecords, getAddressSourcesFromRecords } from "@/lib/transaction-sync";
+import { transactionSyncService, type SyncProgress, type SyncResult, type SyncOptions, type SourceCategory, type SourceSelection, type SourceInfo, type SyncDepthEstimate, loadAddressRecords, getAddressSourcesFromRecords } from "@/lib/transaction-sync";
 import type { Record as DbRecord, PausedSyncState, SkippedAddress, AddressBlacklist, SyncProtectionSettings } from "@/lib/database";
 import { DEFAULT_SYNC_PROTECTION } from "@/lib/database";
 import { useNodeSettings } from "@/hooks/use-node-settings";
@@ -117,7 +117,7 @@ export default function TransactionSync() {
     setIsLoadingSources(true);
     try {
       await new Promise(r => setTimeout(r, 0));
-      const records = await loadDecryptedAddressRecords();
+      const records = await loadAddressRecords();
       setCachedRecords(records);
       const categories = getAddressSourcesFromRecords(records);
       setSourceCategories(categories);

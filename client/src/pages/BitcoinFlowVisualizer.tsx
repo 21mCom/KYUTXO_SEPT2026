@@ -282,9 +282,7 @@ export default function BitcoinFlowVisualizer() {
           .equals('address')
           .toArray();
 
-        const decrypted = records;
-
-        let filtered = decrypted.filter(r => r.inputString);
+        let filtered = records.filter(r => r.inputString);
 
         if (filterOwner !== "__all__") {
           filtered = filtered.filter(r => r.owner === filterOwner);
@@ -398,41 +396,37 @@ export default function BitcoinFlowVisualizer() {
         .first();
       
       if (dbRecord) {
-        const decryptedRecords = [dbRecord];
-        const decrypted = decryptedRecords[0];
-        if (decrypted) {
-          const converted: RecordViewData = {
-            id: String(decrypted.id),
-            type: decrypted.type as "address" | "transaction" | "other",
-            inputString: decrypted.inputString,
-            label: decrypted.label || "",
-            notes: decrypted.notes,
-            tags: decrypted.tags || [],
-            categories: decrypted.categories || [],
-            seedName: decrypted.seedName,
-            walletSoftware: decrypted.walletSoftware,
-            owner: decrypted.owner,
-            walletName: decrypted.walletName,
-            privateKeyStatus: decrypted.privateKeyStatus,
-            source: decrypted.source,
-            derivationPath: decrypted.derivationPath,
-            chainType: decrypted.chainType as ChainType | undefined,
-            vault: decrypted.vault as VaultMetadata | undefined,
-            addressImportance: decrypted.addressImportance as AddressImportance | undefined,
-            customFields: decrypted.customFields as { [key: string]: string } | undefined,
-            syncDepth: decrypted.syncDepth,
-            maxSyncedDepth: decrypted.maxSyncedDepth,
-            discoveredInTxid: decrypted.discoveredInTxid,
-            discoveredFromRecordId: decrypted.discoveredFromRecordId,
-            flowType: decrypted.flowType as FlowType | undefined,
-            acquisitionMethod: decrypted.acquisitionMethod as AcquisitionMethod | undefined,
-            dispositionType: decrypted.dispositionType as DispositionType | undefined,
-            costBasisUsd: decrypted.costBasisUsd,
-            counterpartyType: decrypted.counterpartyType as CounterpartyType | undefined,
-          };
-          setSelectedRecord(converted);
-          setRecordPanelOpen(true);
-        }
+        const converted: RecordViewData = {
+          id: String(dbRecord.id),
+          type: dbRecord.type as "address" | "transaction" | "other",
+          inputString: dbRecord.inputString,
+          label: dbRecord.label || "",
+          notes: dbRecord.notes,
+          tags: dbRecord.tags || [],
+          categories: dbRecord.categories || [],
+          seedName: dbRecord.seedName,
+          walletSoftware: dbRecord.walletSoftware,
+          owner: dbRecord.owner,
+          walletName: dbRecord.walletName,
+          privateKeyStatus: dbRecord.privateKeyStatus,
+          source: dbRecord.source,
+          derivationPath: dbRecord.derivationPath,
+          chainType: dbRecord.chainType as ChainType | undefined,
+          vault: dbRecord.vault as VaultMetadata | undefined,
+          addressImportance: dbRecord.addressImportance as AddressImportance | undefined,
+          customFields: dbRecord.customFields as { [key: string]: string } | undefined,
+          syncDepth: dbRecord.syncDepth,
+          maxSyncedDepth: dbRecord.maxSyncedDepth,
+          discoveredInTxid: dbRecord.discoveredInTxid,
+          discoveredFromRecordId: dbRecord.discoveredFromRecordId,
+          flowType: dbRecord.flowType as FlowType | undefined,
+          acquisitionMethod: dbRecord.acquisitionMethod as AcquisitionMethod | undefined,
+          dispositionType: dbRecord.dispositionType as DispositionType | undefined,
+          costBasisUsd: dbRecord.costBasisUsd,
+          counterpartyType: dbRecord.counterpartyType as CounterpartyType | undefined,
+        };
+        setSelectedRecord(converted);
+        setRecordPanelOpen(true);
       } else {
         navigate(`/records?search=${encodeURIComponent(address)}`);
       }

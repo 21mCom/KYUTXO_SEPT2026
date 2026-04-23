@@ -507,7 +507,7 @@ export default function BulkEditor() {
     }
     
     // For vocabulary fields (select/array with suggestions), use Combobox
-    // Key includes hash of option values to force re-render when vocabulary data changes (encrypted → decrypted)
+    // Key includes hash of option values to force re-render when vocabulary data changes
     if ((fieldDef.type === 'select' || fieldDef.type === 'array') && fieldDef.vocabularyKey) {
       // Create a simple hash from option values to detect content changes
       const optionsHash = options.map(o => o.value).join('|').slice(0, 100);

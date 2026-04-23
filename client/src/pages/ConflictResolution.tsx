@@ -83,12 +83,11 @@ export default function ConflictResolution() {
         return;
       }
       
-      const rawRecords = await db.records.where('id').anyOf(multiOriginIds).toArray();
-      const decrypted = rawRecords;
+      const records = await db.records.where('id').anyOf(multiOriginIds).toArray();
       
       const recordsWithConflictData: RecordWithConflicts[] = [];
       
-      for (const record of decrypted) {
+      for (const record of records) {
         if (!record.id) continue;
         
         const origins = await getRecordOrigins(record.id);

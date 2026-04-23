@@ -53,7 +53,7 @@ function isOwnedAddress(importance: AddressImportance | undefined): boolean {
   return ['verified', 'manual', 'wallet-import', 'xpub-derived'].includes(importance);
 }
 
-// Get record for an address with optional decryption
+// Get record for an address
 async function getRecordForAddress(address: string): Promise<Record | undefined> {
   const records = await db.records
     .where('inputString')

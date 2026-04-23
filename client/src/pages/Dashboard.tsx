@@ -74,7 +74,7 @@ export default function Dashboard() {
   const [uploadProgress, setUploadProgress] = useState<{ current: number; total: number } | null>(null);
   
   // Smart filtering: exclude blockchain-discovered records by default for performance
-  // This filters at the DATABASE level, avoiding loading/decrypting records we don't need
+  // This filters at the DATABASE level, avoiding loading records we don't need
   const [includeBlockchainDiscovered, setIncludeBlockchainDiscovered] = useState(false);
   
   // Delete confirmation state

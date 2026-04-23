@@ -75,7 +75,7 @@ export default function Transactions() {
   const [searchFilters, setSearchFilters] = useState<SearchFilters>(defaultFilters);
   
   // Smart filtering: exclude transactions only involving blockchain-discovered addresses
-  // This filters at the DATABASE level, avoiding loading/decrypting records we don't need
+  // This filters at the DATABASE level, avoiding loading records we don't need
   const [includeBlockchainDiscovered, setIncludeBlockchainDiscovered] = useState(false);
   
   // OP_RETURN filter: only show transactions with OP_RETURN data
@@ -104,51 +104,51 @@ export default function Transactions() {
     [includeBlockchainDiscovered]
   );
   
-  // Decrypt records to get addresses
-  const [decryptedRecords, setDecryptedRecords] = useState<Record[]>([]);
+  // Process records to get addresses
+  const [processedRecords, setProcessedRecords] = useState<Record[]>([]);
   // Use a ref to track the latest request ID and prevent stale async updates
-  const decryptRequestId = useRef(0);
+  const requestId = useRef(0);
   
   useEffect(() => {
     if (!rawRecords) return;
     
     // Increment request ID for this call - use ref to ensure we can check latest value
-    decryptRequestId.current += 1;
-    const thisRequestId = decryptRequestId.current;
+    requestId.current += 1;
+    const thisRequestId = requestId.current;
     
-    const decrypt = async () => {
+    const processRecords = async () => {
       try {
-        const decrypted = rawRecords;
+        const records = rawRecords;
         // Only update if this is still the latest request
-        if (thisRequestId === decryptRequestId.current) {
-          setDecryptedRecords(decrypted);
+        if (thisRequestId === requestId.current) {
+          setProcessedRecords(records);
         }
       } catch {
         // On failure, use raw records as fallback only if this is latest request
-        if (thisRequestId === decryptRequestId.current) {
-          setDecryptedRecords(prev => prev.length === 0 ? rawRecords : prev);
+        if (thisRequestId === requestId.current) {
+          setProcessedRecords(prev => prev.length === 0 ? rawRecords : prev);
         }
       }
     };
     
-    decrypt();
+    processRecords();
   }, [rawRecords]);
 
   // Build address -> record lookup
   const addressToRecord = useMemo(() => {
     const map = new Map<string, Record>();
-    decryptedRecords.forEach(record => {
+    processedRecords.forEach(record => {
       if (record.type === 'address' && record.inputString) {
         map.set(record.inputString, record);
       }
     });
     return map;
-  }, [decryptedRecords]);
+  }, [processedRecords]);
 
   const { value: userCuratedTxidSet, isComputing: userCuratedTxidSetComputing } = useAsyncMemo(async (signal) => {
-    if (!decryptedRecords || decryptedRecords.length === 0) return new Set<string>();
+    if (!processedRecords || processedRecords.length === 0) return new Set<string>();
     
-    const recordIds = decryptedRecords
+    const recordIds = processedRecords
       .filter(r => r.id !== undefined)
       .map(r => r.id as number);
     
@@ -167,7 +167,7 @@ export default function Transactions() {
       if (i + batchSize < recordIds.length) await yieldToUI();
     }
     return txids;
-  }, [decryptedRecords], new Set<string>());
+  }, [processedRecords], new Set<string>());
 
   const blockchainOnlyTxCount = useMemo(() => {
     if (!allTransactions || userCuratedTxidSetComputing) return 0;

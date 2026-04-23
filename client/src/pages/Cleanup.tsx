@@ -100,11 +100,10 @@ async function bulkGetOriginsByRecordId(recordIds: Set<number>): Promise<Map<num
       .toArray();
 
     for (const origin of batch) {
-      const decrypted = origin;
       if (!grouped.has(origin.recordId)) {
         grouped.set(origin.recordId, []);
       }
-      grouped.get(origin.recordId)!.push(decrypted);
+      grouped.get(origin.recordId)!.push(origin);
     }
   }
   return grouped;
@@ -122,10 +121,9 @@ async function buildKnownRecordSets(onProgress: (msg: string) => void): Promise<
       ['address', 'xpub-derived'],
     ])
     .toArray();
-  const decrypted = knownRecords;
   const knownAddresses = new Set<string>();
   const knownRecordIds = new Set<number>();
-  for (const r of decrypted) {
+  for (const r of knownRecords) {
     if (r.inputString) {
       knownAddresses.add(r.inputString.trim().toLowerCase());
     }
@@ -255,8 +253,7 @@ export default function Cleanup() {
           ['address', 'xpub-derived'],
         ])
         .toArray();
-      const decrypted = allRecords;
-      const synced = decrypted
+      const synced = allRecords
         .filter(r => r.id && (r.maxSyncedDepth !== undefined && r.maxSyncedDepth >= 0))
         .map(r => ({ id: r.id!, address: r.inputString }));
       setSyncedAddresses(synced);
@@ -318,14 +315,13 @@ export default function Cleanup() {
       setScanProgress(`Checking records... ${processed.toLocaleString()}/${total.toLocaleString()} (${Math.round((processed / total) * 100)}%)`);
       await yieldToUI();
 
-      const decrypted = batch;
       const batchRecordIds = new Set<number>();
-      for (const r of decrypted) {
+      for (const r of batch) {
         if (r.id) batchRecordIds.add(r.id);
       }
       const originsMap = await bulkGetOriginsByRecordId(batchRecordIds);
 
-      for (const record of decrypted) {
+      for (const record of batch) {
         if (!record.id) continue;
         const origins = originsMap.get(record.id) || [];
         if (isBlockchainOnlyRecord(record, origins) && !hasUserMetadata(record, origins)) {
@@ -384,11 +380,10 @@ export default function Cleanup() {
         .toArray();
 
       if (children.length === 0) break;
-      const decrypted = children;
-      for (const r of decrypted) allDiscovered.push(r);
+      for (const r of children) allDiscovered.push(r);
       setScanProgress(`Discovery tree depth ${depth + 1}: ${allDiscovered.length.toLocaleString()} records found...`);
       await yieldToUI();
-      currentParentIds = decrypted.map(r => r.id).filter((id): id is number => id !== undefined);
+      currentParentIds = children.map(r => r.id).filter((id): id is number => id !== undefined);
       depth++;
     }
 
@@ -489,14 +484,13 @@ export default function Cleanup() {
       setScanProgress(`Checking records... ${processed.toLocaleString()}/${total.toLocaleString()} (${Math.round((processed / total) * 100)}%)`);
       await yieldToUI();
 
-      const decrypted = batch;
       const batchRecordIds = new Set<number>();
-      for (const r of decrypted) {
+      for (const r of batch) {
         if (r.id) batchRecordIds.add(r.id);
       }
       const originsMap = await bulkGetOriginsByRecordId(batchRecordIds);
 
-      for (const record of decrypted) {
+      for (const record of batch) {
         if (!record.id) continue;
         const origins = originsMap.get(record.id) || [];
         if (isBlockchainOnlyRecord(record, origins) && !hasUserMetadata(record, origins)) {
@@ -618,8 +612,7 @@ export default function Cleanup() {
         if (records.length === 0) { skipped++; continue; }
 
         if (scanMode === 'blockchain-only' || scanMode === 'unconnected') {
-          const decrypted = records;
-          const record = decrypted[0];
+          const record = records[0];
           const origins = await bulkGetOriginsByRecordId(new Set([id]));
           const recordOrigins = origins.get(id) || [];
           if (!isBlockchainOnlyRecord(record, recordOrigins) || hasUserMetadata(record, recordOrigins)) {
