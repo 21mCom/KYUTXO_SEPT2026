@@ -83,7 +83,7 @@ import {
   createEvidenceAttachment,
   deleteEvidenceAttachment,
 } from "@/lib/dataFacade";
-import { uploadEncryptedFile, downloadDecryptedFile, deleteEncryptedFile, getFileBlob, isPreviewableType, getPreviewType } from "@/lib/attachments";
+import { uploadFile, downloadFile, deleteFile, getFileBlob, isPreviewableType, getPreviewType } from "@/lib/attachments";
 import { useDropzone } from "react-dropzone";
 
 const evidenceFormSchema = z.object({
@@ -292,7 +292,7 @@ export default function EvidencePage() {
     try {
       for (const attachment of selectedAttachments) {
         if (attachment.objectStoragePath) {
-          await deleteEncryptedFile(attachment.objectStoragePath);
+          await deleteFile(attachment.objectStoragePath);
         }
       }
       
@@ -366,7 +366,7 @@ export default function EvidencePage() {
 
       if (pendingFiles.length > 0) {
         for (const file of pendingFiles) {
-          const storagePath = await uploadEncryptedFile(file);
+          const storagePath = await uploadFile(file);
           
           await createEvidenceAttachment({
             evidenceId,
@@ -397,7 +397,7 @@ export default function EvidencePage() {
 
   const handleDownloadAttachment = async (attachment: EvidenceAttachment) => {
     try {
-      await downloadDecryptedFile(attachment.objectStoragePath, attachment.filename);
+      await downloadFile(attachment.objectStoragePath, attachment.filename);
     } catch (error) {
       console.error("Failed to download file:", error);
       toast({
@@ -412,7 +412,7 @@ export default function EvidencePage() {
     if (!attachment.id) return;
     
     try {
-      await deleteEncryptedFile(attachment.objectStoragePath);
+      await deleteFile(attachment.objectStoragePath);
       await deleteEvidenceAttachment(attachment.id);
       
       setSelectedAttachments(prev => prev.filter(a => a.id !== attachment.id));
@@ -456,13 +456,9 @@ export default function EvidencePage() {
     setIsPreviewLoading(true);
     
     try {
-      // Evidence attachments are always encrypted on storage
-      // Note: attachment file storage path used for download,
-      // but the file itself is always encrypted when uploaded via uploadEncryptedFile
       const blob = await getFileBlob(
         attachment.objectStoragePath, 
-        attachment.mimeType,
-        true // Always decrypt - files are encrypted on upload
+        attachment.mimeType
       );
       
       if (previewType === 'text') {

@@ -92,7 +92,7 @@ export async function uploadAttachment(
 }
 
 // Download attachment - works in both Electron and web modes
-export async function downloadAttachment(objectPath: string, _isEncrypted?: boolean): Promise<Blob> {
+export async function downloadAttachment(objectPath: string): Promise<Blob> {
   try {
     let data: ArrayBuffer;
     
@@ -205,7 +205,7 @@ export function formatFileSize(bytes: number): string {
 // Useful for evidence attachments which have their own table
 
 // Upload a file and return the storage path (no DB record created)
-export async function uploadEncryptedFile(file: File): Promise<string> {
+export async function uploadFile(file: File): Promise<string> {
   try {
     const fileData: ArrayBuffer = await file.arrayBuffer();
     
@@ -254,9 +254,9 @@ export async function uploadEncryptedFile(file: File): Promise<string> {
 }
 
 // Download a file by its storage path and trigger browser download
-export async function downloadDecryptedFile(objectPath: string, filename: string): Promise<void> {
+export async function downloadFile(objectPath: string, filename: string): Promise<void> {
   try {
-    const blob = await downloadAttachment(objectPath, true); // Always try decrypting
+    const blob = await downloadAttachment(objectPath);
     
     // Create download link
     const url = URL.createObjectURL(blob);
@@ -275,8 +275,7 @@ export async function downloadDecryptedFile(objectPath: string, filename: string
 // Get file blob for preview (no download triggered)
 export async function getFileBlob(
   objectPath: string, 
-  mimeType: string,
-  _isEncrypted: boolean = true
+  mimeType: string
 ): Promise<Blob> {
   try {
     const blob = await downloadAttachment(objectPath);
@@ -324,7 +323,7 @@ export function getPreviewType(mimeType: string): 'image' | 'text' | 'audio' | '
 }
 
 // Delete a file by its storage path (no DB record deletion)
-export async function deleteEncryptedFile(objectPath: string): Promise<void> {
+export async function deleteFile(objectPath: string): Promise<void> {
   try {
     if (isElectron()) {
       // Electron mode: delete via IPC
