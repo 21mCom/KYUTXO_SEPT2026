@@ -5,7 +5,6 @@ import {
   verifyPassword,
   bufferToBase64,
   base64ToBuffer,
-  deriveKey,
 } from '@/lib/crypto';
 import { 
   isVaultInitialized, 
@@ -13,11 +12,8 @@ import {
   saveVaultSettings,
   isAttachmentPathsMigrated,
   setAttachmentPathsMigrated,
-  isLegacyDecryptComplete,
-  setLegacyDecryptComplete,
 } from '@/lib/vault';
 import { migrateAttachmentPaths } from '@/lib/attachments';
-import { hasLegacyEncryptedRecords, decryptLegacyRecords, type LegacyDecryptProgress } from '@/lib/legacy-decrypt';
 
 interface AuthContextType {
   isInitialized: boolean | null;
@@ -26,8 +22,6 @@ interface AuthContextType {
   login: (password: string) => Promise<boolean>;
   logout: () => void;
   isLoading: boolean;
-  legacyMigrationProgress: LegacyDecryptProgress | null;
-  legacyMigrationResult: { totalDecrypted: number; totalFailed: number; unexpectedError?: boolean } | null;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -36,8 +30,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [isInitialized, setIsInitialized] = useState<boolean | null>(null);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
-  const [legacyMigrationProgress, setLegacyMigrationProgress] = useState<LegacyDecryptProgress | null>(null);
-  const [legacyMigrationResult, setLegacyMigrationResult] = useState<{ totalDecrypted: number; totalFailed: number; unexpectedError?: boolean } | null>(null);
 
   useEffect(() => {
     const checkVault = async () => {
@@ -66,51 +58,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
     } catch (error) {
       console.error('Attachment path migration failed:', error);
-    }
-  }, []);
-
-  const runLegacyDecryptMigration = useCallback(async (password: string, saltBase64: string) => {
-    try {
-      const alreadyDone = await isLegacyDecryptComplete();
-      if (alreadyDone) return;
-
-      const hasLegacy = await hasLegacyEncryptedRecords();
-      if (!hasLegacy) {
-        await setLegacyDecryptComplete(true);
-        return;
-      }
-
-      setLegacyMigrationProgress({
-        tableName: 'Preparing',
-        tableIndex: 0,
-        tableCount: 13,
-        current: 0,
-        total: 0,
-        failed: 0,
-      });
-
-      const salt = base64ToBuffer(saltBase64);
-      const encryptionKey = await deriveKey(password, salt);
-
-      const result = await decryptLegacyRecords(encryptionKey, (progress) => {
-        setLegacyMigrationProgress(progress);
-      });
-
-      console.log(`[LegacyDecrypt] Complete: ${result.totalDecrypted} decrypted, ${result.totalFailed} failed, ${result.tableErrors.length} table errors`);
-
-      if (result.totalFailed === 0 && result.tableErrors.length === 0) {
-        await setLegacyDecryptComplete(true);
-      }
-
-      setLegacyMigrationResult({
-        totalDecrypted: result.totalDecrypted,
-        totalFailed: result.totalFailed + result.tableErrors.length,
-      });
-    } catch (error) {
-      console.error('[LegacyDecrypt] Migration failed:', error);
-      setLegacyMigrationResult({ totalDecrypted: 0, totalFailed: 0, unexpectedError: true });
-    } finally {
-      setLegacyMigrationProgress(null);
     }
   }, []);
 
@@ -145,7 +92,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (isValid) {
         setIsAuthenticated(true);
         runAttachmentPathMigration();
-        runLegacyDecryptMigration(password, settings.salt);
         return true;
       }
 
@@ -153,12 +99,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } finally {
       setIsLoading(false);
     }
-  }, [runAttachmentPathMigration, runLegacyDecryptMigration]);
+  }, [runAttachmentPathMigration]);
 
   const logout = useCallback(() => {
     setIsAuthenticated(false);
-    setLegacyMigrationProgress(null);
-    setLegacyMigrationResult(null);
   }, []);
 
   return (
@@ -170,8 +114,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         login,
         logout,
         isLoading,
-        legacyMigrationProgress,
-        legacyMigrationResult,
       }}
     >
       {children}
