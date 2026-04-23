@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from "react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -147,7 +147,6 @@ export default function NetworkAnalysis() {
 
       setProgress(`Found ${filteredRecords.length.toLocaleString()} addresses. Loading transaction data...`);
 
-      const addresses = filteredRecords.map(r => r.inputString);
       let participants: TransactionParticipant[];
 
       if (filterMode === "all") {
@@ -163,19 +162,21 @@ export default function NetworkAnalysis() {
         participants = await db.transactionParticipants.toArray();
       } else {
         const batchSize = 500;
-        participants = [];
+        const recordIds = filteredRecords.map(r => r.id).filter((id): id is number => id !== undefined);
         const txidSet = new Set<string>();
-        for (let i = 0; i < addresses.length; i += batchSize) {
+
+        for (let i = 0; i < recordIds.length; i += batchSize) {
           if (controller.signal.aborted) return;
-          const batch = addresses.slice(i, i + batchSize);
+          const batch = recordIds.slice(i, i + batchSize);
           const batchParticipants = await db.transactionParticipants
-            .where('address')
+            .where('recordId')
             .anyOf(batch)
             .toArray();
           for (const p of batchParticipants) txidSet.add(p.txid);
-          setProgress(`Loaded participants for ${Math.min(i + batchSize, addresses.length).toLocaleString()} of ${addresses.length.toLocaleString()} addresses...`);
+          setProgress(`Loaded participants for ${Math.min(i + batchSize, recordIds.length).toLocaleString()} of ${recordIds.length.toLocaleString()} records...`);
         }
 
+        participants = [];
         const txids = Array.from(txidSet);
         for (let i = 0; i < txids.length; i += batchSize) {
           if (controller.signal.aborted) return;
