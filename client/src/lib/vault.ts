@@ -7,6 +7,7 @@ export interface VaultSettings {
   createdAt: number;
   migrationComplete?: boolean;
   attachmentPathsMigrated?: boolean;
+  legacyDecryptComplete?: boolean;
 }
 
 class VaultDatabase extends Dexie {
@@ -65,5 +66,17 @@ export async function setAttachmentPathsMigrated(migrated: boolean): Promise<voi
   const settings = await vaultDb.vault.get('main');
   if (settings) {
     await vaultDb.vault.update('main', { attachmentPathsMigrated: migrated });
+  }
+}
+
+export async function isLegacyDecryptComplete(): Promise<boolean> {
+  const settings = await vaultDb.vault.get('main');
+  return settings?.legacyDecryptComplete ?? false;
+}
+
+export async function setLegacyDecryptComplete(complete: boolean): Promise<void> {
+  const settings = await vaultDb.vault.get('main');
+  if (settings) {
+    await vaultDb.vault.update('main', { legacyDecryptComplete: complete });
   }
 }
