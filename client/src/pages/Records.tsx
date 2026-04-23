@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -6,7 +6,8 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { ArrowLeft, Search as SearchIcon, Database, Hash, ExternalLink, AlertCircle, Trash2, X, ChevronLeft, ChevronRight } from "lucide-react";
 import { BlockchainToggle } from "@/components/BlockchainToggle";
-import { db, subscribeToDbChanges, type Record as DbRecord, type VaultMetadata, type AddressImportance, type ChainType, type CustomField, type BlockchainTransaction, type TransactionParticipant } from "@/lib/database";
+import { db, type Record as DbRecord, type VaultMetadata, type AddressImportance, type ChainType, type CustomField, type BlockchainTransaction, type TransactionParticipant } from "@/lib/database";
+import { useDbChangeSignal } from "@/hooks/use-db-change-signal";
 import { deleteRecord, getParticipantsByTxids } from "@/lib/dataFacade";
 import { RecordTable } from "@/components/RecordTable";
 import { RecordDetailPanel } from "@/components/RecordDetailPanel";
@@ -95,22 +96,7 @@ export default function Records() {
     participantAddresses: string[];
   }[]>([]);
   
-  // Track database changes to trigger reloads
-  const changeVersionRef = useRef(0);
-  const [dbChangeSignal, setDbChangeSignal] = useState(0);
-  
-  useEffect(() => {
-    // Subscribe to database changes
-    const unsubscribe = subscribeToDbChanges((tables) => {
-      // Check if any change affects the records table
-      if (tables.includes('records') || tables.length === 0) {
-        changeVersionRef.current += 1;
-        setDbChangeSignal(changeVersionRef.current);
-      }
-    });
-    
-    return unsubscribe;
-  }, []);
+  const dbChangeSignal = useDbChangeSignal(['records']);
 
   // Parse query parameters from location - store them for later application
   useEffect(() => {

@@ -1,6 +1,7 @@
-import { useState, useMemo, useEffect, useRef } from "react";
+import { useState, useMemo } from "react";
 import { format } from "date-fns";
-import { db, Record, AddressImportance, subscribeToDbChanges } from "@/lib/database";
+import { db, Record, AddressImportance } from "@/lib/database";
+import { useDbChangeSignal } from "@/hooks/use-db-change-signal";
 import { useAsyncMemo, checkAbort } from "@/hooks/use-async-memo";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -105,21 +106,8 @@ export default function AddressReuse() {
   
   // Toggle for including blockchain-discovered addresses
   const [includeBlockchainDiscovered, setIncludeBlockchainDiscovered] = useState(false);
-  
-  // Track database changes to trigger reloads
-  const changeVersionRef = useRef(0);
-  const [dbChangeSignal, setDbChangeSignal] = useState(0);
-  
-  useEffect(() => {
-    const unsubscribe = subscribeToDbChanges((tables) => {
-      if (tables.includes('records') || tables.includes('transactionParticipants') || tables.length === 0) {
-        changeVersionRef.current += 1;
-        setDbChangeSignal(changeVersionRef.current);
-      }
-    });
-    
-    return unsubscribe;
-  }, []);
+
+  const dbChangeSignal = useDbChangeSignal(['records', 'transactionParticipants']);
 
   const initialData = { reusedAddresses: [] as AddressReuseInfo[], totalBlockchainDiscovered: 0 };
 
