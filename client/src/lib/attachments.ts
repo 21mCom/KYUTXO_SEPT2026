@@ -351,81 +351,6 @@ export async function deleteEncryptedFile(objectPath: string): Promise<void> {
   }
 }
 
-// ============ RE-ENCRYPTION FOR PASSWORD CHANGE ============
-
-// Read raw file data without decrypting (for re-encryption purposes)
-async function readRawFile(objectPath: string): Promise<ArrayBuffer> {
-  if (isElectron()) {
-    const api = getElectronAPI();
-    const result = await api.readAttachment(objectPath);
-    if (!result.success) {
-      throw new Error(result.error || 'Read failed');
-    }
-    return result.data!;
-  } else {
-    const encodedPath = objectPath.split('/').map(segment => encodeURIComponent(segment)).join('/');
-    const response = await fetch(`/api/attachments/download/${encodedPath}`);
-    if (!response.ok) {
-      throw new Error('Read failed');
-    }
-    return response.arrayBuffer();
-  }
-}
-
-// Write raw file data (for re-encryption purposes)
-async function writeRawFile(objectPath: string, data: ArrayBuffer): Promise<void> {
-  if (isElectron()) {
-    const api = getElectronAPI();
-    // Use writeAttachment to overwrite at exact path (not saveAttachment which creates new file)
-    const result = await api.writeAttachment(objectPath, data);
-    if (!result.success) {
-      throw new Error(result.error || 'Write failed');
-    }
-  } else {
-    // Web mode: upload via API (overwrite)
-    const blob = new Blob([data], { type: 'application/octet-stream' });
-    const formData = new FormData();
-    formData.append('file', blob, 'file');
-    formData.append('objectPath', objectPath);
-    formData.append('overwrite', 'true');
-
-    const response = await fetch('/api/attachments/rewrite', {
-      method: 'POST',
-      body: formData,
-    });
-
-    if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.error || 'Write failed');
-    }
-  }
-}
-
-// Re-encrypt a single attachment file with a new key
-export async function reEncryptAttachmentFile(
-  _objectPath: string,
-  _oldKey: CryptoKey,
-  _newKey: CryptoKey
-): Promise<void> {
-}
-
-export interface ReEncryptFileResult {
-  processed: number;
-  completedIds: number[];
-  cancelled: boolean;
-  failed: number;
-}
-
-export async function reEncryptAllAttachmentFiles(
-  _oldKey: CryptoKey,
-  _newKey: CryptoKey,
-  _onProgress?: (current: number, total: number) => void,
-  _skipIds?: Set<number>,
-  _signal?: AbortSignal
-): Promise<ReEncryptFileResult> {
-  return { processed: 0, completedIds: [], cancelled: false, failed: 0 };
-}
-
 // ============ LEGACY PATH MIGRATION ============
 
 function isAlreadyHashed(dirName: string): boolean {
@@ -575,14 +500,4 @@ export async function migrateAttachmentPaths(
   }
 
   return { migrated, failed };
-}
-
-export async function reEncryptAllEvidenceAttachmentFiles(
-  _oldKey: CryptoKey,
-  _newKey: CryptoKey,
-  _onProgress?: (current: number, total: number) => void,
-  _skipIds?: Set<number>,
-  _signal?: AbortSignal
-): Promise<ReEncryptFileResult> {
-  return { processed: 0, completedIds: [], cancelled: false, failed: 0 };
 }
