@@ -32,11 +32,9 @@ import {
   FileCode,
   Scale,
   ChevronsDownUp,
-  ChevronsUpDown,
-  RefreshCw
+  ChevronsUpDown
 } from "lucide-react";
-import { decryptRecordsWithProgress, getDecryptedParticipantsByTxids } from "@/lib/encryptionFacade";
-import type { DecryptProgress } from "@/lib/encryption/record-encryption";
+import { getDecryptedParticipantsByTxids } from "@/lib/encryptionFacade";
 import { ClickableAddress } from "@/components/ClickableAddress";
 
 const ITEMS_PER_PAGE = 25;
@@ -108,7 +106,6 @@ export default function Transactions() {
   
   // Decrypt records to get addresses
   const [decryptedRecords, setDecryptedRecords] = useState<Record[]>([]);
-  const [decryptProgress, setDecryptProgress] = useState<DecryptProgress | null>(null);
   // Use a ref to track the latest request ID and prevent stale async updates
   const decryptRequestId = useRef(0);
   
@@ -121,8 +118,7 @@ export default function Transactions() {
     
     const decrypt = async () => {
       try {
-        const decrypted = await decryptRecordsWithProgress(rawRecords, setDecryptProgress);
-        setDecryptProgress(null);
+        const decrypted = rawRecords;
         // Only update if this is still the latest request
         if (thisRequestId === decryptRequestId.current) {
           setDecryptedRecords(decrypted);
@@ -369,16 +365,6 @@ export default function Transactions() {
           hiddenCount={blockchainOnlyTxCount}
         />
       </div>
-
-      {decryptProgress && (
-        <div className="flex items-center gap-2 text-sm text-muted-foreground px-4 py-2">
-          <RefreshCw className="h-4 w-4 animate-spin" />
-          <span>
-            Decrypting records {decryptProgress.current.toLocaleString()}/{decryptProgress.total.toLocaleString()}
-            {decryptProgress.cached > 0 && ` (${decryptProgress.cached.toLocaleString()} cached)`}...
-          </span>
-        </div>
-      )}
 
       {/* Stats Overview */}
       <div className="grid gap-4 sm:grid-cols-4 flex-none">

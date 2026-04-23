@@ -108,9 +108,6 @@ async function loadAddressRecordsAtDepth(depth: number): Promise<Record[]> {
     .toArray();
 }
 
-async function decryptRecordsSafe(records: Record[]): Promise<Record[]> {
-  return records;
-}
 
 export class TransactionSyncService {
   private provider: BlockchainProvider;
@@ -731,7 +728,7 @@ export class TransactionSyncService {
         // Get the starting depth from the first specified record - use targeted query
         const targetRawRecords = await db.records.bulkGet(specificRecordIds);
         const validTargetRaw = targetRawRecords.filter((r): r is Record => !!r && r.type === 'address');
-        const targetRecords = await decryptRecordsSafe(validTargetRaw);
+        const targetRecords = validTargetRaw;
 
         // Cache parent metadata for target records
         for (const r of targetRecords) {
@@ -762,7 +759,7 @@ export class TransactionSyncService {
           
           // Load only address records at this specific depth (indexed query)
           const depthRawRecords = await loadAddressRecordsAtDepth(currentDepth);
-          const freshRecords = await decryptRecordsSafe(depthRawRecords);
+          const freshRecords = depthRawRecords;
 
           // Cache parent metadata for discovered records
           for (const r of freshRecords) {
@@ -1024,7 +1021,7 @@ export class TransactionSyncService {
           .where('type').equals('address')
           .filter(r => r.source !== 'blockchain-sync')
           .toArray();
-        const decrypted = await decryptRecordsSafe(allCuratedRecords);
+        const decrypted = allCuratedRecords;
         this.knownAddressSet = new Set(decrypted.map(r => r.inputString));
         console.log(`[TransactionSync] Connected-only mode: ${this.knownAddressSet.size} known addresses loaded`);
       } else {
@@ -1043,7 +1040,7 @@ export class TransactionSyncService {
         } else {
           // Use indexed query to load only records at this depth level
           const depthRawRecords = await loadAddressRecordsAtDepth(currentDepth);
-          allRecords = await decryptRecordsSafe(depthRawRecords);
+          allRecords = depthRawRecords;
         }
 
         // Cache parent metadata for all loaded records

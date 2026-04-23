@@ -33,7 +33,7 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { db, Record as DbRecord, TransactionParticipant, BlockchainTransaction, PriceData } from "@/lib/database";
-import { decryptRecords, getDecryptedParticipantsByTxid } from "@/lib/encryptionFacade";
+import { getDecryptedParticipantsByTxid } from "@/lib/encryptionFacade";
 import { cn } from "@/lib/utils";
 
 interface UTXO {
@@ -115,7 +115,7 @@ export function UTXODetailPanel({ open, onClose, utxo, latestPrice }: UTXODetail
           .filter(r => Boolean(r.inputString && addressSet.has(r.inputString)))
           .toArray();
 
-        const decryptedRecords = await decryptRecords(rawRecords);
+        const decryptedRecords = rawRecords;
 
         const recordMap = new Map<string, DbRecord>();
         decryptedRecords.forEach(r => {

@@ -4,11 +4,10 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { ArrowLeft, Search as SearchIcon, Database, Hash, ExternalLink, AlertCircle, Trash2, X, RefreshCw, ChevronLeft, ChevronRight } from "lucide-react";
+import { ArrowLeft, Search as SearchIcon, Database, Hash, ExternalLink, AlertCircle, Trash2, X, ChevronLeft, ChevronRight } from "lucide-react";
 import { BlockchainToggle } from "@/components/BlockchainToggle";
 import { db, subscribeToDbChanges, type Record as DbRecord, type VaultMetadata, type AddressImportance, type ChainType, type CustomField, type BlockchainTransaction, type TransactionParticipant } from "@/lib/database";
-import { decryptRecords, decryptRecordsWithProgress, deleteRecord, getDecryptedParticipantsByTxids } from "@/lib/encryptionFacade";
-import type { DecryptProgress } from "@/lib/encryption/record-encryption";
+import { deleteRecord, getDecryptedParticipantsByTxids } from "@/lib/encryptionFacade";
 import { RecordTable } from "@/components/RecordTable";
 import { RecordDetailPanel } from "@/components/RecordDetailPanel";
 import { ClickableAddress } from "@/components/ClickableAddress";
@@ -86,7 +85,6 @@ export default function Records() {
   const [isDeleting, setIsDeleting] = useState(false);
   
   const { toast } = useToast();
-  const [decryptProgress, setDecryptProgress] = useState<DecryptProgress | null>(null);
   
   // State for blockchain transaction search results
   const [matchingTxids, setMatchingTxids] = useState<string[]>([]);
@@ -240,8 +238,7 @@ export default function Records() {
           setTotalCount(count);
         }
         
-        const decrypted = await decryptRecordsWithProgress(rawRecords, setDecryptProgress);
-        setDecryptProgress(null);
+        const decrypted = rawRecords;
         
         const convertedRecords: ConvertedRecord[] = decrypted.map(r => ({
           id: String(r.id),
@@ -349,7 +346,7 @@ export default function Records() {
               .anyOf(Array.from(participantAddresses))
               .toArray();
             
-            const relatedRecords = await decryptRecords(allRelatedRawRecords);
+            const relatedRecords = allRelatedRawRecords;
             
             // Convert to display format
             const convertedRelated: ConvertedRecord[] = relatedRecords.map(r => ({
@@ -423,7 +420,7 @@ export default function Records() {
         const record = await db.records.get(parseInt(selectedRecordId));
         if (!record) return;
         
-        const decrypted = await decryptRecords([record]);
+        const decrypted = [record];
         
         if (decrypted.length > 0) {
           const r = decrypted[0];
@@ -625,16 +622,6 @@ export default function Records() {
             </p>
           </div>
         </div>
-
-        {decryptProgress && (
-          <div className="flex items-center gap-2 text-sm text-muted-foreground px-4 py-2">
-            <RefreshCw className="h-4 w-4 animate-spin" />
-            <span>
-              Decrypting records {decryptProgress.current.toLocaleString()}/{decryptProgress.total.toLocaleString()}
-              {decryptProgress.cached > 0 && ` (${decryptProgress.cached.toLocaleString()} cached)`}...
-            </span>
-          </div>
-        )}
 
         <div className="flex flex-col gap-4">
           <div className="flex items-center gap-4">

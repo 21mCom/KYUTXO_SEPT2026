@@ -20,7 +20,6 @@ import {
 } from "lucide-react";
 import { db } from "@/lib/database";
 import type { Record as KRecord, TransactionParticipant } from "@/lib/db-types";
-import { decryptRecords } from "@/lib/encryptionFacade";
 import {
   buildNetworkGraph,
   MAX_NODES,
@@ -90,10 +89,9 @@ export default function NetworkAnalysis() {
     (async () => {
       try {
         const rawRecords = await db.records.where('type').equals('address').toArray();
-        const decrypted = await decryptRecords(rawRecords);
         const ownerSet = new Set<string>();
         const walletSet = new Set<string>();
-        for (const r of decrypted) {
+        for (const r of rawRecords) {
           if (r.owner) ownerSet.add(r.owner);
           if (r.walletName) walletSet.add(r.walletName);
         }
@@ -125,18 +123,17 @@ export default function NetworkAnalysis() {
       let rawRecords = await db.records.where('type').equals('address').toArray();
       if (controller.signal.aborted) return;
 
-      const decrypted = await decryptRecords(rawRecords);
       if (controller.signal.aborted) return;
 
       let filteredRecords: KRecord[];
       if (filterMode === "user-only") {
-        filteredRecords = decrypted.filter(r => (r.syncDepth ?? 0) === 0);
+        filteredRecords = rawRecords.filter(r => (r.syncDepth ?? 0) === 0);
       } else if (filterMode === "by-owner" && filterValue) {
-        filteredRecords = decrypted.filter(r => r.owner === filterValue);
+        filteredRecords = rawRecords.filter(r => r.owner === filterValue);
       } else if (filterMode === "by-wallet" && filterValue) {
-        filteredRecords = decrypted.filter(r => r.walletName === filterValue);
+        filteredRecords = rawRecords.filter(r => r.walletName === filterValue);
       } else {
-        filteredRecords = decrypted;
+        filteredRecords = rawRecords;
       }
 
       if (filteredRecords.length === 0) {
@@ -192,7 +189,7 @@ export default function NetworkAnalysis() {
       if (controller.signal.aborted) return;
 
       const result = await buildNetworkGraph(
-        filterMode === "all" ? decrypted : filteredRecords,
+        filterMode === "all" ? rawRecords : filteredRecords,
         participants,
         controller.signal,
         setProgress,

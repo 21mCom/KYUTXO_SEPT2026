@@ -2,7 +2,7 @@
 // Traces UTXO origins and connections between addresses
 
 import { db, type Record, type TransactionParticipant, type BlockchainTransaction, type AddressImportance } from './database';
-import { decryptRecords, getDecryptedParticipantsByAddress, getDecryptedParticipantsByTxid } from './encryptionFacade';
+import { getDecryptedParticipantsByAddress, getDecryptedParticipantsByTxid } from './encryptionFacade';
 
 // Importance tier levels (higher number = higher importance)
 export const IMPORTANCE_TIERS: { [key in AddressImportance]: number } = {
@@ -342,7 +342,7 @@ export async function findLabeledConnections(
 
   // Get all records and decrypt
   const allRawRecords = await db.records.toArray();
-  const allRecords = await decryptRecords(allRawRecords);
+  const allRecords = allRawRecords;
 
   // Filter to labeled address records (with actual labels, not "Pending Review")
   const labeledAddresses = allRecords.filter(r => 
@@ -399,7 +399,7 @@ export async function getProvenanceChain(
   
   // Get all records for labeling
   const allRawRecords = await db.records.toArray();
-  const allRecords = await decryptRecords(allRawRecords);
+  const allRecords = allRawRecords;
 
   // Trace backwards
   const incoming = await findIncomingConnections(address, maxDepth);
@@ -428,7 +428,7 @@ export async function getProvenanceStats(): Promise<{
   potentialConnections: number;
 }> {
   const allRawRecords = await db.records.toArray();
-  const allRecords = await decryptRecords(allRawRecords);
+  const allRecords = allRawRecords;
 
   const addressRecords = allRecords.filter(r => r.type === 'address');
   const labeledAddresses = addressRecords.filter(r => 
@@ -478,7 +478,7 @@ export async function exploreAddress(
 ): Promise<AddressExplorationResult> {
   // Get all records for labeling and filtering
   const allRawRecords = await db.records.toArray();
-  const allRecords = await decryptRecords(allRawRecords);
+  const allRecords = allRawRecords;
   
   // Build lookup map for quick record access
   const recordLookup = new Map<string, Record>();

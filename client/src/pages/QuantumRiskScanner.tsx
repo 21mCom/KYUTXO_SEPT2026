@@ -7,14 +7,12 @@ import { Progress } from "@/components/ui/progress";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { db, beginBulkOperation, endBulkOperation } from "@/lib/database";
 import type { Record as DbRecord, Tag } from "@/lib/database";
-import { decryptRecordsWithProgress } from "@/lib/encryption/record-encryption";
-import type { DecryptProgress } from "@/lib/encryption/record-encryption";
 import { createTag } from "@/lib/encryption/vocabulary-crud";
 import { updateRecord } from "@/lib/encryption/record-crud";
 import { useTags } from "@/hooks/use-tags";
 import { useToast } from "@/hooks/use-toast";
 
-type ScanState = "idle" | "decrypting" | "analyzing" | "tagging" | "complete";
+type ScanState = "idle" | "analyzing" | "tagging" | "complete";
 
 type RiskLevel = "critical" | "high" | "medium" | "variable" | "low";
 
@@ -75,7 +73,6 @@ function getRiskBadgeProps(level: RiskLevel): { variant?: "destructive" | "defau
 
 export default function QuantumRiskScanner() {
   const [scanState, setScanState] = useState<ScanState>("idle");
-  const [decryptProgress, setDecryptProgress] = useState<DecryptProgress | null>(null);
   const [results, setResults] = useState<ScanResult[]>([]);
   const [taggingProgress, setTaggingProgress] = useState({ current: 0, total: 0 });
   const [openGroups, setOpenGroups] = useState<Record<RiskLevel, boolean>>({
@@ -91,8 +88,8 @@ export default function QuantumRiskScanner() {
   const runScan = useCallback(async () => {
 
     try {
-      setScanState("decrypting");
       setResults([]);
+      setScanState("analyzing");
 
       const allRecords = await db.records.where("type").equals("address").toArray();
 
@@ -105,12 +102,7 @@ export default function QuantumRiskScanner() {
         return;
       }
 
-      const decrypted = await decryptRecordsWithProgress(allRecords, (progress) => {
-        setDecryptProgress(progress);
-      });
-      setDecryptProgress(null);
-
-      setScanState("analyzing");
+      const decrypted = allRecords;
 
       const inputParticipants = await db.transactionParticipants.where("role").equals("input").toArray();
       const spentRecordIds = new Set(
@@ -182,9 +174,6 @@ export default function QuantumRiskScanner() {
   const countByLevel = (level: RiskLevel) => results.filter(r => r.riskLevel === level).length;
 
   const progressPercent = (() => {
-    if (scanState === "decrypting" && decryptProgress) {
-      return Math.round((decryptProgress.current / decryptProgress.total) * 100);
-    }
     if (scanState === "tagging" && taggingProgress.total > 0) {
       return Math.round((taggingProgress.current / taggingProgress.total) * 100);
     }
@@ -193,10 +182,6 @@ export default function QuantumRiskScanner() {
 
   const statusMessage = (() => {
     switch (scanState) {
-      case "decrypting":
-        return decryptProgress
-          ? `Decrypting records... ${decryptProgress.current} / ${decryptProgress.total}`
-          : "Decrypting records...";
       case "analyzing":
         return "Analyzing address types and spending history...";
       case "tagging":
@@ -237,13 +222,13 @@ export default function QuantumRiskScanner() {
             </Button>
           )}
 
-          {(scanState === "decrypting" || scanState === "analyzing" || scanState === "tagging") && (
+          {(scanState === "analyzing" || scanState === "tagging") && (
             <div className="space-y-3" data-testid="scan-progress">
               <div className="flex items-center gap-2">
                 <Loader2 className="h-4 w-4 animate-spin" />
                 <span className="text-sm" data-testid="text-status-message">{statusMessage}</span>
               </div>
-              {(scanState === "decrypting" || scanState === "tagging") && (
+              {scanState === "tagging" && (
                 <Progress value={progressPercent} data-testid="progress-bar" />
               )}
             </div>

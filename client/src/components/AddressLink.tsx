@@ -3,7 +3,6 @@ import { Copy, Check, FileText } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { db, type Record as DbRecord } from "@/lib/database";
-import { decryptRecords } from "@/lib/encryptionFacade";
 import { useRecordPreview } from "@/contexts/RecordPreviewContext";
 
 interface AddressLinkProps {
@@ -55,9 +54,7 @@ export function AddressLink({
     try {
       const rawRecords = await db.records.where('inputString').equals(address).toArray();
       if (rawRecords.length > 0) {
-        const records = await decryptRecords(rawRecords);
-        
-        const record = records[0];
+        const record = rawRecords[0];
         const foundRecordId = record.id!;
         
         const hasMeta = !!(

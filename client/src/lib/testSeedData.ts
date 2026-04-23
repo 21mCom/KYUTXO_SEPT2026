@@ -1,5 +1,5 @@
 import { db, type Record } from './database';
-import { encryptParticipantData, getDecryptedParticipantsByTxid } from './encryptionFacade';
+import { getDecryptedParticipantsByTxid } from './encryptionFacade';
 
 /**
  * Test data seeding utility for demonstrating KYUTXO features.
@@ -301,7 +301,7 @@ export async function seedTestData(options: { clearExisting?: boolean } = {}): P
           vout: input.vout,
           recordId: addressToRecordId.get(input.address)
         };
-        await db.transactionParticipants.add(await encryptParticipantData(p));
+        await db.transactionParticipants.add(p);
       }
     }
     
@@ -320,7 +320,7 @@ export async function seedTestData(options: { clearExisting?: boolean } = {}): P
           vout: output.vout,
           recordId: addressToRecordId.get(output.address)
         };
-        await db.transactionParticipants.add(await encryptParticipantData(p));
+        await db.transactionParticipants.add(p);
       }
     }
   }

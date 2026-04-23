@@ -9,7 +9,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Progress } from "@/components/ui/progress";
 import { useToast } from "@/hooks/use-toast";
 import { db, type Record } from "@/lib/database";
-import { decrypt, encrypt, deriveKey, generateSalt, bufferToBase64 } from "@/lib/crypto";
+import { encrypt, deriveKey, generateSalt, bufferToBase64 } from "@/lib/crypto";
 import { isElectron, getElectronAPI } from "@/lib/electron";
 import JSZip from "jszip";
 
@@ -318,10 +318,6 @@ export default function ExportPage() {
     loadCounts();
   }, []);
 
-  const decryptRecord = async (record: any): Promise<any> => {
-    return record;
-  };
-
   const handleExport = async () => {
     if (encrypted && password !== confirmPassword) {
       toast({
@@ -369,54 +365,19 @@ export default function ExportPage() {
       const rawCustodySegments = await db.custodySegments.toArray();
 
       setProgress(20);
-      setProgressMessage("Decrypting data...");
-
-      const records = await Promise.all(rawRecords.map(decryptRecord));
-      setProgress(35);
-
-      const tags = await Promise.all(rawTags.map(decryptRecord));
-      const categories = await Promise.all(rawCategories.map(decryptRecord));
-      const attachments = await Promise.all(rawAttachments.map(decryptRecord));
-      const recordOrigins = await Promise.all(rawOrigins.map(decryptRecord));
-      const owners = await Promise.all(rawOwners.map(decryptRecord));
-      const walletNames = await Promise.all(rawWalletNames.map(decryptRecord));
-      const seedNames = await Promise.all(rawSeedNames.map(decryptRecord));
-      const walletSoftware = await Promise.all(rawWalletSoftware.map(decryptRecord));
-      const derivationTemplates = await Promise.all(rawDerivationTemplates.map(decryptRecord));
-      const evidence = await Promise.all(rawEvidence.map(decryptRecord));
-      const evidenceAttachments = await Promise.all(rawEvidenceAttachments.map(decryptRecord));
-
-      setProgress(50);
       setProgressMessage("Generating CSV files...");
 
-      const cleanRecords = records;
-      const cleanTags = tags;
-      const cleanCategories = categories;
-      const cleanAttachments = attachments;
-      const cleanOrigins = recordOrigins;
       const customFields = rawCustomFields as CustomFieldDef[];
-      const cleanOwners = owners;
-      const cleanWalletNames = walletNames;
-      const cleanSeedNames = seedNames;
-      const cleanWalletSoftware = walletSoftware;
-      const cleanDerivationTemplates = derivationTemplates;
-      const cleanEvidence = evidence;
-      const cleanEvidenceAttachments = evidenceAttachments;
-      const cleanPriceData = rawPriceData;
-      const cleanSettings = rawSettings;
-      const cleanNodeSettings = rawNodeSettings;
-      const cleanUtxoLineage = rawUtxoLineage;
-      const cleanCustodySegments = rawCustodySegments;
 
-      const recordsCSV = generateRecordsCSV(cleanRecords, cleanAttachments, customFields);
-      const tagsCSV = generateTagsCSV(cleanTags);
-      const categoriesCSV = generateCategoriesCSV(cleanCategories);
-      const attachmentsCSV = generateAttachmentsCSV(cleanAttachments);
-      const ownersCSV = generateOwnersCSV(cleanOwners);
-      const walletNamesCSV = generateWalletNamesCSV(cleanWalletNames);
-      const seedNamesCSV = generateSeedNamesCSV(cleanSeedNames);
-      const walletSoftwareCSV = generateWalletSoftwareCSV(cleanWalletSoftware);
-      const derivationTemplatesCSV = generateDerivationTemplatesCSV(cleanDerivationTemplates);
+      const recordsCSV = generateRecordsCSV(rawRecords, rawAttachments, customFields);
+      const tagsCSV = generateTagsCSV(rawTags);
+      const categoriesCSV = generateCategoriesCSV(rawCategories);
+      const attachmentsCSV = generateAttachmentsCSV(rawAttachments);
+      const ownersCSV = generateOwnersCSV(rawOwners);
+      const walletNamesCSV = generateWalletNamesCSV(rawWalletNames);
+      const seedNamesCSV = generateSeedNamesCSV(rawSeedNames);
+      const walletSoftwareCSV = generateWalletSoftwareCSV(rawWalletSoftware);
+      const derivationTemplatesCSV = generateDerivationTemplatesCSV(rawDerivationTemplates);
 
       setProgress(55);
       setProgressMessage("Gathering attachment files...");
@@ -443,24 +404,24 @@ export default function ExportPage() {
         exportDate: new Date().toISOString(),
         encrypted: encrypted,
         data: {
-          records: cleanRecords,
-          tags: cleanTags,
-          categories: cleanCategories,
-          attachments: cleanAttachments,
-          recordOrigins: cleanOrigins,
+          records: rawRecords,
+          tags: rawTags,
+          categories: rawCategories,
+          attachments: rawAttachments,
+          recordOrigins: rawOrigins,
           customFields: customFields,
-          owners: cleanOwners,
-          walletNames: cleanWalletNames,
-          seedNames: cleanSeedNames,
-          walletSoftware: cleanWalletSoftware,
-          derivationTemplates: cleanDerivationTemplates,
-          evidence: cleanEvidence,
-          evidenceAttachments: cleanEvidenceAttachments,
-          priceData: cleanPriceData,
-          settings: cleanSettings,
-          nodeSettings: cleanNodeSettings,
-          utxoLineage: cleanUtxoLineage,
-          custodySegments: cleanCustodySegments,
+          owners: rawOwners,
+          walletNames: rawWalletNames,
+          seedNames: rawSeedNames,
+          walletSoftware: rawWalletSoftware,
+          derivationTemplates: rawDerivationTemplates,
+          evidence: rawEvidence,
+          evidenceAttachments: rawEvidenceAttachments,
+          priceData: rawPriceData,
+          settings: rawSettings,
+          nodeSettings: rawNodeSettings,
+          utxoLineage: rawUtxoLineage,
+          custodySegments: rawCustodySegments,
         },
       };
 

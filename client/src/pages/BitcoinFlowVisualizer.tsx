@@ -16,7 +16,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { 
   Search, Info, GitBranch, Clock, TrendingUp, 
   ArrowRight, Loader2, Database, Globe, AlertCircle, Route,
-  Filter, ChevronDown, ChevronRight, Wallet, User, Tag, RefreshCw
+  Filter, ChevronDown, ChevronRight, Wallet, User, Tag
 } from "lucide-react";
 import { SiBitcoin } from "react-icons/si";
 import { useVirtualizer } from "@tanstack/react-virtual";
@@ -24,8 +24,7 @@ import { useFlowData, type FlowNode } from "@/hooks/use-flow-data";
 import { HopPathExplorer } from "@/components/HopPathExplorer";
 import { RecordDetailPanel } from "@/components/RecordDetailPanel";
 import { db, type ChainType, type AddressImportance, type VaultMetadata, type FlowType, type AcquisitionMethod, type DispositionType, type CounterpartyType } from "@/lib/database";
-import { decryptRecords, decryptRecordsWithProgress, getDecryptedParticipantsByAddresses } from "@/lib/encryptionFacade";
-import type { DecryptProgress } from "@/lib/encryption/record-encryption";
+import { getDecryptedParticipantsByAddresses } from "@/lib/encryptionFacade";
 import { useOwners } from "@/hooks/use-owners";
 import { useWalletNames } from "@/hooks/use-wallet-names";
 import { useTags } from "@/hooks/use-tags";
@@ -259,7 +258,6 @@ export default function BitcoinFlowVisualizer() {
   const { tags, isLoading: tagsLoading } = useTags();
   const vocabLoading = ownersLoading || walletsLoading || tagsLoading;
 
-  const [decryptProgress, setDecryptProgress] = useState<DecryptProgress | null>(null);
   const [finderOpen, setFinderOpen] = useState(false);
   const [filterOwner, setFilterOwner] = useState<string>("__all__");
   const [filterWallet, setFilterWallet] = useState<string>("__all__");
@@ -284,8 +282,7 @@ export default function BitcoinFlowVisualizer() {
           .equals('address')
           .toArray();
 
-        const decrypted = await decryptRecordsWithProgress(records, setDecryptProgress);
-        setDecryptProgress(null);
+        const decrypted = records;
 
         let filtered = decrypted.filter(r => r.inputString);
 
@@ -401,7 +398,7 @@ export default function BitcoinFlowVisualizer() {
         .first();
       
       if (dbRecord) {
-        const decryptedRecords = await decryptRecords([dbRecord]);
+        const decryptedRecords = [dbRecord];
         const decrypted = decryptedRecords[0];
         if (decrypted) {
           const converted: RecordViewData = {
@@ -505,16 +502,6 @@ export default function BitcoinFlowVisualizer() {
             Trace UTXO provenance through the blockchain. Enter an address to visualize its transaction flow.
           </p>
         </div>
-
-        {decryptProgress && (
-          <div className="flex items-center gap-2 text-sm text-muted-foreground px-4 py-2">
-            <RefreshCw className="h-4 w-4 animate-spin" />
-            <span>
-              Decrypting records {decryptProgress.current.toLocaleString()}/{decryptProgress.total.toLocaleString()}
-              {decryptProgress.cached > 0 && ` (${decryptProgress.cached.toLocaleString()} cached)`}...
-            </span>
-          </div>
-        )}
 
         <Collapsible open={finderOpen} onOpenChange={setFinderOpen}>
           <Card>

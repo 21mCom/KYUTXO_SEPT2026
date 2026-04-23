@@ -43,8 +43,7 @@ import {
   HelpCircle
 } from "lucide-react";
 import { SiBitcoin } from "react-icons/si";
-import { decryptRecords, decryptRecordsWithProgress, getDecryptedOwners, getDecryptedWalletNames, getDecryptedTags, getDecryptedCategories, getDecryptedParticipantsByAddresses } from "@/lib/encryptionFacade";
-import type { DecryptProgress } from "@/lib/encryption/record-encryption";
+import { getDecryptedOwners, getDecryptedWalletNames, getDecryptedTags, getDecryptedCategories, getDecryptedParticipantsByAddresses } from "@/lib/encryptionFacade";
 import { cn } from "@/lib/utils";
 import { UTXODetailPanel } from "@/components/UTXODetailPanel";
 import { ClickableAddress } from "@/components/ClickableAddress";
@@ -185,8 +184,6 @@ export default function UTXOs() {
   // Smart filtering: exclude blockchain-discovered addresses by default
   const [includeBlockchainDiscovered, setIncludeBlockchainDiscovered] = useState(false);
 
-  // NOTE: decryptProgress UI is rendered inline in JSX
-
   // Save settings when they change
   useEffect(() => {
     saveSettings({ displayUnit, sortColumn, sortDirection, ownerFilter, walletFilter, tagFilter, categoryFilter, utxoMode });
@@ -273,7 +270,6 @@ export default function UTXOs() {
   }, []);
 
   const [decryptedRecords, setDecryptedRecords] = useState<DbRecord[]>([]);
-  const [decryptProgress, setDecryptProgress] = useState<DecryptProgress | null>(null);
   const decryptRequestId = useRef(0);
   
   useEffect(() => {
@@ -284,8 +280,7 @@ export default function UTXOs() {
     
     const decrypt = async () => {
       try {
-        const decrypted = await decryptRecordsWithProgress(rawRecords, setDecryptProgress);
-        setDecryptProgress(null);
+        const decrypted = rawRecords;
         if (thisRequestId === decryptRequestId.current) {
           setDecryptedRecords(decrypted);
         }
@@ -891,26 +886,17 @@ export default function UTXOs() {
         />
       </div>
 
-      {(decryptProgress || participantsLoading || isComputing) && (
+      {(participantsLoading || isComputing) && (
         <Card>
           <CardContent className="py-4">
             <div className="flex flex-col gap-2">
-              {decryptProgress && (
-                <div className="flex items-center gap-2 text-sm text-muted-foreground" data-testid="status-decrypt-progress">
-                  <RefreshCw className="h-4 w-4 animate-spin" />
-                  <span>
-                    Decrypting records {decryptProgress.current.toLocaleString()}/{decryptProgress.total.toLocaleString()}
-                    {decryptProgress.cached > 0 && ` (${decryptProgress.cached.toLocaleString()} cached)`}...
-                  </span>
-                </div>
-              )}
               {participantsLoading && (
                 <div className="flex items-center gap-2 text-sm text-muted-foreground" data-testid="status-participants-loading">
                   <RefreshCw className="h-4 w-4 animate-spin" />
                   <span>Loading transaction participants for {decryptedRecords.length.toLocaleString()} addresses...</span>
                 </div>
               )}
-              {isComputing && !participantsLoading && !decryptProgress && (
+              {isComputing && !participantsLoading && (
                 <div className="flex items-center gap-2 text-sm text-muted-foreground" data-testid="status-computing">
                   <RefreshCw className="h-4 w-4 animate-spin" />
                   <span>Computing UTXO set...</span>

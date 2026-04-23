@@ -1,30 +1,5 @@
 import { db, notifyDbChange, type Record, type Attachment, type Evidence, type EvidenceAttachment, type TransactionParticipant } from '../database';
 
-export async function decryptRecordById(id: number): Promise<Record | undefined> {
-  return db.records.get(id);
-}
-
-export async function decryptRecords(records: Record[]): Promise<Record[]> {
-  return records;
-}
-
-export interface DecryptProgress {
-  current: number;
-  total: number;
-  cached: number;
-}
-
-export async function decryptRecordsWithProgress(
-  records: Record[],
-  onProgress?: (progress: DecryptProgress) => void,
-  chunkSize: number = 500,
-): Promise<Record[]> {
-  if (onProgress) {
-    onProgress({ current: records.length, total: records.length, cached: records.length });
-  }
-  return records;
-}
-
 export async function createAttachment(
   data: Omit<Attachment, 'id' | 'createdAt'>
 ): Promise<number> {
@@ -62,10 +37,6 @@ export async function getDecryptedEvidence(id: number): Promise<Evidence | undef
 
 export async function getAllDecryptedEvidence(): Promise<Evidence[]> {
   return db.evidence.toArray();
-}
-
-export async function decryptEvidenceList(evidenceList: Evidence[]): Promise<Evidence[]> {
-  return evidenceList;
 }
 
 export async function updateEvidence(
@@ -117,26 +88,6 @@ export async function getDecryptedEvidenceAttachments(evidenceId: number): Promi
 
 export async function deleteEvidenceAttachment(id: number): Promise<void> {
   await db.evidenceAttachments.delete(id);
-}
-
-export async function encryptParticipantData(participant: TransactionParticipant): Promise<TransactionParticipant> {
-  return participant;
-}
-
-export async function decryptParticipantData(participant: TransactionParticipant): Promise<TransactionParticipant> {
-  return participant;
-}
-
-export async function encryptParticipantsBatchData(
-  participants: TransactionParticipant[],
-): Promise<TransactionParticipant[]> {
-  return participants;
-}
-
-export async function decryptParticipantsData(
-  participants: TransactionParticipant[],
-): Promise<TransactionParticipant[]> {
-  return participants;
 }
 
 export async function getAllDecryptedParticipants(): Promise<TransactionParticipant[]> {

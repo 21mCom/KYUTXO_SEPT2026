@@ -1,7 +1,6 @@
 import { useState, useEffect } from "react";
 import { useLocation } from "wouter";
 import { db, type Record as DbRecord, type ChainType, type AddressImportance, type VaultMetadata, type FlowType, type AcquisitionMethod, type DispositionType, type CounterpartyType } from "@/lib/database";
-import { decryptRecords } from "@/lib/encryptionFacade";
 import { RecordDetailPanel } from "./RecordDetailPanel";
 
 interface ClickableAddressProps {
@@ -94,8 +93,7 @@ export function ClickableAddress({
         .first();
       
       if (dbRecord) {
-        const decryptedRecords = await decryptRecords([dbRecord]);
-        const decrypted = decryptedRecords[0];
+        const decrypted = dbRecord;
         if (decrypted) {
           const converted: ConvertedRecord = {
             id: String(decrypted.id),

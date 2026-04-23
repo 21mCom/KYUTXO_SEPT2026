@@ -9,7 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { useToast } from "@/hooks/use-toast";
-import { decryptRecords, updateRecord } from "@/lib/encryptionFacade";
+import { updateRecord } from "@/lib/encryptionFacade";
 import { db } from "@/lib/database";
 import type { VaultMetadata, Record as DbRecord } from "@/lib/database";
 
@@ -92,10 +92,9 @@ export default function VaultManagement() {
           .anyOf(VAULT_TIERS.map(tier => ['address', tier]))
           .toArray();
 
-        const records = await decryptRecords(rawRecords);
         const vaultMap = new Map<string, VaultSummary>();
 
-        for (const record of records) {
+        for (const record of rawRecords) {
           if (record.vault?.isVaultXpub && record.vault.m && record.vault.n) {
             const key = generateVaultKey(record.vault);
             const parsed = parseVaultNotes(record.vault.vaultNotes);
@@ -180,9 +179,7 @@ export default function VaultManagement() {
         .anyOf(vault.addressIds)
         .toArray();
 
-      const records = await decryptRecords(rawRecords);
-
-      const vaultRecords = records.filter(r => {
+      const vaultRecords = rawRecords.filter(r => {
         if (!r.vault?.isVaultXpub || !r.vault.m || !r.vault.n) return false;
         return generateVaultKey(r.vault) === vault.vaultKey;
       });

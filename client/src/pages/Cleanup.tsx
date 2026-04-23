@@ -20,7 +20,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Trash2, Search, RefreshCw, AlertTriangle, CheckCircle2, Network, ArrowUpDown, Link2, Shield, XCircle, ChevronLeft, ChevronRight, Unplug } from "lucide-react";
 import { db, Record, RecordOrigin } from "@/lib/database";
-import { deleteRecord, decryptRecords, getDecryptedParticipantsByTxids } from "@/lib/encryptionFacade";
+import { deleteRecord, getDecryptedParticipantsByTxids } from "@/lib/encryptionFacade";
 import { yieldToUI } from "@/hooks/use-async-memo";
 
 type Scope = 'addresses' | 'transactions' | 'both';
@@ -122,7 +122,7 @@ async function buildKnownRecordSets(onProgress: (msg: string) => void): Promise<
       ['address', 'xpub-derived'],
     ])
     .toArray();
-  const decrypted = await decryptRecords(knownRecords);
+  const decrypted = knownRecords;
   const knownAddresses = new Set<string>();
   const knownRecordIds = new Set<number>();
   for (const r of decrypted) {
@@ -255,7 +255,7 @@ export default function Cleanup() {
           ['address', 'xpub-derived'],
         ])
         .toArray();
-      const decrypted = await decryptRecords(allRecords);
+      const decrypted = allRecords;
       const synced = decrypted
         .filter(r => r.id && (r.maxSyncedDepth !== undefined && r.maxSyncedDepth >= 0))
         .map(r => ({ id: r.id!, address: r.inputString }));
@@ -318,7 +318,7 @@ export default function Cleanup() {
       setScanProgress(`Checking records... ${processed.toLocaleString()}/${total.toLocaleString()} (${Math.round((processed / total) * 100)}%)`);
       await yieldToUI();
 
-      const decrypted = await decryptRecords(batch);
+      const decrypted = batch;
       const batchRecordIds = new Set<number>();
       for (const r of decrypted) {
         if (r.id) batchRecordIds.add(r.id);
@@ -384,7 +384,7 @@ export default function Cleanup() {
         .toArray();
 
       if (children.length === 0) break;
-      const decrypted = await decryptRecords(children);
+      const decrypted = children;
       for (const r of decrypted) allDiscovered.push(r);
       setScanProgress(`Discovery tree depth ${depth + 1}: ${allDiscovered.length.toLocaleString()} records found...`);
       await yieldToUI();
@@ -489,7 +489,7 @@ export default function Cleanup() {
       setScanProgress(`Checking records... ${processed.toLocaleString()}/${total.toLocaleString()} (${Math.round((processed / total) * 100)}%)`);
       await yieldToUI();
 
-      const decrypted = await decryptRecords(batch);
+      const decrypted = batch;
       const batchRecordIds = new Set<number>();
       for (const r of decrypted) {
         if (r.id) batchRecordIds.add(r.id);
@@ -618,7 +618,7 @@ export default function Cleanup() {
         if (records.length === 0) { skipped++; continue; }
 
         if (scanMode === 'blockchain-only' || scanMode === 'unconnected') {
-          const decrypted = await decryptRecords(records);
+          const decrypted = records;
           const record = decrypted[0];
           const origins = await bulkGetOriginsByRecordId(new Set([id]));
           const recordOrigins = origins.get(id) || [];

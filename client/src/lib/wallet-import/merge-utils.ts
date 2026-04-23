@@ -1,7 +1,6 @@
 import type { ParsedRecord, DuplicateInfo, VaultMetadata } from './types';
 import type { Record as DBRecord, AddressImportance } from '../database';
 import { db } from '../database';
-import { decryptRecords } from '../encryptionFacade';
 import { IMPORTANCE_TIERS } from '../provenance';
 import { expandLabelTokens } from '../label-tokens';
 
@@ -33,7 +32,7 @@ export async function checkForDuplicates(
   parsedRecords: ParsedRecord[]
 ): Promise<DuplicateInfo[]> {
   const allRaw = await db.records.toArray();
-  const allDecrypted = await decryptRecords(allRaw);
+  const allDecrypted = allRaw;
   const lookupMap = new Map<string, DBRecord>();
   for (const r of allDecrypted) {
     if (r.inputString) {

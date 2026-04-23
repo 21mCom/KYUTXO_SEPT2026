@@ -31,7 +31,6 @@ import { createRecord } from "@/hooks/use-records";
 import { syncTagsToMaster, syncCategoriesToMaster, createRecordOrigin, saveDerivationTemplate } from "@/lib/encryptionFacade";
 import { db, beginBulkOperation, endBulkOperation } from "@/lib/database";
 import { updateRecord } from "@/hooks/use-records";
-import { decryptRecordsWithProgress } from "@/lib/encryption/record-encryption";
 import { 
   deriveDualChainAddresses,
   deriveDualChainAdvanced,
@@ -367,7 +366,7 @@ export default function BulkImport() {
       };
 
       const rawRecords = await db.records.where('type').equals('address').toArray();
-      const decryptedRecords = await decryptRecordsWithProgress(rawRecords);
+      const decryptedRecords = rawRecords;
       const recordLookup = new Map<string, (typeof decryptedRecords)[0]>();
       for (const r of decryptedRecords) {
         if (r.inputString) {

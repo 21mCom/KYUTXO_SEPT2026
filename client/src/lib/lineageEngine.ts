@@ -9,7 +9,7 @@ import {
   type CustodyStatus,
   type AddressImportance
 } from './database';
-import { getDecryptedParticipantsByTxid, decryptParticipantsData } from './encryptionFacade';
+import { getDecryptedParticipantsByTxid } from './encryptionFacade';
 
 // Generate a simple UUID for segment IDs
 function generateSegmentId(): string {

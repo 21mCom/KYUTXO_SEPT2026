@@ -7,7 +7,6 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Progress } from "@/components/ui/progress";
 import {
   Loader2,
   ChevronDown,
@@ -17,8 +16,7 @@ import {
   Check,
 } from "lucide-react";
 import { SiBitcoin } from "react-icons/si";
-import { decryptRecordsWithProgress, getDecryptedParticipantsByAddresses } from "@/lib/encryptionFacade";
-import type { DecryptProgress } from "@/lib/encryption/record-encryption";
+import { getDecryptedParticipantsByAddresses } from "@/lib/encryptionFacade";
 
 type GroupBy = "wallet" | "seed" | "owner" | "tag" | "category";
 type SortBy = "balance-desc" | "balance-asc" | "name-asc" | "name-desc" | "addresses-desc";
@@ -78,7 +76,6 @@ export default function BalanceOverview() {
   );
 
   const [decryptedRecords, setDecryptedRecords] = useState<DbRecord[]>([]);
-  const [decryptProgress, setDecryptProgress] = useState<DecryptProgress | null>(null);
   const decryptRequestId = useRef(0);
 
   useEffect(() => {
@@ -88,13 +85,11 @@ export default function BalanceOverview() {
 
     const decrypt = async () => {
       try {
-        const decrypted = await decryptRecordsWithProgress(rawRecords, setDecryptProgress);
-        setDecryptProgress(null);
+        const decrypted = rawRecords;
         if (thisRequestId === decryptRequestId.current) {
           setDecryptedRecords(decrypted);
         }
       } catch {
-        setDecryptProgress(null);
         if (thisRequestId === decryptRequestId.current) {
           setDecryptedRecords(rawRecords);
         }
@@ -399,7 +394,6 @@ export default function BalanceOverview() {
   }, []);
 
   const isLoading = !participants || !transactions || !rawRecords;
-  const isDecrypting = decryptProgress !== null;
 
   const groupByLabel: Record<GroupBy, string> = {
     wallet: "Wallet",
@@ -462,19 +456,6 @@ export default function BalanceOverview() {
           <div className="flex flex-col items-center justify-center py-20 gap-3">
             <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
             <p className="text-sm text-muted-foreground">Loading data...</p>
-          </div>
-        ) : isDecrypting ? (
-          <div className="flex flex-col items-center justify-center py-20 gap-3">
-            <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-            <p className="text-sm text-muted-foreground">
-              Decrypting records... {decryptProgress?.current}/{decryptProgress?.total}
-            </p>
-            {decryptProgress && (
-              <Progress
-                value={Math.round((decryptProgress.current / decryptProgress.total) * 100)}
-                className="w-64"
-              />
-            )}
           </div>
         ) : isComputing ? (
           <div className="flex flex-col items-center justify-center py-20 gap-3">

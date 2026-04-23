@@ -79,7 +79,6 @@ import {
   createEvidence, 
   updateEvidence, 
   deleteEvidence, 
-  decryptEvidenceList,
   getDecryptedEvidenceAttachments,
   createEvidenceAttachment,
   deleteEvidenceAttachment,
@@ -129,8 +128,7 @@ export default function EvidencePage() {
 
   useLiveQuery(async () => {
     if (rawEvidence && rawEvidence.length > 0) {
-      const decrypted = await decryptEvidenceList(rawEvidence);
-      setDecryptedEvidence(decrypted);
+      setDecryptedEvidence(rawEvidence);
     } else {
       setDecryptedEvidence([]);
     }

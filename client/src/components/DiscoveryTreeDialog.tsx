@@ -13,7 +13,6 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { db } from "@/lib/database";
 import type { Record } from "@/lib/database";
-import { decryptRecords } from "@/lib/encryptionFacade";
 
 const PREVIEW_COUNT = 4;
 const ROW_HEIGHT = 36;
@@ -46,14 +45,13 @@ async function fetchDiscoveryTree(parentRecordId: number): Promise<DiscoveredRec
 
     if (children.length === 0) break;
 
-    const decrypted = await decryptRecords(children);
-    const withDepth: DiscoveredRecord[] = decrypted.map((r) => ({
+    const withDepth: DiscoveredRecord[] = children.map((r) => ({
       ...r,
       discoveryDepth: depth,
     }));
     for (const item of withDepth) allDiscovered.push(item);
 
-    currentParentIds = decrypted
+    currentParentIds = withDepth
       .map((r) => r.id)
       .filter((id): id is number => id !== undefined);
     depth++;

@@ -22,8 +22,6 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { db, beginBulkOperation, endBulkOperation } from "@/lib/database";
 import type { Record as DbRecord } from "@/lib/database";
-import { decryptRecordsWithProgress } from "@/lib/encryption/record-encryption";
-import type { DecryptProgress } from "@/lib/encryption/record-encryption";
 import { createTag } from "@/lib/encryption/vocabulary-crud";
 import { updateRecord } from "@/lib/encryption/record-crud";
 import { useTags } from "@/hooks/use-tags";
@@ -42,7 +40,7 @@ import {
   type PrivacySeverity,
 } from "@/lib/privacy-audit";
 
-type ScanState = "idle" | "decrypting" | "analyzing" | "tagging" | "complete";
+type ScanState = "idle" | "analyzing" | "tagging" | "complete";
 
 const FINDING_TYPE_META: Record<PrivacyFindingType, { label: string; icon: typeof Shield }> = {
   SCRIPT_TYPE_MIXING: { label: "Script Type Mixing", icon: Fingerprint },
@@ -74,7 +72,6 @@ function getSeverityBadgeProps(severity: PrivacySeverity): {
 export default function PrivacyAudit() {
   const [scanState, setScanState] = useState<ScanState>("idle");
   const [statusMessage, setStatusMessage] = useState("");
-  const [decryptProgress, setDecryptProgress] = useState<DecryptProgress | null>(null);
   const [result, setResult] = useState<PrivacyAuditResult | null>(null);
   const [taggingProgress, setTaggingProgress] = useState({ current: 0, total: 0 });
   const [selectedOwner, setSelectedOwner] = useState<string>("all");
@@ -89,9 +86,9 @@ export default function PrivacyAudit() {
   const runAudit = useCallback(async () => {
 
     try {
-      setScanState("decrypting");
       setResult(null);
       setStatusMessage("Loading address records...");
+      setScanState("analyzing");
 
       let records = await db.records.where("type").equals("address").toArray();
 
@@ -101,12 +98,7 @@ export default function PrivacyAudit() {
         return;
       }
 
-      const decrypted = await decryptRecordsWithProgress(records, (progress) => {
-        setDecryptProgress(progress);
-      });
-      setDecryptProgress(null);
-
-      let filtered = decrypted;
+      let filtered = records;
       if (selectedOwner !== "all") {
         filtered = filtered.filter(r => r.owner === selectedOwner);
       }
@@ -183,7 +175,7 @@ export default function PrivacyAudit() {
       }
 
       const records = await db.records.where("type").equals("address").toArray();
-      const decrypted = await decryptRecordsWithProgress(records);
+      const decrypted = records;
 
       const addressToRecord = new Map<string, DbRecord>();
       for (const r of decrypted) {
@@ -253,9 +245,6 @@ export default function PrivacyAudit() {
   };
 
   const progressPercent = (() => {
-    if (scanState === "decrypting" && decryptProgress) {
-      return Math.round((decryptProgress.current / decryptProgress.total) * 100);
-    }
     if (scanState === "tagging" && taggingProgress.total > 0) {
       return Math.round((taggingProgress.current / taggingProgress.total) * 100);
     }
@@ -321,21 +310,17 @@ export default function PrivacyAudit() {
                 ) : (
                   <>
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    {scanState === "decrypting" ? "Decrypting..." : scanState === "analyzing" ? "Analyzing..." : "Tagging..."}
+                    {scanState === "analyzing" ? "Analyzing..." : "Tagging..."}
                   </>
                 )}
               </Button>
             </div>
 
-            {(scanState === "decrypting" || scanState === "tagging") && (
+            {scanState === "tagging" && (
               <div className="space-y-1">
                 <Progress value={progressPercent} className="h-2" data-testid="progress-audit" />
                 <p className="text-xs text-muted-foreground" data-testid="text-progress-status">
-                  {scanState === "decrypting" && decryptProgress
-                    ? `Decrypting records... ${decryptProgress.current} / ${decryptProgress.total}`
-                    : scanState === "tagging"
-                    ? `Applying tags... ${taggingProgress.current} / ${taggingProgress.total}`
-                    : statusMessage}
+                  Applying tags... {taggingProgress.current} / {taggingProgress.total}
                 </p>
               </div>
             )}

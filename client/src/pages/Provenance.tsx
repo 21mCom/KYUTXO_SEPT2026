@@ -55,8 +55,7 @@ import {
   Upload,
   Sparkles,
   X,
-  Check,
-  RefreshCw
+  Check
 } from "lucide-react";
 import { 
   findLabeledConnections, 
@@ -75,8 +74,6 @@ import {
   type ProvenanceFilter
 } from "@/lib/provenance";
 import { db, type Record as DbRecord, type AddressImportance } from "@/lib/database";
-import { decryptRecords, decryptRecordsWithProgress } from "@/lib/encryptionFacade";
-import type { DecryptProgress } from "@/lib/encryption/record-encryption";
 import { formatDistanceToNow, format } from "date-fns";
 import { ContinuityProof } from "@/components/ContinuityProof";
 
@@ -124,15 +121,13 @@ export default function Provenance() {
 
   const [allAddresses, setAllAddresses] = useState<DbRecord[]>([]);
   const [labeledAddresses, setLabeledAddresses] = useState<DbRecord[]>([]);
-  const [decryptProgress, setDecryptProgress] = useState<DecryptProgress | null>(null);
 
   const loadStats = useCallback(async () => {
     const s = await getProvenanceStats();
     setStats(s);
     
     const rawAddresses = await db.records.where('type').equals('address').toArray();
-    const addresses = await decryptRecordsWithProgress(rawAddresses, setDecryptProgress);
-    setDecryptProgress(null);
+    const addresses = rawAddresses;
     setAllAddresses(addresses);
     
     const labeled = addresses.filter(r => 
@@ -519,16 +514,6 @@ export default function Provenance() {
             <p className="text-muted-foreground">Explore connections and trace the origins of your Bitcoin addresses</p>
           </div>
         </div>
-
-        {decryptProgress && (
-          <div className="flex items-center gap-2 text-sm text-muted-foreground px-4 py-2">
-            <RefreshCw className="h-4 w-4 animate-spin" />
-            <span>
-              Decrypting records {decryptProgress.current.toLocaleString()}/{decryptProgress.total.toLocaleString()}
-              {decryptProgress.cached > 0 && ` (${decryptProgress.cached.toLocaleString()} cached)`}...
-            </span>
-          </div>
-        )}
 
         <Alert>
           <Info className="h-4 w-4" />
