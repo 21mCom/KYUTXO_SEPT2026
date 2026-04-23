@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { Switch, Route, Router } from "wouter";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
@@ -151,6 +152,85 @@ function AuthenticatedApp() {
   );
 }
 
+function LegacyMigrationOverlay() {
+  const { legacyMigrationProgress, legacyMigrationResult } = useAuth();
+  const [dismissedMigrationResult, setDismissedMigrationResult] = useState(false);
+
+  if (dismissedMigrationResult) {
+    return null;
+  }
+
+  if (!legacyMigrationProgress && !legacyMigrationResult) {
+    return null;
+  }
+
+  if (legacyMigrationResult) {
+    if (legacyMigrationResult.totalFailed > 0) {
+      return (
+        <div className="fixed inset-0 z-[9999] bg-background/95 flex items-center justify-center" data-testid="legacy-migration-overlay">
+          <div className="text-center max-w-md space-y-4 p-6">
+            <div className="text-2xl font-semibold text-foreground">Data Migration Complete</div>
+            {legacyMigrationResult.totalFailed === -1 ? (
+              <p className="text-destructive">
+                Migration encountered an unexpected error. Your data is safe — it will be retried on your next login.
+              </p>
+            ) : (
+              <>
+                <p className="text-muted-foreground">
+                  Successfully restored {legacyMigrationResult.totalDecrypted} records.
+                </p>
+                <p className="text-destructive">
+                  {legacyMigrationResult.totalFailed} records could not be decrypted and were left unchanged.
+                  They will be retried on your next login.
+                </p>
+              </>
+            )}
+            <button
+              onClick={() => setDismissedMigrationResult(true)}
+              className="mt-4 px-4 py-2 bg-primary text-primary-foreground rounded-md"
+              data-testid="button-dismiss-migration"
+            >
+              Continue
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return null;
+  }
+
+  const progress = legacyMigrationProgress!;
+  const pct = progress.total > 0 ? Math.round((progress.current / progress.total) * 100) : 0;
+
+  return (
+    <div className="fixed inset-0 z-[9999] bg-background/95 flex items-center justify-center" data-testid="legacy-migration-overlay">
+      <div className="text-center max-w-md space-y-4 p-6">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto" />
+        <div className="text-2xl font-semibold text-foreground">Migrating Encrypted Data</div>
+        <p className="text-muted-foreground">
+          Restoring plaintext for: {progress.tableName}
+        </p>
+        <div className="w-full bg-muted rounded-full h-2">
+          <div
+            className="bg-primary h-2 rounded-full transition-all duration-200"
+            style={{ width: `${pct}%` }}
+          />
+        </div>
+        <p className="text-sm text-muted-foreground">
+          {progress.current} / {progress.total} records ({pct}%)
+          {progress.failed > 0 && ` — ${progress.failed} failed`}
+        </p>
+        <p className="text-xs text-muted-foreground">
+          Table {progress.tableIndex + 1} of {progress.tableCount}
+        </p>
+        <p className="text-xs text-muted-foreground">
+          Please do not close the application.
+        </p>
+      </div>
+    </div>
+  );
+}
+
 function AppContent() {
   const { isAuthenticated, isInitialized, isLoading } = useAuth();
 
@@ -169,7 +249,12 @@ function AppContent() {
     return <LoginScreen />;
   }
 
-  return <AuthenticatedApp />;
+  return (
+    <>
+      <LegacyMigrationOverlay />
+      <AuthenticatedApp />
+    </>
+  );
 }
 
 export default function App() {

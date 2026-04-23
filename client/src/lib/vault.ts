@@ -10,6 +10,7 @@ export interface VaultSettings {
   createdAt: number;
   migrationComplete?: boolean; // Flag indicating if plaintext data has been migrated
   attachmentPathsMigrated?: boolean; // Flag indicating attachment dirs have been hashed
+  legacyDecryptComplete?: boolean; // Flag indicating legacy encrypted payloads have been decrypted
 }
 
 class VaultDatabase extends Dexie {
@@ -74,6 +75,18 @@ export async function setAttachmentPathsMigrated(migrated: boolean): Promise<voi
   const settings = await vaultDb.vault.get('main');
   if (settings) {
     await vaultDb.vault.update('main', { attachmentPathsMigrated: migrated });
+  }
+}
+
+export async function isLegacyDecryptComplete(): Promise<boolean> {
+  const settings = await vaultDb.vault.get('main');
+  return settings?.legacyDecryptComplete ?? false;
+}
+
+export async function setLegacyDecryptComplete(complete: boolean): Promise<void> {
+  const settings = await vaultDb.vault.get('main');
+  if (settings) {
+    await vaultDb.vault.update('main', { legacyDecryptComplete: complete });
   }
 }
 

@@ -72,54 +72,7 @@ export class KYUTXODatabase extends Dexie {
       pausedSyncState: 'id',
       skippedAddresses: '++id, address, reason, syncRunTimestamp, dismissed, createdAt',
       addressBlacklist: '++id, &address, addedAt'
-    }).upgrade(async tx => {
-      const tablesWithTextFields: Record<string, string[]> = {
-        records: ['label', 'inputString', 'notes'],
-        tags: ['name'],
-        categories: ['name'],
-        owners: ['name'],
-        walletNames: ['name'],
-        seedNames: ['name'],
-        walletSoftware: ['name'],
-      };
-      let totalDeleted = 0;
-      for (const [tableName, fields] of Object.entries(tablesWithTextFields)) {
-        const table = tx.table(tableName);
-        const keysToDelete: number[] = [];
-        await table.toCollection().each((item: any) => {
-          const hasEncryptedField = fields.some(f => item[f] === '[encrypted]');
-          if (hasEncryptedField) {
-            keysToDelete.push(item.id);
-          }
-        });
-        if (keysToDelete.length > 0) {
-          await table.bulkDelete(keysToDelete);
-          totalDeleted += keysToDelete.length;
-          console.log(`[v28 cleanup] Deleted ${keysToDelete.length} unrecoverable records from ${tableName}`);
-        }
-      }
-      const relatedTables = [
-        'attachments', 'recordOrigins', 'transactionParticipants',
-        'evidence', 'evidenceAttachments', 'derivationTemplates',
-        'utxoLineage', 'custodySegments', 'lineageSnapshots',
-      ];
-      for (const tableName of relatedTables) {
-        const table = tx.table(tableName);
-        const keysToDelete: number[] = [];
-        await table.toCollection().each((item: any) => {
-          if (item._legacyEncryptedPayload) {
-            keysToDelete.push(item.id);
-          }
-        });
-        if (keysToDelete.length > 0) {
-          await table.bulkDelete(keysToDelete);
-          totalDeleted += keysToDelete.length;
-          console.log(`[v28 cleanup] Deleted ${keysToDelete.length} unrecoverable records from ${tableName}`);
-        }
-      }
-      if (totalDeleted > 0) {
-        console.log(`[v28 cleanup] Total: removed ${totalDeleted} unrecoverable encrypted records`);
-      }
+    }).upgrade(async () => {
     });
 
     // Version 27 removes field-level encryption (isEncrypted/encryptedPayload stripped from all tables)
