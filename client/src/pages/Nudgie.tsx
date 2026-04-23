@@ -14,7 +14,7 @@ import {
   ACQUISITION_METHOD_OPTIONS,
   DISPOSITION_TYPE_OPTIONS,
 } from "@/lib/database";
-import { updateRecord, createRecord, getDecryptedTags, getDecryptedCategories, getDecryptedParticipantsByAddresses } from "@/lib/encryptionFacade";
+import { updateRecord, createRecord, getDecryptedTags, getDecryptedCategories, getDecryptedParticipantsByAddresses } from "@/lib/dataFacade";
 import { uploadAttachment } from "@/lib/attachments";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";

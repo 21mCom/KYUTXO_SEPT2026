@@ -1,5 +1,5 @@
 import { db, BlockchainTransaction, TransactionParticipant, Record } from './database';
-import { getDecryptedParticipantsByTxid, getDecryptedParticipantsByAddresses } from './encryptionFacade';
+import { getDecryptedParticipantsByTxid, getDecryptedParticipantsByAddresses } from './dataFacade';
 
 // Lightning Channel Classification Types
 export type LightningClassification = 

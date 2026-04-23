@@ -16,7 +16,7 @@ import { db } from "@/lib/database";
 import { useTags } from "@/hooks/use-tags";
 import { useOwners } from "@/hooks/use-owners";
 import { useWalletNames } from "@/hooks/use-wallet-names";
-import { getDecryptedParticipantsByTxids, getDecryptedParticipantsByAddresses } from "@/lib/encryptionFacade";
+import { getDecryptedParticipantsByTxids, getDecryptedParticipantsByAddresses } from "@/lib/dataFacade";
 import type { TransactionParticipant, BlockchainTransaction } from "@/lib/database";
 
 type BalanceMode = "modeA" | "modeB" | "modeC";

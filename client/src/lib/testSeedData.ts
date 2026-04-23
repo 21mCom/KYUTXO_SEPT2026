@@ -1,5 +1,5 @@
 import { db, type Record } from './database';
-import { getDecryptedParticipantsByTxid } from './encryptionFacade';
+import { getDecryptedParticipantsByTxid } from './dataFacade';
 
 /**
  * Test data seeding utility for demonstrating KYUTXO features.

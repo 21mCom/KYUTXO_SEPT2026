@@ -4,7 +4,7 @@
 import { db, notifyDbChange, type Record, type BlockchainTransaction, type TransactionParticipant, type AddressSyncState, type NodeSettings, type PausedSyncState, type SkippedAddress, type AddressBlacklist, type SyncProtectionSettings, DEFAULT_SYNC_PROTECTION } from './database';
 import { createProvider, createProviderFromSettings, parseTransaction, MINIMUM_CONFIRMATIONS, type ProviderType, type ParsedTransaction, type BlockchainProvider, type ApiTransaction } from './blockchain-api';
 import { validateAddress } from './bitcoin';
-import { createRecordOrigin } from './encryptionFacade';
+import { createRecordOrigin } from './dataFacade';
 
 // Legacy source filter type - kept for backwards compatibility
 export type SourceFilter = 'manual-only' | 'include-tx-import' | 'include-blockchain-sync' | 'all' | 'custom';
@@ -1830,7 +1830,7 @@ export class TransactionSyncService {
     role: 'input' | 'output';
     amount: number;
   }>> {
-    const { getDecryptedParticipantsByAddress } = await import('./encryptionFacade');
+    const { getDecryptedParticipantsByAddress } = await import('./dataFacade');
     const participants = await getDecryptedParticipantsByAddress(address);
 
     const results: Array<{

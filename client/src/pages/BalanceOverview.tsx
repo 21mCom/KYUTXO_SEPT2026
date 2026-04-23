@@ -16,7 +16,7 @@ import {
   Check,
 } from "lucide-react";
 import { SiBitcoin } from "react-icons/si";
-import { getDecryptedParticipantsByAddresses } from "@/lib/encryptionFacade";
+import { getDecryptedParticipantsByAddresses } from "@/lib/dataFacade";
 
 type GroupBy = "wallet" | "seed" | "owner" | "tag" | "category";
 type SortBy = "balance-desc" | "balance-asc" | "name-asc" | "name-desc" | "addresses-desc";

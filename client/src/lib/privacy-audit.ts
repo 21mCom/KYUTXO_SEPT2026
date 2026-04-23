@@ -1,6 +1,6 @@
 import { db } from "@/lib/database";
 import type { TransactionParticipant } from "@/lib/db-types";
-import { getDecryptedParticipantsByAddresses } from "@/lib/encryption/record-encryption";
+import { getDecryptedParticipantsByAddresses } from "@/lib/data/record-encryption";
 
 export type PrivacySeverity = "CRITICAL" | "HIGH" | "MEDIUM" | "LOW";
 

@@ -29,7 +29,7 @@ import {
 } from "@/components/ui/popover";
 import { useSettings, useCustomFields, toggleTableColumn, toggleCustomFieldColumn } from "@/hooks/use-settings";
 import { db, type CustomField } from "@/lib/database";
-import { getDecryptedParticipantsByAddresses } from "@/lib/encryptionFacade";
+import { getDecryptedParticipantsByAddresses } from "@/lib/dataFacade";
 import { Separator } from "@/components/ui/separator";
 import { formatBTC } from "@/lib/bitcoin";
 

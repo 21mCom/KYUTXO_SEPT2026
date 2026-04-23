@@ -32,7 +32,7 @@ import {
   createWalletSoftwareEntry,
   updateWalletSoftwareEntry,
   deleteWalletSoftwareEntry,
-} from "@/lib/encryptionFacade";
+} from "@/lib/dataFacade";
 import { useToast } from "@/hooks/use-toast";
 import { 
   type Record,

@@ -7,7 +7,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/component
 import { Separator } from '@/components/ui/separator';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { type RecordOrigin, type RecordOriginType, type Record as DBRecord } from '@/lib/database';
-import { getDecryptedRecordOrigins } from '@/lib/encryptionFacade';
+import { getDecryptedRecordOrigins } from '@/lib/dataFacade';
 import { SINGULAR_FIELDS, type FieldConfig } from '@/lib/conflict-detection';
 
 interface RecordFields {

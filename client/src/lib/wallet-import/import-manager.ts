@@ -17,7 +17,7 @@ import { phoenixAdapter } from './adapters/phoenix';
 import { walletOfSatoshiAdapter } from './adapters/wallet-of-satoshi';
 import { nunchukAdapter } from './adapters/nunchuk';
 import { checkForDuplicates, mergeRecordData, createNewRecordData } from './merge-utils';
-import { createRecord, updateRecord, createRecordOrigin } from '../encryptionFacade';
+import { createRecord, updateRecord, createRecordOrigin } from '../dataFacade';
 import { beginBulkOperation, endBulkOperation } from '../database';
 
 export function scanForPrivateKeys(content: string): { hasPrivateKeys: boolean; warnings: string[] } {

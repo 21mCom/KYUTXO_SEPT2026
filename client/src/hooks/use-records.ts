@@ -7,7 +7,7 @@ import {
   updateRecord as facadeUpdateRecord,
   deleteRecord as facadeDeleteRecord,
   createRecordOrigin,
-} from '@/lib/encryptionFacade';
+} from '@/lib/dataFacade';
 
 export function useRecords() {
   const [records, setRecords] = useState<Record[]>([]);

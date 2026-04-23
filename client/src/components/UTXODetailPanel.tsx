@@ -33,7 +33,7 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { db, Record as DbRecord, TransactionParticipant, BlockchainTransaction, PriceData } from "@/lib/database";
-import { getDecryptedParticipantsByTxid } from "@/lib/encryptionFacade";
+import { getDecryptedParticipantsByTxid } from "@/lib/dataFacade";
 import { cn } from "@/lib/utils";
 
 interface UTXO {

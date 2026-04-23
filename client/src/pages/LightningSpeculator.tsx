@@ -8,7 +8,7 @@ import {
   getClassificationLabel,
   getClassificationBadgeVariant
 } from "@/lib/lightning-detection";
-import { getDecryptedOwners, getDecryptedWalletNames } from "@/lib/encryptionFacade";
+import { getDecryptedOwners, getDecryptedWalletNames } from "@/lib/dataFacade";
 import { ClickableAddress } from "@/components/ClickableAddress";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";

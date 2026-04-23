@@ -58,7 +58,7 @@ import { MultiSelectCombobox } from "@/components/ui/multi-select-combobox";
 import { useTags, createTag as createTagHook } from "@/hooks/use-tags";
 import { useCategories, createCategory as createCategoryHook } from "@/hooks/use-categories";
 import { useRecords, createRecord, updateRecord } from "@/hooks/use-records";
-import { syncTagsToMaster, syncCategoriesToMaster, createRecordOrigin } from "@/lib/encryptionFacade";
+import { syncTagsToMaster, syncCategoriesToMaster, createRecordOrigin } from "@/lib/dataFacade";
 import { beginBulkOperation, endBulkOperation } from "@/lib/database";
 import { useOwners, createOwner } from "@/hooks/use-owners";
 import { useWalletNames, createWalletName } from "@/hooks/use-wallet-names";

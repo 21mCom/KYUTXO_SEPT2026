@@ -2,7 +2,7 @@
 // Traces UTXO origins and connections between addresses
 
 import { db, type Record, type TransactionParticipant, type BlockchainTransaction, type AddressImportance } from './database';
-import { getDecryptedParticipantsByAddress, getDecryptedParticipantsByTxid } from './encryptionFacade';
+import { getDecryptedParticipantsByAddress, getDecryptedParticipantsByTxid } from './dataFacade';
 
 // Importance tier levels (higher number = higher importance)
 export const IMPORTANCE_TIERS: { [key in AddressImportance]: number } = {

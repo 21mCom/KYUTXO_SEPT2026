@@ -42,7 +42,7 @@ import { useCategories } from "@/hooks/use-categories";
 import { useToast } from "@/hooks/use-toast";
 import { 
   bulkUpdateRecords,
-} from "@/lib/encryptionFacade";
+} from "@/lib/dataFacade";
 import type { Record } from "@/lib/database";
 import { uploadAttachment, formatFileSize } from "@/lib/attachments";
 import { Progress } from "@/components/ui/progress";

@@ -1,7 +1,7 @@
 import { useState, useMemo } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { db, type Record as DBRecord, type TransactionParticipant, type BlockchainTransaction, type AddressImportance } from "@/lib/database";
-import { getDecryptedParticipantsByAddress, getDecryptedParticipantsByTxid } from "@/lib/encryptionFacade";
+import { getDecryptedParticipantsByAddress, getDecryptedParticipantsByTxid } from "@/lib/dataFacade";
 import { useRecordPreview } from "@/contexts/RecordPreviewContext";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";

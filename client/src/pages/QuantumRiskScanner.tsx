@@ -7,8 +7,8 @@ import { Progress } from "@/components/ui/progress";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { db, beginBulkOperation, endBulkOperation } from "@/lib/database";
 import type { Record as DbRecord, Tag } from "@/lib/database";
-import { createTag } from "@/lib/encryption/vocabulary-crud";
-import { updateRecord } from "@/lib/encryption/record-crud";
+import { createTag } from "@/lib/data/vocabulary-crud";
+import { updateRecord } from "@/lib/data/record-crud";
 import { useTags } from "@/hooks/use-tags";
 import { useToast } from "@/hooks/use-toast";
 

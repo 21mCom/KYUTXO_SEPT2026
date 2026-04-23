@@ -26,7 +26,7 @@ import {
 } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import { db, type Record as DBRecord, type RecordOrigin } from "@/lib/database";
-import { getDecryptedRecordOrigins, updateRecord } from "@/lib/encryptionFacade";
+import { getDecryptedRecordOrigins, updateRecord } from "@/lib/dataFacade";
 import { 
   SINGULAR_FIELDS, 
   detectSingularFieldConflicts, 

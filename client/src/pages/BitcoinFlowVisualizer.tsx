@@ -24,7 +24,7 @@ import { useFlowData, type FlowNode } from "@/hooks/use-flow-data";
 import { HopPathExplorer } from "@/components/HopPathExplorer";
 import { RecordDetailPanel } from "@/components/RecordDetailPanel";
 import { db, type ChainType, type AddressImportance, type VaultMetadata, type FlowType, type AcquisitionMethod, type DispositionType, type CounterpartyType } from "@/lib/database";
-import { getDecryptedParticipantsByAddresses } from "@/lib/encryptionFacade";
+import { getDecryptedParticipantsByAddresses } from "@/lib/dataFacade";
 import { useOwners } from "@/hooks/use-owners";
 import { useWalletNames } from "@/hooks/use-wallet-names";
 import { useTags } from "@/hooks/use-tags";

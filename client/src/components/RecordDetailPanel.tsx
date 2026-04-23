@@ -2,7 +2,7 @@ import { Edit, Paperclip, Wallet as WalletIcon, User, Users, Upload, QrCode, Key
 import { formatBTC } from "@/lib/bitcoin";
 import DiscoveryTreeDialog from "./DiscoveryTreeDialog";
 import { useLocation } from "wouter";
-import { getDecryptedRecordOrigins, getDecryptedParticipantsByAddress, getDecryptedParticipantsByTxid } from "@/lib/encryptionFacade";
+import { getDecryptedRecordOrigins, getDecryptedParticipantsByAddress, getDecryptedParticipantsByTxid } from "@/lib/dataFacade";
 import { detectSingularFieldConflicts } from "@/lib/conflict-detection";
 import { Link } from "wouter";
 import { useState, useEffect } from "react";

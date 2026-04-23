@@ -28,7 +28,7 @@ import {
 } from "@/components/ui/alert";
 import { useToast } from "@/hooks/use-toast";
 import { createRecord } from "@/hooks/use-records";
-import { syncTagsToMaster, syncCategoriesToMaster, createRecordOrigin, saveDerivationTemplate } from "@/lib/encryptionFacade";
+import { syncTagsToMaster, syncCategoriesToMaster, createRecordOrigin, saveDerivationTemplate } from "@/lib/dataFacade";
 import { db, beginBulkOperation, endBulkOperation } from "@/lib/database";
 import { updateRecord } from "@/hooks/use-records";
 import { 

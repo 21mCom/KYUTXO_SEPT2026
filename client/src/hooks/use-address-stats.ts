@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { db } from "@/lib/database";
-import { getDecryptedParticipantsByAddresses } from "@/lib/encryptionFacade";
+import { getDecryptedParticipantsByAddresses } from "@/lib/dataFacade";
 
 export interface AddressStats {
   balanceSats: number;

@@ -43,7 +43,7 @@ import {
   HelpCircle
 } from "lucide-react";
 import { SiBitcoin } from "react-icons/si";
-import { getDecryptedOwners, getDecryptedWalletNames, getDecryptedTags, getDecryptedCategories, getDecryptedParticipantsByAddresses } from "@/lib/encryptionFacade";
+import { getDecryptedOwners, getDecryptedWalletNames, getDecryptedTags, getDecryptedCategories, getDecryptedParticipantsByAddresses } from "@/lib/dataFacade";
 import { cn } from "@/lib/utils";
 import { UTXODetailPanel } from "@/components/UTXODetailPanel";
 import { ClickableAddress } from "@/components/ClickableAddress";

@@ -34,7 +34,7 @@ import {
   ChevronsDownUp,
   ChevronsUpDown
 } from "lucide-react";
-import { getDecryptedParticipantsByTxids } from "@/lib/encryptionFacade";
+import { getDecryptedParticipantsByTxids } from "@/lib/dataFacade";
 import { ClickableAddress } from "@/components/ClickableAddress";
 
 const ITEMS_PER_PAGE = 25;

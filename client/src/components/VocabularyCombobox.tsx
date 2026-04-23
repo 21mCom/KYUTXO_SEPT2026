@@ -12,7 +12,7 @@ import {
   createWalletNameEntry,
   createSeedNameEntry,
   createWalletSoftwareEntry,
-} from "@/lib/encryptionFacade";
+} from "@/lib/dataFacade";
 
 interface VocabularyComboboxProps {
   fieldKey: string;

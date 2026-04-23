@@ -33,7 +33,7 @@ import {
   X,
   Loader2
 } from "lucide-react";
-import { updateRecord, getDecryptedParticipantsByAddresses } from "@/lib/encryptionFacade";
+import { updateRecord, getDecryptedParticipantsByAddresses } from "@/lib/dataFacade";
 import { useToast } from "@/hooks/use-toast";
 import { useOwners } from "@/hooks/use-owners";
 import { useWalletNames } from "@/hooks/use-wallet-names";

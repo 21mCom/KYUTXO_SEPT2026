@@ -82,7 +82,7 @@ import {
   getDecryptedEvidenceAttachments,
   createEvidenceAttachment,
   deleteEvidenceAttachment,
-} from "@/lib/encryptionFacade";
+} from "@/lib/dataFacade";
 import { uploadEncryptedFile, downloadDecryptedFile, deleteEncryptedFile, getDecryptedFileBlob, isPreviewableType, getPreviewType } from "@/lib/attachments";
 import { useDropzone } from "react-dropzone";
 
