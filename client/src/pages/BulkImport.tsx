@@ -27,7 +27,6 @@ import {
   AlertTitle,
 } from "@/components/ui/alert";
 import { useToast } from "@/hooks/use-toast";
-import { useAuth } from "@/contexts/AuthContext";
 import { createRecord } from "@/hooks/use-records";
 import { syncTagsToMaster, syncCategoriesToMaster, isEncryptionReady, createRecordOrigin, saveDerivationTemplate } from "@/lib/encryptionFacade";
 import { db, beginBulkOperation, endBulkOperation } from "@/lib/database";
@@ -111,7 +110,6 @@ export default function BulkImport() {
   // Save template for future derivations (xpub storage)
   const [saveTemplate, setSaveTemplate] = useState(false);
 
-  const { encryptionKey } = useAuth();
   const { toast } = useToast();
 
   const analyzeXpubInput = useCallback((input: string) => {

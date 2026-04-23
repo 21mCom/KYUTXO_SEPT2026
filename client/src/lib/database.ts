@@ -46,8 +46,50 @@ export class KYUTXODatabase extends Dexie {
   constructor() {
     super('KYUTXODatabase');
     
+    // Version 27 removes field-level encryption (isEncrypted/encryptedPayload stripped from all tables)
+    // Users needing data-at-rest protection should use encrypted containers (VeraCrypt, BitLocker, FileVault, LUKS)
+    this.version(27).stores({
+      records: '++id, type, inputString, label, owner, walletName, seedName, walletSoftware, *tags, *categories, createdAt, updatedAt, chainType, syncDepth, addressImportance, [type+addressImportance], flowType, discoveredFromRecordId',
+      attachments: '++id, recordId, createdAt',
+      tags: '++id, name, createdAt',
+      categories: '++id, name, createdAt',
+      owners: '++id, name, createdAt',
+      walletNames: '++id, name, createdAt',
+      seedNames: '++id, name, createdAt',
+      walletSoftware: '++id, name, createdAt',
+      recordOrigins: '++id, recordId, originType, createdAt',
+      customFields: '++id, slug, enabled, createdAt',
+      settings: 'id',
+      priceData: '++id, [date+currency+asset], date, asset, currency, source, importedAt',
+      blockchainTransactions: '++id, &txid, blockHeight, blockTime, syncedAt, hasOpReturn',
+      transactionParticipants: '++id, [txid+role], txid, role, address, recordId, [prevTxid+prevVout]',
+      addressSyncState: '++id, &address, recordId, lastSyncedAt',
+      nodeSettings: 'id',
+      derivationTemplates: '++id, fingerprint, scriptType, owner, walletName, seedName, createdAt',
+      utxoLineage: '++id, [spentTxid+spentVout], [createdTxid+createdVout], consumingTxid, spentAddress, createdAddress, segmentId, spentOwned, createdOwned, isChange, blockTime',
+      custodySegments: '++id, &segmentId, [originTxid+originVout], originAddress, currentAddress, status, parentSegmentId, owner, walletName, originDate',
+      lineageSnapshots: '++id, &snapshotId, targetType, targetAddress, targetSegmentId, generatedAt, disclosureLevel',
+      evidence: '++id, documentType, originalDate, *tags, importance, createdAt, updatedAt',
+      evidenceAttachments: '++id, evidenceId, createdAt',
+      pausedSyncState: 'id',
+      skippedAddresses: '++id, address, reason, syncRunTimestamp, dismissed, createdAt',
+      addressBlacklist: '++id, &address, addedAt'
+    }).upgrade(async tx => {
+      const tablesToClean = [
+        'records', 'attachments', 'tags', 'categories', 'owners', 'walletNames',
+        'seedNames', 'walletSoftware', 'recordOrigins', 'transactionParticipants',
+        'derivationTemplates', 'utxoLineage', 'custodySegments', 'lineageSnapshots',
+        'evidence', 'evidenceAttachments',
+      ];
+      for (const tableName of tablesToClean) {
+        await tx.table(tableName).toCollection().modify((item: any) => {
+          delete item.isEncrypted;
+          delete item.encryptedPayload;
+        });
+      }
+    });
+
     // Version 26 restores address and [prevTxid+prevVout] indexes on transactionParticipants
-    // These were accidentally removed in v24/v25 during the encryption overhaul
     this.version(26).stores({
       records: '++id, type, inputString, label, owner, walletName, seedName, walletSoftware, *tags, *categories, createdAt, updatedAt, isEncrypted, chainType, syncDepth, addressImportance, [type+addressImportance], flowType, discoveredFromRecordId',
       attachments: '++id, recordId, createdAt, isEncrypted',

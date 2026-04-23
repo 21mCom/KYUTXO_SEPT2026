@@ -2,21 +2,15 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { db, type Record, type RecordOriginType, subscribeToDbChanges } from '@/lib/database';
 import { uploadAttachment, deleteAttachment } from '@/lib/attachments';
-import { useAuth } from '@/contexts/AuthContext';
 import { 
   createRecord as facadeCreateRecord,
   updateRecord as facadeUpdateRecord,
   deleteRecord as facadeDeleteRecord,
-  decryptRecordById,
-  decryptRecords,
-  isEncryptionReady,
   createRecordOrigin,
 } from '@/lib/encryptionFacade';
 
-// Hook to get all records with manual loading (no useLiveQuery)
-// Loads once on mount and can be reloaded via the returned reload function
 export function useRecords() {
-  const [decryptedRecords, setDecryptedRecords] = useState<Record[]>([]);
+  const [records, setRecords] = useState<Record[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const loadVersionRef = useRef(0);
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -27,18 +21,11 @@ export function useRecords() {
     try {
       const rawRecords = await db.records.orderBy('updatedAt').reverse().toArray();
       if (loadVersionRef.current !== version) return;
-
-      if (isEncryptionReady()) {
-        const decrypted = await decryptRecords(rawRecords);
-        if (loadVersionRef.current !== version) return;
-        setDecryptedRecords(decrypted);
-      } else {
-        setDecryptedRecords(rawRecords);
-      }
+      setRecords(rawRecords);
     } catch (error) {
       console.error('Failed to load records:', error);
       if (loadVersionRef.current === version) {
-        setDecryptedRecords([]);
+        setRecords([]);
       }
     } finally {
       if (loadVersionRef.current === version) {
@@ -66,25 +53,20 @@ export function useRecords() {
   }, [loadRecords]);
 
   return {
-    records: decryptedRecords,
+    records,
     isLoading,
     reload: loadRecords,
   };
 }
 
-// User-curated importance tiers (records that should NOT be hidden when toggle is off)
 const USER_CURATED_TIERS: string[] = ['verified', 'manual', 'wallet-import', 'xpub-derived'];
-// Blockchain-discovered importance tiers
 const BLOCKCHAIN_DISCOVERED_TIERS: string[] = ['blockchain-discovered', 'pending-review'];
 
-// Hook to get filtered records with debounced manual loading (no useLiveQuery)
-// Uses compound index [type+addressImportance] for zero-scan queries
-// Supports optional pagination via offset/limit params for performance with large datasets
 export function useFilteredRecords(
   includeBlockchainDiscovered: boolean,
   options?: { offset?: number; limit?: number }
 ) {
-  const [decryptedRecords, setDecryptedRecords] = useState<Record[]>([]);
+  const [records, setRecords] = useState<Record[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [blockchainDiscoveredCount, setBlockchainDiscoveredCount] = useState(0);
   const [totalCount, setTotalCount] = useState(0);
@@ -177,17 +159,11 @@ export function useFilteredRecords(
       if (loadVersionRef.current !== version) return;
       setBlockchainDiscoveredCount(bdCount);
 
-      if (isEncryptionReady()) {
-        const decrypted = await decryptRecords(rawRecords);
-        if (loadVersionRef.current !== version) return;
-        setDecryptedRecords(decrypted);
-      } else {
-        setDecryptedRecords(rawRecords);
-      }
+      setRecords(rawRecords);
     } catch (error) {
       console.error('Failed to load filtered records:', error);
       if (loadVersionRef.current === version) {
-        setDecryptedRecords([]);
+        setRecords([]);
       }
     } finally {
       if (loadVersionRef.current === version) {
@@ -215,7 +191,7 @@ export function useFilteredRecords(
   }, [includeBlockchainDiscovered, offset, limit, loadRecords]);
 
   return {
-    records: decryptedRecords,
+    records,
     isLoading,
     blockchainDiscoveredCount,
     totalCount,
@@ -223,11 +199,8 @@ export function useFilteredRecords(
   };
 }
 
-// Hook to get a single record with decryption
 export function useRecord(id: number | undefined) {
-  const { encryptionKey } = useAuth();
-  const [decryptedRecord, setDecryptedRecord] = useState<Record | undefined>();
-  const [isDecrypting, setIsDecrypting] = useState(false);
+  const [record, setRecord] = useState<Record | undefined>();
   
   const rawRecord = useLiveQuery(
     () => id ? db.records.get(id) : undefined,
@@ -235,42 +208,16 @@ export function useRecord(id: number | undefined) {
   );
   
   useEffect(() => {
-    const decrypt = async () => {
-      if (!rawRecord) {
-        setDecryptedRecord(undefined);
-        return;
-      }
-      
-      if (!rawRecord.isEncrypted || !isEncryptionReady()) {
-        setDecryptedRecord(rawRecord);
-        return;
-      }
-      
-      setIsDecrypting(true);
-      try {
-        const decrypted = await decryptRecordById(rawRecord.id!);
-        setDecryptedRecord(decrypted);
-      } catch (error) {
-        console.error('Failed to decrypt record:', error);
-        setDecryptedRecord(rawRecord);
-      } finally {
-        setIsDecrypting(false);
-      }
-    };
-    
-    decrypt();
+    setRecord(rawRecord);
   }, [rawRecord]);
   
   return {
-    record: decryptedRecord,
-    isLoading: (rawRecord === undefined && id !== undefined) || isDecrypting,
+    record,
+    isLoading: rawRecord === undefined && id !== undefined,
   };
 }
 
-// Create a new record (uses encryption facade)
-// Also creates a RecordOrigin entry to track metadata provenance
 export async function createRecord(data: Omit<Record, 'id' | 'createdAt' | 'updatedAt'>) {
-  // Ensure addressImportance is set for compound index compatibility
   let addressImportance = data.addressImportance;
   if (!addressImportance) {
     if (data.type === 'transaction' || data.type === 'other') {
@@ -287,8 +234,6 @@ export async function createRecord(data: Omit<Record, 'id' | 'createdAt' | 'upda
     }
   }
   
-  // Ensure syncDepth and maxSyncedDepth are set for new records
-  // Manual/imported records are at depth 0, and haven't been synced (-1)
   const recordWithDefaults = {
     ...data,
     addressImportance,
@@ -296,64 +241,46 @@ export async function createRecord(data: Omit<Record, 'id' | 'createdAt' | 'upda
     maxSyncedDepth: data.maxSyncedDepth ?? -1,
   };
   
-  let recordId: number;
+  const recordId = await facadeCreateRecord(recordWithDefaults) as number;
   
-  if (isEncryptionReady()) {
-    recordId = await facadeCreateRecord(recordWithDefaults) as number;
-    
-    // Create a RecordOrigin entry to track the source of metadata
-    // Determine origin type based on source field and addressImportance
-    let originType: RecordOriginType = 'manual';
-    
-    if (data.source === 'blockchain-sync' || data.addressImportance === 'blockchain-discovered') {
-      originType = 'blockchain-sync';
-    } else if (data.source?.startsWith('walletImport-') || data.addressImportance === 'wallet-import') {
-      originType = 'wallet-sync';
-    } else if (data.addressImportance === 'xpub-derived' || data.xpub || data.derivationPath) {
-      originType = 'xpub-derived';
-    } else if (data.source?.includes('bulk') || data.source?.includes('import')) {
-      originType = 'bulk-import';
-    }
-    
-    try {
-      await createRecordOrigin({
-        recordId,
-        originType,
-        source: data.source || 'Manual entry',
-        label: data.label,
-        notes: data.notes,
-        owner: data.owner,
-        walletName: data.walletName,
-        seedName: data.seedName,
-        walletSoftware: data.walletSoftware,
-        tags: data.tags,
-        categories: data.categories,
-      });
-    } catch (originError) {
-      console.error('[createRecord] Failed to create RecordOrigin:', originError);
-      // Don't fail the record creation if origin creation fails
-    }
-    
-    return recordId;
+  let originType: RecordOriginType = 'manual';
+  
+  if (data.source === 'blockchain-sync' || data.addressImportance === 'blockchain-discovered') {
+    originType = 'blockchain-sync';
+  } else if (data.source?.startsWith('walletImport-') || data.addressImportance === 'wallet-import') {
+    originType = 'wallet-sync';
+  } else if (data.addressImportance === 'xpub-derived' || data.xpub || data.derivationPath) {
+    originType = 'xpub-derived';
+  } else if (data.source?.includes('bulk') || data.source?.includes('import')) {
+    originType = 'bulk-import';
   }
   
-  // Fallback to unencrypted if not authenticated (shouldn't happen in normal flow)
-  const now = Date.now();
-  const id = await db.records.add({
-    ...recordWithDefaults,
-    createdAt: now,
-    updatedAt: now,
-  });
-  return id;
+  try {
+    await createRecordOrigin({
+      recordId,
+      originType,
+      source: data.source || 'Manual entry',
+      label: data.label,
+      notes: data.notes,
+      owner: data.owner,
+      walletName: data.walletName,
+      seedName: data.seedName,
+      walletSoftware: data.walletSoftware,
+      tags: data.tags,
+      categories: data.categories,
+    });
+  } catch (originError) {
+    console.error('[createRecord] Failed to create RecordOrigin:', originError);
+  }
+  
+  return recordId;
 }
 
-// Create record with attachments
 export async function createRecordWithAttachments(
   data: Omit<Record, 'id' | 'createdAt' | 'updatedAt'>,
   files: File[],
   onProgress?: (current: number, total: number) => void
 ): Promise<{ recordId: number; uploadedCount: number; failedCount: number }> {
-  // Create the record first
   const recordId = await createRecord(data) as number;
 
   if (files.length === 0) {
@@ -369,10 +296,6 @@ export async function createRecordWithAttachments(
       
       try {
         const result = await uploadAttachment(recordId, files[i], data.inputString);
-        
-        // Note: Attachment metadata encryption is handled by the encryptAttachment import
-        // which uses the encryption key from the facade
-        
         uploadedAttachmentIds.push(result.id);
       } catch (error) {
         console.error(`Failed to upload file ${files[i].name}:`, error);
@@ -380,7 +303,6 @@ export async function createRecordWithAttachments(
       }
     }
 
-    // If all uploads failed, rollback
     if (failedCount === files.length && files.length > 0) {
       for (const attachmentId of uploadedAttachmentIds) {
         try {
@@ -413,42 +335,23 @@ export async function createRecordWithAttachments(
   }
 }
 
-// Update a record (uses encryption facade)
 export async function updateRecord(id: number, data: Partial<Record>) {
-  if (isEncryptionReady()) {
-    return facadeUpdateRecord(id, data);
-  }
-  
-  // Fallback to unencrypted
-  await db.records.update(id, {
-    ...data,
-    updatedAt: Date.now(),
-  });
+  return facadeUpdateRecord(id, data);
 }
 
-// Delete a record (uses encryption facade)
 export async function deleteRecord(id: number) {
   return facadeDeleteRecord(id);
 }
 
-// Search records (works with decrypted data in memory)
 export async function searchRecords(query: string) {
   if (!query.trim()) {
-    const records = await db.records.orderBy('updatedAt').reverse().toArray();
-    if (isEncryptionReady()) {
-      return decryptRecords(records);
-    }
-    return records;
+    return db.records.orderBy('updatedAt').reverse().toArray();
   }
   
   const allRecords = await db.records.toArray();
-  const decrypted = isEncryptionReady() 
-    ? await decryptRecords(allRecords) 
-    : allRecords;
-  
   const lowerQuery = query.toLowerCase();
   
-  return decrypted
+  return allRecords
     .filter(record => 
       record.label.toLowerCase().includes(lowerQuery) ||
       record.inputString.toLowerCase().includes(lowerQuery) ||
@@ -459,18 +362,13 @@ export async function searchRecords(query: string) {
     .sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
-// Filter records
 export async function filterRecords(filters: {
   type?: 'address' | 'transaction' | 'other' | 'all';
   tags?: string[];
   categories?: string[];
 }) {
   const allRecords = await db.records.toArray();
-  const decrypted = isEncryptionReady() 
-    ? await decryptRecords(allRecords) 
-    : allRecords;
-  
-  let filtered = decrypted;
+  let filtered = allRecords;
   
   if (filters.type && filters.type !== 'all') {
     filtered = filtered.filter(r => r.type === filters.type);

@@ -12,7 +12,7 @@ import { decryptRecordsWithProgress } from "@/lib/encryption/record-encryption";
 import type { DecryptProgress } from "@/lib/encryption/record-encryption";
 import { createTag } from "@/lib/encryption/vocabulary-crud";
 import { updateRecord } from "@/lib/encryption/record-crud";
-import { useEncryptedTags } from "@/hooks/use-encrypted-records";
+import { useTags } from "@/hooks/use-tags";
 import { useToast } from "@/hooks/use-toast";
 
 type ScanState = "idle" | "decrypting" | "analyzing" | "tagging" | "complete";
@@ -86,7 +86,7 @@ export default function QuantumRiskScanner() {
     variable: true,
     low: true,
   });
-  const { tags } = useEncryptedTags();
+  const { tags } = useTags();
   const { toast } = useToast();
 
   const runScan = useCallback(async () => {

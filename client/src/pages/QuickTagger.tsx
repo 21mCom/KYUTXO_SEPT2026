@@ -32,14 +32,14 @@ import {
   CommandList,
 } from "@/components/ui/command";
 import { cn } from "@/lib/utils";
-import { useEncryptedTags, useEncryptedCategories, createEncryptedTag, createEncryptedCategory } from "@/hooks/use-encrypted-records";
-import { useAuth } from "@/contexts/AuthContext";
+import { useTags, createTag } from "@/hooks/use-tags";
+import { useCategories, createCategory } from "@/hooks/use-categories";
 import { useRecords, createRecord, updateRecord } from "@/hooks/use-records";
 import { useOwners, createOwner } from "@/hooks/use-owners";
 import { useWalletNames, createWalletName } from "@/hooks/use-wallet-names";
 import { useSeedNames, createSeedName } from "@/hooks/use-seed-names";
 import { useWalletSoftware, createWalletSoftware } from "@/hooks/use-wallet-software";
-import { syncTagsToMaster, syncCategoriesToMaster, createRecordOrigin, isEncryptionReady } from "@/lib/encryptionFacade";
+import { syncTagsToMaster, syncCategoriesToMaster, createRecordOrigin } from "@/lib/encryptionFacade";
 import { beginBulkOperation, endBulkOperation } from "@/lib/database";
 import { validateBitcoinInput } from "@/lib/bitcoin";
 import { 
@@ -76,7 +76,6 @@ type Step = 'paste' | 'review' | 'metadata' | 'complete';
 
 export default function QuickTagger() {
   const { toast } = useToast();
-  const { encryptionKey } = useAuth();
   const [step, setStep] = useState<Step>('paste');
   const [pastedText, setPastedText] = useState("");
   const [entries, setEntries] = useState<ParsedEntry[]>([]);
@@ -115,8 +114,8 @@ export default function QuickTagger() {
   const [newWalletSoftware, setNewWalletSoftware] = useState("");
 
   // Hooks for vocabulary and records
-  const { tags } = useEncryptedTags();
-  const { categories } = useEncryptedCategories();
+  const { tags } = useTags();
+  const { categories } = useCategories();
   const { records } = useRecords();
   const { owners } = useOwners();
   const { walletNames } = useWalletNames();
@@ -172,15 +171,6 @@ export default function QuickTagger() {
 
   // Parse pasted text into entries
   const parseEntries = async () => {
-    // Check both auth context and encryption facade readiness
-    if (!encryptionKey || !isEncryptionReady()) {
-      toast({
-        title: "Please wait",
-        description: "Encryption is still initializing. Try again in a moment.",
-        variant: "destructive",
-      });
-      return;
-    }
     
     setIsProcessing(true);
     const lines = pastedText
@@ -265,12 +255,6 @@ export default function QuickTagger() {
 
   // Apply metadata to all selected entries
   const applyMetadata = async () => {
-    // Verify encryption is fully ready before applying metadata
-    if (!encryptionKey || !isEncryptionReady()) {
-      toast({ title: "Encryption not ready", variant: "destructive" });
-      return;
-    }
-
     setIsProcessing(true);
     const entriesToProcess = entries.filter(e => e.selected);
     let created = 0;
@@ -284,7 +268,7 @@ export default function QuickTagger() {
         const existingTagNames = tags.map(t => t.name);
         for (const tagName of selectedTags) {
           if (!existingTagNames.includes(tagName)) {
-            await createEncryptedTag(tagName, undefined, encryptionKey);
+            await createTag(tagName);
           }
         }
         await syncTagsToMaster(selectedTags);
@@ -294,7 +278,7 @@ export default function QuickTagger() {
         const existingCatNames = categories.map(c => c.name);
         for (const catName of selectedCategories) {
           if (!existingCatNames.includes(catName)) {
-            await createEncryptedCategory(catName, encryptionKey);
+            await createCategory(catName);
           }
         }
         await syncCategoriesToMaster(selectedCategories);
@@ -679,7 +663,7 @@ a1075db55d416d3ca199f55b6084e2115b9345e16c5cf302fc80e9d5fbf5d48d
                       onChange={setSelectedTags}
                       placeholder="Select or create tags..."
                       onAddNew={(name) => {
-                        if (encryptionKey) createEncryptedTag(name, undefined, encryptionKey);
+                        createTag(name);
                       }}
                     />
                   </div>
@@ -692,7 +676,7 @@ a1075db55d416d3ca199f55b6084e2115b9345e16c5cf302fc80e9d5fbf5d48d
                       onChange={setSelectedCategories}
                       placeholder="Select or create categories..."
                       onAddNew={(name) => {
-                        if (encryptionKey) createEncryptedCategory(name, encryptionKey);
+                        createCategory(name);
                       }}
                     />
                   </div>

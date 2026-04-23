@@ -42,11 +42,8 @@ import { useAuth } from "@/contexts/AuthContext";
 import { db } from "@/lib/database";
 import { deriveKey, decrypt, base64ToBuffer, verifyPassword } from "@/lib/crypto";
 import { getVaultSettings } from "@/lib/vault";
-import { getEncryptionKey } from "@/lib/encryptionFacade";
-import type { ReEncryptionProgress } from "@/lib/dbEncryption";
 import { generateSalt, hashPassword, bufferToBase64 } from "@/lib/crypto";
 import { saveVaultSettings } from "@/lib/vault";
-import { initEncryptionFacade } from "@/lib/encryptionFacade";
 import { reEncryptAllAttachmentFiles, reEncryptAllEvidenceAttachmentFiles, migrateAttachmentPaths, type ReEncryptFileResult } from "@/lib/attachments";
 import { 
   savePendingPasswordChange, 
@@ -65,7 +62,6 @@ export default function SettingsPage() {
   const { fieldVisibility, isLoading: settingsLoading } = useSettings();
   const { customFields, isLoading: customFieldsLoading } = useCustomFields();
   const { toast } = useToast();
-  const { encryptionKey } = useAuth();
   
   const [newFieldName, setNewFieldName] = useState("");
   const [isAddingField, setIsAddingField] = useState(false);
@@ -96,7 +92,7 @@ export default function SettingsPage() {
   const [isChangingPassword, setIsChangingPassword] = useState(false);
   const [pendingChange, setPendingChange] = useState<PendingPasswordChange | null>(null);
   const changePasswordAbortRef = useRef<AbortController | null>(null);
-  const [changePasswordProgress, setChangePasswordProgress] = useState<ReEncryptionProgress | null>(null);
+  const [changePasswordProgress, setChangePasswordProgress] = useState<any>(null);
   const [isMigratingAttachments, setIsMigratingAttachments] = useState(false);
 
   useEffect(() => {
@@ -284,6 +280,10 @@ export default function SettingsPage() {
           hasAttachments: true,
           owner: false,
           walletName: false,
+          firstSeen: false,
+          balance: false,
+          lastTxDate: false,
+          txCount: false,
           source: false,
         },
         customFieldColumns: {},
@@ -441,11 +441,9 @@ export default function SettingsPage() {
       await finalizePendingPasswordChange();
       setPendingChange(null);
 
-      initEncryptionFacade(newKey);
-
       toast({
         title: "Password Changed",
-        description: `Successfully re-encrypted ${totalReEncrypted} items with your new password.`,
+        description: `Password updated successfully.`,
       });
 
       setChangePasswordDialogOpen(false);
@@ -562,11 +560,9 @@ export default function SettingsPage() {
 
       await finalizePendingPasswordChange();
       setPendingChange(null);
-      initEncryptionFacade(newKey);
-
       toast({
         title: "Password Change Complete",
-        description: "All data has been re-encrypted with your new password.",
+        description: "Password updated successfully.",
       });
 
       setChangePasswordDialogOpen(false);
@@ -672,13 +668,11 @@ export default function SettingsPage() {
 
   // Restore from backup handler
   const handleRestore = async () => {
-    // Get the current encryption key from the facade
-    const currentKey = getEncryptionKey();
-    if (!restoreFile || !currentKey) {
+    if (!restoreFile) {
       toast({
         variant: "destructive",
         title: "Error",
-        description: "Please log in first to restore data.",
+        description: "Please select a backup file.",
       });
       return;
     }
@@ -788,7 +782,7 @@ export default function SettingsPage() {
         
         for (let i = 0; i < records.length; i++) {
           const record = records[i];
-          const { id, encryptedPayload, isEncrypted, ...recordData } = record;
+          const { id, ...recordData } = record;
           
           // Skip duplicates in merge mode
           if (restoreMode === "merge" && existingInputStrings.has(recordData.inputString)) {
@@ -841,7 +835,7 @@ export default function SettingsPage() {
             updatedAt: recordData.updatedAt || Date.now(),
           };
 
-          await db.records.add({ ...newRecord, isEncrypted: false } as any);
+          await db.records.add(newRecord as any);
           recordsAdded++;
           setRestoreProgress(50 + Math.floor((i / records.length) * 20));
         }
@@ -872,7 +866,7 @@ export default function SettingsPage() {
       // Restore tags
       if (tags && tags.length > 0) {
         for (const tag of tags) {
-          const { id, encryptedPayload, isEncrypted, ...tagData } = tag;
+          const { id, ...tagData } = tag;
           const tagName = tagData.name || "";
           
           // Skip duplicates in merge mode
@@ -886,7 +880,7 @@ export default function SettingsPage() {
             createdAt: tagData.createdAt || Date.now(),
           };
           
-          await db.tags.add({ ...newTag, isEncrypted: false } as any);
+          await db.tags.add(newTag as any);
           tagsAdded++;
         }
       }
@@ -894,7 +888,7 @@ export default function SettingsPage() {
       // Restore categories
       if (categories && categories.length > 0) {
         for (const category of categories) {
-          const { id, encryptedPayload, isEncrypted, ...catData } = category;
+          const { id, ...catData } = category;
           const catName = catData.name || "";
           
           // Skip duplicates in merge mode
@@ -907,7 +901,7 @@ export default function SettingsPage() {
             createdAt: catData.createdAt || Date.now(),
           };
           
-          await db.categories.add({ ...newCategory, isEncrypted: false } as any);
+          await db.categories.add(newCategory as any);
           categoriesAdded++;
         }
       }
@@ -930,7 +924,7 @@ export default function SettingsPage() {
         }
         
         for (const attachment of attachments) {
-          const { id, encryptedPayload, isEncrypted, ...attData } = attachment;
+          const { id, ...attData } = attachment;
           const attKey = `${attData.recordId}:${attData.filename}`;
           
           // Skip duplicates in merge mode
@@ -947,7 +941,7 @@ export default function SettingsPage() {
             createdAt: attData.createdAt || Date.now(),
           };
           
-          await db.attachments.add({ ...newAttachment, isEncrypted: false } as any);
+          await db.attachments.add(newAttachment as any);
           attachmentsAdded++;
         }
       }
@@ -1065,7 +1059,7 @@ export default function SettingsPage() {
       // Restore owners
       if (owners && owners.length > 0) {
         for (const owner of owners) {
-          const { id, encryptedPayload, isEncrypted, ...ownerData } = owner;
+          const { id, ...ownerData } = owner;
           const ownerName = ownerData.name || "";
           
           if (restoreMode === "merge" && existingOwnerNames.has(ownerName)) {
@@ -1077,7 +1071,7 @@ export default function SettingsPage() {
             createdAt: ownerData.createdAt || Date.now(),
           };
           
-          await db.owners.add({ ...newOwner, isEncrypted: false } as any);
+          await db.owners.add(newOwner as any);
           vocabularyAdded++;
         }
       }
@@ -1085,7 +1079,7 @@ export default function SettingsPage() {
       // Restore wallet names
       if (walletNames && walletNames.length > 0) {
         for (const wn of walletNames) {
-          const { id, encryptedPayload, isEncrypted, ...wnData } = wn;
+          const { id, ...wnData } = wn;
           const wnName = wnData.name || "";
           
           if (restoreMode === "merge" && existingWalletNameNames.has(wnName)) {
@@ -1097,7 +1091,7 @@ export default function SettingsPage() {
             createdAt: wnData.createdAt || Date.now(),
           };
           
-          await db.walletNames.add({ ...newWalletName, isEncrypted: false } as any);
+          await db.walletNames.add(newWalletName as any);
           vocabularyAdded++;
         }
       }
@@ -1105,7 +1099,7 @@ export default function SettingsPage() {
       // Restore seed names
       if (seedNames && seedNames.length > 0) {
         for (const sn of seedNames) {
-          const { id, encryptedPayload, isEncrypted, ...snData } = sn;
+          const { id, ...snData } = sn;
           const snName = snData.name || "";
           
           if (restoreMode === "merge" && existingSeedNameNames.has(snName)) {
@@ -1117,7 +1111,7 @@ export default function SettingsPage() {
             createdAt: snData.createdAt || Date.now(),
           };
           
-          await db.seedNames.add({ ...newSeedName, isEncrypted: false } as any);
+          await db.seedNames.add(newSeedName as any);
           vocabularyAdded++;
         }
       }
@@ -1125,7 +1119,7 @@ export default function SettingsPage() {
       // Restore wallet software
       if (walletSoftware && walletSoftware.length > 0) {
         for (const ws of walletSoftware) {
-          const { id, encryptedPayload, isEncrypted, ...wsData } = ws;
+          const { id, ...wsData } = ws;
           const wsName = wsData.name || "";
           
           if (restoreMode === "merge" && existingWalletSoftwareNames.has(wsName)) {
@@ -1137,7 +1131,7 @@ export default function SettingsPage() {
             createdAt: wsData.createdAt || Date.now(),
           };
           
-          await db.walletSoftware.add({ ...newWalletSoftware, isEncrypted: false } as any);
+          await db.walletSoftware.add(newWalletSoftware as any);
           vocabularyAdded++;
         }
       }
@@ -1159,7 +1153,7 @@ export default function SettingsPage() {
         }
         
         for (const template of derivationTemplates) {
-          const { id, encryptedPayload, isEncrypted, ...templateData } = template;
+          const { id, ...templateData } = template;
           const templateKey = `${templateData.fingerprint}:${templateData.scriptType}`;
           
           if (restoreMode === "merge" && existingTemplateKeys.has(templateKey)) {
@@ -1181,7 +1175,7 @@ export default function SettingsPage() {
             updatedAt: templateData.updatedAt || Date.now(),
           };
           
-          await db.derivationTemplates.add({ ...newTemplate, isEncrypted: false } as any);
+          await db.derivationTemplates.add(newTemplate as any);
           templatesAdded++;
         }
       }
@@ -1197,7 +1191,7 @@ export default function SettingsPage() {
       // Restore evidence documents (v2.2.0+)
       if (evidence && evidence.length > 0) {
         for (const ev of evidence) {
-          const { id, encryptedPayload, isEncrypted, ...evData } = ev;
+          const { id, ...evData } = ev;
           
           const newEvidence = {
             title: evData.title || "Restored Evidence",
@@ -1212,7 +1206,7 @@ export default function SettingsPage() {
             updatedAt: evData.updatedAt || Date.now(),
           };
           
-          await db.evidence.add({ ...newEvidence, isEncrypted: false } as any);
+          await db.evidence.add(newEvidence as any);
           evidenceAdded++;
         }
       }
@@ -1220,7 +1214,7 @@ export default function SettingsPage() {
       // Restore evidence attachments (v2.2.0+)
       if (evidenceAttachments && evidenceAttachments.length > 0) {
         for (const ea of evidenceAttachments) {
-          const { id, encryptedPayload, isEncrypted, ...eaData } = ea;
+          const { id, ...eaData } = ea;
           
           const newEvidenceAttachment = {
             evidenceId: eaData.evidenceId,
@@ -1229,10 +1223,9 @@ export default function SettingsPage() {
             size: eaData.size || 0,
             objectStoragePath: eaData.objectStoragePath || "",
             createdAt: eaData.createdAt || Date.now(),
-            isEncrypted: eaData.isEncrypted ?? true,
           };
           
-          await db.evidenceAttachments.add({ ...newEvidenceAttachment, isEncrypted: false } as any);
+          await db.evidenceAttachments.add(newEvidenceAttachment as any);
           evidenceAttachmentsAdded++;
         }
       }
@@ -1575,7 +1568,7 @@ export default function SettingsPage() {
               <div>
                 <Label className="text-base">Change Password</Label>
                 <p className="text-sm text-muted-foreground">
-                  Update your vault password (re-encrypts all data)
+                  Update your vault password
                 </p>
               </div>
               <Button

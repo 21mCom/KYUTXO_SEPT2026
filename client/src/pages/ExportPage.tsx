@@ -9,7 +9,6 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Progress } from "@/components/ui/progress";
 import { useToast } from "@/hooks/use-toast";
 import { db, type Record } from "@/lib/database";
-import { useAuth } from "@/contexts/AuthContext";
 import { decrypt, encrypt, deriveKey, generateSalt, bufferToBase64 } from "@/lib/crypto";
 import { isElectron, getElectronAPI } from "@/lib/electron";
 import JSZip from "jszip";
@@ -288,7 +287,6 @@ export default function ExportPage() {
   const [vocabularyCount, setVocabularyCount] = useState(0);
   const [derivationTemplateCount, setDerivationTemplateCount] = useState(0);
 
-  const { encryptionKey } = useAuth();
   const { toast } = useToast();
 
   const attachmentsFolderPath = isElectron() 
@@ -321,18 +319,7 @@ export default function ExportPage() {
   }, []);
 
   const decryptRecord = async (record: any): Promise<any> => {
-    if (!record.isEncrypted || !record.encryptedPayload || !encryptionKey) {
-      return record;
-    }
-    try {
-      const decrypted = await decrypt(record.encryptedPayload, encryptionKey);
-      const parsed = JSON.parse(decrypted);
-      const { encryptedPayload, isEncrypted, ...rest } = record;
-      return { ...rest, ...parsed };
-    } catch (error) {
-      console.error("Failed to decrypt record:", error);
-      return record;
-    }
+    return record;
   };
 
   const handleExport = async () => {
@@ -402,19 +389,19 @@ export default function ExportPage() {
       setProgress(50);
       setProgressMessage("Generating CSV files...");
 
-      const cleanRecords = records.map(({ encryptedPayload, isEncrypted, ...r }) => r);
-      const cleanTags = tags.map(({ encryptedPayload, isEncrypted, ...t }) => t);
-      const cleanCategories = categories.map(({ encryptedPayload, isEncrypted, ...c }) => c);
-      const cleanAttachments = attachments.map(({ encryptedPayload, isEncrypted, ...a }) => a);
-      const cleanOrigins = recordOrigins.map(({ encryptedPayload, isEncrypted, ...o }) => o);
+      const cleanRecords = records;
+      const cleanTags = tags;
+      const cleanCategories = categories;
+      const cleanAttachments = attachments;
+      const cleanOrigins = recordOrigins;
       const customFields = rawCustomFields as CustomFieldDef[];
-      const cleanOwners = owners.map(({ encryptedPayload, isEncrypted, ...o }) => o);
-      const cleanWalletNames = walletNames.map(({ encryptedPayload, isEncrypted, ...w }) => w);
-      const cleanSeedNames = seedNames.map(({ encryptedPayload, isEncrypted, ...s }) => s);
-      const cleanWalletSoftware = walletSoftware.map(({ encryptedPayload, isEncrypted, ...w }) => w);
-      const cleanDerivationTemplates = derivationTemplates.map(({ encryptedPayload, isEncrypted, ...d }) => d);
-      const cleanEvidence = evidence.map(({ encryptedPayload, isEncrypted, ...e }) => e);
-      const cleanEvidenceAttachments = evidenceAttachments.map(({ encryptedPayload, isEncrypted, ...ea }) => ea);
+      const cleanOwners = owners;
+      const cleanWalletNames = walletNames;
+      const cleanSeedNames = seedNames;
+      const cleanWalletSoftware = walletSoftware;
+      const cleanDerivationTemplates = derivationTemplates;
+      const cleanEvidence = evidence;
+      const cleanEvidenceAttachments = evidenceAttachments;
       const cleanPriceData = rawPriceData;
       const cleanSettings = rawSettings;
       const cleanNodeSettings = rawNodeSettings;

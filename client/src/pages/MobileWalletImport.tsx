@@ -39,8 +39,6 @@ import { useToast } from '@/hooks/use-toast';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '@/lib/database';
 import { isEncryptionReady } from '@/lib/encryptionFacade';
-import { decryptTag, decryptCategory } from '@/lib/dbEncryption';
-import { getEncryptionKey } from '@/lib/encryptionFacade';
 import { useSeedNames, createSeedName, SEED_NAME_MAX_LENGTH } from '@/hooks/use-seed-names';
 import { useOwners, createOwner } from '@/hooks/use-owners';
 import { useWalletNames, createWalletName } from '@/hooks/use-wallet-names';
@@ -126,9 +124,9 @@ export default function MobileWalletImport() {
   const { walletNames: rawWalletNames } = useWalletNames();
   const { walletSoftware: rawWalletSoftwareList } = useWalletSoftware();
   
-  const seedNames = rawSeedNames.map(s => s.name).filter(n => n && n !== '[encrypted]');
-  const owners = rawOwners.map(o => o.name).filter(n => n && n !== '[encrypted]');
-  const walletNames = rawWalletNames.map(w => w.name).filter(n => n && n !== '[encrypted]');
+  const seedNames = rawSeedNames.map(s => s.name).filter(n => n);
+  const owners = rawOwners.map(o => o.name).filter(n => n);
+  const walletNames = rawWalletNames.map(w => w.name).filter(n => n);
   
   const rawTags = useLiveQuery(() => db.tags.toArray(), []);
   const rawCategories = useLiveQuery(() => db.categories.toArray(), []);
@@ -136,18 +134,12 @@ export default function MobileWalletImport() {
   const [categories, setCategories] = useState<string[]>([]);
   
   useEffect(() => {
-    async function decryptData() {
-      if (!isEncryptionReady() || !rawTags || !rawCategories) return;
-      const key = getEncryptionKey();
-      if (!key) return;
-      
-      const decryptedTags = await Promise.all(rawTags.map(t => decryptTag(t, key)));
-      const decryptedCategories = await Promise.all(rawCategories.map(c => decryptCategory(c, key)));
-      
-      setTags(decryptedTags.map(t => t.name));
-      setCategories(decryptedCategories.map(c => c.name));
+    if (rawTags) {
+      setTags(rawTags.map(t => t.name));
     }
-    decryptData();
+    if (rawCategories) {
+      setCategories(rawCategories.map(c => c.name));
+    }
   }, [rawTags, rawCategories]);
   
   const onDrop = useCallback(async (acceptedFiles: File[]) => {

@@ -64,7 +64,7 @@ export async function buildNetworkGraph(
   let processed = 0;
   for (const p of participants) {
     if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
-    if (!p.address || p.address === '[encrypted]') continue;
+    if (!p.address) continue;
     let addrs = txToAddresses.get(p.txid);
     if (!addrs) {
       addrs = new Set();

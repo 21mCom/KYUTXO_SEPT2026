@@ -55,8 +55,8 @@ import {
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import { MultiSelectCombobox } from "@/components/ui/multi-select-combobox";
-import { useEncryptedTags, useEncryptedCategories, createEncryptedTag, createEncryptedCategory } from "@/hooks/use-encrypted-records";
-import { useAuth } from "@/contexts/AuthContext";
+import { useTags, createTag as createTagHook } from "@/hooks/use-tags";
+import { useCategories, createCategory as createCategoryHook } from "@/hooks/use-categories";
 import { useRecords, createRecord, updateRecord } from "@/hooks/use-records";
 import { syncTagsToMaster, syncCategoriesToMaster, isEncryptionReady, createRecordOrigin } from "@/lib/encryptionFacade";
 import { beginBulkOperation, endBulkOperation } from "@/lib/database";
@@ -128,10 +128,9 @@ export default function DescriptorImport() {
   
   const [markAsVerified, setMarkAsVerified] = useState(false);
 
-  const { tags } = useEncryptedTags();
-  const { categories } = useEncryptedCategories();
+  const { tags } = useTags();
+  const { categories } = useCategories();
   const { records } = useRecords();
-  const { encryptionKey } = useAuth();
   const { toast } = useToast();
 
   const { owners: existingOwners } = useOwners();
@@ -140,32 +139,32 @@ export default function DescriptorImport() {
   const { walletSoftware: existingWalletSoftware } = useWalletSoftware();
 
   const allOwners = Array.from(new Set([
-    ...existingOwners.map(o => o.name).filter(n => n && n !== '[encrypted]'),
+    ...existingOwners.map(o => o.name).filter(n => n),
     ownerInput
   ].filter(Boolean)));
   
   const allWalletNames = Array.from(new Set([
-    ...existingWalletNames.map(w => w.name).filter(n => n && n !== '[encrypted]'),
+    ...existingWalletNames.map(w => w.name).filter(n => n),
     walletNameInput
   ].filter(Boolean)));
   
   const allSeedNames = Array.from(new Set([
-    ...existingSeedNames.map(s => s.name).filter(n => n && n !== '[encrypted]'),
+    ...existingSeedNames.map(s => s.name).filter(n => n),
     seedName
   ].filter(Boolean)));
   
   const allWalletSoftware = Array.from(new Set([
-    ...existingWalletSoftware.map(w => w.name).filter(n => n && n !== '[encrypted]'),
+    ...existingWalletSoftware.map(w => w.name).filter(n => n),
     walletSoftware
   ].filter(Boolean)));
 
   const availableTags = tags
     .map(t => t.name)
-    .filter(n => n && n !== '[encrypted]');
+    .filter(n => n);
     
   const availableCategories = categories
     .map(c => c.name)
-    .filter(n => n && n !== '[encrypted]');
+    .filter(n => n);
 
   const onDrop = useCallback((acceptedFiles: File[]) => {
     if (acceptedFiles.length === 0) return;
@@ -508,7 +507,7 @@ export default function DescriptorImport() {
 
   const handleSaveAddresses = async () => {
     const hasResult = multisigResult || taprootResult;
-    if (!hasResult || !parsedDescriptor || !encryptionKey) {
+    if (!hasResult || !parsedDescriptor) {
       toast({
         title: "Error",
         description: "Missing data for save",
@@ -1229,10 +1228,8 @@ export default function DescriptorImport() {
                     values={selectedTags}
                     onChange={setSelectedTags}
                     onAddNew={async (value) => {
-                      if (encryptionKey) {
-                        await createEncryptedTag(value, undefined, encryptionKey);
-                        setSelectedTags([...selectedTags, value]);
-                      }
+                      await createTagHook(value);
+                      setSelectedTags([...selectedTags, value]);
                     }}
                     placeholder="Select tags..."
                     testId="multiselect-tags"
@@ -1246,10 +1243,8 @@ export default function DescriptorImport() {
                     values={selectedCategories}
                     onChange={setSelectedCategories}
                     onAddNew={async (value) => {
-                      if (encryptionKey) {
-                        await createEncryptedCategory(value, encryptionKey);
-                        setSelectedCategories([...selectedCategories, value]);
-                      }
+                      await createCategoryHook(value);
+                      setSelectedCategories([...selectedCategories, value]);
                     }}
                     placeholder="Select categories..."
                     testId="multiselect-categories"

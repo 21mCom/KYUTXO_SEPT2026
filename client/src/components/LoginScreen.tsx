@@ -65,8 +65,8 @@ export function LoginScreen() {
           <CardTitle className="text-2xl">KYUTXO Vault</CardTitle>
           <CardDescription>
             {isInitialized
-              ? 'Enter your password to unlock your encrypted vault.'
-              : 'Create a password to encrypt your data. All records and attachments will be encrypted at rest.'}
+              ? 'Enter your password to unlock your vault.'
+              : 'Create a password to lock access to your data.'}
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -132,9 +132,9 @@ export function LoginScreen() {
 
             {!isInitialized && (
               <div className="text-xs text-muted-foreground text-center space-y-1">
-                <p>Your password encrypts all data locally using AES-256.</p>
+                <p>Your password locks access to the app.</p>
                 <p className="font-medium text-destructive">
-                  If you forget your password, your data cannot be recovered.
+                  Remember your password to access the app.
                 </p>
               </div>
             )}

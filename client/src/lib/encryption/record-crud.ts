@@ -1,55 +1,54 @@
 import { db, notifyDbChange, type Record, type Attachment, type RecordOrigin, type RecordOriginType, type Owner, type WalletName, type SeedName, type WalletSoftware, type DerivationTemplate, type AddressImportance } from '../database';
-import { getKey, getEncryptionKey } from './key-management';
 
 async function syncRecordVocabulary(
   data: Partial<Record>
 ): Promise<void> {
   const syncTasks: Promise<void>[] = [];
 
-  if (data.owner && data.owner !== 'Unknown' && data.owner !== '[encrypted]') {
+  if (data.owner && data.owner !== 'Unknown') {
     syncTasks.push((async () => {
       const owners = await db.owners.toArray();
       const exists = owners.some(
         (o) => o.name && o.name.toLowerCase() === data.owner!.toLowerCase()
       );
       if (!exists) {
-        await db.owners.add({ name: data.owner!, createdAt: Date.now(), isEncrypted: false } as Owner);
+        await db.owners.add({ name: data.owner!, createdAt: Date.now() });
       }
     })());
   }
 
-  if (data.walletName && data.walletName !== '[encrypted]') {
+  if (data.walletName) {
     syncTasks.push((async () => {
       const walletNames = await db.walletNames.toArray();
       const exists = walletNames.some(
         (wn) => wn.name && wn.name.toLowerCase() === data.walletName!.toLowerCase()
       );
       if (!exists) {
-        await db.walletNames.add({ name: data.walletName!, createdAt: Date.now(), isEncrypted: false } as WalletName);
+        await db.walletNames.add({ name: data.walletName!, createdAt: Date.now() });
       }
     })());
   }
 
-  if (data.seedName && data.seedName !== '[encrypted]') {
+  if (data.seedName) {
     syncTasks.push((async () => {
       const seedNames = await db.seedNames.toArray();
       const exists = seedNames.some(
         (sn) => sn.name && sn.name.toLowerCase() === data.seedName!.toLowerCase()
       );
       if (!exists) {
-        await db.seedNames.add({ name: data.seedName!, createdAt: Date.now(), isEncrypted: false } as SeedName);
+        await db.seedNames.add({ name: data.seedName!, createdAt: Date.now() });
       }
     })());
   }
 
-  if (data.walletSoftware && data.walletSoftware !== '[encrypted]') {
+  if (data.walletSoftware) {
     syncTasks.push((async () => {
       const walletSoftwareList = await db.walletSoftware.toArray();
       const exists = walletSoftwareList.some(
         (ws) => ws.name && ws.name.toLowerCase() === data.walletSoftware!.toLowerCase()
       );
       if (!exists) {
-        await db.walletSoftware.add({ name: data.walletSoftware!, createdAt: Date.now(), isEncrypted: false } as WalletSoftware);
+        await db.walletSoftware.add({ name: data.walletSoftware!, createdAt: Date.now() });
       }
     })());
   }
@@ -82,7 +81,6 @@ export async function createRecord(
     addressImportance,
     createdAt: now,
     updatedAt: now,
-    isEncrypted: false,
   };
 
   console.log(`[createRecord] Creating record: type=${data.type}, inputString=${data.inputString?.substring(0, 20)}...`);
@@ -112,7 +110,6 @@ export async function updateRecord(
     ...updates,
     id,
     updatedAt: Date.now(),
-    isEncrypted: false,
   };
 
   syncRecordVocabulary(updates).catch((err) => {
@@ -145,7 +142,7 @@ async function batchSyncVocabulary(
       const toAdd: Owner[] = [];
       for (const name of Array.from(values.owners)) {
         if (!existingNames.has(name.toLowerCase())) {
-          toAdd.push({ name, createdAt: Date.now(), isEncrypted: false } as Owner);
+          toAdd.push({ name, createdAt: Date.now() });
         }
       }
       
@@ -166,7 +163,7 @@ async function batchSyncVocabulary(
       const toAdd: WalletName[] = [];
       for (const name of Array.from(values.walletNames)) {
         if (!existingNames.has(name.toLowerCase())) {
-          toAdd.push({ name, createdAt: Date.now(), isEncrypted: false } as WalletName);
+          toAdd.push({ name, createdAt: Date.now() });
         }
       }
       
@@ -187,7 +184,7 @@ async function batchSyncVocabulary(
       const toAdd: SeedName[] = [];
       for (const name of Array.from(values.seedNames)) {
         if (!existingNames.has(name.toLowerCase())) {
-          toAdd.push({ name, createdAt: Date.now(), isEncrypted: false } as SeedName);
+          toAdd.push({ name, createdAt: Date.now() });
         }
       }
       
@@ -208,7 +205,7 @@ async function batchSyncVocabulary(
       const toAdd: WalletSoftware[] = [];
       for (const name of Array.from(values.walletSoftware)) {
         if (!existingNames.has(name.toLowerCase())) {
-          toAdd.push({ name, createdAt: Date.now(), isEncrypted: false } as WalletSoftware);
+          toAdd.push({ name, createdAt: Date.now() });
         }
       }
       
@@ -258,7 +255,6 @@ export async function bulkUpdateRecords(
       ...changes,
       id,
       updatedAt: now,
-      isEncrypted: false,
     };
     
     recordsToSave.push(updated);
@@ -277,16 +273,16 @@ export async function bulkUpdateRecords(
   };
   
   for (const changes of allChanges) {
-    if (changes.owner && changes.owner !== 'Unknown' && changes.owner !== '[encrypted]') {
+    if (changes.owner && changes.owner !== 'Unknown') {
       vocabularyValues.owners.add(changes.owner);
     }
-    if (changes.walletName && changes.walletName !== '[encrypted]') {
+    if (changes.walletName) {
       vocabularyValues.walletNames.add(changes.walletName);
     }
-    if (changes.seedName && changes.seedName !== '[encrypted]') {
+    if (changes.seedName) {
       vocabularyValues.seedNames.add(changes.seedName);
     }
-    if (changes.walletSoftware && changes.walletSoftware !== '[encrypted]') {
+    if (changes.walletSoftware) {
       vocabularyValues.walletSoftware.add(changes.walletSoftware);
     }
   }
@@ -347,7 +343,6 @@ export async function createRecordOrigin(
   const origin: RecordOrigin = {
     ...data,
     createdAt: Date.now(),
-    isEncrypted: false,
   };
 
   const id = await db.recordOrigins.add(origin);
@@ -436,7 +431,6 @@ export async function saveDerivationTemplate(template: {
     notes: template.notes,
     createdAt: now,
     updatedAt: now,
-    isEncrypted: false,
   };
   
   return await db.derivationTemplates.add(derivationTemplate);

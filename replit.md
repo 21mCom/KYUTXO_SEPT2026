@@ -2,7 +2,7 @@
 
 ## Overview
 
-KYUTXO is an encrypted, offline-first desktop application for managing Bitcoin address and transaction metadata. It enables users to organize cryptocurrency information, attach encrypted files, and manage custom vocabularies, prioritizing data privacy through full encryption, password protection, and complete offline functionality. The project aims to become a robust personal crypto data management solution, with future plans for advanced provenance tracking, entity relationship mapping, and compliance reporting. The current focus is on efficient blockchain data import and transaction synchronization.
+KYUTXO is an offline-first desktop application for managing Bitcoin address and transaction metadata. It enables users to organize cryptocurrency information, attach files, and manage custom vocabularies, prioritizing data privacy through password-based UI locking and complete offline functionality. Users needing data-at-rest protection should use encrypted containers (VeraCrypt, BitLocker, FileVault, LUKS). The project aims to become a robust personal crypto data management solution, with future plans for advanced provenance tracking, entity relationship mapping, and compliance reporting. The current focus is on efficient blockchain data import and transaction synchronization.
 
 ## User Preferences
 
@@ -10,14 +10,14 @@ Preferred communication style: Simple, everyday language.
 
 ## System Architecture
 
-KYUTXO employs a security-focused architecture with all data and attachments secured via password-based AES-256-GCM encryption using PBKDF2 key derivation. The application is built with React 18, TypeScript, and Vite for the frontend, utilizing `shadcn/ui` and Tailwind CSS for a responsive, offline-first UI, and Electron for cross-platform desktop deployment. State management uses TanStack Query and Dexie.js for IndexedDB. A local Express.js backend primarily manages file attachments, keeping core business logic client-side.
+KYUTXO employs an offline-first architecture with a lightweight password-based UI lock (hash check only, no field-level encryption). The application is built with React 18, TypeScript, and Vite for the frontend, utilizing `shadcn/ui` and Tailwind CSS for a responsive, offline-first UI, and Electron for cross-platform desktop deployment. State management uses TanStack Query and Dexie.js for IndexedDB. A local Express.js backend primarily manages file attachments, keeping core business logic client-side.
 
 **Key Architectural Decisions & Features:**
 
 *   **UI/UX:** Responsive, offline-first UI with reorganized navigation and quick action patterns.
 *   **Data Model:** Comprehensive records for tracking ownership, wallet names, and metadata.
-*   **Encryption:** Bulk decrypt-on-login / encrypt-on-close architecture using AES-256-GCM with PBKDF2 key derivation. On login, all 13 encrypted tables are decrypted in-place in 500-record batches with a full-screen progress overlay (`DecryptionProgress.tsx`). During the session, all reads/writes are plaintext — zero crypto overhead. On lock/close, all data is re-encrypted before clearing the key. A `dbDecryptionState` flag in the vault (`encrypted` → `decrypting` → `decrypted` → `encrypting` → `encrypted`) provides crash-safety: if the app is killed mid-session (`decrypted`), next login just derives the key; if killed during encrypt (`encrypting`), next login runs a full decrypt to reach known-good state. File attachments on disk use individual binary AES encryption (unchanged). Password change only re-encrypts file attachments; DB records are encrypted with the new key on next lock. The old per-record LRU decrypt cache has been removed.
-*   **Performance Optimizations:** DB-level pagination across all major pages (Records, Transactions, Dashboard) to avoid loading entire tables into memory. `getAllDecryptedParticipants()` fully eliminated from all UI components — every call site now uses targeted indexed lookups (`getDecryptedParticipantsByAddresses`/`getDecryptedParticipantsByTxids`). The bulk crypto engine (`bulk-crypto.ts`) processes all tables in batches with `bulkPut()` for efficient writes and yields to UI between batches for progress updates.
+*   **Security:** Password-based UI lock only (hash check). No field-level encryption — all data is stored as plaintext in IndexedDB. Users needing data-at-rest protection should use OS-level encrypted containers. The `isEncrypted`/`encryptedPayload` fields have been removed from all 16 database tables (DB schema v27). Encryption infrastructure files (encryptionFacade, dbEncryption, bulk-crypto, key-management, record-encryption) are stubbed to empty exports.
+*   **Performance Optimizations:** DB-level pagination across all major pages (Records, Transactions, Dashboard) to avoid loading entire tables into memory. `getAllDecryptedParticipants()` fully eliminated from all UI components — every call site now uses targeted indexed lookups (`getDecryptedParticipantsByAddresses`/`getDecryptedParticipantsByTxids`).
 *   **Offline First & Portability:** Designed for complete offline functionality and portable database storage.
 *   **Vocabulary Management:** Custom tags, categories, owners, and wallet details with auto-sync.
 *   **Duplicate Detection & Merge:** Intelligent merging of new metadata.
@@ -46,7 +46,7 @@ KYUTXO employs a security-focused architecture with all data and attachments sec
 *   **Bitcoin Flow Visualizer:** Interactive UTXO provenance tracing tool with Sankey Diagram, Timeline Swimlanes, Line Chart, and Hop-Path Explorer visualizations.
 *   **Transaction Search Enhancement:** Includes blockchain transactions and participating addresses in search results.
 *   **Origin Tracking System:** Comprehensive UTXO lineage tracking with `utxoLineage` and `custodySegment` tables, a Lineage Engine, Continuity Proof, Continuity Certificate Report, and Evidence Bundle Export.
-*   **Evidence/Document Storage System:** General-purpose encrypted document storage for proof-of-ownership and historical records.
+*   **Evidence/Document Storage System:** General-purpose document storage for proof-of-ownership and historical records.
 *   **Vault Management Page:** Dedicated UI for viewing and managing multisig vaults.
 *   **Statement Report:** Bank-statement-like transaction report generator with configurable options (date range, currency, balance modes, columns), PDF export, and spending discovery.
 *   **Privacy Audit:** On-chain privacy vulnerability scanner inspired by the Stealth project. Runs 6 detection heuristics against local transaction data: Script Type Mixing (HIGH — mixed input script families fingerprint the wallet), Dust UTXO Detection (CRITICAL/MEDIUM — unspent dust used for tracking), Dust Spending (HIGH — dust co-spent with normal inputs links addresses), Consolidation Origin (MEDIUM — multi-input consolidation links address clusters), Exchange Origin (LOW — batch withdrawal patterns reveal exchange relationship), and Tainted UTXO Merge (HIGH — merging inputs from different funding sources propagates linkability). Auto-tags affected records with `privacy:*` tags. All analysis runs client-side.

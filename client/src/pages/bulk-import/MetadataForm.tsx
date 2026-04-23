@@ -30,7 +30,8 @@ import {
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import { MultiSelectCombobox } from "@/components/ui/multi-select-combobox";
-import { useEncryptedTags, useEncryptedCategories } from "@/hooks/use-encrypted-records";
+import { useTags } from "@/hooks/use-tags";
+import { useCategories } from "@/hooks/use-categories";
 import { useOwners, createOwner } from "@/hooks/use-owners";
 import { useWalletNames, createWalletName } from "@/hooks/use-wallet-names";
 import { useSeedNames, createSeedName } from "@/hooks/use-seed-names";
@@ -101,8 +102,8 @@ export default function MetadataForm({
   xpubInfo,
 }: MetadataFormProps) {
   const { toast } = useToast();
-  const { tags } = useEncryptedTags();
-  const { categories } = useEncryptedCategories();
+  const { tags } = useTags();
+  const { categories } = useCategories();
   const { owners: existingOwners } = useOwners();
   const { walletNames: existingWalletNames } = useWalletNames();
   const { seedNames: existingSeedNames } = useSeedNames();
@@ -118,29 +119,29 @@ export default function MetadataForm({
   const [newWalletName, setNewWalletName] = useState("");
 
   const allOwners = Array.from(new Set([
-    ...existingOwners.map(o => o.name).filter(n => n && n !== '[encrypted]'),
+    ...existingOwners.map(o => o.name).filter(n => n),
     ownerInput
   ].filter(Boolean)));
   const allWalletNames = Array.from(new Set([
-    ...existingWalletNames.map(wn => wn.name).filter(n => n && n !== '[encrypted]'),
+    ...existingWalletNames.map(wn => wn.name).filter(n => n),
     walletNameInput
   ].filter(Boolean)));
   const allSeedNames = Array.from(new Set([
-    ...existingSeedNames.map(sn => sn.name).filter(n => n && n !== '[encrypted]'),
+    ...existingSeedNames.map(sn => sn.name).filter(n => n),
     seedName
   ].filter(Boolean)));
   const allWalletSoftwareList = Array.from(new Set([
-    ...existingWalletSoftware.map(ws => ws.name).filter(n => n && n !== '[encrypted]'),
+    ...existingWalletSoftware.map(ws => ws.name).filter(n => n),
     walletSoftware
   ].filter(Boolean)));
 
   const availableTags = tags
     .map(t => t.name)
-    .filter(name => name && name !== "[encrypted]");
+    .filter(name => name);
 
   const availableCategories = categories
     .map(c => c.name)
-    .filter(name => name && name !== "[encrypted]");
+    .filter(name => name);
 
   const addNewSeedName = async () => {
     if (!newSeedName.trim()) return;

@@ -75,7 +75,7 @@ async function getRecordForAddress(address: string): Promise<Record | undefined>
   }
   
   // Decrypt if needed
-  if (bestRecord.isEncrypted && isEncryptionReady()) {
+  if (false) {
     const decrypted = await decryptRecords([bestRecord]);
     return decrypted[0];
   }

@@ -5,7 +5,6 @@ export async function createTag(name: string, color?: string): Promise<number> {
     name,
     color,
     createdAt: Date.now(),
-    isEncrypted: false,
   };
 
   const id = await db.tags.add(tag);
@@ -24,7 +23,6 @@ export async function updateTag(id: number, data: Partial<Tag>): Promise<void> {
     ...existing,
     ...data,
     id,
-    isEncrypted: false,
   };
   
   await db.tags.put(updated);
@@ -38,7 +36,6 @@ export async function createCategory(name: string): Promise<number> {
   const category: Category = {
     name,
     createdAt: Date.now(),
-    isEncrypted: false,
   };
 
   const id = await db.categories.add(category);
@@ -57,7 +54,6 @@ export async function updateCategory(id: number, data: Partial<Category>): Promi
     ...existing,
     ...data,
     id,
-    isEncrypted: false,
   };
   
   await db.categories.put(updated);
@@ -71,7 +67,6 @@ export async function createOwner(name: string): Promise<number> {
   const owner: Owner = {
     name,
     createdAt: Date.now(),
-    isEncrypted: false,
   };
 
   const id = await db.owners.add(owner);
@@ -90,7 +85,6 @@ export async function updateOwner(id: number, data: Partial<Owner>): Promise<voi
     ...existing,
     ...data,
     id,
-    isEncrypted: false,
   };
   
   await db.owners.put(updated);
@@ -104,7 +98,6 @@ export async function createWalletNameEntry(name: string): Promise<number> {
   const walletName: WalletName = {
     name,
     createdAt: Date.now(),
-    isEncrypted: false,
   };
 
   const id = await db.walletNames.add(walletName);
@@ -123,7 +116,6 @@ export async function updateWalletNameEntry(id: number, data: Partial<WalletName
     ...existing,
     ...data,
     id,
-    isEncrypted: false,
   };
   
   await db.walletNames.put(updated);
@@ -137,7 +129,6 @@ export async function createSeedNameEntry(name: string): Promise<number> {
   const seedName: SeedName = {
     name,
     createdAt: Date.now(),
-    isEncrypted: false,
   };
 
   const id = await db.seedNames.add(seedName);
@@ -156,7 +147,6 @@ export async function updateSeedNameEntry(id: number, data: Partial<SeedName>): 
     ...existing,
     ...data,
     id,
-    isEncrypted: false,
   };
   
   await db.seedNames.put(updated);
@@ -170,7 +160,6 @@ export async function createWalletSoftwareEntry(name: string): Promise<number> {
   const walletSoftware: WalletSoftware = {
     name,
     createdAt: Date.now(),
-    isEncrypted: false,
   };
 
   const id = await db.walletSoftware.add(walletSoftware);
@@ -189,7 +178,6 @@ export async function updateWalletSoftwareEntry(id: number, data: Partial<Wallet
     ...existing,
     ...data,
     id,
-    isEncrypted: false,
   };
   
   await db.walletSoftware.put(updated);
@@ -213,7 +201,6 @@ export async function syncTagsToMaster(tagNames: string[]): Promise<void> {
       const tag: Tag = {
         name: trimmedName,
         createdAt: Date.now(),
-        isEncrypted: false,
       };
       await db.tags.add(tag);
       existingNames.add(trimmedName.toLowerCase());
@@ -235,7 +222,6 @@ export async function syncCategoriesToMaster(categoryNames: string[]): Promise<v
       const category: Category = {
         name: trimmedName,
         createdAt: Date.now(),
-        isEncrypted: false,
       };
       await db.categories.add(category);
       existingNames.add(trimmedName.toLowerCase());

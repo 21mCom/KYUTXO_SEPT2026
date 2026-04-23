@@ -1,7 +1,6 @@
 import { createContext, useContext, useState, useCallback, useEffect, type ReactNode } from "react";
 import { useLocation } from "wouter";
 import { db, type Record as DbRecord, type Attachment, type VaultMetadata, type AddressImportance, type ChainType, type CustomField, type FlowType, type AcquisitionMethod, type DispositionType, type CounterpartyType } from "@/lib/database";
-import { decryptRecords, isEncryptionReady } from "@/lib/encryptionFacade";
 import { RecordDetailPanel } from "@/components/RecordDetailPanel";
 import { useToast } from "@/hooks/use-toast";
 
@@ -149,13 +148,7 @@ export function RecordPreviewProvider({ children }: { children: ReactNode }) {
         return;
       }
 
-      let decryptedRecord: DbRecord;
-      if (isEncryptionReady()) {
-        const decrypted = await decryptRecords([rawRecord]);
-        decryptedRecord = decrypted[0];
-      } else {
-        decryptedRecord = rawRecord;
-      }
+      const decryptedRecord: DbRecord = rawRecord;
 
       const panelRecord: RecordForPanel = {
         id: String(decryptedRecord.id),
@@ -220,13 +213,7 @@ export function RecordPreviewProvider({ children }: { children: ReactNode }) {
         return;
       }
 
-      // Decrypt all records, then select the best one based on metadata richness
-      let decryptedRecords: DbRecord[];
-      if (isEncryptionReady()) {
-        decryptedRecords = await decryptRecords(rawRecords);
-      } else {
-        decryptedRecords = rawRecords;
-      }
+      const decryptedRecords: DbRecord[] = rawRecords;
       
       // Select the record with the richest metadata (prefer wallet-import over blockchain-sync)
       const decryptedRecord = selectBestRecord(decryptedRecords);

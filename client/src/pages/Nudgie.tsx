@@ -214,7 +214,7 @@ export default function Nudgie() {
   useEffect(() => {
     // Only attempt decryption if encryption is ready (vault is unlocked)
     if (!isEncryptionReady()) {
-      // When locked, fall back to raw data (which may show '[encrypted]' placeholders)
+      // Fall back to raw data
       setDecryptedTags(tags);
       setDecryptedCategories(categories);
       return;
@@ -484,12 +484,12 @@ export default function Nudgie() {
   };
 
   const availableTagNames = useMemo(() => 
-    decryptedTags.map(t => t.name).filter(n => n && n !== '[encrypted]'),
+    decryptedTags.map(t => t.name).filter(n => n),
     [decryptedTags]
   );
 
   const availableCategoryNames = useMemo(() => 
-    decryptedCategories.map(c => c.name).filter(n => n && n !== '[encrypted]'),
+    decryptedCategories.map(c => c.name).filter(n => n),
     [decryptedCategories]
   );
 
@@ -690,19 +690,19 @@ export default function Nudgie() {
   };
 
   const uniqueSeedNames = Array.from(new Set([
-    ...seedNames.map(s => s.name).filter(n => n && n !== '[encrypted]'),
+    ...seedNames.map(s => s.name).filter(n => n),
     ...decryptedAddressRecords.map(r => r.seedName).filter((s): s is string => !!s)
   ]));
   const uniqueWalletSoftware = Array.from(new Set([
-    ...walletSoftware.map(w => w.name).filter(n => n && n !== '[encrypted]'),
+    ...walletSoftware.map(w => w.name).filter(n => n),
     ...decryptedAddressRecords.map(r => r.walletSoftware).filter((s): s is string => !!s)
   ]));
   const uniqueOwners = Array.from(new Set([
-    ...owners.map(o => o.name).filter(n => n && n !== '[encrypted]'),
+    ...owners.map(o => o.name).filter(n => n),
     ...decryptedAddressRecords.map(r => r.owner).filter((s): s is string => !!s)
   ]));
   const uniqueWalletNames = Array.from(new Set([
-    ...walletNames.map(w => w.name).filter(n => n && n !== '[encrypted]'),
+    ...walletNames.map(w => w.name).filter(n => n),
     ...decryptedAddressRecords.map(r => r.walletName).filter((s): s is string => !!s)
   ]));
 

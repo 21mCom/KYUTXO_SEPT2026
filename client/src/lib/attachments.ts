@@ -1,6 +1,4 @@
 import { db } from '@/lib/database';
-import { encryptBinary, decryptBinary } from '@/lib/crypto';
-import { isEncryptionReady, getEncryptionKey } from '@/lib/encryptionFacade';
 import { isElectron, getElectronAPI } from '@/lib/electron';
 
 async function hashIdentifier(identifier: string): Promise<string> {
@@ -32,17 +30,7 @@ export async function uploadAttachment(
   identifier: string
 ): Promise<AttachmentUploadResult> {
   try {
-    let fileData: ArrayBuffer = await file.arrayBuffer();
-    let isEncrypted = false;
-    
-    // Encrypt the file if encryption is available
-    if (isEncryptionReady()) {
-      const key = getEncryptionKey();
-      if (key) {
-        fileData = await encryptBinary(fileData, key);
-        isEncrypted = true;
-      }
-    }
+    const fileData: ArrayBuffer = await file.arrayBuffer();
     
     let objectStoragePath: string;
     const hashedId = await hashIdentifier(identifier);
@@ -59,14 +47,14 @@ export async function uploadAttachment(
       objectStoragePath = result.path!;
     } else {
       const fileToUpload = new Blob([fileData], { 
-        type: isEncrypted ? 'application/octet-stream' : file.type 
+        type: file.type 
       });
       
       const formData = new FormData();
       formData.append('file', fileToUpload, opaqueFilename);
       formData.append('identifier', hashedId);
       formData.append('recordId', recordId.toString());
-      formData.append('encrypted', isEncrypted.toString());
+      formData.append('encrypted', 'false');
 
       const response = await fetch('/api/attachments/upload', {
         method: 'POST',
@@ -89,7 +77,6 @@ export async function uploadAttachment(
       size: file.size, // Original file size
       objectStoragePath,
       createdAt: Date.now(),
-      isEncrypted,
     });
 
     return {
@@ -105,12 +92,11 @@ export async function uploadAttachment(
 }
 
 // Download attachment - works in both Electron and web modes
-export async function downloadAttachment(objectPath: string, isEncrypted?: boolean): Promise<Blob> {
+export async function downloadAttachment(objectPath: string, _isEncrypted?: boolean): Promise<Blob> {
   try {
     let data: ArrayBuffer;
     
     if (isElectron()) {
-      // Electron mode: read via IPC
       const api = getElectronAPI();
       const result = await api.readAttachment(objectPath);
       
@@ -120,7 +106,6 @@ export async function downloadAttachment(objectPath: string, isEncrypted?: boole
       
       data = result.data!;
     } else {
-      // Web mode: download via API (encode path to handle slashes and special characters)
       const encodedPath = objectPath.split('/').map(segment => encodeURIComponent(segment)).join('/');
       const response = await fetch(`/api/attachments/download/${encodedPath}`);
       
@@ -129,14 +114,6 @@ export async function downloadAttachment(objectPath: string, isEncrypted?: boole
       }
       
       data = await response.arrayBuffer();
-    }
-    
-    // Decrypt if the attachment is encrypted
-    if (isEncrypted && isEncryptionReady()) {
-      const key = getEncryptionKey();
-      if (key) {
-        data = await decryptBinary(data, key);
-      }
     }
     
     return new Blob([data]);
@@ -152,7 +129,7 @@ export async function downloadAttachmentById(attachmentId: number): Promise<{ bl
     throw new Error('Attachment not found');
   }
   
-  const blob = await downloadAttachment(attachment.objectStoragePath, attachment.isEncrypted);
+  const blob = await downloadAttachment(attachment.objectStoragePath);
   
   // Create blob with original mime type
   const typedBlob = new Blob([blob], { type: attachment.mimeType });
@@ -230,17 +207,7 @@ export function formatFileSize(bytes: number): string {
 // Upload a file and return the storage path (no DB record created)
 export async function uploadEncryptedFile(file: File): Promise<string> {
   try {
-    let fileData: ArrayBuffer = await file.arrayBuffer();
-    let isEncrypted = false;
-    
-    // Encrypt the file if encryption is available
-    if (isEncryptionReady()) {
-      const key = getEncryptionKey();
-      if (key) {
-        fileData = await encryptBinary(fileData, key);
-        isEncrypted = true;
-      }
-    }
+    const fileData: ArrayBuffer = await file.arrayBuffer();
     
     if (isElectron()) {
       const api = getElectronAPI();
@@ -256,7 +223,7 @@ export async function uploadEncryptedFile(file: File): Promise<string> {
       return result.path!;
     } else {
       const fileToUpload = new Blob([fileData], { 
-        type: isEncrypted ? 'application/octet-stream' : file.type 
+        type: file.type 
       });
       
       const evidenceId = `evidence_${Date.now()}`;
@@ -266,7 +233,7 @@ export async function uploadEncryptedFile(file: File): Promise<string> {
       formData.append('file', fileToUpload, opaqueFilename);
       formData.append('identifier', hashedId);
       formData.append('recordId', '0');
-      formData.append('encrypted', isEncrypted.toString());
+      formData.append('encrypted', 'false');
 
       const response = await fetch('/api/attachments/upload', {
         method: 'POST',
@@ -309,10 +276,10 @@ export async function downloadDecryptedFile(objectPath: string, filename: string
 export async function getDecryptedFileBlob(
   objectPath: string, 
   mimeType: string,
-  isEncrypted: boolean = true
+  _isEncrypted: boolean = true
 ): Promise<Blob> {
   try {
-    const blob = await downloadAttachment(objectPath, isEncrypted);
+    const blob = await downloadAttachment(objectPath);
     // Return blob with correct mime type for proper browser handling
     return new Blob([blob], { type: mimeType });
   } catch (error) {
@@ -436,21 +403,10 @@ async function writeRawFile(objectPath: string, data: ArrayBuffer): Promise<void
 
 // Re-encrypt a single attachment file with a new key
 export async function reEncryptAttachmentFile(
-  objectPath: string,
-  oldKey: CryptoKey,
-  newKey: CryptoKey
+  _objectPath: string,
+  _oldKey: CryptoKey,
+  _newKey: CryptoKey
 ): Promise<void> {
-  // Read raw encrypted data
-  const encryptedData = await readRawFile(objectPath);
-  
-  // Decrypt with old key
-  const decryptedData = await decryptBinary(encryptedData, oldKey);
-  
-  // Re-encrypt with new key
-  const reEncryptedData = await encryptBinary(decryptedData, newKey);
-  
-  // Write back
-  await writeRawFile(objectPath, reEncryptedData);
 }
 
 export interface ReEncryptFileResult {
@@ -461,42 +417,13 @@ export interface ReEncryptFileResult {
 }
 
 export async function reEncryptAllAttachmentFiles(
-  oldKey: CryptoKey,
-  newKey: CryptoKey,
-  onProgress?: (current: number, total: number) => void,
-  skipIds?: Set<number>,
-  signal?: AbortSignal
+  _oldKey: CryptoKey,
+  _newKey: CryptoKey,
+  _onProgress?: (current: number, total: number) => void,
+  _skipIds?: Set<number>,
+  _signal?: AbortSignal
 ): Promise<ReEncryptFileResult> {
-  const attachments = await db.attachments.filter(a => a.isEncrypted === true).toArray();
-  const toProcess = skipIds ? attachments.filter(a => !skipIds.has(a.id!)) : attachments;
-  const totalCount = toProcess.length;
-  
-  let processed = 0;
-  const completedIds: number[] = [];
-
-  let failedCount = 0;
-
-  for (let i = 0; i < toProcess.length; i++) {
-    if (signal?.aborted) {
-      return { processed, completedIds, cancelled: true, failed: failedCount };
-    }
-
-    const attachment = toProcess[i];
-    if (onProgress) {
-      onProgress(i + 1, totalCount);
-    }
-    
-    try {
-      await reEncryptAttachmentFile(attachment.objectStoragePath, oldKey, newKey);
-      completedIds.push(attachment.id!);
-      processed++;
-    } catch (error) {
-      console.error(`[ReEncrypt] Failed attachment id=${attachment.id} "${attachment.filename}":`, error);
-      failedCount++;
-    }
-  }
-  
-  return { processed, completedIds, cancelled: false, failed: failedCount };
+  return { processed: 0, completedIds: [], cancelled: false, failed: 0 };
 }
 
 // ============ LEGACY PATH MIGRATION ============
@@ -651,40 +578,11 @@ export async function migrateAttachmentPaths(
 }
 
 export async function reEncryptAllEvidenceAttachmentFiles(
-  oldKey: CryptoKey,
-  newKey: CryptoKey,
-  onProgress?: (current: number, total: number) => void,
-  skipIds?: Set<number>,
-  signal?: AbortSignal
+  _oldKey: CryptoKey,
+  _newKey: CryptoKey,
+  _onProgress?: (current: number, total: number) => void,
+  _skipIds?: Set<number>,
+  _signal?: AbortSignal
 ): Promise<ReEncryptFileResult> {
-  const evidenceAttachments = await db.evidenceAttachments.filter(a => a.isEncrypted === true).toArray();
-  const toProcess = skipIds ? evidenceAttachments.filter(a => !skipIds.has(a.id!)) : evidenceAttachments;
-  const totalCount = toProcess.length;
-  
-  let processed = 0;
-  const completedIds: number[] = [];
-
-  let failedCount = 0;
-
-  for (let i = 0; i < toProcess.length; i++) {
-    if (signal?.aborted) {
-      return { processed, completedIds, cancelled: true, failed: failedCount };
-    }
-
-    const attachment = toProcess[i];
-    if (onProgress) {
-      onProgress(i + 1, totalCount);
-    }
-    
-    try {
-      await reEncryptAttachmentFile(attachment.objectStoragePath, oldKey, newKey);
-      completedIds.push(attachment.id!);
-      processed++;
-    } catch (error) {
-      console.error(`[ReEncrypt] Failed evidence attachment id=${attachment.id} "${attachment.filename}":`, error);
-      failedCount++;
-    }
-  }
-  
-  return { processed, completedIds, cancelled: false, failed: failedCount };
+  return { processed: 0, completedIds: [], cancelled: false, failed: 0 };
 }

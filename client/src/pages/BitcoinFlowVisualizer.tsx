@@ -554,7 +554,7 @@ export default function BitcoinFlowVisualizer() {
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="__all__">All owners</SelectItem>
-                        {owners.filter(o => o.name && o.name !== '[encrypted]').map(o => (
+                        {owners.filter(o => o.name).map(o => (
                           <SelectItem key={o.id} value={o.name}>{o.name}</SelectItem>
                         ))}
                       </SelectContent>
@@ -571,7 +571,7 @@ export default function BitcoinFlowVisualizer() {
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="__all__">All wallets</SelectItem>
-                        {walletNames.filter(w => w.name && w.name !== '[encrypted]').map(w => (
+                        {walletNames.filter(w => w.name).map(w => (
                           <SelectItem key={w.id} value={w.name}>{w.name}</SelectItem>
                         ))}
                       </SelectContent>
@@ -588,7 +588,7 @@ export default function BitcoinFlowVisualizer() {
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="__all__">All tags</SelectItem>
-                        {tags.filter(t => t.name && t.name !== '[encrypted]').map(t => (
+                        {tags.filter(t => t.name).map(t => (
                           <SelectItem key={t.id} value={t.name}>{t.name}</SelectItem>
                         ))}
                       </SelectContent>

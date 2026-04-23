@@ -1,48 +1,12 @@
 import { useLiveQuery } from 'dexie-react-hooks';
-import { useState, useEffect } from 'react';
 import { db, type Tag } from '@/lib/database';
-import { 
-  getDecryptedTags,
-  isEncryptionReady,
-} from '@/lib/encryptionFacade';
 
 export function useTags() {
-  const [decryptedTags, setDecryptedTags] = useState<Tag[]>([]);
-  const [isDecrypting, setIsDecrypting] = useState(false);
-  
-  const rawTags = useLiveQuery(() => db.tags.orderBy('name').toArray());
-  
-  useEffect(() => {
-    const decrypt = async () => {
-      if (!rawTags) {
-        setDecryptedTags([]);
-        return;
-      }
-      
-      if (!isEncryptionReady()) {
-        setDecryptedTags(rawTags);
-        return;
-      }
-      
-      setIsDecrypting(true);
-      try {
-        const decrypted = await getDecryptedTags();
-        decrypted.sort((a, b) => a.name.localeCompare(b.name));
-        setDecryptedTags(decrypted);
-      } catch (error) {
-        console.error('Failed to decrypt tags:', error);
-        setDecryptedTags(rawTags);
-      } finally {
-        setIsDecrypting(false);
-      }
-    };
-    
-    decrypt();
-  }, [rawTags]);
-  
+  const tags = useLiveQuery(() => db.tags.orderBy('name').toArray());
+
   return {
-    tags: decryptedTags,
-    isLoading: rawTags === undefined || isDecrypting,
+    tags: tags ?? [],
+    isLoading: tags === undefined,
   };
 }
 
@@ -51,7 +15,7 @@ export async function createTag(name: string, color?: string) {
   if (existing) {
     throw new Error('Tag already exists');
   }
-  
+
   const id = await db.tags.add({
     name,
     color,
@@ -67,8 +31,7 @@ export async function updateTag(id: number, data: Partial<Tag>) {
 export async function deleteTag(id: number) {
   const tag = await db.tags.get(id);
   if (!tag) return;
-  
-  // Remove tag from all records
+
   const records = await db.records.filter(r => r.tags.includes(tag.name)).toArray();
   for (const record of records) {
     await db.records.update(record.id!, {
@@ -76,7 +39,7 @@ export async function deleteTag(id: number) {
       updatedAt: Date.now(),
     });
   }
-  
+
   await db.tags.delete(id);
 }
 

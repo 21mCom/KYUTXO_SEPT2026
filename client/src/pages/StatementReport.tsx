@@ -13,7 +13,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { formatBTC } from "@/lib/bitcoin";
 import { db } from "@/lib/database";
-import { useEncryptedTags } from "@/hooks/use-encrypted-records";
+import { useTags } from "@/hooks/use-tags";
 import { useOwners } from "@/hooks/use-owners";
 import { useWalletNames } from "@/hooks/use-wallet-names";
 import { decryptRecords, decryptRecordsWithProgress, getDecryptedParticipantsByTxids, getDecryptedParticipantsByAddresses, decryptParticipantsData } from "@/lib/encryptionFacade";
@@ -69,13 +69,13 @@ export default function StatementReport() {
   const [usedAddresses, setUsedAddresses] = useState<string[]>([]);
   const [decryptProgress, setDecryptProgress] = useState<DecryptProgress | null>(null);
 
-  const { tags } = useEncryptedTags();
+  const { tags } = useTags();
   const { owners } = useOwners();
   const { walletNames } = useWalletNames();
 
-  const filteredTags = useMemo(() => tags.filter(t => t.name !== "[encrypted]"), [tags]);
-  const filteredOwners = useMemo(() => owners.filter(o => o.name !== "[encrypted]"), [owners]);
-  const filteredWalletNames = useMemo(() => walletNames.filter(w => w.name !== "[encrypted]"), [walletNames]);
+  const filteredTags = useMemo(() => tags.filter(t => t.name), [tags]);
+  const filteredOwners = useMemo(() => owners.filter(o => o.name), [owners]);
+  const filteredWalletNames = useMemo(() => walletNames.filter(w => w.name), [walletNames]);
 
   const resolveAddresses = useCallback(async (): Promise<string[]> => {
     if (addressMode === "paste") {

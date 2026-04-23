@@ -55,7 +55,7 @@ function formatBlockTime(timestamp?: number): string {
 
 // Format source field for display - strip timestamp suffixes
 function formatSourceDisplay(source?: string): string {
-  if (!source || source === '[encrypted]') return "-";
+  if (!source) return "-";
   
   // walletImport-Sparrow Wallet_2024-01-01_054834 -> Sparrow Wallet Import (2024-01-01)
   const walletImportMatch = source.match(/^walletImport-(.+?)_(\d{4}-\d{2}-\d{2})_\d+$/);
@@ -714,12 +714,12 @@ export function RecordTable({
                 )}
                 {tableColumns.owner && (
                   <TableCell className="text-sm text-muted-foreground">
-                    {record.owner && record.owner !== '[encrypted]' ? record.owner : "-"}
+                    {record.owner || "-"}
                   </TableCell>
                 )}
                 {tableColumns.walletName && (
                   <TableCell className="text-sm text-muted-foreground">
-                    {record.walletName && record.walletName !== '[encrypted]' ? record.walletName : "-"}
+                    {record.walletName || "-"}
                   </TableCell>
                 )}
                 {tableColumns.firstSeen && (
@@ -750,7 +750,7 @@ export function RecordTable({
                 )}
                 {enabledCustomFields.filter(f => customFieldColumns[f.slug]).map((field) => {
                   const value = record.customFields?.[field.slug];
-                  const displayValue = value && value !== '[encrypted]' ? value : "-";
+                  const displayValue = value || "-";
                   return (
                     <TableCell key={field.slug} className="text-sm text-muted-foreground">
                       {displayValue}

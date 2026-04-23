@@ -162,10 +162,6 @@ export interface Record {
   
   createdAt: number;
   updatedAt: number;
-  // Encrypted payload - contains the sensitive data when encryption is enabled
-  encryptedPayload?: string;
-  // Flag to indicate if this record is encrypted
-  isEncrypted?: boolean;
 }
 
 export interface Attachment {
@@ -176,9 +172,6 @@ export interface Attachment {
   size: number;
   objectStoragePath: string;
   createdAt: number;
-  // Encrypted fields
-  encryptedPayload?: string;
-  isEncrypted?: boolean;
 }
 
 export interface Tag {
@@ -186,16 +179,12 @@ export interface Tag {
   name: string;
   color?: string;
   createdAt: number;
-  encryptedPayload?: string;
-  isEncrypted?: boolean;
 }
 
 export interface Category {
   id?: number;
   name: string;
   createdAt: number;
-  encryptedPayload?: string;
-  isEncrypted?: boolean;
 }
 
 // Vocabulary items for dropdown selections
@@ -203,32 +192,24 @@ export interface Owner {
   id?: number;
   name: string;
   createdAt: number;
-  encryptedPayload?: string;
-  isEncrypted?: boolean;
 }
 
 export interface WalletName {
   id?: number;
   name: string;
   createdAt: number;
-  encryptedPayload?: string;
-  isEncrypted?: boolean;
 }
 
 export interface SeedName {
   id?: number;
   name: string;
   createdAt: number;
-  encryptedPayload?: string;
-  isEncrypted?: boolean;
 }
 
 export interface WalletSoftware {
   id?: number;
   name: string;
   createdAt: number;
-  encryptedPayload?: string;
-  isEncrypted?: boolean;
 }
 
 // Origin type for tracking how a record was added
@@ -255,8 +236,6 @@ export interface RecordOrigin {
   derivationPath?: string;
   chainType?: ChainType;
   createdAt: number;
-  encryptedPayload?: string;
-  isEncrypted?: boolean;
 }
 
 // Custom field definition created by user
@@ -357,19 +336,13 @@ export interface TransactionParticipant {
   id?: number;
   txid: string;           // Foreign key to BlockchainTransaction
   role: 'input' | 'output';
-  address: string;        // Bitcoin address (encrypted: '[encrypted]')
-  amount: number;         // Amount in satoshis (encrypted: 0)
-  vout?: number;          // Output index (for outputs) - stays plaintext for indexing
-  // For inputs: the outpoint being spent (identifies which UTXO is consumed)
-  prevTxid?: string;      // The txid of the transaction that created the UTXO being spent (encrypted: '[encrypted]')
-  prevVout?: number;      // The output index in that transaction (encrypted: 0)
-  // Link to our records table if address exists there
+  address: string;
+  amount: number;
+  vout?: number;
+  prevTxid?: string;
+  prevVout?: number;
   recordId?: number;
-  // Script/address type information
-  scriptType?: ScriptType; // Type of script (p2pkh, p2sh, v0_p2wpkh, v1_p2tr, etc.) (encrypted)
-  // Encryption fields
-  isEncrypted?: boolean;
-  encryptedPayload?: string;
+  scriptType?: ScriptType;
 }
 
 // Tracks sync state per address for incremental syncing
@@ -483,11 +456,7 @@ export interface UtxoLineage {
   blockHeight: number;      // Block height of the consuming transaction
   // Segment linking
   segmentId?: string;       // Links to parent custody segment
-  // Timestamps
   createdAt: number;
-  // Encryption
-  encryptedPayload?: string;
-  isEncrypted?: boolean;
 }
 
 // Custody segment status
@@ -530,12 +499,8 @@ export interface CustodySegment {
   owner?: string;
   walletName?: string;
   seedName?: string;
-  // Timestamps
   createdAt: number;
   updatedAt: number;
-  // Encryption
-  encryptedPayload?: string;
-  isEncrypted?: boolean;
 }
 
 // Pre-computed lineage snapshot for export/sharing
@@ -564,9 +529,6 @@ export interface LineageSnapshot {
   // Export metadata
   generatedAt: number;        // When snapshot was created
   expiresAt?: number;         // Optional expiration for shared snapshots
-  // Encryption
-  encryptedPayload?: string;
-  isEncrypted?: boolean;
 }
 
 // Document types for evidence entries
@@ -625,12 +587,8 @@ export interface Evidence {
   source?: string;
   // Importance level
   importance?: EvidenceImportance;
-  // Timestamps
   createdAt: number;
   updatedAt: number;
-  // Encryption
-  encryptedPayload?: string;
-  isEncrypted?: boolean;
 }
 
 // Attachment specifically for evidence entries (separate from record attachments)
@@ -642,9 +600,6 @@ export interface EvidenceAttachment {
   size: number;
   objectStoragePath: string;
   createdAt: number;
-  // Encrypted fields
-  encryptedPayload?: string;
-  isEncrypted?: boolean;
 }
 
 // Skipped address from sync - tracked for user review
@@ -682,35 +637,20 @@ export const DEFAULT_SYNC_PROTECTION: SyncProtectionSettings = {
   perAddressTimeoutMs: 60000,
 };
 
-// Derivation template for optional encrypted xpub storage
+// Derivation template for xpub storage
 // WARNING: Storing xpubs doesn't risk funds but reveals wallet structure and all addresses
 export interface DerivationTemplate {
   id?: number;
-  // Master fingerprint (8 hex chars) to identify the seed without exposing it
   fingerprint: string;
-  // Script type: P2WPKH (native segwit), P2PKH (legacy), P2SH-P2WPKH (wrapped segwit), P2TR (taproot)
   scriptType: 'P2WPKH' | 'P2PKH' | 'P2SH-P2WPKH' | 'P2TR';
-  // Derivation path template, e.g., "m/84'/0'/0'" for native segwit
   derivationPath: string;
-  // The extended public key (encrypted in encryptedPayload when encryption is enabled)
   xpub?: string;
-  // Gap limit for address discovery (default 20)
   gapLimit: number;
-  // Network: mainnet or testnet
   network: 'mainnet' | 'testnet';
-  // Associated owner (from vocabulary)
   owner?: string;
-  // Associated wallet name (from vocabulary)
   walletName?: string;
-  // Associated seed name (from vocabulary)
   seedName?: string;
-  // Optional notes about this template
   notes?: string;
-  // Timestamps
   createdAt: number;
   updatedAt: number;
-  // Encrypted payload - contains xpub when encryption is enabled
-  encryptedPayload?: string;
-  // Flag to indicate if this record is encrypted
-  isEncrypted?: boolean;
 }

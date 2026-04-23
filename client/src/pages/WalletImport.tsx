@@ -35,8 +35,6 @@ import { useToast } from '@/hooks/use-toast';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '@/lib/database';
 import { isEncryptionReady } from '@/lib/encryptionFacade';
-import { decryptTag, decryptCategory } from '@/lib/dbEncryption';
-import { getEncryptionKey } from '@/lib/encryptionFacade';
 import { useSeedNames, createSeedName, SEED_NAME_MAX_LENGTH } from '@/hooks/use-seed-names';
 import { useOwners, createOwner } from '@/hooks/use-owners';
 import { useWalletNames, createWalletName } from '@/hooks/use-wallet-names';
@@ -121,7 +119,7 @@ export default function WalletImport() {
   const [newSeedName, setNewSeedName] = useState<string>('');
   const { seedNames } = useSeedNames();
   const allSeedNames = Array.from(new Set([
-    ...seedNames.map(s => s.name).filter(n => n && n !== '[encrypted]'),
+    ...seedNames.map(s => s.name).filter(n => n),
     seedNameInput
   ].filter(Boolean)));
   
@@ -130,7 +128,7 @@ export default function WalletImport() {
   const [newOwnerName, setNewOwnerName] = useState<string>('');
   const { owners } = useOwners();
   const allOwners = Array.from(new Set([
-    ...owners.map(o => o.name).filter(n => n && n !== '[encrypted]'),
+    ...owners.map(o => o.name).filter(n => n),
     ownerInput
   ].filter(Boolean)));
   
@@ -139,7 +137,7 @@ export default function WalletImport() {
   const [newWalletNameValue, setNewWalletNameValue] = useState<string>('');
   const { walletNames } = useWalletNames();
   const allWalletNames = Array.from(new Set([
-    ...walletNames.map(wn => wn.name).filter(n => n && n !== '[encrypted]'),
+    ...walletNames.map(wn => wn.name).filter(n => n),
     walletNameInput
   ].filter(Boolean)));
   
@@ -225,7 +223,7 @@ export default function WalletImport() {
   const detectedWalletSoftware = getWalletName(selectedWalletType);
   const allWalletSoftwareOptions = Array.from(new Set([
     detectedWalletSoftware,
-    ...existingWalletSoftware.map(ws => ws.name).filter(n => n && n !== '[encrypted]'),
+    ...existingWalletSoftware.map(ws => ws.name).filter(n => n),
     walletSoftwareInput
   ].filter(Boolean)));
   
@@ -236,38 +234,13 @@ export default function WalletImport() {
   const [availableCategories, setAvailableCategories] = useState<string[]>([]);
   
   useEffect(() => {
-    const decryptItems = async () => {
-      const key = getEncryptionKey();
-      if (!key) return;
-      
-      if (encryptedTags) {
-        const decryptedTags: string[] = [];
-        for (const tag of encryptedTags) {
-          try {
-            const decrypted = tag.isEncrypted ? await decryptTag(tag, key) : tag;
-            decryptedTags.push(decrypted.name);
-          } catch {
-            // Skip failed decryptions
-          }
-        }
-        setAvailableTags(decryptedTags);
-      }
-      
-      if (encryptedCategories) {
-        const decryptedCategories: string[] = [];
-        for (const cat of encryptedCategories) {
-          try {
-            const decrypted = cat.isEncrypted ? await decryptCategory(cat, key) : cat;
-            decryptedCategories.push(decrypted.name);
-          } catch {
-            // Skip failed decryptions
-          }
-        }
-        setAvailableCategories(decryptedCategories);
-      }
-    };
+    if (encryptedTags) {
+      setAvailableTags(encryptedTags.map(t => t.name));
+    }
     
-    decryptItems();
+    if (encryptedCategories) {
+      setAvailableCategories(encryptedCategories.map(c => c.name));
+    }
   }, [encryptedTags, encryptedCategories]);
   
   const supportedWallets = getSupportedWallets();

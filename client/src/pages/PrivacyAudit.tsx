@@ -27,7 +27,7 @@ import { decryptRecordsWithProgress } from "@/lib/encryption/record-encryption";
 import type { DecryptProgress } from "@/lib/encryption/record-encryption";
 import { createTag } from "@/lib/encryption/vocabulary-crud";
 import { updateRecord } from "@/lib/encryption/record-crud";
-import { useEncryptedTags } from "@/hooks/use-encrypted-records";
+import { useTags } from "@/hooks/use-tags";
 import { useOwners } from "@/hooks/use-owners";
 import { useWalletNames } from "@/hooks/use-wallet-names";
 import { useToast } from "@/hooks/use-toast";
@@ -82,7 +82,7 @@ export default function PrivacyAudit() {
   const [selectedWallet, setSelectedWallet] = useState<string>("all");
   const [openTypes, setOpenTypes] = useState<Record<string, boolean>>({});
 
-  const { tags } = useEncryptedTags();
+  const { tags } = useTags();
   const { owners } = useOwners();
   const { walletNames } = useWalletNames();
   const { toast } = useToast();

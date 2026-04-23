@@ -21,8 +21,7 @@ import {
 import { Trash2, Search, RefreshCw, AlertTriangle, CheckCircle2, Network, ArrowUpDown, Link2, Shield, XCircle, ChevronLeft, ChevronRight, Unplug } from "lucide-react";
 import { db, Record, RecordOrigin } from "@/lib/database";
 import { deleteRecord, decryptRecords, getDecryptedParticipantsByTxids } from "@/lib/encryptionFacade";
-import { decryptRecordOrigin } from "@/lib/dbEncryption";
-import { getKey, isEncryptionReady } from "@/lib/encryptionFacade";
+import { isEncryptionReady } from "@/lib/encryptionFacade";
 import { yieldToUI } from "@/hooks/use-async-memo";
 
 type Scope = 'addresses' | 'transactions' | 'both';
@@ -92,7 +91,7 @@ async function bulkGetOriginsByRecordId(recordIds: Set<number>): Promise<Map<num
   const idsArray = Array.from(recordIds);
   const CHUNK = 200;
   const grouped = new Map<number, RecordOrigin[]>();
-  const key = isEncryptionReady() ? getKey() : null;
+  const key = null;
 
   for (let i = 0; i < idsArray.length; i += CHUNK) {
     const chunk = idsArray.slice(i, i + CHUNK);
@@ -102,14 +101,7 @@ async function bulkGetOriginsByRecordId(recordIds: Set<number>): Promise<Map<num
       .toArray();
 
     for (const origin of batch) {
-      let decrypted = origin;
-      if (origin.isEncrypted && key) {
-        try {
-          decrypted = await decryptRecordOrigin(origin, key);
-        } catch {
-          continue;
-        }
-      }
+      const decrypted = origin;
       if (!grouped.has(origin.recordId)) {
         grouped.set(origin.recordId, []);
       }

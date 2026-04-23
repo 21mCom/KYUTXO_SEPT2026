@@ -21,7 +21,8 @@ import { RecordDetailPanel } from "@/components/RecordDetailPanel";
 import { RecordFormDialog, type TransactionAddresses } from "@/components/RecordFormDialog";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useFilteredRecords, createRecord, createRecordWithAttachments, updateRecord, deleteRecord, searchRecords, filterRecords } from "@/hooks/use-records";
-import { useEncryptedTags, useEncryptedCategories } from "@/hooks/use-encrypted-records";
+import { useTags } from "@/hooks/use-tags";
+import { useCategories } from "@/hooks/use-categories";
 import { useOwners } from "@/hooks/use-owners";
 import { useWalletNames } from "@/hooks/use-wallet-names";
 import { useSeedNames } from "@/hooks/use-seed-names";
@@ -100,8 +101,8 @@ export default function Dashboard() {
   }, [hasClientSideFilters, currentPage, ITEMS_PER_PAGE]);
 
   const { records, isLoading, blockchainDiscoveredCount, totalCount } = useFilteredRecords(includeBlockchainDiscovered, paginationOptions);
-  const { tags } = useEncryptedTags();
-  const { categories } = useEncryptedCategories();
+  const { tags } = useTags();
+  const { categories } = useCategories();
   const { owners } = useOwners();
   const { walletNames } = useWalletNames();
   const { seedNames } = useSeedNames();
@@ -330,19 +331,19 @@ export default function Dashboard() {
 
   // Compute unique values for dropdowns (combining existing record values with master lists)
   const uniqueSeedNames = Array.from(new Set([
-    ...seedNames.map(s => s.name).filter(n => n && n !== '[encrypted]'),
+    ...seedNames.map(s => s.name).filter(n => n),
     ...records.map(r => r.seedName).filter((s): s is string => !!s)
   ]));
   const uniqueWalletSoftware = Array.from(new Set([
-    ...walletSoftware.map(w => w.name).filter(n => n && n !== '[encrypted]'),
+    ...walletSoftware.map(w => w.name).filter(n => n),
     ...records.map(r => r.walletSoftware).filter((s): s is string => !!s)
   ]));
   const uniqueOwners = Array.from(new Set([
-    ...owners.map(o => o.name).filter(n => n && n !== '[encrypted]'),
+    ...owners.map(o => o.name).filter(n => n),
     ...records.map(r => r.owner).filter((s): s is string => !!s)
   ]));
   const uniqueWalletNames = Array.from(new Set([
-    ...walletNames.map(w => w.name).filter(n => n && n !== '[encrypted]'),
+    ...walletNames.map(w => w.name).filter(n => n),
     ...records.map(r => r.walletName).filter((s): s is string => !!s)
   ]));
 
@@ -960,8 +961,8 @@ export default function Dashboard() {
         <FilterBar
           filter={filter}
           onChange={setFilter}
-          availableTags={tags.map(t => t.name).filter(n => n && n !== '[encrypted]')}
-          availableCategories={categories.map(c => c.name).filter(n => n && n !== '[encrypted]')}
+          availableTags={tags.map(t => t.name).filter(n => n)}
+          availableCategories={categories.map(c => c.name).filter(n => n)}
           tableColumns={settings?.tableColumns}
         />
         
@@ -1127,8 +1128,8 @@ export default function Dashboard() {
         availableWalletSoftware={uniqueWalletSoftware}
         availableOwners={uniqueOwners}
         availableWalletNames={uniqueWalletNames}
-        availableTags={tags.map(t => t.name).filter(n => n && n !== '[encrypted]')}
-        availableCategories={categories.map(c => c.name).filter(n => n && n !== '[encrypted]')}
+        availableTags={tags.map(t => t.name).filter(n => n)}
+        availableCategories={categories.map(c => c.name).filter(n => n)}
         enabledCustomFields={enabledCustomFields}
         onCheckDuplicate={handleCheckDuplicate}
         existingAttachments={editingRecord ? editingRecordAttachments : []}

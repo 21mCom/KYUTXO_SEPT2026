@@ -1,10 +1,4 @@
 import { db, notifyDbChange, type Record, type Attachment, type Evidence, type EvidenceAttachment, type TransactionParticipant } from '../database';
-import {
-  encryptAttachment,
-  encryptEvidence,
-  encryptEvidenceAttachment,
-} from '../dbEncryption';
-import { getKey } from './key-management';
 
 export async function decryptRecordById(id: number): Promise<Record | undefined> {
   return db.records.get(id);
@@ -37,7 +31,6 @@ export async function createAttachment(
   const attachment: Attachment = {
     ...data,
     createdAt: Date.now(),
-    isEncrypted: false,
   };
 
   const id = await db.attachments.add(attachment);
@@ -56,7 +49,6 @@ export async function createEvidence(
     ...data,
     createdAt: now,
     updatedAt: now,
-    isEncrypted: false,
   };
 
   const id = await db.evidence.add(evidence);
@@ -88,7 +80,6 @@ export async function updateEvidence(
     ...updates,
     id,
     updatedAt: Date.now(),
-    isEncrypted: false,
   };
 
   await db.evidence.put(updated);
@@ -114,7 +105,6 @@ export async function createEvidenceAttachment(
   const attachment: EvidenceAttachment = {
     ...data,
     createdAt: Date.now(),
-    isEncrypted: false,
   };
 
   const id = await db.evidenceAttachments.add(attachment);

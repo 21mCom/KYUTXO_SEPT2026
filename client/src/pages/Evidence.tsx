@@ -459,7 +459,7 @@ export default function EvidencePage() {
     
     try {
       // Evidence attachments are always encrypted on storage
-      // Note: isEncrypted on the attachment object refers to metadata encryption state,
+      // Note: attachment file storage path used for download,
       // but the file itself is always encrypted when uploaded via uploadEncryptedFile
       const blob = await getDecryptedFileBlob(
         attachment.objectStoragePath, 
