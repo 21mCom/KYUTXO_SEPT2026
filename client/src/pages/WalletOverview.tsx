@@ -27,7 +27,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { decryptRecords, decryptRecordsWithProgress, isEncryptionReady } from "@/lib/encryptionFacade";
+import { decryptRecords, decryptRecordsWithProgress } from "@/lib/encryptionFacade";
 import type { DecryptProgress } from "@/lib/encryption/record-encryption";
 import { db } from "@/lib/database";
 import type { Record as DbRecord } from "@/lib/database";
@@ -145,14 +145,8 @@ export default function WalletOverview() {
     setLoading(true);
     try {
       const rawRecords = await db.records.where('type').equals('address').toArray();
-      let records: DbRecord[];
-      
-      if (isEncryptionReady()) {
-        records = await decryptRecordsWithProgress(rawRecords, setDecryptProgress);
-        setDecryptProgress(null);
-      } else {
-        records = rawRecords;
-      }
+      const records = await decryptRecordsWithProgress(rawRecords, setDecryptProgress);
+      setDecryptProgress(null);
 
       // Filter to only address records with wallet names
       const addressRecords = records.filter(r => r.walletName);

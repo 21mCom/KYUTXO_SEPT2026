@@ -1,7 +1,7 @@
 import { useState, useMemo } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { db, type Record as DBRecord, type TransactionParticipant, type BlockchainTransaction, type AddressImportance } from "@/lib/database";
-import { decryptRecords, isEncryptionReady, getDecryptedParticipantsByAddress, getDecryptedParticipantsByTxid } from "@/lib/encryptionFacade";
+import { decryptRecords, getDecryptedParticipantsByAddress, getDecryptedParticipantsByTxid } from "@/lib/encryptionFacade";
 import { useRecordPreview } from "@/contexts/RecordPreviewContext";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -55,7 +55,7 @@ export function HopPointReport() {
 
   const records = useLiveQuery(
     async () => {
-      if (!rawRecords || !isEncryptionReady()) return [];
+      if (!rawRecords) return [];
       return decryptRecords(rawRecords);
     },
     [rawRecords],

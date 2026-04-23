@@ -24,7 +24,7 @@ import { useFlowData, type FlowNode } from "@/hooks/use-flow-data";
 import { HopPathExplorer } from "@/components/HopPathExplorer";
 import { RecordDetailPanel } from "@/components/RecordDetailPanel";
 import { db, type ChainType, type AddressImportance, type VaultMetadata, type FlowType, type AcquisitionMethod, type DispositionType, type CounterpartyType } from "@/lib/database";
-import { decryptRecords, decryptRecordsWithProgress, isEncryptionReady, getDecryptedParticipantsByAddresses } from "@/lib/encryptionFacade";
+import { decryptRecords, decryptRecordsWithProgress, getDecryptedParticipantsByAddresses } from "@/lib/encryptionFacade";
 import type { DecryptProgress } from "@/lib/encryption/record-encryption";
 import { useOwners } from "@/hooks/use-owners";
 import { useWalletNames } from "@/hooks/use-wallet-names";
@@ -279,11 +279,6 @@ export default function BitcoinFlowVisualizer() {
     const loadFilteredAddresses = async () => {
       setFinderLoading(true);
       try {
-        if (!isEncryptionReady()) {
-          setFilteredAddresses([]);
-          return;
-        }
-
         let records = await db.records
           .where('type')
           .equals('address')
@@ -405,7 +400,7 @@ export default function BitcoinFlowVisualizer() {
         .equals(address)
         .first();
       
-      if (dbRecord && isEncryptionReady()) {
+      if (dbRecord) {
         const decryptedRecords = await decryptRecords([dbRecord]);
         const decrypted = decryptedRecords[0];
         if (decrypted) {
@@ -548,9 +543,9 @@ export default function BitcoinFlowVisualizer() {
                       <User className="h-3 w-3" />
                       Owner
                     </Label>
-                    <Select value={filterOwner} onValueChange={setFilterOwner} disabled={vocabLoading || !isEncryptionReady()}>
+                    <Select value={filterOwner} onValueChange={setFilterOwner} disabled={vocabLoading}>
                       <SelectTrigger data-testid="select-filter-owner">
-                        <SelectValue placeholder={vocabLoading ? "Loading..." : !isEncryptionReady() ? "Locked" : "All owners"} />
+                        <SelectValue placeholder={vocabLoading ? "Loading..." : "All owners"} />
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="__all__">All owners</SelectItem>
@@ -565,9 +560,9 @@ export default function BitcoinFlowVisualizer() {
                       <Wallet className="h-3 w-3" />
                       Wallet
                     </Label>
-                    <Select value={filterWallet} onValueChange={setFilterWallet} disabled={vocabLoading || !isEncryptionReady()}>
+                    <Select value={filterWallet} onValueChange={setFilterWallet} disabled={vocabLoading}>
                       <SelectTrigger data-testid="select-filter-wallet">
-                        <SelectValue placeholder={vocabLoading ? "Loading..." : !isEncryptionReady() ? "Locked" : "All wallets"} />
+                        <SelectValue placeholder={vocabLoading ? "Loading..." : "All wallets"} />
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="__all__">All wallets</SelectItem>
@@ -582,9 +577,9 @@ export default function BitcoinFlowVisualizer() {
                       <Tag className="h-3 w-3" />
                       Tag
                     </Label>
-                    <Select value={filterTag} onValueChange={setFilterTag} disabled={vocabLoading || !isEncryptionReady()}>
+                    <Select value={filterTag} onValueChange={setFilterTag} disabled={vocabLoading}>
                       <SelectTrigger data-testid="select-filter-tag">
-                        <SelectValue placeholder={vocabLoading ? "Loading..." : !isEncryptionReady() ? "Locked" : "All tags"} />
+                        <SelectValue placeholder={vocabLoading ? "Loading..." : "All tags"} />
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="__all__">All tags</SelectItem>
@@ -603,13 +598,7 @@ export default function BitcoinFlowVisualizer() {
                   </div>
                 )}
 
-                {hasActiveFilter && !finderLoading && !isEncryptionReady() && (
-                  <div className="text-sm text-muted-foreground py-4 text-center">
-                    Database is locked. Unlock with your password to search addresses.
-                  </div>
-                )}
-
-                {hasActiveFilter && !finderLoading && filteredAddresses.length === 0 && isEncryptionReady() && (
+                {hasActiveFilter && !finderLoading && filteredAddresses.length === 0 && (
                   <div className="text-sm text-muted-foreground py-4 text-center">
                     No addresses with transaction history found for this filter.
                   </div>

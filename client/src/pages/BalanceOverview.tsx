@@ -17,7 +17,7 @@ import {
   Check,
 } from "lucide-react";
 import { SiBitcoin } from "react-icons/si";
-import { decryptRecordsWithProgress, isEncryptionReady, getDecryptedParticipantsByAddresses } from "@/lib/encryptionFacade";
+import { decryptRecordsWithProgress, getDecryptedParticipantsByAddresses } from "@/lib/encryptionFacade";
 import type { DecryptProgress } from "@/lib/encryption/record-encryption";
 
 type GroupBy = "wallet" | "seed" | "owner" | "tag" | "category";
@@ -88,17 +88,10 @@ export default function BalanceOverview() {
 
     const decrypt = async () => {
       try {
-        if (isEncryptionReady()) {
-          const decrypted = await decryptRecordsWithProgress(rawRecords, setDecryptProgress);
-          setDecryptProgress(null);
-          if (thisRequestId === decryptRequestId.current) {
-            setDecryptedRecords(decrypted);
-          }
-        } else {
-          setDecryptProgress(null);
-          if (thisRequestId === decryptRequestId.current) {
-            setDecryptedRecords(rawRecords);
-          }
+        const decrypted = await decryptRecordsWithProgress(rawRecords, setDecryptProgress);
+        setDecryptProgress(null);
+        if (thisRequestId === decryptRequestId.current) {
+          setDecryptedRecords(decrypted);
         }
       } catch {
         setDecryptProgress(null);

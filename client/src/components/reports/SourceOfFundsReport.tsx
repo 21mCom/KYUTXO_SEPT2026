@@ -1,7 +1,7 @@
 import { useState, useMemo } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { db, type Record as DBRecord, type TransactionParticipant, type BlockchainTransaction, type PriceData } from "@/lib/database";
-import { decryptRecords, isEncryptionReady, getDecryptedParticipantsByAddress, getDecryptedParticipantsByTxid } from "@/lib/encryptionFacade";
+import { decryptRecords, getDecryptedParticipantsByAddress, getDecryptedParticipantsByTxid } from "@/lib/encryptionFacade";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -57,7 +57,7 @@ export function SourceOfFundsReport() {
 
   const records = useLiveQuery(
     async () => {
-      if (!rawRecords || !isEncryptionReady()) return [];
+      if (!rawRecords) return [];
       return decryptRecords(rawRecords);
     },
     [rawRecords],

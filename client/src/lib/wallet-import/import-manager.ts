@@ -17,7 +17,7 @@ import { phoenixAdapter } from './adapters/phoenix';
 import { walletOfSatoshiAdapter } from './adapters/wallet-of-satoshi';
 import { nunchukAdapter } from './adapters/nunchuk';
 import { checkForDuplicates, mergeRecordData, createNewRecordData } from './merge-utils';
-import { createRecord, updateRecord, isEncryptionReady, createRecordOrigin } from '../encryptionFacade';
+import { createRecord, updateRecord, createRecordOrigin } from '../encryptionFacade';
 import { beginBulkOperation, endBulkOperation } from '../database';
 
 export function scanForPrivateKeys(content: string): { hasPrivateKeys: boolean; warnings: string[] } {
@@ -163,11 +163,6 @@ export async function executeImport(
     failedRecords: 0,
     errors: [],
   };
-  
-  if (!isEncryptionReady()) {
-    result.errors.push('Encryption not ready. Please login first.');
-    return result;
-  }
   
   const total = duplicateInfos.length;
   

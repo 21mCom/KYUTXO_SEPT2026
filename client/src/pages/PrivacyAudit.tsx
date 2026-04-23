@@ -22,7 +22,6 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { db, beginBulkOperation, endBulkOperation } from "@/lib/database";
 import type { Record as DbRecord } from "@/lib/database";
-import { isEncryptionReady } from "@/lib/encryption/key-management";
 import { decryptRecordsWithProgress } from "@/lib/encryption/record-encryption";
 import type { DecryptProgress } from "@/lib/encryption/record-encryption";
 import { createTag } from "@/lib/encryption/vocabulary-crud";
@@ -88,14 +87,6 @@ export default function PrivacyAudit() {
   const { toast } = useToast();
 
   const runAudit = useCallback(async () => {
-    if (!isEncryptionReady()) {
-      toast({
-        variant: "destructive",
-        title: "Encryption Not Ready",
-        description: "Please log in before running the audit.",
-      });
-      return;
-    }
 
     try {
       setScanState("decrypting");

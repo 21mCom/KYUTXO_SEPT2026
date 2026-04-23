@@ -1,7 +1,7 @@
 import type { ParsedRecord, DuplicateInfo, VaultMetadata } from './types';
 import type { Record as DBRecord, AddressImportance } from '../database';
 import { db } from '../database';
-import { isEncryptionReady, decryptRecords } from '../encryptionFacade';
+import { decryptRecords } from '../encryptionFacade';
 import { IMPORTANCE_TIERS } from '../provenance';
 import { expandLabelTokens } from '../label-tokens';
 
@@ -32,15 +32,6 @@ export function isVerified(record: DBRecord | null | undefined): boolean {
 export async function checkForDuplicates(
   parsedRecords: ParsedRecord[]
 ): Promise<DuplicateInfo[]> {
-  if (!isEncryptionReady()) {
-    return parsedRecords.map(record => ({
-      parsedRecord: record,
-      existingRecord: null,
-      isNew: true,
-      willMerge: false,
-    }));
-  }
-
   const allRaw = await db.records.toArray();
   const allDecrypted = await decryptRecords(allRaw);
   const lookupMap = new Map<string, DBRecord>();

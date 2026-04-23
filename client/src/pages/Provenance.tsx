@@ -75,7 +75,7 @@ import {
   type ProvenanceFilter
 } from "@/lib/provenance";
 import { db, type Record as DbRecord, type AddressImportance } from "@/lib/database";
-import { decryptRecords, decryptRecordsWithProgress, isEncryptionReady } from "@/lib/encryptionFacade";
+import { decryptRecords, decryptRecordsWithProgress } from "@/lib/encryptionFacade";
 import type { DecryptProgress } from "@/lib/encryption/record-encryption";
 import { formatDistanceToNow, format } from "date-fns";
 import { ContinuityProof } from "@/components/ContinuityProof";
@@ -131,13 +131,8 @@ export default function Provenance() {
     setStats(s);
     
     const rawAddresses = await db.records.where('type').equals('address').toArray();
-    let addresses: DbRecord[];
-    if (isEncryptionReady()) {
-      addresses = await decryptRecordsWithProgress(rawAddresses, setDecryptProgress);
-      setDecryptProgress(null);
-    } else {
-      addresses = rawAddresses;
-    }
+    const addresses = await decryptRecordsWithProgress(rawAddresses, setDecryptProgress);
+    setDecryptProgress(null);
     setAllAddresses(addresses);
     
     const labeled = addresses.filter(r => 

@@ -34,7 +34,6 @@ import { MultiSelectCombobox } from '@/components/ui/multi-select-combobox';
 import { useToast } from '@/hooks/use-toast';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '@/lib/database';
-import { isEncryptionReady } from '@/lib/encryptionFacade';
 import { useSeedNames, createSeedName, SEED_NAME_MAX_LENGTH } from '@/hooks/use-seed-names';
 import { useOwners, createOwner } from '@/hooks/use-owners';
 import { useWalletNames, createWalletName } from '@/hooks/use-wallet-names';

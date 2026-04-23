@@ -43,7 +43,7 @@ import {
   HelpCircle
 } from "lucide-react";
 import { SiBitcoin } from "react-icons/si";
-import { decryptRecords, decryptRecordsWithProgress, isEncryptionReady, getDecryptedOwners, getDecryptedWalletNames, getDecryptedTags, getDecryptedCategories, getDecryptedParticipantsByAddresses } from "@/lib/encryptionFacade";
+import { decryptRecords, decryptRecordsWithProgress, getDecryptedOwners, getDecryptedWalletNames, getDecryptedTags, getDecryptedCategories, getDecryptedParticipantsByAddresses } from "@/lib/encryptionFacade";
 import type { DecryptProgress } from "@/lib/encryption/record-encryption";
 import { cn } from "@/lib/utils";
 import { UTXODetailPanel } from "@/components/UTXODetailPanel";
@@ -284,16 +284,10 @@ export default function UTXOs() {
     
     const decrypt = async () => {
       try {
-        if (isEncryptionReady()) {
-          const decrypted = await decryptRecordsWithProgress(rawRecords, setDecryptProgress);
-          setDecryptProgress(null);
-          if (thisRequestId === decryptRequestId.current) {
-            setDecryptedRecords(decrypted);
-          }
-        } else {
-          if (thisRequestId === decryptRequestId.current) {
-            setDecryptedRecords(rawRecords);
-          }
+        const decrypted = await decryptRecordsWithProgress(rawRecords, setDecryptProgress);
+        setDecryptProgress(null);
+        if (thisRequestId === decryptRequestId.current) {
+          setDecryptedRecords(decrypted);
         }
       } catch {
         if (thisRequestId === decryptRequestId.current) {

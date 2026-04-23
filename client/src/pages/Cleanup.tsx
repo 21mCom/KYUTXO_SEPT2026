@@ -21,7 +21,6 @@ import {
 import { Trash2, Search, RefreshCw, AlertTriangle, CheckCircle2, Network, ArrowUpDown, Link2, Shield, XCircle, ChevronLeft, ChevronRight, Unplug } from "lucide-react";
 import { db, Record, RecordOrigin } from "@/lib/database";
 import { deleteRecord, decryptRecords, getDecryptedParticipantsByTxids } from "@/lib/encryptionFacade";
-import { isEncryptionReady } from "@/lib/encryptionFacade";
 import { yieldToUI } from "@/hooks/use-async-memo";
 
 type Scope = 'addresses' | 'transactions' | 'both';

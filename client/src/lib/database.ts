@@ -83,6 +83,10 @@ export class KYUTXODatabase extends Dexie {
       ];
       for (const tableName of tablesToClean) {
         await tx.table(tableName).toCollection().modify((item: any) => {
+          if (item.isEncrypted && item.encryptedPayload) {
+            console.warn(`[v27 migration] Record in ${tableName} (id=${item.id}) has encrypted data that was not decrypted before upgrade. The encrypted payload will be preserved in _legacyEncryptedPayload for manual recovery. To migrate properly: restore from backup with the previous app version, unlock the vault to decrypt data, then upgrade.`);
+            item._legacyEncryptedPayload = item.encryptedPayload;
+          }
           delete item.isEncrypted;
           delete item.encryptedPayload;
         });

@@ -7,7 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { ArrowLeft, Search as SearchIcon, Database, Hash, ExternalLink, AlertCircle, Trash2, X, RefreshCw, ChevronLeft, ChevronRight } from "lucide-react";
 import { BlockchainToggle } from "@/components/BlockchainToggle";
 import { db, subscribeToDbChanges, type Record as DbRecord, type VaultMetadata, type AddressImportance, type ChainType, type CustomField, type BlockchainTransaction, type TransactionParticipant } from "@/lib/database";
-import { decryptRecords, decryptRecordsWithProgress, isEncryptionReady, deleteRecord, getDecryptedParticipantsByTxids } from "@/lib/encryptionFacade";
+import { decryptRecords, decryptRecordsWithProgress, deleteRecord, getDecryptedParticipantsByTxids } from "@/lib/encryptionFacade";
 import type { DecryptProgress } from "@/lib/encryption/record-encryption";
 import { RecordTable } from "@/components/RecordTable";
 import { RecordDetailPanel } from "@/components/RecordDetailPanel";
@@ -240,14 +240,8 @@ export default function Records() {
           setTotalCount(count);
         }
         
-        let decrypted: DbRecord[];
-        
-        if (isEncryptionReady()) {
-          decrypted = await decryptRecordsWithProgress(rawRecords, setDecryptProgress);
-          setDecryptProgress(null);
-        } else {
-          decrypted = rawRecords;
-        }
+        const decrypted = await decryptRecordsWithProgress(rawRecords, setDecryptProgress);
+        setDecryptProgress(null);
         
         const convertedRecords: ConvertedRecord[] = decrypted.map(r => ({
           id: String(r.id),
@@ -355,12 +349,7 @@ export default function Records() {
               .anyOf(Array.from(participantAddresses))
               .toArray();
             
-            let relatedRecords: DbRecord[];
-            if (isEncryptionReady()) {
-              relatedRecords = await decryptRecords(allRelatedRawRecords);
-            } else {
-              relatedRecords = allRelatedRawRecords;
-            }
+            const relatedRecords = await decryptRecords(allRelatedRawRecords);
             
             // Convert to display format
             const convertedRelated: ConvertedRecord[] = relatedRecords.map(r => ({
@@ -434,12 +423,7 @@ export default function Records() {
         const record = await db.records.get(parseInt(selectedRecordId));
         if (!record) return;
         
-        let decrypted: DbRecord[];
-        if (isEncryptionReady()) {
-          decrypted = await decryptRecords([record]);
-        } else {
-          decrypted = [record];
-        }
+        const decrypted = await decryptRecords([record]);
         
         if (decrypted.length > 0) {
           const r = decrypted[0];

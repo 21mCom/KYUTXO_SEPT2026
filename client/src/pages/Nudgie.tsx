@@ -14,7 +14,7 @@ import {
   ACQUISITION_METHOD_OPTIONS,
   DISPOSITION_TYPE_OPTIONS,
 } from "@/lib/database";
-import { decryptRecords, decryptRecordsWithProgress, updateRecord, createRecord, getDecryptedTags, getDecryptedCategories, isEncryptionReady, getDecryptedParticipantsByAddresses } from "@/lib/encryptionFacade";
+import { decryptRecords, decryptRecordsWithProgress, updateRecord, createRecord, getDecryptedTags, getDecryptedCategories, getDecryptedParticipantsByAddresses } from "@/lib/encryptionFacade";
 import type { DecryptProgress } from "@/lib/encryption/record-encryption";
 import { uploadAttachment } from "@/lib/attachments";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -210,16 +210,7 @@ export default function Nudgie() {
     decrypt();
   }, [rawAddressRecords, rawTransactionRecords]);
 
-  // Decrypt tags and categories vocabulary items
   useEffect(() => {
-    // Only attempt decryption if encryption is ready (vault is unlocked)
-    if (!isEncryptionReady()) {
-      // Fall back to raw data
-      setDecryptedTags(tags);
-      setDecryptedCategories(categories);
-      return;
-    }
-    
     const decryptVocabulary = async () => {
       try {
         const [dTags, dCategories] = await Promise.all([

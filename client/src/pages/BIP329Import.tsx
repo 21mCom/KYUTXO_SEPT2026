@@ -20,7 +20,6 @@ import { Progress } from '@/components/ui/progress';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { useToast } from '@/hooks/use-toast';
-import { isEncryptionReady } from '@/lib/encryptionFacade';
 import {
   analyzeRecords,
   executeImport,
@@ -256,15 +255,6 @@ export default function BIP329Import() {
   };
   
   const handleImport = async () => {
-    if (!isEncryptionReady()) {
-      toast({
-        title: 'Not authenticated',
-        description: 'Please unlock your vault first',
-        variant: 'destructive',
-      });
-      return;
-    }
-    
     setIsImporting(true);
     setImportProgress(0);
     setImportStatus('Starting import...');

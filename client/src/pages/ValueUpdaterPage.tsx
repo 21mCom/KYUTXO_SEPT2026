@@ -8,7 +8,6 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useTags } from "@/hooks/use-tags";
 import { useCategories } from "@/hooks/use-categories";
 import { db, type Record as DbRecord, beginBulkOperation, endBulkOperation } from "@/lib/database";
-import { isEncryptionReady } from "@/lib/encryption/key-management";
 import { decryptRecordsWithProgress } from "@/lib/encryption/record-encryption";
 import type { DecryptProgress } from "@/lib/encryption/record-encryption";
 import { useOwners } from "@/hooks/use-owners";
@@ -238,13 +237,8 @@ export default function ValueUpdaterPage() {
     setEncryptedLoading(true);
     try {
       const rawRecords = await db.records.toArray();
-      let records: DbRecord[];
-      if (isEncryptionReady()) {
-        records = await decryptRecordsWithProgress(rawRecords, setDecryptProgress);
-        setDecryptProgress(null);
-      } else {
-        records = rawRecords;
-      }
+      const records = await decryptRecordsWithProgress(rawRecords, setDecryptProgress);
+      setDecryptProgress(null);
       setDecryptedRecords(records);
       const values = extractValuesFromRecords(records, ENCRYPTED_FIELDS_LIST);
       setEncryptedValues(values);
@@ -354,13 +348,10 @@ export default function ValueUpdaterPage() {
     if (ENCRYPTED_FIELDS.has(field)) {
       if (decryptedRecords) return decryptedRecords;
       const rawRecords = await db.records.toArray();
-      if (isEncryptionReady()) {
-        const decrypted = await decryptRecordsWithProgress(rawRecords, setDecryptProgress);
-        setDecryptProgress(null);
-        setDecryptedRecords(decrypted);
-        return decrypted;
-      }
-      return rawRecords;
+      const decrypted = await decryptRecordsWithProgress(rawRecords, setDecryptProgress);
+      setDecryptProgress(null);
+      setDecryptedRecords(decrypted);
+      return decrypted;
     }
     return db.records.toArray();
   }, [decryptedRecords]);

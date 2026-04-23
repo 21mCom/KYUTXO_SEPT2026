@@ -27,7 +27,7 @@ import { useOwners } from "@/hooks/use-owners";
 import { useWalletNames } from "@/hooks/use-wallet-names";
 import { useSeedNames } from "@/hooks/use-seed-names";
 import { useWalletSoftware } from "@/hooks/use-wallet-software";
-import { syncTagsToMaster, syncCategoriesToMaster, isEncryptionReady } from "@/lib/encryptionFacade";
+import { syncTagsToMaster, syncCategoriesToMaster } from "@/lib/encryptionFacade";
 import { beginBulkOperation, endBulkOperation } from "@/lib/database";
 import { useCustomFields, useSettings, toggleTableColumn, toggleCustomFieldColumn } from "@/hooks/use-settings";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -363,7 +363,6 @@ export default function Dashboard() {
   }, [records]);
 
   const handleCheckDuplicate = async (inputString: string) => {
-    if (!isEncryptionReady()) return undefined;
     return recordLookupMap.get(inputString.trim().toLowerCase());
   };
 
@@ -443,10 +442,7 @@ export default function Dashboard() {
 
       setIsSubmitting(true);
 
-      let existingRecord: Record | undefined;
-      if (isEncryptionReady()) {
-        existingRecord = recordLookupMap.get(data.inputString.trim().toLowerCase());
-      }
+      const existingRecord = recordLookupMap.get(data.inputString.trim().toLowerCase());
 
       // Handle addressImportance - verified if explicitly marked, otherwise manual for new records
       let addressImportance = data.addressImportance;
@@ -561,13 +557,11 @@ export default function Dashboard() {
       // Sync tags and categories to master tables for autosuggest
       // Wrapped in try/catch to ensure record save succeeds even if sync fails
       try {
-        if (isEncryptionReady()) {
-          if (recordData.tags.length > 0) {
-            await syncTagsToMaster(recordData.tags);
-          }
-          if (recordData.categories.length > 0) {
-            await syncCategoriesToMaster(recordData.categories);
-          }
+        if (recordData.tags.length > 0) {
+          await syncTagsToMaster(recordData.tags);
+        }
+        if (recordData.categories.length > 0) {
+          await syncCategoriesToMaster(recordData.categories);
         }
       } catch (syncError) {
         console.error("Failed to sync tags/categories to master tables:", syncError);
@@ -664,15 +658,13 @@ export default function Dashboard() {
       // Sync tags and categories to master tables for autosuggest
       // Wrapped in try/catch to ensure record save succeeds even if sync fails
       try {
-        if (isEncryptionReady()) {
-          const updatedTags = data.tags || [];
-          const updatedCategories = data.categories || [];
-          if (updatedTags.length > 0) {
-            await syncTagsToMaster(updatedTags);
-          }
-          if (updatedCategories.length > 0) {
-            await syncCategoriesToMaster(updatedCategories);
-          }
+        const updatedTags = data.tags || [];
+        const updatedCategories = data.categories || [];
+        if (updatedTags.length > 0) {
+          await syncTagsToMaster(updatedTags);
+        }
+        if (updatedCategories.length > 0) {
+          await syncCategoriesToMaster(updatedCategories);
         }
       } catch (syncError) {
         console.error("Failed to sync tags/categories to master tables:", syncError);

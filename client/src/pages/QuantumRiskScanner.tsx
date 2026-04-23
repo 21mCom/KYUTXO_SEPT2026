@@ -7,7 +7,6 @@ import { Progress } from "@/components/ui/progress";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { db, beginBulkOperation, endBulkOperation } from "@/lib/database";
 import type { Record as DbRecord, Tag } from "@/lib/database";
-import { isEncryptionReady } from "@/lib/encryption/key-management";
 import { decryptRecordsWithProgress } from "@/lib/encryption/record-encryption";
 import type { DecryptProgress } from "@/lib/encryption/record-encryption";
 import { createTag } from "@/lib/encryption/vocabulary-crud";
@@ -90,14 +89,6 @@ export default function QuantumRiskScanner() {
   const { toast } = useToast();
 
   const runScan = useCallback(async () => {
-    if (!isEncryptionReady()) {
-      toast({
-        variant: "destructive",
-        title: "Encryption Not Ready",
-        description: "Please log in before running the scanner.",
-      });
-      return;
-    }
 
     try {
       setScanState("decrypting");

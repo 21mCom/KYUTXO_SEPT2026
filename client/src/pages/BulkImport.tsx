@@ -28,7 +28,7 @@ import {
 } from "@/components/ui/alert";
 import { useToast } from "@/hooks/use-toast";
 import { createRecord } from "@/hooks/use-records";
-import { syncTagsToMaster, syncCategoriesToMaster, isEncryptionReady, createRecordOrigin, saveDerivationTemplate } from "@/lib/encryptionFacade";
+import { syncTagsToMaster, syncCategoriesToMaster, createRecordOrigin, saveDerivationTemplate } from "@/lib/encryptionFacade";
 import { db, beginBulkOperation, endBulkOperation } from "@/lib/database";
 import { updateRecord } from "@/hooks/use-records";
 import { decryptRecordsWithProgress } from "@/lib/encryption/record-encryption";
@@ -367,9 +367,7 @@ export default function BulkImport() {
       };
 
       const rawRecords = await db.records.where('type').equals('address').toArray();
-      const decryptedRecords = isEncryptionReady()
-        ? await decryptRecordsWithProgress(rawRecords)
-        : rawRecords;
+      const decryptedRecords = await decryptRecordsWithProgress(rawRecords);
       const recordLookup = new Map<string, (typeof decryptedRecords)[0]>();
       for (const r of decryptedRecords) {
         if (r.inputString) {
@@ -454,27 +452,25 @@ export default function BulkImport() {
             });
 
             // Create a record origin entry to track xpub metadata
-            if (isEncryptionReady()) {
-              try {
-                await createRecordOrigin({
-                  recordId: existingRecord.id,
-                  originType: 'xpub-derived',
-                  label: generatedLabel,
-                  notes: notes || undefined,
-                  tags: parsedTags,
-                  categories: parsedCategories,
-                  seedName: seedName || undefined,
-                  walletSoftware: walletSoftware || undefined,
-                  privateKeyStatus: privateKeyStatus || undefined,
-                  owner: ownerInput || undefined,
-                  walletName: walletNameInput || undefined,
-                  xpub: isMultisigMode ? undefined : xpub,
-                  derivationPath: derivationPath,
-                  chainType: addr.chainType,
-                });
-              } catch (originError) {
-                console.error("Failed to create record origin:", originError);
-              }
+            try {
+              await createRecordOrigin({
+                recordId: existingRecord.id,
+                originType: 'xpub-derived',
+                label: generatedLabel,
+                notes: notes || undefined,
+                tags: parsedTags,
+                categories: parsedCategories,
+                seedName: seedName || undefined,
+                walletSoftware: walletSoftware || undefined,
+                privateKeyStatus: privateKeyStatus || undefined,
+                owner: ownerInput || undefined,
+                walletName: walletNameInput || undefined,
+                xpub: isMultisigMode ? undefined : xpub,
+                derivationPath: derivationPath,
+                chainType: addr.chainType,
+              });
+            } catch (originError) {
+              console.error("Failed to create record origin:", originError);
             }
 
             mergedCount++;
@@ -516,13 +512,11 @@ export default function BulkImport() {
       // Sync tags and categories to master tables for autosuggest
       // Wrapped in try/catch to ensure import succeeds even if sync fails
       try {
-        if (isEncryptionReady()) {
-          if (parsedTags.length > 0) {
-            await syncTagsToMaster(parsedTags);
-          }
-          if (parsedCategories.length > 0) {
-            await syncCategoriesToMaster(parsedCategories);
-          }
+        if (parsedTags.length > 0) {
+          await syncTagsToMaster(parsedTags);
+        }
+        if (parsedCategories.length > 0) {
+          await syncCategoriesToMaster(parsedCategories);
         }
       } catch (syncError) {
         console.error("Failed to sync tags/categories to master tables:", syncError);
@@ -531,37 +525,32 @@ export default function BulkImport() {
       // Save derivation template if requested
       if (saveTemplate && xpubInfo) {
         try {
-          if (isEncryptionReady()) {
-            // Extract fingerprint from xpub info (first 8 hex characters of parent fingerprint)
-            const fingerprint = xpubInfo.parentFingerprint || 'unknown';
-            
-            // Map BIP standard to script type
-            const scriptTypeMap: Record<string, 'P2WPKH' | 'P2PKH' | 'P2SH-P2WPKH' | 'P2TR'> = {
-              'BIP84': 'P2WPKH',
-              'BIP44': 'P2PKH',
-              'BIP49': 'P2SH-P2WPKH',
-              'BIP86': 'P2TR',
-            };
-            const scriptType = scriptTypeMap[xpubInfo.bipStandard] || 'P2WPKH';
-            
-            // Build derivation path from depth info
-            const derivationPath = xpubInfo.depth === 3 
-              ? `m/${xpubInfo.bipStandard === 'BIP84' ? '84' : xpubInfo.bipStandard === 'BIP49' ? '49' : xpubInfo.bipStandard === 'BIP86' ? '86' : '44'}'/0'/0'`
-              : `m/${xpubInfo.bipStandard === 'BIP84' ? '84' : xpubInfo.bipStandard === 'BIP49' ? '49' : xpubInfo.bipStandard === 'BIP86' ? '86' : '44'}'/0'/0'/0`;
+          const fingerprint = xpubInfo.parentFingerprint || 'unknown';
+          
+          const scriptTypeMap: Record<string, 'P2WPKH' | 'P2PKH' | 'P2SH-P2WPKH' | 'P2TR'> = {
+            'BIP84': 'P2WPKH',
+            'BIP44': 'P2PKH',
+            'BIP49': 'P2SH-P2WPKH',
+            'BIP86': 'P2TR',
+          };
+          const scriptType = scriptTypeMap[xpubInfo.bipStandard] || 'P2WPKH';
+          
+          const derivationPath = xpubInfo.depth === 3 
+            ? `m/${xpubInfo.bipStandard === 'BIP84' ? '84' : xpubInfo.bipStandard === 'BIP49' ? '49' : xpubInfo.bipStandard === 'BIP86' ? '86' : '44'}'/0'/0'`
+            : `m/${xpubInfo.bipStandard === 'BIP84' ? '84' : xpubInfo.bipStandard === 'BIP49' ? '49' : xpubInfo.bipStandard === 'BIP86' ? '86' : '44'}'/0'/0'/0`;
 
-            await saveDerivationTemplate({
-              fingerprint,
-              scriptType,
-              derivationPath,
-              xpub,
-              gapLimit: Math.max(receiveEndIndex, changeEndIndex) + 1,
-              network: xpubInfo.network === 'mainnet' ? 'mainnet' : 'testnet',
-              owner: ownerInput || undefined,
-              walletName: walletNameInput || undefined,
-              seedName: seedName || undefined,
-              notes: notes || undefined,
-            });
-          }
+          await saveDerivationTemplate({
+            fingerprint,
+            scriptType,
+            derivationPath,
+            xpub,
+            gapLimit: Math.max(receiveEndIndex, changeEndIndex) + 1,
+            network: xpubInfo.network === 'mainnet' ? 'mainnet' : 'testnet',
+            owner: ownerInput || undefined,
+            walletName: walletNameInput || undefined,
+            seedName: seedName || undefined,
+            notes: notes || undefined,
+          });
         } catch (templateError) {
           console.error("Failed to save derivation template:", templateError);
           // Don't fail the import, just log the error

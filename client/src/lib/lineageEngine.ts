@@ -9,7 +9,7 @@ import {
   type CustodyStatus,
   type AddressImportance
 } from './database';
-import { decryptRecords, isEncryptionReady, getDecryptedParticipantsByTxid, decryptParticipantsData } from './encryptionFacade';
+import { getDecryptedParticipantsByTxid, decryptParticipantsData } from './encryptionFacade';
 
 // Generate a simple UUID for segment IDs
 function generateSegmentId(): string {
@@ -72,12 +72,6 @@ async function getRecordForAddress(address: string): Promise<Record | undefined>
     const bestIdx = importanceOrder.indexOf(bestRecord.addressImportance || 'pending-review');
     const currIdx = importanceOrder.indexOf(record.addressImportance || 'pending-review');
     if (currIdx < bestIdx) bestRecord = record;
-  }
-  
-  // Decrypt if needed
-  if (false) {
-    const decrypted = await decryptRecords([bestRecord]);
-    return decrypted[0];
   }
   
   return bestRecord;

@@ -9,7 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { useToast } from "@/hooks/use-toast";
-import { decryptRecords, isEncryptionReady, updateRecord } from "@/lib/encryptionFacade";
+import { decryptRecords, updateRecord } from "@/lib/encryptionFacade";
 import { db } from "@/lib/database";
 import type { VaultMetadata, Record as DbRecord } from "@/lib/database";
 
@@ -92,12 +92,7 @@ export default function VaultManagement() {
           .anyOf(VAULT_TIERS.map(tier => ['address', tier]))
           .toArray();
 
-        let records: DbRecord[];
-        if (isEncryptionReady()) {
-          records = await decryptRecords(rawRecords);
-        } else {
-          records = rawRecords;
-        }
+        const records = await decryptRecords(rawRecords);
         const vaultMap = new Map<string, VaultSummary>();
 
         for (const record of records) {
@@ -185,12 +180,7 @@ export default function VaultManagement() {
         .anyOf(vault.addressIds)
         .toArray();
 
-      let records: DbRecord[];
-      if (isEncryptionReady()) {
-        records = await decryptRecords(rawRecords);
-      } else {
-        records = rawRecords;
-      }
+      const records = await decryptRecords(rawRecords);
 
       const vaultRecords = records.filter(r => {
         if (!r.vault?.isVaultXpub || !r.vault.m || !r.vault.n) return false;

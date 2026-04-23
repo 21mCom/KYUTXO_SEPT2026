@@ -3,7 +3,7 @@ import { Copy, Check, FileText, ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { db, type Record as DbRecord } from "@/lib/database";
-import { decryptRecords, isEncryptionReady } from "@/lib/encryptionFacade";
+import { decryptRecords } from "@/lib/encryptionFacade";
 import { useRecordPreview } from "@/contexts/RecordPreviewContext";
 
 interface TxidLinkProps {
@@ -57,12 +57,7 @@ export function TxidLink({
     try {
       const rawRecords = await db.records.where('inputString').equals(txid).toArray();
       if (rawRecords.length > 0) {
-        let records: DbRecord[];
-        if (isEncryptionReady()) {
-          records = await decryptRecords(rawRecords);
-        } else {
-          records = rawRecords;
-        }
+        const records = await decryptRecords(rawRecords);
         
         const record = records[0];
         const foundRecordId = record.id!;

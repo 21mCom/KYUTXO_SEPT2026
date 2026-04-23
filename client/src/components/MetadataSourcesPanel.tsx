@@ -7,7 +7,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/component
 import { Separator } from '@/components/ui/separator';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { type RecordOrigin, type RecordOriginType, type Record as DBRecord } from '@/lib/database';
-import { getDecryptedRecordOrigins, isEncryptionReady } from '@/lib/encryptionFacade';
+import { getDecryptedRecordOrigins } from '@/lib/encryptionFacade';
 import { SINGULAR_FIELDS, type FieldConfig } from '@/lib/conflict-detection';
 
 interface RecordFields {
@@ -288,12 +288,6 @@ export function MetadataSourcesPanel({ recordId, record }: MetadataSourcesPanelP
 
   useEffect(() => {
     async function loadOrigins() {
-      if (!isEncryptionReady()) {
-        setIsLoading(false);
-        setError('Encryption not ready');
-        return;
-      }
-
       setIsLoading(true);
       setError(null);
       try {

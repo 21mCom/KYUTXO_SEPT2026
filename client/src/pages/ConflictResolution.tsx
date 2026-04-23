@@ -26,7 +26,7 @@ import {
 } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import { db, type Record as DBRecord, type RecordOrigin } from "@/lib/database";
-import { decryptRecords, decryptRecordsWithProgress, getDecryptedRecordOrigins, isEncryptionReady, updateRecord } from "@/lib/encryptionFacade";
+import { decryptRecords, decryptRecordsWithProgress, getDecryptedRecordOrigins, updateRecord } from "@/lib/encryptionFacade";
 import type { DecryptProgress } from "@/lib/encryption/record-encryption";
 import { 
   SINGULAR_FIELDS, 
@@ -67,11 +67,6 @@ export default function ConflictResolution() {
   }, []);
 
   async function loadRecordsWithConflicts() {
-    if (!isEncryptionReady()) {
-      setIsLoading(false);
-      return;
-    }
-
     setIsLoading(true);
     try {
       const allOrigins = await db.recordOrigins.toArray();
