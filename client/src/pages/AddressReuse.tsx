@@ -165,16 +165,12 @@ export default function AddressReuse() {
         
         if (thisProcessingId !== processingRef.current) return;
         
-        const records = curatedRecords;
-        
-        if (thisProcessingId !== processingRef.current) return;
-        
-        setProcessedRecords(records);
+        setProcessedRecords(curatedRecords);
         
         // Build address map from records
         const addrToRecord = new Map<string, Record>();
         const addressSet = new Set<string>();
-        records.forEach(record => {
+        curatedRecords.forEach(record => {
           if (record.inputString) {
             addrToRecord.set(record.inputString, record);
             addressSet.add(record.inputString);

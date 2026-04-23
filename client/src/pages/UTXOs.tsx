@@ -269,30 +269,7 @@ export default function UTXOs() {
     loadVocabulary();
   }, []);
 
-  const [processedRecords, setProcessedRecords] = useState<DbRecord[]>([]);
-  const requestId = useRef(0);
-  
-  useEffect(() => {
-    if (!rawRecords) return;
-    
-    requestId.current += 1;
-    const thisRequestId = requestId.current;
-    
-    const processRecords = async () => {
-      try {
-        const records = rawRecords;
-        if (thisRequestId === requestId.current) {
-          setProcessedRecords(records);
-        }
-      } catch {
-        if (thisRequestId === requestId.current) {
-          setProcessedRecords(rawRecords);
-        }
-      }
-    };
-    
-    processRecords();
-  }, [rawRecords]);
+  const processedRecords = rawRecords ?? [];
 
   useEffect(() => {
     if (!processedRecords || processedRecords.length === 0) {

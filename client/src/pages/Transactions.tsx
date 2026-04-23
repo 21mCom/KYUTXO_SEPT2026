@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useRef } from "react";
+import { useState, useMemo } from "react";
 import { useAsyncMemo, yieldToUI, checkAbort } from "@/hooks/use-async-memo";
 import { useLiveQuery } from "dexie-react-hooks";
 import { format } from "date-fns";
@@ -104,35 +104,7 @@ export default function Transactions() {
     [includeBlockchainDiscovered]
   );
   
-  // Process records to get addresses
-  const [processedRecords, setProcessedRecords] = useState<Record[]>([]);
-  // Use a ref to track the latest request ID and prevent stale async updates
-  const requestId = useRef(0);
-  
-  useEffect(() => {
-    if (!rawRecords) return;
-    
-    // Increment request ID for this call - use ref to ensure we can check latest value
-    requestId.current += 1;
-    const thisRequestId = requestId.current;
-    
-    const processRecords = async () => {
-      try {
-        const records = rawRecords;
-        // Only update if this is still the latest request
-        if (thisRequestId === requestId.current) {
-          setProcessedRecords(records);
-        }
-      } catch {
-        // On failure, use raw records as fallback only if this is latest request
-        if (thisRequestId === requestId.current) {
-          setProcessedRecords(prev => prev.length === 0 ? rawRecords : prev);
-        }
-      }
-    };
-    
-    processRecords();
-  }, [rawRecords]);
+  const processedRecords = rawRecords ?? [];
 
   // Build address -> record lookup
   const addressToRecord = useMemo(() => {
