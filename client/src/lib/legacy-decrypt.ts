@@ -133,6 +133,20 @@ export async function decryptLegacyRecords(
   for (let tableIdx = 0; tableIdx < configs.length; tableIdx++) {
     const config = configs[tableIdx];
 
+    let tableTotal: number;
+    try {
+      tableTotal = await config.table
+        .filter((item: any) => !!item._legacyEncryptedPayload)
+        .count();
+    } catch (err) {
+      const msg = `Failed to count ${config.name}: ${err instanceof Error ? err.message : String(err)}`;
+      console.error(`[LegacyDecrypt] ${msg}`);
+      tableErrors.push(msg);
+      continue;
+    }
+
+    if (tableTotal === 0) continue;
+
     let lastProcessedId = 0;
     let tableDecrypted = 0;
     let tableFailed = 0;
@@ -210,7 +224,7 @@ export async function decryptLegacyRecords(
           tableIndex: tableIdx,
           tableCount: configs.length,
           current: tableDecrypted + tableFailed,
-          total: tableDecrypted + tableFailed,
+          total: tableTotal,
           failed: tableFailed,
         });
       }
