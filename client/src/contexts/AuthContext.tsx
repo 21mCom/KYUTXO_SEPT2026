@@ -93,13 +93,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         await setLegacyDecryptComplete(true);
       }
 
-      const hasIssues = result.totalFailed > 0 || result.tableErrors.length > 0;
-      if (hasIssues) {
-        setLegacyMigrationResult({
-          totalDecrypted: result.totalDecrypted,
-          totalFailed: result.totalFailed + result.tableErrors.length,
-        });
-      }
+      setLegacyMigrationResult({
+        totalDecrypted: result.totalDecrypted,
+        totalFailed: result.totalFailed + result.tableErrors.length,
+      });
     } catch (error) {
       console.error('[LegacyDecrypt] Migration failed:', error);
       setLegacyMigrationResult({ totalDecrypted: 0, totalFailed: 0, unexpectedError: true });

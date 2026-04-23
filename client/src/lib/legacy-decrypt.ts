@@ -1,5 +1,21 @@
 import { decrypt } from './crypto';
 import { db } from './database';
+import type { Table } from 'dexie';
+import type {
+  Record,
+  Attachment,
+  Tag,
+  Category,
+  Owner,
+  WalletName,
+  SeedName,
+  WalletSoftware,
+  RecordOrigin,
+  TransactionParticipant,
+  DerivationTemplate,
+  Evidence,
+  EvidenceAttachment,
+} from './db-types';
 
 const BATCH_SIZE = 500;
 
@@ -18,93 +34,88 @@ export interface LegacyDecryptResult {
   tableErrors: string[];
 }
 
-interface TableConfig {
+type LegacyRecord<T> = T & {
+  _legacyEncryptedPayload?: string;
+  isEncrypted?: boolean;
+  encryptedPayload?: string;
+};
+
+interface TableConfig<T> {
   name: string;
-  table: any;
-  sensitiveFields: string[];
+  table: Table<T>;
+  sensitiveFields: (keyof T)[];
 }
 
-function getTableConfigs(): TableConfig[] {
+function getTableConfigs(): TableConfig<LegacyRecord<
+  Record | Attachment | Tag | Category | Owner | WalletName |
+  SeedName | WalletSoftware | RecordOrigin | TransactionParticipant |
+  DerivationTemplate | Evidence | EvidenceAttachment
+>>[] {
   return [
     {
       name: 'Records',
-      table: db.records,
-      sensitiveFields: ['inputString', 'label', 'notes', 'seedName', 'walletSoftware', 'owner', 'walletName', 'source', 'customFields', 'costBasisUsd'],
+      table: db.records as Table<LegacyRecord<Record>>,
+      sensitiveFields: ['inputString', 'label', 'notes', 'seedName', 'walletSoftware', 'owner', 'walletName', 'source', 'customFields', 'costBasisUsd'] as (keyof Record)[],
     },
     {
       name: 'Attachments',
-      table: db.attachments,
-      sensitiveFields: ['filename', 'objectStoragePath'],
+      table: db.attachments as Table<LegacyRecord<Attachment>>,
+      sensitiveFields: ['filename', 'objectStoragePath'] as (keyof Attachment)[],
     },
     {
       name: 'Tags',
-      table: db.tags,
-      sensitiveFields: ['name'],
+      table: db.tags as Table<LegacyRecord<Tag>>,
+      sensitiveFields: ['name'] as (keyof Tag)[],
     },
     {
       name: 'Categories',
-      table: db.categories,
-      sensitiveFields: ['name'],
+      table: db.categories as Table<LegacyRecord<Category>>,
+      sensitiveFields: ['name'] as (keyof Category)[],
     },
     {
       name: 'Owners',
-      table: db.owners,
-      sensitiveFields: ['name'],
+      table: db.owners as Table<LegacyRecord<Owner>>,
+      sensitiveFields: ['name'] as (keyof Owner)[],
     },
     {
       name: 'Wallet Names',
-      table: db.walletNames,
-      sensitiveFields: ['name'],
+      table: db.walletNames as Table<LegacyRecord<WalletName>>,
+      sensitiveFields: ['name'] as (keyof WalletName)[],
     },
     {
       name: 'Seed Names',
-      table: db.seedNames,
-      sensitiveFields: ['name'],
+      table: db.seedNames as Table<LegacyRecord<SeedName>>,
+      sensitiveFields: ['name'] as (keyof SeedName)[],
     },
     {
       name: 'Wallet Software',
-      table: db.walletSoftware,
-      sensitiveFields: ['name'],
+      table: db.walletSoftware as Table<LegacyRecord<WalletSoftware>>,
+      sensitiveFields: ['name'] as (keyof WalletSoftware)[],
     },
     {
       name: 'Record Origins',
-      table: db.recordOrigins,
-      sensitiveFields: ['label', 'notes', 'seedName', 'walletSoftware', 'owner', 'walletName', 'source', 'xpub', 'derivationPath'],
+      table: db.recordOrigins as Table<LegacyRecord<RecordOrigin>>,
+      sensitiveFields: ['label', 'notes', 'seedName', 'walletSoftware', 'owner', 'walletName', 'source', 'xpub', 'derivationPath'] as (keyof RecordOrigin)[],
     },
     {
       name: 'Transaction Participants',
-      table: db.transactionParticipants,
-      sensitiveFields: ['address', 'amount', 'prevTxid', 'prevVout', 'scriptType'],
+      table: db.transactionParticipants as Table<LegacyRecord<TransactionParticipant>>,
+      sensitiveFields: ['address', 'amount', 'prevTxid', 'prevVout', 'scriptType'] as (keyof TransactionParticipant)[],
     },
     {
       name: 'Derivation Templates',
-      table: db.derivationTemplates,
-      sensitiveFields: ['xpub', 'notes', 'owner', 'walletName', 'seedName'],
-    },
-    {
-      name: 'UTXO Lineage',
-      table: db.utxoLineage,
-      sensitiveFields: [],
-    },
-    {
-      name: 'Custody Segments',
-      table: db.custodySegments,
-      sensitiveFields: [],
-    },
-    {
-      name: 'Lineage Snapshots',
-      table: db.lineageSnapshots,
-      sensitiveFields: [],
+      table: db.derivationTemplates as Table<LegacyRecord<DerivationTemplate>>,
+      sensitiveFields: ['xpub', 'notes', 'owner', 'walletName', 'seedName'] as (keyof DerivationTemplate)[],
     },
     {
       name: 'Evidence',
-      table: db.evidence,
-      sensitiveFields: ['title', 'notes', 'partiesInvolved', 'source'],
+      table: db.evidence as Table<LegacyRecord<Evidence>>,
+      sensitiveFields: ['title', 'notes', 'partiesInvolved', 'source'] as (keyof Evidence)[],
     },
     {
       name: 'Evidence Attachments',
-      table: db.evidenceAttachments,
-      sensitiveFields: ['filename', 'objectStoragePath'],
+      table: db.evidenceAttachments as Table<LegacyRecord<EvidenceAttachment>>,
+      sensitiveFields: ['filename', 'objectStoragePath'] as (keyof EvidenceAttachment)[],
     },
   ];
 }
@@ -113,7 +124,7 @@ export async function hasLegacyEncryptedRecords(): Promise<boolean> {
   const configs = getTableConfigs();
   for (const config of configs) {
     const firstLegacy = await config.table
-      .filter((item: any) => !!item._legacyEncryptedPayload)
+      .filter((item: LegacyRecord<{ id?: number }>) => !!item._legacyEncryptedPayload)
       .limit(1)
       .toArray();
     if (firstLegacy.length > 0) return true;
@@ -136,7 +147,7 @@ export async function decryptLegacyRecords(
     let tableTotal: number;
     try {
       tableTotal = await config.table
-        .filter((item: any) => !!item._legacyEncryptedPayload)
+        .filter((item: LegacyRecord<{ id?: number }>) => !!item._legacyEncryptedPayload)
         .count();
     } catch (err) {
       const msg = `Failed to count ${config.name}: ${err instanceof Error ? err.message : String(err)}`;
@@ -153,7 +164,7 @@ export async function decryptLegacyRecords(
     let hasMore = true;
 
     while (hasMore) {
-      let chunk: any[];
+      let chunk: LegacyRecord<{ id?: number }>[];
       try {
         chunk = await config.table
           .where('id')
@@ -172,28 +183,25 @@ export async function decryptLegacyRecords(
         break;
       }
 
-      lastProcessedId = chunk[chunk.length - 1].id;
+      lastProcessedId = (chunk[chunk.length - 1] as { id: number }).id;
 
-      const legacyItems = chunk.filter((item: any) => !!item._legacyEncryptedPayload);
+      const legacyItems = chunk.filter(item => !!item._legacyEncryptedPayload);
 
       if (legacyItems.length > 0) {
-        const updatedBatch: any[] = [];
+        const updatedBatch: LegacyRecord<{ id?: number }>[] = [];
 
         for (const item of legacyItems) {
           try {
-            const decryptedJson = await decrypt(item._legacyEncryptedPayload, key);
-            const sensitiveData = JSON.parse(decryptedJson);
+            const decryptedJson = await decrypt(item._legacyEncryptedPayload!, key);
+            const sensitiveData = JSON.parse(decryptedJson) as globalThis.Record<string, unknown>;
 
             const restored = { ...item };
 
             for (const field of config.sensitiveFields) {
-              if (field in sensitiveData) {
-                restored[field] = sensitiveData[field];
+              const fieldStr = field as string;
+              if (fieldStr in sensitiveData) {
+                (restored as globalThis.Record<string, unknown>)[fieldStr] = sensitiveData[fieldStr];
               }
-            }
-
-            if (config.sensitiveFields.length === 0) {
-              Object.assign(restored, sensitiveData);
             }
 
             delete restored._legacyEncryptedPayload;
@@ -207,7 +215,7 @@ export async function decryptLegacyRecords(
 
         if (updatedBatch.length > 0) {
           try {
-            await config.table.bulkPut(updatedBatch);
+            await config.table.bulkPut(updatedBatch as Parameters<typeof config.table.bulkPut>[0]);
             tableDecrypted += updatedBatch.length;
           } catch (err) {
             const msg = `Failed to write ${config.name}: ${err instanceof Error ? err.message : String(err)}`;
