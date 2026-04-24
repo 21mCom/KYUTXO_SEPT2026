@@ -15,9 +15,11 @@ import {
   setAttachmentPathsMigrated,
   isLegacyDecryptComplete,
   setLegacyDecryptComplete,
+  getLegacyDecryptCompletedTables,
+  addLegacyDecryptCompletedTable,
 } from '@/lib/vault';
 import { migrateAttachmentPaths } from '@/lib/attachments';
-import { hasLegacyEncryptedRecords, decryptLegacyRecords, type LegacyDecryptProgress } from '@/lib/legacy-decrypt';
+import { hasLegacyEncryptedRecords, decryptLegacyRecords, getTotalTableCount, type LegacyDecryptProgress } from '@/lib/legacy-decrypt';
 
 interface AuthContextType {
   isInitialized: boolean | null;
@@ -74,27 +76,48 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const alreadyDone = await isLegacyDecryptComplete();
       if (alreadyDone) return;
 
+      const completedTables = await getLegacyDecryptCompletedTables();
+
       const hasLegacy = await hasLegacyEncryptedRecords();
       if (!hasLegacy) {
         await setLegacyDecryptComplete(true);
         return;
       }
 
+      const totalTables = getTotalTableCount();
       setLegacyMigrationProgress({
         tableName: 'Preparing',
         tableIndex: 0,
-        tableCount: 13,
+        tableCount: totalTables - completedTables.length,
         current: 0,
         total: 0,
         failed: 0,
       });
 
+      if (completedTables.length > 0) {
+        console.log(`[LegacyDecrypt] Resuming — ${completedTables.length} tables already completed: ${completedTables.join(', ')}`);
+      }
+
       const salt = base64ToBuffer(saltBase64);
       const encryptionKey = await deriveKey(password, salt);
 
-      const result = await decryptLegacyRecords(encryptionKey, (progress) => {
-        setLegacyMigrationProgress(progress);
-      });
+      const result = await decryptLegacyRecords(
+        encryptionKey,
+        (progress) => {
+          setLegacyMigrationProgress(progress);
+        },
+        {
+          alreadyCompletedTables: completedTables,
+          onTableComplete: async (tableName: string) => {
+            try {
+              await addLegacyDecryptCompletedTable(tableName);
+              console.log(`[LegacyDecrypt] Checkpoint saved: ${tableName}`);
+            } catch (err) {
+              console.error(`[LegacyDecrypt] Failed to save checkpoint for ${tableName}:`, err);
+            }
+          },
+        },
+      );
 
       console.log(`[LegacyDecrypt] Complete: ${result.totalDecrypted} decrypted, ${result.totalFailed} failed, ${result.tableErrors.length} table errors`);
 

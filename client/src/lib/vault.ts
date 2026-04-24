@@ -8,6 +8,7 @@ export interface VaultSettings {
   migrationComplete?: boolean;
   attachmentPathsMigrated?: boolean;
   legacyDecryptComplete?: boolean;
+  legacyDecryptCompletedTables?: string[];
 }
 
 class VaultDatabase extends Dexie {
@@ -79,4 +80,23 @@ export async function setLegacyDecryptComplete(complete: boolean): Promise<void>
   if (settings) {
     await vaultDb.vault.update('main', { legacyDecryptComplete: complete });
   }
+}
+
+export async function getLegacyDecryptCompletedTables(): Promise<string[]> {
+  const settings = await vaultDb.vault.get('main');
+  return settings?.legacyDecryptCompletedTables ?? [];
+}
+
+export async function addLegacyDecryptCompletedTable(tableName: string): Promise<void> {
+  await vaultDb.transaction('rw', vaultDb.vault, async () => {
+    const settings = await vaultDb.vault.get('main');
+    if (settings) {
+      const current = settings.legacyDecryptCompletedTables ?? [];
+      if (!current.includes(tableName)) {
+        await vaultDb.vault.update('main', {
+          legacyDecryptCompletedTables: [...current, tableName],
+        });
+      }
+    }
+  });
 }

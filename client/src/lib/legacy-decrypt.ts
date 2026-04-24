@@ -32,6 +32,7 @@ export interface LegacyDecryptResult {
   totalDecrypted: number;
   totalFailed: number;
   tableErrors: string[];
+  completedTableNames: string[];
 }
 
 type LegacyRecord<T> = T & {
@@ -120,6 +121,10 @@ function getTableConfigs(): TableConfig<LegacyRecord<
   ];
 }
 
+export function getTotalTableCount(): number {
+  return getTableConfigs().length;
+}
+
 export async function hasLegacyEncryptedRecords(): Promise<boolean> {
   const configs = getTableConfigs();
   for (const config of configs) {
@@ -135,14 +140,23 @@ export async function hasLegacyEncryptedRecords(): Promise<boolean> {
 export async function decryptLegacyRecords(
   key: CryptoKey,
   onProgress?: (progress: LegacyDecryptProgress) => void,
+  options?: {
+    alreadyCompletedTables?: string[];
+    onTableComplete?: (tableName: string) => Promise<void> | void;
+  },
 ): Promise<LegacyDecryptResult> {
-  const configs = getTableConfigs();
+  const allConfigs = getTableConfigs();
+  const alreadyCompleted = new Set(options?.alreadyCompletedTables ?? []);
+  const remainingConfigs = allConfigs.filter(c => !alreadyCompleted.has(c.name));
+  const remainingCount = remainingConfigs.length;
+
   let totalDecrypted = 0;
   let totalFailed = 0;
   const tableErrors: string[] = [];
+  const completedTableNames: string[] = [];
 
-  for (let tableIdx = 0; tableIdx < configs.length; tableIdx++) {
-    const config = configs[tableIdx];
+  for (let i = 0; i < remainingConfigs.length; i++) {
+    const config = remainingConfigs[i];
 
     let tableTotal: number;
     try {
@@ -156,7 +170,11 @@ export async function decryptLegacyRecords(
       continue;
     }
 
-    if (tableTotal === 0) continue;
+    if (tableTotal === 0) {
+      completedTableNames.push(config.name);
+      try { await options?.onTableComplete?.(config.name); } catch {}
+      continue;
+    }
 
     let lastProcessedId = 0;
     let tableDecrypted = 0;
@@ -229,8 +247,8 @@ export async function decryptLegacyRecords(
       if (onProgress) {
         onProgress({
           tableName: config.name,
-          tableIndex: tableIdx,
-          tableCount: configs.length,
+          tableIndex: i,
+          tableCount: remainingCount,
           current: tableDecrypted + tableFailed,
           total: tableTotal,
           failed: tableFailed,
@@ -244,9 +262,14 @@ export async function decryptLegacyRecords(
       await new Promise(r => setTimeout(r, 0));
     }
 
+    if (tableFailed === 0) {
+      completedTableNames.push(config.name);
+      try { await options?.onTableComplete?.(config.name); } catch {}
+    }
+
     totalDecrypted += tableDecrypted;
     totalFailed += tableFailed;
   }
 
-  return { totalDecrypted, totalFailed, tableErrors };
+  return { totalDecrypted, totalFailed, tableErrors, completedTableNames };
 }
