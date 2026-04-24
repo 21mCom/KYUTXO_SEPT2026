@@ -125,9 +125,11 @@ export function getTotalTableCount(): number {
   return getTableConfigs().length;
 }
 
-export async function hasLegacyEncryptedRecords(): Promise<boolean> {
+export async function hasLegacyEncryptedRecords(alreadyCompletedTables?: string[]): Promise<boolean> {
   const configs = getTableConfigs();
+  const completed = new Set(alreadyCompletedTables ?? []);
   for (const config of configs) {
+    if (completed.has(config.name)) continue;
     const firstLegacy = await config.table
       .filter((item: LegacyRecord<{ id?: number }>) => !!item._legacyEncryptedPayload)
       .limit(1)
@@ -146,9 +148,10 @@ export async function decryptLegacyRecords(
   },
 ): Promise<LegacyDecryptResult> {
   const allConfigs = getTableConfigs();
+  const totalTableCount = allConfigs.length;
   const alreadyCompleted = new Set(options?.alreadyCompletedTables ?? []);
   const remainingConfigs = allConfigs.filter(c => !alreadyCompleted.has(c.name));
-  const remainingCount = remainingConfigs.length;
+  const skippedCount = alreadyCompleted.size;
 
   let totalDecrypted = 0;
   let totalFailed = 0;
@@ -172,7 +175,7 @@ export async function decryptLegacyRecords(
 
     if (tableTotal === 0) {
       completedTableNames.push(config.name);
-      try { await options?.onTableComplete?.(config.name); } catch {}
+      await options?.onTableComplete?.(config.name);
       continue;
     }
 
@@ -247,8 +250,8 @@ export async function decryptLegacyRecords(
       if (onProgress) {
         onProgress({
           tableName: config.name,
-          tableIndex: i,
-          tableCount: remainingCount,
+          tableIndex: skippedCount + i,
+          tableCount: totalTableCount,
           current: tableDecrypted + tableFailed,
           total: tableTotal,
           failed: tableFailed,
@@ -264,7 +267,7 @@ export async function decryptLegacyRecords(
 
     if (tableFailed === 0) {
       completedTableNames.push(config.name);
-      try { await options?.onTableComplete?.(config.name); } catch {}
+      await options?.onTableComplete?.(config.name);
     }
 
     totalDecrypted += tableDecrypted;

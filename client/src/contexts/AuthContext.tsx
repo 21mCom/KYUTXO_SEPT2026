@@ -78,7 +78,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       const completedTables = await getLegacyDecryptCompletedTables();
 
-      const hasLegacy = await hasLegacyEncryptedRecords();
+      const hasLegacy = await hasLegacyEncryptedRecords(completedTables);
       if (!hasLegacy) {
         await setLegacyDecryptComplete(true);
         return;
@@ -87,8 +87,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const totalTables = getTotalTableCount();
       setLegacyMigrationProgress({
         tableName: 'Preparing',
-        tableIndex: 0,
-        tableCount: totalTables - completedTables.length,
+        tableIndex: completedTables.length,
+        tableCount: totalTables,
         current: 0,
         total: 0,
         failed: 0,

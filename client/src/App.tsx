@@ -7,7 +7,6 @@ import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/AppSidebar";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { AuthProvider, useAuth } from "@/contexts/AuthContext";
-import { getTotalTableCount } from "@/lib/legacy-decrypt";
 import { RecordPreviewProvider } from "@/contexts/RecordPreviewContext";
 import { LoginScreen } from "@/components/LoginScreen";
 import { Button } from "@/components/ui/button";
@@ -213,9 +212,9 @@ function LegacyMigrationOverlay() {
       <div className="text-center max-w-md space-y-4 p-6">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto" />
         <div className="text-2xl font-semibold text-foreground">Migrating Encrypted Data</div>
-        {progress.tableCount < getTotalTableCount() && (
+        {progress.tableIndex > 0 && progress.tableName === 'Preparing' && (
           <p className="text-sm text-muted-foreground">
-            Resuming from previous session ({getTotalTableCount() - progress.tableCount} tables already done)
+            Resuming from previous session ({progress.tableIndex} of {progress.tableCount} tables already done)
           </p>
         )}
         <p className="text-muted-foreground">
