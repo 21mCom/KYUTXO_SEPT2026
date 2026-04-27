@@ -9,6 +9,7 @@ export interface VaultSettings {
   attachmentPathsMigrated?: boolean;
   legacyDecryptComplete?: boolean;
   legacyDecryptCompletedTables?: string[];
+  legacyFileDecryptComplete?: boolean;
 }
 
 class VaultDatabase extends Dexie {
@@ -99,4 +100,16 @@ export async function addLegacyDecryptCompletedTable(tableName: string): Promise
       }
     }
   });
+}
+
+export async function isLegacyFileDecryptComplete(): Promise<boolean> {
+  const settings = await vaultDb.vault.get('main');
+  return settings?.legacyFileDecryptComplete ?? false;
+}
+
+export async function setLegacyFileDecryptComplete(complete: boolean): Promise<void> {
+  const settings = await vaultDb.vault.get('main');
+  if (settings) {
+    await vaultDb.vault.update('main', { legacyFileDecryptComplete: complete });
+  }
 }

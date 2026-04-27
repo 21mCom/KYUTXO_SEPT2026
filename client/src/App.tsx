@@ -152,15 +152,51 @@ function AuthenticatedApp() {
 }
 
 function LegacyMigrationOverlay() {
-  const { legacyMigrationProgress, legacyMigrationResult } = useAuth();
+  const { legacyMigrationProgress, legacyMigrationResult, fileDecryptProgress } = useAuth();
   const [dismissedMigrationResult, setDismissedMigrationResult] = useState(false);
 
   if (dismissedMigrationResult) {
     return null;
   }
 
-  if (!legacyMigrationProgress && !legacyMigrationResult) {
+  if (!legacyMigrationProgress && !legacyMigrationResult && !fileDecryptProgress) {
     return null;
+  }
+
+  if (fileDecryptProgress) {
+    const filePct = fileDecryptProgress.total > 0
+      ? Math.round((fileDecryptProgress.current / fileDecryptProgress.total) * 100)
+      : 0;
+
+    return (
+      <div className="fixed inset-0 z-[9999] bg-background/95 flex items-center justify-center" data-testid="file-decrypt-overlay">
+        <div className="text-center max-w-md space-y-4 p-6">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto" />
+          <div className="text-2xl font-semibold text-foreground">Decrypting Attachment Files</div>
+          <p className="text-muted-foreground">
+            Restoring encrypted files to their original format.
+          </p>
+          <div className="w-full bg-muted rounded-full h-2">
+            <div
+              className="bg-primary h-2 rounded-full transition-all duration-200"
+              style={{ width: `${filePct}%` }}
+            />
+          </div>
+          <p className="text-sm text-muted-foreground">
+            {fileDecryptProgress.current} / {fileDecryptProgress.total} files ({filePct}%)
+          </p>
+          {fileDecryptProgress.decrypted > 0 && (
+            <p className="text-xs text-muted-foreground">
+              {fileDecryptProgress.decrypted} decrypted, {fileDecryptProgress.skipped} already plain
+              {fileDecryptProgress.failed > 0 && `, ${fileDecryptProgress.failed} failed`}
+            </p>
+          )}
+          <p className="text-xs text-muted-foreground">
+            Please do not close the application.
+          </p>
+        </div>
+      </div>
+    );
   }
 
   if (legacyMigrationResult) {

@@ -70,6 +70,17 @@ export async function decrypt(encryptedData: string, key: CryptoKey): Promise<st
   return decoder.decode(decryptedBuffer);
 }
 
+export async function decryptBinary(encryptedData: ArrayBuffer, key: CryptoKey): Promise<ArrayBuffer> {
+  const combined = new Uint8Array(encryptedData);
+  const iv = combined.slice(0, IV_LENGTH);
+  const encrypted = combined.slice(IV_LENGTH);
+  return crypto.subtle.decrypt(
+    { name: 'AES-GCM', iv },
+    key,
+    encrypted
+  );
+}
+
 export function bufferToBase64(buffer: Uint8Array): string {
   let binary = '';
   for (let i = 0; i < buffer.length; i++) {

@@ -17,9 +17,12 @@ import {
   setLegacyDecryptComplete,
   getLegacyDecryptCompletedTables,
   addLegacyDecryptCompletedTable,
+  isLegacyFileDecryptComplete,
+  setLegacyFileDecryptComplete,
 } from '@/lib/vault';
 import { migrateAttachmentPaths } from '@/lib/attachments';
 import { hasLegacyEncryptedRecords, decryptLegacyRecords, getTotalTableCount, type LegacyDecryptProgress } from '@/lib/legacy-decrypt';
+import { decryptLegacyAttachmentFiles, type FileDecryptProgress } from '@/lib/legacy-decrypt-files';
 
 interface AuthContextType {
   isInitialized: boolean | null;
@@ -30,6 +33,7 @@ interface AuthContextType {
   isLoading: boolean;
   legacyMigrationProgress: LegacyDecryptProgress | null;
   legacyMigrationResult: { totalDecrypted: number; totalFailed: number; unexpectedError?: boolean } | null;
+  fileDecryptProgress: FileDecryptProgress | null;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -40,6 +44,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [isLoading, setIsLoading] = useState(true);
   const [legacyMigrationProgress, setLegacyMigrationProgress] = useState<LegacyDecryptProgress | null>(null);
   const [legacyMigrationResult, setLegacyMigrationResult] = useState<{ totalDecrypted: number; totalFailed: number; unexpectedError?: boolean } | null>(null);
+  const [fileDecryptProgress, setFileDecryptProgress] = useState<FileDecryptProgress | null>(null);
 
   useEffect(() => {
     const checkVault = async () => {
@@ -71,16 +76,49 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  const runLegacyFileDecryptMigration = useCallback(async (encryptionKey: CryptoKey) => {
+    try {
+      const fileDone = await isLegacyFileDecryptComplete();
+      if (fileDone) return;
+
+      setFileDecryptProgress({ current: 0, total: 0, decrypted: 0, failed: 0, skipped: 0 });
+
+      const result = await decryptLegacyAttachmentFiles(
+        encryptionKey,
+        (progress) => {
+          setFileDecryptProgress(progress);
+        },
+      );
+
+      console.log(`[FileDecrypt] Complete: ${result.totalDecrypted} decrypted, ${result.totalFailed} failed, ${result.totalSkipped} skipped`);
+
+      if (result.totalFailed === 0) {
+        await setLegacyFileDecryptComplete(true);
+      }
+    } catch (error) {
+      console.error('[FileDecrypt] Migration failed:', error);
+    } finally {
+      setFileDecryptProgress(null);
+    }
+  }, []);
+
   const runLegacyDecryptMigration = useCallback(async (password: string, saltBase64: string) => {
+    const salt = base64ToBuffer(saltBase64);
+    const encryptionKey = await deriveKey(password, salt);
+
     try {
       const alreadyDone = await isLegacyDecryptComplete();
-      if (alreadyDone) return;
+      if (alreadyDone) {
+        await runLegacyFileDecryptMigration(encryptionKey);
+        return;
+      }
 
       const completedTables = await getLegacyDecryptCompletedTables();
 
       const hasLegacy = await hasLegacyEncryptedRecords(completedTables);
       if (!hasLegacy) {
         await setLegacyDecryptComplete(true);
+        await runLegacyFileDecryptMigration(encryptionKey);
         return;
       }
 
@@ -97,9 +135,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (completedTables.length > 0) {
         console.log(`[LegacyDecrypt] Resuming — ${completedTables.length} tables already completed: ${completedTables.join(', ')}`);
       }
-
-      const salt = base64ToBuffer(saltBase64);
-      const encryptionKey = await deriveKey(password, salt);
 
       const result = await decryptLegacyRecords(
         encryptionKey,
@@ -121,7 +156,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       console.log(`[LegacyDecrypt] Complete: ${result.totalDecrypted} decrypted, ${result.totalFailed} failed, ${result.tableErrors.length} table errors`);
 
-      if (result.totalFailed === 0 && result.tableErrors.length === 0) {
+      const metadataFullyComplete = result.totalFailed === 0 && result.tableErrors.length === 0;
+      if (metadataFullyComplete) {
         await setLegacyDecryptComplete(true);
       }
 
@@ -129,13 +165,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         totalDecrypted: result.totalDecrypted,
         totalFailed: result.totalFailed + result.tableErrors.length,
       });
+
+      if (metadataFullyComplete) {
+        await runLegacyFileDecryptMigration(encryptionKey);
+      } else {
+        console.warn('[LegacyDecrypt] Skipping file decryption — metadata migration incomplete, will retry next login');
+      }
     } catch (error) {
       console.error('[LegacyDecrypt] Migration failed:', error);
       setLegacyMigrationResult({ totalDecrypted: 0, totalFailed: 0, unexpectedError: true });
     } finally {
       setLegacyMigrationProgress(null);
     }
-  }, []);
+  }, [runLegacyFileDecryptMigration]);
 
   const setupPassword = useCallback(async (password: string) => {
     setIsLoading(true);
@@ -182,6 +224,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setIsAuthenticated(false);
     setLegacyMigrationProgress(null);
     setLegacyMigrationResult(null);
+    setFileDecryptProgress(null);
   }, []);
 
   return (
@@ -195,6 +238,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         isLoading,
         legacyMigrationProgress,
         legacyMigrationResult,
+        fileDecryptProgress,
       }}
     >
       {children}
