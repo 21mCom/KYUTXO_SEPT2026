@@ -71,13 +71,6 @@ function formatSats(sats: number | undefined): string {
   return `${sats} sats`;
 }
 
-interface TransactionWithParticipants extends BlockchainTransaction {
-  inputs: TransactionParticipant[];
-  outputs: TransactionParticipant[];
-  totalInputValue: number;
-  totalOutputValue: number;
-}
-
 // User-curated importance tiers (exclude blockchain-discovered and pending-review by default)
 const USER_CURATED_TIERS = ['verified', 'manual', 'wallet-import', 'xpub-derived'];
 
@@ -89,7 +82,7 @@ function TransactionCard({
   isExpanded,
   onToggleExpand,
   addressToRecord,
-  participantsLoaded,
+  participantsLoaded = true,
 }: {
   tx: BlockchainTransaction;
   inputs: TransactionParticipant[];
@@ -98,7 +91,7 @@ function TransactionCard({
   isExpanded: boolean;
   onToggleExpand: () => void;
   addressToRecord: Map<string, Record>;
-  participantsLoaded: boolean;
+  participantsLoaded?: boolean;
 }) {
   const txDate = new Date(tx.blockTime * 1000);
 
@@ -925,21 +918,6 @@ export default function Transactions() {
     return map;
   }, [searchAddressMap, pageRecords]);
 
-  const paginatedTransactions = useMemo(() => {
-    return paginatedTransactionSlice.map(tx => {
-      const txParts = pageParticipantMap.get(tx.txid) || [];
-      const inputs = txParts.filter(p => p.role === 'input');
-      const outputs = txParts.filter(p => p.role === 'output');
-      return {
-        ...tx,
-        inputs,
-        outputs,
-        totalInputValue: inputs.reduce((sum, p) => sum + p.amount, 0),
-        totalOutputValue: outputs.reduce((sum, p) => sum + p.amount, 0),
-      } as TransactionWithParticipants;
-    });
-  }, [paginatedTransactionSlice, pageParticipantMap]);
-
   const toggleExpanded = (txid: string) => {
     setExpandedTxs(prev => {
       const newSet = new Set(prev);
@@ -966,18 +944,17 @@ export default function Transactions() {
       };
     }
 
-    const pageFees = paginatedTransactions.reduce((sum, tx) => sum + tx.fee, 0);
-    const pageVolume = paginatedTransactions.reduce((sum, tx) => sum + tx.totalOutputValue, 0);
-    const allNavigableFees = filteredTransactions.reduce((sum, tx) => sum + tx.fee, 0);
-
+    const pageFees = paginatedTransactionSlice.reduce((sum, tx) => sum + tx.fee, 0);
+    let pageVolume = 0;
     const linkedAddresses = new Set<string>();
-    paginatedTransactions.forEach(tx => {
-      [...tx.inputs, ...tx.outputs].forEach(p => {
-        if (addressToRecord.has(p.address)) {
-          linkedAddresses.add(p.address);
-        }
-      });
-    });
+    for (const tx of paginatedTransactionSlice) {
+      const parts = pageParticipantMap.get(tx.txid) || [];
+      for (const p of parts) {
+        if (p.role === 'output') pageVolume += p.amount;
+        if (addressToRecord.has(p.address)) linkedAddresses.add(p.address);
+      }
+    }
+    const allNavigableFees = filteredTransactions.reduce((sum, tx) => sum + tx.fee, 0);
 
     return {
       txCount,
@@ -986,7 +963,17 @@ export default function Transactions() {
       allNavigableFees,
       linkedAddressCount: linkedAddresses.size
     };
-  }, [totalFilteredCount, paginatedTransactions, filteredTransactions, addressToRecord, needsClientSideFiltering]);
+  }, [totalFilteredCount, paginatedTransactionSlice, pageParticipantMap, filteredTransactions, addressToRecord, needsClientSideFiltering]);
+
+  const expandAllSource = useMemo(() => {
+    return needsClientSideFiltering
+      ? filteredTransactions.slice(0, EXPAND_ALL_SEARCH_CAP)
+      : paginatedTransactionSlice;
+  }, [needsClientSideFiltering, filteredTransactions, paginatedTransactionSlice]);
+
+  const allExpanded = useMemo(() => {
+    return expandAllSource.length > 0 && expandAllSource.every(tx => expandedTxs.has(tx.txid));
+  }, [expandAllSource, expandedTxs]);
 
   const { value: allNavigableVolume, isComputing: volumeComputing } = useAsyncMemo(async (signal) => {
     if (!needsClientSideFiltering || filteredTransactions.length === 0) {
@@ -1206,25 +1193,15 @@ export default function Transactions() {
           variant="outline"
           size="sm"
           onClick={() => {
-            const source = needsClientSideFiltering
-              ? filteredTransactions.slice(0, EXPAND_ALL_SEARCH_CAP)
-              : paginatedTransactions;
-            const allTxids = source.map(tx => tx.txid);
-            const allExpanded = allTxids.length > 0 && allTxids.every(txid => expandedTxs.has(txid));
             if (allExpanded) {
               setExpandedTxs(new Set());
             } else {
-              setExpandedTxs(new Set(allTxids));
+              setExpandedTxs(new Set(expandAllSource.map(tx => tx.txid)));
             }
           }}
           data-testid="button-expand-collapse-all"
         >
-          {(() => {
-            const source = needsClientSideFiltering
-              ? filteredTransactions.slice(0, EXPAND_ALL_SEARCH_CAP)
-              : paginatedTransactions;
-            return source.length > 0 && source.every(tx => expandedTxs.has(tx.txid));
-          })() ? (
+          {allExpanded ? (
             <>
               <ChevronsDownUp className="h-4 w-4 mr-1" />
               Collapse All
@@ -1286,7 +1263,7 @@ export default function Transactions() {
                 <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />
               </div>
             )
-          ) : paginatedTransactions.length === 0 ? (
+          ) : paginatedTransactionSlice.length === 0 ? (
             <Card>
               <CardContent className="py-12 text-center">
                 <p className="text-muted-foreground">
@@ -1300,19 +1277,23 @@ export default function Transactions() {
               </CardContent>
             </Card>
           ) : (
-            paginatedTransactions.map((tx) => (
-              <TransactionCard
-                key={tx.txid}
-                tx={tx}
-                inputs={tx.inputs}
-                outputs={tx.outputs}
-                totalOutputValue={tx.totalOutputValue}
-                isExpanded={expandedTxs.has(tx.txid)}
-                onToggleExpand={() => toggleExpanded(tx.txid)}
-                addressToRecord={addressToRecord}
-                participantsLoaded={true}
-              />
-            ))
+            paginatedTransactionSlice.map((tx) => {
+              const parts = pageParticipantMap.get(tx.txid) || [];
+              const inputs = parts.filter(p => p.role === 'input');
+              const outputs = parts.filter(p => p.role === 'output');
+              return (
+                <TransactionCard
+                  key={tx.txid}
+                  tx={tx}
+                  inputs={inputs}
+                  outputs={outputs}
+                  totalOutputValue={outputs.reduce((sum, p) => sum + p.amount, 0)}
+                  isExpanded={expandedTxs.has(tx.txid)}
+                  onToggleExpand={() => toggleExpanded(tx.txid)}
+                  addressToRecord={addressToRecord}
+                />
+              );
+            })
           )}
         </div>
       )}
