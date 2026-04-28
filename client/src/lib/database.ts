@@ -46,6 +46,82 @@ export class KYUTXODatabase extends Dexie {
   constructor() {
     super('KYUTXODatabase');
     
+    this.version(29).stores({
+      records: '++id, type, inputString, label, owner, walletName, seedName, walletSoftware, *tags, *categories, createdAt, updatedAt, chainType, syncDepth, addressImportance, [type+addressImportance], flowType, discoveredFromRecordId',
+      attachments: '++id, recordId, createdAt',
+      tags: '++id, name, createdAt',
+      categories: '++id, name, createdAt',
+      owners: '++id, name, createdAt',
+      walletNames: '++id, name, createdAt',
+      seedNames: '++id, name, createdAt',
+      walletSoftware: '++id, name, createdAt',
+      recordOrigins: '++id, recordId, originType, createdAt',
+      customFields: '++id, slug, enabled, createdAt',
+      settings: 'id',
+      priceData: '++id, [date+currency+asset], date, asset, currency, source, importedAt',
+      blockchainTransactions: '++id, &txid, blockHeight, blockTime, syncedAt, hasOpReturn',
+      transactionParticipants: '++id, [txid+role], txid, role, address, recordId, [prevTxid+prevVout]',
+      addressSyncState: '++id, &address, recordId, lastSyncedAt',
+      nodeSettings: 'id',
+      derivationTemplates: '++id, fingerprint, scriptType, owner, walletName, seedName, createdAt',
+      utxoLineage: '++id, [spentTxid+spentVout], [createdTxid+createdVout], consumingTxid, spentAddress, createdAddress, segmentId, spentOwned, createdOwned, isChange, blockTime',
+      custodySegments: '++id, &segmentId, [originTxid+originVout], originAddress, currentAddress, status, parentSegmentId, owner, walletName, originDate',
+      lineageSnapshots: '++id, &snapshotId, targetType, targetAddress, targetSegmentId, generatedAt, disclosureLevel',
+      evidence: '++id, documentType, originalDate, *tags, importance, createdAt, updatedAt',
+      evidenceAttachments: '++id, evidenceId, createdAt',
+      pausedSyncState: 'id',
+      skippedAddresses: '++id, address, reason, syncRunTimestamp, dismissed, createdAt',
+      addressBlacklist: '++id, &address, addedAt'
+    }).upgrade(async tx => {
+      console.log('[v29 migration] Cleaning up stale [encrypted] placeholder values...');
+      const placeholder = '[encrypted]';
+
+      const vocabTables = ['tags', 'categories', 'owners', 'walletNames', 'seedNames', 'walletSoftware'];
+      for (const tableName of vocabTables) {
+        const idsToDelete: number[] = [];
+        await tx.table(tableName).each((item: { id?: number; name: string }) => {
+          if (item.name && item.name.includes(placeholder) && item.id) {
+            idsToDelete.push(item.id);
+          }
+        });
+        if (idsToDelete.length > 0) {
+          await tx.table(tableName).bulkDelete(idsToDelete);
+          console.log(`[v29 migration] Removed ${idsToDelete.length} entries from ${tableName}`);
+        }
+      }
+
+      const fieldsToClean = ['label', 'notes', 'owner', 'walletName', 'seedName', 'walletSoftware', 'source', 'privateKeyStatus'];
+      let cleanedRecords = 0;
+      await tx.table('records').toCollection().modify((record: globalThis.Record<string, unknown>) => {
+        let modified = false;
+        for (const field of fieldsToClean) {
+          if (typeof record[field] === 'string' && (record[field] as string).includes(placeholder)) {
+            record[field] = '';
+            modified = true;
+          }
+        }
+        if (Array.isArray(record.tags)) {
+          const cleaned = (record.tags as string[]).filter(t => !t.includes(placeholder));
+          if (cleaned.length !== (record.tags as string[]).length) {
+            record.tags = cleaned;
+            modified = true;
+          }
+        }
+        if (Array.isArray(record.categories)) {
+          const cleaned = (record.categories as string[]).filter(c => !c.includes(placeholder));
+          if (cleaned.length !== (record.categories as string[]).length) {
+            record.categories = cleaned;
+            modified = true;
+          }
+        }
+        if (modified) cleanedRecords++;
+      });
+      if (cleanedRecords > 0) {
+        console.log(`[v29 migration] Cleaned values from ${cleanedRecords} records`);
+      }
+      console.log('[v29 migration] Complete');
+    });
+
     this.version(28).stores({
       records: '++id, type, inputString, label, owner, walletName, seedName, walletSoftware, *tags, *categories, createdAt, updatedAt, chainType, syncDepth, addressImportance, [type+addressImportance], flowType, discoveredFromRecordId',
       attachments: '++id, recordId, createdAt',

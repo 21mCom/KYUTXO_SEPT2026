@@ -83,59 +83,31 @@ export function useFilteredRecords(
           rawRecords = await db.records.orderBy('updatedAt').reverse().toArray();
         }
       } else {
-        const curatedAddressCount = await db.records
-          .where('[type+addressImportance]')
-          .anyOf(USER_CURATED_TIERS.map(tier => ['address', tier]))
+        const blockchainCount = await db.records
+          .where('addressImportance')
+          .anyOf(['blockchain-discovered', 'pending-review'])
           .count();
-        const transactionCount = await db.records
-          .where('type')
-          .equals('transaction')
-          .count();
-        const otherCount = await db.records
-          .where('type')
-          .equals('other')
-          .count();
-        total = curatedAddressCount + transactionCount + otherCount;
+        total = (await db.records.count()) - blockchainCount;
         if (loadVersionRef.current !== version) return;
 
+        const excludeBlockchain = (r: Record) =>
+          r.addressImportance !== 'blockchain-discovered' &&
+          r.addressImportance !== 'pending-review';
+
         if (pgOffset !== undefined && pgLimit !== undefined) {
-          const curatedAddresses = await db.records
-            .where('[type+addressImportance]')
-            .anyOf(USER_CURATED_TIERS.map(tier => ['address', tier]))
+          rawRecords = await db.records
+            .orderBy('updatedAt')
+            .reverse()
+            .filter(excludeBlockchain)
+            .offset(pgOffset)
+            .limit(pgLimit)
             .toArray();
-
-          const transactions = await db.records
-            .where('type')
-            .equals('transaction')
-            .toArray();
-
-          const otherRecords = await db.records
-            .where('type')
-            .equals('other')
-            .toArray();
-
-          const combined = [...curatedAddresses, ...transactions, ...otherRecords];
-          combined.sort((a, b) => b.updatedAt - a.updatedAt);
-          rawRecords = combined.slice(pgOffset, pgOffset + pgLimit);
         } else {
-          const curatedAddresses = await db.records
-            .where('[type+addressImportance]')
-            .anyOf(USER_CURATED_TIERS.map(tier => ['address', tier]))
+          rawRecords = await db.records
+            .orderBy('updatedAt')
+            .reverse()
+            .filter(excludeBlockchain)
             .toArray();
-
-          const transactions = await db.records
-            .where('type')
-            .equals('transaction')
-            .toArray();
-
-          const otherRecords = await db.records
-            .where('type')
-            .equals('other')
-            .toArray();
-
-          const combined = [...curatedAddresses, ...transactions, ...otherRecords];
-          combined.sort((a, b) => b.updatedAt - a.updatedAt);
-          rawRecords = combined;
         }
       }
 
@@ -321,13 +293,14 @@ export async function deleteRecord(id: number) {
 
 export async function searchRecords(query: string) {
   if (!query.trim()) {
-    return db.records.orderBy('updatedAt').reverse().toArray();
+    return db.records.orderBy('updatedAt').reverse().limit(200).toArray();
   }
   
-  const allRecords = await db.records.toArray();
   const lowerQuery = query.toLowerCase();
   
-  return allRecords
+  return db.records
+    .orderBy('updatedAt')
+    .reverse()
     .filter(record => 
       record.label.toLowerCase().includes(lowerQuery) ||
       record.inputString.toLowerCase().includes(lowerQuery) ||
@@ -335,7 +308,8 @@ export async function searchRecords(query: string) {
       record.tags.some(tag => tag.toLowerCase().includes(lowerQuery)) ||
       record.categories.some(cat => cat.toLowerCase().includes(lowerQuery))
     )
-    .sort((a, b) => b.updatedAt - a.updatedAt);
+    .limit(200)
+    .toArray();
 }
 
 export async function filterRecords(filters: {
@@ -343,20 +317,28 @@ export async function filterRecords(filters: {
   tags?: string[];
   categories?: string[];
 }) {
-  const allRecords = await db.records.toArray();
-  let filtered = allRecords;
+  const hasTagFilter = filters.tags && filters.tags.length > 0;
+  const hasCategoryFilter = filters.categories && filters.categories.length > 0;
   
+  const additionalFilter = (r: Record) => {
+    if (hasTagFilter && !filters.tags!.some(tag => r.tags.includes(tag))) return false;
+    if (hasCategoryFilter && !filters.categories!.some(cat => r.categories.includes(cat))) return false;
+    return true;
+  };
+
   if (filters.type && filters.type !== 'all') {
-    filtered = filtered.filter(r => r.type === filters.type);
+    return db.records
+      .where('type')
+      .equals(filters.type)
+      .filter(additionalFilter)
+      .limit(500)
+      .toArray();
   }
   
-  if (filters.tags && filters.tags.length > 0) {
-    filtered = filtered.filter(r => filters.tags!.some(tag => r.tags.includes(tag)));
-  }
-  
-  if (filters.categories && filters.categories.length > 0) {
-    filtered = filtered.filter(r => filters.categories!.some(cat => r.categories.includes(cat)));
-  }
-  
-  return filtered.sort((a, b) => b.updatedAt - a.updatedAt);
+  return db.records
+    .orderBy('updatedAt')
+    .reverse()
+    .filter(additionalFilter)
+    .limit(500)
+    .toArray();
 }

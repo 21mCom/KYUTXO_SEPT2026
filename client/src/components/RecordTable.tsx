@@ -178,10 +178,15 @@ export function RecordTable({
 
   useEffect(() => {
     const loadAttachmentCounts = async () => {
+      const recordIds = records.map(r => Number(r.id));
+      const attachments = await db.attachments
+        .where('recordId')
+        .anyOf(recordIds)
+        .toArray();
       const counts = new Map<string, number>();
-      for (const record of records) {
-        const count = await db.attachments.where('recordId').equals(Number(record.id)).count();
-        counts.set(record.id, count);
+      for (const a of attachments) {
+        const key = String(a.recordId);
+        counts.set(key, (counts.get(key) || 0) + 1);
       }
       setAttachmentCounts(counts);
     };

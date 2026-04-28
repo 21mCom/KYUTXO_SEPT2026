@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -13,7 +13,13 @@ import { RecordTable } from "@/components/RecordTable";
 import { RecordDetailPanel } from "@/components/RecordDetailPanel";
 import { ClickableAddress } from "@/components/ClickableAddress";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { RecordFilters, ColumnFilter, applyColumnFilters, extractUniqueValues } from "@/components/RecordFilters";
+import { RecordFilters, ColumnFilter } from "@/components/RecordFilters";
+import { useTags } from "@/hooks/use-tags";
+import { useCategories } from "@/hooks/use-categories";
+import { useOwners } from "@/hooks/use-owners";
+import { useWalletNames } from "@/hooks/use-wallet-names";
+import { useSeedNames } from "@/hooks/use-seed-names";
+import { useWalletSoftware } from "@/hooks/use-wallet-software";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -26,7 +32,6 @@ import {
 } from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
 
-// User-curated importance tiers (exclude blockchain-discovered and pending-review by default)
 const USER_CURATED_TIERS: AddressImportance[] = ['verified', 'manual', 'wallet-import', 'xpub-derived'];
 const ALL_TIERS: AddressImportance[] = ['verified', 'manual', 'wallet-import', 'xpub-derived', 'blockchain-discovered', 'pending-review'];
 
@@ -55,6 +60,65 @@ interface ConvertedRecord {
   discoveredFromRecordId?: number;
 }
 
+function convertRecord(r: DbRecord): ConvertedRecord {
+  return {
+    id: String(r.id),
+    type: r.type as "address" | "transaction" | "other",
+    inputString: r.inputString,
+    label: r.label,
+    notes: r.notes,
+    tags: r.tags || [],
+    categories: r.categories || [],
+    seedName: r.seedName,
+    walletSoftware: r.walletSoftware,
+    owner: r.owner,
+    walletName: r.walletName,
+    privateKeyStatus: r.privateKeyStatus,
+    source: r.source,
+    customFields: r.customFields,
+    derivationPath: r.derivationPath,
+    chainType: r.chainType,
+    vault: r.vault,
+    addressImportance: r.addressImportance,
+    syncDepth: r.syncDepth,
+    maxSyncedDepth: r.maxSyncedDepth,
+    discoveredInTxid: r.discoveredInTxid,
+    discoveredFromRecordId: r.discoveredFromRecordId,
+  };
+}
+
+function matchesColumnFilter(record: DbRecord, filter: ColumnFilter): boolean {
+  let value: unknown;
+  if (filter.field === 'hasNotes') {
+    value = Boolean(record.notes && record.notes.trim() !== '');
+  } else {
+    value = (record as unknown as { [key: string]: unknown })[filter.field];
+  }
+  const nv = filter.value?.toLowerCase().trim() || '';
+  switch (filter.operator) {
+    case 'contains': return String(value || '').toLowerCase().includes(nv);
+    case 'equals': return String(value || '').toLowerCase() === nv;
+    case 'notEquals': return String(value || '').toLowerCase() !== nv;
+    case 'startsWith': return String(value || '').toLowerCase().startsWith(nv);
+    case 'endsWith': return String(value || '').toLowerCase().endsWith(nv);
+    case 'isEmpty':
+      if (Array.isArray(value)) return value.length === 0;
+      return !value || String(value).trim() === '';
+    case 'isNotEmpty':
+      if (Array.isArray(value)) return value.length > 0;
+      return Boolean(value) && String(value).trim() !== '';
+    case 'includes':
+      if (Array.isArray(value)) return value.some((v: unknown) => String(v).toLowerCase() === nv);
+      return false;
+    case 'excludes':
+      if (Array.isArray(value)) return !value.some((v: unknown) => String(v).toLowerCase() === nv);
+      return true;
+    case 'isTrue': return Boolean(value);
+    case 'isFalse': return !value;
+    default: return true;
+  }
+}
+
 export default function Records() {
   const [location, navigate] = useLocation();
   
@@ -63,31 +127,26 @@ export default function Records() {
   const [totalCount, setTotalCount] = useState(0);
   
   const [records, setRecords] = useState<ConvertedRecord[]>([]);
-  const [filteredRecords, setFilteredRecords] = useState<ConvertedRecord[]>([]);
   const [selectedRecordId, setSelectedRecordId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [urlSearchQuery, setUrlSearchQuery] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [customFieldDefs, setCustomFieldDefs] = useState<CustomField[]>([]);
   
-  // Filter state: by default, only show user-curated records (not blockchain-discovered)
   const [includeBlockchainDiscovered, setIncludeBlockchainDiscovered] = useState(false);
   const [totalBlockchainDiscovered, setTotalBlockchainDiscovered] = useState(0);
   
-  // Column filters state
   const [columnFilters, setColumnFilters] = useState<ColumnFilter[]>([]);
   
-  // Bulk selection state
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   
-  // Delete confirmation dialogs
   const [bulkDeleteDialogOpen, setBulkDeleteDialogOpen] = useState(false);
   const [singleDeleteTarget, setSingleDeleteTarget] = useState<string | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
   
   const { toast } = useToast();
   
-  // State for blockchain transaction search results
   const [matchingTxids, setMatchingTxids] = useState<string[]>([]);
   const [txidSearchResults, setTxidSearchResults] = useState<{
     txid: string;
@@ -98,7 +157,18 @@ export default function Records() {
   
   const dbChangeSignal = useDbChangeSignal(['records']);
 
-  // Parse query parameters from location - store them for later application
+  const { tags: vocabTags } = useTags();
+  const { categories: vocabCategories } = useCategories();
+  const { owners: vocabOwners } = useOwners();
+  const { walletNames: vocabWalletNames } = useWalletNames();
+  const { seedNames: vocabSeedNames } = useSeedNames();
+  const { walletSoftware: vocabWalletSoftware } = useWalletSoftware();
+
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearch(searchQuery), 300);
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
+
   useEffect(() => {
     try {
       const queryIndex = location.indexOf('?');
@@ -123,318 +193,189 @@ export default function Records() {
     }
   }, [location]);
 
-  // Apply URL search query to input once records are loaded
   useEffect(() => {
     if (urlSearchQuery !== null && records.length > 0 && !isLoading) {
       setSearchQuery(urlSearchQuery);
-      setUrlSearchQuery(null); // Clear after applying
+      setUrlSearchQuery(null);
     }
   }, [urlSearchQuery, records.length, isLoading]);
 
-  const hasActiveFilters = searchQuery !== '' || columnFilters.length > 0;
+  const hasActiveFilters = debouncedSearch !== '' || columnFilters.length > 0;
 
-  // Reset page when search/filter/toggle changes
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchQuery, columnFilters, includeBlockchainDiscovered]);
+  }, [debouncedSearch, columnFilters, includeBlockchainDiscovered]);
 
-  // Load records and custom field definitions with smart filtering
+  const loadVersionRef = useRef(0);
+
   useEffect(() => {
     const loadRecords = async () => {
+      const version = ++loadVersionRef.current;
       setIsLoading(true);
       try {
-        // Load custom field definitions
         const fields = await db.customFields.toArray();
+        if (loadVersionRef.current !== version) return;
         setCustomFieldDefs(fields);
         
-        // Count blockchain-discovered records for the toggle label
         const blockchainCount = await db.records
           .where('addressImportance')
           .anyOf(['blockchain-discovered', 'pending-review'])
           .count();
+        if (loadVersionRef.current !== version) return;
         setTotalBlockchainDiscovered(blockchainCount);
         
-        let rawRecords: DbRecord[];
+        const search = debouncedSearch.toLowerCase().trim();
+        const isTxidSearch = search.length >= 8 && /^[a-fA-F0-9]+$/.test(search);
+        const filtersActive = search !== '' || columnFilters.length > 0;
+        
+        const filterFn = (record: DbRecord): boolean => {
+          if (!includeBlockchainDiscovered) {
+            if (record.addressImportance === 'blockchain-discovered' || 
+                record.addressImportance === 'pending-review') {
+              return false;
+            }
+          }
+          for (const filter of columnFilters) {
+            if (!matchesColumnFilter(record, filter)) return false;
+          }
+          if (search) {
+            if (!(
+              record.label?.toLowerCase().includes(search) ||
+              record.inputString?.toLowerCase().includes(search) ||
+              record.owner?.toLowerCase().includes(search) ||
+              record.walletName?.toLowerCase().includes(search) ||
+              record.notes?.toLowerCase().includes(search)
+            )) return false;
+          }
+          return true;
+        };
+        
         let count: number;
-        
-        if (!hasActiveFilters) {
-          if (includeBlockchainDiscovered) {
-            count = await db.records.count();
-            rawRecords = await db.records
-              .orderBy('id')
-              .reverse()
-              .offset((currentPage - 1) * PAGE_SIZE)
-              .limit(PAGE_SIZE)
-              .toArray();
-          } else {
-            const curatedAddresses = await db.records
-              .where('addressImportance')
-              .anyOf(USER_CURATED_TIERS)
-              .toArray();
-            
-            const legacyAddresses = await db.records
-              .filter(r => r.type === 'address' && !r.addressImportance)
-              .toArray();
-            
-            const transactions = await db.records
-              .where('type')
-              .equals('transaction')
-              .toArray();
-            
-            const otherRecords = await db.records
-              .where('type')
-              .equals('other')
-              .toArray();
-            
-            const combined = [...curatedAddresses, ...legacyAddresses, ...transactions, ...otherRecords];
-            combined.sort((a, b) => (b.id ?? 0) - (a.id ?? 0));
-            count = combined.length;
-            const offset = (currentPage - 1) * PAGE_SIZE;
-            rawRecords = combined.slice(offset, offset + PAGE_SIZE);
-          }
-          
-          setTotalCount(count);
+        if (!filtersActive) {
+          count = includeBlockchainDiscovered 
+            ? await db.records.count()
+            : (await db.records.count()) - blockchainCount;
         } else {
-          // Search/filters active: load all matching records for client-side filtering
-          if (includeBlockchainDiscovered) {
-            rawRecords = await db.records.toArray();
-          } else {
-            const curatedAddresses = await db.records
-              .where('addressImportance')
-              .anyOf(USER_CURATED_TIERS)
-              .toArray();
-            
-            const legacyAddresses = await db.records
-              .filter(r => r.type === 'address' && !r.addressImportance)
-              .toArray();
-            
-            const transactions = await db.records
-              .where('type')
-              .equals('transaction')
-              .toArray();
-            
-            const otherRecords = await db.records
-              .where('type')
-              .equals('other')
-              .toArray();
-            
-            rawRecords = [...curatedAddresses, ...legacyAddresses, ...transactions, ...otherRecords];
-          }
-          count = rawRecords.length;
-          setTotalCount(count);
+          count = await db.records.filter(filterFn).count();
         }
+        if (loadVersionRef.current !== version) return;
+        setTotalCount(count);
         
-        const records = rawRecords;
+        const offset = (currentPage - 1) * PAGE_SIZE;
+        let rawRecords: DbRecord[];
+        if (includeBlockchainDiscovered && !filtersActive) {
+          rawRecords = await db.records
+            .orderBy('id')
+            .reverse()
+            .offset(offset)
+            .limit(PAGE_SIZE)
+            .toArray();
+        } else {
+          rawRecords = await db.records
+            .orderBy('id')
+            .reverse()
+            .filter(filterFn)
+            .offset(offset)
+            .limit(PAGE_SIZE)
+            .toArray();
+        }
+        if (loadVersionRef.current !== version) return;
         
-        const convertedRecords: ConvertedRecord[] = records.map(r => ({
-          id: String(r.id),
-          type: r.type as "address" | "transaction" | "other",
-          inputString: r.inputString,
-          label: r.label,
-          notes: r.notes,
-          tags: r.tags || [],
-          categories: r.categories || [],
-          seedName: r.seedName,
-          walletSoftware: r.walletSoftware,
-          owner: r.owner,
-          walletName: r.walletName,
-          privateKeyStatus: r.privateKeyStatus,
-          source: r.source,
-          customFields: r.customFields,
-          derivationPath: r.derivationPath,
-          chainType: r.chainType,
-          vault: r.vault,
-          addressImportance: r.addressImportance,
-          syncDepth: r.syncDepth,
-          maxSyncedDepth: r.maxSyncedDepth,
-          discoveredInTxid: r.discoveredInTxid,
-          discoveredFromRecordId: r.discoveredFromRecordId,
-        }));
+        const converted = rawRecords.map(convertRecord);
+        setRecords(converted);
         
-        setRecords(convertedRecords);
+        if (isTxidSearch) {
+          try {
+            const matchingTxs = await db.blockchainTransactions
+              .filter(tx => tx.txid.toLowerCase().startsWith(search) || tx.txid.toLowerCase().includes(search))
+              .limit(50)
+              .toArray();
+            if (loadVersionRef.current !== version) return;
+            
+            if (matchingTxs.length > 0) {
+              const txids = matchingTxs.map(tx => tx.txid);
+              setMatchingTxids(txids);
+              
+              const participants = await getParticipantsByTxids(txids);
+              if (loadVersionRef.current !== version) return;
+              
+              const txResults = matchingTxs.map(tx => ({
+                txid: tx.txid,
+                blockHeight: tx.blockHeight,
+                blockTime: tx.blockTime,
+                participantAddresses: participants
+                  .filter(p => p.txid === tx.txid)
+                  .map(p => p.address),
+              }));
+              setTxidSearchResults(txResults);
+              
+              const participantAddresses = new Set(participants.map(p => p.address));
+              const relatedRawRecords = await db.records
+                .where('inputString')
+                .anyOf(Array.from(participantAddresses))
+                .toArray();
+              if (loadVersionRef.current !== version) return;
+              
+              const relatedConverted = relatedRawRecords.map(convertRecord);
+              const existingIds = new Set(converted.map(r => r.id));
+              const additional = relatedConverted.filter(r => !existingIds.has(r.id));
+              if (additional.length > 0) {
+                setRecords([...converted, ...additional]);
+              }
+            } else {
+              setMatchingTxids([]);
+              setTxidSearchResults([]);
+            }
+          } catch (error) {
+            console.error('[Records] Error searching blockchain transactions:', error);
+            setMatchingTxids([]);
+            setTxidSearchResults([]);
+          }
+        } else {
+          setMatchingTxids([]);
+          setTxidSearchResults([]);
+        }
       } catch (error) {
         console.error('[Records] Failed to load records:', error);
       } finally {
-        setIsLoading(false);
+        if (loadVersionRef.current === version) {
+          setIsLoading(false);
+        }
       }
     };
     
     loadRecords();
-  }, [includeBlockchainDiscovered, dbChangeSignal, currentPage, hasActiveFilters]);
+  }, [includeBlockchainDiscovered, dbChangeSignal, currentPage, debouncedSearch, columnFilters]);
 
-  // Extract unique values from records for filter dropdowns
   const uniqueFilterValues = useMemo(() => {
-    return extractUniqueValues(records as unknown as Array<Record<string, unknown>>);
-  }, [records]);
+    const clean = (names: string[]) => 
+      names.filter(n => n && n.trim() && !n.includes('[encrypted]')).sort();
+    return {
+      owner: clean(vocabOwners.map(o => o.name)),
+      walletName: clean(vocabWalletNames.map(w => w.name)),
+      seedName: clean(vocabSeedNames.map(s => s.name)),
+      walletSoftware: clean(vocabWalletSoftware.map(ws => ws.name)),
+      tags: clean(vocabTags.map(t => t.name)),
+      categories: clean(vocabCategories.map(c => c.name)),
+    };
+  }, [vocabTags, vocabCategories, vocabOwners, vocabWalletNames, vocabSeedNames, vocabWalletSoftware]);
 
-  // Filter records based on column filters, search query, including blockchain transaction search
-  useEffect(() => {
-    // First apply column filters
-    const columnFiltered = applyColumnFilters(records as unknown as Array<Record<string, unknown>>, columnFilters) as unknown as ConvertedRecord[];
-    
-    if (!searchQuery) {
-      setFilteredRecords(columnFiltered);
-      setMatchingTxids([]);
-      setTxidSearchResults([]);
-      return;
-    }
-
-    const query = searchQuery.toLowerCase();
-    
-    // Then apply search query filter
-    const filtered = columnFiltered.filter(record => 
-      record.label?.toLowerCase().includes(query) ||
-      record.inputString?.toLowerCase().includes(query) ||
-      record.owner?.toLowerCase().includes(query) ||
-      record.walletName?.toLowerCase().includes(query) ||
-      record.notes?.toLowerCase().includes(query)
-    );
-    
-    // Check if query looks like a transaction ID (64 hex characters)
-    const isTxidSearch = /^[a-fA-F0-9]{8,64}$/.test(searchQuery.trim());
-    
-    if (isTxidSearch) {
-      // Search blockchain transactions for matching txids
-      const searchBlockchainTxs = async () => {
-        try {
-          const txQuery = searchQuery.toLowerCase().trim();
-          
-          // Search by txid prefix or full match
-          const matchingTxs = await db.blockchainTransactions
-            .filter(tx => tx.txid.toLowerCase().startsWith(txQuery) || tx.txid.toLowerCase().includes(txQuery))
-            .toArray();
-          
-          if (matchingTxs.length > 0) {
-            const txids = matchingTxs.map(tx => tx.txid);
-            setMatchingTxids(txids);
-            
-            // Get participant addresses for matching transactions
-            const participants = await getParticipantsByTxids(txids);
-            
-            const txResults = matchingTxs.map(tx => ({
-              txid: tx.txid,
-              blockHeight: tx.blockHeight,
-              blockTime: tx.blockTime,
-              participantAddresses: participants
-                .filter(p => p.txid === tx.txid)
-                .map(p => p.address),
-            }));
-            
-            setTxidSearchResults(txResults);
-            
-            // For txid searches, fetch ALL address records matching participant addresses
-            // This overrides the blockchain toggle - we want to show all related addresses
-            const participantAddresses = new Set(participants.map(p => p.address));
-            
-            // Fetch records for ALL participant addresses regardless of filter settings
-            const allRelatedRawRecords = await db.records
-              .where('inputString')
-              .anyOf(Array.from(participantAddresses))
-              .toArray();
-            
-            const relatedRecords = allRelatedRawRecords;
-            
-            // Convert to display format
-            const convertedRelated: ConvertedRecord[] = relatedRecords.map(r => ({
-              id: String(r.id),
-              type: r.type as "address" | "transaction" | "other",
-              inputString: r.inputString,
-              label: r.label,
-              notes: r.notes,
-              tags: r.tags || [],
-              categories: r.categories || [],
-              seedName: r.seedName,
-              walletSoftware: r.walletSoftware,
-              owner: r.owner,
-              walletName: r.walletName,
-              privateKeyStatus: r.privateKeyStatus,
-              source: r.source,
-              customFields: r.customFields,
-              derivationPath: r.derivationPath,
-              chainType: r.chainType,
-              vault: r.vault,
-              addressImportance: r.addressImportance,
-              syncDepth: r.syncDepth,
-              maxSyncedDepth: r.maxSyncedDepth,
-              discoveredInTxid: r.discoveredInTxid,
-              discoveredFromRecordId: r.discoveredFromRecordId,
-            }));
-            
-            // Merge with any other filtered records (avoiding duplicates)
-            const existingIds = new Set(convertedRelated.map(r => r.id));
-            const additionalFromFilter = filtered.filter(r => !existingIds.has(r.id));
-            
-            setFilteredRecords([...convertedRelated, ...additionalFromFilter]);
-          } else {
-            setMatchingTxids([]);
-            setTxidSearchResults([]);
-            setFilteredRecords(filtered);
-          }
-        } catch (error) {
-          console.error('[Records] Error searching blockchain transactions:', error);
-          setMatchingTxids([]);
-          setTxidSearchResults([]);
-          setFilteredRecords(filtered);
-        }
-      };
-      
-      searchBlockchainTxs();
-    } else {
-      setMatchingTxids([]);
-      setTxidSearchResults([]);
-      setFilteredRecords(filtered);
-    }
-  }, [records, searchQuery, columnFilters]);
-
-  // State for directly-loaded record (when accessed by URL but not in filtered view)
   const [directLoadedRecord, setDirectLoadedRecord] = useState<ConvertedRecord | null>(null);
   
-  // Load specific record by ID if accessed via URL but not in filtered view
   useEffect(() => {
     if (!selectedRecordId || isLoading) return;
     
-    // Check if record is already in the filtered list
     const existingRecord = records.find(r => r.id === selectedRecordId);
     if (existingRecord) {
       setDirectLoadedRecord(null);
       return;
     }
     
-    // Record not in current view - load it directly
     const loadRecord = async () => {
       try {
         const record = await db.records.get(parseInt(selectedRecordId));
         if (!record) return;
-        
-        const records = [record];
-        
-        if (records.length > 0) {
-          const r = records[0];
-          setDirectLoadedRecord({
-            id: String(r.id),
-            type: r.type as "address" | "transaction" | "other",
-            inputString: r.inputString,
-            label: r.label,
-            notes: r.notes,
-            tags: r.tags || [],
-            categories: r.categories || [],
-            seedName: r.seedName,
-            walletSoftware: r.walletSoftware,
-            owner: r.owner,
-            walletName: r.walletName,
-            privateKeyStatus: r.privateKeyStatus,
-            source: r.source,
-            customFields: r.customFields,
-            derivationPath: r.derivationPath,
-            chainType: r.chainType,
-            vault: r.vault,
-            addressImportance: r.addressImportance,
-            syncDepth: r.syncDepth,
-            maxSyncedDepth: r.maxSyncedDepth,
-            discoveredInTxid: r.discoveredInTxid,
-            discoveredFromRecordId: r.discoveredFromRecordId,
-          });
-        }
+        setDirectLoadedRecord(convertRecord(record));
       } catch (error) {
         console.error('[Records] Failed to load specific record:', error);
       }
@@ -447,9 +388,7 @@ export default function Records() {
     ? (records.find(r => r.id === selectedRecordId) || directLoadedRecord)
     : null;
 
-  // Clear selection when records change (e.g., after delete)
   useEffect(() => {
-    // Remove any selected IDs that are no longer in the records list
     const recordIds = new Set(records.map(r => r.id));
     setSelectedIds(prev => {
       const validSelected = new Set(Array.from(prev).filter(id => recordIds.has(id)));
@@ -460,26 +399,17 @@ export default function Records() {
     });
   }, [records]);
 
-  // Pagination computations
-  const displayTotalCount = hasActiveFilters ? filteredRecords.length : totalCount;
+  const displayTotalCount = totalCount;
   const displayTotalPages = Math.max(1, Math.ceil(displayTotalCount / PAGE_SIZE));
   const displayStartIndex = (currentPage - 1) * PAGE_SIZE;
-  
-  const displayRecords = useMemo(() => {
-    if (!hasActiveFilters) {
-      return filteredRecords;
-    }
-    return filteredRecords.slice(displayStartIndex, displayStartIndex + PAGE_SIZE);
-  }, [hasActiveFilters, filteredRecords, displayStartIndex, PAGE_SIZE]);
+  const displayRecords = records;
 
-  // Auto-correct page if it's out of bounds
   useEffect(() => {
     if (currentPage > displayTotalPages && displayTotalPages > 0) {
       setCurrentPage(displayTotalPages);
     }
   }, [currentPage, displayTotalPages]);
 
-  // Delete handlers
   const handleSingleDelete = async () => {
     if (!singleDeleteTarget) return;
     setIsDeleting(true);
@@ -551,7 +481,6 @@ export default function Records() {
     setSingleDeleteTarget(id);
   };
 
-  // If viewing a specific record by ID, show detail-focused view
   if (selectedRecordId && selectedRecord && !searchQuery) {
     return (
       <div className="flex-1 overflow-auto p-6">
@@ -586,7 +515,6 @@ export default function Records() {
     );
   }
 
-  // Default view: all records with search
   return (
     <div className="flex-1 overflow-auto p-6">
       <div className="max-w-6xl mx-auto space-y-6">
@@ -643,7 +571,6 @@ export default function Records() {
           />
         </div>
 
-        {/* Blockchain Transaction Search Results */}
         {txidSearchResults.length > 0 && (
           <Card className="border-primary/30 bg-primary/5">
             <CardHeader className="pb-3">
@@ -693,7 +620,6 @@ export default function Records() {
           </Card>
         )}
 
-        {/* Bulk Action Bar */}
         {selectedIds.size > 0 && (
           <div className="flex items-center justify-between p-3 rounded-lg bg-muted border">
             <div className="flex items-center gap-3">
@@ -723,16 +649,15 @@ export default function Records() {
         )}
 
         <div className="grid gap-6 lg:grid-cols-3">
-          {/* Records List */}
           <div className="lg:col-span-2">
             <Card>
               <CardHeader>
                 <CardTitle>
                   {searchQuery 
                     ? txidSearchResults.length > 0 
-                      ? `Related Address Records (${filteredRecords.length})`
-                      : `Search Results (${filteredRecords.length})` 
-                    : `All Records (${hasActiveFilters ? filteredRecords.length : totalCount})`}
+                      ? `Related Address Records (${records.length})`
+                      : `Search Results (${totalCount})` 
+                    : `All Records (${totalCount})`}
                 </CardTitle>
                 <CardDescription>
                   {txidSearchResults.length > 0 
@@ -802,7 +727,6 @@ export default function Records() {
             </Card>
           </div>
 
-          {/* Detail Panel */}
           {selectedRecord && (
             <div className="lg:col-span-1">
               <RecordDetailPanel
@@ -816,7 +740,6 @@ export default function Records() {
         </div>
       </div>
 
-      {/* Bulk Delete Confirmation Dialog */}
       <AlertDialog open={bulkDeleteDialogOpen} onOpenChange={setBulkDeleteDialogOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -839,7 +762,6 @@ export default function Records() {
         </AlertDialogContent>
       </AlertDialog>
 
-      {/* Single Delete Confirmation Dialog */}
       <AlertDialog open={!!singleDeleteTarget} onOpenChange={(open) => !open && setSingleDeleteTarget(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
