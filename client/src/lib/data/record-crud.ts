@@ -1,4 +1,5 @@
-import { db, notifyDbChange, type Record, type Attachment, type RecordOrigin, type RecordOriginType, type Owner, type WalletName, type SeedName, type WalletSoftware, type DerivationTemplate, type AddressImportance } from '../database';
+import { db, notifyDbChange, type Record, type Attachment, type RecordOrigin, type RecordOriginType, type DerivationTemplate, type AddressImportance } from '../database';
+import { ensureOwner, ensureWalletName, ensureSeedName, ensureWalletSoftware } from './vocabulary-crud';
 
 async function syncRecordVocabulary(
   data: Partial<Record>
@@ -6,51 +7,19 @@ async function syncRecordVocabulary(
   const syncTasks: Promise<void>[] = [];
 
   if (data.owner && data.owner !== 'Unknown') {
-    syncTasks.push((async () => {
-      const owners = await db.owners.toArray();
-      const exists = owners.some(
-        (o) => o.name && o.name.toLowerCase() === data.owner!.toLowerCase()
-      );
-      if (!exists) {
-        await db.owners.add({ name: data.owner!, createdAt: Date.now() });
-      }
-    })());
+    syncTasks.push(ensureOwner(data.owner));
   }
 
   if (data.walletName) {
-    syncTasks.push((async () => {
-      const walletNames = await db.walletNames.toArray();
-      const exists = walletNames.some(
-        (wn) => wn.name && wn.name.toLowerCase() === data.walletName!.toLowerCase()
-      );
-      if (!exists) {
-        await db.walletNames.add({ name: data.walletName!, createdAt: Date.now() });
-      }
-    })());
+    syncTasks.push(ensureWalletName(data.walletName));
   }
 
   if (data.seedName) {
-    syncTasks.push((async () => {
-      const seedNames = await db.seedNames.toArray();
-      const exists = seedNames.some(
-        (sn) => sn.name && sn.name.toLowerCase() === data.seedName!.toLowerCase()
-      );
-      if (!exists) {
-        await db.seedNames.add({ name: data.seedName!, createdAt: Date.now() });
-      }
-    })());
+    syncTasks.push(ensureSeedName(data.seedName));
   }
 
   if (data.walletSoftware) {
-    syncTasks.push((async () => {
-      const walletSoftwareList = await db.walletSoftware.toArray();
-      const exists = walletSoftwareList.some(
-        (ws) => ws.name && ws.name.toLowerCase() === data.walletSoftware!.toLowerCase()
-      );
-      if (!exists) {
-        await db.walletSoftware.add({ name: data.walletSoftware!, createdAt: Date.now() });
-      }
-    })());
+    syncTasks.push(ensureWalletSoftware(data.walletSoftware));
   }
 
   await Promise.all(syncTasks);
@@ -193,6 +162,28 @@ export async function updateRecord(
   }
 }
 
+function deduplicateByNormalizedKey(values: Set<string>): string[] {
+  const seen = new Set<string>();
+  const unique: string[] = [];
+  Array.from(values).forEach(name => {
+    const key = name.trim().toLowerCase();
+    if (key && !seen.has(key)) {
+      seen.add(key);
+      unique.push(name);
+    }
+  });
+  return unique;
+}
+
+async function ensureAllSequentially(
+  names: string[],
+  ensureFn: (name: string) => Promise<void>
+): Promise<void> {
+  for (let i = 0; i < names.length; i++) {
+    await ensureFn(names[i]);
+  }
+}
+
 async function batchSyncVocabulary(
   values: {
     owners: Set<string>;
@@ -202,91 +193,17 @@ async function batchSyncVocabulary(
   }
 ): Promise<void> {
   const tasks: Promise<void>[] = [];
-  
-  if (values.owners.size > 0) {
-    tasks.push((async () => {
-      const existing = await db.owners.toArray();
-      const existingNames = new Set<string>();
-      for (const o of existing) {
-        if (o.name) existingNames.add(o.name.toLowerCase());
-      }
-      
-      const toAdd: Owner[] = [];
-      for (const name of Array.from(values.owners)) {
-        if (!existingNames.has(name.toLowerCase())) {
-          toAdd.push({ name, createdAt: Date.now() });
-        }
-      }
-      
-      if (toAdd.length > 0) {
-        await db.owners.bulkAdd(toAdd);
-      }
-    })());
-  }
-  
-  if (values.walletNames.size > 0) {
-    tasks.push((async () => {
-      const existing = await db.walletNames.toArray();
-      const existingNames = new Set<string>();
-      for (const wn of existing) {
-        if (wn.name) existingNames.add(wn.name.toLowerCase());
-      }
-      
-      const toAdd: WalletName[] = [];
-      for (const name of Array.from(values.walletNames)) {
-        if (!existingNames.has(name.toLowerCase())) {
-          toAdd.push({ name, createdAt: Date.now() });
-        }
-      }
-      
-      if (toAdd.length > 0) {
-        await db.walletNames.bulkAdd(toAdd);
-      }
-    })());
-  }
-  
-  if (values.seedNames.size > 0) {
-    tasks.push((async () => {
-      const existing = await db.seedNames.toArray();
-      const existingNames = new Set<string>();
-      for (const sn of existing) {
-        if (sn.name) existingNames.add(sn.name.toLowerCase());
-      }
-      
-      const toAdd: SeedName[] = [];
-      for (const name of Array.from(values.seedNames)) {
-        if (!existingNames.has(name.toLowerCase())) {
-          toAdd.push({ name, createdAt: Date.now() });
-        }
-      }
-      
-      if (toAdd.length > 0) {
-        await db.seedNames.bulkAdd(toAdd);
-      }
-    })());
-  }
-  
-  if (values.walletSoftware.size > 0) {
-    tasks.push((async () => {
-      const existing = await db.walletSoftware.toArray();
-      const existingNames = new Set<string>();
-      for (const ws of existing) {
-        if (ws.name) existingNames.add(ws.name.toLowerCase());
-      }
-      
-      const toAdd: WalletSoftware[] = [];
-      for (const name of Array.from(values.walletSoftware)) {
-        if (!existingNames.has(name.toLowerCase())) {
-          toAdd.push({ name, createdAt: Date.now() });
-        }
-      }
-      
-      if (toAdd.length > 0) {
-        await db.walletSoftware.bulkAdd(toAdd);
-      }
-    })());
-  }
-  
+
+  const owners = deduplicateByNormalizedKey(values.owners);
+  const walletNames = deduplicateByNormalizedKey(values.walletNames);
+  const seedNames = deduplicateByNormalizedKey(values.seedNames);
+  const walletSoftwareNames = deduplicateByNormalizedKey(values.walletSoftware);
+
+  if (owners.length > 0) tasks.push(ensureAllSequentially(owners, ensureOwner));
+  if (walletNames.length > 0) tasks.push(ensureAllSequentially(walletNames, ensureWalletName));
+  if (seedNames.length > 0) tasks.push(ensureAllSequentially(seedNames, ensureSeedName));
+  if (walletSoftwareNames.length > 0) tasks.push(ensureAllSequentially(walletSoftwareNames, ensureWalletSoftware));
+
   await Promise.all(tasks);
 }
 

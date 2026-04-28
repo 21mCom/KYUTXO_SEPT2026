@@ -289,11 +289,7 @@ export async function syncTagsToMaster(tagNames: string[]): Promise<void> {
   for (const name of tagNames) {
     const trimmedName = name.trim();
     if (trimmedName && !existingNames.has(trimmedName.toLowerCase())) {
-      const tag: Tag = {
-        name: trimmedName,
-        createdAt: Date.now(),
-      };
-      await db.tags.add(tag);
+      await createTag(trimmedName);
       existingNames.add(trimmedName.toLowerCase());
     }
   }
@@ -310,12 +306,52 @@ export async function syncCategoriesToMaster(categoryNames: string[]): Promise<v
   for (const name of categoryNames) {
     const trimmedName = name.trim();
     if (trimmedName && !existingNames.has(trimmedName.toLowerCase())) {
-      const category: Category = {
-        name: trimmedName,
-        createdAt: Date.now(),
-      };
-      await db.categories.add(category);
+      await createCategory(trimmedName);
       existingNames.add(trimmedName.toLowerCase());
     }
+  }
+}
+
+const EXPECTED_VOCABULARY_ERRORS = [
+  'already exists',
+  'cannot be empty',
+  'are limited to',
+] as const;
+
+function isExpectedVocabularyError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const msg = err.message;
+  return EXPECTED_VOCABULARY_ERRORS.some(pattern => msg.includes(pattern));
+}
+
+export async function ensureOwner(name: string): Promise<void> {
+  try {
+    await createOwner(name);
+  } catch (err) {
+    if (!isExpectedVocabularyError(err)) throw err;
+  }
+}
+
+export async function ensureWalletName(name: string): Promise<void> {
+  try {
+    await createWalletName(name);
+  } catch (err) {
+    if (!isExpectedVocabularyError(err)) throw err;
+  }
+}
+
+export async function ensureSeedName(name: string): Promise<void> {
+  try {
+    await createSeedName(name);
+  } catch (err) {
+    if (!isExpectedVocabularyError(err)) throw err;
+  }
+}
+
+export async function ensureWalletSoftware(name: string): Promise<void> {
+  try {
+    await createWalletSoftware(name);
+  } catch (err) {
+    if (!isExpectedVocabularyError(err)) throw err;
   }
 }
