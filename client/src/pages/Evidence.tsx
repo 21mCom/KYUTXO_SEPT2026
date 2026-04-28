@@ -87,6 +87,7 @@ import {
 } from "@/lib/dataFacade";
 import { uploadFile, downloadFile, deleteFile, getFileBlob, isPreviewableType, getPreviewType } from "@/lib/attachments";
 import { useDropzone } from "react-dropzone";
+import { searchPendingClass } from "@/lib/search-pending-class";
 
 const evidenceFormSchema = z.object({
   title: z.string().min(1, "Title is required").max(200, "Title too long"),
@@ -648,7 +649,7 @@ export default function EvidencePage() {
         </div>
       </div>
 
-      <ScrollArea className={`flex-1 transition-opacity duration-200 ${isSearchPending ? 'opacity-60' : ''}`}>
+      <ScrollArea className={`flex-1 ${searchPendingClass(isSearchPending)}`}>
         <div className="p-4">
           {sortedEvidence.length === 0 ? (
             <Card className="border-dashed">

@@ -34,6 +34,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
+import { searchPendingClass } from "@/lib/search-pending-class";
 
 const USER_CURATED_TIERS: AddressImportance[] = ['verified', 'manual', 'wallet-import', 'xpub-derived'];
 const ALL_TIERS: AddressImportance[] = ['verified', 'manual', 'wallet-import', 'xpub-derived', 'blockchain-discovered', 'pending-review'];
@@ -622,7 +623,7 @@ export default function Records() {
           />
         </div>
 
-        <div className={`space-y-6 transition-opacity duration-200 ${isSearchPending ? 'opacity-60' : ''}`}>
+        <div className={`space-y-6 ${searchPendingClass(isSearchPending)}`}>
         {txidSearchResults.length > 0 && (
           <Card className="border-primary/30 bg-primary/5">
             <CardHeader className="pb-3">

@@ -52,6 +52,7 @@ import { cn } from "@/lib/utils";
 import { UTXODetailPanel } from "@/components/UTXODetailPanel";
 import { ClickableAddress } from "@/components/ClickableAddress";
 import { ScrollPositionIndicator } from "@/components/ScrollPositionIndicator";
+import { searchPendingClass } from "@/lib/search-pending-class";
 
 const SETTINGS_KEY = "kyutxo-utxos-settings";
 
@@ -1264,7 +1265,7 @@ export default function UTXOs() {
         </CardContent>
       </Card>
 
-      <div className={`flex-1 min-h-0 transition-opacity duration-200 ${isSearchPending ? 'opacity-60' : ''}`}>
+      <div className={`flex-1 min-h-0 ${searchPendingClass(isSearchPending)}`}>
         <Card className="h-full flex flex-col">
           <CardHeader className="pb-2 flex-none">
             <CardTitle className="text-base">

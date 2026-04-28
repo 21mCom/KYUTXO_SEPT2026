@@ -45,6 +45,7 @@ import { validateBitcoinInput } from "@/lib/bitcoin";
 import { getRecordAttachments } from "@/lib/attachments";
 import type { Record } from "@/lib/database";
 import type { Attachment } from "@/lib/database";
+import { searchPendingClass } from "@/lib/search-pending-class";
 
 type SortDirection = "asc" | "desc" | null;
 type SortColumn = "type" | "label" | "inputString" | "tags" | "categories" | "walletSoftware" | "seedName" | "privateKeyStatus" | "attachments" | "source" | "owner" | "walletName" | "balance" | "lastTxDate" | "txCount" | string;
@@ -964,7 +965,7 @@ export default function Dashboard() {
         />
       </div>
 
-      <div className={`flex-1 overflow-auto p-4 transition-opacity duration-200 ${isSearchPending ? 'opacity-60' : ''}`}>
+      <div className={`flex-1 overflow-auto p-4 ${searchPendingClass(isSearchPending)}`}>
         {isLoading ? (
           <div className="flex items-center justify-center h-64">
             <p className="text-muted-foreground">Loading records...</p>

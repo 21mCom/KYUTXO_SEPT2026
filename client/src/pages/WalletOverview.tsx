@@ -32,6 +32,7 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { db } from "@/lib/database";
 import type { Record as DbRecord } from "@/lib/database";
+import { searchPendingClass } from "@/lib/search-pending-class";
 
 interface WalletStats {
   walletName: string;
@@ -391,7 +392,7 @@ export default function WalletOverview() {
       </div>
 
       {/* Wallet Table */}
-      <Card className={`flex-1 overflow-hidden transition-opacity duration-200 ${isSearchPending ? 'opacity-60' : ''}`}>
+      <Card className={`flex-1 overflow-hidden ${searchPendingClass(isSearchPending)}`}>
         <ScrollArea className="h-full">
           {loading ? (
             <div className="flex items-center justify-center h-48">

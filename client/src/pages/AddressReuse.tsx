@@ -47,6 +47,7 @@ import { useTags } from "@/hooks/use-tags";
 import { useCategories } from "@/hooks/use-categories";
 import { useSeedNames } from "@/hooks/use-seed-names";
 import { useWalletSoftware } from "@/hooks/use-wallet-software";
+import { searchPendingClass } from "@/lib/search-pending-class";
 
 type ReuseReason = 'multi-receive' | 'change-to-self' | 'both';
 
@@ -613,7 +614,7 @@ export default function AddressReuse() {
               </div>
             </div>
 
-            <div className={`transition-opacity duration-200 ${isSearchPending ? 'opacity-60' : ''}`}>
+            <div className={`${searchPendingClass(isSearchPending)}`}>
             {isProcessing ? (
               <div className="text-center py-12 text-muted-foreground">
                 <div className="space-y-3">

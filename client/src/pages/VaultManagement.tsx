@@ -14,6 +14,7 @@ import { useToast } from "@/hooks/use-toast";
 import { updateRecord } from "@/lib/dataFacade";
 import { db } from "@/lib/database";
 import type { VaultMetadata, Record as DbRecord } from "@/lib/database";
+import { searchPendingClass } from "@/lib/search-pending-class";
 
 interface CosignerDetail {
   index: number;
@@ -262,7 +263,7 @@ export default function VaultManagement() {
         </div>
       </div>
 
-      <div className={`transition-opacity duration-200 ${isSearchPending ? 'opacity-60' : ''}`}>
+      <div className={`${searchPendingClass(isSearchPending)}`}>
       {filteredVaults.length === 0 ? (
         <Card>
           <CardContent className="py-12 text-center">

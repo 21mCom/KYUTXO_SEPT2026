@@ -35,6 +35,7 @@ import {
   type FieldConflict,
   type FieldConfig 
 } from "@/lib/conflict-detection";
+import { searchPendingClass } from "@/lib/search-pending-class";
 
 interface RecordWithConflicts {
   record: DBRecord;
@@ -286,7 +287,7 @@ export default function ConflictResolution() {
             </div>
           </div>
         </CardHeader>
-        <CardContent className={`transition-opacity duration-200 ${isSearchPending ? 'opacity-60' : ''}`}>
+        <CardContent className={`${searchPendingClass(isSearchPending)}`}>
           {filteredRecords.length === 0 ? (
             <div className="text-center py-12 text-muted-foreground">
               {recordsWithConflicts.length === 0 ? (
