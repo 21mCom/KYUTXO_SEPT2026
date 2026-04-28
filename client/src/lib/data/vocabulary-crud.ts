@@ -29,6 +29,17 @@ export async function getTags(): Promise<Tag[]> {
 }
 
 export async function updateTag(id: number, data: Partial<Tag>): Promise<void> {
+  if (data.name !== undefined) {
+    const trimmedName = data.name.trim();
+    if (!trimmedName) {
+      throw new Error('Tag name cannot be empty');
+    }
+    const existing = await db.tags.where('name').equalsIgnoreCase(trimmedName).first();
+    if (existing && existing.id !== id) {
+      throw new Error('Tag already exists');
+    }
+    data = { ...data, name: trimmedName };
+  }
   await db.tags.update(id, data);
 }
 
@@ -78,6 +89,17 @@ export async function getCategories(): Promise<Category[]> {
 }
 
 export async function updateCategory(id: number, data: Partial<Category>): Promise<void> {
+  if (data.name !== undefined) {
+    const trimmedName = data.name.trim();
+    if (!trimmedName) {
+      throw new Error('Category name cannot be empty');
+    }
+    const existing = await db.categories.where('name').equalsIgnoreCase(trimmedName).first();
+    if (existing && existing.id !== id) {
+      throw new Error('Category already exists');
+    }
+    data = { ...data, name: trimmedName };
+  }
   await db.categories.update(id, data);
 }
 
@@ -121,6 +143,17 @@ export async function getOwners(): Promise<Owner[]> {
 }
 
 export async function updateOwner(id: number, data: Partial<Owner>): Promise<void> {
+  if (data.name !== undefined) {
+    const trimmedName = data.name.trim();
+    if (!trimmedName) {
+      throw new Error('Owner name cannot be empty');
+    }
+    const existing = await db.owners.where('name').equalsIgnoreCase(trimmedName).first();
+    if (existing && existing.id !== id) {
+      throw new Error('Owner already exists');
+    }
+    data = { ...data, name: trimmedName };
+  }
   await db.owners.update(id, data);
 }
 
@@ -153,6 +186,17 @@ export async function getWalletNames(): Promise<WalletName[]> {
 }
 
 export async function updateWalletName(id: number, data: Partial<WalletName>): Promise<void> {
+  if (data.name !== undefined) {
+    const trimmedName = data.name.trim();
+    if (!trimmedName) {
+      throw new Error('Wallet name cannot be empty');
+    }
+    const existing = await db.walletNames.where('name').equalsIgnoreCase(trimmedName).first();
+    if (existing && existing.id !== id) {
+      throw new Error('Wallet name already exists');
+    }
+    data = { ...data, name: trimmedName };
+  }
   await db.walletNames.update(id, data);
 }
 
@@ -194,12 +238,19 @@ export async function getSeedNames(): Promise<SeedName[]> {
 }
 
 export async function updateSeedName(id: number, data: Partial<SeedName>): Promise<void> {
-  if (data.name) {
+  if (data.name !== undefined) {
     const trimmedName = data.name.trim();
+    if (!trimmedName) {
+      throw new Error('Seed name cannot be empty');
+    }
     if (trimmedName.length > SEED_NAME_MAX_LENGTH) {
       throw new Error(`Seed names are limited to ${SEED_NAME_MAX_LENGTH} characters to prevent accidental seed phrase entry`);
     }
-    data.name = trimmedName;
+    const existing = await db.seedNames.where('name').equalsIgnoreCase(trimmedName).first();
+    if (existing && existing.id !== id) {
+      throw new Error('Seed name already exists');
+    }
+    data = { ...data, name: trimmedName };
   }
   await db.seedNames.update(id, data);
 }
@@ -237,6 +288,17 @@ export async function getWalletSoftware(): Promise<WalletSoftware[]> {
 }
 
 export async function updateWalletSoftware(id: number, data: Partial<WalletSoftware>): Promise<void> {
+  if (data.name !== undefined) {
+    const trimmedName = data.name.trim();
+    if (!trimmedName) {
+      throw new Error('Wallet software name cannot be empty');
+    }
+    const existing = await db.walletSoftware.where('name').equalsIgnoreCase(trimmedName).first();
+    if (existing && existing.id !== id) {
+      throw new Error('Wallet software already exists');
+    }
+    data = { ...data, name: trimmedName };
+  }
   await db.walletSoftware.update(id, data);
 }
 
