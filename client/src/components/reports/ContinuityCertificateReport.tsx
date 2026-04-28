@@ -22,7 +22,7 @@ import { format } from "date-fns";
 import { 
   CalendarIcon, Shield, Clock, Coins, 
   ArrowRight, Filter, FileJson, FileText, Lock, Eye,
-  AlertTriangle, RefreshCw
+  AlertTriangle, RefreshCw, X
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { AddressLink } from "@/components/AddressLink";
@@ -375,16 +375,26 @@ export function ContinuityCertificateReport() {
               data-testid="progress-bar-error"
             />
           </div>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => exportSelectedCertificates(exportError.format)}
-            disabled={selectedCertificates.size === 0}
-            data-testid="button-retry-export"
-          >
-            <RefreshCw className="h-4 w-4 mr-2" />
-            Retry
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => exportSelectedCertificates(exportError.format)}
+              disabled={selectedCertificates.size === 0}
+              data-testid="button-retry-export"
+            >
+              <RefreshCw className="h-4 w-4 mr-2" />
+              Retry
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setExportError(null)}
+              data-testid="button-dismiss-export-error"
+            >
+              <X className="h-4 w-4" />
+            </Button>
+          </div>
         </div>
       )}
 
