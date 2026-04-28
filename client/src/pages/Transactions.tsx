@@ -1154,23 +1154,28 @@ export default function Transactions() {
               {needsClientSideFiltering ? (
                 volumeComputing ? (
                   stats.pageVolume !== null ? (
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <span className="inline-flex items-center gap-1 cursor-help" tabIndex={0} data-testid="indicator-loaded-volume">
-                          <span>{satsToBtc(stats.pageVolume)} BTC</span>
-                          <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-                        </span>
-                      </TooltipTrigger>
-                      <TooltipContent side="bottom" className="max-w-xs">
-                        <p>
-                          Volume from {stats.loadedTxCount.toLocaleString()} of {navigableCount.toLocaleString()} transactions
-                          loaded so far.
-                          {volumeProgress && volumeProgress.total > 0
-                            ? ` Computing total… ${volumeProgress.processed.toLocaleString()} / ${volumeProgress.total.toLocaleString()}`
-                            : " Computing total…"}
-                        </p>
-                      </TooltipContent>
-                    </Tooltip>
+                    <div className="flex flex-col">
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <span className="inline-flex items-center gap-1 cursor-help" tabIndex={0} data-testid="indicator-loaded-volume">
+                            <span>{satsToBtc(stats.pageVolume)} BTC</span>
+                            <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                          </span>
+                        </TooltipTrigger>
+                        <TooltipContent side="bottom" className="max-w-xs">
+                          <p>
+                            Volume from {stats.loadedTxCount.toLocaleString()} of {navigableCount.toLocaleString()} transactions
+                            loaded so far.
+                            {volumeProgress && volumeProgress.total > 0
+                              ? ` Computing total… ${volumeProgress.processed.toLocaleString()} / ${volumeProgress.total.toLocaleString()}`
+                              : " Computing total…"}
+                          </p>
+                        </TooltipContent>
+                      </Tooltip>
+                      <span className="text-xs text-muted-foreground" data-testid="text-volume-fraction">
+                        {stats.loadedTxCount.toLocaleString()}/{navigableCount.toLocaleString()} txs loaded
+                      </span>
+                    </div>
                   ) : (
                     <span className="inline-flex items-center gap-2" data-testid="indicator-volume-loading">
                       <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
@@ -1260,20 +1265,25 @@ export default function Transactions() {
                   </TooltipContent>
                 </Tooltip>
               ) : stats.isPartialStats ? (
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <span className="inline-flex items-center gap-1 cursor-help" tabIndex={0} data-testid="indicator-loaded-addresses">
-                      <span>{stats.linkedAddressCount.toLocaleString()}</span>
-                      <Info className="h-4 w-4 text-muted-foreground" />
-                    </span>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom" className="max-w-xs">
-                    <p>
-                      Linked addresses found in {stats.loadedTxCount.toLocaleString()} of {navigableCount.toLocaleString()} transactions
-                      loaded so far. Scroll to load more.
-                    </p>
-                  </TooltipContent>
-                </Tooltip>
+                <div className="flex flex-col">
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span className="inline-flex items-center gap-1 cursor-help" tabIndex={0} data-testid="indicator-loaded-addresses">
+                        <span>{stats.linkedAddressCount.toLocaleString()}</span>
+                        <Info className="h-4 w-4 text-muted-foreground" />
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom" className="max-w-xs">
+                      <p>
+                        Linked addresses found in {stats.loadedTxCount.toLocaleString()} of {navigableCount.toLocaleString()} transactions
+                        loaded so far. Scroll to load more.
+                      </p>
+                    </TooltipContent>
+                  </Tooltip>
+                  <span className="text-xs text-muted-foreground" data-testid="text-addresses-fraction">
+                    {stats.loadedTxCount.toLocaleString()}/{navigableCount.toLocaleString()} txs loaded
+                  </span>
+                </div>
               ) : (
                 stats.linkedAddressCount.toLocaleString()
               )}
