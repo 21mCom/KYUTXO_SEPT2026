@@ -241,7 +241,7 @@ function VirtualizedPreviewList({ records, scrollToTopSignal }: { records: Recor
 
   useEffect(() => {
     if (scrollToTopSignal > 0 && parentRef.current) {
-      parentRef.current.scrollTop = 0;
+      parentRef.current.scrollTo({ top: 0, behavior: "smooth" });
     }
   }, [scrollToTopSignal]);
 
