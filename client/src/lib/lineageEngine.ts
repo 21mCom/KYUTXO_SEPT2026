@@ -202,37 +202,39 @@ export async function buildAllLineage(
 // Get lineage chain for an address (traces back to origin)
 export async function getLineageChainForAddress(
   address: string,
-  maxDepth: number = 10
+  maxDepth: number = 10,
+  maxResults: number = 5000
 ): Promise<UtxoLineage[]> {
   const chain: UtxoLineage[] = [];
   const visited = new Set<string>();
   const queue: string[] = [address];
   let depth = 0;
   
-  while (queue.length > 0 && depth < maxDepth) {
+  while (queue.length > 0 && depth < maxDepth && chain.length < maxResults) {
     const currentAddress = queue.shift()!;
     if (visited.has(currentAddress)) continue;
     visited.add(currentAddress);
     
-    // Find lineage records where this address received funds
+    const remaining = maxResults - chain.length;
     const incoming = await db.utxoLineage
       .where('createdAddress')
       .equals(currentAddress)
+      .limit(remaining)
       .toArray();
     
     for (const lineage of incoming) {
       chain.push(lineage);
       
-      // If the source was also owned, continue tracing back
       if (lineage.spentOwned && !visited.has(lineage.spentAddress)) {
         queue.push(lineage.spentAddress);
       }
+      
+      if (chain.length >= maxResults) break;
     }
     
     depth++;
   }
   
-  // Sort by block time (oldest first)
   chain.sort((a, b) => a.blockTime - b.blockTime);
   
   return chain;
@@ -241,37 +243,39 @@ export async function getLineageChainForAddress(
 // Get lineage chain forward (traces where funds went)
 export async function getLineageChainForward(
   address: string,
-  maxDepth: number = 10
+  maxDepth: number = 10,
+  maxResults: number = 5000
 ): Promise<UtxoLineage[]> {
   const chain: UtxoLineage[] = [];
   const visited = new Set<string>();
   const queue: string[] = [address];
   let depth = 0;
   
-  while (queue.length > 0 && depth < maxDepth) {
+  while (queue.length > 0 && depth < maxDepth && chain.length < maxResults) {
     const currentAddress = queue.shift()!;
     if (visited.has(currentAddress)) continue;
     visited.add(currentAddress);
     
-    // Find lineage records where this address sent funds
+    const remaining = maxResults - chain.length;
     const outgoing = await db.utxoLineage
       .where('spentAddress')
       .equals(currentAddress)
+      .limit(remaining)
       .toArray();
     
     for (const lineage of outgoing) {
       chain.push(lineage);
       
-      // If the destination was also owned (change or self-transfer), continue tracing
       if (lineage.createdOwned && !visited.has(lineage.createdAddress)) {
         queue.push(lineage.createdAddress);
       }
+      
+      if (chain.length >= maxResults) break;
     }
     
     depth++;
   }
   
-  // Sort by block time (oldest first)
   chain.sort((a, b) => a.blockTime - b.blockTime);
   
   return chain;
@@ -305,7 +309,7 @@ export async function buildCustodySegment(
   const originRecord = await getRecordForAddress(originAddress);
   
   // Get the lineage chain forward to trace custody
-  const forwardChain = await getLineageChainForward(originAddress, 50);
+  const forwardChain = await getLineageChainForward(originAddress, 50, 5000);
   
   // Find the current state
   let currentAddress = originAddress;

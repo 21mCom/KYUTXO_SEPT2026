@@ -82,7 +82,7 @@ export function ContinuityProof({ selectedAddress, onAddressSelect }: Continuity
     const addressSegments = await getSegmentsForAddress(address);
     setSegments(addressSegments);
     
-    const addressLineage = await getLineageChainForAddress(address, 20);
+    const addressLineage = await getLineageChainForAddress(address, 20, 2000);
     setLineage(addressLineage);
   };
   
