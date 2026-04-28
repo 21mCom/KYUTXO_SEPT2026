@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { ArrowLeft, Search as SearchIcon, Database, Hash, ExternalLink, AlertCircle, Trash2, X, ChevronLeft, ChevronRight } from "lucide-react";
+import { ArrowLeft, Search as SearchIcon, Database, Hash, ExternalLink, AlertCircle, Trash2, X, ChevronLeft, ChevronRight, Loader2 } from "lucide-react";
 import { BlockchainToggle } from "@/components/BlockchainToggle";
 import Dexie from "dexie";
 import { db, type Record as DbRecord, type VaultMetadata, type AddressImportance, type ChainType, type CustomField, type BlockchainTransaction, type TransactionParticipant } from "@/lib/database";
@@ -132,7 +132,7 @@ export default function Records() {
   const [records, setRecords] = useState<ConvertedRecord[]>([]);
   const [selectedRecordId, setSelectedRecordId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
-  const debouncedSearch = useDebouncedValue(searchQuery, PAGE_DEBOUNCE.Records);
+  const [debouncedSearch, isSearchPending] = useDebouncedValue(searchQuery, PAGE_DEBOUNCE.Records);
   const [urlSearchQuery, setUrlSearchQuery] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [customFieldDefs, setCustomFieldDefs] = useState<CustomField[]>([]);
@@ -591,7 +591,11 @@ export default function Records() {
                 Search Records
               </label>
               <div className="mt-2 relative">
-                <SearchIcon className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                {isSearchPending ? (
+                  <Loader2 className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground animate-spin" data-testid="icon-search-pending" />
+                ) : (
+                  <SearchIcon className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                )}
                 <Input
                   id="search"
                   placeholder="Search by label, address, txid, owner, wallet, or notes..."

@@ -51,7 +51,7 @@ type SortColumn = "type" | "label" | "inputString" | "tags" | "categories" | "wa
 
 export default function Dashboard() {
   const [search, setSearch] = useState("");
-  const debouncedSearch = useDebouncedValue(search, PAGE_DEBOUNCE.Dashboard);
+  const [debouncedSearch, isSearchPending] = useDebouncedValue(search, PAGE_DEBOUNCE.Dashboard);
   const [view, setView] = useState<"grid" | "table">("table");
   const [filter, setFilter] = useState<{
     type?: "address" | "transaction" | "other" | "all";
@@ -833,6 +833,7 @@ export default function Dashboard() {
             onChange={setSearch}
             placeholder="Search records..."
             className="max-w-md"
+            isPending={isSearchPending}
           />
           <div className="flex items-center gap-2">
             <BlockchainToggle

@@ -50,7 +50,7 @@ export default function ConflictResolution() {
   const [isLoading, setIsLoading] = useState(true);
   const [recordsWithConflicts, setRecordsWithConflicts] = useState<RecordWithConflicts[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
-  const debouncedSearchQuery = useDebouncedValue(searchQuery, PAGE_DEBOUNCE.ConflictResolution);
+  const [debouncedSearchQuery, isSearchPending] = useDebouncedValue(searchQuery, PAGE_DEBOUNCE.ConflictResolution);
   const [fieldFilter, setFieldFilter] = useState<string>("all");
   const [selectedRecord, setSelectedRecord] = useState<RecordWithConflicts | null>(null);
   const [selectedConflict, setSelectedConflict] = useState<FieldConflict | null>(null);
@@ -250,7 +250,11 @@ export default function ConflictResolution() {
           <div className="flex items-center justify-between gap-4">
             <div className="flex items-center gap-4 flex-1">
               <div className="relative flex-1 max-w-sm">
-                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                {isSearchPending ? (
+                  <Loader2 className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground animate-spin" data-testid="icon-search-pending" />
+                ) : (
+                  <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                )}
                 <Input
                   placeholder="Search addresses or labels..."
                   value={searchQuery}

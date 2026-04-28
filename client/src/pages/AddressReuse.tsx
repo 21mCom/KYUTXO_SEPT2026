@@ -83,7 +83,7 @@ const ALL_TIERS: AddressImportance[] = ['verified', 'manual', 'wallet-import', '
 
 export default function AddressReuse() {
   const [search, setSearch] = useState("");
-  const debouncedSearch = useDebouncedValue(search, PAGE_DEBOUNCE.AddressReuse);
+  const [debouncedSearch, isSearchPending] = useDebouncedValue(search, PAGE_DEBOUNCE.AddressReuse);
   const [expandedAddresses, setExpandedAddresses] = useState<Set<string>>(new Set());
   const [copiedAddress, setCopiedAddress] = useState<string | null>(null);
   const { toast } = useToast();
@@ -598,7 +598,11 @@ export default function AddressReuse() {
           <CardContent>
             <div className="mb-4">
               <div className="relative">
-                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                {isSearchPending ? (
+                  <Loader2 className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground animate-spin" data-testid="icon-search-pending" />
+                ) : (
+                  <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                )}
                 <Input
                   placeholder="Search by address, label, owner..."
                   value={search}

@@ -90,7 +90,7 @@ export default function Transactions() {
   const [opReturnOnly, setOpReturnOnly] = useState(false);
   const [searchProgress, setSearchProgress] = useState<{ scanned: number; total: number; matches: number } | null>(null);
 
-  const debouncedSearch = useDebouncedValue(search, PAGE_DEBOUNCE.Transactions);
+  const [debouncedSearch, isSearchPending] = useDebouncedValue(search, PAGE_DEBOUNCE.Transactions);
 
   const txDbSignal = useDbChangeSignal(['blockchainTransactions', 'transactionParticipants', 'records'], 500);
 
@@ -664,7 +664,11 @@ export default function Transactions() {
       {/* Search and Filters */}
       <div className="flex-none flex flex-col sm:flex-row gap-3">
         <div className="relative flex-1">
-          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          {isSearchPending ? (
+            <Loader2 className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground animate-spin" data-testid="icon-search-pending" />
+          ) : (
+            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          )}
           <Input
             placeholder="Search by txid, address, or label..."
             value={search}

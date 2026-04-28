@@ -1,4 +1,4 @@
-import { Search, X } from "lucide-react";
+import { Search, X, Loader2 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 
@@ -7,12 +7,17 @@ interface SearchBarProps {
   onChange: (value: string) => void;
   placeholder?: string;
   className?: string;
+  isPending?: boolean;
 }
 
-export function SearchBar({ value, onChange, placeholder = "Search records...", className = "" }: SearchBarProps) {
+export function SearchBar({ value, onChange, placeholder = "Search records...", className = "", isPending = false }: SearchBarProps) {
   return (
     <div className={`relative ${className}`}>
-      <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+      {isPending ? (
+        <Loader2 className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground animate-spin" data-testid="icon-search-pending" />
+      ) : (
+        <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+      )}
       <Input
         type="search"
         placeholder={placeholder}

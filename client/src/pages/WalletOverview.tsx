@@ -12,7 +12,8 @@ import {
   Search,
   ExternalLink,
   ArrowUpDown,
-  RefreshCw
+  RefreshCw,
+  Loader2
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -136,7 +137,7 @@ export default function WalletOverview() {
   const [walletStats, setWalletStats] = useState<WalletStats[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
-  const debouncedSearchQuery = useDebouncedValue(searchQuery, PAGE_DEBOUNCE.WalletOverview);
+  const [debouncedSearchQuery, isSearchPending] = useDebouncedValue(searchQuery, PAGE_DEBOUNCE.WalletOverview);
   const [sortField, setSortField] = useState<SortField>('walletName');
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
   const [expandedWallets, setExpandedWallets] = useState<Set<string>>(new Set());
@@ -375,7 +376,11 @@ export default function WalletOverview() {
 
       {/* Search */}
       <div className="relative max-w-sm">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+        {isSearchPending ? (
+          <Loader2 className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground animate-spin" data-testid="icon-search-pending" />
+        ) : (
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+        )}
         <Input
           placeholder="Search wallets..."
           value={searchQuery}

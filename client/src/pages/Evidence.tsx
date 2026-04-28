@@ -104,7 +104,7 @@ type EvidenceFormValues = z.infer<typeof evidenceFormSchema>;
 export default function EvidencePage() {
   const { toast } = useToast();
   const [searchTerm, setSearchTerm] = useState("");
-  const debouncedSearchTerm = useDebouncedValue(searchTerm, PAGE_DEBOUNCE.Evidence);
+  const [debouncedSearchTerm, isSearchPending] = useDebouncedValue(searchTerm, PAGE_DEBOUNCE.Evidence);
   const [filterType, setFilterType] = useState<string>("all");
   const [filterImportance, setFilterImportance] = useState<string>("all");
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
@@ -583,7 +583,11 @@ export default function EvidencePage() {
 
       <div className="flex items-center gap-4 p-4 border-b flex-wrap">
         <div className="relative flex-1 min-w-[200px]">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          {isSearchPending ? (
+            <Loader2 className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground animate-spin" data-testid="icon-search-pending" />
+          ) : (
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          )}
           <Input
             placeholder="Search by title, notes, parties, or tags..."
             value={searchTerm}

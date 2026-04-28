@@ -43,7 +43,8 @@ import {
   Check,
   TrendingUp,
   TrendingDown,
-  HelpCircle
+  HelpCircle,
+  Loader2
 } from "lucide-react";
 import { SiBitcoin } from "react-icons/si";
 import { getOwners, getWalletNames, getTags, getCategories, getParticipantsByAddresses } from "@/lib/dataFacade";
@@ -168,7 +169,7 @@ export default function UTXOs() {
   const initialSettings = useMemo(() => loadSettings(), []);
   
   const [search, setSearch] = useState("");
-  const debouncedSearch = useDebouncedValue(search, PAGE_DEBOUNCE.UTXOs);
+  const [debouncedSearch, isSearchPending] = useDebouncedValue(search, PAGE_DEBOUNCE.UTXOs);
   const [selectedDate, setSelectedDate] = useState<Date | undefined>(undefined);
   const [searchFilters, setSearchFilters] = useState<SearchFilters>(defaultFilters);
   const [ownerFilter, setOwnerFilter] = useState<string>(initialSettings.ownerFilter);
@@ -1069,7 +1070,11 @@ export default function UTXOs() {
             <div className="flex-1 min-w-[200px]">
               <Label className="sr-only">Search</Label>
               <div className="relative">
-                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                {isSearchPending ? (
+                  <Loader2 className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground animate-spin" data-testid="icon-search-pending" />
+                ) : (
+                  <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                )}
                 <Input
                   placeholder="Search address, txid, label..."
                   value={search}
