@@ -88,36 +88,22 @@ export default function Transactions() {
     searchFilters.amountMode !== 'any' ||
     searchFilters.dateMode !== 'any';
 
-  const rawRecords = useLiveQuery(
+  const curatedRecords = useLiveQuery(
     async () => {
-      if (includeBlockchainDiscovered) {
-        return db.records.where('type').equals('address').toArray();
-      } else {
-        return db.records
-          .where('[type+addressImportance]')
-          .anyOf(USER_CURATED_TIERS.map(tier => ['address', tier]))
-          .toArray();
-      }
+      if (includeBlockchainDiscovered) return null;
+      return db.records
+        .where('[type+addressImportance]')
+        .anyOf(USER_CURATED_TIERS.map(tier => ['address', tier]))
+        .toArray();
     },
     [includeBlockchainDiscovered]
   );
 
-  const processedRecords = rawRecords ?? [];
-
-  const addressToRecord = useMemo(() => {
-    const map = new Map<string, Record>();
-    processedRecords.forEach(record => {
-      if (record.type === 'address' && record.inputString) {
-        map.set(record.inputString, record);
-      }
-    });
-    return map;
-  }, [processedRecords]);
-
   const { value: userCuratedTxidSet, isComputing: userCuratedTxidSetComputing } = useAsyncMemo(async (signal) => {
-    if (!processedRecords || processedRecords.length === 0) return new Set<string>();
+    if (includeBlockchainDiscovered) return new Set<string>();
+    if (!curatedRecords || curatedRecords.length === 0) return new Set<string>();
 
-    const recordIds = processedRecords
+    const recordIds = curatedRecords
       .filter(r => r.id !== undefined)
       .map(r => r.id as number);
 
@@ -136,7 +122,7 @@ export default function Transactions() {
       if (i + batchSize < recordIds.length) await yieldToUI();
     }
     return txids;
-  }, [processedRecords], new Set<string>());
+  }, [curatedRecords, includeBlockchainDiscovered], new Set<string>());
 
   const { value: txCounts } = useAsyncMemo(async (signal) => {
     const totalDbCount = await db.blockchainTransactions.count();
@@ -249,6 +235,35 @@ export default function Transactions() {
     return map;
   }, [needsBroadParticipants, preFilteredTransactions], new Map<string, TransactionParticipant[]>());
 
+  const { value: broadRecords } = useAsyncMemo(async (signal) => {
+    const recordIds = new Set<number>();
+    for (const parts of broadParticipantMap.values()) {
+      for (const p of parts) {
+        if (p.recordId != null) recordIds.add(p.recordId);
+      }
+    }
+    if (recordIds.size === 0) return [] as Record[];
+    const records = await db.records.bulkGet(Array.from(recordIds));
+    return records.filter(Boolean) as Record[];
+  }, [broadParticipantMap], [] as Record[]);
+
+  const searchAddressMap = useMemo(() => {
+    const map = new Map<string, Record>();
+    if (curatedRecords) {
+      for (const record of curatedRecords) {
+        if (record.type === 'address' && record.inputString) {
+          map.set(record.inputString, record);
+        }
+      }
+    }
+    for (const record of broadRecords) {
+      if (record.type === 'address' && record.inputString) {
+        map.set(record.inputString, record);
+      }
+    }
+    return map;
+  }, [curatedRecords, broadRecords]);
+
   const filteredTransactions = useMemo(() => {
     let results = preFilteredTransactions;
     
@@ -273,7 +288,7 @@ export default function Transactions() {
         const txParts = broadParticipantMap.get(tx.txid);
         if (txParts) {
           if (txParts.some(p => p.address.toLowerCase().includes(searchLower))) return true;
-          const linkedRecords = txParts.map(p => addressToRecord.get(p.address)).filter(Boolean);
+          const linkedRecords = txParts.map(p => searchAddressMap.get(p.address)).filter(Boolean);
           if (linkedRecords.some(r => r?.label?.toLowerCase().includes(searchLower))) return true;
         }
         
@@ -282,7 +297,7 @@ export default function Transactions() {
     }
     
     return results;
-  }, [preFilteredTransactions, search, searchFilters, broadParticipantMap, addressToRecord]);
+  }, [preFilteredTransactions, search, searchFilters, broadParticipantMap, searchAddressMap]);
 
   const totalFilteredCount = needsClientSideFiltering
     ? filteredTransactions.length
@@ -328,6 +343,28 @@ export default function Transactions() {
     }
     return map;
   }, [paginatedTransactionSlice, needsBroadParticipants, broadParticipantMap], new Map<string, TransactionParticipant[]>());
+
+  const { value: pageRecords } = useAsyncMemo(async (signal) => {
+    const recordIds = new Set<number>();
+    for (const parts of pageParticipantMap.values()) {
+      for (const p of parts) {
+        if (p.recordId != null) recordIds.add(p.recordId);
+      }
+    }
+    if (recordIds.size === 0) return [] as Record[];
+    const records = await db.records.bulkGet(Array.from(recordIds));
+    return records.filter(Boolean) as Record[];
+  }, [pageParticipantMap], [] as Record[]);
+
+  const addressToRecord = useMemo(() => {
+    const map = new Map<string, Record>(searchAddressMap);
+    for (const record of pageRecords) {
+      if (record.type === 'address' && record.inputString) {
+        map.set(record.inputString, record);
+      }
+    }
+    return map;
+  }, [searchAddressMap, pageRecords]);
 
   const paginatedTransactions = useMemo(() => {
     return paginatedTransactionSlice.map(tx => {
