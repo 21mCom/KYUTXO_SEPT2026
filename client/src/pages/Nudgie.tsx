@@ -188,7 +188,7 @@ export default function Nudgie() {
       }
       checkAbort(signal);
       try {
-        return await getParticipantsByAddresses(addresses);
+        return await getParticipantsByAddresses(addresses, signal);
       } catch (e) {
         if (signal.aborted) throw e;
         return [] as TransactionParticipant[];
