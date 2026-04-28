@@ -251,58 +251,72 @@ export default function Records() {
           return true;
         };
         
-        const excludeBlockchain = (r: DbRecord) =>
-          r.addressImportance !== 'blockchain-discovered' &&
-          r.addressImportance !== 'pending-review';
+        const USER_TIERS: DbRecord['addressImportance'][] =
+          ['verified', 'manual', 'wallet-import', 'xpub-derived'];
 
-        const singleEqualsFilter = !search && columnFilters.length === 1 &&
-          columnFilters[0].operator === 'equals' ? columnFilters[0] : null;
-        const indexedField = singleEqualsFilter &&
-          ['type', 'owner', 'walletName'].includes(singleEqualsFilter.field)
-          ? singleEqualsFilter.field : null;
+        const singleTypeFilter = !search && columnFilters.length === 1 &&
+          columnFilters[0].field === 'type' &&
+          columnFilters[0].operator === 'equals'
+          ? columnFilters[0].value.trim() : null;
 
         let count: number;
         const pgOffset = (currentPage - 1) * PAGE_SIZE;
         let rawRecords: DbRecord[];
 
-        if (!filtersActive) {
-          count = includeBlockchainDiscovered
-            ? await db.records.count()
-            : (await db.records.count()) - blockchainCount;
+        if (!filtersActive && includeBlockchainDiscovered) {
+          count = await db.records.count();
+          if (loadVersionRef.current !== version) return;
+          setTotalCount(count);
+
+          rawRecords = await db.records
+            .orderBy('id').reverse()
+            .offset(pgOffset).limit(PAGE_SIZE).toArray();
+
+        } else if (!filtersActive && !includeBlockchainDiscovered) {
+          count = (await db.records.count()) - blockchainCount;
+          if (loadVersionRef.current !== version) return;
+          setTotalCount(count);
+
+          const candidateLimit = pgOffset + PAGE_SIZE;
+          const tierResults = await Promise.all(USER_TIERS.map(tier =>
+            db.records.where('[addressImportance+id]')
+              .between([tier, Dexie.minKey], [tier, Dexie.maxKey])
+              .reverse()
+              .limit(candidateLimit)
+              .toArray()
+          ));
+          const merged = tierResults.flat()
+            .sort((a, b) => (b.id ?? 0) - (a.id ?? 0));
+          rawRecords = merged.slice(pgOffset, pgOffset + PAGE_SIZE);
+
+        } else if (singleTypeFilter) {
+          const typeVal = singleTypeFilter;
+          if (includeBlockchainDiscovered) {
+            count = await db.records.where('type').equals(typeVal).count();
+          } else {
+            count = await db.records.where('[type+addressImportance]')
+              .anyOf(USER_TIERS.map(tier => [typeVal, tier])).count();
+          }
           if (loadVersionRef.current !== version) return;
           setTotalCount(count);
 
           if (includeBlockchainDiscovered) {
-            rawRecords = await db.records
-              .orderBy('id').reverse()
+            rawRecords = await db.records.where('[type+id]')
+              .between([typeVal, Dexie.minKey], [typeVal, Dexie.maxKey])
+              .reverse()
               .offset(pgOffset).limit(PAGE_SIZE).toArray();
           } else {
-            rawRecords = await db.records
-              .orderBy('id').reverse()
-              .filter(excludeBlockchain)
-              .offset(pgOffset).limit(PAGE_SIZE).toArray();
+            const candidateLimit = pgOffset + PAGE_SIZE;
+            const tierResults = await Promise.all(USER_TIERS.map(tier =>
+              db.records.where('[type+addressImportance]')
+                .equals([typeVal, tier])
+                .toArray()
+            ));
+            const merged = tierResults.flat()
+              .sort((a, b) => (b.id ?? 0) - (a.id ?? 0));
+            rawRecords = merged.slice(pgOffset, pgOffset + PAGE_SIZE);
           }
-        } else if (indexedField) {
-          const compoundIdx = `[${indexedField}+id]` as
-            '[type+id]' | '[owner+id]' | '[walletName+id]';
-          const val = singleEqualsFilter!.value.toLowerCase().trim();
 
-          if (includeBlockchainDiscovered) {
-            count = await db.records.where(indexedField).equals(val).count();
-          } else {
-            count = await db.records.where(indexedField).equals(val)
-              .filter(excludeBlockchain).count();
-          }
-          if (loadVersionRef.current !== version) return;
-          setTotalCount(count);
-
-          const baseQuery = db.records.where(compoundIdx)
-            .between([val, Dexie.minKey], [val, Dexie.maxKey])
-            .reverse();
-          rawRecords = includeBlockchainDiscovered
-            ? await baseQuery.offset(pgOffset).limit(PAGE_SIZE).toArray()
-            : await baseQuery.filter(excludeBlockchain)
-                .offset(pgOffset).limit(PAGE_SIZE).toArray();
         } else {
           count = await db.records.filter(filterFn).count();
           if (loadVersionRef.current !== version) return;
