@@ -199,6 +199,28 @@ async function runFilterQuery(
 const PREVIEW_ROW_HEIGHT = 40;
 const CONFIRM_ROW_HEIGHT = 44;
 
+function useResizeRemeasure(
+  parentRef: React.RefObject<HTMLElement | null>,
+  virtualizer: ReturnType<typeof useVirtualizer>,
+) {
+  useEffect(() => {
+    const el = parentRef.current;
+    if (!el) return;
+    let prevWidth = el.clientWidth;
+    const ro = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (!entry) return;
+      const newWidth = entry.contentRect.width;
+      if (newWidth !== prevWidth) {
+        prevWidth = newWidth;
+        virtualizer.measure();
+      }
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [parentRef, virtualizer]);
+}
+
 function VirtualizedPreviewList({ records }: { records: Record[] }) {
   const parentRef = useRef<HTMLDivElement>(null);
 
@@ -209,6 +231,8 @@ function VirtualizedPreviewList({ records }: { records: Record[] }) {
     overscan: 20,
     measureElement: (el) => el.getBoundingClientRect().height,
   });
+
+  useResizeRemeasure(parentRef, virtualizer);
 
   return (
     <div className="border rounded-lg">
@@ -285,6 +309,8 @@ function VirtualizedConfirmationTable({
     overscan: 20,
     measureElement: (el) => el.getBoundingClientRect().height,
   });
+
+  useResizeRemeasure(parentRef, virtualizer);
 
   return (
     <div className="border rounded-lg">
