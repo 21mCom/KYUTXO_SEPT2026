@@ -31,8 +31,7 @@ import { useWalletNames, createWalletName, updateWalletName, deleteWalletName, g
 import { useSeedNames, createSeedName, updateSeedName, deleteSeedName, getSeedNameUsageCount, SEED_NAME_MAX_LENGTH } from "@/hooks/use-seed-names";
 import { useOwners, createOwner, updateOwner, deleteOwner, getOwnerUsageCount } from "@/hooks/use-owners";
 import { useWalletSoftware, createWalletSoftware, updateWalletSoftware, deleteWalletSoftware, getWalletSoftwareUsageCount } from "@/hooks/use-wallet-software";
-import { db } from "@/lib/database";
-import { bulkUpdateRecords } from "@/lib/dataFacade";
+import { propagateTagRename, propagateCategoryRename, propagateStringFieldRename } from "@/lib/data/vocabulary-crud";
 
 interface VocabItem {
   id?: number;
@@ -53,42 +52,6 @@ interface VocabSectionConfig {
   maxLength?: number;
   maxLengthMessage?: string;
   deleteRemovesFromRecords?: boolean;
-}
-
-async function propagateTagRename(oldName: string, newName: string): Promise<number> {
-  const records = await db.records.filter(r => r.tags.includes(oldName)).toArray();
-  if (records.length === 0) return 0;
-  await bulkUpdateRecords(
-    records.map(record => ({
-      id: record.id!,
-      changes: { tags: record.tags.map(t => t === oldName ? newName : t) },
-    }))
-  );
-  return records.length;
-}
-
-async function propagateCategoryRename(oldName: string, newName: string): Promise<number> {
-  const records = await db.records.filter(r => r.categories.includes(oldName)).toArray();
-  if (records.length === 0) return 0;
-  await bulkUpdateRecords(
-    records.map(record => ({
-      id: record.id!,
-      changes: { categories: record.categories.map(c => c === oldName ? newName : c) },
-    }))
-  );
-  return records.length;
-}
-
-async function propagateStringFieldRename(field: string, oldName: string, newName: string): Promise<number> {
-  const records = await db.records.where(field).equals(oldName).toArray();
-  if (records.length === 0) return 0;
-  await bulkUpdateRecords(
-    records.map(record => ({
-      id: record.id!,
-      changes: { [field]: newName },
-    }))
-  );
-  return records.length;
 }
 
 function VocabSection({ config }: { config: VocabSectionConfig }) {

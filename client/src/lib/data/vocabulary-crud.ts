@@ -1,6 +1,14 @@
 import { db, type Tag, type Category, type Owner, type WalletName, type SeedName, type WalletSoftware } from '../database';
+import { bulkUpdateRecords } from './record-crud';
+
+export const SEED_NAME_MAX_LENGTH = 15;
 
 export async function createTag(name: string, color?: string): Promise<number> {
+  const existing = await db.tags.where('name').equals(name).first();
+  if (existing) {
+    throw new Error('Tag already exists');
+  }
+
   const tag: Tag = {
     name,
     color,
@@ -16,23 +24,36 @@ export async function getTags(): Promise<Tag[]> {
 }
 
 export async function updateTag(id: number, data: Partial<Tag>): Promise<void> {
-  const existing = await db.tags.get(id);
-  if (!existing) throw new Error('Tag not found');
-  
-  const updated: Tag = {
-    ...existing,
-    ...data,
-    id,
-  };
-  
-  await db.tags.put(updated);
+  await db.tags.update(id, data);
 }
 
 export async function deleteTag(id: number): Promise<void> {
+  const tag = await db.tags.get(id);
+  if (!tag) return;
+
+  const records = await db.records.filter(r => r.tags.includes(tag.name)).toArray();
+  if (records.length > 0) {
+    await bulkUpdateRecords(
+      records.map(record => ({
+        id: record.id!,
+        changes: { tags: record.tags.filter(t => t !== tag.name) },
+      }))
+    );
+  }
+
   await db.tags.delete(id);
 }
 
+export async function getTagUsageCount(tagName: string): Promise<number> {
+  return db.records.filter(r => r.tags.includes(tagName)).count();
+}
+
 export async function createCategory(name: string): Promise<number> {
+  const existing = await db.categories.where('name').equals(name).first();
+  if (existing) {
+    throw new Error('Category already exists');
+  }
+
   const category: Category = {
     name,
     createdAt: Date.now(),
@@ -47,30 +68,42 @@ export async function getCategories(): Promise<Category[]> {
 }
 
 export async function updateCategory(id: number, data: Partial<Category>): Promise<void> {
-  const existing = await db.categories.get(id);
-  if (!existing) throw new Error('Category not found');
-  
-  const updated: Category = {
-    ...existing,
-    ...data,
-    id,
-  };
-  
-  await db.categories.put(updated);
+  await db.categories.update(id, data);
 }
 
 export async function deleteCategory(id: number): Promise<void> {
+  const category = await db.categories.get(id);
+  if (!category) return;
+
+  const records = await db.records.filter(r => r.categories.includes(category.name)).toArray();
+  if (records.length > 0) {
+    await bulkUpdateRecords(
+      records.map(record => ({
+        id: record.id!,
+        changes: { categories: record.categories.filter(c => c !== category.name) },
+      }))
+    );
+  }
+
   await db.categories.delete(id);
 }
 
-export async function createOwner(name: string): Promise<number> {
-  const owner: Owner = {
-    name,
-    createdAt: Date.now(),
-  };
+export async function getCategoryUsageCount(categoryName: string): Promise<number> {
+  return db.records.filter(r => r.categories.includes(categoryName)).count();
+}
 
-  const id = await db.owners.add(owner);
-  return id as number;
+export async function createOwner(name: string): Promise<number> {
+  if (!name.trim()) {
+    throw new Error('Owner name cannot be empty');
+  }
+
+  const trimmedName = name.trim();
+  const existing = await db.owners.where('name').equalsIgnoreCase(trimmedName).first();
+  if (existing) {
+    throw new Error('Owner already exists');
+  }
+
+  return await db.owners.add({ name: trimmedName, createdAt: Date.now() }) as number;
 }
 
 export async function getOwners(): Promise<Owner[]> {
@@ -78,123 +111,181 @@ export async function getOwners(): Promise<Owner[]> {
 }
 
 export async function updateOwner(id: number, data: Partial<Owner>): Promise<void> {
-  const existing = await db.owners.get(id);
-  if (!existing) throw new Error('Owner not found');
-  
-  const updated: Owner = {
-    ...existing,
-    ...data,
-    id,
-  };
-  
-  await db.owners.put(updated);
+  await db.owners.update(id, data);
 }
 
 export async function deleteOwner(id: number): Promise<void> {
   await db.owners.delete(id);
 }
 
-export async function createWalletNameEntry(name: string): Promise<number> {
-  const walletName: WalletName = {
-    name,
-    createdAt: Date.now(),
-  };
-
-  const id = await db.walletNames.add(walletName);
-  return id as number;
+export async function getOwnerUsageCount(ownerName: string): Promise<number> {
+  return db.records.where('owner').equals(ownerName).count();
 }
+
+export async function createWalletName(name: string): Promise<number> {
+  if (!name.trim()) {
+    throw new Error('Wallet name cannot be empty');
+  }
+
+  const trimmedName = name.trim();
+  const existing = await db.walletNames.where('name').equalsIgnoreCase(trimmedName).first();
+  if (existing) {
+    throw new Error('Wallet name already exists');
+  }
+
+  return await db.walletNames.add({ name: trimmedName, createdAt: Date.now() }) as number;
+}
+
+export const createWalletNameEntry = createWalletName;
 
 export async function getWalletNames(): Promise<WalletName[]> {
   return db.walletNames.toArray();
 }
 
-export async function updateWalletNameEntry(id: number, data: Partial<WalletName>): Promise<void> {
-  const existing = await db.walletNames.get(id);
-  if (!existing) throw new Error('Wallet name not found');
-  
-  const updated: WalletName = {
-    ...existing,
-    ...data,
-    id,
-  };
-  
-  await db.walletNames.put(updated);
+export async function updateWalletName(id: number, data: Partial<WalletName>): Promise<void> {
+  await db.walletNames.update(id, data);
 }
 
-export async function deleteWalletNameEntry(id: number): Promise<void> {
+export const updateWalletNameEntry = updateWalletName;
+
+export async function deleteWalletName(id: number): Promise<void> {
   await db.walletNames.delete(id);
 }
 
-export async function createSeedNameEntry(name: string): Promise<number> {
-  const seedName: SeedName = {
-    name,
-    createdAt: Date.now(),
-  };
+export const deleteWalletNameEntry = deleteWalletName;
 
-  const id = await db.seedNames.add(seedName);
-  return id as number;
+export async function getWalletNameUsageCount(walletNameValue: string): Promise<number> {
+  return db.records.where('walletName').equals(walletNameValue).count();
 }
+
+export async function createSeedName(name: string): Promise<number> {
+  if (!name.trim()) {
+    throw new Error('Seed name cannot be empty');
+  }
+
+  const trimmedName = name.trim();
+
+  if (trimmedName.length > SEED_NAME_MAX_LENGTH) {
+    throw new Error(`Seed names are limited to ${SEED_NAME_MAX_LENGTH} characters to prevent accidental seed phrase entry`);
+  }
+
+  const existing = await db.seedNames.where('name').equalsIgnoreCase(trimmedName).first();
+  if (existing) {
+    throw new Error('Seed name already exists');
+  }
+
+  return await db.seedNames.add({ name: trimmedName, createdAt: Date.now() }) as number;
+}
+
+export const createSeedNameEntry = createSeedName;
 
 export async function getSeedNames(): Promise<SeedName[]> {
   return db.seedNames.toArray();
 }
 
-export async function updateSeedNameEntry(id: number, data: Partial<SeedName>): Promise<void> {
-  const existing = await db.seedNames.get(id);
-  if (!existing) throw new Error('Seed name not found');
-  
-  const updated: SeedName = {
-    ...existing,
-    ...data,
-    id,
-  };
-  
-  await db.seedNames.put(updated);
+export async function updateSeedName(id: number, data: Partial<SeedName>): Promise<void> {
+  if (data.name) {
+    const trimmedName = data.name.trim();
+    if (trimmedName.length > SEED_NAME_MAX_LENGTH) {
+      throw new Error(`Seed names are limited to ${SEED_NAME_MAX_LENGTH} characters to prevent accidental seed phrase entry`);
+    }
+    data.name = trimmedName;
+  }
+  await db.seedNames.update(id, data);
 }
 
-export async function deleteSeedNameEntry(id: number): Promise<void> {
+export const updateSeedNameEntry = updateSeedName;
+
+export async function deleteSeedName(id: number): Promise<void> {
   await db.seedNames.delete(id);
 }
 
-export async function createWalletSoftwareEntry(name: string): Promise<number> {
-  const walletSoftware: WalletSoftware = {
-    name,
-    createdAt: Date.now(),
-  };
+export const deleteSeedNameEntry = deleteSeedName;
 
-  const id = await db.walletSoftware.add(walletSoftware);
-  return id as number;
+export async function getSeedNameUsageCount(seedNameValue: string): Promise<number> {
+  return db.records.where('seedName').equals(seedNameValue).count();
 }
+
+export async function createWalletSoftware(name: string): Promise<number> {
+  if (!name.trim()) {
+    throw new Error('Wallet software name cannot be empty');
+  }
+
+  const trimmedName = name.trim();
+  const existing = await db.walletSoftware.where('name').equalsIgnoreCase(trimmedName).first();
+  if (existing) {
+    throw new Error('Wallet software already exists');
+  }
+
+  return await db.walletSoftware.add({ name: trimmedName, createdAt: Date.now() }) as number;
+}
+
+export const createWalletSoftwareEntry = createWalletSoftware;
 
 export async function getWalletSoftware(): Promise<WalletSoftware[]> {
   return db.walletSoftware.toArray();
 }
 
-export async function updateWalletSoftwareEntry(id: number, data: Partial<WalletSoftware>): Promise<void> {
-  const existing = await db.walletSoftware.get(id);
-  if (!existing) throw new Error('Wallet software not found');
-  
-  const updated: WalletSoftware = {
-    ...existing,
-    ...data,
-    id,
-  };
-  
-  await db.walletSoftware.put(updated);
+export async function updateWalletSoftware(id: number, data: Partial<WalletSoftware>): Promise<void> {
+  await db.walletSoftware.update(id, data);
 }
 
-export async function deleteWalletSoftwareEntry(id: number): Promise<void> {
+export const updateWalletSoftwareEntry = updateWalletSoftware;
+
+export async function deleteWalletSoftware(id: number): Promise<void> {
   await db.walletSoftware.delete(id);
+}
+
+export const deleteWalletSoftwareEntry = deleteWalletSoftware;
+
+export async function getWalletSoftwareUsageCount(walletSoftwareValue: string): Promise<number> {
+  return db.records.where('walletSoftware').equals(walletSoftwareValue).count();
+}
+
+export async function propagateTagRename(oldName: string, newName: string): Promise<number> {
+  const records = await db.records.filter(r => r.tags.includes(oldName)).toArray();
+  if (records.length === 0) return 0;
+  await bulkUpdateRecords(
+    records.map(record => ({
+      id: record.id!,
+      changes: { tags: record.tags.map(t => t === oldName ? newName : t) },
+    }))
+  );
+  return records.length;
+}
+
+export async function propagateCategoryRename(oldName: string, newName: string): Promise<number> {
+  const records = await db.records.filter(r => r.categories.includes(oldName)).toArray();
+  if (records.length === 0) return 0;
+  await bulkUpdateRecords(
+    records.map(record => ({
+      id: record.id!,
+      changes: { categories: record.categories.map(c => c === oldName ? newName : c) },
+    }))
+  );
+  return records.length;
+}
+
+export async function propagateStringFieldRename(field: string, oldName: string, newName: string): Promise<number> {
+  const records = await db.records.where(field).equals(oldName).toArray();
+  if (records.length === 0) return 0;
+  await bulkUpdateRecords(
+    records.map(record => ({
+      id: record.id!,
+      changes: { [field]: newName },
+    }))
+  );
+  return records.length;
 }
 
 export async function syncTagsToMaster(tagNames: string[]): Promise<void> {
   if (!tagNames || tagNames.length === 0) return;
-  
+
   const existingTags = await db.tags.toArray();
   const existingNames = new Set(
     existingTags.map(t => t.name.toLowerCase())
   );
-  
+
   for (const name of tagNames) {
     const trimmedName = name.trim();
     if (trimmedName && !existingNames.has(trimmedName.toLowerCase())) {
@@ -210,12 +301,12 @@ export async function syncTagsToMaster(tagNames: string[]): Promise<void> {
 
 export async function syncCategoriesToMaster(categoryNames: string[]): Promise<void> {
   if (!categoryNames || categoryNames.length === 0) return;
-  
+
   const existingCategories = await db.categories.toArray();
   const existingNames = new Set(
     existingCategories.map(c => c.name.toLowerCase())
   );
-  
+
   for (const name of categoryNames) {
     const trimmedName = name.trim();
     if (trimmedName && !existingNames.has(trimmedName.toLowerCase())) {

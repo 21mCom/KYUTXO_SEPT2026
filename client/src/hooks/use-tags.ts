@@ -1,6 +1,7 @@
 import { useLiveQuery } from 'dexie-react-hooks';
-import { db, type Tag } from '@/lib/database';
-import { bulkUpdateRecords } from '@/lib/dataFacade';
+import { db } from '@/lib/database';
+
+export { createTag, updateTag, deleteTag, getTagUsageCount } from '@/lib/data/vocabulary-crud';
 
 export function useTags() {
   const tags = useLiveQuery(() => db.tags.orderBy('name').toArray());
@@ -9,43 +10,4 @@ export function useTags() {
     tags: tags ?? [],
     isLoading: tags === undefined,
   };
-}
-
-export async function createTag(name: string, color?: string) {
-  const existing = await db.tags.where('name').equals(name).first();
-  if (existing) {
-    throw new Error('Tag already exists');
-  }
-
-  const id = await db.tags.add({
-    name,
-    color,
-    createdAt: Date.now(),
-  });
-  return id;
-}
-
-export async function updateTag(id: number, data: Partial<Tag>) {
-  await db.tags.update(id, data);
-}
-
-export async function deleteTag(id: number) {
-  const tag = await db.tags.get(id);
-  if (!tag) return;
-
-  const records = await db.records.filter(r => r.tags.includes(tag.name)).toArray();
-  if (records.length > 0) {
-    await bulkUpdateRecords(
-      records.map(record => ({
-        id: record.id!,
-        changes: { tags: record.tags.filter(t => t !== tag.name) },
-      }))
-    );
-  }
-
-  await db.tags.delete(id);
-}
-
-export async function getTagUsageCount(tagName: string): Promise<number> {
-  return db.records.filter(r => r.tags.includes(tagName)).count();
 }
