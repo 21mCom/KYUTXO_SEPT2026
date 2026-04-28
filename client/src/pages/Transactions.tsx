@@ -1,5 +1,6 @@
 import { useState, useMemo } from "react";
 import { useAsyncMemo, yieldToUI, checkAbort } from "@/hooks/use-async-memo";
+import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { useDbChangeSignal } from "@/hooks/use-db-change-signal";
 import { useLiveQuery } from "dexie-react-hooks";
 import { format } from "date-fns";
@@ -84,9 +85,11 @@ export default function Transactions() {
   const [opReturnOnly, setOpReturnOnly] = useState(false);
   const [searchProgress, setSearchProgress] = useState<{ scanned: number; total: number; matches: number } | null>(null);
 
+  const debouncedSearch = useDebouncedValue(search, 300);
+
   const txDbSignal = useDbChangeSignal(['blockchainTransactions', 'transactionParticipants', 'records'], 500);
 
-  const needsClientSideFiltering = search.trim() !== '' ||
+  const needsClientSideFiltering = debouncedSearch.trim() !== '' ||
     searchFilters.amountMode !== 'any' ||
     searchFilters.dateMode !== 'any';
 
@@ -213,9 +216,9 @@ export default function Transactions() {
 
     const hasDateFilter = searchFilters.dateMode !== 'any';
     const hasAmountFilter = searchFilters.amountMode !== 'any';
-    const hasTextSearch = search.trim() !== '';
+    const hasTextSearch = debouncedSearch.trim() !== '';
     const needsParticipants = hasTextSearch || hasAmountFilter;
-    const searchLower = search.trim().toLowerCase();
+    const searchLower = debouncedSearch.trim().toLowerCase();
     const BATCH_SIZE = 500;
 
     const addressRecordMap = new Map<string, Record>();
@@ -365,10 +368,10 @@ export default function Transactions() {
     setSearchProgress(null);
     return { matches: allMatches, totalMatchCount: allMatches.length };
   }, [needsClientSideFiltering, includeBlockchainDiscovered, opReturnOnly,
-      userCuratedTxidSet, search, searchFilters, curatedRecords, txDbSignal],
+      userCuratedTxidSet, debouncedSearch, searchFilters, curatedRecords, txDbSignal],
      { matches: [] as BlockchainTransaction[], totalMatchCount: 0 });
 
-  const needsBroadParticipants = search.trim() !== '' || searchFilters.amountMode !== 'any';
+  const needsBroadParticipants = debouncedSearch.trim() !== '' || searchFilters.amountMode !== 'any';
 
   const preFilteredTransactions = useMemo(() => {
     if (!needsClientSideFiltering) return loadedTransactions;
