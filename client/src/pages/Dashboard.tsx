@@ -964,7 +964,7 @@ export default function Dashboard() {
         />
       </div>
 
-      <div className="flex-1 overflow-auto p-4">
+      <div className={`flex-1 overflow-auto p-4 transition-opacity duration-200 ${isSearchPending ? 'opacity-60' : ''}`}>
         {isLoading ? (
           <div className="flex items-center justify-center h-64">
             <p className="text-muted-foreground">Loading records...</p>

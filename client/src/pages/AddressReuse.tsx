@@ -613,6 +613,7 @@ export default function AddressReuse() {
               </div>
             </div>
 
+            <div className={`transition-opacity duration-200 ${isSearchPending ? 'opacity-60' : ''}`}>
             {isProcessing ? (
               <div className="text-center py-12 text-muted-foreground">
                 <div className="space-y-3">
@@ -831,6 +832,7 @@ export default function AddressReuse() {
                 ))}
               </div>
             )}
+            </div>
           </CardContent>
         </Card>
 

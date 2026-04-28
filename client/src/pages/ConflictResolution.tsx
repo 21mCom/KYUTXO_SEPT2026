@@ -286,7 +286,7 @@ export default function ConflictResolution() {
             </div>
           </div>
         </CardHeader>
-        <CardContent>
+        <CardContent className={`transition-opacity duration-200 ${isSearchPending ? 'opacity-60' : ''}`}>
           {filteredRecords.length === 0 ? (
             <div className="text-center py-12 text-muted-foreground">
               {recordsWithConflicts.length === 0 ? (

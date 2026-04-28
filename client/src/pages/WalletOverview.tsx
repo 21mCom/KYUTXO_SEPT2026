@@ -391,7 +391,7 @@ export default function WalletOverview() {
       </div>
 
       {/* Wallet Table */}
-      <Card className="flex-1 overflow-hidden">
+      <Card className={`flex-1 overflow-hidden transition-opacity duration-200 ${isSearchPending ? 'opacity-60' : ''}`}>
         <ScrollArea className="h-full">
           {loading ? (
             <div className="flex items-center justify-center h-48">

@@ -648,7 +648,7 @@ export default function EvidencePage() {
         </div>
       </div>
 
-      <ScrollArea className="flex-1">
+      <ScrollArea className={`flex-1 transition-opacity duration-200 ${isSearchPending ? 'opacity-60' : ''}`}>
         <div className="p-4">
           {sortedEvidence.length === 0 ? (
             <Card className="border-dashed">

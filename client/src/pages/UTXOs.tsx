@@ -1264,7 +1264,7 @@ export default function UTXOs() {
         </CardContent>
       </Card>
 
-      <div className="flex-1 min-h-0">
+      <div className={`flex-1 min-h-0 transition-opacity duration-200 ${isSearchPending ? 'opacity-60' : ''}`}>
         <Card className="h-full flex flex-col">
           <CardHeader className="pb-2 flex-none">
             <CardTitle className="text-base">

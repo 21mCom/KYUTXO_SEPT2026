@@ -262,6 +262,7 @@ export default function VaultManagement() {
         </div>
       </div>
 
+      <div className={`transition-opacity duration-200 ${isSearchPending ? 'opacity-60' : ''}`}>
       {filteredVaults.length === 0 ? (
         <Card>
           <CardContent className="py-12 text-center">
@@ -445,6 +446,7 @@ export default function VaultManagement() {
           </div>
         </ScrollArea>
       )}
+      </div>
     </div>
   );
 }
