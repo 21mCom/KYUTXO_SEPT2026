@@ -671,6 +671,7 @@ export interface EvidenceBundleOptions {
   includeLineageChain: boolean;
   redactExternalAddresses: boolean;
   selectedSegmentIds?: string[];
+  resumeFromBundle?: EvidenceBundle;
 }
 
 const SEGMENT_BATCH_SIZE = 200;
@@ -737,7 +738,13 @@ export async function generateEvidenceBundle(
   const { totalDays, earliestOrigin, latestActivity } = getCustodyDuration(segments);
   const totalValueBtc = segments.reduce((sum, s) => sum + s.currentAmount, 0) / 100000000;
 
-  const evidenceSegments: EvidenceSegment[] = [];
+  const resumeBundle = options.resumeFromBundle;
+  const alreadyProcessedIds = new Set(
+    resumeBundle ? resumeBundle.segments.map(s => s.segmentId) : []
+  );
+  const evidenceSegments: EvidenceSegment[] = resumeBundle
+    ? [...resumeBundle.segments]
+    : [];
 
   const buildPartialBundle = async (): Promise<EvidenceBundle> => {
     const partialValue = evidenceSegments.reduce((sum, s) => {
@@ -764,6 +771,13 @@ export async function generateEvidenceBundle(
   };
 
   for (const segment of segments) {
+    if (alreadyProcessedIds.has(segment.segmentId)) {
+      if (onProgress) {
+        onProgress(evidenceSegments.length, segments.length);
+      }
+      continue;
+    }
+
     try {
       const segmentLineage = options.includeLineageChain
         ? await getLineageForSegment(segment)

@@ -137,20 +137,21 @@ export function ContinuityCertificateReport() {
     setSelectedCertificates(new Set());
   };
 
-  const exportSelectedCertificates = async (exportFormat: 'json' | 'pdf') => {
+  const exportSelectedCertificates = async (exportFormat: 'json' | 'pdf', resumeFromBundle?: EvidenceBundle) => {
     const selected = filteredCertificates.filter(c => selectedCertificates.has(c.segment.id!));
     const selectedSegmentIds = selected.map(c => c.segment.segmentId);
     
     setIsExporting(true);
     setExportError(null);
-    setExportProgress({ current: 0, total: selectedSegmentIds.length });
+    setExportProgress({ current: resumeFromBundle ? resumeFromBundle.segments.length : 0, total: selectedSegmentIds.length });
     try {
       const options: EvidenceBundleOptions = {
         includeAddresses,
         includeTxids,
         includeLineageChain,
         redactExternalAddresses: false,
-        selectedSegmentIds
+        selectedSegmentIds,
+        resumeFromBundle
       };
 
       const handleProgress: ProgressCallback = (current, total) => {
@@ -173,7 +174,7 @@ export function ContinuityCertificateReport() {
       toast({
         title: partialBundle ? "Export partially completed" : "Export failed",
         description: partialBundle
-          ? `${partialBundle.summary.totalSegments} of ${partialBundle.requestedSegments} segments processed. You can download the partial results.`
+          ? `${partialBundle.summary.totalSegments} of ${partialBundle.requestedSegments} segments processed. You can download the partial results or resume.`
           : message,
         variant: "destructive",
       });
@@ -409,22 +410,33 @@ export function ContinuityCertificateReport() {
             </div>
             <div className="flex items-center gap-2">
               {exportError.partialBundle && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => downloadPartialBundle(exportError.partialBundle!, exportError.format)}
-                  disabled={isDownloadingPartial}
-                  data-testid="button-download-partial"
-                >
-                  {isDownloadingPartial ? (
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  ) : (
-                    <Download className="h-4 w-4 mr-2" />
-                  )}
-                  {isDownloadingPartial
-                    ? "Downloading..."
-                    : `Download partial (${exportError.partialBundle.summary.totalSegments}/${exportError.partialBundle.requestedSegments})`}
-                </Button>
+                <>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => downloadPartialBundle(exportError.partialBundle!, exportError.format)}
+                    disabled={isDownloadingPartial}
+                    data-testid="button-download-partial"
+                  >
+                    {isDownloadingPartial ? (
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    ) : (
+                      <Download className="h-4 w-4 mr-2" />
+                    )}
+                    {isDownloadingPartial
+                      ? "Downloading..."
+                      : `Download partial (${exportError.partialBundle.summary.totalSegments}/${exportError.partialBundle.requestedSegments})`}
+                  </Button>
+                  <Button
+                    size="sm"
+                    onClick={() => exportSelectedCertificates(exportError.format, exportError.partialBundle!)}
+                    disabled={selectedCertificates.size === 0}
+                    data-testid="button-resume-export"
+                  >
+                    <ArrowRight className="h-4 w-4 mr-2" />
+                    Resume
+                  </Button>
+                </>
               )}
               <Button
                 variant="outline"
@@ -449,7 +461,7 @@ export function ContinuityCertificateReport() {
           {exportError.partialBundle && (
             <div className="flex items-center gap-2 ml-8 text-xs text-muted-foreground" data-testid="text-partial-info">
               <Badge variant="outline" className="text-xs">INCOMPLETE</Badge>
-              {exportError.partialBundle.summary.totalSegments} of {exportError.partialBundle.requestedSegments} segments were successfully processed before the error occurred.
+              {exportError.partialBundle.summary.totalSegments} of {exportError.partialBundle.requestedSegments} segments were successfully processed. Resume to continue from where it left off.
             </div>
           )}
         </div>
