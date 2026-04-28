@@ -9,6 +9,7 @@ interface ScrollPositionIndicatorProps {
 }
 
 const DEFAULT_FADE_OUT_DELAY_MS = 1500;
+const INITIAL_FLASH_MS = 1000;
 
 export function ScrollPositionIndicator({
   virtualItems,
@@ -22,6 +23,9 @@ export function ScrollPositionIndicator({
 
   useEffect(() => {
     if (!scrollElement) return;
+
+    setVisible(true);
+    timerRef.current = setTimeout(() => setVisible(false), INITIAL_FLASH_MS);
 
     const onScroll = () => {
       setVisible(true);
