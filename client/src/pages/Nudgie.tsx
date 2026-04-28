@@ -15,7 +15,7 @@ import {
   ACQUISITION_METHOD_OPTIONS,
   DISPOSITION_TYPE_OPTIONS,
 } from "@/lib/database";
-import { updateRecord, createRecord, getTags, getCategories, getParticipantsByAddresses } from "@/lib/dataFacade";
+import { updateRecord, createRecord, getParticipantsByAddresses } from "@/lib/dataFacade";
 import { uploadAttachment } from "@/lib/attachments";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -33,7 +33,6 @@ import { MultiSelectCombobox } from "@/components/ui/multi-select-combobox";
 import { useToast } from "@/hooks/use-toast";
 import { useTags } from "@/hooks/use-tags";
 import { useCategories } from "@/hooks/use-categories";
-import type { Tag as TagType, Category as CategoryType } from "@/lib/database";
 import { useOwners } from "@/hooks/use-owners";
 import { useWalletNames } from "@/hooks/use-wallet-names";
 import { useSeedNames } from "@/hooks/use-seed-names";
@@ -177,8 +176,6 @@ export default function Nudgie() {
 
   const [addressRecords, setAddressRecords] = useState<Record[]>([]);
   const [transactionRecords, setTransactionRecords] = useState<Record[]>([]);
-  const [loadedTags, setLoadedTags] = useState<TagType[]>([]);
-  const [loadedCategories, setLoadedCategories] = useState<CategoryType[]>([]);
   const loadRequestId = useRef(0);
   const [participants, setParticipants] = useState<TransactionParticipant[] | undefined>(undefined);
   const participantsRequestId = useRef(0);
@@ -207,24 +204,6 @@ export default function Nudgie() {
     
     loadRecords();
   }, [rawAddressRecords, rawTransactionRecords]);
-
-  useEffect(() => {
-    const loadVocabulary = async () => {
-      try {
-        const [dTags, dCategories] = await Promise.all([
-          getTags(),
-          getCategories()
-        ]);
-        setLoadedTags(dTags);
-        setLoadedCategories(dCategories);
-      } catch {
-        // Fallback to raw data if loading fails
-        setLoadedTags(tags);
-        setLoadedCategories(categories);
-      }
-    };
-    loadVocabulary();
-  }, [tags, categories]);
 
   useEffect(() => {
     if (!addressRecords || addressRecords.length === 0) {
@@ -524,13 +503,13 @@ export default function Nudgie() {
   };
 
   const availableTagNames = useMemo(() => 
-    loadedTags.map(t => t.name).filter(n => n),
-    [loadedTags]
+    tags.map(t => t.name).filter(n => n),
+    [tags]
   );
 
   const availableCategoryNames = useMemo(() => 
-    loadedCategories.map(c => c.name).filter(n => n),
-    [loadedCategories]
+    categories.map(c => c.name).filter(n => n),
+    [categories]
   );
 
   const handleSaveTransaction = async (tx: TransactionWithContext) => {
