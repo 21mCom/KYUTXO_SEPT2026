@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef, useCallback } from "react";
+import { useState, useMemo, useRef, useCallback, useEffect } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { db, type CustodySegment, type UtxoLineage } from "@/lib/database";
 import { 
@@ -10,6 +10,11 @@ import {
   type EvidenceBundleOptions,
   type ProgressCallback
 } from "@/lib/lineageEngine";
+import {
+  savePartialBundle,
+  loadPartialBundle,
+  clearPartialBundle,
+} from "@/lib/partialBundleStore";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -124,6 +129,30 @@ export function ContinuityCertificateReport() {
     });
   }, [certificateData, dateRange, minAmount, statusFilter]);
 
+  const currentSelectedSegmentIds = useMemo(() => {
+    return filteredCertificates
+      .filter(c => selectedCertificates.has(c.segment.id!))
+      .map(c => c.segment.segmentId);
+  }, [filteredCertificates, selectedCertificates]);
+
+  useEffect(() => {
+    if (currentSelectedSegmentIds.length === 0 || isExporting) return;
+    let cancelled = false;
+    loadPartialBundle(currentSelectedSegmentIds).then(persisted => {
+      if (cancelled || !persisted) return;
+      setExportError({
+        message: `Previous incomplete export found (${persisted.bundle.summary.totalSegments} of ${persisted.bundle.requestedSegments ?? currentSelectedSegmentIds.length} segments).`,
+        format: persisted.format,
+        partialBundle: persisted.bundle,
+      });
+      setExportProgress({
+        current: persisted.bundle.summary.totalSegments,
+        total: persisted.bundle.requestedSegments ?? currentSelectedSegmentIds.length,
+      });
+    });
+    return () => { cancelled = true; };
+  }, [currentSelectedSegmentIds, isExporting]);
+
   const toggleCertificate = (id: number) => {
     setSelectedCertificates(prev => {
       const next = new Set(prev);
@@ -173,6 +202,7 @@ export function ContinuityCertificateReport() {
       if (controller.signal.aborted) {
         if (bundle.isPartial && bundle.summary.totalSegments > 0) {
           setExportError({ message: `Cancelled after processing ${bundle.summary.totalSegments} of ${bundle.requestedSegments ?? selectedSegmentIds.length} segments.`, format: exportFormat, partialBundle: bundle });
+          await savePartialBundle(bundle, exportFormat, selectedSegmentIds);
           toast({
             title: "Export cancelled",
             description: `${bundle.summary.totalSegments} of ${bundle.requestedSegments ?? selectedSegmentIds.length} segments processed. You can download the partial results.`,
@@ -192,11 +222,15 @@ export function ContinuityCertificateReport() {
       } else {
         downloadEvidenceBundle(bundle, `evidence-bundle-${dateStr}.json`);
       }
+      await clearPartialBundle(selectedSegmentIds);
       setExportProgress(null);
     } catch (err) {
       const message = err instanceof Error ? err.message : "An unexpected error occurred during export";
       const partialBundle = err instanceof PartialBundleError ? err.partialBundle : undefined;
       setExportError({ message, format: exportFormat, partialBundle });
+      if (partialBundle) {
+        await savePartialBundle(partialBundle, exportFormat, selectedSegmentIds);
+      }
       toast({
         title: partialBundle ? "Export partially completed" : "Export failed",
         description: partialBundle
@@ -478,7 +512,10 @@ export function ContinuityCertificateReport() {
               <Button
                 variant="ghost"
                 size="icon"
-                onClick={() => setExportError(null)}
+                onClick={() => {
+                  setExportError(null);
+                  clearPartialBundle(currentSelectedSegmentIds);
+                }}
                 disabled={isDownloadingPartial}
                 data-testid="button-dismiss-export-error"
               >

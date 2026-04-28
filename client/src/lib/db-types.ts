@@ -639,6 +639,15 @@ export const DEFAULT_SYNC_PROTECTION: SyncProtectionSettings = {
   perAddressTimeoutMs: 60000,
 };
 
+export interface PartialExportBundle {
+  id?: number;
+  selectionKey: string;
+  bundle: import('./lineageEngine').EvidenceBundle;
+  format: 'json' | 'pdf';
+  selectedSegmentIds: string[];
+  createdAt: number;
+}
+
 // Derivation template for xpub storage
 // WARNING: Storing xpubs doesn't risk funds but reveals wallet structure and all addresses
 export interface DerivationTemplate {

@@ -25,7 +25,7 @@ KYUTXO features an offline-first architecture built for cross-platform desktop d
 *   **Visualization:** Features a Bitcoin Flow Visualizer for UTXO provenance tracing and a Network Analysis tool for visualizing Bitcoin address relationships as a force-directed graph.
 *   **Workflow Tools:** Provides a Quick Tagger for bulk labeling, Nudgie for unlabeled transaction workflow, a Database Cleanup utility for managing blockchain-discovered records, and a Discovery Tree Dialog.
 *   **Metadata & Editing:** Supports transaction classification metadata, a bulk editor for batch modifications, and a metadata conflict resolution system using a `RecordOrigin` system.
-*   **Origin Tracking System:** Comprehensive UTXO lineage tracking with `utxoLineage` and `custodySegment` tables, a Lineage Engine, Continuity Proof, Continuity Certificate Report, and Evidence Bundle Export.
+*   **Origin Tracking System:** Comprehensive UTXO lineage tracking with `utxoLineage` and `custodySegment` tables, a Lineage Engine, Continuity Proof, Continuity Certificate Report, and Evidence Bundle Export. Partial export bundles are persisted to IndexedDB (`partialExportBundles` table) so they survive page refreshes; the `partialBundleStore.ts` module provides save/load/clear operations keyed by the sorted set of selected segment IDs.
 *   **Evidence Storage:** General-purpose document storage for proof-of-ownership and historical records.
 *   **Vault Management:** Dedicated UI for viewing and managing multisig vaults.
 
