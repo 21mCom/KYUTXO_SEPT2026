@@ -1,5 +1,6 @@
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db, type Tag } from '@/lib/database';
+import { bulkUpdateRecords } from '@/lib/dataFacade';
 
 export function useTags() {
   const tags = useLiveQuery(() => db.tags.orderBy('name').toArray());
@@ -33,11 +34,13 @@ export async function deleteTag(id: number) {
   if (!tag) return;
 
   const records = await db.records.filter(r => r.tags.includes(tag.name)).toArray();
-  for (const record of records) {
-    await db.records.update(record.id!, {
-      tags: record.tags.filter(t => t !== tag.name),
-      updatedAt: Date.now(),
-    });
+  if (records.length > 0) {
+    await bulkUpdateRecords(
+      records.map(record => ({
+        id: record.id!,
+        changes: { tags: record.tags.filter(t => t !== tag.name) },
+      }))
+    );
   }
 
   await db.tags.delete(id);

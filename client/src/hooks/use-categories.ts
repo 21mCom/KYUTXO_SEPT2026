@@ -1,5 +1,6 @@
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db, type Category } from '@/lib/database';
+import { bulkUpdateRecords } from '@/lib/dataFacade';
 
 export function useCategories() {
   const categories = useLiveQuery(() => db.categories.orderBy('name').toArray());
@@ -32,11 +33,13 @@ export async function deleteCategory(id: number) {
   if (!category) return;
 
   const records = await db.records.filter(r => r.categories.includes(category.name)).toArray();
-  for (const record of records) {
-    await db.records.update(record.id!, {
-      categories: record.categories.filter(c => c !== category.name),
-      updatedAt: Date.now(),
-    });
+  if (records.length > 0) {
+    await bulkUpdateRecords(
+      records.map(record => ({
+        id: record.id!,
+        changes: { categories: record.categories.filter(c => c !== category.name) },
+      }))
+    );
   }
 
   await db.categories.delete(id);

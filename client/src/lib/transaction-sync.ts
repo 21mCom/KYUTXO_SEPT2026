@@ -4,7 +4,7 @@
 import { db, notifyDbChange, type Record, type BlockchainTransaction, type TransactionParticipant, type AddressSyncState, type NodeSettings, type PausedSyncState, type SkippedAddress, type AddressBlacklist, type SyncProtectionSettings, DEFAULT_SYNC_PROTECTION } from './database';
 import { createProvider, createProviderFromSettings, parseTransaction, MINIMUM_CONFIRMATIONS, type ProviderType, type ParsedTransaction, type BlockchainProvider, type ApiTransaction } from './blockchain-api';
 import { validateAddress } from './bitcoin';
-import { createRecord, createRecordOrigin } from './dataFacade';
+import { createRecord, createRecordOrigin, updateRecord } from './dataFacade';
 
 // Legacy source filter type - kept for backwards compatibility
 export type SourceFilter = 'manual-only' | 'include-tx-import' | 'include-blockchain-sync' | 'all' | 'custom';
@@ -436,10 +436,7 @@ export class TransactionSyncService {
       result.transactionsAlreadySynced = syncResult.skippedAlreadySynced;
       result.addressesSynced = 1;
 
-      await db.records.update(recordId, {
-        maxSyncedDepth: 0,
-        updatedAt: Date.now(),
-      });
+      await updateRecord(recordId, { maxSyncedDepth: 0 }, { skipNotification: true, skipVocabularySync: true });
 
       if (syncResult.imported > 0) {
         this.updateProgress({ phase: 'resolving-prevouts' });
@@ -928,10 +925,7 @@ export class TransactionSyncService {
               result.newAddressRecords += syncResult.newRecords;
               result.addressesSynced++;
               
-              await db.records.update(record.id, {
-                maxSyncedDepth: currentDepth,
-                updatedAt: Date.now(),
-              });
+              await updateRecord(record.id!, { maxSyncedDepth: currentDepth }, { skipNotification: true, skipVocabularySync: true });
 
               // Flush deferred notifications after each address
               this.flushNotifications();
@@ -983,10 +977,7 @@ export class TransactionSyncService {
               const currentMax = targetRecord.maxSyncedDepth ?? -1;
               // Only update if we actually synced at a deeper level
               if (deepestActuallySynced > currentMax) {
-                await db.records.update(targetId, {
-                  maxSyncedDepth: deepestActuallySynced,
-                  updatedAt: Date.now(),
-                });
+                await updateRecord(targetId, { maxSyncedDepth: deepestActuallySynced }, { skipNotification: true, skipVocabularySync: true });
                 console.log(`[TransactionSync] Updated target record ${targetId} maxSyncedDepth: ${currentMax} -> ${deepestActuallySynced}`);
               }
             }
@@ -1227,10 +1218,7 @@ export class TransactionSyncService {
             result.transactionsAlreadySynced += syncResult.skippedAlreadySynced;
             result.addressesSynced++;
 
-            await db.records.update(record.id, {
-              maxSyncedDepth: currentDepth,
-              updatedAt: Date.now(),
-            });
+            await updateRecord(record.id!, { maxSyncedDepth: currentDepth }, { skipNotification: true, skipVocabularySync: true });
 
             // Flush deferred notifications after each address
             this.flushNotifications();
@@ -1709,10 +1697,7 @@ export class TransactionSyncService {
     // Only update if this transaction is older than current firstSeenBlockTime
     // or if firstSeenBlockTime is not set
     if (!record.firstSeenBlockTime || blockTime < record.firstSeenBlockTime) {
-      await db.records.update(recordId, {
-        firstSeenBlockTime: blockTime,
-        updatedAt: Date.now(),
-      });
+      await updateRecord(recordId, { firstSeenBlockTime: blockTime }, { skipNotification: true, skipVocabularySync: true });
     }
   }
 

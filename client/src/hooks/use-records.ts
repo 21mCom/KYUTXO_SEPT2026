@@ -256,7 +256,7 @@ export async function createRecordWithAttachments(
           console.error('Rollback attachment delete failed:', e);
         }
       }
-      await db.records.delete(recordId);
+      await facadeDeleteRecord(recordId);
       throw new Error('All file uploads failed. Record was not created.');
     }
 
@@ -275,7 +275,7 @@ export async function createRecordWithAttachments(
         }
       }
     }
-    await db.records.delete(recordId);
+    await facadeDeleteRecord(recordId);
     throw error;
   }
 }

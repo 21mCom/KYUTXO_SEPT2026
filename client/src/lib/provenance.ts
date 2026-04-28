@@ -2,7 +2,7 @@
 // Traces UTXO origins and connections between addresses
 
 import { db, type Record, type TransactionParticipant, type BlockchainTransaction, type AddressImportance } from './database';
-import { getParticipantsByAddress, getParticipantsByTxid } from './dataFacade';
+import { getParticipantsByAddress, getParticipantsByTxid, updateRecord } from './dataFacade';
 
 // Importance tier levels (higher number = higher importance)
 export const IMPORTANCE_TIERS: { [key in AddressImportance]: number } = {
@@ -613,13 +613,8 @@ export async function upgradeAddressImportance(
     
     const now = Date.now();
     
-    // Update the record
-    await db.records.update(recordId, {
-      addressImportance: newImportance,
-      updatedAt: now,
-    });
+    await updateRecord(recordId, { addressImportance: newImportance });
     
-    // Create audit log entry in RecordOrigin
     await db.recordOrigins.add({
       recordId,
       originType: 'manual', // Manual action to upgrade

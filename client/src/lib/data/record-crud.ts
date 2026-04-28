@@ -156,9 +156,15 @@ export async function bulkCreateRecords(
   return ids as number[];
 }
 
+export interface UpdateRecordOptions {
+  skipNotification?: boolean;
+  skipVocabularySync?: boolean;
+}
+
 export async function updateRecord(
   id: number,
-  updates: Partial<Record>
+  updates: Partial<Record>,
+  options?: UpdateRecordOptions
 ): Promise<void> {
   const existing = await db.records.get(id);
   if (!existing) throw new Error('Record not found');
@@ -174,13 +180,17 @@ export async function updateRecord(
   }
   const updated: Record = merged;
 
-  syncRecordVocabulary(updates).catch((err) => {
-    console.warn('[updateRecord] Vocabulary sync failed:', err);
-  });
+  if (!options?.skipVocabularySync) {
+    syncRecordVocabulary(updates).catch((err) => {
+      console.warn('[updateRecord] Vocabulary sync failed:', err);
+    });
+  }
 
   await db.records.put(updated);
   
-  notifyDbChange('records');
+  if (!options?.skipNotification) {
+    notifyDbChange('records');
+  }
 }
 
 async function batchSyncVocabulary(
@@ -281,7 +291,8 @@ async function batchSyncVocabulary(
 }
 
 export async function bulkUpdateRecords(
-  updates: Array<{ id: number; changes: Partial<Record> }>
+  updates: Array<{ id: number; changes: Partial<Record> }>,
+  options?: UpdateRecordOptions
 ): Promise<{ successCount: number; errorCount: number }> {
   const now = Date.now();
   
@@ -331,33 +342,37 @@ export async function bulkUpdateRecords(
     await db.records.bulkPut(recordsToSave);
   });
   
-  const vocabularyValues = {
-    owners: new Set<string>(),
-    walletNames: new Set<string>(),
-    seedNames: new Set<string>(),
-    walletSoftware: new Set<string>(),
-  };
-  
-  for (const changes of allChanges) {
-    if (changes.owner && changes.owner !== 'Unknown') {
-      vocabularyValues.owners.add(changes.owner);
+  if (!options?.skipVocabularySync) {
+    const vocabularyValues = {
+      owners: new Set<string>(),
+      walletNames: new Set<string>(),
+      seedNames: new Set<string>(),
+      walletSoftware: new Set<string>(),
+    };
+    
+    for (const changes of allChanges) {
+      if (changes.owner && changes.owner !== 'Unknown') {
+        vocabularyValues.owners.add(changes.owner);
+      }
+      if (changes.walletName) {
+        vocabularyValues.walletNames.add(changes.walletName);
+      }
+      if (changes.seedName) {
+        vocabularyValues.seedNames.add(changes.seedName);
+      }
+      if (changes.walletSoftware) {
+        vocabularyValues.walletSoftware.add(changes.walletSoftware);
+      }
     }
-    if (changes.walletName) {
-      vocabularyValues.walletNames.add(changes.walletName);
-    }
-    if (changes.seedName) {
-      vocabularyValues.seedNames.add(changes.seedName);
-    }
-    if (changes.walletSoftware) {
-      vocabularyValues.walletSoftware.add(changes.walletSoftware);
-    }
+    
+    batchSyncVocabulary(vocabularyValues).catch((err) => {
+      console.warn('[bulkUpdateRecords] Vocabulary sync failed:', err);
+    });
   }
   
-  batchSyncVocabulary(vocabularyValues).catch((err) => {
-    console.warn('[bulkUpdateRecords] Vocabulary sync failed:', err);
-  });
-  
-  notifyDbChange('records');
+  if (!options?.skipNotification) {
+    notifyDbChange('records');
+  }
   
   const duration = performance.now() - startTime;
   console.log(`[bulkUpdateRecords] Completed: ${recordsToSave.length} records in ${duration.toFixed(0)}ms (${(duration / recordsToSave.length).toFixed(1)}ms/record)`);
@@ -365,7 +380,11 @@ export async function bulkUpdateRecords(
   return { successCount: recordsToSave.length, errorCount };
 }
 
-export async function deleteRecord(id: number): Promise<void> {
+export interface DeleteRecordOptions {
+  skipNotification?: boolean;
+}
+
+export async function deleteRecord(id: number, options?: DeleteRecordOptions): Promise<void> {
   const attachments = await db.attachments.where('recordId').equals(id).toArray();
 
   for (const attachment of attachments) {
@@ -384,7 +403,9 @@ export async function deleteRecord(id: number): Promise<void> {
   await db.attachments.where('recordId').equals(id).delete();
   await db.records.delete(id);
   
-  notifyDbChange('records');
+  if (!options?.skipNotification) {
+    notifyDbChange('records');
+  }
 }
 
 export async function findRecordByInputString(inputString: string): Promise<Record | undefined> {
