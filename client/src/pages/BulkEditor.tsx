@@ -217,8 +217,13 @@ export default function BulkEditor() {
 
   const [matchingRecords, setMatchingRecords] = useState<Record[]>([]);
   const [isFilterLoading, setIsFilterLoading] = useState(false);
+  const [totalRecordCount, setTotalRecordCount] = useState<number | null>(null);
   const queryVersionRef = useRef(0);
   const dbChangeSignal = useDbChangeSignal(['records'], 500);
+
+  useEffect(() => {
+    db.records.count().then(setTotalRecordCount).catch(() => setTotalRecordCount(null));
+  }, [dbChangeSignal]);
 
   useEffect(() => {
     if (conditions.length === 0) {
@@ -840,8 +845,8 @@ export default function BulkEditor() {
                   </AlertTitle>
                   <AlertDescription>
                     {matchingRecords.length === 0
-                      ? "No records match your criteria. Try adjusting the filters."
-                      : `Found ${matchingRecords.length} matching record${matchingRecords.length !== 1 ? 's' : ''}`
+                      ? `No records match your criteria${totalRecordCount != null ? ` (${totalRecordCount} total in database)` : ''}. Try adjusting the filters.`
+                      : `Found ${matchingRecords.length} matching record${matchingRecords.length !== 1 ? 's' : ''}${totalRecordCount != null ? ` out of ${totalRecordCount} total` : ''}`
                     }
                   </AlertDescription>
                 </>
