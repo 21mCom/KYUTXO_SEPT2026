@@ -565,6 +565,7 @@ export default function Transactions() {
     const txCount = totalFilteredCount;
     const pageFees = paginatedTransactions.reduce((sum, tx) => sum + tx.fee, 0);
     const pageVolume = paginatedTransactions.reduce((sum, tx) => sum + tx.totalOutputValue, 0);
+    const allNavigableFees = filteredTransactions.reduce((sum, tx) => sum + tx.fee, 0);
 
     const linkedAddresses = new Set<string>();
     paginatedTransactions.forEach(tx => {
@@ -579,9 +580,10 @@ export default function Transactions() {
       txCount,
       pageVolume,
       pageFees,
+      allNavigableFees,
       linkedAddressCount: linkedAddresses.size
     };
-  }, [totalFilteredCount, paginatedTransactions, addressToRecord]);
+  }, [totalFilteredCount, paginatedTransactions, filteredTransactions, addressToRecord]);
 
   const isLoading = needsClientSideFiltering ? scanLoading : txLoading;
 
@@ -637,7 +639,25 @@ export default function Transactions() {
           <CardHeader className="pb-2">
             <CardDescription>Page Volume</CardDescription>
             <CardTitle className="text-2xl" data-testid="text-total-volume">
-              {satsToBtc(stats.pageVolume)} BTC
+              {scanResult.limitReached ? (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="inline-flex items-center gap-1 cursor-help" tabIndex={0} data-testid="indicator-approx-volume">
+                      <span>{satsToBtc(stats.pageVolume)} BTC</span>
+                      <Info className="h-4 w-4 text-yellow-600 dark:text-yellow-400" />
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom" className="max-w-xs">
+                    <p>
+                      Showing volume for page {safePage} of {totalPages} only.
+                      Total volume across all {navigableCount.toLocaleString()} navigable
+                      matches is not computed. Try narrowing your filters.
+                    </p>
+                  </TooltipContent>
+                </Tooltip>
+              ) : (
+                <>{satsToBtc(stats.pageVolume)} BTC</>
+              )}
             </CardTitle>
           </CardHeader>
         </Card>
@@ -646,7 +666,24 @@ export default function Transactions() {
           <CardHeader className="pb-2">
             <CardDescription>Page Fees</CardDescription>
             <CardTitle className="text-2xl" data-testid="text-total-fees">
-              {formatSats(stats.pageFees)}
+              {scanResult.limitReached ? (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="inline-flex items-center gap-1 cursor-help" tabIndex={0} data-testid="indicator-approx-fees">
+                      <span>{formatSats(stats.pageFees)}</span>
+                      <Info className="h-4 w-4 text-yellow-600 dark:text-yellow-400" />
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom" className="max-w-xs">
+                    <p>
+                      Showing fees for page {safePage} of {totalPages} only.
+                      Navigable total ({navigableCount.toLocaleString()} matches): {formatSats(stats.allNavigableFees)}.
+                    </p>
+                  </TooltipContent>
+                </Tooltip>
+              ) : (
+                formatSats(stats.pageFees)
+              )}
             </CardTitle>
           </CardHeader>
         </Card>
