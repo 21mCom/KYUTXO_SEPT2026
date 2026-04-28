@@ -162,7 +162,8 @@ export async function buildLineageForTransaction(txid: string): Promise<UtxoLine
 
 // Build lineage for all synced transactions
 export async function buildAllLineage(
-  onProgress?: (current: number, total: number) => void
+  onProgress?: (current: number, total: number) => void,
+  signal?: AbortSignal
 ): Promise<{ processed: number; created: number }> {
   const BATCH_SIZE = 500;
   const totalCount = await db.blockchainTransactions.count();
@@ -171,6 +172,10 @@ export async function buildAllLineage(
   let lastId = 0;
 
   while (processed < totalCount) {
+    if (signal?.aborted) {
+      return { processed, created };
+    }
+
     const batch = await db.blockchainTransactions
       .where('id').above(lastId)
       .limit(BATCH_SIZE)
@@ -178,6 +183,10 @@ export async function buildAllLineage(
     if (batch.length === 0) break;
 
     for (const tx of batch) {
+      if (signal?.aborted) {
+        return { processed, created };
+      }
+
       const lineageRecords = await buildLineageForTransaction(tx.txid);
 
       if (lineageRecords.length > 0) {
@@ -448,14 +457,28 @@ function generateNarrative(
 
 // Build all custody segments from owned addresses
 export async function buildAllCustodySegments(
-  onProgress?: (current: number, total: number) => void
+  onProgress?: (current: number, total: number) => void,
+  signal?: AbortSignal
 ): Promise<{ processed: number; created: number }> {
   const uniqueOrigins = new Map<string, { createdAddress: string; createdTxid: string; createdVout: number }>();
 
-  await db.utxoLineage
-    .where('createdOwned')
-    .equals(1)
-    .each(lineage => {
+  const ORIGIN_SCAN_BATCH = 1000;
+  let originScanOffset = 0;
+  while (true) {
+    if (signal?.aborted) {
+      return { processed: 0, created: 0 };
+    }
+
+    const batch = await db.utxoLineage
+      .where('createdOwned')
+      .equals(1)
+      .offset(originScanOffset)
+      .limit(ORIGIN_SCAN_BATCH)
+      .toArray();
+
+    if (batch.length === 0) break;
+
+    for (const lineage of batch) {
       const key = `${lineage.createdTxid}:${lineage.createdVout}`;
       if (!uniqueOrigins.has(key)) {
         uniqueOrigins.set(key, {
@@ -464,13 +487,21 @@ export async function buildAllCustodySegments(
           createdVout: lineage.createdVout
         });
       }
-    });
+    }
+
+    originScanOffset += batch.length;
+    if (batch.length < ORIGIN_SCAN_BATCH) break;
+  }
 
   const origins = Array.from(uniqueOrigins.values());
   let processed = 0;
   let created = 0;
 
   for (const origin of origins) {
+    if (signal?.aborted) {
+      return { processed, created };
+    }
+
     const segment = await buildCustodySegment(
       origin.createdAddress,
       origin.createdTxid,

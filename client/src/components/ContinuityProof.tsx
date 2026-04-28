@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -27,7 +27,8 @@ import {
   Coins,
   AlertCircle,
   GitBranch,
-  MapPin
+  MapPin,
+  XCircle
 } from "lucide-react";
 import { 
   buildAllLineage,
@@ -51,6 +52,7 @@ export function ContinuityProof({ selectedAddress, onAddressSelect }: Continuity
   
   const [isBuilding, setIsBuilding] = useState(false);
   const [buildProgress, setBuildProgress] = useState({ current: 0, total: 0, phase: '', step: 0, totalSteps: 2, unit: '' });
+  const abortControllerRef = useRef<AbortController | null>(null);
   const [segments, setSegments] = useState<CustodySegment[]>([]);
   const [lineage, setLineage] = useState<UtxoLineage[]>([]);
   const [expandedSegments, setExpandedSegments] = useState<Set<string>>(new Set());
@@ -86,15 +88,31 @@ export function ContinuityProof({ selectedAddress, onAddressSelect }: Continuity
     setLineage(addressLineage);
   };
   
+  const handleCancelBuild = useCallback(() => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+  }, []);
+
   const handleBuildLineage = async () => {
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
     setIsBuilding(true);
     setBuildProgress({ current: 0, total: 0, phase: 'Scanning transactions...', step: 1, totalSteps: 2, unit: 'transactions' });
     
     try {
       const lineageResult = await buildAllLineage((current, total) => {
         setBuildProgress({ current, total, phase: 'Building UTXO lineage', step: 1, totalSteps: 2, unit: 'transactions' });
-      });
+      }, controller.signal);
       
+      if (controller.signal.aborted) {
+        toast({
+          title: "Build Cancelled",
+          description: `Cancelled during lineage phase. ${lineageResult.processed} transactions processed, ${lineageResult.created} links created before cancellation.`,
+        });
+        return;
+      }
+
       toast({
         title: "Lineage Built",
         description: `Processed ${lineageResult.processed} transactions, created ${lineageResult.created} lineage links.`,
@@ -104,18 +122,20 @@ export function ContinuityProof({ selectedAddress, onAddressSelect }: Continuity
       
       const segmentResult = await buildAllCustodySegments((current, total) => {
         setBuildProgress({ current, total, phase: 'Compiling custody segments', step: 2, totalSteps: 2, unit: 'origins' });
-      });
+      }, controller.signal);
       
+      if (controller.signal.aborted) {
+        toast({
+          title: "Build Cancelled",
+          description: `Cancelled during custody phase. ${segmentResult.processed} origins processed, ${segmentResult.created} segments created before cancellation.`,
+        });
+        return;
+      }
+
       toast({
         title: "Custody Segments Compiled",
         description: `Created ${segmentResult.created} custody segments from ${segmentResult.processed} origins.`,
       });
-      
-      await loadStats();
-      
-      if (selectedAddress) {
-        await loadAddressData(selectedAddress);
-      }
       
     } catch (error) {
       toast({
@@ -124,8 +144,13 @@ export function ContinuityProof({ selectedAddress, onAddressSelect }: Continuity
         description: error instanceof Error ? error.message : "An error occurred",
       });
     } finally {
+      abortControllerRef.current = null;
       setIsBuilding(false);
       setBuildProgress({ current: 0, total: 0, phase: '', step: 0, totalSteps: 2, unit: '' });
+      await loadStats();
+      if (selectedAddress) {
+        await loadAddressData(selectedAddress);
+      }
     }
   };
   
@@ -434,16 +459,27 @@ export function ContinuityProof({ selectedAddress, onAddressSelect }: Continuity
         
         {isBuilding && (
           <div className="space-y-2 p-3 bg-muted/30 rounded-lg" data-testid="lineage-build-progress">
-            <div className="flex items-center justify-between text-sm">
+            <div className="flex items-center justify-between gap-2 text-sm">
               <span className="font-medium flex items-center gap-2">
                 <Loader2 className="h-3 w-3 animate-spin" />
                 Step {buildProgress.step} of {buildProgress.totalSteps}: {buildProgress.phase}
               </span>
-              {buildProgress.total > 0 && (
-                <span className="text-muted-foreground tabular-nums" data-testid="text-build-counter">
-                  {buildProgress.current.toLocaleString()} of {buildProgress.total.toLocaleString()} {buildProgress.unit}
-                </span>
-              )}
+              <div className="flex items-center gap-2">
+                {buildProgress.total > 0 && (
+                  <span className="text-muted-foreground tabular-nums" data-testid="text-build-counter">
+                    {buildProgress.current.toLocaleString()} of {buildProgress.total.toLocaleString()} {buildProgress.unit}
+                  </span>
+                )}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleCancelBuild}
+                  data-testid="button-cancel-build"
+                >
+                  <XCircle className="h-3 w-3 mr-1" />
+                  Cancel
+                </Button>
+              </div>
             </div>
             <Progress
               value={buildProgress.total > 0 ? (buildProgress.current / buildProgress.total) * 100 : undefined}
