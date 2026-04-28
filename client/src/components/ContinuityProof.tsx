@@ -103,14 +103,27 @@ export function ContinuityProof({ selectedAddress, onAddressSelect }: Continuity
     return parts.join(' ');
   };
 
-  const getEstimatedRemaining = (): string | null => {
+  const getProcessingRate = (): number | null => {
     const { current, total } = buildProgress;
-    if (current <= 0 || total <= 0 || current >= total) return null;
+    if (current <= 0 || total <= 0) return null;
     const processed = current - phaseStartCountRef.current;
     if (processed <= 0) return null;
     const phaseElapsed = (Date.now() - phaseStartTimeRef.current) / 1000;
     if (phaseElapsed < 2) return null;
-    const rate = processed / phaseElapsed;
+    return processed / phaseElapsed;
+  };
+
+  const formatRate = (rate: number): string => {
+    if (rate >= 1000) return `~${(rate / 1000).toFixed(1)}k`;
+    if (rate >= 100) return `~${Math.round(rate)}`;
+    if (rate >= 10) return `~${rate.toFixed(1)}`;
+    return `~${rate.toFixed(2)}`;
+  };
+
+  const getEstimatedRemaining = (): string | null => {
+    const rate = getProcessingRate();
+    const { current, total } = buildProgress;
+    if (!rate || current >= total) return null;
     const remaining = (total - current) / rate;
     if (remaining < 1) return null;
     return formatDuration(Math.ceil(remaining));
@@ -574,10 +587,20 @@ export function ContinuityProof({ selectedAddress, onAddressSelect }: Continuity
               data-testid="progress-lineage-build"
             />
             <div className="flex items-center justify-between text-xs text-muted-foreground">
-              <span className="flex items-center gap-1 tabular-nums" data-testid="text-build-elapsed">
-                <Clock className="h-3 w-3" />
-                {formatDuration(elapsedSeconds)} elapsed
-              </span>
+              <div className="flex items-center gap-3">
+                <span className="flex items-center gap-1 tabular-nums" data-testid="text-build-elapsed">
+                  <Clock className="h-3 w-3" />
+                  {formatDuration(elapsedSeconds)} elapsed
+                </span>
+                {(() => {
+                  const rate = getProcessingRate();
+                  return rate ? (
+                    <span className="tabular-nums" data-testid="text-build-rate">
+                      {formatRate(rate)} {buildProgress.unit}/sec
+                    </span>
+                  ) : null;
+                })()}
+              </div>
               <div className="flex items-center gap-3">
                 {(() => {
                   const eta = getEstimatedRemaining();
