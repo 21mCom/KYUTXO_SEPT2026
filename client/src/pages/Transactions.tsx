@@ -132,7 +132,7 @@ export default function Transactions() {
     if (includeBlockchainDiscovered && !opReturnOnly) {
       filteredCount = totalDbCount;
     } else if (includeBlockchainDiscovered && opReturnOnly) {
-      filteredCount = await db.blockchainTransactions.where('hasOpReturn').equals(1).count();
+      filteredCount = await db.blockchainTransactions.where('hasOpReturn').equals(true).count();
       checkAbort(signal);
     } else if (!includeBlockchainDiscovered && opReturnOnly) {
       let count = 0;
@@ -176,10 +176,12 @@ export default function Transactions() {
 
     if (includeBlockchainDiscovered && opReturnOnly) {
       return db.blockchainTransactions
-        .where('hasOpReturn').equals(1)
+        .orderBy('blockTime')
         .reverse()
-        .sortBy('blockTime')
-        .then(sorted => sorted.slice(dbOffset, dbOffset + dbLimit));
+        .filter(tx => tx.hasOpReturn === true)
+        .offset(dbOffset)
+        .limit(dbLimit)
+        .toArray();
     }
 
     const txidArray = Array.from(userCuratedTxidSet);

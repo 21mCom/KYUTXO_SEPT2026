@@ -1,7 +1,6 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { useDbChangeSignal } from "@/hooks/use-db-change-signal";
 import { useLiveQuery } from "dexie-react-hooks";
-import { useAsyncMemo, yieldToUI, checkAbort } from "@/hooks/use-async-memo";
 import { db, BlockchainTransaction, TransactionParticipant, Record as DbRecord } from "@/lib/database";
 
 import { Card, CardContent } from "@/components/ui/card";
@@ -38,15 +37,134 @@ function formatBtc(sats: number, unit: DisplayUnit): string {
   return (sats / 100_000_000).toFixed(8) + " BTC";
 }
 
-interface AddressBalance {
-  sats: number;
-  count: number;
-  record: DbRecord;
-  address: string;
-}
-
 function formatUsd(amount: number): string {
   return "$" + amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function getGroupKeys(record: DbRecord, groupBy: GroupBy): string[] {
+  switch (groupBy) {
+    case "wallet":
+      return [record.walletName || "Unassigned"];
+    case "seed":
+      return [record.seedName || "Unassigned"];
+    case "owner":
+      return [record.owner || "Unassigned"];
+    case "tag":
+      return record.tags && record.tags.length > 0 ? record.tags : ["Untagged"];
+    case "category":
+      return record.categories && record.categories.length > 0 ? record.categories : ["Uncategorized"];
+  }
+}
+
+function computeBalancesForRecords(
+  records: DbRecord[],
+  participants: TransactionParticipant[],
+  txidToTx: Map<string, BlockchainTransaction>,
+): Map<number, { sats: number; count: number; record: DbRecord; address: string }> {
+  const addressToRec = new Map<string, DbRecord>();
+  const recordIdToRec = new Map<number, DbRecord>();
+  for (const record of records) {
+    if (record.inputString) addressToRec.set(record.inputString, record);
+    if (record.id !== undefined) recordIdToRec.set(record.id, record);
+  }
+
+  const findRecord = (p: TransactionParticipant): DbRecord | undefined => {
+    return addressToRec.get(p.address)
+      || (p.recordId ? recordIdToRec.get(p.recordId) : undefined);
+  };
+
+  const outputs: TransactionParticipant[] = [];
+  const spentOutpoints = new Set<string>();
+
+  for (const p of participants) {
+    if (p.role === 'output') {
+      outputs.push(p);
+    } else if (p.role === 'input') {
+      if (p.prevTxid !== undefined && p.prevVout !== undefined) {
+        spentOutpoints.add(`${p.prevTxid}:${p.prevVout}`);
+      }
+    }
+  }
+
+  const balanceMap = new Map<number, { sats: number; count: number; record: DbRecord; address: string }>();
+
+  const addToBalance = (output: TransactionParticipant, record: DbRecord) => {
+    const rid = record.id!;
+    const existing = balanceMap.get(rid);
+    if (existing) {
+      existing.sats += output.amount;
+      existing.count += 1;
+    } else {
+      balanceMap.set(rid, {
+        sats: output.amount,
+        count: 1,
+        record,
+        address: record.inputString || output.address,
+      });
+    }
+  };
+
+  const hasExactData = spentOutpoints.size > 0;
+
+  if (hasExactData) {
+    for (const output of outputs) {
+      const tx = txidToTx.get(output.txid);
+      if (!tx || tx.blockTime <= 0) continue;
+      const outpoint = `${output.txid}:${output.vout ?? 0}`;
+      if (spentOutpoints.has(outpoint)) continue;
+      const record = findRecord(output);
+      if (!record || record.id === undefined) continue;
+      addToBalance(output, record);
+    }
+    return balanceMap;
+  }
+
+  const outputsWithTime = outputs.map(output => {
+    const tx = txidToTx.get(output.txid);
+    return { output, blockTime: tx?.blockTime ?? 0 };
+  }).filter(o => o.blockTime > 0);
+
+  outputsWithTime.sort((a, b) => a.blockTime - b.blockTime);
+
+  const inputs = participants.filter(p => p.role === 'input');
+  const inputsWithTime = inputs.map(input => {
+    const tx = txidToTx.get(input.txid);
+    return { input, blockTime: tx?.blockTime ?? 0 };
+  }).filter(i => i.blockTime > 0);
+
+  inputsWithTime.sort((a, b) => a.blockTime - b.blockTime);
+
+  const inputsByAddressAmount = new Map<string, { input: TransactionParticipant; blockTime: number }[]>();
+  for (const item of inputsWithTime) {
+    const key = `${item.input.address}:${item.input.amount}`;
+    const existing = inputsByAddressAmount.get(key) || [];
+    existing.push(item);
+    inputsByAddressAmount.set(key, existing);
+  }
+
+  const matchedInputIndices = new Map<string, number>();
+
+  for (const { output, blockTime } of outputsWithTime) {
+    const key = `${output.address}:${output.amount}`;
+    const matchingInputs = inputsByAddressAmount.get(key) || [];
+    const currentIndex = matchedInputIndices.get(key) || 0;
+
+    const spendingInput = matchingInputs.find((item, idx) =>
+      idx >= currentIndex && item.blockTime > blockTime
+    );
+
+    if (spendingInput) {
+      const spendIdx = matchingInputs.indexOf(spendingInput);
+      matchedInputIndices.set(key, spendIdx + 1);
+    } else {
+      const record = findRecord(output);
+      if (record && record.id !== undefined) {
+        addToBalance(output, record);
+      }
+    }
+  }
+
+  return balanceMap;
 }
 
 export default function BalanceOverview() {
@@ -56,12 +174,12 @@ export default function BalanceOverview() {
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
 
   const txDbSignal = useDbChangeSignal(['blockchainTransactions']);
+  const computationId = useRef(0);
 
-  const [transactions, setTransactions] = useState<BlockchainTransaction[] | undefined>(undefined);
-  const transactionsRequestId = useRef(0);
-
-  const [participants, setParticipants] = useState<TransactionParticipant[] | undefined>(undefined);
-  const participantsRequestId = useRef(0);
+  const [groupBalances, setGroupBalances] = useState<Map<string, GroupBalance>>(new Map());
+  const [uniqueAddressBalances, setUniqueAddressBalances] = useState<Map<number, { sats: number; count: number }>>(new Map());
+  const [computingGroup, setComputingGroup] = useState<string | null>(null);
+  const [computedCount, setComputedCount] = useState(0);
 
   const rawRecords = useLiveQuery(
     () => db.records.where('type').equals('address').toArray(),
@@ -78,109 +196,119 @@ export default function BalanceOverview() {
 
   const processedRecords = rawRecords ?? [];
 
-  useEffect(() => {
-    if (!processedRecords || processedRecords.length === 0) {
-      setParticipants(undefined);
-      return;
-    }
-
-    const addresses = processedRecords
-      .filter(r => r.type === 'address' && r.inputString)
-      .map(r => r.inputString!);
-
-    if (addresses.length === 0) {
-      setParticipants([]);
-      return;
-    }
-
-    participantsRequestId.current += 1;
-    const thisRequestId = participantsRequestId.current;
-
-    getParticipantsByAddresses(addresses)
-      .then(result => {
-        if (thisRequestId === participantsRequestId.current) {
-          setParticipants(result);
-        }
-      })
-      .catch(() => {
-        if (thisRequestId === participantsRequestId.current) {
-          setParticipants([]);
-        }
-      });
-  }, [processedRecords]);
-
-  useEffect(() => {
-    if (!participants || participants.length === 0) {
-      setTransactions(participants === undefined ? undefined : []);
-      return;
-    }
-
-    const txids = new Set<string>();
-    for (const p of participants) txids.add(p.txid);
-
-    if (txids.size === 0) {
-      setTransactions([]);
-      return;
-    }
-
-    transactionsRequestId.current += 1;
-    const thisRequestId = transactionsRequestId.current;
-
-    const txidArray = Array.from(txids);
-    const batchSize = 500;
-    const loadBatched = async () => {
-      const results: BlockchainTransaction[] = [];
-      for (let i = 0; i < txidArray.length; i += batchSize) {
-        const batch = txidArray.slice(i, i + batchSize);
-        const txs = await db.blockchainTransactions.where('txid').anyOf(batch).toArray();
-        results.push(...txs);
-        if (i + batchSize < txidArray.length) {
-          await new Promise(r => setTimeout(r, 0));
-        }
+  const recordGroups = useMemo(() => {
+    const groupMap = new Map<string, DbRecord[]>();
+    for (const record of processedRecords) {
+      if (record.type !== 'address' || !record.inputString) continue;
+      const keys = getGroupKeys(record, groupBy);
+      for (const key of keys) {
+        const existing = groupMap.get(key) || [];
+        existing.push(record);
+        groupMap.set(key, existing);
       }
-      return results;
+    }
+    return groupMap;
+  }, [processedRecords, groupBy]);
+
+  useEffect(() => {
+    computationId.current += 1;
+    const thisId = computationId.current;
+    setGroupBalances(new Map());
+    setUniqueAddressBalances(new Map());
+    setComputingGroup(null);
+    setComputedCount(0);
+
+    if (recordGroups.size === 0) return;
+
+    const computeGroups = async () => {
+      const entries = Array.from(recordGroups.entries());
+
+      for (let gi = 0; gi < entries.length; gi++) {
+        const [groupName, records] = entries[gi];
+        if (thisId !== computationId.current) return;
+        setComputingGroup(groupName);
+
+        const addresses = records.map(r => r.inputString!);
+        let participants: TransactionParticipant[];
+        try {
+          participants = await getParticipantsByAddresses(addresses);
+        } catch {
+          participants = [];
+        }
+        if (thisId !== computationId.current) return;
+
+        const txids = new Set<string>();
+        for (const p of participants) txids.add(p.txid);
+
+        const txidToTx = new Map<string, BlockchainTransaction>();
+        if (txids.size > 0) {
+          const txidArray = Array.from(txids);
+          const batchSize = 500;
+          for (let i = 0; i < txidArray.length; i += batchSize) {
+            const batch = txidArray.slice(i, i + batchSize);
+            const txs = await db.blockchainTransactions.where('txid').anyOf(batch).toArray();
+            for (const tx of txs) txidToTx.set(tx.txid, tx);
+            if (thisId !== computationId.current) return;
+          }
+        }
+
+        const balanceMap = computeBalancesForRecords(records, participants, txidToTx);
+        if (thisId !== computationId.current) return;
+
+        const groupBalance: GroupBalance = {
+          name: groupName,
+          totalSats: 0,
+          addressCount: 0,
+          utxoCount: 0,
+          addresses: [],
+        };
+
+        for (const { sats, count, record, address } of balanceMap.values()) {
+          groupBalance.totalSats += sats;
+          groupBalance.utxoCount += count;
+          groupBalance.addressCount += 1;
+          groupBalance.addresses.push({
+            address,
+            sats,
+            utxoCount: count,
+            label: record.label || undefined,
+          });
+        }
+
+        if (balanceMap.size === 0) {
+          setComputedCount(gi + 1);
+          await new Promise(r => setTimeout(r, 0));
+          continue;
+        }
+
+        groupBalance.addresses.sort((a, b) => b.sats - a.sats);
+
+        setGroupBalances(prev => {
+          const next = new Map(prev);
+          next.set(groupName, groupBalance);
+          return next;
+        });
+
+        setUniqueAddressBalances(prev => {
+          const next = new Map(prev);
+          for (const [recordId, bal] of balanceMap.entries()) {
+            if (!next.has(recordId)) {
+              next.set(recordId, { sats: bal.sats, count: bal.count });
+            }
+          }
+          return next;
+        });
+
+        setComputedCount(gi + 1);
+
+        await new Promise(r => setTimeout(r, 0));
+      }
+
+      setComputingGroup(null);
     };
 
-    loadBatched()
-      .then(result => {
-        if (thisRequestId === transactionsRequestId.current) {
-          setTransactions(result);
-        }
-      })
-      .catch(() => {
-        if (thisRequestId === transactionsRequestId.current) {
-          setTransactions([]);
-        }
-      });
-  }, [participants, txDbSignal]);
-
-  const addressToRecord = useMemo(() => {
-    const map = new Map<string, DbRecord>();
-    processedRecords.forEach(record => {
-      if (record.type === 'address' && record.inputString) {
-        map.set(record.inputString, record);
-      }
-    });
-    return map;
-  }, [processedRecords]);
-
-  const recordIdToRecord = useMemo(() => {
-    const map = new Map<number, DbRecord>();
-    processedRecords.forEach(record => {
-      if (record.type === 'address' && record.id !== undefined) {
-        map.set(record.id, record);
-      }
-    });
-    return map;
-  }, [processedRecords]);
-
-  const txidToTx = useMemo(() => {
-    const map = new Map<string, BlockchainTransaction>();
-    transactions?.forEach(tx => {
-      map.set(tx.txid, tx);
-    });
-    return map;
-  }, [transactions]);
+    computeGroups();
+  }, [recordGroups, txDbSignal]);
 
   const latestPrice = useMemo(() => {
     if (!priceData || priceData.length === 0) return null;
@@ -188,187 +316,8 @@ export default function BalanceOverview() {
     return { date: sorted[0].date, price: sorted[0].close };
   }, [priceData]);
 
-  const { value: addressBalances, isComputing } = useAsyncMemo(async (signal) => {
-    if (!participants || !transactions) return [] as AddressBalance[];
-
-    const findRecord = (p: TransactionParticipant): DbRecord | undefined => {
-      return addressToRecord.get(p.address)
-        || (p.recordId ? recordIdToRecord.get(p.recordId) : undefined);
-    };
-
-    const outputs: TransactionParticipant[] = [];
-    const spentOutpoints = new Set<string>();
-
-    for (let i = 0; i < participants.length; i++) {
-      const p = participants[i];
-      if (p.role === 'output') {
-        outputs.push(p);
-      } else if (p.role === 'input') {
-        if (p.prevTxid !== undefined && p.prevVout !== undefined) {
-          spentOutpoints.add(`${p.prevTxid}:${p.prevVout}`);
-        }
-      }
-      if (i % 2000 === 1999) {
-        checkAbort(signal);
-        await yieldToUI();
-      }
-    }
-
-    const hasExactData = spentOutpoints.size > 0;
-    const balanceMap = new Map<number, AddressBalance>();
-
-    const addToBalance = (output: TransactionParticipant, record: DbRecord) => {
-      const rid = record.id!;
-      const existing = balanceMap.get(rid);
-      if (existing) {
-        existing.sats += output.amount;
-        existing.count += 1;
-      } else {
-        balanceMap.set(rid, {
-          sats: output.amount,
-          count: 1,
-          record,
-          address: record.inputString || output.address,
-        });
-      }
-    };
-
-    if (hasExactData) {
-      for (let i = 0; i < outputs.length; i++) {
-        const output = outputs[i];
-        const tx = txidToTx.get(output.txid);
-        if (!tx || tx.blockTime <= 0) continue;
-
-        const outpoint = `${output.txid}:${output.vout ?? 0}`;
-        if (spentOutpoints.has(outpoint)) continue;
-
-        const record = findRecord(output);
-        if (!record || record.id === undefined) continue;
-
-        addToBalance(output, record);
-
-        if (i % 2000 === 1999) {
-          checkAbort(signal);
-          await yieldToUI();
-        }
-      }
-      return Array.from(balanceMap.values());
-    }
-
-    const outputsWithTime = outputs.map(output => {
-      const tx = txidToTx.get(output.txid);
-      return { output, blockTime: tx?.blockTime ?? 0 };
-    }).filter(o => o.blockTime > 0);
-
-    outputsWithTime.sort((a, b) => a.blockTime - b.blockTime);
-
-    checkAbort(signal);
-    await yieldToUI();
-
-    const inputs = participants.filter(p => p.role === 'input');
-    const inputsWithTime = inputs.map(input => {
-      const tx = txidToTx.get(input.txid);
-      return { input, blockTime: tx?.blockTime ?? 0 };
-    }).filter(i => i.blockTime > 0);
-
-    inputsWithTime.sort((a, b) => a.blockTime - b.blockTime);
-
-    const inputsByAddressAmount = new Map<string, { input: TransactionParticipant; blockTime: number }[]>();
-    for (const item of inputsWithTime) {
-      const key = `${item.input.address}:${item.input.amount}`;
-      const existing = inputsByAddressAmount.get(key) || [];
-      existing.push(item);
-      inputsByAddressAmount.set(key, existing);
-    }
-
-    checkAbort(signal);
-    await yieldToUI();
-
-    const matchedInputIndices = new Map<string, number>();
-
-    for (let i = 0; i < outputsWithTime.length; i++) {
-      const { output, blockTime } = outputsWithTime[i];
-      const key = `${output.address}:${output.amount}`;
-      const matchingInputs = inputsByAddressAmount.get(key) || [];
-      const currentIndex = matchedInputIndices.get(key) || 0;
-
-      const spendingInput = matchingInputs.find((item, idx) =>
-        idx >= currentIndex && item.blockTime > blockTime
-      );
-
-      if (spendingInput) {
-        const spendIdx = matchingInputs.indexOf(spendingInput);
-        matchedInputIndices.set(key, spendIdx + 1);
-      } else {
-        const record = findRecord(output);
-        if (record && record.id !== undefined) {
-          addToBalance(output, record);
-        }
-      }
-
-      if (i % 2000 === 1999) {
-        checkAbort(signal);
-        await yieldToUI();
-      }
-    }
-
-    return Array.from(balanceMap.values());
-  }, [participants, transactions, txidToTx, addressToRecord, recordIdToRecord], [] as AddressBalance[]);
-
   const groups = useMemo(() => {
-    if (addressBalances.length === 0) return [];
-
-    const groupMap = new Map<string, GroupBalance>();
-
-    for (const { address, sats, count, record } of addressBalances) {
-      let groupKeys: string[] = [];
-
-      switch (groupBy) {
-        case "wallet":
-          groupKeys = [record.walletName || "Unassigned"];
-          break;
-        case "seed":
-          groupKeys = [record.seedName || "Unassigned"];
-          break;
-        case "owner":
-          groupKeys = [record.owner || "Unassigned"];
-          break;
-        case "tag":
-          groupKeys = record.tags && record.tags.length > 0 ? record.tags : ["Untagged"];
-          break;
-        case "category":
-          groupKeys = record.categories && record.categories.length > 0 ? record.categories : ["Uncategorized"];
-          break;
-      }
-
-      for (const key of groupKeys) {
-        const existing = groupMap.get(key) || {
-          name: key,
-          totalSats: 0,
-          addressCount: 0,
-          utxoCount: 0,
-          addresses: [],
-        };
-
-        existing.totalSats += sats;
-        existing.utxoCount += count;
-        existing.addressCount += 1;
-        existing.addresses.push({
-          address,
-          sats,
-          utxoCount: count,
-          label: record.label || undefined,
-        });
-
-        groupMap.set(key, existing);
-      }
-    }
-
-    const result = Array.from(groupMap.values());
-
-    result.forEach(g => {
-      g.addresses.sort((a, b) => b.sats - a.sats);
-    });
+    const result = Array.from(groupBalances.values());
 
     switch (sortBy) {
       case "balance-desc":
@@ -389,15 +338,15 @@ export default function BalanceOverview() {
     }
 
     return result;
-  }, [addressBalances, groupBy, sortBy]);
+  }, [groupBalances, sortBy]);
 
-  const totalBalance = useMemo(() => {
+  const { totalBalance, totalAddresses } = useMemo(() => {
     let total = 0;
-    for (const { sats } of addressBalances) {
+    for (const { sats } of uniqueAddressBalances.values()) {
       total += sats;
     }
-    return total;
-  }, [addressBalances]);
+    return { totalBalance: total, totalAddresses: uniqueAddressBalances.size };
+  }, [uniqueAddressBalances]);
 
   const toggleGroup = useCallback((name: string) => {
     setExpandedGroups(prev => {
@@ -418,7 +367,9 @@ export default function BalanceOverview() {
     setTimeout(() => setCopiedAddress(null), 2000);
   }, []);
 
-  const isLoading = !participants || !transactions || !rawRecords;
+  const isLoading = !rawRecords;
+  const isComputing = computingGroup !== null;
+  const totalGroupCount = recordGroups.size;
 
   const groupByLabel: Record<GroupBy, string> = {
     wallet: "Wallet",
@@ -482,12 +433,15 @@ export default function BalanceOverview() {
             <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
             <p className="text-sm text-muted-foreground">Loading data...</p>
           </div>
-        ) : isComputing ? (
+        ) : processedRecords.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-20 gap-3">
-            <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-            <p className="text-sm text-muted-foreground">Computing balances...</p>
+            <Wallet className="h-10 w-10 text-muted-foreground/40" />
+            <p className="text-sm text-muted-foreground">No address records found</p>
+            <p className="text-xs text-muted-foreground/60">
+              Add addresses first to see balances
+            </p>
           </div>
-        ) : addressBalances.length === 0 ? (
+        ) : groups.length === 0 && !isComputing ? (
           <div className="flex flex-col items-center justify-center py-20 gap-3">
             <Wallet className="h-10 w-10 text-muted-foreground/40" />
             <p className="text-sm text-muted-foreground">No UTXO data found</p>
@@ -501,10 +455,22 @@ export default function BalanceOverview() {
               <CardContent className="py-4 px-5">
                 <div className="flex items-center justify-between gap-4 flex-wrap">
                   <div>
-                    <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Total Balance</p>
-                    <p className="text-2xl font-bold font-mono" data-testid="text-total-balance">
-                      {formatBtc(totalBalance, displayUnit)}
+                    <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">
+                      Total Balance
+                      {isComputing && (
+                        <span className="ml-2 text-muted-foreground/60">
+                          ({computedCount}/{totalGroupCount})
+                        </span>
+                      )}
                     </p>
+                    <div className="flex items-center gap-2">
+                      <p className="text-2xl font-bold font-mono" data-testid="text-total-balance">
+                        {formatBtc(totalBalance, displayUnit)}
+                      </p>
+                      {isComputing && (
+                        <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                      )}
+                    </div>
                     {latestPrice && (
                       <p className="text-sm text-muted-foreground mt-0.5" data-testid="text-total-usd">
                         {formatUsd((totalBalance / 100_000_000) * latestPrice.price)}
@@ -513,7 +479,7 @@ export default function BalanceOverview() {
                   </div>
                   <div className="text-right">
                     <p className="text-xs text-muted-foreground">{groups.length} {groupByLabel[groupBy].toLowerCase()}{groups.length !== 1 ? 's' : ''}</p>
-                    <p className="text-xs text-muted-foreground">{addressBalances.length} addresses</p>
+                    <p className="text-xs text-muted-foreground">{totalAddresses} addresses</p>
                   </div>
                 </div>
               </CardContent>
@@ -572,10 +538,6 @@ export default function BalanceOverview() {
                     <div className="border-t px-4 py-2">
                       <div className="space-y-1">
                         {group.addresses.map((addr) => {
-                          const addrPercentage = group.totalSats > 0
-                            ? (addr.sats / group.totalSats) * 100
-                            : 0;
-
                           return (
                             <div
                               key={addr.address}
@@ -624,6 +586,13 @@ export default function BalanceOverview() {
                 </Card>
               );
             })}
+
+            {isComputing && computingGroup && (
+              <div className="flex items-center justify-center gap-2 py-4 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                <span>Computing {computingGroup}...</span>
+              </div>
+            )}
           </div>
         )}
       </div>
