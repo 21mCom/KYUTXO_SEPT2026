@@ -988,6 +988,31 @@ export default function Transactions() {
     };
   }, [totalFilteredCount, paginatedTransactions, filteredTransactions, addressToRecord, needsClientSideFiltering]);
 
+  const { value: allNavigableVolume, isComputing: volumeComputing } = useAsyncMemo(async (signal) => {
+    if (!needsClientSideFiltering || filteredTransactions.length === 0) {
+      return null;
+    }
+
+    const txids = filteredTransactions.map(tx => tx.txid);
+    let totalVolume = 0;
+    const BATCH_SIZE = 500;
+
+    for (let i = 0; i < txids.length; i += BATCH_SIZE) {
+      checkAbort(signal);
+      const batch = txids.slice(i, i + BATCH_SIZE);
+      const participants = await getParticipantsByTxids(batch);
+      checkAbort(signal);
+      for (const p of participants) {
+        if (p.role === 'output') {
+          totalVolume += p.amount;
+        }
+      }
+      if (i + BATCH_SIZE < txids.length) await yieldToUI();
+    }
+
+    return totalVolume;
+  }, [needsClientSideFiltering, filteredTransactions], null as number | null);
+
   const isLoading = needsClientSideFiltering ? scanLoading : txLoading;
 
   return (
@@ -1042,24 +1067,34 @@ export default function Transactions() {
           <CardHeader className="pb-2">
             <CardDescription>{needsClientSideFiltering ? 'Volume' : 'Page Volume'}</CardDescription>
             <CardTitle className="text-2xl" data-testid="text-total-volume">
-              {stats.pageVolume === null ? (
-                <span className="text-muted-foreground">—</span>
-              ) : scanResult.limitReached ? (
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <span className="inline-flex items-center gap-1 cursor-help" tabIndex={0} data-testid="indicator-approx-volume">
-                      <span>{satsToBtc(stats.pageVolume)} BTC</span>
-                      <Info className="h-4 w-4 text-yellow-600 dark:text-yellow-400" />
-                    </span>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom" className="max-w-xs">
-                    <p>
-                      Showing volume for page {safePage} of {totalPages} only.
-                      Total volume across all {navigableCount.toLocaleString()} navigable
-                      matches is not computed. Try narrowing your filters.
-                    </p>
-                  </TooltipContent>
-                </Tooltip>
+              {needsClientSideFiltering ? (
+                volumeComputing ? (
+                  <span className="inline-flex items-center gap-2" data-testid="indicator-volume-loading">
+                    <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                    <span className="text-muted-foreground text-base">Computing…</span>
+                  </span>
+                ) : allNavigableVolume !== null ? (
+                  scanResult.limitReached ? (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span className="inline-flex items-center gap-1 cursor-help" tabIndex={0} data-testid="indicator-approx-volume">
+                          <span>{satsToBtc(allNavigableVolume)} BTC</span>
+                          <Info className="h-4 w-4 text-yellow-600 dark:text-yellow-400" />
+                        </span>
+                      </TooltipTrigger>
+                      <TooltipContent side="bottom" className="max-w-xs">
+                        <p>
+                          Volume across {navigableCount.toLocaleString()} navigable matches.
+                          Total search matched {scanResult.totalMatchCount.toLocaleString()} transactions.
+                        </p>
+                      </TooltipContent>
+                    </Tooltip>
+                  ) : (
+                    <>{satsToBtc(allNavigableVolume)} BTC</>
+                  )
+                ) : (
+                  <span className="text-muted-foreground">—</span>
+                )
               ) : (
                 <>{satsToBtc(stats.pageVolume)} BTC</>
               )}
