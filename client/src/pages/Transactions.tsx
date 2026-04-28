@@ -33,7 +33,8 @@ import {
   FileCode,
   Scale,
   ChevronsDownUp,
-  ChevronsUpDown
+  ChevronsUpDown,
+  Loader2
 } from "lucide-react";
 import { getParticipantsByTxids } from "@/lib/dataFacade";
 import { ClickableAddress } from "@/components/ClickableAddress";
@@ -81,6 +82,7 @@ export default function Transactions() {
   
   // OP_RETURN filter: only show transactions with OP_RETURN data
   const [opReturnOnly, setOpReturnOnly] = useState(false);
+  const [searchProgress, setSearchProgress] = useState<{ scanned: number; total: number; matches: number } | null>(null);
 
   const txDbSignal = useDbChangeSignal(['blockchainTransactions', 'transactionParticipants', 'records'], 500);
 
@@ -161,16 +163,17 @@ export default function Transactions() {
   const totalFilteredCountForOffset = txCounts.filteredCount;
   const totalPagesForOffset = Math.max(1, Math.ceil(totalFilteredCountForOffset / ITEMS_PER_PAGE));
   const safePageForOffset = Math.min(currentPage, totalPagesForOffset);
-  const dbOffset = needsClientSideFiltering ? 0 : (safePageForOffset - 1) * ITEMS_PER_PAGE;
-  const dbLimit = needsClientSideFiltering ? 5000 : ITEMS_PER_PAGE;
+  const dbOffset = (safePageForOffset - 1) * ITEMS_PER_PAGE;
 
   const { value: loadedTransactions, isComputing: txLoading } = useAsyncMemo(async (signal) => {
+    if (needsClientSideFiltering) return [] as BlockchainTransaction[];
+
     const needsFilter = !includeBlockchainDiscovered || opReturnOnly;
 
     if (!needsFilter) {
       return db.blockchainTransactions
         .orderBy('blockTime').reverse()
-        .offset(dbOffset).limit(dbLimit)
+        .offset(dbOffset).limit(ITEMS_PER_PAGE)
         .toArray();
     }
 
@@ -180,7 +183,7 @@ export default function Transactions() {
         .reverse()
         .filter(tx => tx.hasOpReturn === true)
         .offset(dbOffset)
-        .limit(dbLimit)
+        .limit(ITEMS_PER_PAGE)
         .toArray();
     }
 
@@ -197,10 +200,173 @@ export default function Transactions() {
 
     const filtered = opReturnOnly ? allCurated.filter(tx => tx.hasOpReturn) : allCurated;
     filtered.sort((a, b) => (b.blockTime ?? 0) - (a.blockTime ?? 0));
-    return filtered.slice(dbOffset, dbOffset + dbLimit);
-  }, [includeBlockchainDiscovered, userCuratedTxidSet, opReturnOnly,
-      dbOffset, dbLimit, txDbSignal],
+    return filtered.slice(dbOffset, dbOffset + ITEMS_PER_PAGE);
+  }, [needsClientSideFiltering, includeBlockchainDiscovered, userCuratedTxidSet, opReturnOnly,
+      dbOffset, txDbSignal],
      [] as BlockchainTransaction[]);
+
+  const { value: scanResult, isComputing: scanLoading } = useAsyncMemo(async (signal) => {
+    if (!needsClientSideFiltering) {
+      setSearchProgress(null);
+      return { matches: [] as BlockchainTransaction[], totalMatchCount: 0 };
+    }
+
+    const hasDateFilter = searchFilters.dateMode !== 'any';
+    const hasAmountFilter = searchFilters.amountMode !== 'any';
+    const hasTextSearch = search.trim() !== '';
+    const needsParticipants = hasTextSearch || hasAmountFilter;
+    const searchLower = search.trim().toLowerCase();
+    const BATCH_SIZE = 500;
+
+    const addressRecordMap = new Map<string, Record>();
+    if (curatedRecords) {
+      for (const r of curatedRecords) {
+        if (r.type === 'address' && r.inputString) {
+          addressRecordMap.set(r.inputString, r);
+        }
+      }
+    }
+
+    const allMatches: BlockchainTransaction[] = [];
+    let scanned = 0;
+    let scanTotal = 0;
+
+    async function filterBatch(batch: BlockchainTransaction[]): Promise<BlockchainTransaction[]> {
+      let filtered = batch;
+
+      if (hasDateFilter) {
+        const dateOnlyFilters: SearchFilters = { ...searchFilters, amountMode: 'any' as const };
+        filtered = filterByDateAndAmount(filtered, dateOnlyFilters, tx => tx.blockTime, () => 0);
+      }
+
+      if (filtered.length === 0 || !needsParticipants) return filtered;
+
+      const txids = filtered.map(tx => tx.txid);
+      const participants = await getParticipantsByTxids(txids);
+      checkAbort(signal);
+
+      const partMap = new Map<string, TransactionParticipant[]>();
+      for (const p of participants) {
+        const arr = partMap.get(p.txid) || [];
+        arr.push(p);
+        partMap.set(p.txid, arr);
+      }
+
+      if (hasTextSearch) {
+        const missingRecordIds = new Set<number>();
+        for (const parts of partMap.values()) {
+          for (const p of parts) {
+            if (p.recordId != null && !addressRecordMap.has(p.address)) {
+              missingRecordIds.add(p.recordId);
+            }
+          }
+        }
+        if (missingRecordIds.size > 0) {
+          const records = await db.records.bulkGet(Array.from(missingRecordIds));
+          checkAbort(signal);
+          for (const r of records) {
+            if (r && r.type === 'address' && r.inputString) {
+              addressRecordMap.set(r.inputString, r);
+            }
+          }
+        }
+      }
+
+      if (hasAmountFilter) {
+        const amountOnlyFilters: SearchFilters = { ...searchFilters, dateMode: 'any' as const };
+        filtered = filterByDateAndAmount(
+          filtered,
+          amountOnlyFilters,
+          tx => tx.blockTime,
+          tx => {
+            const parts = partMap.get(tx.txid) || [];
+            return parts.filter(p => p.role === 'output').reduce((sum, p) => sum + p.amount, 0);
+          }
+        );
+      }
+
+      if (hasTextSearch) {
+        filtered = filtered.filter(tx => {
+          if (tx.txid.toLowerCase().includes(searchLower)) return true;
+          const txParts = partMap.get(tx.txid);
+          if (txParts) {
+            if (txParts.some(p => p.address.toLowerCase().includes(searchLower))) return true;
+            const linkedRecords = txParts.map(p => addressRecordMap.get(p.address)).filter(Boolean);
+            if (linkedRecords.some(r => r?.label?.toLowerCase().includes(searchLower))) return true;
+          }
+          return false;
+        });
+      }
+
+      return filtered;
+    }
+
+    if (includeBlockchainDiscovered) {
+      if (opReturnOnly) {
+        const allKeys = await db.blockchainTransactions
+          .where('hasOpReturn').equals(true)
+          .primaryKeys();
+        checkAbort(signal);
+        scanTotal = allKeys.length;
+        setSearchProgress({ scanned: 0, total: scanTotal, matches: 0 });
+
+        for (let i = 0; i < allKeys.length; i += BATCH_SIZE) {
+          checkAbort(signal);
+          const batchKeys = allKeys.slice(i, i + BATCH_SIZE);
+          const batchRaw = await db.blockchainTransactions.bulkGet(batchKeys as string[]);
+          const batch = batchRaw.filter(Boolean) as BlockchainTransaction[];
+          const matches = await filterBatch(batch);
+          allMatches.push(...matches);
+          scanned += batchKeys.length;
+          setSearchProgress({ scanned, total: scanTotal, matches: allMatches.length });
+          if (i + BATCH_SIZE < allKeys.length) await yieldToUI();
+        }
+      } else {
+        const allKeys = await db.blockchainTransactions
+          .orderBy('blockTime').reverse()
+          .primaryKeys();
+        checkAbort(signal);
+        scanTotal = allKeys.length;
+        setSearchProgress({ scanned: 0, total: scanTotal, matches: 0 });
+
+        for (let i = 0; i < allKeys.length; i += BATCH_SIZE) {
+          checkAbort(signal);
+          const batchKeys = allKeys.slice(i, i + BATCH_SIZE);
+          const batchRaw = await db.blockchainTransactions.bulkGet(batchKeys as string[]);
+          const batch = batchRaw.filter(Boolean) as BlockchainTransaction[];
+          const matches = await filterBatch(batch);
+          allMatches.push(...matches);
+          scanned += batchKeys.length;
+          setSearchProgress({ scanned, total: scanTotal, matches: allMatches.length });
+          if (i + BATCH_SIZE < allKeys.length) await yieldToUI();
+        }
+      }
+    } else {
+      const txidArray = Array.from(userCuratedTxidSet);
+      scanTotal = txidArray.length;
+      setSearchProgress({ scanned: 0, total: scanTotal, matches: 0 });
+
+      for (let i = 0; i < txidArray.length; i += BATCH_SIZE) {
+        checkAbort(signal);
+        const batchTxids = txidArray.slice(i, i + BATCH_SIZE);
+        let batch = await db.blockchainTransactions.where('txid').anyOf(batchTxids).toArray();
+        if (opReturnOnly) {
+          batch = batch.filter(tx => tx.hasOpReturn === true);
+        }
+        const matches = await filterBatch(batch);
+        allMatches.push(...matches);
+        scanned += batchTxids.length;
+        setSearchProgress({ scanned, total: scanTotal, matches: allMatches.length });
+        if (i + BATCH_SIZE < txidArray.length) await yieldToUI();
+      }
+    }
+
+    allMatches.sort((a, b) => (b.blockTime ?? 0) - (a.blockTime ?? 0));
+    setSearchProgress(null);
+    return { matches: allMatches, totalMatchCount: allMatches.length };
+  }, [needsClientSideFiltering, includeBlockchainDiscovered, opReturnOnly,
+      userCuratedTxidSet, search, searchFilters, curatedRecords, txDbSignal],
+     { matches: [] as BlockchainTransaction[], totalMatchCount: 0 });
 
   const needsBroadParticipants = search.trim() !== '' || searchFilters.amountMode !== 'any';
 
@@ -223,13 +389,19 @@ export default function Transactions() {
       return new Map<string, TransactionParticipant[]>();
     }
     
-    const maxTxidsForBroadLoad = 2000;
-    const txidsToLoad = preFilteredTransactions.slice(0, maxTxidsForBroadLoad).map(tx => tx.txid);
-    const loadedParticipants = await getParticipantsByTxids(txidsToLoad);
-    checkAbort(signal);
+    const txidsToLoad = preFilteredTransactions.map(tx => tx.txid);
+    const allParticipants: TransactionParticipant[] = [];
+    const batchSize = 500;
+    for (let i = 0; i < txidsToLoad.length; i += batchSize) {
+      checkAbort(signal);
+      const batch = txidsToLoad.slice(i, i + batchSize);
+      const batchParts = await getParticipantsByTxids(batch);
+      allParticipants.push(...batchParts);
+      if (i + batchSize < txidsToLoad.length) await yieldToUI();
+    }
     
     const map = new Map<string, TransactionParticipant[]>();
-    for (const p of loadedParticipants) {
+    for (const p of allParticipants) {
       const existing = map.get(p.txid) || [];
       existing.push(p);
       map.set(p.txid, existing);
@@ -267,39 +439,9 @@ export default function Transactions() {
   }, [curatedRecords, broadRecords]);
 
   const filteredTransactions = useMemo(() => {
-    let results = preFilteredTransactions;
-    
-    if (searchFilters.amountMode !== 'any' && broadParticipantMap.size > 0) {
-      const amountOnlyFilters: SearchFilters = { ...searchFilters, dateMode: 'any' as const };
-      results = filterByDateAndAmount(
-        results.filter(tx => broadParticipantMap.has(tx.txid)),
-        amountOnlyFilters,
-        (tx) => tx.blockTime,
-        (tx) => {
-          const parts = broadParticipantMap.get(tx.txid) || [];
-          return parts.filter(p => p.role === 'output').reduce((sum, p) => sum + p.amount, 0);
-        }
-      );
-    }
-    
-    if (search.trim()) {
-      const searchLower = search.toLowerCase();
-      results = results.filter(tx => {
-        if (tx.txid.toLowerCase().includes(searchLower)) return true;
-        
-        const txParts = broadParticipantMap.get(tx.txid);
-        if (txParts) {
-          if (txParts.some(p => p.address.toLowerCase().includes(searchLower))) return true;
-          const linkedRecords = txParts.map(p => searchAddressMap.get(p.address)).filter(Boolean);
-          if (linkedRecords.some(r => r?.label?.toLowerCase().includes(searchLower))) return true;
-        }
-        
-        return false;
-      });
-    }
-    
-    return results;
-  }, [preFilteredTransactions, search, searchFilters, broadParticipantMap, searchAddressMap]);
+    if (needsClientSideFiltering) return scanResult.matches;
+    return loadedTransactions;
+  }, [needsClientSideFiltering, scanResult.matches, loadedTransactions]);
 
   const totalFilteredCount = needsClientSideFiltering
     ? filteredTransactions.length
@@ -417,7 +559,7 @@ export default function Transactions() {
     };
   }, [totalFilteredCount, paginatedTransactions, addressToRecord]);
 
-  const isLoading = txLoading;
+  const isLoading = needsClientSideFiltering ? scanLoading : txLoading;
 
   return (
     <div className="flex flex-col h-full overflow-hidden p-4 gap-4">
@@ -547,9 +689,32 @@ export default function Transactions() {
       {/* Transaction List */}
       <div className="flex-1 overflow-y-auto space-y-3">
         {isLoading ? (
-          <div className="flex items-center justify-center h-32">
-            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />
-          </div>
+          searchProgress ? (
+            <div className="flex flex-col items-center justify-center h-32 gap-3" data-testid="search-progress">
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                <span>
+                  Searching... {searchProgress.scanned.toLocaleString()} of{' '}
+                  {searchProgress.total > 0 ? searchProgress.total.toLocaleString() : '...'} scanned
+                  {searchProgress.matches > 0 && (
+                    <> ({searchProgress.matches.toLocaleString()} {searchProgress.matches === 1 ? 'match' : 'matches'} found)</>
+                  )}
+                </span>
+              </div>
+              {searchProgress.total > 0 && (
+                <div className="w-64 h-1.5 bg-muted rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-primary rounded-full transition-all duration-300"
+                    style={{ width: `${Math.min(100, (searchProgress.scanned / searchProgress.total) * 100)}%` }}
+                  />
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="flex items-center justify-center h-32">
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />
+            </div>
+          )
         ) : paginatedTransactions.length === 0 ? (
           <Card>
             <CardContent className="py-12 text-center">

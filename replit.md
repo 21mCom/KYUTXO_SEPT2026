@@ -14,7 +14,7 @@ KYUTXO features an offline-first architecture built for cross-platform desktop d
 *   **UI/UX:** Responsive, offline-first interface with streamlined navigation.
 *   **Data Model:** Comprehensive records for tracking ownership, wallet names, and metadata.
 *   **Security:** Implements a password-based UI lock (hash check only); data is stored as plaintext in IndexedDB. Users requiring data-at-rest protection should utilize OS-level encrypted containers.
-*   **Performance:** Utilizes DB-level and cursor-based pagination, indexed lookups, and debounced search for efficient data handling.
+*   **Performance:** Utilizes DB-level and cursor-based pagination, indexed lookups, and debounced search for efficient data handling. Transactions page uses iterative batched scanning to search across the entire database without caps, yielding between batches to keep the UI responsive.
 *   **Offline First & Portability:** Designed for full offline functionality and portable database storage.
 *   **Data Management:** Includes features for custom vocabulary management, duplicate detection and merging, and bulk address/descriptor/BIP-329 label importing.
 *   **Wallet Data Sync:** Modular system for importing labels and transaction history from various wallet software, including mobile wallets, with duplicate detection.
