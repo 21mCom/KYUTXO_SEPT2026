@@ -119,6 +119,22 @@ export class KYUTXODatabase extends Dexie {
       if (cleanedRecords > 0) {
         console.log(`[v29 migration] Cleaned values from ${cleanedRecords} records`);
       }
+
+      const validTiers = new Set([
+        'verified', 'manual', 'wallet-import', 'xpub-derived',
+        'blockchain-discovered', 'pending-review'
+      ]);
+      let normalizedCount = 0;
+      await tx.table('records').toCollection().modify((record: globalThis.Record<string, unknown>) => {
+        if (!record.addressImportance || !validTiers.has(record.addressImportance as string)) {
+          record.addressImportance = 'manual';
+          normalizedCount++;
+        }
+      });
+      if (normalizedCount > 0) {
+        console.log(`[v29 migration] Normalized ${normalizedCount} records with missing/invalid addressImportance to 'manual'`);
+      }
+
       console.log('[v29 migration] Complete');
     });
 

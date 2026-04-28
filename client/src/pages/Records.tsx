@@ -310,6 +310,8 @@ export default function Records() {
             const tierResults = await Promise.all(USER_TIERS.map(tier =>
               db.records.where('[type+addressImportance]')
                 .equals([typeVal, tier])
+                .reverse()
+                .limit(candidateLimit)
                 .toArray()
             ));
             const merged = tierResults.flat()
