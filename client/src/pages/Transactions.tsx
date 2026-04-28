@@ -1136,8 +1136,23 @@ export default function Transactions() {
             <CardTitle className="text-2xl" data-testid="text-linked-addresses">
               {stats.linkedAddressCount === null ? (
                 <span className="text-muted-foreground">—</span>
+              ) : scanResult.limitReached ? (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="inline-flex items-center gap-1 cursor-help" tabIndex={0} data-testid="indicator-approx-addresses">
+                      <span>~{stats.linkedAddressCount.toLocaleString()}</span>
+                      <Info className="h-4 w-4 text-yellow-600 dark:text-yellow-400" />
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom" className="max-w-xs">
+                    <p>
+                      Count reflects only the current page of results.
+                      Try narrowing your search filters for a complete count.
+                    </p>
+                  </TooltipContent>
+                </Tooltip>
               ) : (
-                stats.linkedAddressCount
+                stats.linkedAddressCount.toLocaleString()
               )}
             </CardTitle>
           </CardHeader>
