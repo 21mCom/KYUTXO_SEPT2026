@@ -21,8 +21,10 @@ import { Progress } from "@/components/ui/progress";
 import { format } from "date-fns";
 import { 
   CalendarIcon, Shield, Clock, Coins, 
-  ArrowRight, Filter, FileJson, FileText, Lock, Eye 
+  ArrowRight, Filter, FileJson, FileText, Lock, Eye,
+  AlertTriangle, RefreshCw
 } from "lucide-react";
+import { useToast } from "@/hooks/use-toast";
 import { AddressLink } from "@/components/AddressLink";
 import { TxidLink } from "@/components/TxidLink";
 
@@ -59,6 +61,8 @@ export function ContinuityCertificateReport() {
   const [includeLineageChain, setIncludeLineageChain] = useState(true);
   const [isExporting, setIsExporting] = useState(false);
   const [exportProgress, setExportProgress] = useState<{ current: number; total: number } | null>(null);
+  const [exportError, setExportError] = useState<{ message: string; format: 'json' | 'pdf' } | null>(null);
+  const { toast } = useToast();
 
   const segments = useLiveQuery(async () => {
     return await db.custodySegments.toArray();
@@ -135,6 +139,7 @@ export function ContinuityCertificateReport() {
     const selectedSegmentIds = selected.map(c => c.segment.segmentId);
     
     setIsExporting(true);
+    setExportError(null);
     setExportProgress({ current: 0, total: selectedSegmentIds.length });
     try {
       const options: EvidenceBundleOptions = {
@@ -157,9 +162,17 @@ export function ContinuityCertificateReport() {
       } else {
         downloadEvidenceBundle(bundle, `evidence-bundle-${dateStr}.json`);
       }
+      setExportProgress(null);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "An unexpected error occurred during export";
+      setExportError({ message, format: exportFormat });
+      toast({
+        title: "Export failed",
+        description: message,
+        variant: "destructive",
+      });
     } finally {
       setIsExporting(false);
-      setExportProgress(null);
     }
   };
 
@@ -342,7 +355,40 @@ export function ContinuityCertificateReport() {
         </div>
       </div>
 
-      {exportProgress && exportProgress.total > 0 && (
+      {exportError && !isExporting && (
+        <div className="flex items-center gap-3 p-3 bg-destructive/10 border border-destructive/30 rounded-lg" data-testid="export-error">
+          <AlertTriangle className="h-5 w-5 text-destructive shrink-0" />
+          <div className="flex-1 space-y-1">
+            <div className="flex items-center justify-between gap-2 text-sm">
+              <span className="text-destructive font-medium">
+                Export failed
+              </span>
+              <span className="text-muted-foreground text-xs truncate max-w-[300px]">
+                {exportError.message}
+              </span>
+            </div>
+            <Progress
+              value={exportProgress && exportProgress.total > 0
+                ? (exportProgress.current / exportProgress.total) * 100
+                : 0}
+              className="h-2 [&>div]:bg-destructive"
+              data-testid="progress-bar-error"
+            />
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => exportSelectedCertificates(exportError.format)}
+            disabled={selectedCertificates.size === 0}
+            data-testid="button-retry-export"
+          >
+            <RefreshCw className="h-4 w-4 mr-2" />
+            Retry
+          </Button>
+        </div>
+      )}
+
+      {isExporting && exportProgress && exportProgress.total > 0 && (
         <div className="flex items-center gap-3 p-3 bg-muted/30 rounded-lg" data-testid="export-progress">
           <div className="flex-1 space-y-1">
             <div className="flex items-center justify-between text-sm">
