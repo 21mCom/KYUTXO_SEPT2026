@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { useAsyncMemo, yieldToUI, checkAbort } from "@/hooks/use-async-memo";
 import { useDbChangeSignal } from "@/hooks/use-db-change-signal";
 import { useLiveQuery } from "dexie-react-hooks";
@@ -33,7 +34,6 @@ import {
   ArrowUpDown,
   ArrowUp,
   ArrowDown,
-  ChevronLeft,
   ChevronRight,
   ChevronDown,
   ChevronRight as ChevronRightIcon,
@@ -49,7 +49,6 @@ import { cn } from "@/lib/utils";
 import { UTXODetailPanel } from "@/components/UTXODetailPanel";
 import { ClickableAddress } from "@/components/ClickableAddress";
 
-const ITEMS_PER_PAGE = 50;
 const SETTINGS_KEY = "kyutxo-utxos-settings";
 
 type UTXOCalculationMode = "heuristic" | "exact";
@@ -175,7 +174,6 @@ export default function UTXOs() {
   const [sortColumn, setSortColumn] = useState<SortColumn>(initialSettings.sortColumn);
   const [sortDirection, setSortDirection] = useState<SortDirection>(initialSettings.sortDirection);
   const [utxoMode, setUtxoMode] = useState<UTXOCalculationMode>(initialSettings.utxoMode);
-  const [currentPage, setCurrentPage] = useState(1);
   const [displayUnit, setDisplayUnit] = useState<"btc" | "sats">(initialSettings.displayUnit);
   const [expandedAddresses, setExpandedAddresses] = useState<Set<string>>(new Set());
   const [copiedTxid, setCopiedTxid] = useState<string | null>(null);
@@ -792,12 +790,31 @@ export default function UTXOs() {
     return sorted;
   }, [filteredGroups, sortColumn, sortDirection]);
 
-  const totalPages = Math.max(1, Math.ceil(sortedGroups.length / ITEMS_PER_PAGE));
-  const safePage = Math.min(currentPage, totalPages);
-  const paginatedGroups = sortedGroups.slice(
-    (safePage - 1) * ITEMS_PER_PAGE,
-    safePage * ITEMS_PER_PAGE
-  );
+  type FlatUtxoRow =
+    | { kind: 'group'; group: AddressGroup }
+    | { kind: 'utxo'; utxo: UTXO; index: number };
+
+  const flattenedRows = useMemo((): FlatUtxoRow[] => {
+    const rows: FlatUtxoRow[] = [];
+    for (const group of sortedGroups) {
+      rows.push({ kind: 'group', group });
+      if (expandedAddresses.has(group.address)) {
+        group.utxos.forEach((utxo, idx) => {
+          rows.push({ kind: 'utxo', utxo, index: idx });
+        });
+      }
+    }
+    return rows;
+  }, [sortedGroups, expandedAddresses]);
+
+  const utxoScrollRef = useRef<HTMLDivElement>(null);
+
+  const utxoVirtualizer = useVirtualizer({
+    count: flattenedRows.length,
+    getScrollElement: () => utxoScrollRef.current,
+    estimateSize: (index) => flattenedRows[index]?.kind === 'utxo' ? 44 : 72,
+    overscan: 20,
+  });
 
   const totalSats = filteredGroups.reduce((sum, g) => sum + g.totalSats, 0);
   const totalUtxoCount = filteredGroups.reduce((sum, g) => sum + g.utxos.length, 0);
@@ -832,8 +849,8 @@ export default function UTXOs() {
   const isLoading = isDataLoading || participantsLoading;
 
   useEffect(() => {
-    setCurrentPage(1);
-  }, [search, ownerFilter, walletFilter, tagFilter, categoryFilter, selectedDate, searchFilters]);
+    utxoScrollRef.current?.scrollTo(0, 0);
+  }, [search, ownerFilter, walletFilter, tagFilter, categoryFilter, selectedDate, searchFilters, sortColumn, sortDirection, includeBlockchainDiscovered]);
 
   const toggleExpanded = (address: string) => {
     setExpandedAddresses(prev => {
@@ -884,7 +901,7 @@ export default function UTXOs() {
   );
 
   return (
-    <div className="flex flex-col p-4 gap-4 overflow-y-auto">
+    <div className="flex flex-col h-full overflow-hidden p-4 gap-4">
       <div className="flex-none flex items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2" data-testid="text-page-title">
@@ -897,16 +914,13 @@ export default function UTXOs() {
         </div>
         <BlockchainToggle
           checked={includeBlockchainDiscovered}
-          onCheckedChange={(checked) => {
-            setIncludeBlockchainDiscovered(checked);
-            setCurrentPage(1);
-          }}
+          onCheckedChange={setIncludeBlockchainDiscovered}
           hiddenCount={blockchainDiscoveredCount ?? 0}
         />
       </div>
 
       {(participantsLoading || isComputing) && (
-        <Card>
+        <Card className="flex-none">
           <CardContent className="py-4">
             <div className="flex flex-col gap-2">
               {participantsLoading && (
@@ -1063,14 +1077,8 @@ export default function UTXOs() {
             
             <TransactionSearchFilters
               filters={searchFilters}
-              onChange={(filters) => {
-                setSearchFilters(filters);
-                setCurrentPage(1);
-              }}
-              onClear={() => {
-                setSearchFilters(defaultFilters);
-                setCurrentPage(1);
-              }}
+              onChange={setSearchFilters}
+              onClear={() => setSearchFilters(defaultFilters)}
             />
 
             <div className="w-[180px]">
@@ -1246,41 +1254,16 @@ export default function UTXOs() {
         </CardContent>
       </Card>
 
-      <div>
-        <Card className="flex flex-col">
+      <div className="flex-1 min-h-0">
+        <Card className="h-full flex flex-col">
           <CardHeader className="pb-2 flex-none">
-            <div className="flex items-center justify-between">
-              <CardTitle className="text-base">
-                {filteredGroups.length === addressGroups.length 
-                  ? `${totalAddressCount} addresses (${totalUtxoCount} UTXOs)` 
-                  : `${filteredGroups.length} of ${addressGroups.length} addresses`}
-              </CardTitle>
-              <div className="flex items-center gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={safePage <= 1}
-                  onClick={() => setCurrentPage(p => p - 1)}
-                  data-testid="button-prev-page"
-                >
-                  <ChevronLeft className="h-4 w-4" />
-                </Button>
-                <span className="text-sm text-muted-foreground">
-                  Page {safePage} of {totalPages}
-                </span>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={safePage >= totalPages}
-                  onClick={() => setCurrentPage(p => p + 1)}
-                  data-testid="button-next-page"
-                >
-                  <ChevronRight className="h-4 w-4" />
-                </Button>
-              </div>
-            </div>
+            <CardTitle className="text-base">
+              {filteredGroups.length === addressGroups.length 
+                ? `${totalAddressCount} addresses (${totalUtxoCount} UTXOs)` 
+                : `${filteredGroups.length} of ${addressGroups.length} addresses`}
+            </CardTitle>
           </CardHeader>
-          <CardContent className="p-0">
+          <CardContent className="flex-1 min-h-0 p-0">
             {isLoading || isComputing ? (
               <div className="flex flex-col items-center justify-center h-32 gap-2" data-testid="status-loading">
                 <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary" />
@@ -1288,7 +1271,7 @@ export default function UTXOs() {
                   {!transactions ? "Loading transactions..." : participantsLoading ? "Loading participants..." : isComputing ? "Computing UTXOs..." : "Loading..."}
                 </p>
               </div>
-            ) : paginatedGroups.length === 0 ? (
+            ) : sortedGroups.length === 0 ? (
               <div className="flex flex-col items-center justify-center h-32 text-muted-foreground">
                 <Coins className="h-8 w-8 mb-2 opacity-50" />
                 <p>No UTXOs found</p>
@@ -1299,96 +1282,104 @@ export default function UTXOs() {
                 )}
               </div>
             ) : (
-              <Table>
-                <TableHeader className="sticky top-0 bg-card z-10">
-                  <TableRow>
-                    <TableHead className="w-8"></TableHead>
-                    <SortableHeader column="address" label="Address" />
-                    <SortableHeader column="amount" label="UTXO Value" />
-                    <SortableHeader column="date" label="Date" />
-                    <TableHead>Value at Receipt</TableHead>
-                    <TableHead>Current Value</TableHead>
-                    <SortableHeader column="gain" label="Gain/Loss" />
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {paginatedGroups.flatMap((group) => {
-                    const isExpanded = expandedAddresses.has(group.address);
-                    const rows = [
-                      <TableRow 
-                        key={`group-${group.address}`} 
-                        className="cursor-pointer hover-elevate" 
-                        onClick={() => toggleExpanded(group.address)}
-                        data-testid={`row-address-${group.address.slice(0, 8)}`}
-                      >
-                        <TableCell className="w-8">
-                          {isExpanded ? (
-                            <ChevronDown className="h-4 w-4" />
-                          ) : (
-                            <ChevronRightIcon className="h-4 w-4" />
-                          )}
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex flex-col gap-1">
-                            <ClickableAddress 
-                              address={group.address} 
-                              className="text-sm"
-                            />
-                            {group.label && (
-                              <span className="text-xs text-muted-foreground">{group.label}</span>
-                            )}
-                            {group.utxos.length > 1 && (
-                              <Badge variant="secondary" className="w-fit text-xs">
-                                {group.utxos.length} UTXOs
-                              </Badge>
-                            )}
-                          </div>
-                        </TableCell>
-                        <TableCell className="font-mono">
-                          {displayUnit === "btc" ? (
-                            <span>{satsToBtc(group.totalSats)} BTC</span>
-                          ) : (
-                            <span>{group.totalSats.toLocaleString()} sats</span>
-                          )}
-                        </TableCell>
-                        <TableCell className="text-sm">
-                          <div className="flex flex-col">
-                            <span>{format(new Date(group.latestDate * 1000), "MMM d, yyyy")}</span>
-                            {group.earliestDate !== group.latestDate && (
-                              <span className="text-xs text-muted-foreground">
-                                From {format(new Date(group.earliestDate * 1000), "MMM d, yyyy")}
-                              </span>
-                            )}
-                          </div>
-                        </TableCell>
-                        <TableCell>
-                          {formatUsdValue(group.totalValueAtReceipt)}
-                        </TableCell>
-                        <TableCell>
-                          {formatUsdValue(group.totalCurrentValue)}
-                        </TableCell>
-                        <TableCell>
-                          {group.gain !== undefined ? (
-                            <div className={cn(
-                              "flex items-center gap-1",
-                              group.gain > 0 ? "text-green-600 dark:text-green-400" : group.gain < 0 ? "text-red-600 dark:text-red-400" : ""
-                            )}>
-                              {group.gain > 0 ? <TrendingUp className="h-3 w-3" /> : group.gain < 0 ? <TrendingDown className="h-3 w-3" /> : null}
-                              <span>{formatUsdValue(group.gain)}</span>
-                              {group.gainPercent !== undefined && (
-                                <span className="text-xs">({group.gainPercent > 0 ? '+' : ''}{group.gainPercent.toFixed(1)}%)</span>
-                              )}
-                            </div>
-                          ) : (
-                            <span className="text-muted-foreground">-</span>
-                          )}
-                        </TableCell>
+              <div ref={utxoScrollRef} className="h-full overflow-auto">
+                <Table>
+                  <TableHeader className="sticky top-0 bg-card z-10">
+                    <TableRow>
+                      <TableHead className="w-8"></TableHead>
+                      <SortableHeader column="address" label="Address" />
+                      <SortableHeader column="amount" label="UTXO Value" />
+                      <SortableHeader column="date" label="Date" />
+                      <TableHead>Value at Receipt</TableHead>
+                      <TableHead>Current Value</TableHead>
+                      <SortableHeader column="gain" label="Gain/Loss" />
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {utxoVirtualizer.getVirtualItems().length > 0 && utxoVirtualizer.getVirtualItems()[0].start > 0 && (
+                      <TableRow>
+                        <TableCell colSpan={7} className="p-0 border-0" style={{ height: utxoVirtualizer.getVirtualItems()[0].start }} />
                       </TableRow>
-                    ];
-
-                    if (isExpanded) {
-                      group.utxos.forEach((utxo, idx) => {
-                        rows.push(
+                    )}
+                    {utxoVirtualizer.getVirtualItems().map(virtualRow => {
+                      const row = flattenedRows[virtualRow.index];
+                      if (row.kind === 'group') {
+                        const group = row.group;
+                        const isExpanded = expandedAddresses.has(group.address);
+                        return (
+                          <TableRow 
+                            key={`group-${group.address}`} 
+                            className="cursor-pointer hover-elevate" 
+                            onClick={() => toggleExpanded(group.address)}
+                            data-testid={`row-address-${group.address.slice(0, 8)}`}
+                          >
+                            <TableCell className="w-8">
+                              {isExpanded ? (
+                                <ChevronDown className="h-4 w-4" />
+                              ) : (
+                                <ChevronRightIcon className="h-4 w-4" />
+                              )}
+                            </TableCell>
+                            <TableCell>
+                              <div className="flex flex-col gap-1">
+                                <ClickableAddress 
+                                  address={group.address} 
+                                  className="text-sm"
+                                />
+                                {group.label && (
+                                  <span className="text-xs text-muted-foreground">{group.label}</span>
+                                )}
+                                {group.utxos.length > 1 && (
+                                  <Badge variant="secondary" className="w-fit text-xs">
+                                    {group.utxos.length} UTXOs
+                                  </Badge>
+                                )}
+                              </div>
+                            </TableCell>
+                            <TableCell className="font-mono">
+                              {displayUnit === "btc" ? (
+                                <span>{satsToBtc(group.totalSats)} BTC</span>
+                              ) : (
+                                <span>{group.totalSats.toLocaleString()} sats</span>
+                              )}
+                            </TableCell>
+                            <TableCell className="text-sm">
+                              <div className="flex flex-col">
+                                <span>{format(new Date(group.latestDate * 1000), "MMM d, yyyy")}</span>
+                                {group.earliestDate !== group.latestDate && (
+                                  <span className="text-xs text-muted-foreground">
+                                    From {format(new Date(group.earliestDate * 1000), "MMM d, yyyy")}
+                                  </span>
+                                )}
+                              </div>
+                            </TableCell>
+                            <TableCell>
+                              {formatUsdValue(group.totalValueAtReceipt)}
+                            </TableCell>
+                            <TableCell>
+                              {formatUsdValue(group.totalCurrentValue)}
+                            </TableCell>
+                            <TableCell>
+                              {group.gain !== undefined ? (
+                                <div className={cn(
+                                  "flex items-center gap-1",
+                                  group.gain > 0 ? "text-green-600 dark:text-green-400" : group.gain < 0 ? "text-red-600 dark:text-red-400" : ""
+                                )}>
+                                  {group.gain > 0 ? <TrendingUp className="h-3 w-3" /> : group.gain < 0 ? <TrendingDown className="h-3 w-3" /> : null}
+                                  <span>{formatUsdValue(group.gain)}</span>
+                                  {group.gainPercent !== undefined && (
+                                    <span className="text-xs">({group.gainPercent > 0 ? '+' : ''}{group.gainPercent.toFixed(1)}%)</span>
+                                  )}
+                                </div>
+                              ) : (
+                                <span className="text-muted-foreground">-</span>
+                              )}
+                            </TableCell>
+                          </TableRow>
+                        );
+                      } else {
+                        const { utxo, index: idx } = row;
+                        return (
                           <TableRow 
                             key={`utxo-${utxo.id}`} 
                             className="bg-muted/30 cursor-pointer hover-elevate" 
@@ -1445,13 +1436,20 @@ export default function UTXOs() {
                             <TableCell></TableCell>
                           </TableRow>
                         );
-                      });
-                    }
-
-                    return rows;
-                  })}
-                </TableBody>
-              </Table>
+                      }
+                    })}
+                    {utxoVirtualizer.getVirtualItems().length > 0 && (() => {
+                      const lastItem = utxoVirtualizer.getVirtualItems().at(-1)!;
+                      const remaining = utxoVirtualizer.getTotalSize() - lastItem.end;
+                      return remaining > 0 ? (
+                        <TableRow>
+                          <TableCell colSpan={7} className="p-0 border-0" style={{ height: remaining }} />
+                        </TableRow>
+                      ) : null;
+                    })()}
+                  </TableBody>
+                </Table>
+              </div>
             )}
           </CardContent>
         </Card>

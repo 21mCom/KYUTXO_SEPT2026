@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { Tag, Layers, ChevronRight, Check, Loader2, AlertCircle, X, ChevronsUpDown, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -119,6 +120,14 @@ export default function QuickTagger() {
   const { walletNames } = useWalletNames();
   const { seedNames } = useSeedNames();
   const { walletSoftware: walletSoftwareList } = useWalletSoftware();
+
+  const reviewScrollRef = useRef<HTMLDivElement>(null);
+  const reviewVirtualizer = useVirtualizer({
+    count: entries.length,
+    getScrollElement: () => reviewScrollRef.current,
+    estimateSize: () => 41,
+    overscan: 20,
+  });
 
   // Build combined lists for comboboxes (existing + currently selected)
   const allOwners = Array.from(new Set([...owners.map(o => o.name), owner].filter(Boolean)));
@@ -557,9 +566,9 @@ a1075db55d416d3ca199f55b6084e2115b9345e16c5cf302fc80e9d5fbf5d48d
                 </div>
               </div>
 
-              <div className="max-h-[300px] overflow-y-auto border rounded-md">
+              <div ref={reviewScrollRef} className="max-h-[300px] overflow-y-auto border rounded-md">
                 <table className="w-full text-sm">
-                  <thead className="sticky top-0 bg-background border-b">
+                  <thead className="sticky top-0 bg-background border-b z-10">
                     <tr>
                       <th className="p-2 text-left w-10"></th>
                       <th className="p-2 text-left">Entry</th>
@@ -568,36 +577,48 @@ a1075db55d416d3ca199f55b6084e2115b9345e16c5cf302fc80e9d5fbf5d48d
                     </tr>
                   </thead>
                   <tbody>
-                    {entries.map((entry, index) => (
-                      <tr
-                        key={index}
-                        className={`border-b ${entry.type === 'invalid' ? 'opacity-50' : ''}`}
-                      >
-                        <td className="p-2">
-                          <Checkbox
-                            checked={entry.selected}
-                            disabled={entry.type === 'invalid'}
-                            onCheckedChange={() => toggleEntry(index)}
-                            data-testid={`checkbox-entry-${index}`}
-                          />
-                        </td>
-                        <td className="p-2 font-mono text-xs truncate max-w-[300px]" title={entry.raw}>
-                          {entry.raw}
-                        </td>
-                        <td className="p-2">
-                          <Badge variant={entry.type === 'invalid' ? 'destructive' : 'secondary'}>
-                            {entry.type === 'address' ? 'Address' : entry.type === 'transaction' ? 'TXID' : 'Invalid'}
-                          </Badge>
-                        </td>
-                        <td className="p-2">
-                          {entry.type !== 'invalid' && (
-                            <Badge variant={entry.existingRecordId ? 'outline' : 'default'}>
-                              {entry.existingRecordId ? 'Exists' : 'New'}
+                    {reviewVirtualizer.getVirtualItems().length > 0 && reviewVirtualizer.getVirtualItems()[0].start > 0 && (
+                      <tr><td colSpan={4} style={{ height: reviewVirtualizer.getVirtualItems()[0].start, padding: 0 }} /></tr>
+                    )}
+                    {reviewVirtualizer.getVirtualItems().map(virtualRow => {
+                      const entry = entries[virtualRow.index];
+                      const index = virtualRow.index;
+                      return (
+                        <tr
+                          key={virtualRow.key}
+                          className={`border-b ${entry.type === 'invalid' ? 'opacity-50' : ''}`}
+                        >
+                          <td className="p-2">
+                            <Checkbox
+                              checked={entry.selected}
+                              disabled={entry.type === 'invalid'}
+                              onCheckedChange={() => toggleEntry(index)}
+                              data-testid={`checkbox-entry-${index}`}
+                            />
+                          </td>
+                          <td className="p-2 font-mono text-xs truncate max-w-[300px]" title={entry.raw}>
+                            {entry.raw}
+                          </td>
+                          <td className="p-2">
+                            <Badge variant={entry.type === 'invalid' ? 'destructive' : 'secondary'}>
+                              {entry.type === 'address' ? 'Address' : entry.type === 'transaction' ? 'TXID' : 'Invalid'}
                             </Badge>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
+                          </td>
+                          <td className="p-2">
+                            {entry.type !== 'invalid' && (
+                              <Badge variant={entry.existingRecordId ? 'outline' : 'default'}>
+                                {entry.existingRecordId ? 'Exists' : 'New'}
+                              </Badge>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                    {reviewVirtualizer.getVirtualItems().length > 0 && (() => {
+                      const lastItem = reviewVirtualizer.getVirtualItems().at(-1)!;
+                      const remaining = reviewVirtualizer.getTotalSize() - lastItem.end;
+                      return remaining > 0 ? <tr><td colSpan={4} style={{ height: remaining, padding: 0 }} /></tr> : null;
+                    })()}
                   </tbody>
                 </table>
               </div>
