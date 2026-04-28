@@ -1,107 +1,43 @@
 # KYUTXO - Bitcoin Metadata Manager
 
 ## Overview
-
-KYUTXO is an offline-first desktop application for managing Bitcoin address and transaction metadata. It enables users to organize cryptocurrency information, attach files, and manage custom vocabularies, prioritizing data privacy through password-based UI locking and complete offline functionality. Users needing data-at-rest protection should use encrypted containers (VeraCrypt, BitLocker, FileVault, LUKS). The project aims to become a robust personal crypto data management solution, with future plans for advanced provenance tracking, entity relationship mapping, and compliance reporting. The current focus is on efficient blockchain data import and transaction synchronization.
+KYUTXO is an offline-first desktop application designed for managing Bitcoin address and transaction metadata. Its primary purpose is to help users organize cryptocurrency information, attach relevant files, and manage custom vocabularies, all while prioritizing data privacy. The application operates completely offline and includes a password-based UI locking mechanism. KYUTXO aims to become a comprehensive personal crypto data management solution, with future ambitions including advanced provenance tracking, entity relationship mapping, and compliance reporting. The immediate focus is on efficient blockchain data import and transaction synchronization.
 
 ## User Preferences
-
 Preferred communication style: Simple, everyday language.
 
 ## System Architecture
-
-KYUTXO employs an offline-first architecture with a lightweight password-based UI lock (hash check only, no field-level encryption). The application is built with React 18, TypeScript, and Vite for the frontend, utilizing `shadcn/ui` and Tailwind CSS for a responsive, offline-first UI, and Electron for cross-platform desktop deployment. State management uses TanStack Query and Dexie.js for IndexedDB. A local Express.js backend primarily manages file attachments, keeping core business logic client-side.
+KYUTXO features an offline-first architecture built for cross-platform desktop deployment using Electron. The frontend is developed with React 18, TypeScript, and Vite, leveraging `shadcn/ui` and Tailwind CSS for a responsive user interface. State management is handled by TanStack Query and Dexie.js for IndexedDB. A local Express.js backend primarily serves file attachments, with core business logic residing client-side.
 
 **Key Architectural Decisions & Features:**
 
-*   **UI/UX:** Responsive, offline-first UI with reorganized navigation and quick action patterns.
+*   **UI/UX:** Responsive, offline-first interface with streamlined navigation.
 *   **Data Model:** Comprehensive records for tracking ownership, wallet names, and metadata.
-*   **Security:** Password-based UI lock only (hash check). No field-level encryption — all data is stored as plaintext in IndexedDB. Users needing data-at-rest protection should use OS-level encrypted containers. The `isEncrypted`/`encryptedPayload` fields have been removed from all 16 database tables (DB schema v27). DB schema v28 is a no-op (schema unchanged from v27). DB schema v29 cleans up stale `[encrypted]` placeholder values from vocabulary tables and record fields left over from the encryption removal migration. Legacy encrypted data migration: on login, `legacy-decrypt.ts` checks for records with `_legacyEncryptedPayload` (preserved by v27 migration), derives the encryption key from the user's password + vault salt, decrypts all payloads across all 16 tables in batches of 500, restores plaintext fields, and clears the legacy field. Failed records are left untouched for retry on next login. A `legacyDecryptComplete` flag in the vault prevents re-running. After metadata migration completes successfully, `legacy-decrypt-files.ts` iterates all attachment and evidenceAttachment records, reads each file from disk, attempts AES-256-GCM decryption (via restored `decryptBinary` in crypto.ts), writes plaintext bytes back, and skips files where GCM auth fails (already plaintext). A separate `legacyFileDecryptComplete` vault flag prevents re-runs. File decryption is gated on metadata migration being fully complete to ensure objectStoragePath values are restored first. Progress overlay shown during both phases. Dead encryption stub files (dbEncryption, encryptedDb, bulk-crypto, key-management) have been deleted. The remaining files under `lib/data/` (record-queries, vocabulary-crud, record-crud) and `dataFacade.ts` contain plain database CRUD operations with no encryption logic.
-*   **Performance Optimizations:** DB-level pagination across all major pages (Records, Transactions, Dashboard) to avoid loading entire tables into memory. Records page uses cursor-based `orderBy().reverse().filter().offset().limit()` pagination instead of full-table `.toArray()` calls. Filter dropdowns populated from vocabulary table hooks (`useTags`, `useCategories`, `useOwners`, `useWalletNames`, `useSeedNames`, `useWalletSoftware`) instead of scanning records. RecordTable attachment counts use a single batch `anyOf()` query instead of N individual queries. `useFilteredRecords` uses cursor-based pagination with indexed blockchain-exclusion count. Search input debounced (300ms). `getAllParticipants()` fully eliminated from all UI components — every call site now uses targeted indexed lookups (`getParticipantsByAddresses`/`getParticipantsByTxids`).
-*   **Offline First & Portability:** Designed for complete offline functionality and portable database storage.
-*   **Vocabulary Management:** Custom tags, categories, owners, and wallet details with auto-sync.
-*   **Duplicate Detection & Merge:** Intelligent merging of new metadata.
-*   **Address Importer:** Bulk import of addresses from xpub/zpub keys, supporting various script types, M-of-N thresholds, BIP-67, and custom derivation paths.
-*   **Wallet Data Sync System:** Modular system for importing labels and transaction history from various wallet software, with duplicate detection and a private key scanner. Includes dedicated import for mobile wallets (Phoenix, Wallet of Satoshi, Mycelium), focusing on on-chain transactions.
-*   **Descriptor Import:** Wizard for importing Bitcoin addresses from output descriptors (e.g., Sparrow wallet export), supporting `wsh(sortedmulti(...))`, `sh(sortedmulti(...))`, `sh(wsh(sortedmulti(...)))`, and `tr()` formats.
-*   **BIP-329 Label Import:** Streamlined import of `.jsonl` files, preserving origin and handling input/output specificity.
-*   **Seed Name Protection:** Prevents accidental seed phrase entry.
-*   **Address Verification System:** Confirms address ownership with a tiered importance system.
-*   **Historical Price Import:** Imports Bitcoin OHLCV price data from CSV files.
-*   **Transaction Sync System:** Fetches and imports confirmed transactions from blockchain data sources for tracked addresses, intelligently matching and creating "Pending Review" records. Features pause/resume, performance optimizations (parallel fetching, caching, batched writes), and comprehensive prevout resolution to ensure accurate input addresses and amounts. Includes sync protection with configurable transaction count thresholds, per-address timeouts, and an address blacklist. Connected-only mode (for depth > 1) prevents record creation for unknown addresses while still saving transaction data, avoiding cascade into deeper sync levels.
-*   **Tor Proxy Integration:** Privacy-enhanced node connectivity via SOCKS5 proxy, with auto-detection, connection testing, .onion support, and SSRF protection. Local network access is opt-in.
-*   **Electrum Protocol Support:** Alternative, efficient protocol for bulk address syncing (10,000+ addresses) via Electrum JSON-RPC over TCP. Note: Electrum does not support Tor routing; UI warnings are shown when both Tor and Electrum are enabled.
-*   **Exact UTXO Tracking:** Dual-mode UTXO calculation (Standard/Exact) with outpoint-based matching.
-*   **Record Detail Panel:** Comprehensive metadata display including expandable and lazy-loaded transaction history.
-*   **Blockchain Toggle Component:** Filters blockchain-discovered records using optimized indexing.
-*   **Reports System:** Includes Source of Funds Report (acquisition history, cost basis, valuation) and Hop-Point Detection Report.
-*   **Quick Tagger:** Paste-based bulk tagging tool for addresses and transactions.
-*   **Nudgie (Transaction Labeling To-Do):** Workflow for labeling unlabeled transactions.
-*   **Database Cleanup:** Dedicated page for querying and bulk deleting blockchain-discovered records without user metadata, offering "Blockchain-Only", "Unconnected Records" (filters to records with no transaction connections to known addresses), and "Discovery Origin" scan modes. Features cancellable scans with AbortController, chunked processing with UI yielding for responsiveness, paginated results (100 per page), and `discoveredFromRecordId` index (DB v25) for fast discovery tree traversal.
-*   **Discovery Tree Dialog:** Visualizes all recursively discovered records from a given address.
-*   **Transaction Classification Metadata:** Tax-neutral fact-recording system for `flowType`, `acquisitionMethod`, `dispositionType`, `costBasisUsd`, and `counterpartyType`.
-*   **Bulk Editor:** Batch editing system with filter/action builders, preview, and undo.
-*   **Value Updater Enhancement:** Extended support for transaction classification fields. All fields render instantly as plaintext during session.
-*   **Metadata Conflict Resolution System:** Detects and resolves conflicts for singular metadata fields from multiple import sources using a `RecordOrigin` system.
-*   **Bitcoin Flow Visualizer:** Interactive UTXO provenance tracing tool with Sankey Diagram, Timeline Swimlanes, Line Chart, and Hop-Path Explorer visualizations.
-*   **Transaction Search Enhancement:** Includes blockchain transactions and participating addresses in search results.
+*   **Security:** Implements a password-based UI lock (hash check only); data is stored as plaintext in IndexedDB. Users requiring data-at-rest protection should utilize OS-level encrypted containers.
+*   **Performance:** Utilizes DB-level and cursor-based pagination, indexed lookups, and debounced search for efficient data handling.
+*   **Offline First & Portability:** Designed for full offline functionality and portable database storage.
+*   **Data Management:** Includes features for custom vocabulary management, duplicate detection and merging, and bulk address/descriptor/BIP-329 label importing.
+*   **Wallet Data Sync:** Modular system for importing labels and transaction history from various wallet software, including mobile wallets, with duplicate detection.
+*   **Transaction Sync System:** Fetches and imports confirmed transactions from blockchain sources for tracked addresses, intelligently matching and creating "Pending Review" records. Features include pause/resume, parallel fetching, caching, batched writes, and prevout resolution.
+*   **Privacy & Connectivity:** Supports Tor proxy integration for privacy-enhanced node connectivity and Electrum Protocol for efficient bulk address syncing.
+*   **UTXO Tracking:** Offers dual-mode UTXO calculation (Standard/Exact) with outpoint-based matching.
+*   **Reporting & Analysis:** Includes a Source of Funds Report, Hop-Point Detection Report, Statement Report, Privacy Audit (on-chain vulnerability scanner), Quantum Risk Scanner, and a Balance Overview.
+*   **Visualization:** Features a Bitcoin Flow Visualizer for UTXO provenance tracing and a Network Analysis tool for visualizing Bitcoin address relationships as a force-directed graph.
+*   **Workflow Tools:** Provides a Quick Tagger for bulk labeling, Nudgie for unlabeled transaction workflow, a Database Cleanup utility for managing blockchain-discovered records, and a Discovery Tree Dialog.
+*   **Metadata & Editing:** Supports transaction classification metadata, a bulk editor for batch modifications, and a metadata conflict resolution system using a `RecordOrigin` system.
 *   **Origin Tracking System:** Comprehensive UTXO lineage tracking with `utxoLineage` and `custodySegment` tables, a Lineage Engine, Continuity Proof, Continuity Certificate Report, and Evidence Bundle Export.
-*   **Evidence/Document Storage System:** General-purpose document storage for proof-of-ownership and historical records.
-*   **Vault Management Page:** Dedicated UI for viewing and managing multisig vaults.
-*   **Statement Report:** Bank-statement-like transaction report generator with configurable options (date range, currency, balance modes, columns), PDF export, and spending discovery.
-*   **Privacy Audit:** On-chain privacy vulnerability scanner inspired by the Stealth project. Runs 6 detection heuristics against local transaction data: Script Type Mixing (HIGH — mixed input script families fingerprint the wallet), Dust UTXO Detection (CRITICAL/MEDIUM — unspent dust used for tracking), Dust Spending (HIGH — dust co-spent with normal inputs links addresses), Consolidation Origin (MEDIUM — multi-input consolidation links address clusters), Exchange Origin (LOW — batch withdrawal patterns reveal exchange relationship), and Tainted UTXO Merge (HIGH — merging inputs from different funding sources propagates linkability). Auto-tags affected records with `privacy:*` tags. All analysis runs client-side.
-*   **Quantum Risk Scanner:** Dedicated page that scans address records for quantum computing vulnerability. Classifies by address type (P2PK=critical, P2TR=high, P2PKH/P2WPKH with spend history=high, P2PKH/P2WPKH receive-only=medium, P2SH=variable/needs review) and auto-tags records with `quantum:critical/high/medium/variable/low` tags. Uses bulk operations for performance.
-*   **Balance Overview:** Clean BTC balance summary page that computes UTXO balances from transaction participants and groups them by wallet, seed, owner, tag, or category. Supports both heuristic and exact UTXO modes (auto-detects), BTC/sats display toggle, optional USD valuation from imported price data, and expandable address breakdowns per group.
-*   **Network Analysis:** Gephi-style force-directed graph visualization of Bitcoin address relationships. Builds an address co-transaction network and runs three client-side algorithms: Louvain community detection (cluster discovery), sampled betweenness centrality (hub identification), and articulation point detection (bridge nodes connecting separate clusters). Features filter modes (user-only, by-owner, by-wallet, all), interactive SVG graph with zoom/pan, node selection with detail panel, cluster legend, and AbortController cancellation. Safe for datasets up to 3,000 addresses with throttled D3 force simulation for performance. Entirely read-only — no data modification.
+*   **Evidence Storage:** General-purpose document storage for proof-of-ownership and historical records.
+*   **Vault Management:** Dedicated UI for viewing and managing multisig vaults.
 
 ## External Dependencies
-
-*   **Security Hardening:** Attachment directories use SHA-256 hashed identifiers and opaque filenames to prevent filesystem metadata leakage. IPC file handlers have path traversal protection on all operations. Dev/test pages are stripped from production builds. Unencrypted exports show prominent warnings.
-*   **Local File System:** For storing encrypted attachments (directory names are SHA-256 hashes, filenames are random hex).
+*   **Local File System:** Used for storing attachments with SHA-256 hashed identifiers and opaque filenames.
 *   **Google Fonts CDN:** For the Inter font family.
 *   **bitcoinjs-lib:** Bitcoin address validation and network detection.
 *   **bip32:** HD wallet key derivation.
 *   **bip39:** Mnemonic seed phrase handling.
-*   **Electron:** Core framework for desktop application.
-*   **electron-builder:** For packaging and distribution.
-*   **Radix UI:** Unstyled, accessible component primitives.
+*   **Electron:** Core framework for desktop application development.
+*   **electron-builder:** For packaging and distributing the desktop application.
+*   **Radix UI:** Provides unstyled, accessible component primitives.
 *   **Lucide React & React Icons:** Icon libraries.
 *   **cmdk:** Command palette component.
 *   **class-variance-authority & clsx:** Utilities for dynamic className composition.
-
-## Git Privacy Cleanup (Action Required)
-
-**Status:** 53 files in `attached_assets/` are tracked in git history despite being listed in `.gitignore`. These include screenshots (potentially showing addresses/balances), AI build prompts, nginx config dumps, and a security audit prompt describing encryption internals. They exist in the git history of the current GitHub remote (`21mCom/21mCom-KYUTXO-PORTABLE`).
-
-**Note:** The old repo `21mCom/KYUTXO_PORTABLE` has been deleted. All active development continues in `21mCom/21mCom-KYUTXO-PORTABLE`.
-
-**Step 1 — Remove from current tracking (run in your local clone):**
-```bash
-git rm --cached -r attached_assets/
-git commit -m "Remove attached_assets from tracking (privacy cleanup)"
-git push origin main
-```
-This stops the files from appearing in the current tree but they remain in git history.
-
-**Step 2 — Purge from git history entirely (optional but recommended):**
-```bash
-# Install git-filter-repo if not already installed:
-# pip install git-filter-repo
-
-# Clone a fresh copy to work on:
-git clone https://github.com/21mCom/21mCom-KYUTXO-PORTABLE.git kyutxo-cleanup
-cd kyutxo-cleanup
-
-# Remove attached_assets/ from all history:
-git filter-repo --path attached_assets/ --invert-paths
-
-# Force push the rewritten history:
-git remote add origin https://github.com/21mCom/21mCom-KYUTXO-PORTABLE.git
-git push origin --force --all
-git push origin --force --tags
-```
-After force-pushing, all collaborators must re-clone. The old commits with attached_assets will be garbage-collected by GitHub after ~90 days.
-
-**Files verified as safe to keep tracked:**
-- `client/src/lib/testSeedData.ts` — uses only publicly known demo addresses (Satoshi genesis, common examples), no real keys
-- `client/src/pages/DevTestData.tsx` — dev-only UI, gated behind `import.meta.env.DEV`, no secrets

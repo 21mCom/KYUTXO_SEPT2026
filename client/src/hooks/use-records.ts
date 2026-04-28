@@ -13,7 +13,10 @@ import { useDbChangeSignal } from '@/hooks/use-db-change-signal';
 const RECORDS_TABLES = ['records'];
 const DEBOUNCE_MS = 500;
 
-export function useRecords() {
+const DEFAULT_RECORDS_LIMIT = 5000;
+
+export function useRecords(options?: { limit?: number }) {
+  const recordLimit = options?.limit ?? DEFAULT_RECORDS_LIMIT;
   const [records, setRecords] = useState<Record[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const loadVersionRef = useRef(0);
@@ -23,7 +26,11 @@ export function useRecords() {
     const version = ++loadVersionRef.current;
     setIsLoading(true);
     try {
-      const rawRecords = await db.records.orderBy('updatedAt').reverse().toArray();
+      const rawRecords = await db.records
+        .orderBy('updatedAt')
+        .reverse()
+        .limit(recordLimit)
+        .toArray();
       if (loadVersionRef.current !== version) return;
       setRecords(rawRecords);
     } catch (error) {
@@ -36,7 +43,7 @@ export function useRecords() {
         setIsLoading(false);
       }
     }
-  }, []);
+  }, [recordLimit]);
 
   useEffect(() => {
     loadRecords();
@@ -73,15 +80,16 @@ export function useFilteredRecords(
       let rawRecords: Record[];
       let total: number;
 
+      const effectiveLimit = pgLimit ?? DEFAULT_RECORDS_LIMIT;
+      const effectiveOffset = pgOffset ?? 0;
+
       if (includeBD) {
         total = await db.records.count();
         if (loadVersionRef.current !== version) return;
 
-        if (pgOffset !== undefined && pgLimit !== undefined) {
-          rawRecords = await db.records.orderBy('updatedAt').reverse().offset(pgOffset).limit(pgLimit).toArray();
-        } else {
-          rawRecords = await db.records.orderBy('updatedAt').reverse().toArray();
-        }
+        rawRecords = await db.records
+          .orderBy('updatedAt').reverse()
+          .offset(effectiveOffset).limit(effectiveLimit).toArray();
       } else {
         const blockchainCount = await db.records
           .where('addressImportance')
@@ -94,21 +102,10 @@ export function useFilteredRecords(
           r.addressImportance !== 'blockchain-discovered' &&
           r.addressImportance !== 'pending-review';
 
-        if (pgOffset !== undefined && pgLimit !== undefined) {
-          rawRecords = await db.records
-            .orderBy('updatedAt')
-            .reverse()
-            .filter(excludeBlockchain)
-            .offset(pgOffset)
-            .limit(pgLimit)
-            .toArray();
-        } else {
-          rawRecords = await db.records
-            .orderBy('updatedAt')
-            .reverse()
-            .filter(excludeBlockchain)
-            .toArray();
-        }
+        rawRecords = await db.records
+          .orderBy('updatedAt').reverse()
+          .filter(excludeBlockchain)
+          .offset(effectiveOffset).limit(effectiveLimit).toArray();
       }
 
       if (loadVersionRef.current !== version) return;

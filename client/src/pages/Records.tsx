@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { ArrowLeft, Search as SearchIcon, Database, Hash, ExternalLink, AlertCircle, Trash2, X, ChevronLeft, ChevronRight } from "lucide-react";
 import { BlockchainToggle } from "@/components/BlockchainToggle";
+import Dexie from "dexie";
 import { db, type Record as DbRecord, type VaultMetadata, type AddressImportance, type ChainType, type CustomField, type BlockchainTransaction, type TransactionParticipant } from "@/lib/database";
 import { useDbChangeSignal } from "@/hooks/use-db-change-signal";
 import { deleteRecord, getParticipantsByTxids } from "@/lib/dataFacade";
@@ -250,34 +251,67 @@ export default function Records() {
           return true;
         };
         
+        const excludeBlockchain = (r: DbRecord) =>
+          r.addressImportance !== 'blockchain-discovered' &&
+          r.addressImportance !== 'pending-review';
+
+        const singleEqualsFilter = !search && columnFilters.length === 1 &&
+          columnFilters[0].operator === 'equals' ? columnFilters[0] : null;
+        const indexedField = singleEqualsFilter &&
+          ['type', 'owner', 'walletName'].includes(singleEqualsFilter.field)
+          ? singleEqualsFilter.field : null;
+
         let count: number;
+        const pgOffset = (currentPage - 1) * PAGE_SIZE;
+        let rawRecords: DbRecord[];
+
         if (!filtersActive) {
-          count = includeBlockchainDiscovered 
+          count = includeBlockchainDiscovered
             ? await db.records.count()
             : (await db.records.count()) - blockchainCount;
+          if (loadVersionRef.current !== version) return;
+          setTotalCount(count);
+
+          if (includeBlockchainDiscovered) {
+            rawRecords = await db.records
+              .orderBy('id').reverse()
+              .offset(pgOffset).limit(PAGE_SIZE).toArray();
+          } else {
+            rawRecords = await db.records
+              .orderBy('id').reverse()
+              .filter(excludeBlockchain)
+              .offset(pgOffset).limit(PAGE_SIZE).toArray();
+          }
+        } else if (indexedField) {
+          const compoundIdx = `[${indexedField}+id]` as
+            '[type+id]' | '[owner+id]' | '[walletName+id]';
+          const val = singleEqualsFilter!.value.toLowerCase().trim();
+
+          if (includeBlockchainDiscovered) {
+            count = await db.records.where(indexedField).equals(val).count();
+          } else {
+            count = await db.records.where(indexedField).equals(val)
+              .filter(excludeBlockchain).count();
+          }
+          if (loadVersionRef.current !== version) return;
+          setTotalCount(count);
+
+          const baseQuery = db.records.where(compoundIdx)
+            .between([val, Dexie.minKey], [val, Dexie.maxKey])
+            .reverse();
+          rawRecords = includeBlockchainDiscovered
+            ? await baseQuery.offset(pgOffset).limit(PAGE_SIZE).toArray()
+            : await baseQuery.filter(excludeBlockchain)
+                .offset(pgOffset).limit(PAGE_SIZE).toArray();
         } else {
           count = await db.records.filter(filterFn).count();
-        }
-        if (loadVersionRef.current !== version) return;
-        setTotalCount(count);
-        
-        const offset = (currentPage - 1) * PAGE_SIZE;
-        let rawRecords: DbRecord[];
-        if (includeBlockchainDiscovered && !filtersActive) {
+          if (loadVersionRef.current !== version) return;
+          setTotalCount(count);
+
           rawRecords = await db.records
-            .orderBy('id')
-            .reverse()
-            .offset(offset)
-            .limit(PAGE_SIZE)
-            .toArray();
-        } else {
-          rawRecords = await db.records
-            .orderBy('id')
-            .reverse()
+            .orderBy('id').reverse()
             .filter(filterFn)
-            .offset(offset)
-            .limit(PAGE_SIZE)
-            .toArray();
+            .offset(pgOffset).limit(PAGE_SIZE).toArray();
         }
         if (loadVersionRef.current !== version) return;
         

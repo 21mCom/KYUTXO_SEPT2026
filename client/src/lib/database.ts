@@ -47,7 +47,7 @@ export class KYUTXODatabase extends Dexie {
     super('KYUTXODatabase');
     
     this.version(29).stores({
-      records: '++id, type, inputString, label, owner, walletName, seedName, walletSoftware, *tags, *categories, createdAt, updatedAt, chainType, syncDepth, addressImportance, [type+addressImportance], flowType, discoveredFromRecordId',
+      records: '++id, type, inputString, label, owner, walletName, seedName, walletSoftware, *tags, *categories, createdAt, updatedAt, chainType, syncDepth, addressImportance, [type+addressImportance], [addressImportance+id], [type+id], [owner+id], [walletName+id], flowType, discoveredFromRecordId',
       attachments: '++id, recordId, createdAt',
       tags: '++id, name, createdAt',
       categories: '++id, name, createdAt',
