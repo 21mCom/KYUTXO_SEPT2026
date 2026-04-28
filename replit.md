@@ -36,6 +36,9 @@ KYUTXO features an offline-first architecture built for cross-platform desktop d
     *   `db.transactionParticipants` → `client/src/lib/data/transaction-crud.ts`
     *   `db.utxoLineage` → `client/src/lib/data/lineage-crud.ts`
     *   `db.custodySegments` → `client/src/lib/data/lineage-crud.ts`
+    *   `db.evidence` → `client/src/lib/data/evidence-crud.ts`
+    *   `db.evidenceAttachments` → `client/src/lib/data/evidence-crud.ts`
+    *   `db.lineageSnapshots` → `client/src/lib/data/lineage-crud.ts`
 
 ## External Dependencies
 *   **Local File System:** Used for storing attachments with SHA-256 hashed identifiers and opaque filenames.

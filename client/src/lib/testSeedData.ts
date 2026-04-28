@@ -2,7 +2,7 @@ import { db } from './database';
 import { createRecord, getParticipantsByTxid } from './dataFacade';
 import { clearAllRecords } from './data/record-crud';
 import { addTransaction, addParticipant, clearTransactions, clearParticipants } from './data/transaction-crud';
-import { addUtxoLineage, updateUtxoLineage, addCustodySegment, clearUtxoLineage, clearCustodySegments } from './data/lineage-crud';
+import { addUtxoLineage, updateUtxoLineage, addCustodySegment, clearUtxoLineage, clearCustodySegments, clearLineageSnapshots } from './data/lineage-crud';
 import { ensureOwner, ensureWalletName, ensureSeedName, syncTagsToMaster, syncCategoriesToMaster } from './data/vocabulary-crud';
 
 /**
@@ -541,7 +541,7 @@ export async function clearTestData(): Promise<void> {
     await clearParticipants({ skipNotification: true });
     await clearUtxoLineage({ skipNotification: true });
     await clearCustodySegments({ skipNotification: true });
-    await db.lineageSnapshots.clear();
+    await clearLineageSnapshots({ skipNotification: true });
   });
 }
 

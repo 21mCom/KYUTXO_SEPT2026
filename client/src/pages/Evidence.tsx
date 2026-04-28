@@ -78,11 +78,11 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { useToast } from "@/hooks/use-toast";
 import { db, type Evidence, type EvidenceAttachment, EVIDENCE_DOCUMENT_TYPE_OPTIONS, EVIDENCE_IMPORTANCE_OPTIONS, type EvidenceDocumentType, type EvidenceImportance } from "@/lib/database";
 import { 
-  createEvidence, 
+  addEvidence, 
   updateEvidence, 
   deleteEvidence, 
   getEvidenceAttachments,
-  createEvidenceAttachment,
+  addEvidenceAttachment,
   deleteEvidenceAttachment,
 } from "@/lib/dataFacade";
 import { uploadFile, downloadFile, deleteFile, getFileBlob, isPreviewableType, getPreviewType } from "@/lib/attachments";
@@ -359,7 +359,7 @@ export default function EvidencePage() {
           description: "Your changes have been saved.",
         });
       } else {
-        evidenceId = await createEvidence(evidenceData);
+        evidenceId = await addEvidence(evidenceData);
         
         toast({
           title: "Evidence added",
@@ -371,7 +371,7 @@ export default function EvidencePage() {
         for (const file of pendingFiles) {
           const storagePath = await uploadFile(file);
           
-          await createEvidenceAttachment({
+          await addEvidenceAttachment({
             evidenceId,
             filename: file.name,
             mimeType: file.type || "application/octet-stream",

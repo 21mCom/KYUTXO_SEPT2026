@@ -40,6 +40,21 @@ const GUARDED_TABLES = [
     crudFile: path.resolve(ROOT, 'client/src/lib/data/lineage-crud.ts'),
     label: 'lineage-crud.ts',
   },
+  {
+    table: 'evidence',
+    crudFile: path.resolve(ROOT, 'client/src/lib/data/evidence-crud.ts'),
+    label: 'evidence-crud.ts',
+  },
+  {
+    table: 'evidenceAttachments',
+    crudFile: path.resolve(ROOT, 'client/src/lib/data/evidence-crud.ts'),
+    label: 'evidence-crud.ts',
+  },
+  {
+    table: 'lineageSnapshots',
+    crudFile: path.resolve(ROOT, 'client/src/lib/data/lineage-crud.ts'),
+    label: 'lineage-crud.ts',
+  },
 ];
 
 const TABLE_NAMES = GUARDED_TABLES.map(g => g.table);

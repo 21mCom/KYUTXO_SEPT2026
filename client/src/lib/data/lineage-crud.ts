@@ -1,4 +1,4 @@
-import { db, notifyDbChange, type UtxoLineage, type CustodySegment } from '../database';
+import { db, notifyDbChange, type UtxoLineage, type CustodySegment, type LineageSnapshot } from '../database';
 
 export type CreateUtxoLineageData = Omit<UtxoLineage, 'id'>;
 export type CreateCustodySegmentData = Omit<CustodySegment, 'id'>;
@@ -86,5 +86,66 @@ export async function clearAllLineageData(
 
   if (!options?.skipNotification) {
     notifyDbChange(['utxoLineage', 'custodySegments']);
+  }
+}
+
+export type CreateLineageSnapshotData = Omit<LineageSnapshot, 'id'>;
+
+export async function addLineageSnapshot(
+  data: CreateLineageSnapshotData,
+  options?: LineageWriteOptions
+): Promise<number> {
+  const id = await db.lineageSnapshots.add(data);
+
+  if (!options?.skipNotification) {
+    notifyDbChange('lineageSnapshots');
+  }
+
+  return id as number;
+}
+
+export async function bulkAddLineageSnapshots(
+  records: LineageSnapshot[],
+  options?: LineageWriteOptions
+): Promise<void> {
+  if (records.length === 0) return;
+
+  await db.lineageSnapshots.bulkAdd(records);
+
+  if (!options?.skipNotification) {
+    notifyDbChange('lineageSnapshots');
+  }
+}
+
+export async function updateLineageSnapshot(
+  id: number,
+  changes: Partial<LineageSnapshot>,
+  options?: LineageWriteOptions
+): Promise<void> {
+  await db.lineageSnapshots.update(id, changes);
+
+  if (!options?.skipNotification) {
+    notifyDbChange('lineageSnapshots');
+  }
+}
+
+export async function deleteLineageSnapshot(
+  id: number,
+  options?: LineageWriteOptions
+): Promise<void> {
+  await db.lineageSnapshots.delete(id);
+
+  if (!options?.skipNotification) {
+    notifyDbChange('lineageSnapshots');
+  }
+}
+
+export async function clearLineageSnapshots(
+  options?: LineageWriteOptions
+): Promise<void> {
+  await db.lineageSnapshots.clear();
+
+  if (!options?.skipNotification) {
+    notifyDbChange('lineageSnapshots');
   }
 }

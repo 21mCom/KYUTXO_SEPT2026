@@ -1,5 +1,6 @@
 import { db } from '@/lib/database';
 import { isElectron, getElectronAPI } from '@/lib/electron';
+import { updateEvidenceAttachment } from '@/lib/data/evidence-crud';
 
 async function hashIdentifier(identifier: string): Promise<string> {
   const encoder = new TextEncoder();
@@ -473,7 +474,7 @@ export async function migrateAttachmentPaths(
         if (item.table === 'attachments') {
           await db.attachments.update(item.id, { objectStoragePath: newStoragePath });
         } else {
-          await db.evidenceAttachments.update(item.id, { objectStoragePath: newStoragePath });
+          await updateEvidenceAttachment(item.id, { objectStoragePath: newStoragePath }, { skipNotification: true });
         }
       } catch (dbError) {
         if (didRenameFile) {

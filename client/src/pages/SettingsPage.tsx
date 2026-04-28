@@ -39,10 +39,11 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { useAuth } from "@/contexts/AuthContext";
-import { db } from "@/lib/database";
+import { db, type Evidence } from "@/lib/database";
 import { bulkCreateRecords, clearAllRecords, type CreateRecordData } from "@/lib/data/record-crud";
 import { clearTransactions, clearParticipants } from "@/lib/data/transaction-crud";
 import { addUtxoLineage, addCustodySegment, clearUtxoLineage, clearCustodySegments } from "@/lib/data/lineage-crud";
+import { bulkAddEvidence, clearEvidence, clearEvidenceAttachments, addEvidenceAttachment as addEvidenceAttachmentCrud } from "@/lib/data/evidence-crud";
 import { deriveKey, decrypt, base64ToBuffer, verifyPassword } from "@/lib/crypto";
 import { getVaultSettings, vaultDb } from "@/lib/vault";
 import { generateSalt, hashPassword, bufferToBase64 } from "@/lib/crypto";
@@ -531,8 +532,8 @@ export default function SettingsPage() {
         await db.seedNames.clear();
         await db.walletSoftware.clear();
         await db.derivationTemplates.clear();
-        await db.evidence.clear();
-        await db.evidenceAttachments.clear();
+        await clearEvidence({ skipNotification: true });
+        await clearEvidenceAttachments({ skipNotification: true });
         await db.priceData.clear();
         await db.nodeSettings.clear();
         await clearUtxoLineage({ skipNotification: true });
@@ -971,7 +972,7 @@ export default function SettingsPage() {
             updatedAt: evData.updatedAt || Date.now(),
           };
           
-          await db.evidence.add(newEvidence as any);
+          await bulkAddEvidence([newEvidence as Evidence], { skipNotification: true });
           evidenceAdded++;
         }
       }
@@ -990,7 +991,7 @@ export default function SettingsPage() {
             createdAt: eaData.createdAt || Date.now(),
           };
           
-          await db.evidenceAttachments.add(newEvidenceAttachment as any);
+          await addEvidenceAttachmentCrud(newEvidenceAttachment, { skipNotification: true });
           evidenceAttachmentsAdded++;
         }
       }

@@ -3,3 +3,4 @@ export * from './data/vocabulary-crud';
 export * from './data/record-crud';
 export * from './data/transaction-crud';
 export * from './data/lineage-crud';
+export * from './data/evidence-crud';
