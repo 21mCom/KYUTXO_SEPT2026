@@ -446,42 +446,43 @@ function generateNarrative(
 export async function buildAllCustodySegments(
   onProgress?: (current: number, total: number) => void
 ): Promise<{ processed: number; created: number }> {
-  // Find all owned addresses that received funds
-  const ownedLineage = await db.utxoLineage
+  const uniqueOrigins = new Map<string, { createdAddress: string; createdTxid: string; createdVout: number }>();
+
+  await db.utxoLineage
     .where('createdOwned')
-    .equals(1) // IndexedDB uses 1/0 for booleans in indexes
-    .toArray();
-  
-  // Deduplicate by origin UTXO
-  const uniqueOrigins = new Map<string, UtxoLineage>();
-  for (const lineage of ownedLineage) {
-    const key = `${lineage.createdTxid}:${lineage.createdVout}`;
-    if (!uniqueOrigins.has(key)) {
-      uniqueOrigins.set(key, lineage);
-    }
-  }
-  
+    .equals(1)
+    .each(lineage => {
+      const key = `${lineage.createdTxid}:${lineage.createdVout}`;
+      if (!uniqueOrigins.has(key)) {
+        uniqueOrigins.set(key, {
+          createdAddress: lineage.createdAddress,
+          createdTxid: lineage.createdTxid,
+          createdVout: lineage.createdVout
+        });
+      }
+    });
+
   const origins = Array.from(uniqueOrigins.values());
   let processed = 0;
   let created = 0;
-  
-  for (const lineage of origins) {
+
+  for (const origin of origins) {
     const segment = await buildCustodySegment(
-      lineage.createdAddress,
-      lineage.createdTxid,
-      lineage.createdVout
+      origin.createdAddress,
+      origin.createdTxid,
+      origin.createdVout
     );
-    
+
     if (segment) {
       created++;
     }
-    
+
     processed++;
     if (onProgress) {
       onProgress(processed, origins.length);
     }
   }
-  
+
   return { processed, created };
 }
 
