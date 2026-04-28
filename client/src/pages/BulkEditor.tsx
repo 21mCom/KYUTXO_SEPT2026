@@ -1,11 +1,11 @@
 import { useState, useMemo, useEffect, useRef } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Switch } from "@/components/ui/switch";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -194,6 +194,194 @@ async function runFilterQuery(
     .filter(matchRecord)
     .limit(limit)
     .toArray();
+}
+
+const PREVIEW_ROW_HEIGHT = 40;
+const CONFIRM_ROW_HEIGHT = 44;
+
+function VirtualizedPreviewList({ records }: { records: Record[] }) {
+  const parentRef = useRef<HTMLDivElement>(null);
+
+  const virtualizer = useVirtualizer({
+    count: records.length,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => PREVIEW_ROW_HEIGHT,
+    overscan: 20,
+  });
+
+  return (
+    <div className="border rounded-lg">
+      <div className="p-3 bg-muted/50 border-b flex items-center justify-between">
+        <span className="font-medium text-sm" data-testid="text-preview-count">
+          Preview: {records.length} record{records.length !== 1 ? 's' : ''} will be modified
+        </span>
+      </div>
+      <div
+        ref={parentRef}
+        className="h-[200px] overflow-auto"
+        data-testid="preview-scroll-container"
+      >
+        <div
+          className="relative w-full p-3"
+          style={{ height: `${virtualizer.getTotalSize() + 24}px` }}
+        >
+          {virtualizer.getVirtualItems().map(virtualRow => {
+            const record = records[virtualRow.index];
+            return (
+              <div
+                key={record.id}
+                className="absolute left-0 right-0 px-3"
+                style={{
+                  height: `${virtualRow.size}px`,
+                  transform: `translateY(${virtualRow.start + 12}px)`,
+                }}
+              >
+                <div className="flex items-center gap-3 p-2 bg-background rounded border text-sm h-[36px]">
+                  <Badge variant="outline" className="shrink-0">
+                    {record.type}
+                  </Badge>
+                  <span className="font-mono text-xs truncate flex-1">
+                    {record.inputString?.substring(0, 40)}...
+                  </span>
+                  {record.owner && (
+                    <Badge variant="secondary" className="shrink-0">
+                      {record.owner}
+                    </Badge>
+                  )}
+                  {record.label && (
+                    <span className="text-muted-foreground truncate max-w-[150px]">
+                      {record.label}
+                    </span>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function VirtualizedConfirmationTable({
+  records,
+  metadataActions,
+  hasAttachFileAction,
+  totalAttachFiles,
+}: {
+  records: Record[];
+  metadataActions: ActionDef[];
+  hasAttachFileAction: boolean;
+  totalAttachFiles: number;
+}) {
+  const parentRef = useRef<HTMLDivElement>(null);
+
+  const virtualizer = useVirtualizer({
+    count: records.length,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => CONFIRM_ROW_HEIGHT,
+    overscan: 20,
+  });
+
+  return (
+    <div className="border rounded-lg">
+      <div className="bg-muted/50 sticky top-0 z-10">
+        <div className="flex w-full text-sm">
+          <div className="text-left p-2 font-medium flex-1 min-w-[150px]">Record</div>
+          {metadataActions.map(action => {
+            const fieldDef = FIELD_DEFS.find(f => f.key === action.field);
+            return (
+              <div key={action.id} className="text-left p-2 font-medium flex-1 min-w-[100px]">
+                {fieldDef?.label}
+              </div>
+            );
+          })}
+          {hasAttachFileAction && (
+            <div className="text-left p-2 font-medium flex-1 min-w-[100px]">Attachments</div>
+          )}
+        </div>
+      </div>
+      <div
+        ref={parentRef}
+        className="max-h-[200px] overflow-auto"
+        data-testid="confirmation-scroll-container"
+      >
+        <div
+          className="relative w-full"
+          style={{ height: `${virtualizer.getTotalSize()}px` }}
+        >
+          {virtualizer.getVirtualItems().map(virtualRow => {
+            const record = records[virtualRow.index];
+            const idx = virtualRow.index;
+            return (
+              <div
+                key={record.id}
+                className={`absolute left-0 right-0 flex w-full text-sm ${idx % 2 === 0 ? 'bg-background' : 'bg-muted/20'}`}
+                style={{
+                  height: `${virtualRow.size}px`,
+                  transform: `translateY(${virtualRow.start}px)`,
+                }}
+              >
+                <div className="p-2 font-mono text-xs truncate flex-1 min-w-[150px] flex items-center">
+                  {record.inputString?.substring(0, 20)}...
+                </div>
+                {metadataActions.map(action => {
+                  const currentValue = record[action.field];
+                  const displayCurrent = Array.isArray(currentValue) 
+                    ? (currentValue as string[]).join(', ') || '(empty)'
+                    : (currentValue as string) || '(empty)';
+                  
+                  let newValue = displayCurrent;
+                  if (action.type === 'set') {
+                    newValue = action.value || '(empty)';
+                  } else if (action.type === 'clear') {
+                    newValue = '(empty)';
+                  } else if (action.type === 'add' && Array.isArray(currentValue)) {
+                    const arr = (currentValue as string[]) || [];
+                    newValue = arr.includes(action.value) 
+                      ? arr.join(', ')
+                      : [...arr, action.value].join(', ');
+                  } else if (action.type === 'remove' && Array.isArray(currentValue)) {
+                    const arr = (currentValue as string[]).filter(v => v !== action.value);
+                    newValue = arr.join(', ') || '(empty)';
+                  }
+                  
+                  const changed = displayCurrent !== newValue;
+                  
+                  return (
+                    <div key={action.id} className="p-2 flex-1 min-w-[100px] flex items-center">
+                      {changed ? (
+                        <div className="space-y-1">
+                          <div className="text-muted-foreground line-through text-xs truncate max-w-[100px]">
+                            {displayCurrent}
+                          </div>
+                          <div className="text-primary font-medium text-xs truncate max-w-[100px]">
+                            {newValue}
+                          </div>
+                        </div>
+                      ) : (
+                        <span className="text-muted-foreground text-xs">
+                          {displayCurrent}
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
+                {hasAttachFileAction && (
+                  <div className="p-2 flex-1 min-w-[100px] flex items-center">
+                    <div className="flex items-center gap-1 text-xs text-primary">
+                      <Paperclip className="h-3 w-3" />
+                      +{totalAttachFiles} file{totalAttachFiles !== 1 ? 's' : ''}
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 export default function BulkEditor() {
@@ -1089,45 +1277,7 @@ export default function BulkEditor() {
         <CardContent className="space-y-4">
           {/* Preview of matching records */}
           {matchingRecords.length > 0 && (
-            <div className="border rounded-lg">
-              <div className="p-3 bg-muted/50 border-b flex items-center justify-between">
-                <span className="font-medium text-sm">
-                  Preview: {matchingRecords.length} record{matchingRecords.length !== 1 ? 's' : ''} will be modified
-                </span>
-              </div>
-              <ScrollArea className="h-[200px]">
-                <div className="p-3 space-y-2">
-                  {matchingRecords.slice(0, 50).map(record => (
-                    <div 
-                      key={record.id} 
-                      className="flex items-center gap-3 p-2 bg-background rounded border text-sm"
-                    >
-                      <Badge variant="outline" className="shrink-0">
-                        {record.type}
-                      </Badge>
-                      <span className="font-mono text-xs truncate flex-1">
-                        {record.inputString?.substring(0, 40)}...
-                      </span>
-                      {record.owner && (
-                        <Badge variant="secondary" className="shrink-0">
-                          {record.owner}
-                        </Badge>
-                      )}
-                      {record.label && (
-                        <span className="text-muted-foreground truncate max-w-[150px]">
-                          {record.label}
-                        </span>
-                      )}
-                    </div>
-                  ))}
-                  {matchingRecords.length > 50 && (
-                    <div className="text-center text-sm text-muted-foreground py-2">
-                      ...and {matchingRecords.length - 50} more
-                    </div>
-                  )}
-                </div>
-              </ScrollArea>
-            </div>
+            <VirtualizedPreviewList records={matchingRecords} />
           )}
           
           {/* Attachment storage estimate */}
@@ -1268,90 +1418,12 @@ export default function BulkEditor() {
                 {/* Preview of Changes */}
                 <div>
                   <h4 className="font-medium mb-2 text-sm text-foreground">Preview of Affected Records:</h4>
-                  <div className="border rounded-lg max-h-[200px] overflow-auto">
-                    <table className="w-full text-sm">
-                      <thead className="bg-muted/50 sticky top-0">
-                        <tr>
-                          <th className="text-left p-2 font-medium">Record</th>
-                          {metadataActions.map(action => {
-                            const fieldDef = FIELD_DEFS.find(f => f.key === action.field);
-                            return (
-                              <th key={action.id} className="text-left p-2 font-medium">
-                                {fieldDef?.label}
-                              </th>
-                            );
-                          })}
-                          {hasAttachFileAction && (
-                            <th className="text-left p-2 font-medium">Attachments</th>
-                          )}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {matchingRecords.slice(0, 5).map((record, idx) => (
-                          <tr key={record.id} className={idx % 2 === 0 ? 'bg-background' : 'bg-muted/20'}>
-                            <td className="p-2 font-mono text-xs truncate max-w-[150px]">
-                              {record.inputString?.substring(0, 20)}...
-                            </td>
-                            {metadataActions.map(action => {
-                              const currentValue = record[action.field];
-                              const displayCurrent = Array.isArray(currentValue) 
-                                ? (currentValue as string[]).join(', ') || '(empty)'
-                                : (currentValue as string) || '(empty)';
-                              
-                              let newValue = displayCurrent;
-                              if (action.type === 'set') {
-                                newValue = action.value || '(empty)';
-                              } else if (action.type === 'clear') {
-                                newValue = '(empty)';
-                              } else if (action.type === 'add' && Array.isArray(currentValue)) {
-                                const arr = (currentValue as string[]) || [];
-                                newValue = arr.includes(action.value) 
-                                  ? arr.join(', ')
-                                  : [...arr, action.value].join(', ');
-                              } else if (action.type === 'remove' && Array.isArray(currentValue)) {
-                                const arr = (currentValue as string[]).filter(v => v !== action.value);
-                                newValue = arr.join(', ') || '(empty)';
-                              }
-                              
-                              const changed = displayCurrent !== newValue;
-                              
-                              return (
-                                <td key={action.id} className="p-2">
-                                  {changed ? (
-                                    <div className="space-y-1">
-                                      <div className="text-muted-foreground line-through text-xs truncate max-w-[100px]">
-                                        {displayCurrent}
-                                      </div>
-                                      <div className="text-primary font-medium text-xs truncate max-w-[100px]">
-                                        {newValue}
-                                      </div>
-                                    </div>
-                                  ) : (
-                                    <span className="text-muted-foreground text-xs">
-                                      {displayCurrent}
-                                    </span>
-                                  )}
-                                </td>
-                              );
-                            })}
-                            {hasAttachFileAction && (
-                              <td className="p-2">
-                                <div className="flex items-center gap-1 text-xs text-primary">
-                                  <Paperclip className="h-3 w-3" />
-                                  +{totalAttachFiles} file{totalAttachFiles !== 1 ? 's' : ''}
-                                </div>
-                              </td>
-                            )}
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                    {matchingRecords.length > 5 && (
-                      <div className="text-center text-xs text-muted-foreground py-2 bg-muted/30 border-t">
-                        ...and {matchingRecords.length - 5} more record{matchingRecords.length - 5 !== 1 ? 's' : ''}
-                      </div>
-                    )}
-                  </div>
+                  <VirtualizedConfirmationTable
+                    records={matchingRecords}
+                    metadataActions={metadataActions}
+                    hasAttachFileAction={hasAttachFileAction}
+                    totalAttachFiles={totalAttachFiles}
+                  />
                 </div>
                 
                 {/* Undo notice */}
