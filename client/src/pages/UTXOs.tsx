@@ -816,6 +816,7 @@ export default function UTXOs() {
     getScrollElement: () => utxoScrollRef.current,
     estimateSize: (index) => flattenedRows[index]?.kind === 'utxo' ? 44 : 72,
     overscan: 20,
+    measureElement: (el) => el.getBoundingClientRect().height,
   });
 
   const totalSats = filteredGroups.reduce((sum, g) => sum + g.totalSats, 0);
@@ -1311,6 +1312,8 @@ export default function UTXOs() {
                         return (
                           <TableRow 
                             key={`group-${group.address}`} 
+                            ref={utxoVirtualizer.measureElement}
+                            data-index={virtualRow.index}
                             className="cursor-pointer hover-elevate" 
                             onClick={() => toggleExpanded(group.address)}
                             data-testid={`row-address-${group.address.slice(0, 8)}`}
@@ -1384,6 +1387,8 @@ export default function UTXOs() {
                         return (
                           <TableRow 
                             key={`utxo-${utxo.id}`} 
+                            ref={utxoVirtualizer.measureElement}
+                            data-index={virtualRow.index}
                             className="bg-muted/30 cursor-pointer hover-elevate" 
                             onClick={() => openUtxoDetail(utxo)}
                             data-testid={`row-utxo-${utxo.id}`}

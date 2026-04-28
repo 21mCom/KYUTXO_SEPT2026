@@ -127,6 +127,7 @@ export default function QuickTagger() {
     getScrollElement: () => reviewScrollRef.current,
     estimateSize: () => 41,
     overscan: 20,
+    measureElement: (el) => el.getBoundingClientRect().height,
   });
 
   // Build combined lists for comboboxes (existing + currently selected)
@@ -586,6 +587,8 @@ a1075db55d416d3ca199f55b6084e2115b9345e16c5cf302fc80e9d5fbf5d48d
                       return (
                         <tr
                           key={virtualRow.key}
+                          ref={reviewVirtualizer.measureElement}
+                          data-index={virtualRow.index}
                           className={`border-b ${entry.type === 'invalid' ? 'opacity-50' : ''}`}
                         >
                           <td className="p-2">
