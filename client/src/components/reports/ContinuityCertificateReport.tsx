@@ -457,7 +457,7 @@ export function ContinuityCertificateReport() {
                   <Button
                     size="sm"
                     onClick={() => exportSelectedCertificates(exportError.format, exportError.partialBundle!)}
-                    disabled={selectedCertificates.size === 0}
+                    disabled={selectedCertificates.size === 0 || isDownloadingPartial}
                     data-testid="button-resume-export"
                   >
                     <ArrowRight className="h-4 w-4 mr-2" />
@@ -469,7 +469,7 @@ export function ContinuityCertificateReport() {
                 variant="outline"
                 size="sm"
                 onClick={() => exportSelectedCertificates(exportError.format)}
-                disabled={selectedCertificates.size === 0}
+                disabled={selectedCertificates.size === 0 || isDownloadingPartial}
                 data-testid="button-retry-export"
               >
                 <RefreshCw className="h-4 w-4 mr-2" />
@@ -479,6 +479,7 @@ export function ContinuityCertificateReport() {
                 variant="ghost"
                 size="icon"
                 onClick={() => setExportError(null)}
+                disabled={isDownloadingPartial}
                 data-testid="button-dismiss-export-error"
               >
                 <X className="h-4 w-4" />
