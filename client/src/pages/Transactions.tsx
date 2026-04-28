@@ -35,12 +35,14 @@ import {
   Scale,
   ChevronsDownUp,
   ChevronsUpDown,
-  Loader2
+  Loader2,
+  AlertTriangle
 } from "lucide-react";
 import { getParticipantsByTxids } from "@/lib/dataFacade";
 import { ClickableAddress } from "@/components/ClickableAddress";
 
 const ITEMS_PER_PAGE = 25;
+const MAX_COLLECTED_MATCHES = 50_000;
 
 // Helper to format satoshis to BTC
 function satsToBtc(sats: number | undefined): string {
@@ -211,7 +213,7 @@ export default function Transactions() {
   const { value: scanResult, isComputing: scanLoading } = useAsyncMemo(async (signal) => {
     if (!needsClientSideFiltering) {
       setSearchProgress(null);
-      return { matches: [] as BlockchainTransaction[], totalMatchCount: 0 };
+      return { matches: [] as BlockchainTransaction[], totalMatchCount: 0, limitReached: false };
     }
 
     const hasDateFilter = searchFilters.dateMode !== 'any';
@@ -231,6 +233,7 @@ export default function Transactions() {
     }
 
     const allMatches: BlockchainTransaction[] = [];
+    let totalMatchCount = 0;
     let scanned = 0;
     let scanTotal = 0;
 
@@ -319,9 +322,13 @@ export default function Transactions() {
           const batchRaw = await db.blockchainTransactions.bulkGet(batchKeys as string[]);
           const batch = batchRaw.filter(Boolean) as BlockchainTransaction[];
           const matches = await filterBatch(batch);
-          allMatches.push(...matches);
+          totalMatchCount += matches.length;
+          if (allMatches.length < MAX_COLLECTED_MATCHES) {
+            const room = MAX_COLLECTED_MATCHES - allMatches.length;
+            allMatches.push(...matches.slice(0, room));
+          }
           scanned += batchKeys.length;
-          setSearchProgress({ scanned, total: scanTotal, matches: allMatches.length });
+          setSearchProgress({ scanned, total: scanTotal, matches: totalMatchCount });
           if (i + BATCH_SIZE < allKeys.length) await yieldToUI();
         }
       } else {
@@ -338,9 +345,13 @@ export default function Transactions() {
           const batchRaw = await db.blockchainTransactions.bulkGet(batchKeys as string[]);
           const batch = batchRaw.filter(Boolean) as BlockchainTransaction[];
           const matches = await filterBatch(batch);
-          allMatches.push(...matches);
+          totalMatchCount += matches.length;
+          if (allMatches.length < MAX_COLLECTED_MATCHES) {
+            const room = MAX_COLLECTED_MATCHES - allMatches.length;
+            allMatches.push(...matches.slice(0, room));
+          }
           scanned += batchKeys.length;
-          setSearchProgress({ scanned, total: scanTotal, matches: allMatches.length });
+          setSearchProgress({ scanned, total: scanTotal, matches: totalMatchCount });
           if (i + BATCH_SIZE < allKeys.length) await yieldToUI();
         }
       }
@@ -357,19 +368,23 @@ export default function Transactions() {
           batch = batch.filter(tx => tx.hasOpReturn === true);
         }
         const matches = await filterBatch(batch);
-        allMatches.push(...matches);
+        totalMatchCount += matches.length;
+        if (allMatches.length < MAX_COLLECTED_MATCHES) {
+          const room = MAX_COLLECTED_MATCHES - allMatches.length;
+          allMatches.push(...matches.slice(0, room));
+        }
         scanned += batchTxids.length;
-        setSearchProgress({ scanned, total: scanTotal, matches: allMatches.length });
+        setSearchProgress({ scanned, total: scanTotal, matches: totalMatchCount });
         if (i + BATCH_SIZE < txidArray.length) await yieldToUI();
       }
     }
 
     allMatches.sort((a, b) => (b.blockTime ?? 0) - (a.blockTime ?? 0));
     setSearchProgress(null);
-    return { matches: allMatches, totalMatchCount: allMatches.length };
+    return { matches: allMatches, totalMatchCount, limitReached: totalMatchCount > allMatches.length };
   }, [needsClientSideFiltering, includeBlockchainDiscovered, opReturnOnly,
       userCuratedTxidSet, debouncedSearch, searchFilters, curatedRecords, txDbSignal],
-     { matches: [] as BlockchainTransaction[], totalMatchCount: 0 });
+     { matches: [] as BlockchainTransaction[], totalMatchCount: 0, limitReached: false });
 
   const needsBroadParticipants = debouncedSearch.trim() !== '' || searchFilters.amountMode !== 'any';
 
@@ -447,9 +462,12 @@ export default function Transactions() {
   }, [needsClientSideFiltering, scanResult.matches, loadedTransactions]);
 
   const totalFilteredCount = needsClientSideFiltering
+    ? scanResult.totalMatchCount
+    : txCounts.filteredCount;
+  const navigableCount = needsClientSideFiltering
     ? filteredTransactions.length
     : txCounts.filteredCount;
-  const totalPages = Math.max(1, Math.ceil(totalFilteredCount / ITEMS_PER_PAGE));
+  const totalPages = Math.max(1, Math.ceil(navigableCount / ITEMS_PER_PAGE));
   const safePage = Math.min(currentPage, totalPages);
   const startIndex = (safePage - 1) * ITEMS_PER_PAGE;
   const paginatedTransactionSlice = needsClientSideFiltering
@@ -688,6 +706,15 @@ export default function Transactions() {
           )}
         </Button>
       </div>
+
+      {scanResult.limitReached && (
+        <div className="flex-none flex items-center gap-3 p-3 rounded-md bg-yellow-50 dark:bg-yellow-950/50 border border-yellow-200 dark:border-yellow-800 text-sm" data-testid="warning-search-limit">
+          <AlertTriangle className="h-4 w-4 text-yellow-600 dark:text-yellow-400 flex-shrink-0" />
+          <span className="text-yellow-800 dark:text-yellow-200">
+            Your search matched {scanResult.totalMatchCount.toLocaleString()} transactions, but only the first {MAX_COLLECTED_MATCHES.toLocaleString()} are shown. Try narrowing your search with more specific filters to see all results.
+          </span>
+        </div>
+      )}
 
       {/* Transaction List */}
       <div className="flex-1 overflow-y-auto space-y-3">
@@ -937,10 +964,14 @@ export default function Transactions() {
       </div>
 
       {/* Pagination */}
-      {totalFilteredCount > ITEMS_PER_PAGE && (
+      {navigableCount > ITEMS_PER_PAGE && (
         <div className="flex items-center justify-between border-t pt-4 flex-none">
           <div className="text-sm text-muted-foreground">
-            Showing {startIndex + 1}-{Math.min(startIndex + ITEMS_PER_PAGE, totalFilteredCount)} of {totalFilteredCount} transactions
+            Showing {startIndex + 1}-{Math.min(startIndex + ITEMS_PER_PAGE, navigableCount)} of{' '}
+            {scanResult.limitReached
+              ? <>{navigableCount.toLocaleString()} (of {totalFilteredCount.toLocaleString()} total matches)</>
+              : <>{navigableCount.toLocaleString()}</>
+            } transactions
           </div>
           <div className="flex items-center gap-2">
             <Button
