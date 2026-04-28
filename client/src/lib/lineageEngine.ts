@@ -611,7 +611,8 @@ export interface EvidenceBundle {
   version: string;
   generatedAt: string;
   bundleId: string;
-  // Summary information (always included)
+  isPartial?: boolean;
+  requestedSegments?: number;
   summary: {
     totalSegments: number;
     totalValueBtc: number;
@@ -619,10 +620,17 @@ export interface EvidenceBundle {
     latestActivity: string;
     totalCustodyDays: number;
   };
-  // Segments with optional redaction
   segments: EvidenceSegment[];
-  // Verification hash for integrity
   integrityHash?: string;
+}
+
+export class PartialBundleError extends Error {
+  partialBundle: EvidenceBundle;
+  constructor(message: string, partialBundle: EvidenceBundle) {
+    super(message);
+    this.name = 'PartialBundleError';
+    this.partialBundle = partialBundle;
+  }
 }
 
 export interface EvidenceSegment {
@@ -731,51 +739,87 @@ export async function generateEvidenceBundle(
 
   const evidenceSegments: EvidenceSegment[] = [];
 
+  const buildPartialBundle = async (): Promise<EvidenceBundle> => {
+    const partialValue = evidenceSegments.reduce((sum, s) => {
+      return sum + (s.origin?.amount ?? 0);
+    }, 0) / 100000000;
+
+    const partialBundle: EvidenceBundle = {
+      version: '1.0',
+      generatedAt: new Date().toISOString(),
+      bundleId: 'bundle_' + crypto.randomUUID().replace(/-/g, '').slice(0, 12),
+      isPartial: true,
+      requestedSegments: segments.length,
+      summary: {
+        totalSegments: evidenceSegments.length,
+        totalValueBtc: partialValue,
+        earliestOrigin: earliestOrigin.toISOString(),
+        latestActivity: latestActivity.toISOString(),
+        totalCustodyDays: totalDays
+      },
+      segments: evidenceSegments
+    };
+    partialBundle.integrityHash = await generateIntegrityHash(partialBundle);
+    return partialBundle;
+  };
+
   for (const segment of segments) {
-    const segmentLineage = options.includeLineageChain
-      ? await getLineageForSegment(segment)
-      : [];
+    try {
+      const segmentLineage = options.includeLineageChain
+        ? await getLineageForSegment(segment)
+        : [];
 
-    const originDateMs = segment.originDate * 1000;
-    const custodyDays = Math.floor((Date.now() - originDateMs) / (1000 * 60 * 60 * 24));
+      const originDateMs = segment.originDate * 1000;
+      const custodyDays = Math.floor((Date.now() - originDateMs) / (1000 * 60 * 60 * 24));
 
-    const evidenceSegment: EvidenceSegment = {
-      segmentId: segment.segmentId,
-      custodyDays,
-      hopCount: segment.hopCount,
-      includesFullAddresses: options.includeAddresses,
-      includesFullTxids: options.includeTxids
-    };
+      const evidenceSegment: EvidenceSegment = {
+        segmentId: segment.segmentId,
+        custodyDays,
+        hopCount: segment.hopCount,
+        includesFullAddresses: options.includeAddresses,
+        includesFullTxids: options.includeTxids
+      };
 
-    evidenceSegment.origin = {
-      address: options.includeAddresses ? segment.originAddress : hashAddress(segment.originAddress),
-      txid: options.includeTxids ? segment.originTxid : hashTxid(segment.originTxid),
-      vout: segment.originVout,
-      date: new Date(originDateMs).toISOString(),
-      amount: segment.originAmount
-    };
+      evidenceSegment.origin = {
+        address: options.includeAddresses ? segment.originAddress : hashAddress(segment.originAddress),
+        txid: options.includeTxids ? segment.originTxid : hashTxid(segment.originTxid),
+        vout: segment.originVout,
+        date: new Date(originDateMs).toISOString(),
+        amount: segment.originAmount
+      };
 
-    evidenceSegment.current = {
-      address: options.includeAddresses && segment.currentAddress 
-        ? segment.currentAddress 
-        : (segment.currentAddress ? hashAddress(segment.currentAddress) : undefined),
-      txid: options.includeTxids && segment.currentTxid 
-        ? segment.currentTxid 
-        : (segment.currentTxid ? hashTxid(segment.currentTxid) : undefined),
-      vout: segment.currentVout,
-      amount: segment.currentAmount,
-      status: segment.status
-    };
+      evidenceSegment.current = {
+        address: options.includeAddresses && segment.currentAddress 
+          ? segment.currentAddress 
+          : (segment.currentAddress ? hashAddress(segment.currentAddress) : undefined),
+        txid: options.includeTxids && segment.currentTxid 
+          ? segment.currentTxid 
+          : (segment.currentTxid ? hashTxid(segment.currentTxid) : undefined),
+        vout: segment.currentVout,
+        amount: segment.currentAmount,
+        status: segment.status
+      };
 
-    if (options.includeLineageChain && segmentLineage.length > 0) {
-      evidenceSegment.lineageChain = segmentLineage.map(l => ({
-        txid: options.includeTxids ? l.createdTxid : hashTxid(l.createdTxid),
-        type: 'created' as const,
-        confidenceLevel: l.confidence
-      }));
+      if (options.includeLineageChain && segmentLineage.length > 0) {
+        evidenceSegment.lineageChain = segmentLineage.map(l => ({
+          txid: options.includeTxids ? l.createdTxid : hashTxid(l.createdTxid),
+          type: 'created' as const,
+          confidenceLevel: l.confidence
+        }));
+      }
+
+      evidenceSegments.push(evidenceSegment);
+    } catch (err) {
+      if (evidenceSegments.length > 0) {
+        const partialBundle = await buildPartialBundle();
+        const originalMessage = err instanceof Error ? err.message : 'Unknown error';
+        throw new PartialBundleError(
+          `Export failed after processing ${evidenceSegments.length} of ${segments.length} segments: ${originalMessage}`,
+          partialBundle
+        );
+      }
+      throw err;
     }
-
-    evidenceSegments.push(evidenceSegment);
 
     if (onProgress) {
       onProgress(evidenceSegments.length, segments.length);
@@ -881,7 +925,20 @@ export async function downloadEvidenceBundlePdf(bundle: EvidenceBundle, filename
   doc.setFont('helvetica', 'normal');
   doc.setTextColor(100);
   doc.text('Continuity Certificate Report', margin, y);
-  y += 15;
+  y += 8;
+
+  if (bundle.isPartial) {
+    doc.setFontSize(11);
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(180, 60, 60);
+    doc.text(
+      `INCOMPLETE — ${bundle.summary.totalSegments} of ${bundle.requestedSegments ?? '?'} segments exported`,
+      margin, y
+    );
+    doc.setTextColor(0);
+    y += 7;
+  }
+  y += 7;
   
   // Bundle info box
   doc.setDrawColor(200);
