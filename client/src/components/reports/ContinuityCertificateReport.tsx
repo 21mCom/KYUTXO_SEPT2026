@@ -68,6 +68,7 @@ export function ContinuityCertificateReport() {
   const [includeLineageChain, setIncludeLineageChain] = useState(true);
   const [isExporting, setIsExporting] = useState(false);
   const [exportProgress, setExportProgress] = useState<{ current: number; total: number } | null>(null);
+  const [resumedFromCount, setResumedFromCount] = useState(0);
   const [exportError, setExportError] = useState<{ message: string; format: 'json' | 'pdf'; partialBundle?: EvidenceBundle } | null>(null);
   const [isDownloadingPartial, setIsDownloadingPartial] = useState(false);
   const exportAbortRef = useRef<AbortController | null>(null);
@@ -181,7 +182,9 @@ export function ContinuityCertificateReport() {
     exportAbortRef.current = controller;
     setIsExporting(true);
     setExportError(null);
-    setExportProgress({ current: resumeFromBundle ? resumeFromBundle.segments.length : 0, total: selectedSegmentIds.length });
+    const priorCount = resumeFromBundle ? resumeFromBundle.segments.length : 0;
+    setResumedFromCount(priorCount);
+    setExportProgress({ current: priorCount, total: selectedSegmentIds.length });
     try {
       const options: EvidenceBundleOptions = {
         includeAddresses,
@@ -461,13 +464,37 @@ export function ContinuityCertificateReport() {
                   {exportError.message}
                 </span>
               </div>
-              <Progress
-                value={exportProgress && exportProgress.total > 0
-                  ? (exportProgress.current / exportProgress.total) * 100
-                  : 0}
-                className="h-2 [&>div]:bg-destructive"
-                data-testid="progress-bar-error"
-              />
+              {(() => {
+                const errorClamped = exportProgress && exportProgress.total > 0
+                  ? Math.min(resumedFromCount, exportProgress.total)
+                  : 0;
+                return errorClamped > 0 && exportProgress && exportProgress.total > 0 ? (
+                  <div
+                    className="relative h-2 w-full overflow-hidden rounded-full bg-secondary"
+                    data-testid="progress-bar-error"
+                  >
+                    <div
+                      className="absolute left-0 h-full bg-destructive/30 transition-all"
+                      style={{ width: `${(errorClamped / exportProgress.total) * 100}%` }}
+                    />
+                    <div
+                      className="absolute h-full bg-destructive transition-all"
+                      style={{
+                        left: `${(errorClamped / exportProgress.total) * 100}%`,
+                        width: `${(Math.max(0, exportProgress.current - errorClamped) / exportProgress.total) * 100}%`
+                      }}
+                    />
+                  </div>
+                ) : (
+                  <Progress
+                    value={exportProgress && exportProgress.total > 0
+                      ? (exportProgress.current / exportProgress.total) * 100
+                      : 0}
+                    className="h-2 [&>div]:bg-destructive"
+                    data-testid="progress-bar-error"
+                  />
+                );
+              })()}
             </div>
             <div className="flex items-center gap-2">
               {exportError.partialBundle && (
@@ -532,12 +559,20 @@ export function ContinuityCertificateReport() {
         </div>
       )}
 
-      {isExporting && exportProgress && exportProgress.total > 0 && (
+      {isExporting && exportProgress && exportProgress.total > 0 && (() => {
+        const clampedResumed = Math.min(resumedFromCount, exportProgress.total);
+        return (
         <div className="flex items-center gap-3 p-3 bg-muted/30 rounded-lg" data-testid="export-progress">
           <div className="flex-1 space-y-1">
             <div className="flex items-center justify-between gap-2 text-sm">
               <span className="text-muted-foreground">
-                Processing segment {exportProgress.current} of {exportProgress.total}
+                {clampedResumed > 0 ? (
+                  exportProgress.current <= clampedResumed
+                    ? `Skipping ${clampedResumed} previously completed segment${clampedResumed !== 1 ? 's' : ''}...`
+                    : `Processing segment ${exportProgress.current} of ${exportProgress.total}`
+                ) : (
+                  `Processing segment ${exportProgress.current} of ${exportProgress.total}`
+                )}
               </span>
               <span className="font-medium tabular-nums">
                 {exportProgress.total > 0
@@ -545,13 +580,46 @@ export function ContinuityCertificateReport() {
                   : 0}%
               </span>
             </div>
-            <Progress
-              value={exportProgress.total > 0
-                ? (exportProgress.current / exportProgress.total) * 100
-                : 0}
-              className="h-2"
-              data-testid="progress-bar"
-            />
+            {clampedResumed > 0 ? (
+              <div
+                className="relative h-2 w-full overflow-hidden rounded-full bg-secondary"
+                data-testid="progress-bar"
+              >
+                <div
+                  className="absolute left-0 h-full bg-primary/30 transition-all"
+                  style={{ width: `${(clampedResumed / exportProgress.total) * 100}%` }}
+                  data-testid="progress-bar-resumed"
+                />
+                <div
+                  className="absolute h-full bg-primary transition-all"
+                  style={{
+                    left: `${(clampedResumed / exportProgress.total) * 100}%`,
+                    width: `${(Math.max(0, exportProgress.current - clampedResumed) / exportProgress.total) * 100}%`
+                  }}
+                  data-testid="progress-bar-new"
+                />
+              </div>
+            ) : (
+              <Progress
+                value={exportProgress.total > 0
+                  ? (exportProgress.current / exportProgress.total) * 100
+                  : 0}
+                className="h-2"
+                data-testid="progress-bar"
+              />
+            )}
+            {clampedResumed > 0 && (
+              <div className="flex items-center gap-3 text-xs text-muted-foreground" data-testid="text-resumed-info">
+                <span className="flex items-center gap-1">
+                  <span className="inline-block h-2 w-2 rounded-full bg-primary/30" />
+                  {clampedResumed} previously completed
+                </span>
+                <span className="flex items-center gap-1">
+                  <span className="inline-block h-2 w-2 rounded-full bg-primary" />
+                  {Math.max(0, exportProgress.current - clampedResumed)} newly processed
+                </span>
+              </div>
+            )}
           </div>
           <Button
             variant="outline"
@@ -563,7 +631,8 @@ export function ContinuityCertificateReport() {
             Cancel
           </Button>
         </div>
-      )}
+        );
+      })()}
 
       <div className="text-sm text-muted-foreground">
         Showing {filteredCertificates.length} of {certificateData.length} custody segments
