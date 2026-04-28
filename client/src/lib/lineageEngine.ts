@@ -644,9 +644,12 @@ async function getLineageForSegment(segment: CustodySegment): Promise<UtxoLineag
   return result;
 }
 
+export type ProgressCallback = (current: number, total: number) => void;
+
 // Generate minimal evidence bundle with selective disclosure
 export async function generateEvidenceBundle(
-  options: EvidenceBundleOptions
+  options: EvidenceBundleOptions,
+  onProgress?: ProgressCallback
 ): Promise<EvidenceBundle> {
   const segments = options.selectedSegmentIds
     ? await db.custodySegments.where('segmentId').anyOf(options.selectedSegmentIds).toArray()
@@ -702,6 +705,13 @@ export async function generateEvidenceBundle(
     }
 
     evidenceSegments.push(evidenceSegment);
+
+    if (onProgress) {
+      onProgress(evidenceSegments.length, segments.length);
+      if (evidenceSegments.length % 5 === 0 || evidenceSegments.length === segments.length) {
+        await new Promise(resolve => setTimeout(resolve, 0));
+      }
+    }
   }
 
   const bundle: EvidenceBundle = {

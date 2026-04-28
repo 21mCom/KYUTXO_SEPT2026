@@ -5,7 +5,8 @@ import {
   generateEvidenceBundle, 
   downloadEvidenceBundle,
   downloadEvidenceBundlePdf,
-  type EvidenceBundleOptions 
+  type EvidenceBundleOptions,
+  type ProgressCallback
 } from "@/lib/lineageEngine";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -16,6 +17,7 @@ import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import { Progress } from "@/components/ui/progress";
 import { format } from "date-fns";
 import { 
   CalendarIcon, Shield, Clock, Coins, 
@@ -56,6 +58,7 @@ export function ContinuityCertificateReport() {
   const [includeTxids, setIncludeTxids] = useState(true);
   const [includeLineageChain, setIncludeLineageChain] = useState(true);
   const [isExporting, setIsExporting] = useState(false);
+  const [exportProgress, setExportProgress] = useState<{ current: number; total: number } | null>(null);
 
   const segments = useLiveQuery(async () => {
     return await db.custodySegments.toArray();
@@ -132,6 +135,7 @@ export function ContinuityCertificateReport() {
     const selectedSegmentIds = selected.map(c => c.segment.segmentId);
     
     setIsExporting(true);
+    setExportProgress({ current: 0, total: selectedSegmentIds.length });
     try {
       const options: EvidenceBundleOptions = {
         includeAddresses,
@@ -140,8 +144,12 @@ export function ContinuityCertificateReport() {
         redactExternalAddresses: false,
         selectedSegmentIds
       };
+
+      const handleProgress: ProgressCallback = (current, total) => {
+        setExportProgress({ current, total });
+      };
       
-      const bundle = await generateEvidenceBundle(options);
+      const bundle = await generateEvidenceBundle(options, handleProgress);
       const dateStr = format(new Date(), 'yyyy-MM-dd');
       
       if (exportFormat === 'pdf') {
@@ -151,6 +159,7 @@ export function ContinuityCertificateReport() {
       }
     } finally {
       setIsExporting(false);
+      setExportProgress(null);
     }
   };
 
@@ -332,6 +341,30 @@ export function ContinuityCertificateReport() {
           </Button>
         </div>
       </div>
+
+      {exportProgress && exportProgress.total > 0 && (
+        <div className="flex items-center gap-3 p-3 bg-muted/30 rounded-lg" data-testid="export-progress">
+          <div className="flex-1 space-y-1">
+            <div className="flex items-center justify-between text-sm">
+              <span className="text-muted-foreground">
+                Processing segment {exportProgress.current} of {exportProgress.total}
+              </span>
+              <span className="font-medium tabular-nums">
+                {exportProgress.total > 0
+                  ? Math.round((exportProgress.current / exportProgress.total) * 100)
+                  : 0}%
+              </span>
+            </div>
+            <Progress
+              value={exportProgress.total > 0
+                ? (exportProgress.current / exportProgress.total) * 100
+                : 0}
+              className="h-2"
+              data-testid="progress-bar"
+            />
+          </div>
+        </div>
+      )}
 
       <div className="text-sm text-muted-foreground">
         Showing {filteredCertificates.length} of {certificateData.length} custody segments
