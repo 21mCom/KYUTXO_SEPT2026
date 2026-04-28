@@ -288,6 +288,57 @@ export async function deleteRecord(id: number) {
   return facadeDeleteRecord(id);
 }
 
+export async function lookupRecordsByInputStrings(inputStrings: string[]): Promise<Map<string, Record>> {
+  const result = new Map<string, Record>();
+  if (inputStrings.length === 0) return result;
+
+  const seen = new Set<string>();
+  const unique: string[] = [];
+  for (const s of inputStrings) {
+    const trimmed = s.trim();
+    if (!trimmed) continue;
+    const key = trimmed.toLowerCase();
+    if (!seen.has(key)) {
+      seen.add(key);
+      unique.push(trimmed);
+    }
+  }
+
+  const CHUNK_SIZE = 500;
+  const allRecords: Record[] = [];
+  for (let i = 0; i < unique.length; i += CHUNK_SIZE) {
+    const chunk = unique.slice(i, i + CHUNK_SIZE);
+    const records = await db.records
+      .where('inputString')
+      .anyOf(chunk)
+      .toArray();
+    allRecords.push(...records);
+  }
+
+  for (const r of allRecords) {
+    if (r.inputString) {
+      result.set(r.inputString.trim().toLowerCase(), r);
+    }
+  }
+
+  const unmatchedEntries = unique.filter(s => !result.has(s.toLowerCase()));
+  for (const s of unmatchedEntries) {
+    try {
+      const match = await db.records
+        .where('inputString')
+        .equalsIgnoreCase(s)
+        .first();
+      if (match && match.inputString) {
+        result.set(match.inputString.trim().toLowerCase(), match);
+      }
+    } catch {
+      // equalsIgnoreCase fallback
+    }
+  }
+
+  return result;
+}
+
 export async function searchRecords(query: string) {
   if (!query.trim()) {
     return db.records.orderBy('updatedAt').reverse().limit(200).toArray();

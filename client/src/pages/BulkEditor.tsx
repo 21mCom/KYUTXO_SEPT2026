@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -32,7 +32,7 @@ import {
   FileIcon,
   Loader2,
 } from "lucide-react";
-import { useRecords } from "@/hooks/use-records";
+import { useDbChangeSignal } from "@/hooks/use-db-change-signal";
 import { useOwners } from "@/hooks/use-owners";
 import { useWalletNames } from "@/hooks/use-wallet-names";
 import { useSeedNames } from "@/hooks/use-seed-names";
@@ -43,7 +43,7 @@ import { useToast } from "@/hooks/use-toast";
 import { 
   bulkUpdateRecords,
 } from "@/lib/dataFacade";
-import type { Record } from "@/lib/database";
+import { db, type Record } from "@/lib/database";
 import { uploadAttachment, formatFileSize } from "@/lib/attachments";
 import { Progress } from "@/components/ui/progress";
 import {
@@ -59,8 +59,144 @@ import {
 } from "./bulk-editor-types";
 import { VocabularyCombobox, VocabularyMultiSelect } from "@/components/VocabularyCombobox";
 
+const INDEXED_STRING_FIELDS = new Set([
+  'type', 'owner', 'walletName', 'seedName', 'walletSoftware',
+  'label', 'chainType', 'addressImportance', 'flowType', 'inputString', 'source',
+]);
+
+const FILTER_DEBOUNCE_MS = 300;
+const FILTER_RESULT_LIMIT = 10000;
+
+function matchCondition(record: Record, condition: FilterCondition): boolean {
+  const fieldDef = FIELD_DEFS.find(f => f.key === condition.field);
+  if (!fieldDef) return false;
+
+  const fieldValue = record[condition.field];
+  const operator = OPERATORS.find(o => o.value === condition.operator);
+
+  const conditionValues = condition.values.length > 0
+    ? condition.values.map(v => v.toLowerCase())
+    : condition.value ? [condition.value.toLowerCase()] : [];
+
+  if (operator?.needsValue && conditionValues.length === 0) return false;
+
+  if (fieldDef.type === 'array') {
+    const arr = (fieldValue as string[] | undefined) || [];
+    const arrLower = arr.map(v => v.toLowerCase());
+
+    switch (condition.operator) {
+      case 'contains':
+        return conditionValues.some(cv => arrLower.some(v => v.includes(cv)));
+      case 'not_contains':
+        return !conditionValues.some(cv => arrLower.some(v => v.includes(cv)));
+      case 'equals':
+        return conditionValues.some(cv => arrLower.includes(cv));
+      case 'not_equals':
+        return !conditionValues.some(cv => arrLower.includes(cv));
+      case 'is_empty':
+        return arr.length === 0;
+      case 'is_not_empty':
+        return arr.length > 0;
+      default:
+        return false;
+    }
+  }
+
+  const strValue = (fieldValue as string | undefined)?.toLowerCase() || '';
+
+  switch (condition.operator) {
+    case 'equals':
+      return conditionValues.includes(strValue);
+    case 'not_equals':
+      return !conditionValues.includes(strValue);
+    case 'contains':
+      return conditionValues.some(cv => strValue.includes(cv));
+    case 'not_contains':
+      return !conditionValues.some(cv => strValue.includes(cv));
+    case 'starts_with':
+      return conditionValues.some(cv => strValue.startsWith(cv));
+    case 'is_empty':
+      return !strValue || strValue === '';
+    case 'is_not_empty':
+      return !!strValue && strValue !== '';
+    default:
+      return false;
+  }
+}
+
+async function runFilterQuery(
+  conditions: FilterCondition[],
+  useAndLogic: boolean,
+  limit: number
+): Promise<Record[]> {
+  if (conditions.length === 0) return [];
+
+  const matchRecord = (record: Record) => {
+    const results = conditions.map(c => matchCondition(record, c));
+    return useAndLogic ? results.every(r => r) : results.some(r => r);
+  };
+
+  if (useAndLogic) {
+    const indexableCondition = conditions.find(c => {
+      if (!INDEXED_STRING_FIELDS.has(c.field as string)) return false;
+      if (c.operator !== 'equals') return false;
+      const vals = c.values.length > 0 ? c.values : c.value ? [c.value] : [];
+      return vals.length > 0;
+    });
+
+    if (indexableCondition) {
+      const values = indexableCondition.values.length > 0
+        ? indexableCondition.values
+        : [indexableCondition.value];
+
+      const otherConditions = conditions.filter(c => c !== indexableCondition);
+      const filterFn = otherConditions.length > 0
+        ? (record: Record) => otherConditions.every(c => matchCondition(record, c))
+        : () => true;
+
+      return db.records
+        .where(indexableCondition.field as string)
+        .anyOf(values)
+        .filter(filterFn)
+        .limit(limit)
+        .toArray();
+    }
+
+    const multiEntryCondition = conditions.find(c => {
+      if (c.field !== 'tags' && c.field !== 'categories') return false;
+      if (c.operator !== 'equals') return false;
+      const vals = c.values.length > 0 ? c.values : c.value ? [c.value] : [];
+      return vals.length > 0;
+    });
+
+    if (multiEntryCondition) {
+      const values = multiEntryCondition.values.length > 0
+        ? multiEntryCondition.values
+        : [multiEntryCondition.value];
+
+      const otherConditions = conditions.filter(c => c !== multiEntryCondition);
+      const filterFn = otherConditions.length > 0
+        ? (record: Record) => otherConditions.every(c => matchCondition(record, c))
+        : () => true;
+
+      return db.records
+        .where(multiEntryCondition.field as string)
+        .anyOf(values)
+        .filter(filterFn)
+        .limit(limit)
+        .toArray();
+    }
+  }
+
+  return db.records
+    .orderBy('updatedAt')
+    .reverse()
+    .filter(matchRecord)
+    .limit(limit)
+    .toArray();
+}
+
 export default function BulkEditor() {
-  const { records, isLoading } = useRecords();
   const { owners } = useOwners();
   const { walletNames } = useWalletNames();
   const { seedNames } = useSeedNames();
@@ -68,21 +204,63 @@ export default function BulkEditor() {
   const { tags } = useTags();
   const { categories } = useCategories();
   const { toast } = useToast();
-  
-  // Filter state
+
   const [conditions, setConditions] = useState<FilterCondition[]>([]);
   const [useAndLogic, setUseAndLogic] = useState(true);
-  
-  // Action state
+
   const [actions, setActions] = useState<ActionDef[]>([]);
-  
-  // UI state
+
   const [showConfirmDialog, setShowConfirmDialog] = useState(false);
   const [isApplying, setIsApplying] = useState(false);
   const [lastUndo, setLastUndo] = useState<UndoSnapshot | null>(null);
   const [attachProgress, setAttachProgress] = useState<{ current: number; total: number } | null>(null);
-  
-  // Build vocabulary options map
+
+  const [matchingRecords, setMatchingRecords] = useState<Record[]>([]);
+  const [isFilterLoading, setIsFilterLoading] = useState(false);
+  const queryVersionRef = useRef(0);
+  const dbChangeSignal = useDbChangeSignal(['records'], 500);
+
+  useEffect(() => {
+    if (conditions.length === 0) {
+      setMatchingRecords([]);
+      setIsFilterLoading(false);
+      return;
+    }
+
+    const hasIncompleteCondition = conditions.some(c => {
+      const op = OPERATORS.find(o => o.value === c.operator);
+      if (!op?.needsValue) return false;
+      return c.values.length === 0 && !c.value?.trim();
+    });
+
+    if (hasIncompleteCondition) {
+      setMatchingRecords([]);
+      setIsFilterLoading(false);
+      return;
+    }
+
+    const version = ++queryVersionRef.current;
+    setIsFilterLoading(true);
+
+    const timer = setTimeout(async () => {
+      try {
+        const results = await runFilterQuery(conditions, useAndLogic, FILTER_RESULT_LIMIT);
+        if (queryVersionRef.current === version) {
+          setMatchingRecords(results);
+          setIsFilterLoading(false);
+        }
+      } catch (error) {
+        console.error('Filter query failed:', error);
+        if (queryVersionRef.current === version) {
+          setMatchingRecords([]);
+          setIsFilterLoading(false);
+        }
+      }
+    }, FILTER_DEBOUNCE_MS);
+
+    return () => clearTimeout(timer);
+  }, [conditions, useAndLogic, dbChangeSignal]);
+
   const vocabularyOptions = useMemo(() => ({
     owners: owners.map(o => ({ value: o.name, label: o.name })),
     walletNames: walletNames.map(w => ({ value: w.name, label: w.name })),
@@ -91,91 +269,12 @@ export default function BulkEditor() {
     tags: tags.map(t => ({ value: t.name, label: t.name })),
     categories: categories.map(c => ({ value: c.name, label: c.name })),
   }), [owners, walletNames, seedNames, walletSoftware, tags, categories]);
-  
-  // Get options for a field
+
   const getFieldOptions = (field: FieldDef) => {
     if (field.options) return field.options;
     if (field.vocabularyKey) return vocabularyOptions[field.vocabularyKey];
     return [];
   };
-  
-  // Filter records based on conditions
-  const matchingRecords = useMemo(() => {
-    if (conditions.length === 0) return [];
-    
-    return records.filter(record => {
-      const results = conditions.map(condition => {
-        const fieldDef = FIELD_DEFS.find(f => f.key === condition.field);
-        if (!fieldDef) return false;
-        
-        const fieldValue = record[condition.field];
-        const operator = OPERATORS.find(o => o.value === condition.operator);
-        
-        // Get all condition values (multi-select) or single value
-        const conditionValues = condition.values.length > 0 
-          ? condition.values.map(v => v.toLowerCase())
-          : condition.value ? [condition.value.toLowerCase()] : [];
-        
-        // If operator needs a value but none provided, don't match anything
-        // This prevents empty selections from matching all records
-        if (operator?.needsValue && conditionValues.length === 0) {
-          return false;
-        }
-        
-        // Handle array fields (tags, categories)
-        if (fieldDef.type === 'array') {
-          const arr = (fieldValue as string[] | undefined) || [];
-          const arrLower = arr.map(v => v.toLowerCase());
-          
-          switch (condition.operator) {
-            case 'contains':
-              // For multi-select: match if ANY of the condition values are in the array
-              return conditionValues.some(cv => arrLower.some(v => v.includes(cv)));
-            case 'not_contains':
-              return !conditionValues.some(cv => arrLower.some(v => v.includes(cv)));
-            case 'equals':
-              // For multi-select: match if the field value equals ANY of the selected values
-              return conditionValues.some(cv => arrLower.includes(cv));
-            case 'not_equals':
-              return !conditionValues.some(cv => arrLower.includes(cv));
-            case 'is_empty':
-              return arr.length === 0;
-            case 'is_not_empty':
-              return arr.length > 0;
-            default:
-              return false;
-          }
-        }
-        
-        // Handle string/enum/select fields
-        const strValue = (fieldValue as string | undefined)?.toLowerCase() || '';
-        
-        switch (condition.operator) {
-          case 'equals':
-            // For multi-select: match if the field value equals ANY of the selected values
-            return conditionValues.includes(strValue);
-          case 'not_equals':
-            return !conditionValues.includes(strValue);
-          case 'contains':
-            return conditionValues.some(cv => strValue.includes(cv));
-          case 'not_contains':
-            return !conditionValues.some(cv => strValue.includes(cv));
-          case 'starts_with':
-            return conditionValues.some(cv => strValue.startsWith(cv));
-          case 'is_empty':
-            return !strValue || strValue === '';
-          case 'is_not_empty':
-            return strValue && strValue !== '';
-          default:
-            return false;
-        }
-      });
-      
-      return useAndLogic 
-        ? results.every(r => r) 
-        : results.some(r => r);
-    });
-  }, [records, conditions, useAndLogic]);
   
   // Add a new filter condition
   const addCondition = () => {
@@ -536,14 +635,6 @@ export default function BulkEditor() {
     );
   };
   
-  if (isLoading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <div className="text-muted-foreground">Loading records...</div>
-      </div>
-    );
-  }
-  
   return (
     <div className="h-full overflow-auto">
       <div className="container mx-auto p-6 max-w-6xl space-y-6 pb-12">
@@ -731,19 +822,30 @@ export default function BulkEditor() {
             Add Condition
           </Button>
           
-          {/* Match count */}
           {conditions.length > 0 && (
             <Alert className={matchingRecords.length > 0 ? "" : "border-amber-500"}>
-              <Search className="h-4 w-4" />
-              <AlertTitle>
-                {matchingRecords.length} record{matchingRecords.length !== 1 ? 's' : ''} match
-              </AlertTitle>
-              <AlertDescription>
-                {matchingRecords.length === 0 
-                  ? "No records match your criteria. Try adjusting the filters."
-                  : `Found ${matchingRecords.length} of ${records.length} total records`
-                }
-              </AlertDescription>
+              {isFilterLoading ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  <AlertTitle>Searching...</AlertTitle>
+                  <AlertDescription>
+                    Querying records matching your criteria
+                  </AlertDescription>
+                </>
+              ) : (
+                <>
+                  <Search className="h-4 w-4" />
+                  <AlertTitle>
+                    {matchingRecords.length} record{matchingRecords.length !== 1 ? 's' : ''} match
+                  </AlertTitle>
+                  <AlertDescription>
+                    {matchingRecords.length === 0
+                      ? "No records match your criteria. Try adjusting the filters."
+                      : `Found ${matchingRecords.length} matching record${matchingRecords.length !== 1 ? 's' : ''}`
+                    }
+                  </AlertDescription>
+                </>
+              )}
             </Alert>
           )}
         </CardContent>
@@ -1081,10 +1183,10 @@ export default function BulkEditor() {
             </Button>
             <Button
               onClick={() => setShowConfirmDialog(true)}
-              disabled={!isValidSetup || matchingRecords.length === 0 || isApplying}
+              disabled={!isValidSetup || matchingRecords.length === 0 || isApplying || isFilterLoading}
               data-testid="button-apply"
             >
-              {isApplying ? "Applying..." : `Apply to ${matchingRecords.length} Record${matchingRecords.length !== 1 ? 's' : ''}`}
+              {isApplying ? "Applying..." : isFilterLoading ? "Searching..." : `Apply to ${matchingRecords.length} Record${matchingRecords.length !== 1 ? 's' : ''}`}
             </Button>
           </div>
         </CardContent>

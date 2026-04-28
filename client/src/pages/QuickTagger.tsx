@@ -34,13 +34,13 @@ import {
 import { cn } from "@/lib/utils";
 import { useTags, createTag } from "@/hooks/use-tags";
 import { useCategories, createCategory } from "@/hooks/use-categories";
-import { useRecords, createRecord, updateRecord } from "@/hooks/use-records";
+import { createRecord, updateRecord, lookupRecordsByInputStrings } from "@/hooks/use-records";
 import { useOwners, createOwner } from "@/hooks/use-owners";
 import { useWalletNames, createWalletName } from "@/hooks/use-wallet-names";
 import { useSeedNames, createSeedName } from "@/hooks/use-seed-names";
 import { useWalletSoftware, createWalletSoftware } from "@/hooks/use-wallet-software";
 import { syncTagsToMaster, syncCategoriesToMaster, createRecordOrigin } from "@/lib/dataFacade";
-import { beginBulkOperation, endBulkOperation } from "@/lib/database";
+import { db, beginBulkOperation, endBulkOperation } from "@/lib/database";
 import { validateBitcoinInput } from "@/lib/bitcoin";
 import { 
   COUNTERPARTY_TYPE_OPTIONS,
@@ -113,10 +113,8 @@ export default function QuickTagger() {
   const [newSeedName, setNewSeedName] = useState("");
   const [newWalletSoftware, setNewWalletSoftware] = useState("");
 
-  // Hooks for vocabulary and records
   const { tags } = useTags();
   const { categories } = useCategories();
-  const { records } = useRecords();
   const { owners } = useOwners();
   const { walletNames } = useWalletNames();
   const { seedNames } = useSeedNames();
@@ -178,12 +176,7 @@ export default function QuickTagger() {
       .map(line => line.trim())
       .filter(line => line.length > 0);
 
-    const recordLookup = new Map<string, typeof records[0]>();
-    for (const r of records) {
-      if (r.inputString) {
-        recordLookup.set(r.inputString.trim().toLowerCase(), r);
-      }
-    }
+    const recordLookup = await lookupRecordsByInputStrings(lines);
 
     const seen = new Set<string>();
     const parsed: ParsedEntry[] = [];
@@ -312,12 +305,7 @@ export default function QuickTagger() {
         }
       }
 
-      const applyLookup = new Map<string, typeof records[0]>();
-      for (const r of records) {
-        if (r.inputString) {
-          applyLookup.set(r.inputString.trim().toLowerCase(), r);
-        }
-      }
+      const applyLookup = await lookupRecordsByInputStrings(entriesToProcess.map(e => e.raw));
 
       for (const entry of entriesToProcess) {
         const isAddress = entry.type === 'address';
@@ -360,8 +348,7 @@ export default function QuickTagger() {
         }
 
         if (currentRecordId) {
-          // Update existing record - merge tags/categories
-          const existingRecord = records.find(r => r.id === currentRecordId);
+          const existingRecord = await db.records.get(currentRecordId);
           if (existingRecord) {
             const mergedTags = Array.from(new Set([...existingRecord.tags, ...selectedTags]));
             const mergedCategories = Array.from(new Set([...existingRecord.categories, ...selectedCategories]));
@@ -394,7 +381,7 @@ export default function QuickTagger() {
             costBasisUsd: isTransaction && costBasisUsd ? parseFloat(costBasisUsd) : undefined,
           });
           if (newRecordId) {
-            applyLookup.set(entry.raw.trim().toLowerCase(), { id: newRecordId as number, inputString: entry.raw } as typeof records[0]);
+            applyLookup.set(entry.raw.trim().toLowerCase(), { id: newRecordId as number, inputString: entry.raw } as any);
             try {
               await createRecordOrigin({
                 recordId: newRecordId as number,

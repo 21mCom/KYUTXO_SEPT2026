@@ -57,7 +57,7 @@ import { useToast } from "@/hooks/use-toast";
 import { MultiSelectCombobox } from "@/components/ui/multi-select-combobox";
 import { useTags, createTag as createTagHook } from "@/hooks/use-tags";
 import { useCategories, createCategory as createCategoryHook } from "@/hooks/use-categories";
-import { useRecords, createRecord, updateRecord } from "@/hooks/use-records";
+import { createRecord, updateRecord, lookupRecordsByInputStrings } from "@/hooks/use-records";
 import { syncTagsToMaster, syncCategoriesToMaster, createRecordOrigin } from "@/lib/dataFacade";
 import { beginBulkOperation, endBulkOperation } from "@/lib/database";
 import { useOwners, createOwner } from "@/hooks/use-owners";
@@ -130,7 +130,6 @@ export default function DescriptorImport() {
 
   const { tags } = useTags();
   const { categories } = useCategories();
-  const { records } = useRecords();
   const { toast } = useToast();
 
   const { owners: existingOwners } = useOwners();
@@ -545,12 +544,8 @@ export default function DescriptorImport() {
 
       setSaveProgress({ current: 0, total: allSelected.length });
       
-      const recordLookup = new Map<string, typeof records[0]>();
-      for (const r of records) {
-        if (r.inputString) {
-          recordLookup.set(r.inputString.trim().toLowerCase(), r);
-        }
-      }
+      const allAddresses = allSelected.map(a => a.address);
+      const recordLookup = await lookupRecordsByInputStrings(allAddresses);
       
       const sourcePrefix = walletNameInput || seedName || 'descriptor-import';
       const now = new Date();
