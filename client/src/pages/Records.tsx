@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import { useLocation } from "wouter";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
+import { PAGE_DEBOUNCE } from "@/config/debounce";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -131,7 +132,7 @@ export default function Records() {
   const [records, setRecords] = useState<ConvertedRecord[]>([]);
   const [selectedRecordId, setSelectedRecordId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
-  const debouncedSearch = useDebouncedValue(searchQuery, 300);
+  const debouncedSearch = useDebouncedValue(searchQuery, PAGE_DEBOUNCE.Records);
   const [urlSearchQuery, setUrlSearchQuery] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [customFieldDefs, setCustomFieldDefs] = useState<CustomField[]>([]);

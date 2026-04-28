@@ -1,6 +1,7 @@
 import { useState, useMemo } from "react";
 import { useAsyncMemo, yieldToUI, checkAbort } from "@/hooks/use-async-memo";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
+import { PAGE_DEBOUNCE } from "@/config/debounce";
 import { useDbChangeSignal } from "@/hooks/use-db-change-signal";
 import { useLiveQuery } from "dexie-react-hooks";
 import { format } from "date-fns";
@@ -89,7 +90,7 @@ export default function Transactions() {
   const [opReturnOnly, setOpReturnOnly] = useState(false);
   const [searchProgress, setSearchProgress] = useState<{ scanned: number; total: number; matches: number } | null>(null);
 
-  const debouncedSearch = useDebouncedValue(search, 300);
+  const debouncedSearch = useDebouncedValue(search, PAGE_DEBOUNCE.Transactions);
 
   const txDbSignal = useDbChangeSignal(['blockchainTransactions', 'transactionParticipants', 'records'], 500);
 

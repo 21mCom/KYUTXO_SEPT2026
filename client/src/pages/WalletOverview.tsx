@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo } from "react";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
+import { PAGE_DEBOUNCE } from "@/config/debounce";
 import { useLocation } from "wouter";
 import { 
   Wallet, 
@@ -135,7 +136,7 @@ export default function WalletOverview() {
   const [walletStats, setWalletStats] = useState<WalletStats[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
-  const debouncedSearchQuery = useDebouncedValue(searchQuery, 300);
+  const debouncedSearchQuery = useDebouncedValue(searchQuery, PAGE_DEBOUNCE.WalletOverview);
   const [sortField, setSortField] = useState<SortField>('walletName');
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
   const [expandedWallets, setExpandedWallets] = useState<Set<string>>(new Set());

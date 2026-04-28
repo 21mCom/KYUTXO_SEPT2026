@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
+import { PAGE_DEBOUNCE } from "@/config/debounce";
 import { useLocation } from "wouter";
 import { Layers, Users, ChevronDown, ChevronRight, Search, ExternalLink, Wallet, Pencil, Check, X, StickyNote } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -77,7 +78,7 @@ export default function VaultManagement() {
   const [vaults, setVaults] = useState<VaultSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
-  const debouncedSearchQuery = useDebouncedValue(searchQuery, 300);
+  const debouncedSearchQuery = useDebouncedValue(searchQuery, PAGE_DEBOUNCE.VaultManagement);
   const [expandedVaults, setExpandedVaults] = useState<Set<string>>(new Set());
   const [editingNotesVault, setEditingNotesVault] = useState<string | null>(null);
   const [editNotesText, setEditNotesText] = useState("");

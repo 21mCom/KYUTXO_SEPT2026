@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo } from "react";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
+import { PAGE_DEBOUNCE } from "@/config/debounce";
 import { useLocation } from "wouter";
 import { AlertCircle, Check, ChevronRight, Filter, Loader2, Search, X, ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -49,7 +50,7 @@ export default function ConflictResolution() {
   const [isLoading, setIsLoading] = useState(true);
   const [recordsWithConflicts, setRecordsWithConflicts] = useState<RecordWithConflicts[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
-  const debouncedSearchQuery = useDebouncedValue(searchQuery, 300);
+  const debouncedSearchQuery = useDebouncedValue(searchQuery, PAGE_DEBOUNCE.ConflictResolution);
   const [fieldFilter, setFieldFilter] = useState<string>("all");
   const [selectedRecord, setSelectedRecord] = useState<RecordWithConflicts | null>(null);
   const [selectedConflict, setSelectedConflict] = useState<FieldConflict | null>(null);

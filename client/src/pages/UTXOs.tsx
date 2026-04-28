@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
+import { PAGE_DEBOUNCE } from "@/config/debounce";
 import { useAsyncMemo, yieldToUI, checkAbort } from "@/hooks/use-async-memo";
 import { useDbChangeSignal } from "@/hooks/use-db-change-signal";
 import { useLiveQuery } from "dexie-react-hooks";
@@ -166,7 +167,7 @@ export default function UTXOs() {
   const initialSettings = useMemo(() => loadSettings(), []);
   
   const [search, setSearch] = useState("");
-  const debouncedSearch = useDebouncedValue(search, 300);
+  const debouncedSearch = useDebouncedValue(search, PAGE_DEBOUNCE.UTXOs);
   const [selectedDate, setSelectedDate] = useState<Date | undefined>(undefined);
   const [searchFilters, setSearchFilters] = useState<SearchFilters>(defaultFilters);
   const [ownerFilter, setOwnerFilter] = useState<string>(initialSettings.ownerFilter);

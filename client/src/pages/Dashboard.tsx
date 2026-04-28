@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo } from "react";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
+import { PAGE_DEBOUNCE } from "@/config/debounce";
 import { Plus, Grid3x3, List, ChevronLeft, ChevronRight, Trash2, X, Settings2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -50,7 +51,7 @@ type SortColumn = "type" | "label" | "inputString" | "tags" | "categories" | "wa
 
 export default function Dashboard() {
   const [search, setSearch] = useState("");
-  const debouncedSearch = useDebouncedValue(search, 300);
+  const debouncedSearch = useDebouncedValue(search, PAGE_DEBOUNCE.Dashboard);
   const [view, setView] = useState<"grid" | "table">("table");
   const [filter, setFilter] = useState<{
     type?: "address" | "transaction" | "other" | "all";

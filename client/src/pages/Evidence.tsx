@@ -1,5 +1,6 @@
 import { useState, useCallback } from "react";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
+import { PAGE_DEBOUNCE } from "@/config/debounce";
 import { useLiveQuery } from "dexie-react-hooks";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -103,7 +104,7 @@ type EvidenceFormValues = z.infer<typeof evidenceFormSchema>;
 export default function EvidencePage() {
   const { toast } = useToast();
   const [searchTerm, setSearchTerm] = useState("");
-  const debouncedSearchTerm = useDebouncedValue(searchTerm, 300);
+  const debouncedSearchTerm = useDebouncedValue(searchTerm, PAGE_DEBOUNCE.Evidence);
   const [filterType, setFilterType] = useState<string>("all");
   const [filterImportance, setFilterImportance] = useState<string>("all");
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);

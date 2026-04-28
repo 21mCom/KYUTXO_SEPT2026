@@ -1,5 +1,6 @@
 import { useState, useMemo } from "react";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
+import { PAGE_DEBOUNCE } from "@/config/debounce";
 import { format } from "date-fns";
 import { db, Record, AddressImportance } from "@/lib/database";
 import { useDbChangeSignal } from "@/hooks/use-db-change-signal";
@@ -82,7 +83,7 @@ const ALL_TIERS: AddressImportance[] = ['verified', 'manual', 'wallet-import', '
 
 export default function AddressReuse() {
   const [search, setSearch] = useState("");
-  const debouncedSearch = useDebouncedValue(search, 300);
+  const debouncedSearch = useDebouncedValue(search, PAGE_DEBOUNCE.AddressReuse);
   const [expandedAddresses, setExpandedAddresses] = useState<Set<string>>(new Set());
   const [copiedAddress, setCopiedAddress] = useState<string | null>(null);
   const { toast } = useToast();
