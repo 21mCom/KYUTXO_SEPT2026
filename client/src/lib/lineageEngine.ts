@@ -594,35 +594,77 @@ export interface EvidenceBundleOptions {
   selectedSegmentIds?: string[];
 }
 
+const SEGMENT_BATCH_SIZE = 200;
+
+async function loadSegmentsInBatches(): Promise<CustodySegment[]> {
+  const segments: CustodySegment[] = [];
+  let lastId = 0;
+  while (true) {
+    const batch = await db.custodySegments
+      .where('id')
+      .above(lastId)
+      .limit(SEGMENT_BATCH_SIZE)
+      .toArray();
+    if (batch.length === 0) break;
+    segments.push(...batch);
+    lastId = batch[batch.length - 1].id!;
+    if (batch.length < SEGMENT_BATCH_SIZE) break;
+  }
+  return segments;
+}
+
+async function getLineageForSegment(segment: CustodySegment): Promise<UtxoLineage[]> {
+  const addresses = new Set<string>();
+  if (segment.originAddress) addresses.add(segment.originAddress);
+  if (segment.currentAddress) addresses.add(segment.currentAddress);
+
+  if (addresses.size === 0) return [];
+
+  const addressList = Array.from(addresses);
+
+  const [byCreated, bySpent] = await Promise.all([
+    db.utxoLineage.where('createdAddress').anyOf(addressList).toArray(),
+    db.utxoLineage.where('spentAddress').anyOf(addressList).toArray(),
+  ]);
+
+  const seen = new Set<number>();
+  const result: UtxoLineage[] = [];
+  for (const rec of byCreated) {
+    if (rec.id != null && !seen.has(rec.id)) {
+      seen.add(rec.id);
+      result.push(rec);
+    }
+  }
+  for (const rec of bySpent) {
+    if (rec.id != null && !seen.has(rec.id)) {
+      seen.add(rec.id);
+      result.push(rec);
+    }
+  }
+  return result;
+}
+
 // Generate minimal evidence bundle with selective disclosure
 export async function generateEvidenceBundle(
   options: EvidenceBundleOptions
 ): Promise<EvidenceBundle> {
   const segments = options.selectedSegmentIds
     ? await db.custodySegments.where('segmentId').anyOf(options.selectedSegmentIds).toArray()
-    : await db.custodySegments.toArray();
-  
-  const lineageRecords = await db.utxoLineage.toArray();
-  
-  // Calculate summary
+    : await loadSegmentsInBatches();
+
   const { totalDays, earliestOrigin, latestActivity } = getCustodyDuration(segments);
   const totalValueBtc = segments.reduce((sum, s) => sum + s.currentAmount, 0) / 100000000;
-  
-  // Build evidence segments
+
   const evidenceSegments: EvidenceSegment[] = [];
-  
+
   for (const segment of segments) {
-    const segmentLineage = lineageRecords.filter(l =>
-      l.createdAddress === segment.originAddress ||
-      l.createdAddress === segment.currentAddress ||
-      l.spentAddress === segment.originAddress ||
-      l.spentAddress === segment.currentAddress
-    );
-    
-    // originDate is Unix timestamp in seconds
+    const segmentLineage = options.includeLineageChain
+      ? await getLineageForSegment(segment)
+      : [];
+
     const originDateMs = segment.originDate * 1000;
     const custodyDays = Math.floor((Date.now() - originDateMs) / (1000 * 60 * 60 * 24));
-    
+
     const evidenceSegment: EvidenceSegment = {
       segmentId: segment.segmentId,
       custodyDays,
@@ -630,8 +672,7 @@ export async function generateEvidenceBundle(
       includesFullAddresses: options.includeAddresses,
       includesFullTxids: options.includeTxids
     };
-    
-    // Include origin info - always include, but potentially redacted
+
     evidenceSegment.origin = {
       address: options.includeAddresses ? segment.originAddress : hashAddress(segment.originAddress),
       txid: options.includeTxids ? segment.originTxid : hashTxid(segment.originTxid),
@@ -639,8 +680,7 @@ export async function generateEvidenceBundle(
       date: new Date(originDateMs).toISOString(),
       amount: segment.originAmount
     };
-    
-    // Include current state
+
     evidenceSegment.current = {
       address: options.includeAddresses && segment.currentAddress 
         ? segment.currentAddress 
@@ -652,8 +692,7 @@ export async function generateEvidenceBundle(
       amount: segment.currentAmount,
       status: segment.status
     };
-    
-    // Include lineage chain if requested
+
     if (options.includeLineageChain && segmentLineage.length > 0) {
       evidenceSegment.lineageChain = segmentLineage.map(l => ({
         txid: options.includeTxids ? l.createdTxid : hashTxid(l.createdTxid),
@@ -661,10 +700,10 @@ export async function generateEvidenceBundle(
         confidenceLevel: l.confidence
       }));
     }
-    
+
     evidenceSegments.push(evidenceSegment);
   }
-  
+
   const bundle: EvidenceBundle = {
     version: '1.0',
     generatedAt: new Date().toISOString(),
@@ -678,10 +717,9 @@ export async function generateEvidenceBundle(
     },
     segments: evidenceSegments
   };
-  
-  // Add integrity hash
+
   bundle.integrityHash = await generateIntegrityHash(bundle);
-  
+
   return bundle;
 }
 
