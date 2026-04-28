@@ -79,10 +79,25 @@ async function getTransactionParticipants(txid: string): Promise<TransactionPart
   return getParticipantsByTxid(txid);
 }
 
-// Build address node with label info and importance tier
-async function buildAddressNode(address: string, records: Record[]): Promise<AddressNode> {
-  const record = records.find(r => r.inputString === address);
-  
+// Build address node with label info and importance tier (using indexed DB lookup)
+async function buildAddressNodeFromDb(address: string): Promise<AddressNode> {
+  const record = await db.records.where('inputString').equals(address).first();
+
+  return {
+    address,
+    recordId: record?.id,
+    label: record?.label,
+    owner: record?.owner,
+    syncDepth: record?.syncDepth,
+    isLabeled: !!record?.label && record.label !== '' && record.owner !== 'Pending Review',
+    addressImportance: record?.addressImportance,
+    walletName: record?.walletName,
+    source: record?.source,
+  };
+}
+
+// Build address node from a pre-loaded record map (for batch operations)
+function buildAddressNodeFromRecord(address: string, record: Record | undefined): AddressNode {
   return {
     address,
     recordId: record?.id,
@@ -340,17 +355,10 @@ export async function findLabeledConnections(
 ): Promise<ConnectionResult[]> {
   const results: ConnectionResult[] = [];
 
-  // Get all records
-  const allRawRecords = await db.records.toArray();
-  const allRecords = allRawRecords;
-
-  // Filter to labeled address records (with actual labels, not "Pending Review")
-  const labeledAddresses = allRecords.filter(r => 
-    r.type === 'address' && 
-    r.label && 
-    r.label !== '' && 
-    r.owner !== 'Pending Review'
-  );
+  const labeledAddresses = await db.records
+    .where('type').equals('address')
+    .filter(r => !!r.label && r.label !== '' && r.owner !== 'Pending Review')
+    .toArray();
 
   console.log(`[Provenance] Found ${labeledAddresses.length} labeled addresses`);
 
@@ -396,17 +404,22 @@ export async function getProvenanceChain(
   maxDepth: number = 5
 ): Promise<AddressNode[]> {
   const chain: AddressNode[] = [];
-  
-  // Get all records for labeling
-  const allRawRecords = await db.records.toArray();
-  const allRecords = allRawRecords;
 
-  // Trace backwards
   const incoming = await findIncomingConnections(address, maxDepth);
-  
+
   const addresses = Array.from(incoming.keys());
+  const BATCH_SIZE = 500;
+  const recordLookup = new Map<string, Record>();
+  for (let i = 0; i < addresses.length; i += BATCH_SIZE) {
+    const batch = addresses.slice(i, i + BATCH_SIZE);
+    const found = await db.records.where('inputString').anyOf(batch).toArray();
+    for (const r of found) {
+      if (r.inputString) recordLookup.set(r.inputString, r);
+    }
+  }
+
   for (const addr of addresses) {
-    const node = await buildAddressNode(addr, allRecords);
+    const node = buildAddressNodeFromRecord(addr, recordLookup.get(addr));
     chain.push(node);
   }
 
@@ -427,13 +440,10 @@ export async function getProvenanceStats(): Promise<{
   transactionsStored: number;
   potentialConnections: number;
 }> {
-  const allRawRecords = await db.records.toArray();
-  const allRecords = allRawRecords;
-
-  const addressRecords = allRecords.filter(r => r.type === 'address');
-  const labeledAddresses = addressRecords.filter(r => 
-    r.label && r.label !== '' && r.owner !== 'Pending Review'
-  ).length;
+  const labeledAddresses = await db.records
+    .where('type').equals('address')
+    .filter(r => !!r.label && r.label !== '' && r.owner !== 'Pending Review')
+    .count();
 
   const syncedAddresses = await db.addressSyncState.count();
   const transactionsStored = await db.blockchainTransactions.count();
@@ -476,31 +486,31 @@ export async function exploreAddress(
   maxDepth: number = 3,
   filter?: ProvenanceFilter
 ): Promise<AddressExplorationResult> {
-  // Get all records for labeling and filtering
-  const allRawRecords = await db.records.toArray();
-  const allRecords = allRawRecords;
-  
-  // Build lookup map for quick record access
-  const recordLookup = new Map<string, Record>();
-  allRecords.forEach(r => {
-    if (r.type === 'address' && r.inputString) {
-      recordLookup.set(r.inputString, r);
-    }
-  });
-  
-  // Build center node
-  const centerNode = await buildAddressNode(address, allRecords);
-  
-  // Find incoming connections (who sent to this address)
   const incomingMap = await findIncomingConnections(address, maxDepth);
-  
-  // Find outgoing connections (who received from this address)
   const outgoingMap = await findOutgoingConnections(address, maxDepth);
-  
-  // Process incoming connections with filter
+
+  const allNeededAddresses = new Set<string>([address]);
+  for (const addr of incomingMap.keys()) allNeededAddresses.add(addr);
+  for (const addr of outgoingMap.keys()) allNeededAddresses.add(addr);
+
+  const BATCH_SIZE = 500;
+  const recordLookup = new Map<string, Record>();
+  const addrArray = Array.from(allNeededAddresses);
+  for (let i = 0; i < addrArray.length; i += BATCH_SIZE) {
+    const batch = addrArray.slice(i, i + BATCH_SIZE);
+    const found = await db.records.where('inputString').anyOf(batch).toArray();
+    for (const r of found) {
+      if (r.type === 'address' && r.inputString) {
+        recordLookup.set(r.inputString, r);
+      }
+    }
+  }
+
+  const centerNode = buildAddressNodeFromRecord(address, recordLookup.get(address));
+
   const incoming: ConnectionNode[] = [];
   let filteredOut = 0;
-  
+
   const incomingAddresses = Array.from(incomingMap.keys());
   for (const addr of incomingAddresses) {
     const edges = incomingMap.get(addr)!;
@@ -509,16 +519,14 @@ export async function exploreAddress(
       filteredOut++;
       continue;
     }
-    
-    const node = await buildAddressNode(addr, allRecords);
-    
-    // Calculate hop distance (minimum edges to reach center)
+
+    const node = buildAddressNodeFromRecord(addr, record);
+
     const minHops = edges.reduce((min: number, _edge: TransactionEdge) => {
-      // Count hops in the edge chain
       const hops = edges.filter((e: TransactionEdge) => e.toAddress === address || edges.some((e2: TransactionEdge) => e2.toAddress === e.fromAddress)).length;
       return Math.min(min, hops);
     }, maxDepth);
-    
+
     incoming.push({
       ...node,
       edges,
@@ -526,10 +534,9 @@ export async function exploreAddress(
       hopDistance: minHops > 0 ? minHops : 1,
     });
   }
-  
-  // Process outgoing connections with filter
+
   const outgoing: ConnectionNode[] = [];
-  
+
   const outgoingAddresses = Array.from(outgoingMap.keys());
   for (const addr of outgoingAddresses) {
     const edges = outgoingMap.get(addr)!;
@@ -538,8 +545,8 @@ export async function exploreAddress(
       filteredOut++;
       continue;
     }
-    
-    const node = await buildAddressNode(addr, allRecords);
+
+    const node = buildAddressNodeFromRecord(addr, record);
     
     // Calculate hop distance
     const minHops = edges.reduce((min: number, _edge: TransactionEdge) => {

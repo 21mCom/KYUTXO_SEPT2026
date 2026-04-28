@@ -323,18 +323,13 @@ export async function deleteRecord(id: number): Promise<void> {
 
 export async function findRecordByInputString(inputString: string): Promise<Record | undefined> {
   if (!inputString) return undefined;
-  
-  const normalizedInput = inputString.trim().toLowerCase();
-  
-  const allRecords = await db.records.toArray();
-  
-  for (const record of allRecords) {
-    if (record.inputString && record.inputString.trim().toLowerCase() === normalizedInput) {
-      return record;
-    }
-  }
-  
-  return undefined;
+
+  const trimmed = inputString.trim();
+
+  const exactMatch = await db.records.where('inputString').equals(trimmed).first();
+  if (exactMatch) return exactMatch;
+
+  return await db.records.where('inputString').equalsIgnoreCase(trimmed).first();
 }
 
 export async function createRecordOrigin(

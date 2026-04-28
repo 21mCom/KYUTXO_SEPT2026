@@ -31,11 +31,30 @@ export function isVerified(record: DBRecord | null | undefined): boolean {
 export async function checkForDuplicates(
   parsedRecords: ParsedRecord[]
 ): Promise<DuplicateInfo[]> {
-  const allRaw = await db.records.toArray();
+  const BATCH_SIZE = 500;
   const lookupMap = new Map<string, DBRecord>();
-  for (const r of allRaw) {
-    if (r.inputString) {
-      lookupMap.set(r.inputString.trim().toLowerCase(), r);
+  const uniqueInputs = [...new Set(parsedRecords.map(r => r.inputString.trim()))];
+
+  for (let i = 0; i < uniqueInputs.length; i += BATCH_SIZE) {
+    const batch = uniqueInputs.slice(i, i + BATCH_SIZE);
+    const found = await db.records.where('inputString').anyOf(batch).toArray();
+    for (const r of found) {
+      if (r.inputString) {
+        lookupMap.set(r.inputString.trim().toLowerCase(), r);
+      }
+    }
+
+    const unmatchedInBatch = batch.filter(
+      input => !lookupMap.has(input.toLowerCase())
+    );
+    for (const input of unmatchedInBatch) {
+      const caseMatch = await db.records
+        .where('inputString')
+        .equalsIgnoreCase(input)
+        .first();
+      if (caseMatch && caseMatch.inputString) {
+        lookupMap.set(caseMatch.inputString.trim().toLowerCase(), caseMatch);
+      }
     }
   }
 

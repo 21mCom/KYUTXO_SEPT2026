@@ -164,22 +164,36 @@ export async function buildLineageForTransaction(txid: string): Promise<UtxoLine
 export async function buildAllLineage(
   onProgress?: (current: number, total: number) => void
 ): Promise<{ processed: number; created: number }> {
-  const allTransactions = await db.blockchainTransactions.toArray();
+  const BATCH_SIZE = 500;
+  const totalCount = await db.blockchainTransactions.count();
   let processed = 0;
   let created = 0;
-  
-  for (const tx of allTransactions) {
-    const lineageRecords = await buildLineageForTransaction(tx.txid);
-    
-    if (lineageRecords.length > 0) {
-      await db.utxoLineage.bulkAdd(lineageRecords);
-      created += lineageRecords.length;
+  let lastId = 0;
+
+  while (processed < totalCount) {
+    const batch = await db.blockchainTransactions
+      .where('id').above(lastId)
+      .limit(BATCH_SIZE)
+      .toArray();
+    if (batch.length === 0) break;
+
+    for (const tx of batch) {
+      const lineageRecords = await buildLineageForTransaction(tx.txid);
+
+      if (lineageRecords.length > 0) {
+        await db.utxoLineage.bulkAdd(lineageRecords);
+        created += lineageRecords.length;
+      }
+
+      processed++;
+      if (onProgress) {
+        onProgress(processed, totalCount);
+      }
     }
-    
-    processed++;
-    if (onProgress) {
-      onProgress(processed, allTransactions.length);
-    }
+
+    const lastItem = batch[batch.length - 1];
+    if (!lastItem.id) break;
+    lastId = lastItem.id;
   }
   
   return { processed, created };

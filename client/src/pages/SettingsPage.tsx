@@ -547,11 +547,20 @@ export default function SettingsPage() {
 
       // Restore records
       if (records && records.length > 0) {
-        // Build set of existing inputStrings for merge mode
         let existingInputStrings = new Set<string>();
         if (restoreMode === "merge") {
-          const existingRecords = await db.records.toArray();
-          existingInputStrings = new Set(existingRecords.map(r => r.inputString));
+          const backupInputStrings: string[] = [];
+          for (const rec of records) {
+            if (rec.inputString) backupInputStrings.push(rec.inputString);
+          }
+          const MERGE_BATCH = 500;
+          for (let i = 0; i < backupInputStrings.length; i += MERGE_BATCH) {
+            const batch = backupInputStrings.slice(i, i + MERGE_BATCH);
+            const found = await db.records.where('inputString').anyOf(batch).toArray();
+            for (const r of found) {
+              existingInputStrings.add(r.inputString);
+            }
+          }
         }
         
         for (let i = 0; i < records.length; i++) {

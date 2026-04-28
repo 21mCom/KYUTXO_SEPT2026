@@ -345,7 +345,18 @@ export default function ExportPage() {
       setProgressMessage("Gathering records...");
       setProgress(10);
 
-      const rawRecords = await db.records.toArray();
+      const EXPORT_BATCH = 1000;
+      const rawRecords: Record[] = [];
+      let lastRecordId = 0;
+      while (true) {
+        const batch = await db.records.where('id').above(lastRecordId).limit(EXPORT_BATCH).toArray();
+        if (batch.length === 0) break;
+        rawRecords.push(...batch);
+        const lastItem = batch[batch.length - 1];
+        if (!lastItem.id) break;
+        lastRecordId = lastItem.id;
+      }
+
       const rawTags = await db.tags.toArray();
       const rawCategories = await db.categories.toArray();
       const rawAttachments = await db.attachments.toArray();
