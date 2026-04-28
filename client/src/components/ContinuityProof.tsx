@@ -50,7 +50,7 @@ export function ContinuityProof({ selectedAddress, onAddressSelect }: Continuity
   const { toast } = useToast();
   
   const [isBuilding, setIsBuilding] = useState(false);
-  const [buildProgress, setBuildProgress] = useState({ current: 0, total: 0, phase: '' });
+  const [buildProgress, setBuildProgress] = useState({ current: 0, total: 0, phase: '', step: 0, totalSteps: 2, unit: '' });
   const [segments, setSegments] = useState<CustodySegment[]>([]);
   const [lineage, setLineage] = useState<UtxoLineage[]>([]);
   const [expandedSegments, setExpandedSegments] = useState<Set<string>>(new Set());
@@ -88,12 +88,11 @@ export function ContinuityProof({ selectedAddress, onAddressSelect }: Continuity
   
   const handleBuildLineage = async () => {
     setIsBuilding(true);
-    setBuildProgress({ current: 0, total: 0, phase: 'Building UTXO lineage...' });
+    setBuildProgress({ current: 0, total: 0, phase: 'Scanning transactions...', step: 1, totalSteps: 2, unit: 'transactions' });
     
     try {
-      // Phase 1: Build lineage from transactions
       const lineageResult = await buildAllLineage((current, total) => {
-        setBuildProgress({ current, total, phase: 'Building UTXO lineage...' });
+        setBuildProgress({ current, total, phase: 'Building UTXO lineage', step: 1, totalSteps: 2, unit: 'transactions' });
       });
       
       toast({
@@ -101,11 +100,10 @@ export function ContinuityProof({ selectedAddress, onAddressSelect }: Continuity
         description: `Processed ${lineageResult.processed} transactions, created ${lineageResult.created} lineage links.`,
       });
       
-      // Phase 2: Build custody segments
-      setBuildProgress({ current: 0, total: 0, phase: 'Compiling custody segments...' });
+      setBuildProgress({ current: 0, total: 0, phase: 'Scanning origin UTXOs...', step: 2, totalSteps: 2, unit: 'origins' });
       
       const segmentResult = await buildAllCustodySegments((current, total) => {
-        setBuildProgress({ current, total, phase: 'Compiling custody segments...' });
+        setBuildProgress({ current, total, phase: 'Compiling custody segments', step: 2, totalSteps: 2, unit: 'origins' });
       });
       
       toast({
@@ -113,10 +111,8 @@ export function ContinuityProof({ selectedAddress, onAddressSelect }: Continuity
         description: `Created ${segmentResult.created} custody segments from ${segmentResult.processed} origins.`,
       });
       
-      // Reload stats
       await loadStats();
       
-      // Reload address data if selected
       if (selectedAddress) {
         await loadAddressData(selectedAddress);
       }
@@ -129,7 +125,7 @@ export function ContinuityProof({ selectedAddress, onAddressSelect }: Continuity
       });
     } finally {
       setIsBuilding(false);
-      setBuildProgress({ current: 0, total: 0, phase: '' });
+      setBuildProgress({ current: 0, total: 0, phase: '', step: 0, totalSteps: 2, unit: '' });
     }
   };
   
@@ -436,14 +432,28 @@ export function ContinuityProof({ selectedAddress, onAddressSelect }: Continuity
           </div>
         </div>
         
-        {/* Progress */}
-        {isBuilding && buildProgress.total > 0 && (
-          <div className="space-y-2">
-            <div className="flex justify-between text-sm">
-              <span>{buildProgress.phase}</span>
-              <span>{buildProgress.current} / {buildProgress.total}</span>
+        {isBuilding && (
+          <div className="space-y-2 p-3 bg-muted/30 rounded-lg" data-testid="lineage-build-progress">
+            <div className="flex items-center justify-between text-sm">
+              <span className="font-medium flex items-center gap-2">
+                <Loader2 className="h-3 w-3 animate-spin" />
+                Step {buildProgress.step} of {buildProgress.totalSteps}: {buildProgress.phase}
+              </span>
+              {buildProgress.total > 0 && (
+                <span className="text-muted-foreground tabular-nums" data-testid="text-build-counter">
+                  {buildProgress.current.toLocaleString()} of {buildProgress.total.toLocaleString()} {buildProgress.unit}
+                </span>
+              )}
             </div>
-            <Progress value={(buildProgress.current / buildProgress.total) * 100} />
+            <Progress
+              value={buildProgress.total > 0 ? (buildProgress.current / buildProgress.total) * 100 : undefined}
+              data-testid="progress-lineage-build"
+            />
+            {buildProgress.total > 0 && (
+              <div className="text-xs text-muted-foreground text-right" data-testid="text-build-percent">
+                {Math.round((buildProgress.current / buildProgress.total) * 100)}% complete
+              </div>
+            )}
           </div>
         )}
         
