@@ -1023,12 +1023,17 @@ export default function Transactions() {
     return expandAllSource.length > 0 && expandAllSource.every(tx => expandedTxs.has(tx.txid));
   }, [expandAllSource, expandedTxs]);
 
+  const [volumeProgress, setVolumeProgress] = useState<{ processed: number; total: number } | null>(null);
+
   const { value: allNavigableVolume, isComputing: volumeComputing } = useAsyncMemo(async (signal) => {
     if (!needsClientSideFiltering || filteredTransactions.length === 0) {
+      setVolumeProgress(null);
       return null;
     }
 
     const txids = filteredTransactions.map(tx => tx.txid);
+    const total = txids.length;
+    setVolumeProgress({ processed: 0, total });
     let totalVolume = 0;
     const BATCH_SIZE = 500;
 
@@ -1042,6 +1047,7 @@ export default function Transactions() {
           totalVolume += p.amount;
         }
       }
+      setVolumeProgress({ processed: Math.min(i + BATCH_SIZE, total), total });
       if (i + BATCH_SIZE < txids.length) await yieldToUI();
     }
 
@@ -1115,14 +1121,21 @@ export default function Transactions() {
                       <TooltipContent side="bottom" className="max-w-xs">
                         <p>
                           Volume from {stats.loadedTxCount.toLocaleString()} of {navigableCount.toLocaleString()} transactions
-                          loaded so far. Computing total...
+                          loaded so far.
+                          {volumeProgress && volumeProgress.total > 0
+                            ? ` Computing total… ${volumeProgress.processed.toLocaleString()} / ${volumeProgress.total.toLocaleString()}`
+                            : " Computing total…"}
                         </p>
                       </TooltipContent>
                     </Tooltip>
                   ) : (
                     <span className="inline-flex items-center gap-2" data-testid="indicator-volume-loading">
                       <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-                      <span className="text-muted-foreground text-base">Computing...</span>
+                      <span className="text-muted-foreground text-base">
+                        {volumeProgress && volumeProgress.total > 0
+                          ? `Computing… ${volumeProgress.processed.toLocaleString()} / ${volumeProgress.total.toLocaleString()}`
+                          : "Computing…"}
+                      </span>
                     </span>
                   )
                 ) : allNavigableVolume !== null ? (
