@@ -56,47 +56,104 @@ async function syncRecordVocabulary(
   await Promise.all(syncTasks);
 }
 
-export async function createRecord(
-  data: Omit<Record, 'id' | 'createdAt' | 'updatedAt'>
-): Promise<number> {
+export type CreateRecordData = Omit<Record, 'id' | 'createdAt' | 'updatedAt'> & {
+  createdAt?: number;
+  updatedAt?: number;
+};
+
+export interface CreateRecordOptions {
+  skipNotification?: boolean;
+  skipVocabularySync?: boolean;
+}
+
+function deriveAddressImportance(data: CreateRecordData): AddressImportance {
+  if (data.addressImportance) return data.addressImportance;
+  if (data.syncDepth !== undefined && data.syncDepth > 0) return 'blockchain-discovered';
+  if (data.source === 'blockchain-sync') return 'blockchain-discovered';
+  if (data.source?.startsWith('walletImport-')) return 'wallet-import';
+  if (data.source === 'xpub-import' || data.xpub || data.derivationPath) return 'xpub-derived';
+  return 'manual';
+}
+
+function buildFullRecord(data: CreateRecordData): Record {
   const now = Date.now();
-  
-  let addressImportance = data.addressImportance;
-  if (!addressImportance) {
-    if (data.syncDepth !== undefined && data.syncDepth > 0) {
-      addressImportance = 'blockchain-discovered';
-    } else if (data.source === 'blockchain-sync') {
-      addressImportance = 'blockchain-discovered';
-    } else if (data.source?.startsWith('walletImport-')) {
-      addressImportance = 'wallet-import';
-    } else if (data.source === 'xpub-import' || data.xpub || data.derivationPath) {
-      addressImportance = 'xpub-derived';
-    } else {
-      addressImportance = 'manual';
-    }
-  }
-  
-  const record: Record = {
+  return {
     ...data,
-    addressImportance,
+    addressImportance: deriveAddressImportance(data),
     inputStringLower: data.inputString ? data.inputString.toLowerCase() : '',
-    createdAt: now,
-    updatedAt: now,
+    createdAt: data.createdAt ?? now,
+    updatedAt: data.updatedAt ?? now,
   };
+}
+
+export async function createRecord(
+  data: CreateRecordData,
+  options?: CreateRecordOptions
+): Promise<number> {
+  const record = buildFullRecord(data);
 
   console.log(`[createRecord] Creating record: type=${data.type}, inputString=${data.inputString?.substring(0, 20)}...`);
   
-  syncRecordVocabulary(data).catch((err) => {
-    console.warn('[createRecord] Vocabulary sync failed:', err);
-  });
+  if (!options?.skipVocabularySync) {
+    syncRecordVocabulary(data).catch((err) => {
+      console.warn('[createRecord] Vocabulary sync failed:', err);
+    });
+  }
   
   const id = await db.records.add(record);
   
-  notifyDbChange('records');
+  if (!options?.skipNotification) {
+    notifyDbChange('records');
+  }
   
   console.log(`[createRecord] Record created with id=${id}`);
   
   return id as number;
+}
+
+export async function bulkCreateRecords(
+  records: CreateRecordData[],
+  options?: CreateRecordOptions
+): Promise<number[]> {
+  if (records.length === 0) return [];
+
+  console.log(`[bulkCreateRecords] Creating ${records.length} records...`);
+  const startTime = performance.now();
+
+  const fullRecords = records.map(buildFullRecord);
+
+  const ids = await db.transaction('rw', db.records, async () => {
+    return await db.records.bulkAdd(fullRecords, { allKeys: true });
+  });
+
+  if (!options?.skipVocabularySync) {
+    const vocabularyValues = {
+      owners: new Set<string>(),
+      walletNames: new Set<string>(),
+      seedNames: new Set<string>(),
+      walletSoftware: new Set<string>(),
+    };
+
+    for (const data of records) {
+      if (data.owner && data.owner !== 'Unknown') vocabularyValues.owners.add(data.owner);
+      if (data.walletName) vocabularyValues.walletNames.add(data.walletName);
+      if (data.seedName) vocabularyValues.seedNames.add(data.seedName);
+      if (data.walletSoftware) vocabularyValues.walletSoftware.add(data.walletSoftware);
+    }
+
+    batchSyncVocabulary(vocabularyValues).catch((err) => {
+      console.warn('[bulkCreateRecords] Vocabulary sync failed:', err);
+    });
+  }
+
+  if (!options?.skipNotification) {
+    notifyDbChange('records');
+  }
+
+  const duration = performance.now() - startTime;
+  console.log(`[bulkCreateRecords] Created ${ids.length} records in ${duration.toFixed(0)}ms`);
+
+  return ids as number[];
 }
 
 export async function updateRecord(

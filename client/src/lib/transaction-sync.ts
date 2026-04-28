@@ -4,7 +4,7 @@
 import { db, notifyDbChange, type Record, type BlockchainTransaction, type TransactionParticipant, type AddressSyncState, type NodeSettings, type PausedSyncState, type SkippedAddress, type AddressBlacklist, type SyncProtectionSettings, DEFAULT_SYNC_PROTECTION } from './database';
 import { createProvider, createProviderFromSettings, parseTransaction, MINIMUM_CONFIRMATIONS, type ProviderType, type ParsedTransaction, type BlockchainProvider, type ApiTransaction } from './blockchain-api';
 import { validateAddress } from './bitcoin';
-import { createRecordOrigin } from './dataFacade';
+import { createRecord, createRecordOrigin } from './dataFacade';
 
 // Legacy source filter type - kept for backwards compatibility
 export type SourceFilter = 'manual-only' | 'include-tx-import' | 'include-blockchain-sync' | 'all' | 'custom';
@@ -1663,30 +1663,24 @@ export class TransactionSyncService {
       }
     }
 
-    const now = Date.now();
-    const newRecordId = await db.records.add({
+    const newRecordId = await createRecord({
       type: 'address',
       inputString: address,
-      inputStringLower: address.toLowerCase(),
       label: '',
       tags: [],
       categories: [],
       owner: 'Pending Review',
       source: 'blockchain-sync',
       syncDepth,
-      maxSyncedDepth: -1, // Not yet synced
+      maxSyncedDepth: -1,
       discoveredInTxid,
       discoveredFromRecordId,
-      addressImportance: 'blockchain-discovered', // Lowest importance tier for discovered addresses
-      // Inherit context from parent for classification help
+      addressImportance: 'blockchain-discovered',
       walletName: parentWalletName,
       seedName: parentSeedName,
       walletSoftware: parentWalletSoftware,
-      createdAt: now,
-      updatedAt: now,
-    });
+    }, { skipNotification: true, skipVocabularySync: true });
 
-    // Defer notification - will be flushed after address sync completes
     this.deferNotification('records');
 
     try {
@@ -1760,31 +1754,23 @@ export class TransactionSyncService {
       }
     }
 
-    const now = Date.now();
-    const newRecordId = await db.records.add({
+    const newRecordId = await createRecord({
       type: 'transaction',
       inputString: txid,
-      inputStringLower: txid.toLowerCase(),
       label: '',
       tags: [],
       categories: [],
       owner: parentOwner || 'Pending Review',
       source: 'blockchain-sync',
-      syncDepth, // Track how close this tx is to tracked addresses
+      syncDepth,
       discoveredFromRecordId,
-      // Store blockTime in date field (formatted as ISO string)
       date: new Date(blockTime * 1000).toISOString().split('T')[0],
-      // Store block time for sorting (Unix seconds)
       firstSeenBlockTime: blockTime,
-      // Inherit context from parent
       walletName: parentWalletName,
       seedName: parentSeedName,
       walletSoftware: parentWalletSoftware,
-      createdAt: now,
-      updatedAt: now,
-    });
+    }, { skipNotification: true, skipVocabularySync: true });
 
-    // Defer notification - will be flushed after address sync completes
     this.deferNotification('records');
 
     try {

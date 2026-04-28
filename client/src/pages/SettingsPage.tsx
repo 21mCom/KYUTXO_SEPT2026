@@ -40,6 +40,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { useAuth } from "@/contexts/AuthContext";
 import { db } from "@/lib/database";
+import { bulkCreateRecords, type CreateRecordData } from "@/lib/data/record-crud";
 import { deriveKey, decrypt, base64ToBuffer, verifyPassword } from "@/lib/crypto";
 import { getVaultSettings, vaultDb } from "@/lib/vault";
 import { generateSalt, hashPassword, bufferToBase64 } from "@/lib/crypto";
@@ -563,41 +564,19 @@ export default function SettingsPage() {
           }
         }
         
+        const recordsToCreate: CreateRecordData[] = [];
         for (let i = 0; i < records.length; i++) {
           const record = records[i];
           const { id, ...recordData } = record;
           
-          // Skip duplicates in merge mode
           if (restoreMode === "merge" && existingInputStrings.has(recordData.inputString)) {
             recordsSkipped++;
-            setRestoreProgress(50 + Math.floor((i / records.length) * 20));
             continue;
           }
 
-          // Ensure addressImportance is set for compound index compatibility
-          let addressImportance = recordData.addressImportance;
-          if (!addressImportance) {
-            const recType = recordData.type || "address";
-            if (recType === 'transaction' || recType === 'other') {
-              addressImportance = 'manual';
-            } else if ((recordData.syncDepth !== undefined && recordData.syncDepth > 0) || 
-                       recordData.source === 'blockchain-sync') {
-              addressImportance = 'blockchain-discovered';
-            } else if (recordData.source?.startsWith('walletImport-')) {
-              addressImportance = 'wallet-import';
-            } else if (recordData.source === 'xpub-import' || recordData.xpub || recordData.derivationPath) {
-              addressImportance = 'xpub-derived';
-            } else {
-              addressImportance = 'manual';
-            }
-          }
-          
-          // Create a new record object with required fields
-          const restoredInputString = recordData.inputString || "";
-          const newRecord = {
+          recordsToCreate.push({
             type: recordData.type || "address",
-            inputString: restoredInputString,
-            inputStringLower: restoredInputString.toLowerCase(),
+            inputString: recordData.inputString || "",
             label: recordData.label || "Restored Record",
             notes: recordData.notes,
             amount: recordData.amount,
@@ -612,21 +591,22 @@ export default function SettingsPage() {
             walletName: recordData.walletName,
             source: recordData.source,
             customFields: recordData.customFields,
-            addressImportance,
+            addressImportance: recordData.addressImportance,
             syncDepth: recordData.syncDepth,
             xpub: recordData.xpub,
             derivationPath: recordData.derivationPath,
             createdAt: recordData.createdAt || Date.now(),
             updatedAt: recordData.updatedAt || Date.now(),
-          };
-
-          await db.records.add(newRecord as any);
-          recordsAdded++;
-          setRestoreProgress(50 + Math.floor((i / records.length) * 20));
+          } as CreateRecordData);
         }
+
+        if (recordsToCreate.length > 0) {
+          await bulkCreateRecords(recordsToCreate, { skipNotification: true, skipVocabularySync: true });
+          recordsAdded = recordsToCreate.length;
+        }
+        setRestoreProgress(70);
       }
 
-      setRestoreProgress(70);
       setRestoreMessage("Restoring tags and categories...");
 
       // Track existing tag/category names for merge mode

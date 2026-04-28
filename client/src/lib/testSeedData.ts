@@ -1,4 +1,5 @@
-import { db, type Record } from './database';
+import { db } from './database';
+import { createRecord } from './dataFacade';
 import { getParticipantsByTxid } from './dataFacade';
 
 /**
@@ -219,10 +220,9 @@ export async function seedTestData(options: { clearExisting?: boolean } = {}): P
           continue;
         }
         
-        const record: Record = {
+        const id = await createRecord({
           type: 'address',
           inputString: addr.address,
-          inputStringLower: addr.address.toLowerCase(),
           label: addr.label,
           notes: addr.notes,
           amount: addr.amount,
@@ -234,11 +234,7 @@ export async function seedTestData(options: { clearExisting?: boolean } = {}): P
           seedName: wallet.seedName,
           source: 'manual',
           addressImportance: addr.importance,
-          createdAt: now,
-          updatedAt: now,
-        };
-        
-        const id = await db.records.add(record);
+        }, { skipVocabularySync: true });
         recordIds.push(id);
         addressToRecordId.set(addr.address, id);
       }
