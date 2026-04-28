@@ -496,6 +496,7 @@ export interface CustodySegment {
   attachmentIds?: number[];   // Links to attachments (receipts, etc.)
   // Narrative generation
   narrative?: string;         // Human-readable custody timeline
+  lineageTruncated?: boolean; // Whether lineage data was capped during build
   // Owner/wallet metadata (inherited from records)
   owner?: string;
   walletName?: string;

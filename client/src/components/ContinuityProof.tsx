@@ -26,6 +26,7 @@ import {
   Wallet,
   Coins,
   AlertCircle,
+  AlertTriangle,
   GitBranch,
   MapPin,
   XCircle
@@ -55,6 +56,7 @@ export function ContinuityProof({ selectedAddress, onAddressSelect }: Continuity
   const abortControllerRef = useRef<AbortController | null>(null);
   const [segments, setSegments] = useState<CustodySegment[]>([]);
   const [lineage, setLineage] = useState<UtxoLineage[]>([]);
+  const [lineageTruncated, setLineageTruncated] = useState(false);
   const [expandedSegments, setExpandedSegments] = useState<Set<string>>(new Set());
   const [stats, setStats] = useState<{
     lineageCount: number;
@@ -84,8 +86,9 @@ export function ContinuityProof({ selectedAddress, onAddressSelect }: Continuity
     const addressSegments = await getSegmentsForAddress(address);
     setSegments(addressSegments);
     
-    const addressLineage = await getLineageChainForAddress(address, 20, 2000);
-    setLineage(addressLineage);
+    const result = await getLineageChainForAddress(address, 20, 2000);
+    setLineage(result.chain);
+    setLineageTruncated(result.truncated);
   };
   
   const handleCancelBuild = useCallback(() => {
@@ -265,10 +268,23 @@ export function ContinuityProof({ selectedAddress, onAddressSelect }: Continuity
                     <ChevronRight className="h-4 w-4 text-muted-foreground" />
                   )}
                   <div>
-                    <CardTitle className="text-base flex items-center gap-2">
+                    <CardTitle className="text-base flex items-center gap-2 flex-wrap">
                       <Coins className="h-4 w-4 text-primary" />
                       {formatBtc(segment.originAmount)} BTC
                       {getStatusBadge(segment.status)}
+                      {segment.lineageTruncated && (
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Badge variant="outline" className="bg-yellow-500/10 text-yellow-700 dark:text-yellow-400 border-yellow-500/20" data-testid={`badge-truncated-${segment.segmentId}`}>
+                              <AlertTriangle className="h-3 w-3 mr-1" />
+                              Partial
+                            </Badge>
+                          </TooltipTrigger>
+                          <TooltipContent>
+                            <p>Custody trail may be incomplete — lineage data was truncated due to traversal limits.</p>
+                          </TooltipContent>
+                        </Tooltip>
+                      )}
                     </CardTitle>
                     <CardDescription className="mt-1">
                       {segment.narrative || `Custody from ${format(segment.originDate, 'MMM d, yyyy')}`}
@@ -534,6 +550,15 @@ export function ContinuityProof({ selectedAddress, onAddressSelect }: Continuity
             <Separator />
             <div className="space-y-3">
               <h3 className="text-sm font-medium">Lineage Chain ({lineage.length} links)</h3>
+              {lineageTruncated && (
+                <Alert variant="default" data-testid="alert-lineage-truncated">
+                  <AlertTriangle className="h-4 w-4" />
+                  <AlertTitle>Results Truncated</AlertTitle>
+                  <AlertDescription>
+                    Showing first {lineage.length.toLocaleString()} of many results. The full lineage chain exceeds traversal limits.
+                  </AlertDescription>
+                </Alert>
+              )}
               <ScrollArea className="max-h-48">
                 <div className="space-y-2">
                   {lineage.map((link, idx) => (

@@ -208,16 +208,21 @@ export async function buildAllLineage(
   return { processed, created };
 }
 
-// Get lineage chain for an address (traces back to origin)
+export interface LineageChainResult {
+  chain: UtxoLineage[];
+  truncated: boolean;
+}
+
 export async function getLineageChainForAddress(
   address: string,
   maxDepth: number = 10,
   maxResults: number = 5000
-): Promise<UtxoLineage[]> {
+): Promise<LineageChainResult> {
   const chain: UtxoLineage[] = [];
   const visited = new Set<string>();
   const queue: string[] = [address];
   let depth = 0;
+  let truncated = false;
   
   while (queue.length > 0 && depth < maxDepth && chain.length < maxResults) {
     const currentAddress = queue.shift()!;
@@ -228,37 +233,50 @@ export async function getLineageChainForAddress(
     const incoming = await db.utxoLineage
       .where('createdAddress')
       .equals(currentAddress)
-      .limit(remaining)
+      .limit(remaining + 1)
       .toArray();
     
+    if (incoming.length > remaining) {
+      truncated = true;
+    }
+
     for (const lineage of incoming) {
+      if (chain.length >= maxResults) {
+        truncated = true;
+        break;
+      }
       chain.push(lineage);
       
       if (lineage.spentOwned && !visited.has(lineage.spentAddress)) {
         queue.push(lineage.spentAddress);
       }
-      
-      if (chain.length >= maxResults) break;
     }
     
     depth++;
   }
+
+  if (!truncated && chain.length >= maxResults && queue.length > 0) {
+    truncated = true;
+  }
+  if (!truncated && queue.length > 0 && depth >= maxDepth) {
+    truncated = true;
+  }
   
   chain.sort((a, b) => a.blockTime - b.blockTime);
   
-  return chain;
+  return { chain, truncated };
 }
 
-// Get lineage chain forward (traces where funds went)
 export async function getLineageChainForward(
   address: string,
   maxDepth: number = 10,
   maxResults: number = 5000
-): Promise<UtxoLineage[]> {
+): Promise<LineageChainResult> {
   const chain: UtxoLineage[] = [];
   const visited = new Set<string>();
   const queue: string[] = [address];
   let depth = 0;
+  let truncated = false;
   
   while (queue.length > 0 && depth < maxDepth && chain.length < maxResults) {
     const currentAddress = queue.shift()!;
@@ -269,25 +287,38 @@ export async function getLineageChainForward(
     const outgoing = await db.utxoLineage
       .where('spentAddress')
       .equals(currentAddress)
-      .limit(remaining)
+      .limit(remaining + 1)
       .toArray();
     
+    if (outgoing.length > remaining) {
+      truncated = true;
+    }
+
     for (const lineage of outgoing) {
+      if (chain.length >= maxResults) {
+        truncated = true;
+        break;
+      }
       chain.push(lineage);
       
       if (lineage.createdOwned && !visited.has(lineage.createdAddress)) {
         queue.push(lineage.createdAddress);
       }
-      
-      if (chain.length >= maxResults) break;
     }
     
     depth++;
   }
+
+  if (!truncated && chain.length >= maxResults && queue.length > 0) {
+    truncated = true;
+  }
+  if (!truncated && queue.length > 0 && depth >= maxDepth) {
+    truncated = true;
+  }
   
   chain.sort((a, b) => a.blockTime - b.blockTime);
   
-  return chain;
+  return { chain, truncated };
 }
 
 // Build or update a custody segment from lineage data
@@ -317,8 +348,7 @@ export async function buildCustodySegment(
   // Get origin record for metadata
   const originRecord = await getRecordForAddress(originAddress);
   
-  // Get the lineage chain forward to trace custody
-  const forwardChain = await getLineageChainForward(originAddress, 50, 5000);
+  const { chain: forwardChain, truncated: forwardTruncated } = await getLineageChainForward(originAddress, 50, 5000);
   
   // Find the current state
   let currentAddress = originAddress;
@@ -364,7 +394,11 @@ export async function buildCustodySegment(
     }
   }
   
-  // Generate narrative
+  let narrativeSuffix = '';
+  if (forwardTruncated) {
+    narrativeSuffix = ' (lineage data truncated — custody trail may be incomplete)';
+  }
+
   const narrative = generateNarrative(
     originTx.blockTime,
     originAmount,
@@ -372,7 +406,7 @@ export async function buildCustodySegment(
     status,
     originRecord?.acquisitionMethod,
     currentAmount
-  );
+  ) + narrativeSuffix;
   
   const now = Date.now();
   const segment: CustodySegment = {
@@ -393,6 +427,7 @@ export async function buildCustodySegment(
     hopCount,
     evidenceTxids,
     narrative,
+    lineageTruncated: forwardTruncated || undefined,
     owner: originRecord?.owner,
     walletName: originRecord?.walletName,
     seedName: originRecord?.seedName,
