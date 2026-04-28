@@ -1,0 +1,129 @@
+// @vitest-environment jsdom
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { renderHook, act } from "@testing-library/react";
+
+let mockQueryReturn: unknown = undefined;
+vi.mock("dexie-react-hooks", () => ({
+  useLiveQuery: (fn: () => unknown) => mockQueryReturn,
+}));
+
+vi.mock("@/lib/database", () => ({
+  db: {
+    nodeSettings: {
+      get: vi.fn(() => Promise.resolve(undefined)),
+      update: vi.fn(),
+      put: vi.fn(),
+    },
+  },
+  DEFAULT_TRUSTED_LOCAL_HOSTS: ["127.0.0.1", "localhost"],
+}));
+
+import { useNodeSettings, getDefaultNodeSettings } from "./use-node-settings";
+
+beforeEach(() => {
+  vi.useFakeTimers();
+  mockQueryReturn = undefined;
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+describe("useNodeSettings", () => {
+  it("returns default settings when query returns undefined", () => {
+    mockQueryReturn = undefined;
+    const { result } = renderHook(() => useNodeSettings());
+    expect(result.current.nodeSettings.providerType).toBe("mempool-space");
+    expect(result.current.nodeSettings.useTor).toBe(false);
+    expect(result.current.nodeSettings.network).toBe("mainnet");
+    expect(result.current.nodeSettings.allowLocalNetwork).toBe(false);
+  });
+
+  it("isLoading is true when settings are undefined and timeout has not elapsed", () => {
+    mockQueryReturn = undefined;
+    const { result } = renderHook(() => useNodeSettings());
+    expect(result.current.isLoading).toBe(true);
+  });
+
+  it("isLoading becomes false after timeout when settings remain undefined", () => {
+    mockQueryReturn = undefined;
+    const { result } = renderHook(() => useNodeSettings());
+
+    act(() => {
+      vi.advanceTimersByTime(2000);
+    });
+
+    expect(result.current.isLoading).toBe(false);
+  });
+
+  it("merges loaded settings with defaults", () => {
+    mockQueryReturn = {
+      id: "default",
+      providerType: "custom",
+      useTor: true,
+      requestTimeout: 60000,
+      network: "testnet",
+    };
+    const { result } = renderHook(() => useNodeSettings());
+    expect(result.current.nodeSettings.providerType).toBe("custom");
+    expect(result.current.nodeSettings.useTor).toBe(true);
+    expect(result.current.nodeSettings.requestTimeout).toBe(60000);
+    expect(result.current.nodeSettings.network).toBe("testnet");
+    expect(result.current.nodeSettings.useElectrum).toBe(false);
+  });
+
+  it("defaults allowLocalNetwork to false for existing users without the field", () => {
+    mockQueryReturn = {
+      id: "default",
+      providerType: "mempool-space",
+      useTor: false,
+      requestTimeout: 30000,
+      network: "mainnet",
+    };
+    const { result } = renderHook(() => useNodeSettings());
+    expect(result.current.nodeSettings.allowLocalNetwork).toBe(false);
+  });
+
+  it("defaults trustedLocalHosts when not present in saved settings", () => {
+    mockQueryReturn = {
+      id: "default",
+      providerType: "mempool-space",
+      useTor: false,
+      requestTimeout: 30000,
+      network: "mainnet",
+    };
+    const { result } = renderHook(() => useNodeSettings());
+    expect(result.current.nodeSettings.trustedLocalHosts).toEqual(["127.0.0.1", "localhost"]);
+  });
+
+  it("isLoading is false when settings are loaded", () => {
+    mockQueryReturn = { id: "default", providerType: "mempool-space" };
+    const { result } = renderHook(() => useNodeSettings());
+    expect(result.current.isLoading).toBe(false);
+  });
+
+  it("exposes updateSettings, resetToDefaults, and setConnectionStatus functions", () => {
+    mockQueryReturn = { id: "default", providerType: "mempool-space" };
+    const { result } = renderHook(() => useNodeSettings());
+    expect(typeof result.current.updateSettings).toBe("function");
+    expect(typeof result.current.resetToDefaults).toBe("function");
+    expect(typeof result.current.setConnectionStatus).toBe("function");
+  });
+});
+
+describe("getDefaultNodeSettings", () => {
+  it("returns a copy of default settings", () => {
+    const defaults = getDefaultNodeSettings();
+    expect(defaults.providerType).toBe("mempool-space");
+    expect(defaults.useTor).toBe(false);
+    expect(defaults.network).toBe("mainnet");
+    expect(defaults.allowLocalNetwork).toBe(false);
+  });
+
+  it("returns a new object each time", () => {
+    const a = getDefaultNodeSettings();
+    const b = getDefaultNodeSettings();
+    expect(a).not.toBe(b);
+    expect(a).toEqual(b);
+  });
+});
