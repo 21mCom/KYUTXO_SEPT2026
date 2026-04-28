@@ -593,9 +593,11 @@ export default function SettingsPage() {
           }
           
           // Create a new record object with required fields
+          const restoredInputString = recordData.inputString || "";
           const newRecord = {
             type: recordData.type || "address",
-            inputString: recordData.inputString || "",
+            inputString: restoredInputString,
+            inputStringLower: restoredInputString.toLowerCase(),
             label: recordData.label || "Restored Record",
             notes: recordData.notes,
             amount: recordData.amount,

@@ -222,6 +222,7 @@ export async function seedTestData(options: { clearExisting?: boolean } = {}): P
         const record: Record = {
           type: 'address',
           inputString: addr.address,
+          inputStringLower: addr.address.toLowerCase(),
           label: addr.label,
           notes: addr.notes,
           amount: addr.amount,

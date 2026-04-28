@@ -79,6 +79,7 @@ export async function createRecord(
   const record: Record = {
     ...data,
     addressImportance,
+    inputStringLower: data.inputString ? data.inputString.toLowerCase() : '',
     createdAt: now,
     updatedAt: now,
   };
@@ -105,12 +106,16 @@ export async function updateRecord(
   const existing = await db.records.get(id);
   if (!existing) throw new Error('Record not found');
 
-  const updated: Record = {
+  const merged = {
     ...existing,
     ...updates,
     id,
     updatedAt: Date.now(),
   };
+  if (updates.inputString !== undefined) {
+    merged.inputStringLower = updates.inputString ? updates.inputString.toLowerCase() : '';
+  }
+  const updated: Record = merged;
 
   syncRecordVocabulary(updates).catch((err) => {
     console.warn('[updateRecord] Vocabulary sync failed:', err);
@@ -250,12 +255,16 @@ export async function bulkUpdateRecords(
       continue;
     }
     
-    const updated: Record = {
+    const merged = {
       ...existing,
       ...changes,
       id,
       updatedAt: now,
     };
+    if (changes.inputString !== undefined) {
+      merged.inputStringLower = changes.inputString ? changes.inputString.toLowerCase() : '';
+    }
+    const updated: Record = merged;
     
     recordsToSave.push(updated);
     allChanges.push(changes);
@@ -329,7 +338,7 @@ export async function findRecordByInputString(inputString: string): Promise<Reco
   const exactMatch = await db.records.where('inputString').equals(trimmed).first();
   if (exactMatch) return exactMatch;
 
-  return await db.records.where('inputString').equalsIgnoreCase(trimmed).first();
+  return await db.records.where('inputStringLower').equals(trimmed.toLowerCase()).first();
 }
 
 export async function createRecordOrigin(

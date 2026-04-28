@@ -46,6 +46,44 @@ export class KYUTXODatabase extends Dexie {
   constructor() {
     super('KYUTXODatabase');
     
+    this.version(30).stores({
+      records: '++id, type, inputString, inputStringLower, label, owner, walletName, seedName, walletSoftware, *tags, *categories, createdAt, updatedAt, chainType, syncDepth, addressImportance, [type+addressImportance], [addressImportance+id], [type+id], [owner+id], [walletName+id], flowType, discoveredFromRecordId',
+      attachments: '++id, recordId, createdAt',
+      tags: '++id, name, createdAt',
+      categories: '++id, name, createdAt',
+      owners: '++id, name, createdAt',
+      walletNames: '++id, name, createdAt',
+      seedNames: '++id, name, createdAt',
+      walletSoftware: '++id, name, createdAt',
+      recordOrigins: '++id, recordId, originType, createdAt',
+      customFields: '++id, slug, enabled, createdAt',
+      settings: 'id',
+      priceData: '++id, [date+currency+asset], date, asset, currency, source, importedAt',
+      blockchainTransactions: '++id, &txid, blockHeight, blockTime, syncedAt, hasOpReturn',
+      transactionParticipants: '++id, [txid+role], txid, role, address, recordId, [prevTxid+prevVout]',
+      addressSyncState: '++id, &address, recordId, lastSyncedAt',
+      nodeSettings: 'id',
+      derivationTemplates: '++id, fingerprint, scriptType, owner, walletName, seedName, createdAt',
+      utxoLineage: '++id, [spentTxid+spentVout], [createdTxid+createdVout], consumingTxid, spentAddress, createdAddress, segmentId, spentOwned, createdOwned, isChange, blockTime',
+      custodySegments: '++id, &segmentId, [originTxid+originVout], originAddress, currentAddress, status, parentSegmentId, owner, walletName, originDate',
+      lineageSnapshots: '++id, &snapshotId, targetType, targetAddress, targetSegmentId, generatedAt, disclosureLevel',
+      evidence: '++id, documentType, originalDate, *tags, importance, createdAt, updatedAt',
+      evidenceAttachments: '++id, evidenceId, createdAt',
+      pausedSyncState: 'id',
+      skippedAddresses: '++id, address, reason, syncRunTimestamp, dismissed, createdAt',
+      addressBlacklist: '++id, &address, addedAt'
+    }).upgrade(async tx => {
+      console.log('[v30 migration] Populating inputStringLower for indexed case-insensitive lookups...');
+      let count = 0;
+      await tx.table('records').toCollection().modify((record: globalThis.Record<string, unknown>) => {
+        if (typeof record.inputString === 'string' && record.inputString) {
+          record.inputStringLower = (record.inputString as string).toLowerCase();
+          count++;
+        }
+      });
+      console.log(`[v30 migration] Set inputStringLower on ${count} records`);
+    });
+
     this.version(29).stores({
       records: '++id, type, inputString, label, owner, walletName, seedName, walletSoftware, *tags, *categories, createdAt, updatedAt, chainType, syncDepth, addressImportance, [type+addressImportance], [addressImportance+id], [type+id], [owner+id], [walletName+id], flowType, discoveredFromRecordId',
       attachments: '++id, recordId, createdAt',

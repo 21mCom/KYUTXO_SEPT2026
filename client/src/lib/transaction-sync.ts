@@ -1667,6 +1667,7 @@ export class TransactionSyncService {
     const newRecordId = await db.records.add({
       type: 'address',
       inputString: address,
+      inputStringLower: address.toLowerCase(),
       label: '',
       tags: [],
       categories: [],
@@ -1763,6 +1764,7 @@ export class TransactionSyncService {
     const newRecordId = await db.records.add({
       type: 'transaction',
       inputString: txid,
+      inputStringLower: txid.toLowerCase(),
       label: '',
       tags: [],
       categories: [],

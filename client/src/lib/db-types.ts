@@ -105,6 +105,7 @@ export interface Record {
   id?: number;
   type: 'address' | 'transaction' | 'other';
   inputString: string;
+  inputStringLower?: string;
   label: string;
   notes?: string;
   amount?: number;
