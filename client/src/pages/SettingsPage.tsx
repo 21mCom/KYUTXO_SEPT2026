@@ -40,6 +40,14 @@ import {
 } from "@/components/ui/alert-dialog";
 import { useAuth } from "@/contexts/AuthContext";
 import { db, type Evidence } from "@/lib/database";
+import {
+  restoreTag,
+  restoreCategory,
+  restoreOwner,
+  restoreWalletName,
+  restoreSeedName,
+  restoreWalletSoftware,
+} from "@/lib/data/vocabulary-crud";
 import { bulkCreateRecords, clearAllRecords, type CreateRecordData } from "@/lib/data/record-crud";
 import { clearTransactions, clearParticipants } from "@/lib/data/transaction-crud";
 import { addUtxoLineage, addCustodySegment, clearUtxoLineage, clearCustodySegments } from "@/lib/data/lineage-crud";
@@ -646,7 +654,7 @@ export default function SettingsPage() {
             createdAt: tagData.createdAt || Date.now(),
           };
           
-          await db.tags.add(newTag as any);
+          await restoreTag(newTag);
           tagsAdded++;
         }
       }
@@ -667,7 +675,7 @@ export default function SettingsPage() {
             createdAt: catData.createdAt || Date.now(),
           };
           
-          await db.categories.add(newCategory as any);
+          await restoreCategory(newCategory);
           categoriesAdded++;
         }
       }
@@ -837,7 +845,7 @@ export default function SettingsPage() {
             createdAt: ownerData.createdAt || Date.now(),
           };
           
-          await db.owners.add(newOwner as any);
+          await restoreOwner(newOwner);
           vocabularyAdded++;
         }
       }
@@ -857,7 +865,7 @@ export default function SettingsPage() {
             createdAt: wnData.createdAt || Date.now(),
           };
           
-          await db.walletNames.add(newWalletName as any);
+          await restoreWalletName(newWalletName);
           vocabularyAdded++;
         }
       }
@@ -877,7 +885,7 @@ export default function SettingsPage() {
             createdAt: snData.createdAt || Date.now(),
           };
           
-          await db.seedNames.add(newSeedName as any);
+          await restoreSeedName(newSeedName);
           vocabularyAdded++;
         }
       }
@@ -897,7 +905,7 @@ export default function SettingsPage() {
             createdAt: wsData.createdAt || Date.now(),
           };
           
-          await db.walletSoftware.add(newWalletSoftware as any);
+          await restoreWalletSoftware(newWalletSoftware);
           vocabularyAdded++;
         }
       }

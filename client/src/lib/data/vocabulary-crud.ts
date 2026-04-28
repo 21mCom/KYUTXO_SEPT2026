@@ -427,3 +427,27 @@ export async function ensureWalletSoftware(name: string): Promise<void> {
     if (!isExpectedVocabularyError(err)) throw err;
   }
 }
+
+export async function restoreTag(data: { name: string; color?: string; createdAt: number }): Promise<number> {
+  return await db.tags.add(data) as number;
+}
+
+export async function restoreCategory(data: { name: string; createdAt: number }): Promise<number> {
+  return await db.categories.add(data) as number;
+}
+
+export async function restoreOwner(data: { name: string; createdAt: number }): Promise<number> {
+  return await db.owners.add(data) as number;
+}
+
+export async function restoreWalletName(data: { name: string; createdAt: number }): Promise<number> {
+  return await db.walletNames.add(data) as number;
+}
+
+export async function restoreSeedName(data: { name: string; createdAt: number }): Promise<number> {
+  return await db.seedNames.add(data) as number;
+}
+
+export async function restoreWalletSoftware(data: { name: string; createdAt: number }): Promise<number> {
+  return await db.walletSoftware.add(data) as number;
+}
