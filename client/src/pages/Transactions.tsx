@@ -36,8 +36,10 @@ import {
   ChevronsDownUp,
   ChevronsUpDown,
   Loader2,
-  AlertTriangle
+  AlertTriangle,
+  Info
 } from "lucide-react";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { getParticipantsByTxids } from "@/lib/dataFacade";
 import { ClickableAddress } from "@/components/ClickableAddress";
 
@@ -607,7 +609,25 @@ export default function Transactions() {
           <CardHeader className="pb-2">
             <CardDescription>Total Transactions</CardDescription>
             <CardTitle className="text-2xl" data-testid="text-total-transactions">
-              {stats.txCount}
+              {scanResult.limitReached ? (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="inline-flex items-center gap-1 cursor-help" tabIndex={0} data-testid="indicator-approx-count">
+                      <span>~{stats.txCount.toLocaleString()}</span>
+                      <Info className="h-4 w-4 text-yellow-600 dark:text-yellow-400" />
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom" className="max-w-xs">
+                    <p>
+                      Found {scanResult.totalMatchCount.toLocaleString()} total matches, but only the
+                      first {navigableCount.toLocaleString()} are navigable due to memory limits.
+                      Try narrowing your search filters.
+                    </p>
+                  </TooltipContent>
+                </Tooltip>
+              ) : (
+                stats.txCount.toLocaleString()
+              )}
             </CardTitle>
           </CardHeader>
         </Card>
