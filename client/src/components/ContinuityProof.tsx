@@ -59,7 +59,36 @@ interface ContinuityProofProps {
 }
 
 const LAST_BUILD_DURATION_KEY = 'kyutxo_last_build_duration_seconds';
+const LAST_BUILD_META_KEY = 'kyutxo_last_build_meta';
 const CANCEL_CONFIRM_THRESHOLD = 75;
+
+interface LastBuildMeta {
+  durationSeconds: number;
+  transactionCount: number;
+}
+
+function loadLastBuildMeta(): LastBuildMeta | null {
+  try {
+    const stored = localStorage.getItem(LAST_BUILD_META_KEY);
+    if (stored) {
+      const parsed = JSON.parse(stored);
+      if (parsed && typeof parsed.durationSeconds === 'number' && parsed.durationSeconds > 0) {
+        return {
+          durationSeconds: parsed.durationSeconds,
+          transactionCount: typeof parsed.transactionCount === 'number' ? parsed.transactionCount : 0,
+        };
+      }
+    }
+    const oldStored = localStorage.getItem(LAST_BUILD_DURATION_KEY);
+    if (oldStored !== null) {
+      const parsed = parseInt(oldStored, 10);
+      if (Number.isFinite(parsed) && parsed > 0) {
+        return { durationSeconds: parsed, transactionCount: 0 };
+      }
+    }
+  } catch {}
+  return null;
+}
 
 export function ContinuityProof({ selectedAddress, onAddressSelect }: ContinuityProofProps) {
   const { toast } = useToast();
@@ -77,20 +106,12 @@ export function ContinuityProof({ selectedAddress, onAddressSelect }: Continuity
     segmentCount: number;
     lastBuilt?: number;
   }>({ lineageCount: 0, segmentCount: 0 });
+  const [currentTransactionCount, setCurrentTransactionCount] = useState(0);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const buildStartTimeRef = useRef<number>(0);
   const phaseStartTimeRef = useRef<number>(0);
   const phaseStartCountRef = useRef<number>(0);
-  const [lastBuildDurationSeconds, setLastBuildDurationSeconds] = useState<number | null>(() => {
-    try {
-      const stored = localStorage.getItem(LAST_BUILD_DURATION_KEY);
-      if (stored !== null) {
-        const parsed = parseInt(stored, 10);
-        return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
-      }
-    } catch {}
-    return null;
-  });
+  const [lastBuildMeta, setLastBuildMeta] = useState<LastBuildMeta | null>(loadLastBuildMeta);
 
   useEffect(() => {
     if (!isBuilding) {
@@ -145,7 +166,9 @@ export function ContinuityProof({ selectedAddress, onAddressSelect }: Continuity
   const loadStats = useCallback(async () => {
     const lineageCount = await db.utxoLineage.count();
     const segmentCount = await db.custodySegments.count();
+    const txCount = await db.blockchainTransactions.count();
     setStats({ lineageCount, segmentCount });
+    setCurrentTransactionCount(txCount);
   }, []);
   
   useEffect(() => {
@@ -243,10 +266,15 @@ export function ContinuityProof({ selectedAddress, onAddressSelect }: Continuity
 
       const totalSeconds = Math.round((Date.now() - buildStartTimeRef.current) / 1000);
       if (totalSeconds > 0) {
+        const txCount = await db.blockchainTransactions.count();
+        const meta: LastBuildMeta = {
+          durationSeconds: totalSeconds,
+          transactionCount: txCount,
+        };
         try {
-          localStorage.setItem(LAST_BUILD_DURATION_KEY, String(totalSeconds));
+          localStorage.setItem(LAST_BUILD_META_KEY, JSON.stringify(meta));
         } catch {}
-        setLastBuildDurationSeconds(totalSeconds);
+        setLastBuildMeta(meta);
       }
       
     } catch (error) {
@@ -579,10 +607,22 @@ export function ContinuityProof({ selectedAddress, onAddressSelect }: Continuity
                 </>
               )}
             </Button>
-            {!isBuilding && lastBuildDurationSeconds !== null && (
+            {!isBuilding && lastBuildMeta !== null && (
               <div className="text-xs text-muted-foreground mt-1.5" data-testid="text-last-build-duration">
                 <Clock className="h-3 w-3 inline-block mr-1 align-text-bottom" />
-                Last build: {formatDuration(lastBuildDurationSeconds)}
+                {lastBuildMeta.transactionCount > 0 ? (
+                  currentTransactionCount > lastBuildMeta.transactionCount * 1.2 ? (
+                    <span data-testid="text-build-size-warning">
+                      Last build: {formatDuration(lastBuildMeta.durationSeconds)} with {lastBuildMeta.transactionCount.toLocaleString()} transactions {'\u2014'} now {currentTransactionCount.toLocaleString()} transactions, may take longer
+                    </span>
+                  ) : (
+                    <span>
+                      Last build: {formatDuration(lastBuildMeta.durationSeconds)} with {lastBuildMeta.transactionCount.toLocaleString()} transactions
+                    </span>
+                  )
+                ) : (
+                  <span>Last build: {formatDuration(lastBuildMeta.durationSeconds)}</span>
+                )}
               </div>
             )}
           </div>
