@@ -408,6 +408,18 @@ export async function deleteRecord(id: number, options?: DeleteRecordOptions): P
   }
 }
 
+export interface ClearAllRecordsOptions {
+  skipNotification?: boolean;
+}
+
+export async function clearAllRecords(options?: ClearAllRecordsOptions): Promise<void> {
+  await db.records.clear();
+
+  if (!options?.skipNotification) {
+    notifyDbChange('records');
+  }
+}
+
 export async function findRecordByInputString(inputString: string): Promise<Record | undefined> {
   if (!inputString) return undefined;
 

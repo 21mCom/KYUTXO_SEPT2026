@@ -1,6 +1,7 @@
 import { db } from './database';
 import { createRecord } from './dataFacade';
 import { getParticipantsByTxid } from './dataFacade';
+import { clearAllRecords } from './data/record-crud';
 
 /**
  * Test data seeding utility for demonstrating KYUTXO features.
@@ -178,7 +179,7 @@ export async function seedTestData(options: { clearExisting?: boolean } = {}): P
       db.utxoLineage,
       db.custodySegments
     ], async () => {
-      await db.records.clear();
+      await clearAllRecords({ skipNotification: true });
       await db.owners.clear();
       await db.walletNames.clear();
       await db.seedNames.clear();
@@ -549,7 +550,7 @@ export async function clearTestData(): Promise<void> {
     db.custodySegments,
     db.lineageSnapshots
   ], async () => {
-    await db.records.clear();
+    await clearAllRecords({ skipNotification: true });
     await db.owners.clear();
     await db.walletNames.clear();
     await db.seedNames.clear();

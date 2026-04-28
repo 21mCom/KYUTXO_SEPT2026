@@ -29,6 +29,9 @@ KYUTXO features an offline-first architecture built for cross-platform desktop d
 *   **Evidence Storage:** General-purpose document storage for proof-of-ownership and historical records.
 *   **Vault Management:** Dedicated UI for viewing and managing multisig vaults.
 
+## Data Layer Conventions
+*   **Record CRUD Guard:** All write operations on `db.records` (add, put, delete, bulkAdd, bulkPut, bulkDelete, modify, clear) must go through `client/src/lib/data/record-crud.ts` (re-exported via `dataFacade.ts`). Direct `db.records` writes outside this module are prohibited. Run `node scripts/check-record-writes.js` to verify compliance. Database migrations in `database.ts` that use `tx.table('records')` are exempt.
+
 ## External Dependencies
 *   **Local File System:** Used for storing attachments with SHA-256 hashed identifiers and opaque filenames.
 *   **Google Fonts CDN:** For the Inter font family.

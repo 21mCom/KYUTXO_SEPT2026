@@ -40,7 +40,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { useAuth } from "@/contexts/AuthContext";
 import { db } from "@/lib/database";
-import { bulkCreateRecords, type CreateRecordData } from "@/lib/data/record-crud";
+import { bulkCreateRecords, clearAllRecords, type CreateRecordData } from "@/lib/data/record-crud";
 import { deriveKey, decrypt, base64ToBuffer, verifyPassword } from "@/lib/crypto";
 import { getVaultSettings, vaultDb } from "@/lib/vault";
 import { generateSalt, hashPassword, bufferToBase64 } from "@/lib/crypto";
@@ -219,8 +219,7 @@ export default function SettingsPage() {
         return;
       }
 
-      // Clear all tables
-      await db.records.clear();
+      await clearAllRecords({ skipNotification: true });
       await db.tags.clear();
       await db.categories.clear();
       await db.attachments.clear();
@@ -515,12 +514,11 @@ export default function SettingsPage() {
         custodySegments = [],
       } = data;
 
-      // If replace mode, clear existing data first
       if (restoreMode === "replace") {
         setRestoreMessage("Clearing existing data...");
         setRestoreProgress(40);
         
-        await db.records.clear();
+        await clearAllRecords({ skipNotification: true });
         await db.tags.clear();
         await db.categories.clear();
         await db.attachments.clear();
