@@ -48,6 +48,8 @@ interface ContinuityProofProps {
   onAddressSelect?: (address: string) => void;
 }
 
+const LAST_BUILD_DURATION_KEY = 'kyutxo_last_build_duration_seconds';
+
 export function ContinuityProof({ selectedAddress, onAddressSelect }: ContinuityProofProps) {
   const { toast } = useToast();
   
@@ -67,6 +69,16 @@ export function ContinuityProof({ selectedAddress, onAddressSelect }: Continuity
   const buildStartTimeRef = useRef<number>(0);
   const phaseStartTimeRef = useRef<number>(0);
   const phaseStartCountRef = useRef<number>(0);
+  const [lastBuildDurationSeconds, setLastBuildDurationSeconds] = useState<number | null>(() => {
+    try {
+      const stored = localStorage.getItem(LAST_BUILD_DURATION_KEY);
+      if (stored !== null) {
+        const parsed = parseInt(stored, 10);
+        return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+      }
+    } catch {}
+    return null;
+  });
 
   useEffect(() => {
     if (!isBuilding) {
@@ -185,6 +197,14 @@ export function ContinuityProof({ selectedAddress, onAddressSelect }: Continuity
         title: "Custody Segments Compiled",
         description: `Created ${segmentResult.created} custody segments from ${segmentResult.processed} origins.`,
       });
+
+      const totalSeconds = Math.round((Date.now() - buildStartTimeRef.current) / 1000);
+      if (totalSeconds > 0) {
+        try {
+          localStorage.setItem(LAST_BUILD_DURATION_KEY, String(totalSeconds));
+        } catch {}
+        setLastBuildDurationSeconds(totalSeconds);
+      }
       
     } catch (error) {
       toast({
@@ -516,6 +536,12 @@ export function ContinuityProof({ selectedAddress, onAddressSelect }: Continuity
                 </>
               )}
             </Button>
+            {!isBuilding && lastBuildDurationSeconds !== null && (
+              <div className="text-xs text-muted-foreground mt-1.5" data-testid="text-last-build-duration">
+                <Clock className="h-3 w-3 inline-block mr-1 align-text-bottom" />
+                Last build: {formatDuration(lastBuildDurationSeconds)}
+              </div>
+            )}
           </div>
         </div>
         
