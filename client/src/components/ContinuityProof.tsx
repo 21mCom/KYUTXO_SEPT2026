@@ -63,6 +63,46 @@ export function ContinuityProof({ selectedAddress, onAddressSelect }: Continuity
     segmentCount: number;
     lastBuilt?: number;
   }>({ lineageCount: 0, segmentCount: 0 });
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const buildStartTimeRef = useRef<number>(0);
+  const phaseStartTimeRef = useRef<number>(0);
+  const phaseStartCountRef = useRef<number>(0);
+
+  useEffect(() => {
+    if (!isBuilding) {
+      setElapsedSeconds(0);
+      return;
+    }
+    const interval = setInterval(() => {
+      setElapsedSeconds(Math.floor((Date.now() - buildStartTimeRef.current) / 1000));
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [isBuilding]);
+
+  const formatDuration = (totalSeconds: number): string => {
+    if (totalSeconds < 1) return "0s";
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+    const parts: string[] = [];
+    if (hours > 0) parts.push(`${hours}h`);
+    if (minutes > 0) parts.push(`${minutes}m`);
+    if (seconds > 0 || parts.length === 0) parts.push(`${seconds}s`);
+    return parts.join(' ');
+  };
+
+  const getEstimatedRemaining = (): string | null => {
+    const { current, total } = buildProgress;
+    if (current <= 0 || total <= 0 || current >= total) return null;
+    const processed = current - phaseStartCountRef.current;
+    if (processed <= 0) return null;
+    const phaseElapsed = (Date.now() - phaseStartTimeRef.current) / 1000;
+    if (phaseElapsed < 2) return null;
+    const rate = processed / phaseElapsed;
+    const remaining = (total - current) / rate;
+    if (remaining < 1) return null;
+    return formatDuration(Math.ceil(remaining));
+  };
   
   // Load stats on mount
   const loadStats = useCallback(async () => {
@@ -100,6 +140,10 @@ export function ContinuityProof({ selectedAddress, onAddressSelect }: Continuity
   const handleBuildLineage = async () => {
     const controller = new AbortController();
     abortControllerRef.current = controller;
+    const now = Date.now();
+    buildStartTimeRef.current = now;
+    phaseStartTimeRef.current = now;
+    phaseStartCountRef.current = 0;
     setIsBuilding(true);
     setBuildProgress({ current: 0, total: 0, phase: 'Scanning transactions...', step: 1, totalSteps: 2, unit: 'transactions' });
     
@@ -121,6 +165,8 @@ export function ContinuityProof({ selectedAddress, onAddressSelect }: Continuity
         description: `Processed ${lineageResult.processed} transactions, created ${lineageResult.created} lineage links.`,
       });
       
+      phaseStartTimeRef.current = Date.now();
+      phaseStartCountRef.current = 0;
       setBuildProgress({ current: 0, total: 0, phase: 'Scanning origin UTXOs...', step: 2, totalSteps: 2, unit: 'origins' });
       
       const segmentResult = await buildAllCustodySegments((current, total) => {
@@ -501,11 +547,27 @@ export function ContinuityProof({ selectedAddress, onAddressSelect }: Continuity
               value={buildProgress.total > 0 ? (buildProgress.current / buildProgress.total) * 100 : undefined}
               data-testid="progress-lineage-build"
             />
-            {buildProgress.total > 0 && (
-              <div className="text-xs text-muted-foreground text-right" data-testid="text-build-percent">
-                {Math.round((buildProgress.current / buildProgress.total) * 100)}% complete
+            <div className="flex items-center justify-between text-xs text-muted-foreground">
+              <span className="flex items-center gap-1 tabular-nums" data-testid="text-build-elapsed">
+                <Clock className="h-3 w-3" />
+                {formatDuration(elapsedSeconds)} elapsed
+              </span>
+              <div className="flex items-center gap-3">
+                {(() => {
+                  const eta = getEstimatedRemaining();
+                  return eta ? (
+                    <span className="tabular-nums" data-testid="text-build-eta">
+                      ~{eta} remaining
+                    </span>
+                  ) : null;
+                })()}
+                {buildProgress.total > 0 && (
+                  <span data-testid="text-build-percent">
+                    {Math.round((buildProgress.current / buildProgress.total) * 100)}% complete
+                  </span>
+                )}
               </div>
-            )}
+            </div>
           </div>
         )}
         
