@@ -25,6 +25,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Progress } from "@/components/ui/progress";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { format } from "date-fns";
 import { 
   CalendarIcon, Shield, Clock, Coins, 
@@ -521,39 +522,66 @@ export function ContinuityCertificateReport() {
                       ? "Downloading..."
                       : `Download partial (${exportError.partialBundle.summary.totalSegments}/${exportError.partialBundle.requestedSegments})`}
                   </Button>
-                  <Button
-                    size="sm"
-                    onClick={() => exportSelectedCertificates(exportError.format, exportError.partialBundle!)}
-                    disabled={selectedCertificates.size === 0 || isDownloadingPartial}
-                    data-testid="button-resume-export"
-                  >
-                    <ArrowRight className="h-4 w-4 mr-2" />
-                    Resume
-                  </Button>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span tabIndex={isDownloadingPartial ? 0 : undefined}>
+                        <Button
+                          size="sm"
+                          onClick={() => exportSelectedCertificates(exportError.format, exportError.partialBundle!)}
+                          disabled={selectedCertificates.size === 0 || isDownloadingPartial}
+                          data-testid="button-resume-export"
+                        >
+                          <ArrowRight className="h-4 w-4 mr-2" />
+                          Resume
+                        </Button>
+                      </span>
+                    </TooltipTrigger>
+                    {isDownloadingPartial && (
+                      <TooltipContent>Download in progress…</TooltipContent>
+                    )}
+                  </Tooltip>
                 </>
               )}
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => exportSelectedCertificates(exportError.format)}
-                disabled={selectedCertificates.size === 0 || isDownloadingPartial}
-                data-testid="button-retry-export"
-              >
-                <RefreshCw className="h-4 w-4 mr-2" />
-                Retry
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={() => {
-                  setExportError(null);
-                  clearPartialBundle(currentSelectedSegmentIds);
-                }}
-                disabled={isDownloadingPartial}
-                data-testid="button-dismiss-export-error"
-              >
-                <X className="h-4 w-4" />
-              </Button>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span tabIndex={isDownloadingPartial ? 0 : undefined}>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => exportSelectedCertificates(exportError.format)}
+                      disabled={selectedCertificates.size === 0 || isDownloadingPartial}
+                      data-testid="button-retry-export"
+                    >
+                      <RefreshCw className="h-4 w-4 mr-2" />
+                      Retry
+                    </Button>
+                  </span>
+                </TooltipTrigger>
+                {isDownloadingPartial && (
+                  <TooltipContent>Download in progress…</TooltipContent>
+                )}
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span tabIndex={isDownloadingPartial ? 0 : undefined}>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => {
+                        setExportError(null);
+                        clearPartialBundle(currentSelectedSegmentIds);
+                      }}
+                      disabled={isDownloadingPartial}
+                      data-testid="button-dismiss-export-error"
+                    >
+                      <X className="h-4 w-4" />
+                    </Button>
+                  </span>
+                </TooltipTrigger>
+                {isDownloadingPartial && (
+                  <TooltipContent>Download in progress…</TooltipContent>
+                )}
+              </Tooltip>
             </div>
           </div>
           {exportError.partialBundle && (
