@@ -207,6 +207,7 @@ function VirtualizedPreviewList({ records }: { records: Record[] }) {
     getScrollElement: () => parentRef.current,
     estimateSize: () => PREVIEW_ROW_HEIGHT,
     overscan: 20,
+    measureElement: (el) => el.getBoundingClientRect().height,
   });
 
   return (
@@ -230,13 +231,14 @@ function VirtualizedPreviewList({ records }: { records: Record[] }) {
             return (
               <div
                 key={record.id}
+                ref={virtualizer.measureElement}
+                data-index={virtualRow.index}
                 className="absolute left-0 right-0 px-3"
                 style={{
-                  height: `${virtualRow.size}px`,
                   transform: `translateY(${virtualRow.start + 12}px)`,
                 }}
               >
-                <div className="flex items-center gap-3 p-2 bg-background rounded border text-sm h-[36px]">
+                <div className="flex items-center gap-3 p-2 bg-background rounded border text-sm">
                   <Badge variant="outline" className="shrink-0">
                     {record.type}
                   </Badge>
@@ -281,6 +283,7 @@ function VirtualizedConfirmationTable({
     getScrollElement: () => parentRef.current,
     estimateSize: () => CONFIRM_ROW_HEIGHT,
     overscan: 20,
+    measureElement: (el) => el.getBoundingClientRect().height,
   });
 
   return (
@@ -316,9 +319,10 @@ function VirtualizedConfirmationTable({
             return (
               <div
                 key={record.id}
+                ref={virtualizer.measureElement}
+                data-index={virtualRow.index}
                 className={`absolute left-0 right-0 flex w-full text-sm ${idx % 2 === 0 ? 'bg-background' : 'bg-muted/20'}`}
                 style={{
-                  height: `${virtualRow.size}px`,
                   transform: `translateY(${virtualRow.start}px)`,
                 }}
               >
