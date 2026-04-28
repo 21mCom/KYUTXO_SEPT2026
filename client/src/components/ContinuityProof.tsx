@@ -65,6 +65,8 @@ const CANCEL_CONFIRM_THRESHOLD = 75;
 interface LastBuildMeta {
   durationSeconds: number;
   transactionCount: number;
+  avgRate?: number;
+  peakRate?: number;
 }
 
 function loadLastBuildMeta(): LastBuildMeta | null {
@@ -76,6 +78,8 @@ function loadLastBuildMeta(): LastBuildMeta | null {
         return {
           durationSeconds: parsed.durationSeconds,
           transactionCount: typeof parsed.transactionCount === 'number' ? parsed.transactionCount : 0,
+          avgRate: typeof parsed.avgRate === 'number' && parsed.avgRate > 0 ? parsed.avgRate : undefined,
+          peakRate: typeof parsed.peakRate === 'number' && parsed.peakRate > 0 ? parsed.peakRate : undefined,
         };
       }
     }
@@ -111,6 +115,13 @@ export function ContinuityProof({ selectedAddress, onAddressSelect }: Continuity
   const buildStartTimeRef = useRef<number>(0);
   const phaseStartTimeRef = useRef<number>(0);
   const phaseStartCountRef = useRef<number>(0);
+  const rateTrackingRef = useRef({
+    lastSampleTime: 0,
+    lastSampleCount: 0,
+    phasePeakRate: 0,
+    lineageAvgRate: 0,
+    lineagePeakRate: 0,
+  });
   const [lastBuildMeta, setLastBuildMeta] = useState<LastBuildMeta | null>(loadLastBuildMeta);
 
   useEffect(() => {
@@ -161,7 +172,34 @@ export function ContinuityProof({ selectedAddress, onAddressSelect }: Continuity
     if (remaining < 1) return null;
     return formatDuration(Math.ceil(remaining));
   };
-  
+
+  const samplePeakRate = (current: number) => {
+    const tracking = rateTrackingRef.current;
+    const now = Date.now();
+    const elapsed = (now - tracking.lastSampleTime) / 1000;
+    if (elapsed >= 2 && tracking.lastSampleTime > 0) {
+      const delta = current - tracking.lastSampleCount;
+      if (delta > 0) {
+        const rate = delta / elapsed;
+        if (rate > tracking.phasePeakRate) {
+          tracking.phasePeakRate = rate;
+        }
+      }
+      tracking.lastSampleTime = now;
+      tracking.lastSampleCount = current;
+    } else if (tracking.lastSampleTime === 0) {
+      tracking.lastSampleTime = now;
+      tracking.lastSampleCount = current;
+    }
+  };
+
+  const resetPhasePeakTracking = () => {
+    const tracking = rateTrackingRef.current;
+    tracking.lastSampleTime = 0;
+    tracking.lastSampleCount = 0;
+    tracking.phasePeakRate = 0;
+  };
+
   // Load stats on mount
   const loadStats = useCallback(async () => {
     const lineageCount = await db.utxoLineage.count();
@@ -222,14 +260,24 @@ export function ContinuityProof({ selectedAddress, onAddressSelect }: Continuity
     buildStartTimeRef.current = now;
     phaseStartTimeRef.current = now;
     phaseStartCountRef.current = 0;
+    resetPhasePeakTracking();
+    rateTrackingRef.current.lineageAvgRate = 0;
+    rateTrackingRef.current.lineagePeakRate = 0;
     setIsBuilding(true);
     setBuildProgress({ current: 0, total: 0, phase: 'Scanning transactions...', step: 1, totalSteps: 2, unit: 'transactions' });
     
     try {
       const lineageResult = await buildAllLineage((current, total) => {
+        samplePeakRate(current);
         setBuildProgress({ current, total, phase: 'Building UTXO lineage', step: 1, totalSteps: 2, unit: 'transactions' });
       }, controller.signal);
       
+      const lineageElapsed = (Date.now() - phaseStartTimeRef.current) / 1000;
+      const lineageAvg = lineageElapsed > 0 ? lineageResult.processed / lineageElapsed : 0;
+      const lineagePeak = rateTrackingRef.current.phasePeakRate;
+      rateTrackingRef.current.lineageAvgRate = lineageAvg;
+      rateTrackingRef.current.lineagePeakRate = lineagePeak;
+
       if (controller.signal.aborted) {
         toast({
           title: "Build Cancelled",
@@ -243,11 +291,13 @@ export function ContinuityProof({ selectedAddress, onAddressSelect }: Continuity
         description: `Processed ${lineageResult.processed} transactions, created ${lineageResult.created} lineage links.`,
       });
       
+      resetPhasePeakTracking();
       phaseStartTimeRef.current = Date.now();
       phaseStartCountRef.current = 0;
       setBuildProgress({ current: 0, total: 0, phase: 'Scanning origin UTXOs...', step: 2, totalSteps: 2, unit: 'origins' });
       
       const segmentResult = await buildAllCustodySegments((current, total) => {
+        samplePeakRate(current);
         setBuildProgress({ current, total, phase: 'Compiling custody segments', step: 2, totalSteps: 2, unit: 'origins' });
       }, controller.signal);
       
@@ -265,16 +315,31 @@ export function ContinuityProof({ selectedAddress, onAddressSelect }: Continuity
       });
 
       const totalSeconds = Math.round((Date.now() - buildStartTimeRef.current) / 1000);
+      const avgRate = rateTrackingRef.current.lineageAvgRate;
+      const peakRate = rateTrackingRef.current.lineagePeakRate;
+
       if (totalSeconds > 0) {
         const txCount = await db.blockchainTransactions.count();
         const meta: LastBuildMeta = {
           durationSeconds: totalSeconds,
           transactionCount: txCount,
+          avgRate: avgRate > 0 ? Math.round(avgRate * 10) / 10 : undefined,
+          peakRate: peakRate > 0 ? Math.round(peakRate * 10) / 10 : undefined,
         };
         try {
           localStorage.setItem(LAST_BUILD_META_KEY, JSON.stringify(meta));
         } catch {}
         setLastBuildMeta(meta);
+      }
+
+      if (avgRate > 0 || peakRate > 0) {
+        const rateParts: string[] = [];
+        if (avgRate > 0) rateParts.push(`avg: ${formatRate(avgRate)} txns/sec`);
+        if (peakRate > 0) rateParts.push(`peak: ${formatRate(peakRate)} txns/sec`);
+        toast({
+          title: "Build Complete",
+          description: `Finished in ${formatDuration(totalSeconds)}. ${rateParts.join(', ')}.`,
+        });
       }
       
     } catch (error) {
@@ -622,6 +687,13 @@ export function ContinuityProof({ selectedAddress, onAddressSelect }: Continuity
                   )
                 ) : (
                   <span>Last build: {formatDuration(lastBuildMeta.durationSeconds)}</span>
+                )}
+                {(lastBuildMeta.avgRate || lastBuildMeta.peakRate) && (
+                  <span className="block mt-0.5" data-testid="text-last-build-rates">
+                    {lastBuildMeta.avgRate ? `avg: ${formatRate(lastBuildMeta.avgRate)} txns/sec` : ''}
+                    {lastBuildMeta.avgRate && lastBuildMeta.peakRate ? ' · ' : ''}
+                    {lastBuildMeta.peakRate ? `peak: ${formatRate(lastBuildMeta.peakRate)} txns/sec` : ''}
+                  </span>
                 )}
               </div>
             )}
