@@ -11,6 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useVirtualizer } from "@tanstack/react-virtual";
+import { ScrollPositionIndicator } from "@/components/ScrollPositionIndicator";
 import { db } from "@/lib/database";
 import type { Record } from "@/lib/database";
 
@@ -139,6 +140,12 @@ function VirtualizedRecordList({ records }: { records: DiscoveredRecord[] }) {
           </div>
         ))}
       </div>
+      <ScrollPositionIndicator
+        virtualItems={virtualizer.getVirtualItems()}
+        totalCount={records.length}
+        scrollElement={parentRef.current}
+        label="records"
+      />
     </div>
   );
 }

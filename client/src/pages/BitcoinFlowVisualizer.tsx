@@ -28,6 +28,7 @@ import { getParticipantsByAddresses } from "@/lib/dataFacade";
 import { useOwners } from "@/hooks/use-owners";
 import { useWalletNames } from "@/hooks/use-wallet-names";
 import { useTags } from "@/hooks/use-tags";
+import { ScrollPositionIndicator } from "@/components/ScrollPositionIndicator";
 
 interface FilteredAddress {
   address: string;
@@ -231,6 +232,12 @@ function AddressFinderList({ addresses, onSelect, satsToBtcDisplay, formatDate }
             );
           })}
         </div>
+        <ScrollPositionIndicator
+          virtualItems={virtualizer.getVirtualItems()}
+          totalCount={addresses.length}
+          scrollElement={parentRef.current}
+          label="addresses"
+        />
       </div>
     </div>
   );

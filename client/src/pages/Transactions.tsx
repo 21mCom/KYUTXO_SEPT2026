@@ -1,5 +1,6 @@
 import { useState, useMemo, useRef, useEffect } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
+import { ScrollPositionIndicator } from "@/components/ScrollPositionIndicator";
 import { useAsyncMemo, yieldToUI, checkAbort } from "@/hooks/use-async-memo";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { PAGE_DEBOUNCE } from "@/config/debounce";
@@ -455,6 +456,12 @@ function VirtualizedTransactionList({
           );
         })}
       </div>
+      <ScrollPositionIndicator
+        virtualItems={virtualItems}
+        totalCount={transactions.length}
+        scrollElement={parentRef.current}
+        label="transactions"
+      />
     </div>
   );
 }

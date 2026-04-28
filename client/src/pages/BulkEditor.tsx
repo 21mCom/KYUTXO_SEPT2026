@@ -46,6 +46,7 @@ import {
 import { db, type Record } from "@/lib/database";
 import { uploadAttachment, formatFileSize } from "@/lib/attachments";
 import { Progress } from "@/components/ui/progress";
+import { ScrollPositionIndicator } from "@/components/ScrollPositionIndicator";
 import {
   type FieldDef,
   type Operator,
@@ -288,6 +289,12 @@ function VirtualizedPreviewList({ records }: { records: Record[] }) {
             );
           })}
         </div>
+        <ScrollPositionIndicator
+          virtualItems={virtualizer.getVirtualItems()}
+          totalCount={records.length}
+          scrollElement={parentRef.current}
+          label="records"
+        />
       </div>
     </div>
   );
@@ -417,6 +424,12 @@ function VirtualizedConfirmationTable({
             );
           })}
         </div>
+        <ScrollPositionIndicator
+          virtualItems={virtualizer.getVirtualItems()}
+          totalCount={records.length}
+          scrollElement={parentRef.current}
+          label="records"
+        />
       </div>
     </div>
   );
