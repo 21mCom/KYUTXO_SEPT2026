@@ -643,7 +643,7 @@ export default function Transactions() {
   const { value: scanResult, isComputing: scanLoading } = useAsyncMemo(async (signal) => {
     if (!needsClientSideFiltering) {
       setSearchProgress(null);
-      return { matches: [] as BlockchainTransaction[], totalMatchCount: 0, limitReached: false };
+      return { matches: [] as BlockchainTransaction[], totalMatchCount: 0, limitReached: false, totalLinkedAddressCount: 0 };
     }
 
     const hasDateFilter = searchFilters.dateMode !== 'any';
@@ -666,6 +666,7 @@ export default function Transactions() {
     let totalMatchCount = 0;
     let scanned = 0;
     let scanTotal = 0;
+    const totalLinkedAddresses = new Set<string>();
 
     async function filterBatch(batch: BlockchainTransaction[]): Promise<BlockchainTransaction[]> {
       let filtered = batch;
@@ -675,7 +676,21 @@ export default function Transactions() {
         filtered = filterByDateAndAmount(filtered, dateOnlyFilters, tx => tx.blockTime, () => 0);
       }
 
-      if (filtered.length === 0 || !needsParticipants) return filtered;
+      if (filtered.length === 0) return filtered;
+
+      if (!needsParticipants) {
+        if (addressRecordMap.size > 0) {
+          const txids = filtered.map(tx => tx.txid);
+          const participants = await getParticipantsByTxids(txids);
+          checkAbort(signal);
+          for (const p of participants) {
+            if (addressRecordMap.has(p.address)) {
+              totalLinkedAddresses.add(p.address);
+            }
+          }
+        }
+        return filtered;
+      }
 
       const txids = filtered.map(tx => tx.txid);
       const participants = await getParticipantsByTxids(txids);
@@ -732,6 +747,17 @@ export default function Transactions() {
           }
           return false;
         });
+      }
+
+      if (addressRecordMap.size > 0) {
+        for (const tx of filtered) {
+          const parts = partMap.get(tx.txid) || [];
+          for (const p of parts) {
+            if (addressRecordMap.has(p.address)) {
+              totalLinkedAddresses.add(p.address);
+            }
+          }
+        }
       }
 
       return filtered;
@@ -811,10 +837,10 @@ export default function Transactions() {
 
     allMatches.sort((a, b) => (b.blockTime ?? 0) - (a.blockTime ?? 0));
     setSearchProgress(null);
-    return { matches: allMatches, totalMatchCount, limitReached: totalMatchCount > allMatches.length };
+    return { matches: allMatches, totalMatchCount, limitReached: totalMatchCount > allMatches.length, totalLinkedAddressCount: totalLinkedAddresses.size };
   }, [needsClientSideFiltering, includeBlockchainDiscovered, opReturnOnly,
       userCuratedTxidSet, debouncedSearch, searchFilters, curatedRecords, txDbSignal],
-     { matches: [] as BlockchainTransaction[], totalMatchCount: 0, limitReached: false });
+     { matches: [] as BlockchainTransaction[], totalMatchCount: 0, limitReached: false, totalLinkedAddressCount: 0 });
 
   const needsBroadParticipants = debouncedSearch.trim() !== '' || searchFilters.amountMode !== 'any';
 
@@ -1197,10 +1223,25 @@ export default function Transactions() {
         
         <Card>
           <CardHeader className="pb-2">
-            <CardDescription>{stats.isPartialStats ? 'Loaded Linked Addresses' : 'Linked Addresses'}</CardDescription>
+            <CardDescription>{stats.isPartialStats && !scanResult.limitReached ? 'Loaded Linked Addresses' : 'Linked Addresses'}</CardDescription>
             <CardTitle className="text-2xl" data-testid="text-linked-addresses">
               {stats.linkedAddressCount === null ? (
                 <span className="text-muted-foreground">—</span>
+              ) : scanResult.limitReached ? (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="inline-flex items-center gap-1 cursor-help" tabIndex={0} data-testid="indicator-approx-addresses">
+                      <span>{scanResult.totalLinkedAddressCount.toLocaleString()}</span>
+                      <Info className="h-4 w-4 text-yellow-600 dark:text-yellow-400" />
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom" className="max-w-xs">
+                    <p>
+                      Linked addresses across all {scanResult.totalMatchCount.toLocaleString()} matched transactions.
+                      Only {navigableCount.toLocaleString()} matches are navigable.
+                    </p>
+                  </TooltipContent>
+                </Tooltip>
               ) : stats.isPartialStats ? (
                 <Tooltip>
                   <TooltipTrigger asChild>
@@ -1213,21 +1254,6 @@ export default function Transactions() {
                     <p>
                       Linked addresses found in {stats.loadedTxCount.toLocaleString()} of {navigableCount.toLocaleString()} transactions
                       loaded so far. Scroll to load more.
-                    </p>
-                  </TooltipContent>
-                </Tooltip>
-              ) : scanResult.limitReached ? (
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <span className="inline-flex items-center gap-1 cursor-help" tabIndex={0} data-testid="indicator-approx-addresses">
-                      <span>~{stats.linkedAddressCount.toLocaleString()}</span>
-                      <Info className="h-4 w-4 text-yellow-600 dark:text-yellow-400" />
-                    </span>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom" className="max-w-xs">
-                    <p>
-                      Count reflects only the current page of results.
-                      Try narrowing your search filters for a complete count.
                     </p>
                   </TooltipContent>
                 </Tooltip>
