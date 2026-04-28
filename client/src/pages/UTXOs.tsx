@@ -50,6 +50,7 @@ import { getOwners, getWalletNames, getTags, getCategories, getParticipantsByAdd
 import { cn } from "@/lib/utils";
 import { UTXODetailPanel } from "@/components/UTXODetailPanel";
 import { ClickableAddress } from "@/components/ClickableAddress";
+import { ScrollPositionIndicator } from "@/components/ScrollPositionIndicator";
 
 const SETTINGS_KEY = "kyutxo-utxos-settings";
 
@@ -1457,6 +1458,12 @@ export default function UTXOs() {
                     })()}
                   </TableBody>
                 </Table>
+                <ScrollPositionIndicator
+                  virtualItems={utxoVirtualizer.getVirtualItems()}
+                  totalCount={flattenedRows.length}
+                  scrollElement={utxoScrollRef.current}
+                  label="rows"
+                />
               </div>
             )}
           </CardContent>

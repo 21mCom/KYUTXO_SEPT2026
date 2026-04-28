@@ -33,6 +33,7 @@ import {
   CommandList,
 } from "@/components/ui/command";
 import { cn } from "@/lib/utils";
+import { ScrollPositionIndicator } from "@/components/ScrollPositionIndicator";
 import { useTags, createTag } from "@/hooks/use-tags";
 import { useCategories, createCategory } from "@/hooks/use-categories";
 import { createRecord, updateRecord, lookupRecordsByInputStrings } from "@/hooks/use-records";
@@ -624,6 +625,12 @@ a1075db55d416d3ca199f55b6084e2115b9345e16c5cf302fc80e9d5fbf5d48d
                     })()}
                   </tbody>
                 </table>
+                <ScrollPositionIndicator
+                  virtualItems={reviewVirtualizer.getVirtualItems()}
+                  totalCount={entries.length}
+                  scrollElement={reviewScrollRef.current}
+                  label="entries"
+                />
               </div>
 
               <div className="flex justify-between">
