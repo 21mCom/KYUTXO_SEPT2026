@@ -145,8 +145,6 @@ export default function Nudgie() {
 
   const txDbSignal = useDbChangeSignal(['blockchainTransactions']);
 
-  const [transactions, setTransactions] = useState<BlockchainTransaction[] | undefined>(undefined);
-  const transactionsRequestId = useRef(0);
   const [allTransactionsCount, setAllTransactionsCount] = useState(0);
 
   const rawAddressRecords = useLiveQuery(
@@ -176,39 +174,29 @@ export default function Nudgie() {
 
   const addressRecords = rawAddressRecords ?? [];
   const transactionRecords = rawTransactionRecords ?? [];
-  const [participants, setParticipants] = useState<TransactionParticipant[] | undefined>(undefined);
-  const participantsRequestId = useRef(0);
 
-  useEffect(() => {
-    if (!addressRecords || addressRecords.length === 0) {
-      setParticipants(undefined);
-      return;
-    }
-
-    const addresses = addressRecords
-      .filter(r => r.type === 'address' && r.inputString)
-      .map(r => r.inputString!);
-
-    if (addresses.length === 0) {
-      setParticipants([]);
-      return;
-    }
-
-    participantsRequestId.current += 1;
-    const thisRequestId = participantsRequestId.current;
-
-    getParticipantsByAddresses(addresses)
-      .then(result => {
-        if (thisRequestId === participantsRequestId.current) {
-          setParticipants(result);
-        }
-      })
-      .catch(() => {
-        if (thisRequestId === participantsRequestId.current) {
-          setParticipants([]);
-        }
-      });
-  }, [addressRecords]);
+  const { value: participants } = useAsyncMemo(
+    async (signal) => {
+      if (!addressRecords || addressRecords.length === 0) {
+        return undefined;
+      }
+      const addresses = addressRecords
+        .filter(r => r.type === 'address' && r.inputString)
+        .map(r => r.inputString!);
+      if (addresses.length === 0) {
+        return [] as TransactionParticipant[];
+      }
+      checkAbort(signal);
+      try {
+        return await getParticipantsByAddresses(addresses);
+      } catch (e) {
+        if (signal.aborted) throw e;
+        return [] as TransactionParticipant[];
+      }
+    },
+    [addressRecords],
+    undefined as TransactionParticipant[] | undefined
+  );
 
   useEffect(() => {
     db.blockchainTransactions.count().then(count => {
@@ -216,51 +204,40 @@ export default function Nudgie() {
     }).catch(() => {});
   }, [participants]);
 
-  useEffect(() => {
-    if (!participants || participants.length === 0) {
-      setTransactions(participants === undefined ? undefined : []);
-      return;
-    }
-
-    const txids = new Set<string>();
-    for (const p of participants) txids.add(p.txid);
-
-    if (txids.size === 0) {
-      setTransactions([]);
-      return;
-    }
-
-    transactionsRequestId.current += 1;
-    const thisRequestId = transactionsRequestId.current;
-
-    const txidArray = Array.from(txids);
-    const batchSize = 500;
-    const loadBatched = async () => {
-      const results: BlockchainTransaction[] = [];
-      for (let i = 0; i < txidArray.length; i += batchSize) {
-        const batch = txidArray.slice(i, i + batchSize);
-        const txs = await db.blockchainTransactions.where('txid').anyOf(batch).toArray();
-        results.push(...txs);
-        if (i + batchSize < txidArray.length) {
-          await new Promise(r => setTimeout(r, 0));
-        }
+  const { value: transactions } = useAsyncMemo(
+    async (signal) => {
+      if (!participants || participants.length === 0) {
+        return participants === undefined ? undefined : [];
       }
-      return results;
-    };
-
-    loadBatched()
-      .then(result => {
-        if (thisRequestId === transactionsRequestId.current) {
-          result.sort((a, b) => (b.blockTime ?? 0) - (a.blockTime ?? 0));
-          setTransactions(result);
+      const txids = new Set<string>();
+      for (const p of participants) txids.add(p.txid);
+      if (txids.size === 0) {
+        return [] as BlockchainTransaction[];
+      }
+      checkAbort(signal);
+      try {
+        const txidArray = Array.from(txids);
+        const batchSize = 500;
+        const results: BlockchainTransaction[] = [];
+        for (let i = 0; i < txidArray.length; i += batchSize) {
+          checkAbort(signal);
+          const batch = txidArray.slice(i, i + batchSize);
+          const txs = await db.blockchainTransactions.where('txid').anyOf(batch).toArray();
+          results.push(...txs);
+          if (i + batchSize < txidArray.length) {
+            await yieldToUI();
+          }
         }
-      })
-      .catch(() => {
-        if (thisRequestId === transactionsRequestId.current) {
-          setTransactions([]);
-        }
-      });
-  }, [participants, txDbSignal]);
+        results.sort((a, b) => (b.blockTime ?? 0) - (a.blockTime ?? 0));
+        return results;
+      } catch (e) {
+        if (signal.aborted) throw e;
+        return [] as BlockchainTransaction[];
+      }
+    },
+    [participants, txDbSignal],
+    undefined as BlockchainTransaction[] | undefined
+  );
 
   const addressToRecord = useMemo(() => {
     const map = new Map<string, Record>();
