@@ -24,7 +24,7 @@ import { format } from "date-fns";
 import { 
   CalendarIcon, Shield, Clock, Coins, 
   ArrowRight, Filter, FileJson, FileText, Lock, Eye,
-  AlertTriangle, RefreshCw, X, Download
+  AlertTriangle, RefreshCw, X, Download, Loader2
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { AddressLink } from "@/components/AddressLink";
@@ -64,6 +64,7 @@ export function ContinuityCertificateReport() {
   const [isExporting, setIsExporting] = useState(false);
   const [exportProgress, setExportProgress] = useState<{ current: number; total: number } | null>(null);
   const [exportError, setExportError] = useState<{ message: string; format: 'json' | 'pdf'; partialBundle?: EvidenceBundle } | null>(null);
+  const [isDownloadingPartial, setIsDownloadingPartial] = useState(false);
   const { toast } = useToast();
 
   const segments = useLiveQuery(async () => {
@@ -182,11 +183,27 @@ export function ContinuityCertificateReport() {
   };
 
   const downloadPartialBundle = async (bundle: EvidenceBundle, exportFormat: 'json' | 'pdf') => {
-    const dateStr = format(new Date(), 'yyyy-MM-dd');
-    if (exportFormat === 'pdf') {
-      await downloadEvidenceBundlePdf(bundle, `evidence-bundle-partial-${dateStr}.pdf`);
-    } else {
-      downloadEvidenceBundle(bundle, `evidence-bundle-partial-${dateStr}.json`);
+    setIsDownloadingPartial(true);
+    try {
+      const dateStr = format(new Date(), 'yyyy-MM-dd');
+      if (exportFormat === 'pdf') {
+        await downloadEvidenceBundlePdf(bundle, `evidence-bundle-partial-${dateStr}.pdf`);
+      } else {
+        downloadEvidenceBundle(bundle, `evidence-bundle-partial-${dateStr}.json`);
+      }
+      toast({
+        title: "Partial download complete",
+        description: `Downloaded ${bundle.summary.totalSegments} of ${bundle.requestedSegments} segments.`,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to generate partial download";
+      toast({
+        title: "Partial download failed",
+        description: message,
+        variant: "destructive",
+      });
+    } finally {
+      setIsDownloadingPartial(false);
     }
   };
 
@@ -396,10 +413,17 @@ export function ContinuityCertificateReport() {
                   variant="outline"
                   size="sm"
                   onClick={() => downloadPartialBundle(exportError.partialBundle!, exportError.format)}
+                  disabled={isDownloadingPartial}
                   data-testid="button-download-partial"
                 >
-                  <Download className="h-4 w-4 mr-2" />
-                  Download partial ({exportError.partialBundle.summary.totalSegments}/{exportError.partialBundle.requestedSegments})
+                  {isDownloadingPartial ? (
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  ) : (
+                    <Download className="h-4 w-4 mr-2" />
+                  )}
+                  {isDownloadingPartial
+                    ? "Downloading..."
+                    : `Download partial (${exportError.partialBundle.summary.totalSegments}/${exportError.partialBundle.requestedSegments})`}
                 </Button>
               )}
               <Button
