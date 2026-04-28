@@ -342,34 +342,3 @@ export function applyColumnFilters<T extends Record<string, unknown>>(
   });
 }
 
-export function extractUniqueValues(
-  records: Array<Record<string, unknown>>
-): Record<string, string[]> {
-  const result: Record<string, Set<string>> = {};
-  
-  FILTERABLE_FIELDS.forEach(field => {
-    if (field.type === 'text' || field.type === 'array') {
-      result[field.key] = new Set();
-    }
-  });
-
-  records.forEach(record => {
-    FILTERABLE_FIELDS.forEach(field => {
-      const value = record[field.key];
-      if (field.type === 'array' && Array.isArray(value)) {
-        value.forEach(v => {
-          if (v && String(v).trim()) result[field.key]?.add(String(v).trim());
-        });
-      } else if (field.type === 'text' && value && String(value).trim()) {
-        result[field.key]?.add(String(value).trim());
-      }
-    });
-  });
-
-  const finalResult: Record<string, string[]> = {};
-  Object.entries(result).forEach(([key, set]) => {
-    finalResult[key] = Array.from(set).sort().slice(0, 100);
-  });
-
-  return finalResult;
-}

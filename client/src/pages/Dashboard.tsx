@@ -14,7 +14,7 @@ import {
 import { BlockchainToggle } from "@/components/BlockchainToggle";
 import { SearchBar } from "@/components/SearchBar";
 import { FilterBar } from "@/components/FilterBar";
-import { RecordFilters, ColumnFilter, applyColumnFilters, extractUniqueValues } from "@/components/RecordFilters";
+import { RecordFilters, ColumnFilter, applyColumnFilters } from "@/components/RecordFilters";
 import { RecordCard } from "@/components/RecordCard";
 import { RecordTable } from "@/components/RecordTable";
 import { RecordDetailPanel } from "@/components/RecordDetailPanel";
@@ -142,10 +142,18 @@ export default function Dashboard() {
     loadEditingAttachments();
   }, [editingRecord?.id]);
 
-  // Extract unique values from records for filter dropdowns
-  const uniqueFilterValues = useMemo(() => {
-    return extractUniqueValues(records as unknown as Array<{ [key: string]: unknown }>);
-  }, [records]);
+  const uniqueFilterValues = useMemo((): Record<string, string[]> => {
+    const clean = (names: string[]) =>
+      names.filter(n => n && n.trim() && !n.includes('[encrypted]')).sort();
+    return {
+      tags: clean(tags.map(t => t.name)),
+      categories: clean(categories.map(c => c.name)),
+      owner: clean(owners.map(o => o.name)),
+      walletName: clean(walletNames.map(w => w.name)),
+      seedName: clean(seedNames.map(s => s.name)),
+      walletSoftware: clean(walletSoftware.map(w => w.name)),
+    };
+  }, [tags, categories, owners, walletNames, seedNames, walletSoftware]);
 
   // Apply search and filters
   // Note: blockchain-discovered filtering is now done at the DATABASE level via useFilteredRecords
