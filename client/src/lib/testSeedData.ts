@@ -3,6 +3,7 @@ import { createRecord, getParticipantsByTxid } from './dataFacade';
 import { clearAllRecords } from './data/record-crud';
 import { addTransaction, addParticipant, clearTransactions, clearParticipants } from './data/transaction-crud';
 import { addUtxoLineage, updateUtxoLineage, addCustodySegment, clearUtxoLineage, clearCustodySegments } from './data/lineage-crud';
+import { ensureOwner, ensureWalletName, ensureSeedName, syncTagsToMaster, syncCategoriesToMaster } from './data/vocabulary-crud';
 
 /**
  * Test data seeding utility for demonstrating KYUTXO features.
@@ -197,21 +198,11 @@ export async function seedTestData(options: { clearExisting?: boolean } = {}): P
   
   // Create vocabulary entries first
   for (const owner of [TEST_DATA.owner1, TEST_DATA.owner2]) {
-    // Add owner
-    await db.owners.add({ name: owner.name, createdAt: now });
+    await ensureOwner(owner.name);
     
     for (const wallet of owner.wallets) {
-      // Add wallet name
-      const existingWallet = await db.walletNames.where('name').equals(wallet.name).first();
-      if (!existingWallet) {
-        await db.walletNames.add({ name: wallet.name, createdAt: now });
-      }
-      
-      // Add seed name
-      const existingSeed = await db.seedNames.where('name').equals(wallet.seedName).first();
-      if (!existingSeed) {
-        await db.seedNames.add({ name: wallet.seedName, createdAt: now });
-      }
+      await ensureWalletName(wallet.name);
+      await ensureSeedName(wallet.seedName);
       
       // Add records
       for (const addr of wallet.addresses) {
@@ -256,19 +247,8 @@ export async function seedTestData(options: { clearExisting?: boolean } = {}): P
     }
   }
   
-  for (const tag of Array.from(allTags)) {
-    const existing = await db.tags.where('name').equals(tag).first();
-    if (!existing) {
-      await db.tags.add({ name: tag, createdAt: now });
-    }
-  }
-  
-  for (const cat of Array.from(allCategories)) {
-    const existing = await db.categories.where('name').equals(cat).first();
-    if (!existing) {
-      await db.categories.add({ name: cat, createdAt: now });
-    }
-  }
+  await syncTagsToMaster(Array.from(allTags));
+  await syncCategoriesToMaster(Array.from(allCategories));
   
   // Insert mock blockchain transactions
   for (const tx of MOCK_TRANSACTIONS) {
