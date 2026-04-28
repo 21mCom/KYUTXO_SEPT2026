@@ -300,6 +300,7 @@ function VirtualizedPreviewList({ records, scrollToTopSignal }: { records: Recor
           totalCount={records.length}
           scrollElement={parentRef.current}
           label="records"
+          variant="compact"
         />
       </div>
     </div>
@@ -435,6 +436,7 @@ function VirtualizedConfirmationTable({
           totalCount={records.length}
           scrollElement={parentRef.current}
           label="records"
+          variant="table"
         />
       </div>
     </div>

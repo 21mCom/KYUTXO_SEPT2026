@@ -1468,6 +1468,7 @@ export default function UTXOs() {
                   totalCount={flattenedRows.length}
                   scrollElement={utxoScrollRef.current}
                   label="rows"
+                  variant="table"
                 />
               </div>
             )}

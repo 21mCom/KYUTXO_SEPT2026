@@ -145,6 +145,7 @@ function VirtualizedRecordList({ records }: { records: DiscoveredRecord[] }) {
         totalCount={records.length}
         scrollElement={parentRef.current}
         label="records"
+        variant="compact"
       />
     </div>
   );
