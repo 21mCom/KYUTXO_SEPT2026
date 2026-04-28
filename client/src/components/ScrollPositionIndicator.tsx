@@ -5,15 +5,17 @@ interface ScrollPositionIndicatorProps {
   totalCount: number;
   scrollElement: HTMLElement | null;
   label?: string;
+  fadeOutDelay?: number;
 }
 
-const FADE_OUT_DELAY_MS = 1500;
+const DEFAULT_FADE_OUT_DELAY_MS = 1500;
 
 export function ScrollPositionIndicator({
   virtualItems,
   totalCount,
   scrollElement,
   label = "rows",
+  fadeOutDelay = DEFAULT_FADE_OUT_DELAY_MS,
 }: ScrollPositionIndicatorProps) {
   const [visible, setVisible] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -24,7 +26,7 @@ export function ScrollPositionIndicator({
     const onScroll = () => {
       setVisible(true);
       if (timerRef.current) clearTimeout(timerRef.current);
-      timerRef.current = setTimeout(() => setVisible(false), FADE_OUT_DELAY_MS);
+      timerRef.current = setTimeout(() => setVisible(false), fadeOutDelay);
     };
 
     scrollElement.addEventListener("scroll", onScroll, { passive: true });
@@ -33,7 +35,7 @@ export function ScrollPositionIndicator({
       scrollElement.removeEventListener("scroll", onScroll);
       if (timerRef.current) clearTimeout(timerRef.current);
     };
-  }, [scrollElement]);
+  }, [scrollElement, fadeOutDelay]);
 
   if (!scrollElement || virtualItems.length === 0 || totalCount === 0) return null;
 
