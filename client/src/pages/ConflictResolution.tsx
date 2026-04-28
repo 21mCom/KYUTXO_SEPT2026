@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from "react";
+import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { useLocation } from "wouter";
 import { AlertCircle, Check, ChevronRight, Filter, Loader2, Search, X, ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -48,6 +49,7 @@ export default function ConflictResolution() {
   const [isLoading, setIsLoading] = useState(true);
   const [recordsWithConflicts, setRecordsWithConflicts] = useState<RecordWithConflicts[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
+  const debouncedSearchQuery = useDebouncedValue(searchQuery, 300);
   const [fieldFilter, setFieldFilter] = useState<string>("all");
   const [selectedRecord, setSelectedRecord] = useState<RecordWithConflicts | null>(null);
   const [selectedConflict, setSelectedConflict] = useState<FieldConflict | null>(null);
@@ -119,8 +121,8 @@ export default function ConflictResolution() {
       filtered = filtered.filter(r => String(r.record.id) === filterRecordId);
     }
     
-    if (searchQuery) {
-      const query = searchQuery.toLowerCase();
+    if (debouncedSearchQuery) {
+      const query = debouncedSearchQuery.toLowerCase();
       filtered = filtered.filter(r => 
         r.record.inputString.toLowerCase().includes(query) ||
         r.record.label?.toLowerCase().includes(query) ||
@@ -135,7 +137,7 @@ export default function ConflictResolution() {
     }
     
     return filtered;
-  }, [recordsWithConflicts, searchQuery, fieldFilter, filterRecordId]);
+  }, [recordsWithConflicts, debouncedSearchQuery, fieldFilter, filterRecordId]);
 
   const totalConflicts = useMemo(() => {
     return filteredRecords.reduce((sum, r) => sum + r.conflicts.length, 0);

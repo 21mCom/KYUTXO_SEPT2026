@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from "react";
+import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { Plus, Grid3x3, List, ChevronLeft, ChevronRight, Trash2, X, Settings2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -49,6 +50,7 @@ type SortColumn = "type" | "label" | "inputString" | "tags" | "categories" | "wa
 
 export default function Dashboard() {
   const [search, setSearch] = useState("");
+  const debouncedSearch = useDebouncedValue(search, 300);
   const [view, setView] = useState<"grid" | "table">("table");
   const [filter, setFilter] = useState<{
     type?: "address" | "transaction" | "other" | "all";
@@ -88,7 +90,7 @@ export default function Dashboard() {
   // Column filters state
   const [columnFilters, setColumnFilters] = useState<ColumnFilter[]>([]);
 
-  const hasClientSideFilters = search.trim() !== '' || 
+  const hasClientSideFilters = debouncedSearch.trim() !== '' || 
     (filter.type !== undefined && filter.type !== 'all') || 
     filter.tags.length > 0 || 
     filter.categories.length > 0 || 
@@ -190,8 +192,8 @@ export default function Dashboard() {
       }
 
       // Apply search (on already filtered results)
-      if (search.trim()) {
-        const lowerQuery = search.toLowerCase();
+      if (debouncedSearch.trim()) {
+        const lowerQuery = debouncedSearch.toLowerCase();
         results = results.filter(record =>
           record.label.toLowerCase().includes(lowerQuery) ||
           record.inputString.toLowerCase().includes(lowerQuery) ||
@@ -208,12 +210,12 @@ export default function Dashboard() {
     };
 
     applyFiltersAsync();
-  }, [search, filter, records, includeBlockchainDiscovered, columnFilters, allAddressStats]);
+  }, [debouncedSearch, filter, records, includeBlockchainDiscovered, columnFilters, allAddressStats]);
 
   // Reset to page 1 when filters change
   useEffect(() => {
     setCurrentPage(1);
-  }, [search, filter, includeBlockchainDiscovered, columnFilters]);
+  }, [debouncedSearch, filter, includeBlockchainDiscovered, columnFilters]);
   
   // Handle sort column clicks from RecordTable
   const handleSort = (column: SortColumn) => {

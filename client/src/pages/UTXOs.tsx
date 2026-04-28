@@ -1,5 +1,6 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
+import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { useAsyncMemo, yieldToUI, checkAbort } from "@/hooks/use-async-memo";
 import { useDbChangeSignal } from "@/hooks/use-db-change-signal";
 import { useLiveQuery } from "dexie-react-hooks";
@@ -165,6 +166,7 @@ export default function UTXOs() {
   const initialSettings = useMemo(() => loadSettings(), []);
   
   const [search, setSearch] = useState("");
+  const debouncedSearch = useDebouncedValue(search, 300);
   const [selectedDate, setSelectedDate] = useState<Date | undefined>(undefined);
   const [searchFilters, setSearchFilters] = useState<SearchFilters>(defaultFilters);
   const [ownerFilter, setOwnerFilter] = useState<string>(initialSettings.ownerFilter);
@@ -747,8 +749,8 @@ export default function UTXOs() {
       }
     }
 
-    if (search.trim()) {
-      const q = search.toLowerCase();
+    if (debouncedSearch.trim()) {
+      const q = debouncedSearch.toLowerCase();
       filtered = filtered.filter(g =>
         g.address.toLowerCase().includes(q) ||
         g.label?.toLowerCase().includes(q) ||
@@ -761,7 +763,7 @@ export default function UTXOs() {
     }
 
     return filtered;
-  }, [addressGroups, ownerFilter, walletFilter, tagFilter, categoryFilter, search, searchFilters, includeBlockchainDiscovered, userCuratedAddresses]);
+  }, [addressGroups, ownerFilter, walletFilter, tagFilter, categoryFilter, debouncedSearch, searchFilters, includeBlockchainDiscovered, userCuratedAddresses]);
 
   const sortedGroups = useMemo(() => {
     const sorted = [...filteredGroups];
@@ -850,7 +852,7 @@ export default function UTXOs() {
 
   useEffect(() => {
     utxoScrollRef.current?.scrollTo(0, 0);
-  }, [search, ownerFilter, walletFilter, tagFilter, categoryFilter, selectedDate, searchFilters, sortColumn, sortDirection, includeBlockchainDiscovered]);
+  }, [debouncedSearch, ownerFilter, walletFilter, tagFilter, categoryFilter, selectedDate, searchFilters, sortColumn, sortDirection, includeBlockchainDiscovered]);
 
   const toggleExpanded = (address: string) => {
     setExpandedAddresses(prev => {

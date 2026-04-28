@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from "react";
+import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { useLocation } from "wouter";
 import { 
   Wallet, 
@@ -134,6 +135,7 @@ export default function WalletOverview() {
   const [walletStats, setWalletStats] = useState<WalletStats[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
+  const debouncedSearchQuery = useDebouncedValue(searchQuery, 300);
   const [sortField, setSortField] = useState<SortField>('walletName');
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
   const [expandedWallets, setExpandedWallets] = useState<Set<string>>(new Set());
@@ -214,8 +216,8 @@ export default function WalletOverview() {
   const sortedAndFilteredStats = useMemo(() => {
     let filtered = walletStats;
     
-    if (searchQuery.trim()) {
-      const query = searchQuery.toLowerCase();
+    if (debouncedSearchQuery.trim()) {
+      const query = debouncedSearchQuery.toLowerCase();
       filtered = walletStats.filter(w => 
         w.walletName.toLowerCase().includes(query)
       );
@@ -248,7 +250,7 @@ export default function WalletOverview() {
       
       return sortDirection === 'asc' ? comparison : -comparison;
     });
-  }, [walletStats, searchQuery, sortField, sortDirection]);
+  }, [walletStats, debouncedSearchQuery, sortField, sortDirection]);
 
   const handleSort = (field: SortField) => {
     if (sortField === field) {

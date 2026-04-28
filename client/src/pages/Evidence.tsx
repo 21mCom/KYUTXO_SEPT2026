@@ -1,4 +1,5 @@
 import { useState, useCallback } from "react";
+import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { useLiveQuery } from "dexie-react-hooks";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -102,6 +103,7 @@ type EvidenceFormValues = z.infer<typeof evidenceFormSchema>;
 export default function EvidencePage() {
   const { toast } = useToast();
   const [searchTerm, setSearchTerm] = useState("");
+  const debouncedSearchTerm = useDebouncedValue(searchTerm, 300);
   const [filterType, setFilterType] = useState<string>("all");
   const [filterImportance, setFilterImportance] = useState<string>("all");
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
@@ -136,12 +138,12 @@ export default function EvidencePage() {
 
   const filteredEvidence = loadedEvidence.filter((evidence) => {
     const matchesSearch = 
-      searchTerm === "" ||
-      evidence.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      evidence.notes?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      evidence.partiesInvolved?.some(p => p.toLowerCase().includes(searchTerm.toLowerCase())) ||
-      evidence.tags?.some(t => t.toLowerCase().includes(searchTerm.toLowerCase())) ||
-      evidence.source?.toLowerCase().includes(searchTerm.toLowerCase());
+      debouncedSearchTerm === "" ||
+      evidence.title.toLowerCase().includes(debouncedSearchTerm.toLowerCase()) ||
+      evidence.notes?.toLowerCase().includes(debouncedSearchTerm.toLowerCase()) ||
+      evidence.partiesInvolved?.some(p => p.toLowerCase().includes(debouncedSearchTerm.toLowerCase())) ||
+      evidence.tags?.some(t => t.toLowerCase().includes(debouncedSearchTerm.toLowerCase())) ||
+      evidence.source?.toLowerCase().includes(debouncedSearchTerm.toLowerCase());
     
     const matchesType = filterType === "all" || evidence.documentType === filterType;
     const matchesImportance = filterImportance === "all" || evidence.importance === filterImportance;

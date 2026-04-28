@@ -1,4 +1,5 @@
 import { useState, useMemo } from "react";
+import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { format } from "date-fns";
 import { db, Record, AddressImportance } from "@/lib/database";
 import { useDbChangeSignal } from "@/hooks/use-db-change-signal";
@@ -81,6 +82,7 @@ const ALL_TIERS: AddressImportance[] = ['verified', 'manual', 'wallet-import', '
 
 export default function AddressReuse() {
   const [search, setSearch] = useState("");
+  const debouncedSearch = useDebouncedValue(search, 300);
   const [expandedAddresses, setExpandedAddresses] = useState<Set<string>>(new Set());
   const [copiedAddress, setCopiedAddress] = useState<string | null>(null);
   const { toast } = useToast();
@@ -302,8 +304,8 @@ export default function AddressReuse() {
     }
     
     // Filter by search text
-    if (search.trim()) {
-      const searchLower = search.toLowerCase();
+    if (debouncedSearch.trim()) {
+      const searchLower = debouncedSearch.toLowerCase();
       result = result.filter(item => {
         if (item.address.toLowerCase().includes(searchLower)) return true;
         if (item.record?.label?.toLowerCase().includes(searchLower)) return true;
@@ -314,7 +316,7 @@ export default function AddressReuse() {
     }
     
     return result;
-  }, [yourReusedAddresses, search, reuseTypeFilter, ownerFilter, importanceFilter, walletNameFilter]);
+  }, [yourReusedAddresses, debouncedSearch, reuseTypeFilter, ownerFilter, importanceFilter, walletNameFilter]);
 
   // Check if any filters are active
   const hasActiveFilters = reuseTypeFilter !== 'all' || ownerFilter !== 'all' || importanceFilter !== 'all' || walletNameFilter !== 'all';

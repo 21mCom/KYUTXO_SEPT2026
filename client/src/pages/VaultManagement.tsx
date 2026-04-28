@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
+import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { useLocation } from "wouter";
 import { Layers, Users, ChevronDown, ChevronRight, Search, ExternalLink, Wallet, Pencil, Check, X, StickyNote } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -76,6 +77,7 @@ export default function VaultManagement() {
   const [vaults, setVaults] = useState<VaultSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
+  const debouncedSearchQuery = useDebouncedValue(searchQuery, 300);
   const [expandedVaults, setExpandedVaults] = useState<Set<string>>(new Set());
   const [editingNotesVault, setEditingNotesVault] = useState<string | null>(null);
   const [editNotesText, setEditNotesText] = useState("");
@@ -135,15 +137,15 @@ export default function VaultManagement() {
   }, []);
 
   const filteredVaults = useMemo(() => {
-    if (!searchQuery.trim()) return vaults;
-    const query = searchQuery.toLowerCase();
+    if (!debouncedSearchQuery.trim()) return vaults;
+    const query = debouncedSearchQuery.toLowerCase();
     return vaults.filter(vault => 
       vault.vaultName.toLowerCase().includes(query) ||
       vault.cosigners.some(c => (c.name || '').toLowerCase().includes(query)) ||
       (vault.scriptType || '').toLowerCase().includes(query) ||
       (vault.userNotes || '').toLowerCase().includes(query)
     );
-  }, [vaults, searchQuery]);
+  }, [vaults, debouncedSearchQuery]);
 
   const toggleVaultExpanded = (vaultName: string) => {
     setExpandedVaults(prev => {
