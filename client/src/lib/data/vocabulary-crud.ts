@@ -4,13 +4,18 @@ import { bulkUpdateRecords } from './record-crud';
 export const SEED_NAME_MAX_LENGTH = 15;
 
 export async function createTag(name: string, color?: string): Promise<number> {
-  const existing = await db.tags.where('name').equals(name).first();
+  if (!name.trim()) {
+    throw new Error('Tag name cannot be empty');
+  }
+
+  const trimmedName = name.trim();
+  const existing = await db.tags.where('name').equalsIgnoreCase(trimmedName).first();
   if (existing) {
     throw new Error('Tag already exists');
   }
 
   const tag: Tag = {
-    name,
+    name: trimmedName,
     color,
     createdAt: Date.now(),
   };
@@ -49,13 +54,18 @@ export async function getTagUsageCount(tagName: string): Promise<number> {
 }
 
 export async function createCategory(name: string): Promise<number> {
-  const existing = await db.categories.where('name').equals(name).first();
+  if (!name.trim()) {
+    throw new Error('Category name cannot be empty');
+  }
+
+  const trimmedName = name.trim();
+  const existing = await db.categories.where('name').equalsIgnoreCase(trimmedName).first();
   if (existing) {
     throw new Error('Category already exists');
   }
 
   const category: Category = {
-    name,
+    name: trimmedName,
     createdAt: Date.now(),
   };
 
