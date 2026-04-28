@@ -174,36 +174,10 @@ export default function Nudgie() {
     []
   );
 
-  const [addressRecords, setAddressRecords] = useState<Record[]>([]);
-  const [transactionRecords, setTransactionRecords] = useState<Record[]>([]);
-  const loadRequestId = useRef(0);
+  const addressRecords = rawAddressRecords ?? [];
+  const transactionRecords = rawTransactionRecords ?? [];
   const [participants, setParticipants] = useState<TransactionParticipant[] | undefined>(undefined);
   const participantsRequestId = useRef(0);
-
-  useEffect(() => {
-    if (!rawAddressRecords || !rawTransactionRecords) return;
-    
-    loadRequestId.current += 1;
-    const thisRequestId = loadRequestId.current;
-    
-    const loadRecords = async () => {
-      try {
-        const addresses = rawAddressRecords;
-        const txRecords = rawTransactionRecords;
-        if (thisRequestId === loadRequestId.current) {
-          setAddressRecords(addresses);
-          setTransactionRecords(txRecords);
-        }
-      } catch {
-        if (thisRequestId === loadRequestId.current) {
-          setAddressRecords(rawAddressRecords);
-          setTransactionRecords(rawTransactionRecords);
-        }
-      }
-    };
-    
-    loadRecords();
-  }, [rawAddressRecords, rawTransactionRecords]);
 
   useEffect(() => {
     if (!addressRecords || addressRecords.length === 0) {
