@@ -729,22 +729,10 @@ export default function Nudgie() {
     }
   };
 
-  const uniqueSeedNames = Array.from(new Set([
-    ...seedNames.map(s => s.name).filter(n => n),
-    ...addressRecords.map(r => r.seedName).filter((s): s is string => !!s)
-  ]));
-  const uniqueWalletSoftware = Array.from(new Set([
-    ...walletSoftware.map(w => w.name).filter(n => n),
-    ...addressRecords.map(r => r.walletSoftware).filter((s): s is string => !!s)
-  ]));
-  const uniqueOwners = Array.from(new Set([
-    ...owners.map(o => o.name).filter(n => n),
-    ...addressRecords.map(r => r.owner).filter((s): s is string => !!s)
-  ]));
-  const uniqueWalletNames = Array.from(new Set([
-    ...walletNames.map(w => w.name).filter(n => n),
-    ...addressRecords.map(r => r.walletName).filter((s): s is string => !!s)
-  ]));
+  const uniqueSeedNames = seedNames.map(s => s.name).filter(n => n);
+  const uniqueWalletSoftware = walletSoftware.map(w => w.name).filter(n => n);
+  const uniqueOwners = owners.map(o => o.name).filter(n => n);
+  const uniqueWalletNames = walletNames.map(w => w.name).filter(n => n);
 
   const handleCreateAddressRecord = async (address: string) => {
     const now = Date.now();

@@ -337,23 +337,10 @@ export default function Dashboard() {
 
   const selectedRecord = records.find(r => r.id === selectedRecordId);
 
-  // Compute unique values for dropdowns (combining existing record values with master lists)
-  const uniqueSeedNames = Array.from(new Set([
-    ...seedNames.map(s => s.name).filter(n => n),
-    ...records.map(r => r.seedName).filter((s): s is string => !!s)
-  ]));
-  const uniqueWalletSoftware = Array.from(new Set([
-    ...walletSoftware.map(w => w.name).filter(n => n),
-    ...records.map(r => r.walletSoftware).filter((s): s is string => !!s)
-  ]));
-  const uniqueOwners = Array.from(new Set([
-    ...owners.map(o => o.name).filter(n => n),
-    ...records.map(r => r.owner).filter((s): s is string => !!s)
-  ]));
-  const uniqueWalletNames = Array.from(new Set([
-    ...walletNames.map(w => w.name).filter(n => n),
-    ...records.map(r => r.walletName).filter((s): s is string => !!s)
-  ]));
+  const uniqueSeedNames = seedNames.map(s => s.name).filter(n => n);
+  const uniqueWalletSoftware = walletSoftware.map(w => w.name).filter(n => n);
+  const uniqueOwners = owners.map(o => o.name).filter(n => n);
+  const uniqueWalletNames = walletNames.map(w => w.name).filter(n => n);
 
   const handleRecordClick = (id: number) => {
     setSelectedRecordId(id);
