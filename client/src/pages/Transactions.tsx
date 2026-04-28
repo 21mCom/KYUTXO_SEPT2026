@@ -1000,6 +1000,26 @@ export default function Transactions() {
     });
   };
 
+  const perTxParticipants = useMemo(() => {
+    const result = new Map<string, { inputs: TransactionParticipant[]; outputs: TransactionParticipant[]; totalOutputValue: number }>();
+    for (const tx of paginatedTransactionSlice) {
+      const parts = pageParticipantMap.get(tx.txid) || [];
+      const inputs: TransactionParticipant[] = [];
+      const outputs: TransactionParticipant[] = [];
+      let totalOutputValue = 0;
+      for (const p of parts) {
+        if (p.role === 'input') {
+          inputs.push(p);
+        } else {
+          outputs.push(p);
+          totalOutputValue += p.amount;
+        }
+      }
+      result.set(tx.txid, { inputs, outputs, totalOutputValue });
+    }
+    return result;
+  }, [paginatedTransactionSlice, pageParticipantMap]);
+
   const stats = useMemo(() => {
     const txCount = totalFilteredCount;
 
@@ -1020,10 +1040,15 @@ export default function Transactions() {
     let pageVolume = 0;
     const linkedAddresses = new Set<string>();
     for (const tx of paginatedTransactionSlice) {
-      const parts = pageParticipantMap.get(tx.txid) || [];
-      for (const p of parts) {
-        if (p.role === 'output') pageVolume += p.amount;
-        if (addressToRecord.has(p.address)) linkedAddresses.add(p.address);
+      const entry = perTxParticipants.get(tx.txid);
+      if (entry) {
+        pageVolume += entry.totalOutputValue;
+        for (const p of entry.inputs) {
+          if (addressToRecord.has(p.address)) linkedAddresses.add(p.address);
+        }
+        for (const p of entry.outputs) {
+          if (addressToRecord.has(p.address)) linkedAddresses.add(p.address);
+        }
       }
     }
     const allNavigableFees = filteredTransactions.reduce((sum, tx) => sum + tx.fee, 0);
@@ -1037,7 +1062,7 @@ export default function Transactions() {
       isPartialStats: false,
       loadedTxCount: paginatedTransactionSlice.length,
     };
-  }, [totalFilteredCount, paginatedTransactionSlice, pageParticipantMap, filteredTransactions, addressToRecord, needsClientSideFiltering, virtualizedStats]);
+  }, [totalFilteredCount, paginatedTransactionSlice, perTxParticipants, filteredTransactions, addressToRecord, needsClientSideFiltering, virtualizedStats]);
 
   const expandAllSource = useMemo(() => {
     return needsClientSideFiltering
@@ -1426,16 +1451,16 @@ export default function Transactions() {
             </Card>
           ) : (
             paginatedTransactionSlice.map((tx) => {
-              const parts = pageParticipantMap.get(tx.txid) || [];
-              const inputs = parts.filter(p => p.role === 'input');
-              const outputs = parts.filter(p => p.role === 'output');
+              const entry = perTxParticipants.get(tx.txid);
+              const inputs = entry?.inputs || [];
+              const outputs = entry?.outputs || [];
               return (
                 <TransactionCard
                   key={tx.txid}
                   tx={tx}
                   inputs={inputs}
                   outputs={outputs}
-                  totalOutputValue={outputs.reduce((sum, p) => sum + p.amount, 0)}
+                  totalOutputValue={entry?.totalOutputValue || 0}
                   isExpanded={expandedTxs.has(tx.txid)}
                   onToggleExpand={() => toggleExpanded(tx.txid)}
                   addressToRecord={addressToRecord}
