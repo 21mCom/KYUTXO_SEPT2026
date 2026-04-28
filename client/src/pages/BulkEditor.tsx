@@ -234,6 +234,10 @@ function VirtualizedPreviewList({ records }: { records: Record[] }) {
 
   useResizeRemeasure(parentRef, virtualizer);
 
+  useEffect(() => {
+    virtualizer.measure();
+  }, [records, virtualizer]);
+
   return (
     <div className="border rounded-lg">
       <div className="p-3 bg-muted/50 border-b flex items-center justify-between">
@@ -311,6 +315,10 @@ function VirtualizedConfirmationTable({
   });
 
   useResizeRemeasure(parentRef, virtualizer);
+
+  useEffect(() => {
+    virtualizer.measure();
+  }, [records, virtualizer]);
 
   return (
     <div className="border rounded-lg">
