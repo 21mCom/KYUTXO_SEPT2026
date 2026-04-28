@@ -623,7 +623,7 @@ export default function Records() {
           />
         </div>
 
-        <div className={`space-y-6 ${searchPendingClass(isSearchPending)}`}>
+        <div className={`space-y-6 ${searchPendingClass(isSearchPending, 'Records')}`}>
         {txidSearchResults.length > 0 && (
           <Card className="border-primary/30 bg-primary/5">
             <CardHeader className="pb-3">

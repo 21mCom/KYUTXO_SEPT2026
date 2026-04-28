@@ -287,7 +287,7 @@ export default function ConflictResolution() {
             </div>
           </div>
         </CardHeader>
-        <CardContent className={`${searchPendingClass(isSearchPending)}`}>
+        <CardContent className={`${searchPendingClass(isSearchPending, 'ConflictResolution')}`}>
           {filteredRecords.length === 0 ? (
             <div className="text-center py-12 text-muted-foreground">
               {recordsWithConflicts.length === 0 ? (

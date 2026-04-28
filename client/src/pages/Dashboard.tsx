@@ -965,7 +965,7 @@ export default function Dashboard() {
         />
       </div>
 
-      <div className={`flex-1 overflow-auto p-4 ${searchPendingClass(isSearchPending)}`}>
+      <div className={`flex-1 overflow-auto p-4 ${searchPendingClass(isSearchPending, 'Dashboard')}`}>
         {isLoading ? (
           <div className="flex items-center justify-center h-64">
             <p className="text-muted-foreground">Loading records...</p>

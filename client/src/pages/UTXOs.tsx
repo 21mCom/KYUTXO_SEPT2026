@@ -1265,7 +1265,7 @@ export default function UTXOs() {
         </CardContent>
       </Card>
 
-      <div className={`flex-1 min-h-0 ${searchPendingClass(isSearchPending)}`}>
+      <div className={`flex-1 min-h-0 ${searchPendingClass(isSearchPending, 'UTXOs')}`}>
         <Card className="h-full flex flex-col">
           <CardHeader className="pb-2 flex-none">
             <CardTitle className="text-base">

@@ -614,7 +614,7 @@ export default function AddressReuse() {
               </div>
             </div>
 
-            <div className={`${searchPendingClass(isSearchPending)}`}>
+            <div className={`${searchPendingClass(isSearchPending, 'AddressReuse')}`}>
             {isProcessing ? (
               <div className="text-center py-12 text-muted-foreground">
                 <div className="space-y-3">

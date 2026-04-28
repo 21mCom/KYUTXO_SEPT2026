@@ -263,7 +263,7 @@ export default function VaultManagement() {
         </div>
       </div>
 
-      <div className={`${searchPendingClass(isSearchPending)}`}>
+      <div className={`${searchPendingClass(isSearchPending, 'VaultManagement')}`}>
       {filteredVaults.length === 0 ? (
         <Card>
           <CardContent className="py-12 text-center">

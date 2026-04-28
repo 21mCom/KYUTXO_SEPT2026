@@ -1408,7 +1408,7 @@ export default function Transactions() {
         </Button>
       </div>
 
-      <div className={`flex-1 flex flex-col gap-4 min-h-0 ${searchPendingClass(isSearchPending)}`}>
+      <div className={`flex-1 flex flex-col gap-4 min-h-0 ${searchPendingClass(isSearchPending, 'Transactions')}`}>
       {scanResult.limitReached && (
         <div className="flex-none flex items-center gap-3 p-3 rounded-md bg-yellow-50 dark:bg-yellow-950/50 border border-yellow-200 dark:border-yellow-800 text-sm" data-testid="warning-search-limit">
           <AlertTriangle className="h-4 w-4 text-yellow-600 dark:text-yellow-400 flex-shrink-0" />

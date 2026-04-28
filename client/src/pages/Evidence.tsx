@@ -649,7 +649,7 @@ export default function EvidencePage() {
         </div>
       </div>
 
-      <ScrollArea className={`flex-1 ${searchPendingClass(isSearchPending)}`}>
+      <ScrollArea className={`flex-1 ${searchPendingClass(isSearchPending, 'Evidence')}`}>
         <div className="p-4">
           {sortedEvidence.length === 0 ? (
             <Card className="border-dashed">

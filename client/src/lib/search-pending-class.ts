@@ -1,5 +1,10 @@
-export function searchPendingClass(isPending: boolean): string {
-  return isPending
-    ? 'transition-opacity duration-200 opacity-60'
-    : 'transition-opacity duration-200';
+import type { PageName } from "@/config/debounce";
+import { getSearchPendingOpacity } from "@/config/debounce";
+
+export function searchPendingClass(isPending: boolean, page?: PageName): string {
+  if (isPending) {
+    const opacity = page ? getSearchPendingOpacity(page) : 'opacity-60';
+    return `transition-opacity duration-200 ${opacity}`;
+  }
+  return 'transition-opacity duration-200';
 }
