@@ -17,7 +17,7 @@ export class KYUTXODatabase extends Dexie {
   // bulkPut, bulkDelete, modify, clear) on db.records outside record-crud.ts.
   // All record writes must go through the CRUD layer in
   // client/src/lib/data/record-crud.ts (re-exported via dataFacade.ts).
-  // Run `node scripts/check-record-writes.js` to verify compliance.
+  // Run `node scripts/check-crud-guards.js` to verify compliance.
   records!: Table<Record>;
   attachments!: Table<Attachment>;
   tags!: Table<Tag>;

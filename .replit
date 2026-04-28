@@ -31,7 +31,7 @@ args = "Start application"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
-args = "record-writes"
+args = "crud-guards"
 
 [[workflows.workflow]]
 name = "Start application"
@@ -43,12 +43,12 @@ args = "npm run dev"
 waitForPort = 5000
 
 [[workflows.workflow]]
-name = "record-writes"
+name = "crud-guards"
 author = "agent"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "node scripts/check-record-writes.js"
+args = "node scripts/check-crud-guards.js"
 
 [workflows.workflow.metadata]
 isValidation = true

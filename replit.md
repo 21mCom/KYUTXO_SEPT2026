@@ -30,7 +30,7 @@ KYUTXO features an offline-first architecture built for cross-platform desktop d
 *   **Vault Management:** Dedicated UI for viewing and managing multisig vaults.
 
 ## Data Layer Conventions
-*   **CRUD Layer Guards:** Write operations on the following tables must go through their dedicated CRUD modules (re-exported via `dataFacade.ts`). Direct writes outside the CRUD module are prohibited. This constraint is enforced automatically via a git pre-commit hook and a registered validation step (`record-writes`). Run `scripts/install-hooks.sh` to reinstall the pre-commit hook after cloning. Database migrations in `database.ts` that use `tx.table(...)` are exempt. Run `node scripts/check-record-writes.js` to manually verify compliance.
+*   **CRUD Layer Guards:** Write operations on the following tables must go through their dedicated CRUD modules (re-exported via `dataFacade.ts`). Direct writes outside the CRUD module are prohibited. This constraint is enforced automatically via a git pre-commit hook and a registered validation step (`crud-guards`). Run `scripts/install-hooks.sh` to reinstall the pre-commit hook after cloning. Database migrations in `database.ts` that use `tx.table(...)` are exempt. Run `node scripts/check-crud-guards.js` to manually verify compliance.
     *   `db.records` → `client/src/lib/data/record-crud.ts`
     *   `db.blockchainTransactions` → `client/src/lib/data/transaction-crud.ts`
     *   `db.transactionParticipants` → `client/src/lib/data/transaction-crud.ts`
