@@ -729,7 +729,8 @@ export type ProgressCallback = (current: number, total: number) => void;
 // Generate minimal evidence bundle with selective disclosure
 export async function generateEvidenceBundle(
   options: EvidenceBundleOptions,
-  onProgress?: ProgressCallback
+  onProgress?: ProgressCallback,
+  signal?: AbortSignal
 ): Promise<EvidenceBundle> {
   const segments = options.selectedSegmentIds
     ? await db.custodySegments.where('segmentId').anyOf(options.selectedSegmentIds).toArray()
@@ -771,6 +772,27 @@ export async function generateEvidenceBundle(
   };
 
   for (const segment of segments) {
+    if (signal?.aborted) {
+      if (evidenceSegments.length > 0) {
+        return buildPartialBundle();
+      }
+      return {
+        version: '1.0',
+        generatedAt: new Date().toISOString(),
+        bundleId: 'bundle_' + crypto.randomUUID().replace(/-/g, '').slice(0, 12),
+        isPartial: true,
+        requestedSegments: segments.length,
+        summary: {
+          totalSegments: 0,
+          totalValueBtc: 0,
+          earliestOrigin: earliestOrigin.toISOString(),
+          latestActivity: latestActivity.toISOString(),
+          totalCustodyDays: totalDays
+        },
+        segments: []
+      };
+    }
+
     if (alreadyProcessedIds.has(segment.segmentId)) {
       if (onProgress) {
         onProgress(evidenceSegments.length, segments.length);

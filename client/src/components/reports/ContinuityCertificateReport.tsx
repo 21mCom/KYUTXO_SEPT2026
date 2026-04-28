@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useRef, useCallback } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { db, type CustodySegment, type UtxoLineage } from "@/lib/database";
 import { 
@@ -24,7 +24,7 @@ import { format } from "date-fns";
 import { 
   CalendarIcon, Shield, Clock, Coins, 
   ArrowRight, Filter, FileJson, FileText, Lock, Eye,
-  AlertTriangle, RefreshCw, X, Download, Loader2
+  AlertTriangle, RefreshCw, X, Download, Loader2, Ban
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { AddressLink } from "@/components/AddressLink";
@@ -65,7 +65,14 @@ export function ContinuityCertificateReport() {
   const [exportProgress, setExportProgress] = useState<{ current: number; total: number } | null>(null);
   const [exportError, setExportError] = useState<{ message: string; format: 'json' | 'pdf'; partialBundle?: EvidenceBundle } | null>(null);
   const [isDownloadingPartial, setIsDownloadingPartial] = useState(false);
+  const exportAbortRef = useRef<AbortController | null>(null);
   const { toast } = useToast();
+
+  const handleCancelExport = useCallback(() => {
+    if (exportAbortRef.current) {
+      exportAbortRef.current.abort();
+    }
+  }, []);
 
   const segments = useLiveQuery(async () => {
     return await db.custodySegments.toArray();
@@ -141,6 +148,8 @@ export function ContinuityCertificateReport() {
     const selected = filteredCertificates.filter(c => selectedCertificates.has(c.segment.id!));
     const selectedSegmentIds = selected.map(c => c.segment.segmentId);
     
+    const controller = new AbortController();
+    exportAbortRef.current = controller;
     setIsExporting(true);
     setExportError(null);
     setExportProgress({ current: resumeFromBundle ? resumeFromBundle.segments.length : 0, total: selectedSegmentIds.length });
@@ -158,8 +167,25 @@ export function ContinuityCertificateReport() {
         setExportProgress({ current, total });
       };
       
-      const bundle = await generateEvidenceBundle(options, handleProgress);
+      const bundle = await generateEvidenceBundle(options, handleProgress, controller.signal);
       const dateStr = format(new Date(), 'yyyy-MM-dd');
+
+      if (controller.signal.aborted) {
+        if (bundle.isPartial && bundle.summary.totalSegments > 0) {
+          setExportError({ message: `Cancelled after processing ${bundle.summary.totalSegments} of ${bundle.requestedSegments ?? selectedSegmentIds.length} segments.`, format: exportFormat, partialBundle: bundle });
+          toast({
+            title: "Export cancelled",
+            description: `${bundle.summary.totalSegments} of ${bundle.requestedSegments ?? selectedSegmentIds.length} segments processed. You can download the partial results.`,
+          });
+        } else {
+          toast({
+            title: "Export cancelled",
+            description: "Evidence bundle generation was cancelled.",
+          });
+        }
+        setExportProgress(null);
+        return;
+      }
       
       if (exportFormat === 'pdf') {
         await downloadEvidenceBundlePdf(bundle, `evidence-bundle-${dateStr}.pdf`);
@@ -180,6 +206,7 @@ export function ContinuityCertificateReport() {
       });
     } finally {
       setIsExporting(false);
+      exportAbortRef.current = null;
     }
   };
 
@@ -470,7 +497,7 @@ export function ContinuityCertificateReport() {
       {isExporting && exportProgress && exportProgress.total > 0 && (
         <div className="flex items-center gap-3 p-3 bg-muted/30 rounded-lg" data-testid="export-progress">
           <div className="flex-1 space-y-1">
-            <div className="flex items-center justify-between text-sm">
+            <div className="flex items-center justify-between gap-2 text-sm">
               <span className="text-muted-foreground">
                 Processing segment {exportProgress.current} of {exportProgress.total}
               </span>
@@ -488,6 +515,15 @@ export function ContinuityCertificateReport() {
               data-testid="progress-bar"
             />
           </div>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleCancelExport}
+            data-testid="button-cancel-export"
+          >
+            <Ban className="h-4 w-4 mr-1" />
+            Cancel
+          </Button>
         </div>
       )}
 
