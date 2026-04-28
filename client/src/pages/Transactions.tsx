@@ -1049,15 +1049,32 @@ export default function Transactions() {
     return expandAllSource.length > 0 && expandAllSource.every(tx => expandedTxs.has(tx.txid));
   }, [expandAllSource, expandedTxs]);
 
+  const filteredTxIdentity = useMemo(() => {
+    if (filteredTransactions.length === 0) return '';
+    let h = 0x811c9dc5;
+    for (const tx of filteredTransactions) {
+      const id = tx.txid;
+      for (let i = 0; i < id.length; i++) {
+        h ^= id.charCodeAt(i);
+        h = Math.imul(h, 0x01000193);
+      }
+    }
+    return `${filteredTransactions.length}:${h >>> 0}`;
+  }, [filteredTransactions]);
+
+  const filteredTxRef = useRef(filteredTransactions);
+  filteredTxRef.current = filteredTransactions;
+
   const [volumeProgress, setVolumeProgress] = useState<{ processed: number; total: number } | null>(null);
 
   const { value: allNavigableVolume, isComputing: volumeComputing } = useAsyncMemo(async (signal) => {
-    if (!needsClientSideFiltering || filteredTransactions.length === 0) {
+    if (!needsClientSideFiltering || filteredTxIdentity === '') {
       setVolumeProgress(null);
       return null;
     }
 
-    const txids = filteredTransactions.map(tx => tx.txid);
+    const txs = filteredTxRef.current;
+    const txids = txs.map(tx => tx.txid);
     const total = txids.length;
     setVolumeProgress({ processed: 0, total });
     let totalVolume = 0;
@@ -1078,7 +1095,7 @@ export default function Transactions() {
     }
 
     return totalVolume;
-  }, [needsClientSideFiltering, filteredTransactions], null as number | null);
+  }, [needsClientSideFiltering, filteredTxIdentity], null as number | null);
 
   const isLoading = needsClientSideFiltering ? scanLoading : txLoading;
 
