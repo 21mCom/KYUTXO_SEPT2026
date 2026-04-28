@@ -704,9 +704,9 @@ export function ContinuityProof({ selectedAddress, onAddressSelect }: Continuity
               <div className="text-xs text-muted-foreground mt-1.5" data-testid="text-last-build-duration">
                 <Clock className="h-3 w-3 inline-block mr-1 align-text-bottom" />
                 {lastBuildMeta.transactionCount > 0 ? (
-                  currentTransactionCount > lastBuildMeta.transactionCount * 1.2 ? (
+                  currentTransactionCount > lastBuildMeta.transactionCount ? (
                     <span data-testid="text-build-size-warning">
-                      Last build: {formatDuration(lastBuildMeta.durationSeconds)} with {lastBuildMeta.transactionCount.toLocaleString()} transactions {'\u2014'} now {currentTransactionCount.toLocaleString()} transactions, may take longer
+                      Last build: {formatDuration(lastBuildMeta.durationSeconds)} with {lastBuildMeta.transactionCount.toLocaleString()} transactions {'\u2014'} now {currentTransactionCount.toLocaleString()} transactions, estimated ~{formatDuration(Math.round(lastBuildMeta.durationSeconds * (currentTransactionCount / lastBuildMeta.transactionCount)))}
                     </span>
                   ) : (
                     <span>
