@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef, useEffect } from "react";
+import { useState, useMemo, useRef, useEffect, useCallback } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { ScrollPositionIndicator } from "@/components/ScrollPositionIndicator";
 import { useAsyncMemo, yieldToUI, checkAbort } from "@/hooks/use-async-memo";
@@ -71,6 +71,11 @@ function formatSats(sats: number | undefined): string {
   return `${sats} sats`;
 }
 
+interface VirtualizedLoadedStats {
+  loadedVolume: number;
+  loadedLinkedAddressCount: number;
+  loadedTxCount: number;
+}
 // User-curated importance tiers (exclude blockchain-discovered and pending-review by default)
 const USER_CURATED_TIERS = ['verified', 'manual', 'wallet-import', 'xpub-derived'];
 
@@ -300,11 +305,13 @@ function VirtualizedTransactionList({
   expandedTxs,
   toggleExpanded,
   baseAddressToRecord,
+  onStatsChange,
 }: {
   transactions: BlockchainTransaction[];
   expandedTxs: Set<string>;
   toggleExpanded: (txid: string) => void;
   baseAddressToRecord: Map<string, Record>;
+  onStatsChange?: (stats: VirtualizedLoadedStats) => void;
 }) {
   const parentRef = useRef<HTMLDivElement>(null);
   const participantCacheRef = useRef(new Map<string, TransactionParticipant[]>());
@@ -406,6 +413,32 @@ function VirtualizedTransactionList({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [baseAddressToRecord, cacheVersion]);
 
+  useEffect(() => {
+    if (!onStatsChange) return;
+    const cache = participantCacheRef.current;
+    const records = recordCacheRef.current;
+    let totalVolume = 0;
+    let loadedTxCount = 0;
+    const linkedAddresses = new Set<string>();
+
+    for (const [, participants] of cache) {
+      loadedTxCount++;
+      for (const p of participants) {
+        if (p.role === 'output') totalVolume += p.amount;
+        if (baseAddressToRecord.has(p.address) || records.has(p.address)) {
+          linkedAddresses.add(p.address);
+        }
+      }
+    }
+
+    onStatsChange({
+      loadedVolume: totalVolume,
+      loadedLinkedAddressCount: linkedAddresses.size,
+      loadedTxCount,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cacheVersion, onStatsChange, baseAddressToRecord]);
+
   return (
     <div
       ref={parentRef}
@@ -472,6 +505,11 @@ export default function Transactions() {
   // OP_RETURN filter: only show transactions with OP_RETURN data
   const [opReturnOnly, setOpReturnOnly] = useState(false);
   const [searchProgress, setSearchProgress] = useState<{ scanned: number; total: number; matches: number } | null>(null);
+  const [virtualizedStats, setVirtualizedStats] = useState<VirtualizedLoadedStats | null>(null);
+
+  const handleVirtualizedStatsChange = useCallback((stats: VirtualizedLoadedStats) => {
+    setVirtualizedStats(stats);
+  }, []);
 
   const [debouncedSearch, isSearchPending] = useDebouncedValue(search, PAGE_DEBOUNCE.Transactions);
 
@@ -480,6 +518,12 @@ export default function Transactions() {
   const needsClientSideFiltering = debouncedSearch.trim() !== '' ||
     searchFilters.amountMode !== 'any' ||
     searchFilters.dateMode !== 'any';
+
+  useEffect(() => {
+    if (!needsClientSideFiltering) {
+      setVirtualizedStats(null);
+    }
+  }, [needsClientSideFiltering]);
 
   const curatedRecords = useLiveQuery(
     async () => {
@@ -937,10 +981,12 @@ export default function Transactions() {
       const allNavigableFees = filteredTransactions.reduce((sum, tx) => sum + tx.fee, 0);
       return {
         txCount,
-        pageVolume: null as number | null,
+        pageVolume: virtualizedStats ? virtualizedStats.loadedVolume : null as number | null,
         pageFees: allNavigableFees,
         allNavigableFees,
-        linkedAddressCount: null as number | null
+        linkedAddressCount: virtualizedStats ? virtualizedStats.loadedLinkedAddressCount : null as number | null,
+        isPartialStats: true,
+        loadedTxCount: virtualizedStats?.loadedTxCount ?? 0,
       };
     }
 
@@ -961,9 +1007,11 @@ export default function Transactions() {
       pageVolume,
       pageFees,
       allNavigableFees,
-      linkedAddressCount: linkedAddresses.size
+      linkedAddressCount: linkedAddresses.size,
+      isPartialStats: false,
+      loadedTxCount: paginatedTransactionSlice.length,
     };
-  }, [totalFilteredCount, paginatedTransactionSlice, pageParticipantMap, filteredTransactions, addressToRecord, needsClientSideFiltering]);
+  }, [totalFilteredCount, paginatedTransactionSlice, pageParticipantMap, filteredTransactions, addressToRecord, needsClientSideFiltering, virtualizedStats]);
 
   const expandAllSource = useMemo(() => {
     return needsClientSideFiltering
@@ -1052,14 +1100,31 @@ export default function Transactions() {
         
         <Card>
           <CardHeader className="pb-2">
-            <CardDescription>{needsClientSideFiltering ? 'Volume' : 'Page Volume'}</CardDescription>
+            <CardDescription>{needsClientSideFiltering ? (volumeComputing ? 'Loaded Volume' : 'Volume') : 'Page Volume'}</CardDescription>
             <CardTitle className="text-2xl" data-testid="text-total-volume">
               {needsClientSideFiltering ? (
                 volumeComputing ? (
-                  <span className="inline-flex items-center gap-2" data-testid="indicator-volume-loading">
-                    <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-                    <span className="text-muted-foreground text-base">Computing…</span>
-                  </span>
+                  stats.pageVolume !== null ? (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span className="inline-flex items-center gap-1 cursor-help" tabIndex={0} data-testid="indicator-loaded-volume">
+                          <span>{satsToBtc(stats.pageVolume)} BTC</span>
+                          <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                        </span>
+                      </TooltipTrigger>
+                      <TooltipContent side="bottom" className="max-w-xs">
+                        <p>
+                          Volume from {stats.loadedTxCount.toLocaleString()} of {navigableCount.toLocaleString()} transactions
+                          loaded so far. Computing total...
+                        </p>
+                      </TooltipContent>
+                    </Tooltip>
+                  ) : (
+                    <span className="inline-flex items-center gap-2" data-testid="indicator-volume-loading">
+                      <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                      <span className="text-muted-foreground text-base">Computing...</span>
+                    </span>
+                  )
                 ) : allNavigableVolume !== null ? (
                   scanResult.limitReached ? (
                     <Tooltip>
@@ -1119,10 +1184,25 @@ export default function Transactions() {
         
         <Card>
           <CardHeader className="pb-2">
-            <CardDescription>Linked Addresses</CardDescription>
+            <CardDescription>{stats.isPartialStats ? 'Loaded Linked Addresses' : 'Linked Addresses'}</CardDescription>
             <CardTitle className="text-2xl" data-testid="text-linked-addresses">
               {stats.linkedAddressCount === null ? (
                 <span className="text-muted-foreground">—</span>
+              ) : stats.isPartialStats ? (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="inline-flex items-center gap-1 cursor-help" tabIndex={0} data-testid="indicator-loaded-addresses">
+                      <span>{stats.linkedAddressCount.toLocaleString()}</span>
+                      <Info className="h-4 w-4 text-muted-foreground" />
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom" className="max-w-xs">
+                    <p>
+                      Linked addresses found in {stats.loadedTxCount.toLocaleString()} of {navigableCount.toLocaleString()} transactions
+                      loaded so far. Scroll to load more.
+                    </p>
+                  </TooltipContent>
+                </Tooltip>
               ) : scanResult.limitReached ? (
                 <Tooltip>
                   <TooltipTrigger asChild>
@@ -1234,6 +1314,7 @@ export default function Transactions() {
           expandedTxs={expandedTxs}
           toggleExpanded={toggleExpanded}
           baseAddressToRecord={addressToRecord}
+          onStatsChange={handleVirtualizedStatsChange}
         />
       ) : (
         <div className="flex-1 overflow-y-auto space-y-3">
