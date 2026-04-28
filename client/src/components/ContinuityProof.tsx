@@ -4,6 +4,16 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -49,12 +59,14 @@ interface ContinuityProofProps {
 }
 
 const LAST_BUILD_DURATION_KEY = 'kyutxo_last_build_duration_seconds';
+const CANCEL_CONFIRM_THRESHOLD = 75;
 
 export function ContinuityProof({ selectedAddress, onAddressSelect }: ContinuityProofProps) {
   const { toast } = useToast();
   
   const [isBuilding, setIsBuilding] = useState(false);
   const [buildProgress, setBuildProgress] = useState({ current: 0, total: 0, phase: '', step: 0, totalSteps: 2, unit: '' });
+  const [showCancelConfirm, setShowCancelConfirm] = useState(false);
   const abortControllerRef = useRef<AbortController | null>(null);
   const [segments, setSegments] = useState<CustodySegment[]>([]);
   const [lineage, setLineage] = useState<UtxoLineage[]>([]);
@@ -156,7 +168,25 @@ export function ContinuityProof({ selectedAddress, onAddressSelect }: Continuity
     setLineageTruncated(result.truncated);
   };
   
+  const getOverallProgress = useCallback((): number => {
+    const { current, total, step, totalSteps } = buildProgress;
+    if (totalSteps <= 0 || step <= 0) return 0;
+    const stepFraction = total > 0 ? current / total : 0;
+    return ((step - 1 + stepFraction) / totalSteps) * 100;
+  }, [buildProgress]);
+
   const handleCancelBuild = useCallback(() => {
+    if (!abortControllerRef.current) return;
+    const progress = getOverallProgress();
+    if (progress >= CANCEL_CONFIRM_THRESHOLD) {
+      setShowCancelConfirm(true);
+    } else {
+      abortControllerRef.current.abort();
+    }
+  }, [getOverallProgress]);
+
+  const handleConfirmCancel = useCallback(() => {
+    setShowCancelConfirm(false);
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
     }
@@ -691,6 +721,30 @@ export function ContinuityProof({ selectedAddress, onAddressSelect }: Continuity
           </>
         )}
       </CardContent>
+
+      <AlertDialog open={showCancelConfirm} onOpenChange={setShowCancelConfirm}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Cancel Build?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This build is {Math.round(getOverallProgress())}% complete.
+              {buildProgress.step >= 2
+                ? " Lineage data from step 1 is already saved, and custody segments created so far will be kept. However, the remaining items won't be processed."
+                : " Data processed so far will be kept, but the remaining items won't be processed."}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel data-testid="button-cancel-build-dismiss">Continue Building</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleConfirmCancel}
+              className="bg-destructive text-destructive-foreground"
+              data-testid="button-cancel-build-confirm"
+            >
+              Cancel Build
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Card>
   );
 }
