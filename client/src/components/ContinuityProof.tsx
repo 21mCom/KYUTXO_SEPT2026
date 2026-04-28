@@ -122,6 +122,8 @@ export function ContinuityProof({ selectedAddress, onAddressSelect }: Continuity
     lineageAvgRate: 0,
     lineagePeakRate: 0,
   });
+  const ROLLING_WINDOW_SECONDS = 5;
+  const rateSamplesRef = useRef<Array<{ time: number; count: number }>>([]);
   const [lastBuildMeta, setLastBuildMeta] = useState<LastBuildMeta | null>(loadLastBuildMeta);
 
   useEffect(() => {
@@ -134,6 +136,18 @@ export function ContinuityProof({ selectedAddress, onAddressSelect }: Continuity
     }, 1000);
     return () => clearInterval(interval);
   }, [isBuilding]);
+
+  useEffect(() => {
+    if (!isBuilding || buildProgress.current <= 0) return;
+    const now = Date.now();
+    const samples = rateSamplesRef.current;
+    if (samples.length > 0 && samples[samples.length - 1].count === buildProgress.current) return;
+    samples.push({ time: now, count: buildProgress.current });
+    const cutoff = now - ROLLING_WINDOW_SECONDS * 2 * 1000;
+    while (samples.length > 0 && samples[0].time < cutoff) {
+      samples.shift();
+    }
+  }, [isBuilding, buildProgress]);
 
   const formatDuration = (totalSeconds: number): string => {
     if (totalSeconds < 1) return "0s";
@@ -150,11 +164,27 @@ export function ContinuityProof({ selectedAddress, onAddressSelect }: Continuity
   const getProcessingRate = (): number | null => {
     const { current, total } = buildProgress;
     if (current <= 0 || total <= 0) return null;
-    const processed = current - phaseStartCountRef.current;
+    const samples = rateSamplesRef.current;
+    if (samples.length < 1) return null;
+    const now = Date.now();
+    const cutoff = now - ROLLING_WINDOW_SECONDS * 2 * 1000;
+    while (samples.length > 1 && samples[0].time < cutoff) {
+      samples.shift();
+    }
+    const windowStart = now - ROLLING_WINDOW_SECONDS * 1000;
+    let startIdx = 0;
+    for (let i = samples.length - 1; i >= 0; i--) {
+      if (samples[i].time <= windowStart) {
+        startIdx = i;
+        break;
+      }
+    }
+    const startSample = samples[startIdx];
+    const elapsed = (now - startSample.time) / 1000;
+    if (elapsed < 1.5) return null;
+    const processed = current - startSample.count;
     if (processed <= 0) return null;
-    const phaseElapsed = (Date.now() - phaseStartTimeRef.current) / 1000;
-    if (phaseElapsed < 2) return null;
-    return processed / phaseElapsed;
+    return processed / elapsed;
   };
 
   const formatRate = (rate: number): string => {
@@ -263,6 +293,7 @@ export function ContinuityProof({ selectedAddress, onAddressSelect }: Continuity
     resetPhasePeakTracking();
     rateTrackingRef.current.lineageAvgRate = 0;
     rateTrackingRef.current.lineagePeakRate = 0;
+    rateSamplesRef.current = [];
     setIsBuilding(true);
     setBuildProgress({ current: 0, total: 0, phase: 'Scanning transactions...', step: 1, totalSteps: 2, unit: 'transactions' });
     
@@ -294,6 +325,7 @@ export function ContinuityProof({ selectedAddress, onAddressSelect }: Continuity
       resetPhasePeakTracking();
       phaseStartTimeRef.current = Date.now();
       phaseStartCountRef.current = 0;
+      rateSamplesRef.current = [];
       setBuildProgress({ current: 0, total: 0, phase: 'Scanning origin UTXOs...', step: 2, totalSteps: 2, unit: 'origins' });
       
       const segmentResult = await buildAllCustodySegments((current, total) => {
