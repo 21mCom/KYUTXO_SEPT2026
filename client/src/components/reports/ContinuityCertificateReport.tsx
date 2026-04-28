@@ -70,6 +70,7 @@ export function ContinuityCertificateReport() {
   const [exportProgress, setExportProgress] = useState<{ current: number; total: number } | null>(null);
   const [resumedFromCount, setResumedFromCount] = useState(0);
   const [exportError, setExportError] = useState<{ message: string; format: 'json' | 'pdf'; partialBundle?: EvidenceBundle } | null>(null);
+  const [cancelledPartial, setCancelledPartial] = useState<{ bundle: EvidenceBundle; format: 'json' | 'pdf'; totalRequested: number } | null>(null);
   const [isDownloadingPartial, setIsDownloadingPartial] = useState(false);
   const exportAbortRef = useRef<AbortController | null>(null);
   const { toast } = useToast();
@@ -182,6 +183,7 @@ export function ContinuityCertificateReport() {
     exportAbortRef.current = controller;
     setIsExporting(true);
     setExportError(null);
+    setCancelledPartial(null);
     const priorCount = resumeFromBundle ? resumeFromBundle.segments.length : 0;
     setResumedFromCount(priorCount);
     setExportProgress({ current: priorCount, total: selectedSegmentIds.length });
@@ -204,7 +206,11 @@ export function ContinuityCertificateReport() {
 
       if (controller.signal.aborted) {
         if (bundle.isPartial && bundle.summary.totalSegments > 0) {
-          setExportError({ message: `Cancelled after processing ${bundle.summary.totalSegments} of ${bundle.requestedSegments ?? selectedSegmentIds.length} segments.`, format: exportFormat, partialBundle: bundle });
+          setCancelledPartial({
+            bundle,
+            format: exportFormat,
+            totalRequested: bundle.requestedSegments ?? selectedSegmentIds.length
+          });
           await savePartialBundle(bundle, exportFormat, selectedSegmentIds);
           toast({
             title: "Export cancelled",
@@ -556,6 +562,81 @@ export function ContinuityCertificateReport() {
               {exportError.partialBundle.summary.totalSegments} of {exportError.partialBundle.requestedSegments} segments were successfully processed. Resume to continue from where it left off.
             </div>
           )}
+        </div>
+      )}
+
+      {cancelledPartial && !isExporting && (
+        <div className="flex flex-col gap-2 p-3 bg-muted/30 border rounded-lg" data-testid="cancelled-partial">
+          <div className="flex items-center gap-3">
+            <Ban className="h-5 w-5 text-muted-foreground shrink-0" />
+            <div className="flex-1 space-y-1">
+              <div className="flex items-center justify-between gap-2 text-sm">
+                <span className="font-medium">
+                  Export cancelled
+                </span>
+                <span className="text-muted-foreground text-xs">
+                  {cancelledPartial.bundle.summary.totalSegments} of {cancelledPartial.totalRequested} segments completed
+                </span>
+              </div>
+              <Progress
+                value={(cancelledPartial.bundle.summary.totalSegments / cancelledPartial.totalRequested) * 100}
+                className="h-2"
+                data-testid="progress-bar-cancelled"
+              />
+            </div>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => downloadPartialBundle(cancelledPartial.bundle, 'json')}
+                disabled={isDownloadingPartial}
+                data-testid="button-cancelled-download-json"
+              >
+                {isDownloadingPartial ? (
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                ) : (
+                  <FileJson className="h-4 w-4 mr-2" />
+                )}
+                JSON
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => downloadPartialBundle(cancelledPartial.bundle, 'pdf')}
+                disabled={isDownloadingPartial}
+                data-testid="button-cancelled-download-pdf"
+              >
+                {isDownloadingPartial ? (
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                ) : (
+                  <FileText className="h-4 w-4 mr-2" />
+                )}
+                PDF
+              </Button>
+              <Button
+                size="sm"
+                onClick={() => exportSelectedCertificates(cancelledPartial.format, cancelledPartial.bundle)}
+                disabled={selectedCertificates.size === 0 || isDownloadingPartial}
+                data-testid="button-cancelled-resume"
+              >
+                <ArrowRight className="h-4 w-4 mr-2" />
+                Resume
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => setCancelledPartial(null)}
+                disabled={isDownloadingPartial}
+                data-testid="button-dismiss-cancelled"
+              >
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 ml-8 text-xs text-muted-foreground" data-testid="text-cancelled-partial-info">
+            <Badge variant="outline" className="text-xs">PARTIAL</Badge>
+            {cancelledPartial.bundle.summary.totalSegments} of {cancelledPartial.totalRequested} segments were processed before cancellation. Download partial results or resume to continue.
+          </div>
         </div>
       )}
 
