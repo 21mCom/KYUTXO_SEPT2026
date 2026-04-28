@@ -55,7 +55,7 @@ export default function BalanceOverview() {
   const [displayUnit, setDisplayUnit] = useState<DisplayUnit>("btc");
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
 
-  const txDbSignal = useDbChangeSignal('blockchainTransactions');
+  const txDbSignal = useDbChangeSignal(['blockchainTransactions']);
 
   const [transactions, setTransactions] = useState<BlockchainTransaction[] | undefined>(undefined);
   const transactionsRequestId = useRef(0);

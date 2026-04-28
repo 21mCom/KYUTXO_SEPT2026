@@ -144,7 +144,7 @@ export default function Nudgie() {
   const { walletSoftware } = useWalletSoftware();
   const { enabledCustomFields } = useCustomFields();
 
-  const txDbSignal = useDbChangeSignal('blockchainTransactions');
+  const txDbSignal = useDbChangeSignal(['blockchainTransactions']);
 
   const [transactions, setTransactions] = useState<BlockchainTransaction[] | undefined>(undefined);
   const transactionsRequestId = useRef(0);

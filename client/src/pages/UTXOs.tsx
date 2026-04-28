@@ -190,7 +190,7 @@ export default function UTXOs() {
     saveSettings({ displayUnit, sortColumn, sortDirection, ownerFilter, walletFilter, tagFilter, categoryFilter, utxoMode });
   }, [displayUnit, sortColumn, sortDirection, ownerFilter, walletFilter, tagFilter, categoryFilter, utxoMode]);
 
-  const txDbSignal = useDbChangeSignal('blockchainTransactions');
+  const txDbSignal = useDbChangeSignal(['blockchainTransactions']);
 
   const [transactions, setTransactions] = useState<BlockchainTransaction[] | undefined>(undefined);
   const transactionsRequestId = useRef(0);

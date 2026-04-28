@@ -188,17 +188,28 @@ export default function Transactions() {
         .toArray();
     }
 
-    const matchesFilter = (tx: BlockchainTransaction): boolean => {
-      if (!includeBlockchainDiscovered && !userCuratedTxidSet.has(tx.txid)) return false;
-      if (opReturnOnly && !tx.hasOpReturn) return false;
-      return true;
-    };
+    if (includeBlockchainDiscovered && opReturnOnly) {
+      return db.blockchainTransactions
+        .where('hasOpReturn').equals(1)
+        .reverse()
+        .sortBy('blockTime')
+        .then(sorted => sorted.slice(dbOffset, dbOffset + dbLimit));
+    }
 
-    return db.blockchainTransactions
-      .orderBy('blockTime').reverse()
-      .filter(matchesFilter)
-      .offset(dbOffset).limit(dbLimit)
-      .toArray();
+    const txidArray = Array.from(userCuratedTxidSet);
+    const allCurated: BlockchainTransaction[] = [];
+    const batchSize = 500;
+    for (let i = 0; i < txidArray.length; i += batchSize) {
+      checkAbort(signal);
+      const batch = txidArray.slice(i, i + batchSize);
+      const batchTxs = await db.blockchainTransactions.where('txid').anyOf(batch).toArray();
+      allCurated.push(...batchTxs);
+      if (i + batchSize < txidArray.length) await yieldToUI();
+    }
+
+    const filtered = opReturnOnly ? allCurated.filter(tx => tx.hasOpReturn) : allCurated;
+    filtered.sort((a, b) => (b.blockTime ?? 0) - (a.blockTime ?? 0));
+    return filtered.slice(dbOffset, dbOffset + dbLimit);
   }, [includeBlockchainDiscovered, userCuratedTxidSet, opReturnOnly,
       dbOffset, dbLimit, txDbSignal],
      [] as BlockchainTransaction[]);
