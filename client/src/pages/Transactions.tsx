@@ -318,6 +318,12 @@ function VirtualizedTransactionList({
   const recordCacheRef = useRef(new Map<string, Record>());
   const pendingLoadsRef = useRef(new Set<string>());
   const [cacheVersion, setCacheVersion] = useState(0);
+  const statsRef = useRef<{
+    volume: number;
+    txCount: number;
+    linkedAddresses: Set<string>;
+    allAddresses: Set<string>;
+  }>({ volume: 0, txCount: 0, linkedAddresses: new Set(), allAddresses: new Set() });
 
   const txIdentity = transactions.length > 0
     ? `${transactions.length}-${transactions[0].txid}-${transactions[transactions.length - 1].txid}`
@@ -327,7 +333,9 @@ function VirtualizedTransactionList({
     participantCacheRef.current = new Map();
     recordCacheRef.current = new Map();
     pendingLoadsRef.current = new Set();
+    statsRef.current = { volume: 0, txCount: 0, linkedAddresses: new Set(), allAddresses: new Set() };
     setCacheVersion(0);
+    onStatsChange?.({ loadedVolume: 0, loadedLinkedAddressCount: 0, loadedTxCount: 0 });
   }, [txIdentity]);
 
   const virtualizer = useVirtualizer({
@@ -395,7 +403,23 @@ function VirtualizedTransactionList({
           }
         }
 
-        if (!cancelled) setCacheVersion(v => v + 1);
+        if (!cancelled) {
+          const stats = statsRef.current;
+          stats.txCount += txidsToLoad.length;
+          for (const p of participants) {
+            stats.allAddresses.add(p.address);
+            if (p.role === 'output') stats.volume += p.amount;
+            if (baseAddressToRecord.has(p.address) || recordCacheRef.current.has(p.address)) {
+              stats.linkedAddresses.add(p.address);
+            }
+          }
+          setCacheVersion(v => v + 1);
+          onStatsChange?.({
+            loadedVolume: stats.volume,
+            loadedLinkedAddressCount: stats.linkedAddresses.size,
+            loadedTxCount: stats.txCount,
+          });
+        }
       } finally {
         txidsToLoad.forEach(txid => pending.delete(txid));
       }
@@ -415,29 +439,24 @@ function VirtualizedTransactionList({
 
   useEffect(() => {
     if (!onStatsChange) return;
-    const cache = participantCacheRef.current;
-    const records = recordCacheRef.current;
-    let totalVolume = 0;
-    let loadedTxCount = 0;
-    const linkedAddresses = new Set<string>();
+    const stats = statsRef.current;
+    if (stats.allAddresses.size === 0) return;
 
-    for (const [, participants] of cache) {
-      loadedTxCount++;
-      for (const p of participants) {
-        if (p.role === 'output') totalVolume += p.amount;
-        if (baseAddressToRecord.has(p.address) || records.has(p.address)) {
-          linkedAddresses.add(p.address);
-        }
+    const newLinked = new Set<string>();
+    const records = recordCacheRef.current;
+    for (const addr of stats.allAddresses) {
+      if (baseAddressToRecord.has(addr) || records.has(addr)) {
+        newLinked.add(addr);
       }
     }
+    stats.linkedAddresses = newLinked;
 
     onStatsChange({
-      loadedVolume: totalVolume,
-      loadedLinkedAddressCount: linkedAddresses.size,
-      loadedTxCount,
+      loadedVolume: stats.volume,
+      loadedLinkedAddressCount: newLinked.size,
+      loadedTxCount: stats.txCount,
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cacheVersion, onStatsChange, baseAddressToRecord]);
+  }, [baseAddressToRecord, onStatsChange]);
 
   return (
     <div
