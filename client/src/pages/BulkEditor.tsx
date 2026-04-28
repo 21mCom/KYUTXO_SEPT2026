@@ -222,7 +222,7 @@ function useResizeRemeasure(
   }, [parentRef, virtualizer]);
 }
 
-function VirtualizedPreviewList({ records }: { records: Record[] }) {
+function VirtualizedPreviewList({ records, scrollToTopSignal }: { records: Record[]; scrollToTopSignal: number }) {
   const parentRef = useRef<HTMLDivElement>(null);
 
   const virtualizer = useVirtualizer({
@@ -238,6 +238,12 @@ function VirtualizedPreviewList({ records }: { records: Record[] }) {
   useEffect(() => {
     virtualizer.measure();
   }, [records, virtualizer]);
+
+  useEffect(() => {
+    if (scrollToTopSignal > 0 && parentRef.current) {
+      parentRef.current.scrollTop = 0;
+    }
+  }, [scrollToTopSignal]);
 
   return (
     <div className="border rounded-lg">
@@ -457,6 +463,7 @@ export default function BulkEditor() {
   const [matchingRecords, setMatchingRecords] = useState<Record[]>([]);
   const [isFilterLoading, setIsFilterLoading] = useState(false);
   const [totalRecordCount, setTotalRecordCount] = useState<number | null>(null);
+  const [scrollResetSignal, setScrollResetSignal] = useState(0);
   const queryVersionRef = useRef(0);
   const dbChangeSignal = useDbChangeSignal(['records'], 500);
 
@@ -720,6 +727,7 @@ export default function BulkEditor() {
       });
       
       setActions([]);
+      setScrollResetSignal(s => s + 1);
       
     } catch (error) {
       console.error('Bulk edit failed:', error);
@@ -756,6 +764,7 @@ export default function BulkEditor() {
       });
       
       setLastUndo(null);
+      setScrollResetSignal(s => s + 1);
     } catch (error) {
       console.error('Undo failed:', error);
       toast({
@@ -1328,7 +1337,7 @@ export default function BulkEditor() {
         <CardContent className="space-y-4">
           {/* Preview of matching records */}
           {matchingRecords.length > 0 && (
-            <VirtualizedPreviewList records={matchingRecords} />
+            <VirtualizedPreviewList records={matchingRecords} scrollToTopSignal={scrollResetSignal} />
           )}
           
           {/* Attachment storage estimate */}
