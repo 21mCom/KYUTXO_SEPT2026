@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useRef, useCallback } from "react";
+import { useState, useMemo, useRef, useCallback } from "react";
 import { useAsyncMemo, yieldToUI, checkAbort } from "@/hooks/use-async-memo";
 import { useDbChangeSignal } from "@/hooks/use-db-change-signal";
 import { useLiveQuery } from "dexie-react-hooks";
@@ -145,7 +145,11 @@ export default function Nudgie() {
 
   const txDbSignal = useDbChangeSignal(['blockchainTransactions']);
 
-  const [allTransactionsCount, setAllTransactionsCount] = useState(0);
+  const allTransactionsCount = useLiveQuery(
+    () => db.blockchainTransactions.count(),
+    [],
+    0
+  );
 
   const rawAddressRecords = useLiveQuery(
     async () => {
@@ -197,12 +201,6 @@ export default function Nudgie() {
     [addressRecords],
     undefined as TransactionParticipant[] | undefined
   );
-
-  useEffect(() => {
-    db.blockchainTransactions.count().then(count => {
-      setAllTransactionsCount(count);
-    }).catch(() => {});
-  }, [participants]);
 
   const { value: transactions } = useAsyncMemo(
     async (signal) => {
