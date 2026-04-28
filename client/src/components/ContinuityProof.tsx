@@ -51,6 +51,7 @@ import {
   type UtxoLineage
 } from "@/lib/lineageEngine";
 import { db } from "@/lib/database";
+import { computeOverallProgress, decideCancelAction, CANCEL_CONFIRM_THRESHOLD } from "@/lib/buildProgress";
 import { format, formatDistanceToNow } from "date-fns";
 
 interface ContinuityProofProps {
@@ -60,7 +61,6 @@ interface ContinuityProofProps {
 
 const LAST_BUILD_DURATION_KEY = 'kyutxo_last_build_duration_seconds';
 const LAST_BUILD_META_KEY = 'kyutxo_last_build_meta';
-const CANCEL_CONFIRM_THRESHOLD = 75;
 
 interface LastBuildMeta {
   durationSeconds: number;
@@ -260,19 +260,15 @@ export function ContinuityProof({ selectedAddress, onAddressSelect }: Continuity
   };
   
   const getOverallProgress = useCallback((): number => {
-    const { current, total, step, totalSteps } = buildProgress;
-    if (totalSteps <= 0 || step <= 0) return 0;
-    const stepFraction = total > 0 ? current / total : 0;
-    return ((step - 1 + stepFraction) / totalSteps) * 100;
+    return computeOverallProgress(buildProgress);
   }, [buildProgress]);
 
   const handleCancelBuild = useCallback(() => {
-    if (!abortControllerRef.current) return;
-    const progress = getOverallProgress();
-    if (progress >= CANCEL_CONFIRM_THRESHOLD) {
+    const action = decideCancelAction(!!abortControllerRef.current, getOverallProgress());
+    if (action === 'show_confirm') {
       setShowCancelConfirm(true);
-    } else {
-      abortControllerRef.current.abort();
+    } else if (action === 'abort') {
+      abortControllerRef.current!.abort();
     }
   }, [getOverallProgress]);
 
