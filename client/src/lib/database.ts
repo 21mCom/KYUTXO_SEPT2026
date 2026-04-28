@@ -13,8 +13,8 @@ import type {
 } from './db-types';
 
 export class KYUTXODatabase extends Dexie {
-  // IMPORTANT: Do not call write methods (add, put, delete, bulkAdd, bulkPut,
-  // bulkDelete, modify, clear) on db.records outside of record-crud.ts.
+  // IMPORTANT: Do not call write methods (add, put, update, delete, bulkAdd,
+  // bulkPut, bulkDelete, modify, clear) on db.records outside record-crud.ts.
   // All record writes must go through the CRUD layer in
   // client/src/lib/data/record-crud.ts (re-exported via dataFacade.ts).
   // Run `node scripts/check-record-writes.js` to verify compliance.
@@ -30,12 +30,20 @@ export class KYUTXODatabase extends Dexie {
   customFields!: Table<CustomField>;
   settings!: Table<Settings>;
   priceData!: Table<PriceData>;
+  // IMPORTANT: Do not call write methods (add, put, update, delete, bulkAdd,
+  // bulkPut, bulkDelete, modify, clear) on db.blockchainTransactions or
+  // db.transactionParticipants outside of transaction-crud.ts.
+  // All writes must go through client/src/lib/data/transaction-crud.ts.
   blockchainTransactions!: Table<BlockchainTransaction>;
   transactionParticipants!: Table<TransactionParticipant>;
   addressSyncState!: Table<AddressSyncState>;
   nodeSettings!: Table<NodeSettings>;
   derivationTemplates!: Table<DerivationTemplate>;
   // Lineage tracking tables for AML/SOF
+  // IMPORTANT: Do not call write methods (add, put, update, delete, bulkAdd,
+  // bulkPut, bulkDelete, modify, clear) on db.utxoLineage or
+  // db.custodySegments outside of lineage-crud.ts.
+  // All writes must go through client/src/lib/data/lineage-crud.ts.
   utxoLineage!: Table<UtxoLineage>;
   custodySegments!: Table<CustodySegment>;
   lineageSnapshots!: Table<LineageSnapshot>;

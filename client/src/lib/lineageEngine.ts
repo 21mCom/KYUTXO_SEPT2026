@@ -9,7 +9,7 @@ import {
   type CustodyStatus,
   type AddressImportance
 } from './database';
-import { getParticipantsByTxid } from './dataFacade';
+import { getParticipantsByTxid, bulkAddUtxoLineage, addCustodySegment } from './dataFacade';
 
 // Generate a simple UUID for segment IDs
 function generateSegmentId(): string {
@@ -190,7 +190,7 @@ export async function buildAllLineage(
       const lineageRecords = await buildLineageForTransaction(tx.txid);
 
       if (lineageRecords.length > 0) {
-        await db.utxoLineage.bulkAdd(lineageRecords);
+        await bulkAddUtxoLineage(lineageRecords, { skipNotification: true });
         created += lineageRecords.length;
       }
 
@@ -435,7 +435,7 @@ export async function buildCustodySegment(
     updatedAt: now
   };
   
-  await db.custodySegments.add(segment);
+  await addCustodySegment(segment, { skipNotification: true });
   
   return segment;
 }

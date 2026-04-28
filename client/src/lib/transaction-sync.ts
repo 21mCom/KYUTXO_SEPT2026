@@ -4,7 +4,7 @@
 import { db, notifyDbChange, type Record, type BlockchainTransaction, type TransactionParticipant, type AddressSyncState, type NodeSettings, type PausedSyncState, type SkippedAddress, type AddressBlacklist, type SyncProtectionSettings, DEFAULT_SYNC_PROTECTION } from './database';
 import { createProvider, createProviderFromSettings, parseTransaction, MINIMUM_CONFIRMATIONS, type ProviderType, type ParsedTransaction, type BlockchainProvider, type ApiTransaction } from './blockchain-api';
 import { validateAddress } from './bitcoin';
-import { createRecord, createRecordOrigin, updateRecord } from './dataFacade';
+import { createRecord, createRecordOrigin, updateRecord, addTransaction, bulkAddParticipants, bulkPutParticipants } from './dataFacade';
 
 // Legacy source filter type - kept for backwards compatibility
 export type SourceFilter = 'manual-only' | 'include-tx-import' | 'include-blockchain-sync' | 'all' | 'custom';
@@ -1354,7 +1354,7 @@ export class TransactionSyncService {
         continue;
       }
 
-      await db.blockchainTransactions.add({
+      await addTransaction({
         txid: parsed.txid,
         blockHeight: parsed.blockHeight,
         blockTime: parsed.blockTime,
@@ -1366,7 +1366,7 @@ export class TransactionSyncService {
         vsize: parsed.vsize,
         hasOpReturn: parsed.hasOpReturn,
         opReturnData: parsed.opReturnData.length > 0 ? parsed.opReturnData : undefined,
-      });
+      }, { skipNotification: true });
       stats.imported++;
 
       const txSyncDepth = Math.max(0, newAddressDepth - 1);
@@ -1433,7 +1433,7 @@ export class TransactionSyncService {
 
       // Encrypt and batch insert all participants for this transaction at once
       if (participantsBatch.length > 0) {
-        await db.transactionParticipants.bulkAdd(participantsBatch);
+        await bulkAddParticipants(participantsBatch, { skipNotification: true });
       }
 
       txProcessed++;
@@ -1602,11 +1602,7 @@ export class TransactionSyncService {
     if (resolvedParticipants.length > 0) {
       for (let i = 0; i < resolvedParticipants.length; i += 200) {
         const batch = resolvedParticipants.slice(i, i + 200);
-        await db.transaction('rw', db.transactionParticipants, async () => {
-          for (const p of batch) {
-            if (p.id) await db.transactionParticipants.put(p);
-          }
-        });
+        await bulkPutParticipants(batch, { skipNotification: true });
         if (onProgress) onProgress(Math.min(stats.resolved, unresolvedInputs.length), unresolvedInputs.length);
       }
       console.log(`[TransactionSync] Resolved ${stats.resolved} prevout inputs (${stats.fetchedFromNode} fetched from node, ${stats.errors} errors)`);

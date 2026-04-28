@@ -1,7 +1,8 @@
 import { db } from './database';
-import { createRecord } from './dataFacade';
-import { getParticipantsByTxid } from './dataFacade';
+import { createRecord, getParticipantsByTxid } from './dataFacade';
 import { clearAllRecords } from './data/record-crud';
+import { addTransaction, addParticipant, clearTransactions, clearParticipants } from './data/transaction-crud';
+import { addUtxoLineage, updateUtxoLineage, addCustodySegment, clearUtxoLineage, clearCustodySegments } from './data/lineage-crud';
 
 /**
  * Test data seeding utility for demonstrating KYUTXO features.
@@ -183,10 +184,10 @@ export async function seedTestData(options: { clearExisting?: boolean } = {}): P
       await db.owners.clear();
       await db.walletNames.clear();
       await db.seedNames.clear();
-      await db.blockchainTransactions.clear();
-      await db.transactionParticipants.clear();
-      await db.utxoLineage.clear();
-      await db.custodySegments.clear();
+      await clearTransactions({ skipNotification: true });
+      await clearParticipants({ skipNotification: true });
+      await clearUtxoLineage({ skipNotification: true });
+      await clearCustodySegments({ skipNotification: true });
     });
   }
   
@@ -273,14 +274,14 @@ export async function seedTestData(options: { clearExisting?: boolean } = {}): P
   for (const tx of MOCK_TRANSACTIONS) {
     const existingTx = await db.blockchainTransactions.where('txid').equals(tx.txid).first();
     if (!existingTx) {
-      await db.blockchainTransactions.add({
+      await addTransaction({
         txid: tx.txid,
         blockHeight: tx.blockHeight,
         blockTime: tx.blockTime,
         fee: tx.fee,
         feeRate: tx.feeRate,
         syncedAt: now
-      });
+      }, { skipNotification: true });
     }
     
     // Add inputs
@@ -299,7 +300,7 @@ export async function seedTestData(options: { clearExisting?: boolean } = {}): P
           vout: input.vout,
           recordId: addressToRecordId.get(input.address)
         };
-        await db.transactionParticipants.add(p);
+        await addParticipant(p, { skipNotification: true });
       }
     }
     
@@ -318,7 +319,7 @@ export async function seedTestData(options: { clearExisting?: boolean } = {}): P
           vout: output.vout,
           recordId: addressToRecordId.get(output.address)
         };
-        await db.transactionParticipants.add(p);
+        await addParticipant(p, { skipNotification: true });
       }
     }
   }
@@ -377,7 +378,7 @@ async function buildTestLineage(addressToRecordId: Map<string, number>): Promise
               .first();
             
             if (!existing) {
-              await db.utxoLineage.add({
+              await addUtxoLineage({
                 spentTxid: utxo.txid,
                 spentVout: utxo.vout,
                 spentAddress: utxo.address,
@@ -394,7 +395,7 @@ async function buildTestLineage(addressToRecordId: Map<string, number>): Promise
                 blockTime: tx.blockTime,
                 blockHeight: tx.blockHeight,
                 createdAt: now,
-              });
+              }, { skipNotification: true });
               lineageCount++;
             }
           }
@@ -503,7 +504,7 @@ async function buildTestCustodySegments(addressToRecordId: Map<string, number>):
       .first();
     
     if (!existing) {
-      await db.custodySegments.add({
+      await addCustodySegment({
         segmentId,
         originTxid: lineage.spentTxid,
         originVout: lineage.spentVout,
@@ -523,11 +524,11 @@ async function buildTestCustodySegments(addressToRecordId: Map<string, number>):
         seedName,
         createdAt: now,
         updatedAt: now,
-      });
+      }, { skipNotification: true });
       
       // Link lineage records to segment
       for (const l of chain) {
-        await db.utxoLineage.update(l.id!, { segmentId });
+        await updateUtxoLineage(l.id!, { segmentId }, { skipNotification: true });
       }
     }
   }
@@ -556,10 +557,10 @@ export async function clearTestData(): Promise<void> {
     await db.seedNames.clear();
     await db.tags.clear();
     await db.categories.clear();
-    await db.blockchainTransactions.clear();
-    await db.transactionParticipants.clear();
-    await db.utxoLineage.clear();
-    await db.custodySegments.clear();
+    await clearTransactions({ skipNotification: true });
+    await clearParticipants({ skipNotification: true });
+    await clearUtxoLineage({ skipNotification: true });
+    await clearCustodySegments({ skipNotification: true });
     await db.lineageSnapshots.clear();
   });
 }

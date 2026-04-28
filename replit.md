@@ -30,7 +30,12 @@ KYUTXO features an offline-first architecture built for cross-platform desktop d
 *   **Vault Management:** Dedicated UI for viewing and managing multisig vaults.
 
 ## Data Layer Conventions
-*   **Record CRUD Guard:** All write operations on `db.records` (add, put, delete, bulkAdd, bulkPut, bulkDelete, modify, clear) must go through `client/src/lib/data/record-crud.ts` (re-exported via `dataFacade.ts`). Direct `db.records` writes outside this module are prohibited. Run `node scripts/check-record-writes.js` to verify compliance. Database migrations in `database.ts` that use `tx.table('records')` are exempt.
+*   **CRUD Layer Guards:** Write operations on the following tables must go through their dedicated CRUD modules (re-exported via `dataFacade.ts`). Direct writes outside the CRUD module are prohibited. Run `node scripts/check-record-writes.js` to verify compliance. Database migrations in `database.ts` that use `tx.table(...)` are exempt.
+    *   `db.records` → `client/src/lib/data/record-crud.ts`
+    *   `db.blockchainTransactions` → `client/src/lib/data/transaction-crud.ts`
+    *   `db.transactionParticipants` → `client/src/lib/data/transaction-crud.ts`
+    *   `db.utxoLineage` → `client/src/lib/data/lineage-crud.ts`
+    *   `db.custodySegments` → `client/src/lib/data/lineage-crud.ts`
 
 ## External Dependencies
 *   **Local File System:** Used for storing attachments with SHA-256 hashed identifiers and opaque filenames.

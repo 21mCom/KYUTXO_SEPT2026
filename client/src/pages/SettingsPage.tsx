@@ -41,6 +41,8 @@ import {
 import { useAuth } from "@/contexts/AuthContext";
 import { db } from "@/lib/database";
 import { bulkCreateRecords, clearAllRecords, type CreateRecordData } from "@/lib/data/record-crud";
+import { clearTransactions, clearParticipants } from "@/lib/data/transaction-crud";
+import { addUtxoLineage, addCustodySegment, clearUtxoLineage, clearCustodySegments } from "@/lib/data/lineage-crud";
 import { deriveKey, decrypt, base64ToBuffer, verifyPassword } from "@/lib/crypto";
 import { getVaultSettings, vaultDb } from "@/lib/vault";
 import { generateSalt, hashPassword, bufferToBase64 } from "@/lib/crypto";
@@ -227,8 +229,8 @@ export default function SettingsPage() {
       await db.customFields.clear();
       
       // Clear blockchain sync data
-      await db.blockchainTransactions.clear();
-      await db.transactionParticipants.clear();
+      await clearTransactions({ skipNotification: true });
+      await clearParticipants({ skipNotification: true });
       await db.addressSyncState.clear();
       
       // Clear vocabulary tables
@@ -533,8 +535,8 @@ export default function SettingsPage() {
         await db.evidenceAttachments.clear();
         await db.priceData.clear();
         await db.nodeSettings.clear();
-        await db.utxoLineage.clear();
-        await db.custodySegments.clear();
+        await clearUtxoLineage({ skipNotification: true });
+        await clearCustodySegments({ skipNotification: true });
       }
 
       setRestoreProgress(50);
@@ -1014,7 +1016,7 @@ export default function SettingsPage() {
       if (utxoLineage && utxoLineage.length > 0) {
         for (const ul of utxoLineage) {
           const { id, ...ulData } = ul;
-          await db.utxoLineage.add(ulData);
+          await addUtxoLineage(ulData, { skipNotification: true });
           lineageDataAdded++;
         }
       }
@@ -1023,7 +1025,7 @@ export default function SettingsPage() {
       if (custodySegments && custodySegments.length > 0) {
         for (const cs of custodySegments) {
           const { id, ...csData } = cs;
-          await db.custodySegments.add(csData);
+          await addCustodySegment(csData, { skipNotification: true });
         }
       }
 
