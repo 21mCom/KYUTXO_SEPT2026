@@ -212,9 +212,36 @@ export default function ValueUpdaterPage() {
   const loadAllValues = useCallback(async () => {
     setValuesLoading(true);
     try {
-      const rawRecords = await db.records.toArray();
-      const values = extractValuesFromRecords(rawRecords, ALL_FIELDS_LIST);
-      setFieldValues(values);
+      const BATCH_SIZE = 2000;
+      const fieldCounters = new Map<string, Map<string, number>>();
+      for (const field of ALL_FIELDS_LIST) {
+        fieldCounters.set(field, new Map());
+      }
+
+      let offset = 0;
+      let hasMore = true;
+
+      while (hasMore) {
+        const batch = await db.records.offset(offset).limit(BATCH_SIZE).toArray();
+        const batchValues = extractValuesFromRecords(batch, ALL_FIELDS_LIST);
+        for (const [field, entries] of batchValues.entries()) {
+          const counter = fieldCounters.get(field)!;
+          for (const { value, count } of entries) {
+            counter.set(value, (counter.get(value) || 0) + count);
+          }
+        }
+        hasMore = batch.length === BATCH_SIZE;
+        offset += BATCH_SIZE;
+        if (hasMore) await new Promise(r => setTimeout(r, 0));
+      }
+
+      const result = new Map<string, Array<{ value: string; count: number }>>();
+      for (const [field, counter] of fieldCounters.entries()) {
+        result.set(field, Array.from(counter.entries())
+          .map(([value, count]) => ({ value, count }))
+          .sort((a, b) => a.value.localeCompare(b.value)));
+      }
+      setFieldValues(result);
     } catch (error) {
       console.error('Failed to load values:', error);
     } finally {
@@ -306,7 +333,18 @@ export default function ValueUpdaterPage() {
   };
 
   const getRecordsForField = useCallback(async (): Promise<DbRecord[]> => {
-    return db.records.toArray();
+    const BATCH_SIZE = 2000;
+    const results: DbRecord[] = [];
+    let offset = 0;
+    let hasMore = true;
+    while (hasMore) {
+      const batch = await db.records.offset(offset).limit(BATCH_SIZE).toArray();
+      results.push(...batch);
+      hasMore = batch.length === BATCH_SIZE;
+      offset += BATCH_SIZE;
+      if (hasMore) await new Promise(r => setTimeout(r, 0));
+    }
+    return results;
   }, []);
 
   const handleUpdateValue = async (field: FieldType, oldValue: string, newValueInput: string) => {

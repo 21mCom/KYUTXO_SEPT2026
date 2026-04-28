@@ -1,5 +1,6 @@
 import { useState, useMemo } from "react";
 import { useAsyncMemo, yieldToUI, checkAbort } from "@/hooks/use-async-memo";
+import { useDbChangeSignal } from "@/hooks/use-db-change-signal";
 import { useLiveQuery } from "dexie-react-hooks";
 import { format } from "date-fns";
 import { db, BlockchainTransaction, TransactionParticipant, Record } from "@/lib/database";
@@ -81,20 +82,17 @@ export default function Transactions() {
   // OP_RETURN filter: only show transactions with OP_RETURN data
   const [opReturnOnly, setOpReturnOnly] = useState(false);
 
-  const allTransactions = useLiveQuery(
-    () => db.blockchainTransactions.orderBy('blockTime').reverse().toArray(),
-    []
-  );
+  const txDbSignal = useDbChangeSignal(['blockchainTransactions', 'transactionParticipants', 'records'], 500);
 
-  // Fetch records using compound index [type+addressImportance] for zero-scan filtering
-  // After v14 migration, all records have addressImportance set
+  const needsClientSideFiltering = search.trim() !== '' ||
+    searchFilters.amountMode !== 'any' ||
+    searchFilters.dateMode !== 'any';
+
   const rawRecords = useLiveQuery(
     async () => {
       if (includeBlockchainDiscovered) {
-        // Load all address records using type index
         return db.records.where('type').equals('address').toArray();
       } else {
-        // Use compound index for efficient filtering without table scans
         return db.records
           .where('[type+addressImportance]')
           .anyOf(USER_CURATED_TIERS.map(tier => ['address', tier]))
@@ -103,10 +101,9 @@ export default function Transactions() {
     },
     [includeBlockchainDiscovered]
   );
-  
+
   const processedRecords = rawRecords ?? [];
 
-  // Build address -> record lookup
   const addressToRecord = useMemo(() => {
     const map = new Map<string, Record>();
     processedRecords.forEach(record => {
@@ -119,13 +116,13 @@ export default function Transactions() {
 
   const { value: userCuratedTxidSet, isComputing: userCuratedTxidSetComputing } = useAsyncMemo(async (signal) => {
     if (!processedRecords || processedRecords.length === 0) return new Set<string>();
-    
+
     const recordIds = processedRecords
       .filter(r => r.id !== undefined)
       .map(r => r.id as number);
-    
+
     if (recordIds.length === 0) return new Set<string>();
-    
+
     const txids = new Set<string>();
     const batchSize = 500;
     for (let i = 0; i < recordIds.length; i += batchSize) {
@@ -141,37 +138,86 @@ export default function Transactions() {
     return txids;
   }, [processedRecords], new Set<string>());
 
-  const blockchainOnlyTxCount = useMemo(() => {
-    if (!allTransactions || userCuratedTxidSetComputing) return 0;
-    let count = 0;
-    for (const tx of allTransactions) {
-      if (!userCuratedTxidSet.has(tx.txid)) count++;
+  const { value: txCounts } = useAsyncMemo(async (signal) => {
+    const totalDbCount = await db.blockchainTransactions.count();
+    checkAbort(signal);
+
+    let filteredCount: number;
+    if (includeBlockchainDiscovered && !opReturnOnly) {
+      filteredCount = totalDbCount;
+    } else if (includeBlockchainDiscovered && opReturnOnly) {
+      filteredCount = await db.blockchainTransactions.where('hasOpReturn').equals(1).count();
+      checkAbort(signal);
+    } else if (!includeBlockchainDiscovered && opReturnOnly) {
+      let count = 0;
+      const txidArray = Array.from(userCuratedTxidSet);
+      const batchSize = 500;
+      for (let i = 0; i < txidArray.length; i += batchSize) {
+        const batch = txidArray.slice(i, i + batchSize);
+        const txs = await db.blockchainTransactions.where('txid').anyOf(batch).toArray();
+        count += txs.filter(tx => tx.hasOpReturn).length;
+        checkAbort(signal);
+      }
+      filteredCount = count;
+    } else {
+      filteredCount = userCuratedTxidSet.size;
     }
-    return count;
-  }, [allTransactions, userCuratedTxidSet, userCuratedTxidSetComputing]);
+
+    const blockchainOnlyCount = includeBlockchainDiscovered ? 0
+      : Math.max(0, totalDbCount - userCuratedTxidSet.size);
+
+    return { totalDbCount, filteredCount, blockchainOnlyCount };
+  }, [includeBlockchainDiscovered, opReturnOnly, userCuratedTxidSet, txDbSignal],
+     { totalDbCount: 0, filteredCount: 0, blockchainOnlyCount: 0 });
+
+  const blockchainOnlyTxCount = txCounts.blockchainOnlyCount;
+
+  const totalFilteredCountForOffset = txCounts.filteredCount;
+  const totalPagesForOffset = Math.max(1, Math.ceil(totalFilteredCountForOffset / ITEMS_PER_PAGE));
+  const safePageForOffset = Math.min(currentPage, totalPagesForOffset);
+  const dbOffset = needsClientSideFiltering ? 0 : (safePageForOffset - 1) * ITEMS_PER_PAGE;
+  const dbLimit = needsClientSideFiltering ? 5000 : ITEMS_PER_PAGE;
+
+  const { value: loadedTransactions, isComputing: txLoading } = useAsyncMemo(async (signal) => {
+    const needsFilter = !includeBlockchainDiscovered || opReturnOnly;
+
+    if (!needsFilter) {
+      return db.blockchainTransactions
+        .orderBy('blockTime').reverse()
+        .offset(dbOffset).limit(dbLimit)
+        .toArray();
+    }
+
+    const matchesFilter = (tx: BlockchainTransaction): boolean => {
+      if (!includeBlockchainDiscovered && !userCuratedTxidSet.has(tx.txid)) return false;
+      if (opReturnOnly && !tx.hasOpReturn) return false;
+      return true;
+    };
+
+    return db.blockchainTransactions
+      .orderBy('blockTime').reverse()
+      .filter(matchesFilter)
+      .offset(dbOffset).limit(dbLimit)
+      .toArray();
+  }, [includeBlockchainDiscovered, userCuratedTxidSet, opReturnOnly,
+      dbOffset, dbLimit, txDbSignal],
+     [] as BlockchainTransaction[]);
 
   const needsBroadParticipants = search.trim() !== '' || searchFilters.amountMode !== 'any';
 
   const preFilteredTransactions = useMemo(() => {
-    if (!allTransactions) return [];
-    let results = [...allTransactions];
-    
-    if (!includeBlockchainDiscovered) {
-      results = results.filter(tx => userCuratedTxidSet.has(tx.txid));
-    }
-    
-    if (opReturnOnly) {
-      results = results.filter(tx => tx.hasOpReturn === true);
-    }
-    
+    if (!needsClientSideFiltering) return loadedTransactions;
+
+    let results = [...loadedTransactions];
+
     const hasDateFilter = searchFilters.dateMode !== 'any';
     if (hasDateFilter) {
       const dateOnlyFilters: SearchFilters = { ...searchFilters, amountMode: 'any' as const };
       results = filterByDateAndAmount(results, dateOnlyFilters, tx => tx.blockTime, () => 0);
     }
-    
+
     return results;
-  }, [allTransactions, includeBlockchainDiscovered, userCuratedTxidSet, searchFilters, opReturnOnly]);
+  }, [loadedTransactions, needsClientSideFiltering, searchFilters]);
 
   const { value: broadParticipantMap } = useAsyncMemo(async (signal) => {
     if (!needsBroadParticipants || preFilteredTransactions.length === 0) {
@@ -227,11 +273,15 @@ export default function Transactions() {
     return results;
   }, [preFilteredTransactions, search, searchFilters, broadParticipantMap, addressToRecord]);
 
-  // Pagination
-  const totalPages = Math.max(1, Math.ceil(filteredTransactions.length / ITEMS_PER_PAGE));
+  const totalFilteredCount = needsClientSideFiltering
+    ? filteredTransactions.length
+    : txCounts.filteredCount;
+  const totalPages = Math.max(1, Math.ceil(totalFilteredCount / ITEMS_PER_PAGE));
   const safePage = Math.min(currentPage, totalPages);
   const startIndex = (safePage - 1) * ITEMS_PER_PAGE;
-  const paginatedTransactionSlice = filteredTransactions.slice(startIndex, startIndex + ITEMS_PER_PAGE);
+  const paginatedTransactionSlice = needsClientSideFiltering
+    ? filteredTransactions.slice(startIndex, startIndex + ITEMS_PER_PAGE)
+    : filteredTransactions;
 
   const { value: pageParticipantMap } = useAsyncMemo(async (signal) => {
     const txids = paginatedTransactionSlice.map(tx => tx.txid);
@@ -296,10 +346,10 @@ export default function Transactions() {
   };
 
   const stats = useMemo(() => {
-    const txCount = filteredTransactions.length;
-    const fees = filteredTransactions.reduce((sum, tx) => sum + tx.fee, 0);
+    const txCount = totalFilteredCount;
+    const pageFees = paginatedTransactions.reduce((sum, tx) => sum + tx.fee, 0);
     const pageVolume = paginatedTransactions.reduce((sum, tx) => sum + tx.totalOutputValue, 0);
-    
+
     const linkedAddresses = new Set<string>();
     paginatedTransactions.forEach(tx => {
       [...tx.inputs, ...tx.outputs].forEach(p => {
@@ -308,16 +358,16 @@ export default function Transactions() {
         }
       });
     });
-    
+
     return {
       txCount,
       pageVolume,
-      fees,
+      pageFees,
       linkedAddressCount: linkedAddresses.size
     };
-  }, [filteredTransactions, paginatedTransactions, addressToRecord]);
+  }, [totalFilteredCount, paginatedTransactions, addressToRecord]);
 
-  const isLoading = !allTransactions;
+  const isLoading = txLoading;
 
   return (
     <div className="flex flex-col h-full overflow-hidden p-4 gap-4">
@@ -360,9 +410,9 @@ export default function Transactions() {
         
         <Card>
           <CardHeader className="pb-2">
-            <CardDescription>Total Fees Paid</CardDescription>
+            <CardDescription>Page Fees</CardDescription>
             <CardTitle className="text-2xl" data-testid="text-total-fees">
-              {formatSats(stats.fees)}
+              {formatSats(stats.pageFees)}
             </CardTitle>
           </CardHeader>
         </Card>
@@ -669,10 +719,10 @@ export default function Transactions() {
       </div>
 
       {/* Pagination */}
-      {filteredTransactions.length > ITEMS_PER_PAGE && (
+      {totalFilteredCount > ITEMS_PER_PAGE && (
         <div className="flex items-center justify-between border-t pt-4 flex-none">
           <div className="text-sm text-muted-foreground">
-            Showing {startIndex + 1}-{Math.min(startIndex + ITEMS_PER_PAGE, filteredTransactions.length)} of {filteredTransactions.length} transactions
+            Showing {startIndex + 1}-{Math.min(startIndex + ITEMS_PER_PAGE, totalFilteredCount)} of {totalFilteredCount} transactions
           </div>
           <div className="flex items-center gap-2">
             <Button

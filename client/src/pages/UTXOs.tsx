@@ -1,5 +1,6 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { useAsyncMemo, yieldToUI, checkAbort } from "@/hooks/use-async-memo";
+import { useDbChangeSignal } from "@/hooks/use-db-change-signal";
 import { useLiveQuery } from "dexie-react-hooks";
 import { format } from "date-fns";
 import { Link } from "wouter";
@@ -189,24 +190,20 @@ export default function UTXOs() {
     saveSettings({ displayUnit, sortColumn, sortDirection, ownerFilter, walletFilter, tagFilter, categoryFilter, utxoMode });
   }, [displayUnit, sortColumn, sortDirection, ownerFilter, walletFilter, tagFilter, categoryFilter, utxoMode]);
 
-  const transactions = useLiveQuery(
-    () => db.blockchainTransactions.toArray(),
-    []
-  );
+  const txDbSignal = useDbChangeSignal('blockchainTransactions');
+
+  const [transactions, setTransactions] = useState<BlockchainTransaction[] | undefined>(undefined);
+  const transactionsRequestId = useRef(0);
 
   const [participants, setParticipants] = useState<TransactionParticipant[] | undefined>(undefined);
   const [participantsLoading, setParticipantsLoading] = useState(false);
   const participantsRequestId = useRef(0);
 
-  // Load address records using compound index [type+addressImportance] for zero-scan filtering
-  // After v14 migration, all records have addressImportance set
   const rawRecords = useLiveQuery(
     async () => {
       if (includeBlockchainDiscovered) {
-        // Load all address records using type index
         return db.records.where('type').equals('address').toArray();
       } else {
-        // Use compound index for efficient filtering without table scans
         return db.records
           .where('[type+addressImportance]')
           .anyOf(USER_CURATED_TIERS.map(tier => ['address', tier]))
@@ -304,6 +301,51 @@ export default function UTXOs() {
         }
       });
   }, [processedRecords]);
+
+  useEffect(() => {
+    if (!participants || participants.length === 0) {
+      setTransactions(participants === undefined ? undefined : []);
+      return;
+    }
+
+    const txids = new Set<string>();
+    for (const p of participants) txids.add(p.txid);
+
+    if (txids.size === 0) {
+      setTransactions([]);
+      return;
+    }
+
+    transactionsRequestId.current += 1;
+    const thisRequestId = transactionsRequestId.current;
+
+    const txidArray = Array.from(txids);
+    const batchSize = 500;
+    const loadBatched = async () => {
+      const results: BlockchainTransaction[] = [];
+      for (let i = 0; i < txidArray.length; i += batchSize) {
+        const batch = txidArray.slice(i, i + batchSize);
+        const txs = await db.blockchainTransactions.where('txid').anyOf(batch).toArray();
+        results.push(...txs);
+        if (i + batchSize < txidArray.length) {
+          await new Promise(r => setTimeout(r, 0));
+        }
+      }
+      return results;
+    };
+
+    loadBatched()
+      .then(result => {
+        if (thisRequestId === transactionsRequestId.current) {
+          setTransactions(result);
+        }
+      })
+      .catch(() => {
+        if (thisRequestId === transactionsRequestId.current) {
+          setTransactions([]);
+        }
+      });
+  }, [participants, txDbSignal]);
 
   const addressToRecord = useMemo(() => {
     const map = new Map<string, DbRecord>();

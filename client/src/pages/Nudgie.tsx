@@ -1,5 +1,6 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { useAsyncMemo, yieldToUI, checkAbort } from "@/hooks/use-async-memo";
+import { useDbChangeSignal } from "@/hooks/use-db-change-signal";
 import { useLiveQuery } from "dexie-react-hooks";
 import { format } from "date-fns";
 import { 
@@ -143,10 +144,11 @@ export default function Nudgie() {
   const { walletSoftware } = useWalletSoftware();
   const { enabledCustomFields } = useCustomFields();
 
-  const transactions = useLiveQuery(
-    () => db.blockchainTransactions.orderBy('blockTime').reverse().toArray(),
-    []
-  );
+  const txDbSignal = useDbChangeSignal('blockchainTransactions');
+
+  const [transactions, setTransactions] = useState<BlockchainTransaction[] | undefined>(undefined);
+  const transactionsRequestId = useRef(0);
+  const [allTransactionsCount, setAllTransactionsCount] = useState(0);
 
   const rawAddressRecords = useLiveQuery(
     async () => {
@@ -254,6 +256,58 @@ export default function Nudgie() {
         }
       });
   }, [addressRecords]);
+
+  useEffect(() => {
+    db.blockchainTransactions.count().then(count => {
+      setAllTransactionsCount(count);
+    }).catch(() => {});
+  }, [participants]);
+
+  useEffect(() => {
+    if (!participants || participants.length === 0) {
+      setTransactions(participants === undefined ? undefined : []);
+      return;
+    }
+
+    const txids = new Set<string>();
+    for (const p of participants) txids.add(p.txid);
+
+    if (txids.size === 0) {
+      setTransactions([]);
+      return;
+    }
+
+    transactionsRequestId.current += 1;
+    const thisRequestId = transactionsRequestId.current;
+
+    const txidArray = Array.from(txids);
+    const batchSize = 500;
+    const loadBatched = async () => {
+      const results: BlockchainTransaction[] = [];
+      for (let i = 0; i < txidArray.length; i += batchSize) {
+        const batch = txidArray.slice(i, i + batchSize);
+        const txs = await db.blockchainTransactions.where('txid').anyOf(batch).toArray();
+        results.push(...txs);
+        if (i + batchSize < txidArray.length) {
+          await new Promise(r => setTimeout(r, 0));
+        }
+      }
+      return results;
+    };
+
+    loadBatched()
+      .then(result => {
+        if (thisRequestId === transactionsRequestId.current) {
+          result.sort((a, b) => (b.blockTime ?? 0) - (a.blockTime ?? 0));
+          setTransactions(result);
+        }
+      })
+      .catch(() => {
+        if (thisRequestId === transactionsRequestId.current) {
+          setTransactions([]);
+        }
+      });
+  }, [participants, txDbSignal]);
 
   const addressToRecord = useMemo(() => {
     const map = new Map<string, Record>();
@@ -400,7 +454,6 @@ export default function Nudgie() {
   }, [transactionsWithContext]);
 
   const totalUnlabeled = transactionsWithContext.length;
-  const allTransactionsCount = transactions?.length || 0;
   const labeledCount = allTransactionsCount - totalUnlabeled;
   const progressPercent = allTransactionsCount > 0 ? (labeledCount / allTransactionsCount) * 100 : 100;
 

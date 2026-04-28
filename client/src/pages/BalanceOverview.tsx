@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from "react";
+import { useDbChangeSignal } from "@/hooks/use-db-change-signal";
 import { useLiveQuery } from "dexie-react-hooks";
 import { useAsyncMemo, yieldToUI, checkAbort } from "@/hooks/use-async-memo";
 import { db, BlockchainTransaction, TransactionParticipant, Record as DbRecord } from "@/lib/database";
@@ -54,10 +55,10 @@ export default function BalanceOverview() {
   const [displayUnit, setDisplayUnit] = useState<DisplayUnit>("btc");
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
 
-  const transactions = useLiveQuery(
-    () => db.blockchainTransactions.toArray(),
-    []
-  );
+  const txDbSignal = useDbChangeSignal('blockchainTransactions');
+
+  const [transactions, setTransactions] = useState<BlockchainTransaction[] | undefined>(undefined);
+  const transactionsRequestId = useRef(0);
 
   const [participants, setParticipants] = useState<TransactionParticipant[] | undefined>(undefined);
   const participantsRequestId = useRef(0);
@@ -107,6 +108,51 @@ export default function BalanceOverview() {
         }
       });
   }, [processedRecords]);
+
+  useEffect(() => {
+    if (!participants || participants.length === 0) {
+      setTransactions(participants === undefined ? undefined : []);
+      return;
+    }
+
+    const txids = new Set<string>();
+    for (const p of participants) txids.add(p.txid);
+
+    if (txids.size === 0) {
+      setTransactions([]);
+      return;
+    }
+
+    transactionsRequestId.current += 1;
+    const thisRequestId = transactionsRequestId.current;
+
+    const txidArray = Array.from(txids);
+    const batchSize = 500;
+    const loadBatched = async () => {
+      const results: BlockchainTransaction[] = [];
+      for (let i = 0; i < txidArray.length; i += batchSize) {
+        const batch = txidArray.slice(i, i + batchSize);
+        const txs = await db.blockchainTransactions.where('txid').anyOf(batch).toArray();
+        results.push(...txs);
+        if (i + batchSize < txidArray.length) {
+          await new Promise(r => setTimeout(r, 0));
+        }
+      }
+      return results;
+    };
+
+    loadBatched()
+      .then(result => {
+        if (thisRequestId === transactionsRequestId.current) {
+          setTransactions(result);
+        }
+      })
+      .catch(() => {
+        if (thisRequestId === transactionsRequestId.current) {
+          setTransactions([]);
+        }
+      });
+  }, [participants, txDbSignal]);
 
   const addressToRecord = useMemo(() => {
     const map = new Map<string, DbRecord>();
