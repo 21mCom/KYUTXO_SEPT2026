@@ -1,4 +1,5 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useRef, useEffect } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { useAsyncMemo, yieldToUI, checkAbort } from "@/hooks/use-async-memo";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { PAGE_DEBOUNCE } from "@/config/debounce";
@@ -46,6 +47,9 @@ import { ClickableAddress } from "@/components/ClickableAddress";
 
 const ITEMS_PER_PAGE = 25;
 const MAX_COLLECTED_MATCHES = 50_000;
+const VIRTUAL_ITEM_ESTIMATE = 120;
+const VIRTUAL_OVERSCAN = 10;
+const EXPAND_ALL_SEARCH_CAP = 200;
 
 // Helper to format satoshis to BTC
 function satsToBtc(sats: number | undefined): string {
@@ -75,6 +79,385 @@ interface TransactionWithParticipants extends BlockchainTransaction {
 
 // User-curated importance tiers (exclude blockchain-discovered and pending-review by default)
 const USER_CURATED_TIERS = ['verified', 'manual', 'wallet-import', 'xpub-derived'];
+
+function TransactionCard({
+  tx,
+  inputs,
+  outputs,
+  totalOutputValue,
+  isExpanded,
+  onToggleExpand,
+  addressToRecord,
+  participantsLoaded,
+}: {
+  tx: BlockchainTransaction;
+  inputs: TransactionParticipant[];
+  outputs: TransactionParticipant[];
+  totalOutputValue: number;
+  isExpanded: boolean;
+  onToggleExpand: () => void;
+  addressToRecord: Map<string, Record>;
+  participantsLoaded: boolean;
+}) {
+  const txDate = new Date(tx.blockTime * 1000);
+
+  return (
+    <Collapsible open={isExpanded} onOpenChange={onToggleExpand}>
+      <Card data-testid={`card-transaction-${tx.txid.slice(0, 8)}`}>
+        <CollapsibleTrigger asChild>
+          <CardHeader className="cursor-pointer hover-elevate">
+            <div className="flex items-start justify-between gap-4">
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2">
+                  <Hash className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+                  <ClickableAddress
+                    address={tx.txid}
+                    className="flex-1 min-w-0"
+                  />
+                  <a
+                    href={`https://mempool.space/tx/${tx.txid}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={(e) => e.stopPropagation()}
+                    className="text-muted-foreground hover:text-primary"
+                    data-testid={`link-explorer-${tx.txid.slice(0, 8)}`}
+                  >
+                    <ExternalLink className="h-3 w-3" />
+                  </a>
+                </div>
+                <div className="flex items-center gap-4 mt-2 text-sm text-muted-foreground flex-wrap">
+                  <span className="flex items-center gap-1">
+                    <Clock className="h-3 w-3" />
+                    {format(txDate, "MMM d, yyyy HH:mm")}
+                  </span>
+                  <span className="flex items-center gap-1">
+                    Block {(tx.blockHeight ?? 0).toLocaleString()}
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <Zap className="h-3 w-3" />
+                    {(tx.feeRate ?? 0).toFixed(1)} sat/vB
+                  </span>
+                  {tx.vsize && (
+                    <span className="flex items-center gap-1">
+                      <Scale className="h-3 w-3" />
+                      {tx.vsize.toLocaleString()} vB
+                    </span>
+                  )}
+                  {tx.hasOpReturn && (
+                    <Badge variant="outline" className="text-xs bg-purple-50 dark:bg-purple-950 text-purple-700 dark:text-purple-300 border-purple-200 dark:border-purple-800">
+                      <FileCode className="h-3 w-3 mr-1" />
+                      OP_RETURN
+                    </Badge>
+                  )}
+                </div>
+              </div>
+              <div className="flex items-center gap-3">
+                <div className="text-right">
+                  <div className="font-mono text-sm font-medium" data-testid={`text-amount-${tx.txid.slice(0, 8)}`}>
+                    {participantsLoaded ? `${satsToBtc(totalOutputValue)} BTC` : '\u2014'}
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    Fee: {formatSats(tx.fee)}
+                  </div>
+                </div>
+                {isExpanded ? (
+                  <ChevronUp className="h-5 w-5 text-muted-foreground" />
+                ) : (
+                  <ChevronDown className="h-5 w-5 text-muted-foreground" />
+                )}
+              </div>
+            </div>
+          </CardHeader>
+        </CollapsibleTrigger>
+
+        <CollapsibleContent>
+          <CardContent className="pt-0">
+            {!participantsLoaded ? (
+              <div className="flex items-center justify-center py-4">
+                <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                <span className="text-sm text-muted-foreground">Loading transaction details...</span>
+              </div>
+            ) : (
+              <>
+                <div className="grid md:grid-cols-2 gap-4">
+                  <div>
+                    <h4 className="text-sm font-medium mb-2 flex items-center gap-2">
+                      <ArrowDownLeft className="h-4 w-4 text-red-500" />
+                      Inputs ({inputs.length})
+                    </h4>
+                    <div className="space-y-2">
+                      {inputs.map((input, idx) => {
+                        const linkedRecord = addressToRecord.get(input.address);
+                        return (
+                          <div
+                            key={`${input.txid}-input-${idx}`}
+                            className="p-2 rounded-md bg-muted/50 text-sm"
+                            data-testid={`participant-input-${idx}`}
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <ClickableAddress
+                                address={input.address}
+                                className="text-xs truncate flex-1"
+                              />
+                              <span className="font-mono text-xs font-medium whitespace-nowrap">
+                                {formatSats(input.amount)}
+                              </span>
+                            </div>
+                            {linkedRecord && (
+                              <div className="flex items-center gap-1 mt-1">
+                                <LinkIcon className="h-3 w-3 text-primary" />
+                                <Badge variant="secondary" className="text-xs">
+                                  {linkedRecord.label || linkedRecord.owner || 'Labeled'}
+                                </Badge>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <div>
+                    <h4 className="text-sm font-medium mb-2 flex items-center gap-2">
+                      <ArrowUpRight className="h-4 w-4 text-green-500" />
+                      Outputs ({outputs.length})
+                    </h4>
+                    <div className="space-y-2">
+                      {outputs.map((output, idx) => {
+                        const linkedRecord = addressToRecord.get(output.address);
+                        return (
+                          <div
+                            key={`${output.txid}-output-${idx}`}
+                            className="p-2 rounded-md bg-muted/50 text-sm"
+                            data-testid={`participant-output-${idx}`}
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <ClickableAddress
+                                address={output.address}
+                                className="text-xs truncate flex-1"
+                              />
+                              <span className="font-mono text-xs font-medium whitespace-nowrap">
+                                {formatSats(output.amount)}
+                              </span>
+                            </div>
+                            {linkedRecord && (
+                              <div className="flex items-center gap-1 mt-1">
+                                <LinkIcon className="h-3 w-3 text-primary" />
+                                <Badge variant="secondary" className="text-xs">
+                                  {linkedRecord.label || linkedRecord.owner || 'Labeled'}
+                                </Badge>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+
+                {tx.hasOpReturn && tx.opReturnData && tx.opReturnData.length > 0 && (
+                  <div className="mt-4 pt-4 border-t">
+                    <h4 className="text-sm font-medium mb-2 flex items-center gap-2">
+                      <FileCode className="h-4 w-4 text-purple-500" />
+                      OP_RETURN Data ({tx.opReturnData.length})
+                    </h4>
+                    <div className="space-y-2">
+                      {tx.opReturnData.map((opReturn, idx) => (
+                        <div
+                          key={`op-return-${idx}`}
+                          className="p-3 rounded-md bg-purple-50 dark:bg-purple-950/50 border border-purple-200 dark:border-purple-800 text-sm"
+                          data-testid={`op-return-${idx}`}
+                        >
+                          <div className="flex items-center gap-2 mb-2">
+                            <Badge variant="outline" className="text-xs">
+                              Output #{opReturn.vout}
+                            </Badge>
+                          </div>
+                          {opReturn.dataText && (
+                            <div className="mb-2">
+                              <span className="text-xs text-muted-foreground">Text:</span>
+                              <pre className="mt-1 p-2 bg-background rounded text-xs font-mono whitespace-pre-wrap break-all">
+                                {opReturn.dataText}
+                              </pre>
+                            </div>
+                          )}
+                          <div>
+                            <span className="text-xs text-muted-foreground">Hex:</span>
+                            <pre className="mt-1 p-2 bg-background rounded text-xs font-mono whitespace-pre-wrap break-all text-muted-foreground">
+                              {opReturn.dataHex || '(empty)'}
+                            </pre>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+          </CardContent>
+        </CollapsibleContent>
+      </Card>
+    </Collapsible>
+  );
+}
+
+function VirtualizedTransactionList({
+  transactions,
+  expandedTxs,
+  toggleExpanded,
+  baseAddressToRecord,
+}: {
+  transactions: BlockchainTransaction[];
+  expandedTxs: Set<string>;
+  toggleExpanded: (txid: string) => void;
+  baseAddressToRecord: Map<string, Record>;
+}) {
+  const parentRef = useRef<HTMLDivElement>(null);
+  const participantCacheRef = useRef(new Map<string, TransactionParticipant[]>());
+  const recordCacheRef = useRef(new Map<string, Record>());
+  const pendingLoadsRef = useRef(new Set<string>());
+  const [cacheVersion, setCacheVersion] = useState(0);
+
+  const txIdentity = transactions.length > 0
+    ? `${transactions.length}-${transactions[0].txid}-${transactions[transactions.length - 1].txid}`
+    : '';
+
+  useEffect(() => {
+    participantCacheRef.current = new Map();
+    recordCacheRef.current = new Map();
+    pendingLoadsRef.current = new Set();
+    setCacheVersion(0);
+  }, [txIdentity]);
+
+  const virtualizer = useVirtualizer({
+    count: transactions.length,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => VIRTUAL_ITEM_ESTIMATE,
+    overscan: VIRTUAL_OVERSCAN,
+    measureElement: (el) => el.getBoundingClientRect().height,
+  });
+
+  const virtualItems = virtualizer.getVirtualItems();
+  const visibleRangeKey = virtualItems.length > 0
+    ? `${virtualItems[0].index}-${virtualItems[virtualItems.length - 1].index}`
+    : '';
+
+  useEffect(() => {
+    if (!visibleRangeKey || transactions.length === 0) return;
+
+    const [startStr, endStr] = visibleRangeKey.split('-');
+    const start = parseInt(startStr);
+    const end = parseInt(endStr);
+
+    const cache = participantCacheRef.current;
+    const pending = pendingLoadsRef.current;
+    const txidsToLoad: string[] = [];
+
+    for (let i = start; i <= end; i++) {
+      const tx = transactions[i];
+      if (tx && !cache.has(tx.txid) && !pending.has(tx.txid)) {
+        txidsToLoad.push(tx.txid);
+      }
+    }
+
+    if (txidsToLoad.length === 0) return;
+
+    let cancelled = false;
+    txidsToLoad.forEach(txid => pending.add(txid));
+
+    (async () => {
+      try {
+        const participants = await getParticipantsByTxids(txidsToLoad);
+        if (cancelled) return;
+
+        for (const txid of txidsToLoad) {
+          if (!cache.has(txid)) cache.set(txid, []);
+        }
+        for (const p of participants) {
+          const arr = cache.get(p.txid);
+          if (arr) arr.push(p);
+          else cache.set(p.txid, [p]);
+        }
+
+        const recordIds = new Set<number>();
+        for (const p of participants) {
+          if (p.recordId != null) recordIds.add(p.recordId);
+        }
+        if (recordIds.size > 0) {
+          const records = await db.records.bulkGet(Array.from(recordIds));
+          if (!cancelled) {
+            for (const r of records) {
+              if (r && r.type === 'address' && r.inputString) {
+                recordCacheRef.current.set(r.inputString, r);
+              }
+            }
+          }
+        }
+
+        if (!cancelled) setCacheVersion(v => v + 1);
+      } finally {
+        txidsToLoad.forEach(txid => pending.delete(txid));
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [visibleRangeKey, transactions]);
+
+  const mergedAddressToRecord = useMemo(() => {
+    const merged = new Map(baseAddressToRecord);
+    for (const [addr, record] of recordCacheRef.current) {
+      merged.set(addr, record);
+    }
+    return merged;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [baseAddressToRecord, cacheVersion]);
+
+  return (
+    <div
+      ref={parentRef}
+      className="flex-1 overflow-y-auto"
+      data-testid="virtual-scroll-container"
+    >
+      <div
+        className="relative w-full"
+        style={{ height: `${virtualizer.getTotalSize()}px` }}
+      >
+        {virtualItems.map(virtualRow => {
+          const tx = transactions[virtualRow.index];
+          const participants = participantCacheRef.current.get(tx.txid) || [];
+          const inputs = participants.filter(p => p.role === 'input');
+          const outputs = participants.filter(p => p.role === 'output');
+          const totalOutputValue = outputs.reduce((sum, p) => sum + p.amount, 0);
+          const isExpanded = expandedTxs.has(tx.txid);
+          const isLoaded = participantCacheRef.current.has(tx.txid);
+
+          return (
+            <div
+              key={tx.txid}
+              ref={virtualizer.measureElement}
+              data-index={virtualRow.index}
+              className="absolute left-0 right-0 pb-3"
+              style={{
+                transform: `translateY(${virtualRow.start}px)`,
+              }}
+            >
+              <TransactionCard
+                tx={tx}
+                inputs={inputs}
+                outputs={outputs}
+                totalOutputValue={totalOutputValue}
+                isExpanded={isExpanded}
+                onToggleExpand={() => toggleExpanded(tx.txid)}
+                addressToRecord={mergedAddressToRecord}
+                participantsLoaded={isLoaded}
+              />
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 
 export default function Transactions() {
   const [search, setSearch] = useState("");
@@ -478,6 +861,7 @@ export default function Transactions() {
     : filteredTransactions;
 
   const { value: pageParticipantMap } = useAsyncMemo(async (signal) => {
+    if (needsClientSideFiltering) return new Map<string, TransactionParticipant[]>();
     const txids = paginatedTransactionSlice.map(tx => tx.txid);
     if (txids.length === 0) return new Map<string, TransactionParticipant[]>();
     
@@ -510,7 +894,7 @@ export default function Transactions() {
       map.set(p.txid, existing);
     }
     return map;
-  }, [paginatedTransactionSlice, needsBroadParticipants, broadParticipantMap], new Map<string, TransactionParticipant[]>());
+  }, [needsClientSideFiltering, paginatedTransactionSlice, needsBroadParticipants, broadParticipantMap], new Map<string, TransactionParticipant[]>());
 
   const { value: pageRecords } = useAsyncMemo(async (signal) => {
     const recordIds = new Set<number>();
@@ -563,6 +947,18 @@ export default function Transactions() {
 
   const stats = useMemo(() => {
     const txCount = totalFilteredCount;
+
+    if (needsClientSideFiltering) {
+      const allNavigableFees = filteredTransactions.reduce((sum, tx) => sum + tx.fee, 0);
+      return {
+        txCount,
+        pageVolume: null as number | null,
+        pageFees: allNavigableFees,
+        allNavigableFees,
+        linkedAddressCount: null as number | null
+      };
+    }
+
     const pageFees = paginatedTransactions.reduce((sum, tx) => sum + tx.fee, 0);
     const pageVolume = paginatedTransactions.reduce((sum, tx) => sum + tx.totalOutputValue, 0);
     const allNavigableFees = filteredTransactions.reduce((sum, tx) => sum + tx.fee, 0);
@@ -583,7 +979,7 @@ export default function Transactions() {
       allNavigableFees,
       linkedAddressCount: linkedAddresses.size
     };
-  }, [totalFilteredCount, paginatedTransactions, filteredTransactions, addressToRecord]);
+  }, [totalFilteredCount, paginatedTransactions, filteredTransactions, addressToRecord, needsClientSideFiltering]);
 
   const isLoading = needsClientSideFiltering ? scanLoading : txLoading;
 
@@ -637,9 +1033,11 @@ export default function Transactions() {
         
         <Card>
           <CardHeader className="pb-2">
-            <CardDescription>Page Volume</CardDescription>
+            <CardDescription>{needsClientSideFiltering ? 'Volume' : 'Page Volume'}</CardDescription>
             <CardTitle className="text-2xl" data-testid="text-total-volume">
-              {scanResult.limitReached ? (
+              {stats.pageVolume === null ? (
+                <span className="text-muted-foreground">—</span>
+              ) : scanResult.limitReached ? (
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <span className="inline-flex items-center gap-1 cursor-help" tabIndex={0} data-testid="indicator-approx-volume">
@@ -664,7 +1062,7 @@ export default function Transactions() {
         
         <Card>
           <CardHeader className="pb-2">
-            <CardDescription>Page Fees</CardDescription>
+            <CardDescription>{needsClientSideFiltering ? 'Total Fees' : 'Page Fees'}</CardDescription>
             <CardTitle className="text-2xl" data-testid="text-total-fees">
               {scanResult.limitReached ? (
                 <Tooltip>
@@ -676,8 +1074,10 @@ export default function Transactions() {
                   </TooltipTrigger>
                   <TooltipContent side="bottom" className="max-w-xs">
                     <p>
-                      Showing fees for page {safePage} of {totalPages} only.
-                      Navigable total ({navigableCount.toLocaleString()} matches): {formatSats(stats.allNavigableFees)}.
+                      {needsClientSideFiltering
+                        ? `Showing fees for ${navigableCount.toLocaleString()} navigable matches. Total search matched ${scanResult.totalMatchCount.toLocaleString()} transactions.`
+                        : `Showing fees for page ${safePage} of ${totalPages} only. Navigable total (${navigableCount.toLocaleString()} matches): ${formatSats(stats.allNavigableFees)}.`
+                      }
                     </p>
                   </TooltipContent>
                 </Tooltip>
@@ -692,7 +1092,11 @@ export default function Transactions() {
           <CardHeader className="pb-2">
             <CardDescription>Linked Addresses</CardDescription>
             <CardTitle className="text-2xl" data-testid="text-linked-addresses">
-              {stats.linkedAddressCount}
+              {stats.linkedAddressCount === null ? (
+                <span className="text-muted-foreground">—</span>
+              ) : (
+                stats.linkedAddressCount
+              )}
             </CardTitle>
           </CardHeader>
         </Card>
@@ -745,8 +1149,11 @@ export default function Transactions() {
           variant="outline"
           size="sm"
           onClick={() => {
-            const allTxids = paginatedTransactions.map(tx => tx.txid);
-            const allExpanded = allTxids.every(txid => expandedTxs.has(txid));
+            const source = needsClientSideFiltering
+              ? filteredTransactions.slice(0, EXPAND_ALL_SEARCH_CAP)
+              : paginatedTransactions;
+            const allTxids = source.map(tx => tx.txid);
+            const allExpanded = allTxids.length > 0 && allTxids.every(txid => expandedTxs.has(txid));
             if (allExpanded) {
               setExpandedTxs(new Set());
             } else {
@@ -755,7 +1162,12 @@ export default function Transactions() {
           }}
           data-testid="button-expand-collapse-all"
         >
-          {paginatedTransactions.length > 0 && paginatedTransactions.every(tx => expandedTxs.has(tx.txid)) ? (
+          {(() => {
+            const source = needsClientSideFiltering
+              ? filteredTransactions.slice(0, EXPAND_ALL_SEARCH_CAP)
+              : paginatedTransactions;
+            return source.length > 0 && source.every(tx => expandedTxs.has(tx.txid));
+          })() ? (
             <>
               <ChevronsDownUp className="h-4 w-4 mr-1" />
               Collapse All
@@ -763,7 +1175,9 @@ export default function Transactions() {
           ) : (
             <>
               <ChevronsUpDown className="h-4 w-4 mr-1" />
-              Expand All
+              {needsClientSideFiltering && filteredTransactions.length > EXPAND_ALL_SEARCH_CAP
+                ? `Expand First ${EXPAND_ALL_SEARCH_CAP}`
+                : 'Expand All'}
             </>
           )}
         </Button>
@@ -779,261 +1193,79 @@ export default function Transactions() {
       )}
 
       {/* Transaction List */}
-      <div className="flex-1 overflow-y-auto space-y-3">
-        {isLoading ? (
-          searchProgress ? (
-            <div className="flex flex-col items-center justify-center h-32 gap-3" data-testid="search-progress">
-              <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                <Loader2 className="h-4 w-4 animate-spin" />
-                <span>
-                  Searching... {searchProgress.scanned.toLocaleString()} of{' '}
-                  {searchProgress.total > 0 ? searchProgress.total.toLocaleString() : '...'} scanned
-                  {searchProgress.matches > 0 && (
-                    <> ({searchProgress.matches.toLocaleString()} {searchProgress.matches === 1 ? 'match' : 'matches'} found)</>
-                  )}
-                </span>
-              </div>
-              {searchProgress.total > 0 && (
-                <div className="w-64 h-1.5 bg-muted rounded-full overflow-hidden">
-                  <div
-                    className="h-full bg-primary rounded-full transition-all duration-300"
-                    style={{ width: `${Math.min(100, (searchProgress.scanned / searchProgress.total) * 100)}%` }}
-                  />
+      {needsClientSideFiltering && !isLoading && filteredTransactions.length > 0 ? (
+        <VirtualizedTransactionList
+          transactions={filteredTransactions}
+          expandedTxs={expandedTxs}
+          toggleExpanded={toggleExpanded}
+          baseAddressToRecord={addressToRecord}
+        />
+      ) : (
+        <div className="flex-1 overflow-y-auto space-y-3">
+          {isLoading ? (
+            searchProgress ? (
+              <div className="flex flex-col items-center justify-center h-32 gap-3" data-testid="search-progress">
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  <span>
+                    Searching... {searchProgress.scanned.toLocaleString()} of{' '}
+                    {searchProgress.total > 0 ? searchProgress.total.toLocaleString() : '...'} scanned
+                    {searchProgress.matches > 0 && (
+                      <> ({searchProgress.matches.toLocaleString()} {searchProgress.matches === 1 ? 'match' : 'matches'} found)</>
+                    )}
+                  </span>
                 </div>
-              )}
-            </div>
-          ) : (
-            <div className="flex items-center justify-center h-32">
-              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />
-            </div>
-          )
-        ) : paginatedTransactions.length === 0 ? (
-          <Card>
-            <CardContent className="py-12 text-center">
-              <p className="text-muted-foreground">
-                {search ? "No transactions match your search" : "No transactions synced yet"}
-              </p>
-              {!search && (
-                <p className="text-sm text-muted-foreground mt-2">
-                  Use Transaction Sync to fetch blockchain data for your addresses
+                {searchProgress.total > 0 && (
+                  <div className="w-64 h-1.5 bg-muted rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-primary rounded-full transition-all duration-300"
+                      style={{ width: `${Math.min(100, (searchProgress.scanned / searchProgress.total) * 100)}%` }}
+                    />
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="flex items-center justify-center h-32">
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />
+              </div>
+            )
+          ) : paginatedTransactions.length === 0 ? (
+            <Card>
+              <CardContent className="py-12 text-center">
+                <p className="text-muted-foreground">
+                  {search || hasActiveSearchFilters(searchFilters) ? "No transactions match your search" : "No transactions synced yet"}
                 </p>
-              )}
-            </CardContent>
-          </Card>
-        ) : (
-          paginatedTransactions.map((tx) => {
-            const isExpanded = expandedTxs.has(tx.txid);
-            const txDate = new Date(tx.blockTime * 1000);
-            
-            return (
-              <Collapsible
+                {!search && !hasActiveSearchFilters(searchFilters) && (
+                  <p className="text-sm text-muted-foreground mt-2">
+                    Use Transaction Sync to fetch blockchain data for your addresses
+                  </p>
+                )}
+              </CardContent>
+            </Card>
+          ) : (
+            paginatedTransactions.map((tx) => (
+              <TransactionCard
                 key={tx.txid}
-                open={isExpanded}
-                onOpenChange={() => toggleExpanded(tx.txid)}
-              >
-                <Card data-testid={`card-transaction-${tx.txid.slice(0, 8)}`}>
-                  <CollapsibleTrigger asChild>
-                    <CardHeader className="cursor-pointer hover-elevate">
-                      <div className="flex items-start justify-between gap-4">
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2">
-                            <Hash className="h-4 w-4 text-muted-foreground flex-shrink-0" />
-                            <ClickableAddress 
-                              address={tx.txid} 
-                              className="flex-1 min-w-0"
-                            />
-                            <a
-                              href={`https://mempool.space/tx/${tx.txid}`}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              onClick={(e) => e.stopPropagation()}
-                              className="text-muted-foreground hover:text-primary"
-                              data-testid={`link-explorer-${tx.txid.slice(0, 8)}`}
-                            >
-                              <ExternalLink className="h-3 w-3" />
-                            </a>
-                          </div>
-                          <div className="flex items-center gap-4 mt-2 text-sm text-muted-foreground flex-wrap">
-                            <span className="flex items-center gap-1">
-                              <Clock className="h-3 w-3" />
-                              {format(txDate, "MMM d, yyyy HH:mm")}
-                            </span>
-                            <span className="flex items-center gap-1">
-                              Block {(tx.blockHeight ?? 0).toLocaleString()}
-                            </span>
-                            <span className="flex items-center gap-1">
-                              <Zap className="h-3 w-3" />
-                              {(tx.feeRate ?? 0).toFixed(1)} sat/vB
-                            </span>
-                            {tx.vsize && (
-                              <span className="flex items-center gap-1">
-                                <Scale className="h-3 w-3" />
-                                {tx.vsize.toLocaleString()} vB
-                              </span>
-                            )}
-                            {tx.hasOpReturn && (
-                              <Badge variant="outline" className="text-xs bg-purple-50 dark:bg-purple-950 text-purple-700 dark:text-purple-300 border-purple-200 dark:border-purple-800">
-                                <FileCode className="h-3 w-3 mr-1" />
-                                OP_RETURN
-                              </Badge>
-                            )}
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-3">
-                          <div className="text-right">
-                            <div className="font-mono text-sm font-medium" data-testid={`text-amount-${tx.txid.slice(0, 8)}`}>
-                              {satsToBtc(tx.totalOutputValue)} BTC
-                            </div>
-                            <div className="text-xs text-muted-foreground">
-                              Fee: {formatSats(tx.fee)}
-                            </div>
-                          </div>
-                          {isExpanded ? (
-                            <ChevronUp className="h-5 w-5 text-muted-foreground" />
-                          ) : (
-                            <ChevronDown className="h-5 w-5 text-muted-foreground" />
-                          )}
-                        </div>
-                      </div>
-                    </CardHeader>
-                  </CollapsibleTrigger>
-                  
-                  <CollapsibleContent>
-                    <CardContent className="pt-0">
-                      <div className="grid md:grid-cols-2 gap-4">
-                        {/* Inputs */}
-                        <div>
-                          <h4 className="text-sm font-medium mb-2 flex items-center gap-2">
-                            <ArrowDownLeft className="h-4 w-4 text-red-500" />
-                            Inputs ({tx.inputs.length})
-                          </h4>
-                          <div className="space-y-2">
-                            {tx.inputs.map((input, idx) => {
-                              const linkedRecord = addressToRecord.get(input.address);
-                              return (
-                                <div
-                                  key={`${input.txid}-input-${idx}`}
-                                  className="p-2 rounded-md bg-muted/50 text-sm"
-                                  data-testid={`participant-input-${idx}`}
-                                >
-                                  <div className="flex items-center justify-between gap-2">
-                                    <ClickableAddress 
-                                      address={input.address} 
-                                      className="text-xs truncate flex-1"
-                                    />
-                                    <span className="font-mono text-xs font-medium whitespace-nowrap">
-                                      {formatSats(input.amount)}
-                                    </span>
-                                  </div>
-                                  {linkedRecord && (
-                                    <div className="flex items-center gap-1 mt-1">
-                                      <LinkIcon className="h-3 w-3 text-primary" />
-                                      <Badge variant="secondary" className="text-xs">
-                                        {linkedRecord.label || linkedRecord.owner || 'Labeled'}
-                                      </Badge>
-                                    </div>
-                                  )}
-                                </div>
-                              );
-                            })}
-                          </div>
-                        </div>
-                        
-                        {/* Outputs */}
-                        <div>
-                          <h4 className="text-sm font-medium mb-2 flex items-center gap-2">
-                            <ArrowUpRight className="h-4 w-4 text-green-500" />
-                            Outputs ({tx.outputs.length})
-                          </h4>
-                          <div className="space-y-2">
-                            {tx.outputs.map((output, idx) => {
-                              const linkedRecord = addressToRecord.get(output.address);
-                              return (
-                                <div
-                                  key={`${output.txid}-output-${idx}`}
-                                  className="p-2 rounded-md bg-muted/50 text-sm"
-                                  data-testid={`participant-output-${idx}`}
-                                >
-                                  <div className="flex items-center justify-between gap-2">
-                                    <ClickableAddress 
-                                      address={output.address} 
-                                      className="text-xs truncate flex-1"
-                                    />
-                                    <span className="font-mono text-xs font-medium whitespace-nowrap">
-                                      {formatSats(output.amount)}
-                                    </span>
-                                  </div>
-                                  {linkedRecord && (
-                                    <div className="flex items-center gap-1 mt-1">
-                                      <LinkIcon className="h-3 w-3 text-primary" />
-                                      <Badge variant="secondary" className="text-xs">
-                                        {linkedRecord.label || linkedRecord.owner || 'Labeled'}
-                                      </Badge>
-                                    </div>
-                                  )}
-                                </div>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      </div>
-                      
-                      {/* OP_RETURN Data */}
-                      {tx.hasOpReturn && tx.opReturnData && tx.opReturnData.length > 0 && (
-                        <div className="mt-4 pt-4 border-t">
-                          <h4 className="text-sm font-medium mb-2 flex items-center gap-2">
-                            <FileCode className="h-4 w-4 text-purple-500" />
-                            OP_RETURN Data ({tx.opReturnData.length})
-                          </h4>
-                          <div className="space-y-2">
-                            {tx.opReturnData.map((opReturn, idx) => (
-                              <div
-                                key={`op-return-${idx}`}
-                                className="p-3 rounded-md bg-purple-50 dark:bg-purple-950/50 border border-purple-200 dark:border-purple-800 text-sm"
-                                data-testid={`op-return-${idx}`}
-                              >
-                                <div className="flex items-center gap-2 mb-2">
-                                  <Badge variant="outline" className="text-xs">
-                                    Output #{opReturn.vout}
-                                  </Badge>
-                                </div>
-                                {opReturn.dataText && (
-                                  <div className="mb-2">
-                                    <span className="text-xs text-muted-foreground">Text:</span>
-                                    <pre className="mt-1 p-2 bg-background rounded text-xs font-mono whitespace-pre-wrap break-all">
-                                      {opReturn.dataText}
-                                    </pre>
-                                  </div>
-                                )}
-                                <div>
-                                  <span className="text-xs text-muted-foreground">Hex:</span>
-                                  <pre className="mt-1 p-2 bg-background rounded text-xs font-mono whitespace-pre-wrap break-all text-muted-foreground">
-                                    {opReturn.dataHex || '(empty)'}
-                                  </pre>
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                    </CardContent>
-                  </CollapsibleContent>
-                </Card>
-              </Collapsible>
-            );
-          })
-        )}
-      </div>
+                tx={tx}
+                inputs={tx.inputs}
+                outputs={tx.outputs}
+                totalOutputValue={tx.totalOutputValue}
+                isExpanded={expandedTxs.has(tx.txid)}
+                onToggleExpand={() => toggleExpanded(tx.txid)}
+                addressToRecord={addressToRecord}
+                participantsLoaded={true}
+              />
+            ))
+          )}
+        </div>
+      )}
 
-      {/* Pagination */}
-      {navigableCount > ITEMS_PER_PAGE && (
+      {/* Pagination - only for non-search mode */}
+      {!needsClientSideFiltering && navigableCount > ITEMS_PER_PAGE && (
         <div className="flex items-center justify-between border-t pt-4 flex-none">
           <div className="text-sm text-muted-foreground">
             Showing {startIndex + 1}-{Math.min(startIndex + ITEMS_PER_PAGE, navigableCount)} of{' '}
-            {scanResult.limitReached
-              ? <>{navigableCount.toLocaleString()} (of {totalFilteredCount.toLocaleString()} total matches)</>
-              : <>{navigableCount.toLocaleString()}</>
-            } transactions
+            {navigableCount.toLocaleString()} transactions
           </div>
           <div className="flex items-center gap-2">
             <Button
@@ -1060,6 +1292,17 @@ export default function Transactions() {
               <ChevronRight className="h-4 w-4 ml-1" />
             </Button>
           </div>
+        </div>
+      )}
+
+      {/* Virtual scroll results count */}
+      {needsClientSideFiltering && !isLoading && filteredTransactions.length > 0 && (
+        <div className="flex items-center justify-center border-t pt-3 flex-none text-sm text-muted-foreground" data-testid="text-virtual-scroll-count">
+          {filteredTransactions.length.toLocaleString()} transactions
+          {scanResult.limitReached && (
+            <span className="ml-1">(of {scanResult.totalMatchCount.toLocaleString()} total matches)</span>
+          )}
+          <span className="ml-1">&mdash; scroll to browse</span>
         </div>
       )}
     </div>
