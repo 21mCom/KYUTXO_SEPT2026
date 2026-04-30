@@ -1,4 +1,4 @@
-export const CANCEL_CONFIRM_THRESHOLD = 75;
+export const DEFAULT_CANCEL_CONFIRM_THRESHOLD = 75;
 
 export interface BuildProgressState {
   current: number;
@@ -19,8 +19,9 @@ export type CancelAction = 'show_confirm' | 'abort' | 'noop';
 export function decideCancelAction(
   hasAbortController: boolean,
   overallProgress: number,
+  threshold: number = DEFAULT_CANCEL_CONFIRM_THRESHOLD,
 ): CancelAction {
   if (!hasAbortController) return 'noop';
-  if (overallProgress >= CANCEL_CONFIRM_THRESHOLD) return 'show_confirm';
+  if (threshold === 0 || overallProgress >= threshold) return 'show_confirm';
   return 'abort';
 }

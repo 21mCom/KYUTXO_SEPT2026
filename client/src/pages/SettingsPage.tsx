@@ -1,5 +1,5 @@
 import { useState, useRef } from "react";
-import { Moon, Eye, Database, Plus, Trash2, Pencil, AlertTriangle, Upload, RefreshCw, Loader2, Paperclip, KeyRound } from "lucide-react";
+import { Moon, Eye, Database, Plus, Trash2, Pencil, AlertTriangle, Upload, RefreshCw, Loader2, Paperclip, KeyRound, Shield } from "lucide-react";
 import { isElectron, getElectronAPI } from "@/lib/electron";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
@@ -20,7 +20,15 @@ import {
   toggleCustomField,
   deleteCustomField,
   updateCustomField,
+  updateCancelConfirmThreshold,
 } from "@/hooks/use-settings";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   Dialog,
   DialogContent,
@@ -65,7 +73,7 @@ import VocabularyManager from "@/components/VocabularyManager";
 const DELETE_CONFIRMATION_PHRASE = "DELETE ALL DATA";
 
 export default function SettingsPage() {
-  const { fieldVisibility, isLoading: settingsLoading } = useSettings();
+  const { fieldVisibility, cancelConfirmThreshold, isLoading: settingsLoading } = useSettings();
   const { customFields, isLoading: customFieldsLoading } = useCustomFields();
   const { toast } = useToast();
   
@@ -277,6 +285,7 @@ export default function SettingsPage() {
           source: false,
         },
         customFieldColumns: {},
+        cancelConfirmThreshold: 75,
       });
 
       setClearDialogOpen(false);
@@ -1268,6 +1277,54 @@ export default function SettingsPage() {
         </Card>
 
         <VocabularyManager />
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Shield className="h-5 w-5" />
+              Lineage Build
+            </CardTitle>
+            <CardDescription>
+              Configure how the Continuity Proof lineage builder behaves
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <Label className="text-base">Cancel Confirmation</Label>
+                <p className="text-sm text-muted-foreground">
+                  Ask for confirmation before cancelling a build that has reached this progress level
+                </p>
+              </div>
+              <Select
+                value={String(cancelConfirmThreshold)}
+                onValueChange={async (val) => {
+                  try {
+                    await updateCancelConfirmThreshold(Number(val));
+                  } catch {
+                    toast({
+                      title: "Error",
+                      description: "Failed to update threshold",
+                      variant: "destructive",
+                    });
+                  }
+                }}
+                disabled={isLoading}
+              >
+                <SelectTrigger className="w-[160px]" data-testid="select-cancel-threshold">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="0" data-testid="option-threshold-0">Always confirm</SelectItem>
+                  <SelectItem value="25" data-testid="option-threshold-25">25%</SelectItem>
+                  <SelectItem value="50" data-testid="option-threshold-50">50%</SelectItem>
+                  <SelectItem value="75" data-testid="option-threshold-75">75% (default)</SelectItem>
+                  <SelectItem value="90" data-testid="option-threshold-90">90%</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </CardContent>
+        </Card>
 
         <Card>
           <CardHeader>

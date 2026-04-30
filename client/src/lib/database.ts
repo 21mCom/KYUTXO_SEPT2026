@@ -1025,6 +1025,7 @@ db.on('ready', async () => {
       customFieldColumns: {},
       theme: 'light',
       defaultView: 'table',
+      cancelConfirmThreshold: 75,
     });
   } else {
     // Migrations for existing settings
@@ -1085,6 +1086,10 @@ db.on('ready', async () => {
     
     if (!settings.customFieldColumns) {
       updates.customFieldColumns = {};
+    }
+
+    if ((settings as any).cancelConfirmThreshold === undefined) {
+      updates.cancelConfirmThreshold = 75;
     }
     
     if (Object.keys(updates).length > 0) {

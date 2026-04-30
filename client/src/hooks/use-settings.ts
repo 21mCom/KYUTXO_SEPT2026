@@ -26,6 +26,8 @@ const defaultFieldVisibility = {
   source: true,
 };
 
+import { DEFAULT_CANCEL_CONFIRM_THRESHOLD } from '@/lib/buildProgress';
+
 export function useSettings() {
   const settings = useLiveQuery(() => db.settings.get('default'));
   
@@ -34,6 +36,7 @@ export function useSettings() {
     tableColumns: settings?.tableColumns || defaultTableColumns,
     customFieldColumns: settings?.customFieldColumns || {},
     fieldVisibility: settings?.fieldVisibility || defaultFieldVisibility,
+    cancelConfirmThreshold: settings?.cancelConfirmThreshold ?? DEFAULT_CANCEL_CONFIRM_THRESHOLD,
     isLoading: settings === undefined,
   };
 }
@@ -92,6 +95,15 @@ export async function toggleTableColumn(column: keyof Settings['tableColumns']) 
         ...settings.tableColumns,
         [column]: !settings.tableColumns[column],
       },
+    });
+  }
+}
+
+export async function updateCancelConfirmThreshold(value: number) {
+  const settings = await db.settings.get('default');
+  if (settings) {
+    await db.settings.update('default', {
+      cancelConfirmThreshold: value,
     });
   }
 }

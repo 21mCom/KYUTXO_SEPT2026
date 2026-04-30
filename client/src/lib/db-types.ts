@@ -276,6 +276,7 @@ export interface Settings {
   customFieldColumns: { [key: string]: boolean };
   theme: 'light' | 'dark';
   defaultView: 'table' | 'grid';
+  cancelConfirmThreshold: number;
 }
 
 // Historical price data for Bitcoin and other cryptocurrencies

@@ -51,7 +51,8 @@ import {
   type UtxoLineage
 } from "@/lib/lineageEngine";
 import { db } from "@/lib/database";
-import { computeOverallProgress, decideCancelAction, CANCEL_CONFIRM_THRESHOLD } from "@/lib/buildProgress";
+import { computeOverallProgress, decideCancelAction } from "@/lib/buildProgress";
+import { useSettings } from "@/hooks/use-settings";
 import { format, formatDistanceToNow } from "date-fns";
 
 interface ContinuityProofProps {
@@ -96,6 +97,7 @@ function loadLastBuildMeta(): LastBuildMeta | null {
 
 export function ContinuityProof({ selectedAddress, onAddressSelect }: ContinuityProofProps) {
   const { toast } = useToast();
+  const { cancelConfirmThreshold } = useSettings();
   
   const [isBuilding, setIsBuilding] = useState(false);
   const [buildProgress, setBuildProgress] = useState({ current: 0, total: 0, phase: '', step: 0, totalSteps: 2, unit: '' });
@@ -264,13 +266,13 @@ export function ContinuityProof({ selectedAddress, onAddressSelect }: Continuity
   }, [buildProgress]);
 
   const handleCancelBuild = useCallback(() => {
-    const action = decideCancelAction(!!abortControllerRef.current, getOverallProgress());
+    const action = decideCancelAction(!!abortControllerRef.current, getOverallProgress(), cancelConfirmThreshold);
     if (action === 'show_confirm') {
       setShowCancelConfirm(true);
     } else if (action === 'abort') {
       abortControllerRef.current!.abort();
     }
-  }, [getOverallProgress]);
+  }, [getOverallProgress, cancelConfirmThreshold]);
 
   const handleConfirmCancel = useCallback(() => {
     setShowCancelConfirm(false);

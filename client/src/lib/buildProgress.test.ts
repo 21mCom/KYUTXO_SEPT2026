@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   computeOverallProgress,
   decideCancelAction,
-  CANCEL_CONFIRM_THRESHOLD,
+  DEFAULT_CANCEL_CONFIRM_THRESHOLD,
   type BuildProgressState,
 } from './buildProgress';
 
@@ -10,9 +10,9 @@ function progress(step: number, current: number, total: number, totalSteps = 2):
   return { step, current, total, totalSteps };
 }
 
-describe('CANCEL_CONFIRM_THRESHOLD', () => {
+describe('DEFAULT_CANCEL_CONFIRM_THRESHOLD', () => {
   it('equals 75', () => {
-    expect(CANCEL_CONFIRM_THRESHOLD).toBe(75);
+    expect(DEFAULT_CANCEL_CONFIRM_THRESHOLD).toBe(75);
   });
 });
 
