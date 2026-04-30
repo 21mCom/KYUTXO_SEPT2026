@@ -45,6 +45,41 @@ export const PAGE_SEARCH_PENDING_OPACITY: Record<PageName, string> = {
   ConflictResolution: 'opacity-70',
 };
 
+export const SEARCH_FADE_STORAGE_KEY = 'search-fade-intensity';
+
+export const SEARCH_FADE_OPTIONS = [
+  { value: 'default', label: 'Default (varies by page)' },
+  { value: 'opacity-100', label: 'Off' },
+  { value: 'opacity-80', label: 'Subtle' },
+  { value: 'opacity-70', label: 'Light' },
+  { value: 'opacity-60', label: 'Medium' },
+  { value: 'opacity-50', label: 'Strong' },
+  { value: 'opacity-40', label: 'Heavy' },
+] as const;
+
+export type SearchFadeOption = (typeof SEARCH_FADE_OPTIONS)[number]['value'];
+
+const VALID_FADE_VALUES = new Set<string>(
+  SEARCH_FADE_OPTIONS.map((o) => o.value),
+);
+
+export function getSearchFadePreference(): SearchFadeOption {
+  if (typeof window === 'undefined') return 'default';
+  const stored = localStorage.getItem(SEARCH_FADE_STORAGE_KEY);
+  if (stored && VALID_FADE_VALUES.has(stored)) return stored as SearchFadeOption;
+  return 'default';
+}
+
+export function setSearchFadePreference(value: SearchFadeOption): void {
+  if (value === 'default') {
+    localStorage.removeItem(SEARCH_FADE_STORAGE_KEY);
+  } else {
+    localStorage.setItem(SEARCH_FADE_STORAGE_KEY, value);
+  }
+}
+
 export function getSearchPendingOpacity(page: PageName): string {
+  const userPref = getSearchFadePreference();
+  if (userPref !== 'default') return userPref;
   return PAGE_SEARCH_PENDING_OPACITY[page] ?? DEFAULT_SEARCH_PENDING_OPACITY;
 }

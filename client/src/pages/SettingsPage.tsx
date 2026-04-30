@@ -69,6 +69,12 @@ import {
 } from "@/lib/vault";
 import JSZip from "jszip";
 import VocabularyManager from "@/components/VocabularyManager";
+import {
+  getSearchFadePreference,
+  setSearchFadePreference,
+  SEARCH_FADE_OPTIONS,
+  type SearchFadeOption,
+} from "@/config/debounce";
 
 const DELETE_CONFIRMATION_PHRASE = "DELETE ALL DATA";
 
@@ -105,6 +111,7 @@ export default function SettingsPage() {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [isChangingPassword, setIsChangingPassword] = useState(false);
   const [isMigratingAttachments, setIsMigratingAttachments] = useState(false);
+  const [searchFadeIntensity, setSearchFadeIntensity] = useState<SearchFadeOption>(getSearchFadePreference);
 
   const handleToggleBuiltInField = async (field: keyof typeof fieldVisibility) => {
     try {
@@ -1133,6 +1140,40 @@ export default function SettingsPage() {
                 </p>
               </div>
               <ThemeToggle />
+            </div>
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <Label className="text-base">Search Fade Intensity</Label>
+                <p className="text-sm text-muted-foreground">
+                  How much the results dim while a search is in progress
+                </p>
+              </div>
+              <Select
+                value={searchFadeIntensity}
+                onValueChange={(val) => {
+                  setSearchFadeIntensity(val as SearchFadeOption);
+                  setSearchFadePreference(val as SearchFadeOption);
+                  toast({
+                    title: "Search fade updated",
+                    description: SEARCH_FADE_OPTIONS.find(o => o.value === val)?.label ?? val,
+                  });
+                }}
+              >
+                <SelectTrigger className="w-[200px]" data-testid="select-search-fade">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {SEARCH_FADE_OPTIONS.map((opt) => (
+                    <SelectItem
+                      key={opt.value}
+                      value={opt.value}
+                      data-testid={`option-fade-${opt.value}`}
+                    >
+                      {opt.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
           </CardContent>
         </Card>

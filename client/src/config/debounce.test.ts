@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import fs from "fs";
 import path from "path";
 import {
@@ -7,7 +7,12 @@ import {
   DEFAULT_SEARCH_PENDING_OPACITY,
   PAGE_SEARCH_PENDING_OPACITY,
   getSearchPendingOpacity,
+  getSearchFadePreference,
+  setSearchFadePreference,
+  SEARCH_FADE_STORAGE_KEY,
+  SEARCH_FADE_OPTIONS,
   type PageName,
+  type SearchFadeOption,
 } from "./debounce";
 
 const PAGES_DIR = path.resolve(__dirname, "..", "pages");
@@ -259,5 +264,107 @@ describe("getSearchPendingOpacity", () => {
       expect(typeof result).toBe("string");
       expect(result.length).toBeGreaterThan(0);
     }
+  });
+});
+
+describe("user search fade preference (localStorage)", () => {
+  let store: Record<string, string>;
+
+  beforeEach(() => {
+    store = {};
+    const mockStorage = {
+      getItem: (key: string) => store[key] ?? null,
+      setItem: (key: string, value: string) => { store[key] = value; },
+      removeItem: (key: string) => { delete store[key]; },
+    };
+    vi.stubGlobal("window", { localStorage: mockStorage });
+    vi.stubGlobal("localStorage", mockStorage);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  describe("SEARCH_FADE_OPTIONS", () => {
+    it("has 'default' as the first option", () => {
+      expect(SEARCH_FADE_OPTIONS[0].value).toBe("default");
+    });
+
+    it("every option value matches either 'default' or the tailwind opacity pattern", () => {
+      for (const opt of SEARCH_FADE_OPTIONS) {
+        expect(opt.value).toMatch(/^(default|opacity-\d+)$/);
+      }
+    });
+
+    it("every option has a non-empty label", () => {
+      for (const opt of SEARCH_FADE_OPTIONS) {
+        expect(opt.label.length).toBeGreaterThan(0);
+      }
+    });
+  });
+
+  describe("getSearchFadePreference", () => {
+    it("returns 'default' when nothing is stored", () => {
+      expect(getSearchFadePreference()).toBe("default");
+    });
+
+    it("returns the stored value when set", () => {
+      store[SEARCH_FADE_STORAGE_KEY] = "opacity-80";
+      expect(getSearchFadePreference()).toBe("opacity-80");
+    });
+
+    it("returns 'default' when localStorage contains an invalid value", () => {
+      store[SEARCH_FADE_STORAGE_KEY] = "garbage-value";
+      expect(getSearchFadePreference()).toBe("default");
+    });
+
+    it("returns 'default' when localStorage contains an empty string", () => {
+      store[SEARCH_FADE_STORAGE_KEY] = "";
+      expect(getSearchFadePreference()).toBe("default");
+    });
+  });
+
+  describe("setSearchFadePreference", () => {
+    it("stores a non-default value in localStorage", () => {
+      setSearchFadePreference("opacity-50");
+      expect(store[SEARCH_FADE_STORAGE_KEY]).toBe("opacity-50");
+    });
+
+    it("removes the key when set to 'default'", () => {
+      store[SEARCH_FADE_STORAGE_KEY] = "opacity-50";
+      setSearchFadePreference("default");
+      expect(store[SEARCH_FADE_STORAGE_KEY]).toBeUndefined();
+    });
+
+    it("overwrites a previous preference", () => {
+      setSearchFadePreference("opacity-70");
+      setSearchFadePreference("opacity-40");
+      expect(store[SEARCH_FADE_STORAGE_KEY]).toBe("opacity-40");
+    });
+  });
+
+  describe("getSearchPendingOpacity with user preference", () => {
+    it("returns the user preference instead of per-page default", () => {
+      store[SEARCH_FADE_STORAGE_KEY] = "opacity-80";
+      expect(getSearchPendingOpacity("UTXOs")).toBe("opacity-80");
+      expect(getSearchPendingOpacity("VaultManagement")).toBe("opacity-80");
+    });
+
+    it("returns per-page defaults when preference is cleared", () => {
+      expect(getSearchPendingOpacity("UTXOs")).toBe("opacity-50");
+      expect(getSearchPendingOpacity("VaultManagement")).toBe("opacity-70");
+    });
+
+    it("returns opacity-100 when user disables fade", () => {
+      store[SEARCH_FADE_STORAGE_KEY] = "opacity-100";
+      expect(getSearchPendingOpacity("Transactions")).toBe("opacity-100");
+    });
+
+    it("applies the user preference to all 9 pages uniformly", () => {
+      store[SEARCH_FADE_STORAGE_KEY] = "opacity-40";
+      for (const page of Object.keys(PAGE_SEARCH_PENDING_OPACITY) as PageName[]) {
+        expect(getSearchPendingOpacity(page)).toBe("opacity-40");
+      }
+    });
   });
 });
