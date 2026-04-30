@@ -35,6 +35,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
 import { searchPendingClass } from "@/lib/search-pending-class";
+import { buildRecordsCollection, fetchRecordsPage } from "@/lib/records-query";
 
 const USER_CURATED_TIERS: AddressImportance[] = ['verified', 'manual', 'wallet-import', 'xpub-derived'];
 const ALL_TIERS: AddressImportance[] = ['verified', 'manual', 'wallet-import', 'xpub-derived', 'blockchain-discovered', 'pending-review'];
@@ -129,6 +130,8 @@ export default function Records() {
   const PAGE_SIZE = 50;
   const [currentPage, setCurrentPage] = useState(1);
   const [totalCount, setTotalCount] = useState(0);
+  const [navigableCount, setNavigableCount] = useState(0);
+  const [resultsTruncated, setResultsTruncated] = useState(false);
   
   const [records, setRecords] = useState<ConvertedRecord[]>([]);
   const [selectedRecordId, setSelectedRecordId] = useState<string | null>(null);
@@ -159,7 +162,7 @@ export default function Records() {
     participantAddresses: string[];
   }[]>([]);
   
-  const dbChangeSignal = useDbChangeSignal(['records']);
+  const dbChangeSignal = useDbChangeSignal(['records'], 250);
 
   const { tags: vocabTags } = useTags();
   const { categories: vocabCategories } = useCategories();
@@ -265,6 +268,8 @@ export default function Records() {
           count = await db.records.count();
           if (loadVersionRef.current !== version) return;
           setTotalCount(count);
+          setNavigableCount(count);
+          setResultsTruncated(false);
 
           rawRecords = await db.records
             .orderBy('id').reverse()
@@ -274,6 +279,8 @@ export default function Records() {
           count = (await db.records.count()) - blockchainCount;
           if (loadVersionRef.current !== version) return;
           setTotalCount(count);
+          setNavigableCount(count);
+          setResultsTruncated(false);
 
           const candidateLimit = pgOffset + PAGE_SIZE;
           const tierResults = await Promise.all(USER_TIERS.map(tier =>
@@ -297,6 +304,8 @@ export default function Records() {
           }
           if (loadVersionRef.current !== version) return;
           setTotalCount(count);
+          setNavigableCount(count);
+          setResultsTruncated(false);
 
           if (includeBlockchainDiscovered) {
             rawRecords = await db.records.where('[type+id]')
@@ -318,14 +327,24 @@ export default function Records() {
           }
 
         } else {
-          count = await db.records.filter(filterFn).count();
+          const built = buildRecordsCollection(
+            { search, columnFilters, includeBlockchainDiscovered },
+            filterFn,
+          );
+          const page = await fetchRecordsPage(
+            built,
+            pgOffset,
+            PAGE_SIZE,
+            () => loadVersionRef.current !== version,
+          );
+          if (page === null) return;
           if (loadVersionRef.current !== version) return;
-          setTotalCount(count);
 
-          rawRecords = await db.records
-            .orderBy('id').reverse()
-            .filter(filterFn)
-            .offset(pgOffset).limit(PAGE_SIZE).toArray();
+          count = page.total;
+          setTotalCount(page.total);
+          setNavigableCount(page.effectiveTotal);
+          setResultsTruncated(page.truncated);
+          rawRecords = page.records;
         }
         if (loadVersionRef.current !== version) return;
         
@@ -335,7 +354,8 @@ export default function Records() {
         if (isTxidSearch) {
           try {
             const matchingTxs = await db.blockchainTransactions
-              .filter(tx => tx.txid.toLowerCase().startsWith(search) || tx.txid.toLowerCase().includes(search))
+              .where('txid')
+              .startsWithIgnoreCase(search)
               .limit(50)
               .toArray();
             if (loadVersionRef.current !== version) return;
@@ -448,7 +468,10 @@ export default function Records() {
   }, [records]);
 
   const displayTotalCount = totalCount;
-  const displayTotalPages = Math.max(1, Math.ceil(displayTotalCount / PAGE_SIZE));
+  // Pagination math uses navigableCount (capped at MAX_MATERIALIZE for the
+  // index-narrowed path) so the user can never page past the materialized
+  // window. The full match count is still shown in the header.
+  const displayTotalPages = Math.max(1, Math.ceil(navigableCount / PAGE_SIZE));
   const displayStartIndex = (currentPage - 1) * PAGE_SIZE;
   const displayRecords = records;
 
@@ -742,10 +765,19 @@ export default function Records() {
                       onSelectionChange={setSelectedIds}
                     />
                     
+                    {resultsTruncated && (
+                      <div
+                        className="text-sm text-muted-foreground border-t pt-4 mt-4"
+                        data-testid="text-results-truncated-notice"
+                      >
+                        Matched {displayTotalCount.toLocaleString()} records — showing the first
+                        {' '}{navigableCount.toLocaleString()}. Refine your filters or search to narrow results.
+                      </div>
+                    )}
                     {displayTotalPages > 1 && (
                       <div className="flex items-center justify-between border-t pt-4 mt-4">
                         <div className="text-sm text-muted-foreground" data-testid="text-pagination-info">
-                          Showing {displayStartIndex + 1}-{Math.min(displayStartIndex + displayRecords.length, displayTotalCount)} of {displayTotalCount} records
+                          Showing {displayStartIndex + 1}-{Math.min(displayStartIndex + displayRecords.length, navigableCount)} of {displayTotalCount} records
                         </div>
                         <div className="flex items-center gap-2">
                           <Button
