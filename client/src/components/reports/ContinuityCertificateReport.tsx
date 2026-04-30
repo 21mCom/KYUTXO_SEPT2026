@@ -30,7 +30,7 @@ import { format } from "date-fns";
 import { 
   CalendarIcon, Shield, Clock, Coins, 
   ArrowRight, Filter, FileJson, FileText, Lock, Eye,
-  AlertTriangle, RefreshCw, X, Download, Loader2, Ban
+  AlertTriangle, RefreshCw, X, Download, Loader2, Ban, ChevronDown, ChevronRight
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { AddressLink } from "@/components/AddressLink";
@@ -70,6 +70,8 @@ export function ContinuityCertificateReport() {
   const [isExporting, setIsExporting] = useState(false);
   const [exportProgress, setExportProgress] = useState<{ current: number; total: number } | null>(null);
   const [resumedFromCount, setResumedFromCount] = useState(0);
+  const [resumedSegmentIds, setResumedSegmentIds] = useState<string[]>([]);
+  const [showResumedDetails, setShowResumedDetails] = useState(false);
   const [exportError, setExportError] = useState<{ message: string; format: 'json' | 'pdf'; partialBundle?: EvidenceBundle } | null>(null);
   const [cancelledPartial, setCancelledPartial] = useState<{ bundle: EvidenceBundle; format: 'json' | 'pdf'; totalRequested: number } | null>(null);
   const [isDownloadingPartial, setIsDownloadingPartial] = useState(false);
@@ -138,6 +140,20 @@ export function ContinuityCertificateReport() {
       .map(c => c.segment.segmentId);
   }, [filteredCertificates, selectedCertificates]);
 
+  const segmentLabelMap = useMemo(() => {
+    const map = new Map<string, string>();
+    if (!segments) return map;
+    for (const seg of segments) {
+      const prefix = seg.originAddress.slice(0, 8);
+      map.set(seg.segmentId, `${prefix}\u2026`);
+    }
+    return map;
+  }, [segments]);
+
+  const getSegmentLabel = useCallback((segmentId: string): string => {
+    return segmentLabelMap.get(segmentId) || segmentId.slice(0, 12) + '\u2026';
+  }, [segmentLabelMap]);
+
   useEffect(() => {
     if (currentSelectedSegmentIds.length === 0 || isExporting) return;
     let cancelled = false;
@@ -186,7 +202,10 @@ export function ContinuityCertificateReport() {
     setExportError(null);
     setCancelledPartial(null);
     const priorCount = resumeFromBundle ? resumeFromBundle.segments.length : 0;
+    const priorIds = resumeFromBundle ? resumeFromBundle.segments.map(s => s.segmentId) : [];
     setResumedFromCount(priorCount);
+    setResumedSegmentIds(priorIds);
+    setShowResumedDetails(false);
     setExportProgress({ current: priorCount, total: selectedSegmentIds.length });
     try {
       const options: EvidenceBundleOptions = {
@@ -718,15 +737,53 @@ export function ContinuityCertificateReport() {
               />
             )}
             {clampedResumed > 0 && (
-              <div className="flex items-center gap-3 text-xs text-muted-foreground" data-testid="text-resumed-info">
-                <span className="flex items-center gap-1">
-                  <span className="inline-block h-2 w-2 rounded-full bg-primary/30" />
-                  {clampedResumed} previously completed
-                </span>
-                <span className="flex items-center gap-1">
-                  <span className="inline-block h-2 w-2 rounded-full bg-primary" />
-                  {Math.max(0, exportProgress.current - clampedResumed)} newly processed
-                </span>
+              <div className="flex flex-col gap-1 text-xs text-muted-foreground" data-testid="text-resumed-info">
+                <div className="flex items-center gap-3">
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        type="button"
+                        className="flex items-center gap-1 rounded px-1 cursor-pointer"
+                        onClick={() => setShowResumedDetails(v => !v)}
+                        data-testid="button-toggle-resumed-details"
+                      >
+                        <span className="inline-block h-2 w-2 rounded-full bg-primary/30 shrink-0" />
+                        {clampedResumed} previously completed
+                        {resumedSegmentIds.length > 0 && (
+                          showResumedDetails
+                            ? <ChevronDown className="h-3 w-3 shrink-0" />
+                            : <ChevronRight className="h-3 w-3 shrink-0" />
+                        )}
+                      </button>
+                    </TooltipTrigger>
+                    {resumedSegmentIds.length > 0 && (
+                      <TooltipContent side="bottom" className="max-w-xs">
+                        <p className="font-medium mb-1">Previously completed segments:</p>
+                        <ul className="space-y-0.5">
+                          {resumedSegmentIds.slice(0, 5).map(id => (
+                            <li key={id} className="font-mono text-xs">{getSegmentLabel(id)}</li>
+                          ))}
+                          {resumedSegmentIds.length > 5 && (
+                            <li className="text-muted-foreground">and {resumedSegmentIds.length - 5} more</li>
+                          )}
+                        </ul>
+                      </TooltipContent>
+                    )}
+                  </Tooltip>
+                  <span className="flex items-center gap-1">
+                    <span className="inline-block h-2 w-2 rounded-full bg-primary shrink-0" />
+                    {Math.max(0, exportProgress.current - clampedResumed)} newly processed
+                  </span>
+                </div>
+                {showResumedDetails && resumedSegmentIds.length > 0 && (
+                  <div className="ml-4 flex flex-wrap gap-1" data-testid="list-resumed-segments">
+                    {resumedSegmentIds.map(id => (
+                      <Badge key={id} variant="outline" className="text-xs font-mono">
+                        {getSegmentLabel(id)}
+                      </Badge>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
           </div>
