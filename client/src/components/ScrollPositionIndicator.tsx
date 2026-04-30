@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 
 type ScrollPositionVariant = "default" | "table" | "compact";
+type ScrollPositionPlacement = "top" | "bottom";
 
 interface ScrollPositionIndicatorProps {
   virtualItems: { index: number; start: number; end: number }[];
@@ -12,6 +13,7 @@ interface ScrollPositionIndicatorProps {
   fadeOutDuration?: number;
   className?: string;
   variant?: ScrollPositionVariant;
+  position?: ScrollPositionPlacement;
 }
 
 const DEFAULT_FADE_OUT_DELAY_MS = 1500;
@@ -58,6 +60,7 @@ export function ScrollPositionIndicator({
   fadeOutDuration = DEFAULT_FADE_OUT_DURATION_MS,
   className,
   variant = "default",
+  position = "bottom",
 }: ScrollPositionIndicatorProps) {
   const [visible, setVisible] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -107,8 +110,9 @@ export function ScrollPositionIndicator({
   return (
     <div
       className={cn(
-        "sticky bottom-0 flex justify-center pointer-events-none py-1 z-20",
+        "sticky flex justify-center pointer-events-none py-1 z-20",
         !prefersReducedMotion && "transition-opacity",
+        position === "top" ? "top-0" : "bottom-0",
         styles.wrapper,
         className,
       )}
