@@ -31,6 +31,22 @@ const variantStyles: Record<ScrollPositionVariant, { wrapper: string; pill: stri
   },
 };
 
+function usePrefersReducedMotion(): boolean {
+  const [reducedMotion, setReducedMotion] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  });
+
+  useEffect(() => {
+    const mql = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const handler = (e: MediaQueryListEvent) => setReducedMotion(e.matches);
+    mql.addEventListener("change", handler);
+    return () => mql.removeEventListener("change", handler);
+  }, []);
+
+  return reducedMotion;
+}
+
 export function ScrollPositionIndicator({
   virtualItems,
   totalCount,
@@ -42,12 +58,15 @@ export function ScrollPositionIndicator({
 }: ScrollPositionIndicatorProps) {
   const [visible, setVisible] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const prefersReducedMotion = usePrefersReducedMotion();
 
   useEffect(() => {
     if (!scrollElement) return;
 
-    setVisible(true);
-    timerRef.current = setTimeout(() => setVisible(false), INITIAL_FLASH_MS);
+    if (!prefersReducedMotion) {
+      setVisible(true);
+      timerRef.current = setTimeout(() => setVisible(false), INITIAL_FLASH_MS);
+    }
 
     const onScroll = () => {
       setVisible(true);
@@ -61,7 +80,7 @@ export function ScrollPositionIndicator({
       scrollElement.removeEventListener("scroll", onScroll);
       if (timerRef.current) clearTimeout(timerRef.current);
     };
-  }, [scrollElement, fadeOutDelay]);
+  }, [scrollElement, fadeOutDelay, prefersReducedMotion]);
 
   if (!scrollElement || virtualItems.length === 0 || totalCount === 0) return null;
 
@@ -85,7 +104,8 @@ export function ScrollPositionIndicator({
   return (
     <div
       className={cn(
-        "sticky bottom-0 flex justify-center pointer-events-none py-1 z-20 transition-opacity duration-300",
+        "sticky bottom-0 flex justify-center pointer-events-none py-1 z-20",
+        !prefersReducedMotion && "transition-opacity duration-300",
         styles.wrapper,
         className,
       )}
