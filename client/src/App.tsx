@@ -38,6 +38,7 @@ import BitcoinFlowVisualizer from "@/pages/BitcoinFlowVisualizer";
 import BulkEditor from "@/pages/BulkEditor";
 import QuickTagger from "@/pages/QuickTagger";
 import { lazy, Suspense, useState } from "react";
+import { ActivityBusProvider, useActivityBus } from "@/lib/activity-bus";
 
 const UIAssets = lazy(() => import("@/pages/UIAssets"));
 const IconsReference = lazy(() => import("@/pages/IconsReference"));
@@ -110,6 +111,31 @@ function AppRoutes() {
   );
 }
 
+function ActivityPulseDot() {
+  const { tasks, isStuck, monitorEnabled, monitorPanelOpen, setMonitorPanelOpen } = useActivityBus();
+  if (!monitorEnabled) return null;
+  const active = tasks.length > 0;
+  const dotClass = !active
+    ? 'bg-muted-foreground/40'
+    : isStuck
+    ? 'bg-amber-500'
+    : 'bg-green-500 animate-pulse';
+  const title = !active
+    ? 'Activity monitor — idle (click to open)'
+    : isStuck
+    ? 'Operation appears stuck — click to open monitor'
+    : `${tasks.length} operation${tasks.length > 1 ? 's' : ''} in progress — click to open monitor`;
+  return (
+    <button
+      className={`absolute top-2 left-8 h-2 w-2 rounded-full cursor-pointer ${dotClass} ${monitorPanelOpen ? 'ring-1 ring-offset-1 ring-foreground/30' : ''}`}
+      title={title}
+      data-testid="activity-pulse-dot"
+      onClick={() => setMonitorPanelOpen(!monitorPanelOpen)}
+      aria-label={title}
+    />
+  );
+}
+
 function AuthenticatedApp() {
   const { logout } = useAuth();
   
@@ -125,8 +151,11 @@ function AuthenticatedApp() {
           <div className="flex h-screen w-full">
             <AppSidebar />
             <div className="flex flex-col flex-1 overflow-hidden">
-              <header className="flex items-center justify-between p-4 border-b gap-2">
-                <SidebarTrigger data-testid="button-sidebar-toggle" />
+              <header className="flex items-center justify-between p-4 border-b gap-2 relative">
+                <div className="relative">
+                  <SidebarTrigger data-testid="button-sidebar-toggle" />
+                  <ActivityPulseDot />
+                </div>
                 <div className="flex items-center gap-2">
                   <ThemeToggle />
                   <Button
@@ -307,10 +336,12 @@ export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
-        <AuthProvider>
-          <AppContent />
-          <Toaster />
-        </AuthProvider>
+        <ActivityBusProvider>
+          <AuthProvider>
+            <AppContent />
+            <Toaster />
+          </AuthProvider>
+        </ActivityBusProvider>
       </TooltipProvider>
     </QueryClientProvider>
   );

@@ -55,6 +55,7 @@ import {
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Link, useLocation } from "wouter";
 import { useState, useEffect } from "react";
+import { ActivityMonitorPanel } from "@/components/ActivityMonitorPanel";
 
 interface NavItem {
   title: string;
@@ -273,7 +274,8 @@ export function AppSidebar() {
         </div>
       </SidebarContent>
       <SidebarFooter className="p-4">
-        <div className="text-xs text-muted-foreground">
+        <ActivityMonitorPanel />
+        <div className="text-xs text-muted-foreground mt-2">
           <p>Offline-first PWA</p>
           <p className="mt-1">All data stored locally</p>
           <p className="mt-1">v{APP_VERSION}</p>

@@ -10,6 +10,7 @@ import {
   type AddressImportance
 } from './database';
 import { getParticipantsByTxid, bulkAddUtxoLineage, addCustodySegment } from './dataFacade';
+import { getActivityBus } from './activity-bus';
 
 // Generate a simple UUID for segment IDs
 function generateSegmentId(): string {
@@ -171,41 +172,64 @@ export async function buildAllLineage(
   let created = 0;
   let lastId = 0;
 
-  while (processed < totalCount) {
-    if (signal?.aborted) {
-      return { processed, created };
-    }
+  try {
+    getActivityBus().publishTask({
+      id: 'lineage-build',
+      label: 'Building Lineage',
+      phase: 'Starting',
+      current: 0,
+      total: totalCount,
+    });
+  } catch {}
 
-    const batch = await db.blockchainTransactions
-      .where('id').above(lastId)
-      .limit(BATCH_SIZE)
-      .toArray();
-    if (batch.length === 0) break;
-
-    for (const tx of batch) {
+  try {
+    while (processed < totalCount) {
       if (signal?.aborted) {
         return { processed, created };
       }
 
-      const lineageRecords = await buildLineageForTransaction(tx.txid);
+      const batch = await db.blockchainTransactions
+        .where('id').above(lastId)
+        .limit(BATCH_SIZE)
+        .toArray();
+      if (batch.length === 0) break;
 
-      if (lineageRecords.length > 0) {
-        await bulkAddUtxoLineage(lineageRecords, { skipNotification: true });
-        created += lineageRecords.length;
+      for (const tx of batch) {
+        if (signal?.aborted) {
+          return { processed, created };
+        }
+
+        const lineageRecords = await buildLineageForTransaction(tx.txid);
+
+        if (lineageRecords.length > 0) {
+          await bulkAddUtxoLineage(lineageRecords, { skipNotification: true });
+          created += lineageRecords.length;
+        }
+
+        processed++;
+        if (onProgress) {
+          onProgress(processed, totalCount);
+        }
+        try {
+          getActivityBus().publishTask({
+            id: 'lineage-build',
+            label: 'Building Lineage',
+            phase: 'Processing transactions',
+            current: processed,
+            total: totalCount,
+          });
+        } catch {}
       }
 
-      processed++;
-      if (onProgress) {
-        onProgress(processed, totalCount);
-      }
+      const lastItem = batch[batch.length - 1];
+      if (!lastItem.id) break;
+      lastId = lastItem.id;
     }
 
-    const lastItem = batch[batch.length - 1];
-    if (!lastItem.id) break;
-    lastId = lastItem.id;
+    return { processed, created };
+  } finally {
+    try { getActivityBus().completeTask('lineage-build'); } catch {}
   }
-  
-  return { processed, created };
 }
 
 export interface LineageChainResult {
@@ -495,65 +519,88 @@ export async function buildAllCustodySegments(
   onProgress?: (current: number, total: number) => void,
   signal?: AbortSignal
 ): Promise<{ processed: number; created: number }> {
-  const uniqueOrigins = new Map<string, { createdAddress: string; createdTxid: string; createdVout: number }>();
+  try {
+    getActivityBus().publishTask({
+      id: 'custody-segments-build',
+      label: 'Building Custody Segments',
+      phase: 'Scanning origins',
+      current: 0,
+      total: 0,
+    });
+  } catch {}
 
-  const ORIGIN_SCAN_BATCH = 1000;
-  let originScanOffset = 0;
-  while (true) {
-    if (signal?.aborted) {
-      return { processed: 0, created: 0 };
-    }
+  try {
+    const uniqueOrigins = new Map<string, { createdAddress: string; createdTxid: string; createdVout: number }>();
 
-    const batch = await db.utxoLineage
-      .where('createdOwned')
-      .equals(1)
-      .offset(originScanOffset)
-      .limit(ORIGIN_SCAN_BATCH)
-      .toArray();
-
-    if (batch.length === 0) break;
-
-    for (const lineage of batch) {
-      const key = `${lineage.createdTxid}:${lineage.createdVout}`;
-      if (!uniqueOrigins.has(key)) {
-        uniqueOrigins.set(key, {
-          createdAddress: lineage.createdAddress,
-          createdTxid: lineage.createdTxid,
-          createdVout: lineage.createdVout
-        });
+    const ORIGIN_SCAN_BATCH = 1000;
+    let originScanOffset = 0;
+    while (true) {
+      if (signal?.aborted) {
+        return { processed: 0, created: 0 };
       }
+
+      const batch = await db.utxoLineage
+        .where('createdOwned')
+        .equals(1)
+        .offset(originScanOffset)
+        .limit(ORIGIN_SCAN_BATCH)
+        .toArray();
+
+      if (batch.length === 0) break;
+
+      for (const lineage of batch) {
+        const key = `${lineage.createdTxid}:${lineage.createdVout}`;
+        if (!uniqueOrigins.has(key)) {
+          uniqueOrigins.set(key, {
+            createdAddress: lineage.createdAddress,
+            createdTxid: lineage.createdTxid,
+            createdVout: lineage.createdVout
+          });
+        }
+      }
+
+      originScanOffset += batch.length;
+      if (batch.length < ORIGIN_SCAN_BATCH) break;
     }
 
-    originScanOffset += batch.length;
-    if (batch.length < ORIGIN_SCAN_BATCH) break;
+    const origins = Array.from(uniqueOrigins.values());
+    let processed = 0;
+    let created = 0;
+
+    for (const origin of origins) {
+      if (signal?.aborted) {
+        return { processed, created };
+      }
+
+      const segment = await buildCustodySegment(
+        origin.createdAddress,
+        origin.createdTxid,
+        origin.createdVout
+      );
+
+      if (segment) {
+        created++;
+      }
+
+      processed++;
+      if (onProgress) {
+        onProgress(processed, origins.length);
+      }
+      try {
+        getActivityBus().publishTask({
+          id: 'custody-segments-build',
+          label: 'Building Custody Segments',
+          phase: 'Processing origins',
+          current: processed,
+          total: origins.length,
+        });
+      } catch {}
+    }
+
+    return { processed, created };
+  } finally {
+    try { getActivityBus().completeTask('custody-segments-build'); } catch {}
   }
-
-  const origins = Array.from(uniqueOrigins.values());
-  let processed = 0;
-  let created = 0;
-
-  for (const origin of origins) {
-    if (signal?.aborted) {
-      return { processed, created };
-    }
-
-    const segment = await buildCustodySegment(
-      origin.createdAddress,
-      origin.createdTxid,
-      origin.createdVout
-    );
-
-    if (segment) {
-      created++;
-    }
-
-    processed++;
-    if (onProgress) {
-      onProgress(processed, origins.length);
-    }
-  }
-
-  return { processed, created };
 }
 
 // Get all segments for an address (as origin or current holder)

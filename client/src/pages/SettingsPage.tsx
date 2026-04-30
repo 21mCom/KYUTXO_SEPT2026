@@ -76,6 +76,7 @@ import {
   SEARCH_FADE_OPTIONS,
   type SearchFadeOption,
 } from "@/config/debounce";
+import { useActivityBus } from "@/lib/activity-bus";
 
 const DELETE_CONFIRMATION_PHRASE = "DELETE ALL DATA";
 
@@ -113,6 +114,7 @@ export default function SettingsPage() {
   const [isChangingPassword, setIsChangingPassword] = useState(false);
   const [isMigratingAttachments, setIsMigratingAttachments] = useState(false);
   const [searchFadeIntensity, setSearchFadeIntensity] = useState<SearchFadeOption>(getSearchFadePreference);
+  const { monitorEnabled, setMonitorEnabled } = useActivityBus();
 
   const handleToggleBuiltInField = async (field: keyof typeof fieldVisibility) => {
     try {
@@ -1141,6 +1143,19 @@ export default function SettingsPage() {
                 </p>
               </div>
               <ThemeToggle />
+            </div>
+            <div className="flex items-center justify-between">
+              <div>
+                <Label className="text-base">Activity Monitor</Label>
+                <p className="text-sm text-muted-foreground">
+                  Show a live activity indicator in the header and sidebar
+                </p>
+              </div>
+              <Switch
+                checked={monitorEnabled}
+                onCheckedChange={setMonitorEnabled}
+                data-testid="toggle-activity-monitor"
+              />
             </div>
             <div className="flex items-center justify-between gap-4">
               <div>

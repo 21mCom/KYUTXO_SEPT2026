@@ -35,6 +35,7 @@ import {
 import { Checkbox } from "@/components/ui/checkbox";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { transactionSyncService, type SyncProgress, type SyncResult, type SyncOptions, type SourceCategory, type SourceSelection, type SourceInfo, type SyncDepthEstimate, loadAddressRecords, getAddressSourcesFromRecords } from "@/lib/transaction-sync";
+import { getActivityBus } from "@/lib/activity-bus";
 import type { Record as DbRecord, PausedSyncState, SkippedAddress, AddressBlacklist, SyncProtectionSettings } from "@/lib/database";
 import { DEFAULT_SYNC_PROTECTION } from "@/lib/database";
 import { useNodeSettings } from "@/hooks/use-node-settings";
@@ -200,6 +201,20 @@ export default function TransactionSync() {
     
     transactionSyncService.setProgressCallback((progress) => {
       setSyncProgress(progress);
+      try {
+        const bus = getActivityBus();
+        if (progress.phase === 'complete' || progress.phase === 'error') {
+          bus.completeTask('transaction-sync');
+        } else if (progress.phase !== 'idle') {
+          bus.publishTask({
+            id: 'transaction-sync',
+            label: 'Transaction Sync',
+            phase: progress.phase,
+            current: progress.addressesProcessed,
+            total: progress.addressesTotal,
+          });
+        }
+      } catch {}
     });
 
     try {
@@ -238,6 +253,7 @@ export default function TransactionSync() {
         variant: "destructive",
       });
     } finally {
+      try { getActivityBus().completeTask('transaction-sync'); } catch {}
       const wasStopped = isStopping;
       setIsSyncing(false);
       isSyncingRef.current = false;
@@ -286,6 +302,7 @@ export default function TransactionSync() {
     setTimeout(() => {
       if (isSyncingRef.current) {
         transactionSyncService.stopSync();
+        try { getActivityBus().completeTask('transaction-sync'); } catch {}
         setIsSyncing(false);
         isSyncingRef.current = false;
         setIsStopping(false);
@@ -316,6 +333,20 @@ export default function TransactionSync() {
     
     transactionSyncService.setProgressCallback((progress) => {
       setSyncProgress(progress);
+      try {
+        const bus = getActivityBus();
+        if (progress.phase === 'complete' || progress.phase === 'error') {
+          bus.completeTask('transaction-sync');
+        } else if (progress.phase !== 'idle') {
+          bus.publishTask({
+            id: 'transaction-sync',
+            label: 'Transaction Sync (Resume)',
+            phase: progress.phase,
+            current: progress.addressesProcessed,
+            total: progress.addressesTotal,
+          });
+        }
+      } catch {}
     });
 
     try {
@@ -343,6 +374,7 @@ export default function TransactionSync() {
         variant: "destructive",
       });
     } finally {
+      try { getActivityBus().completeTask('transaction-sync'); } catch {}
       setIsSyncing(false);
       isSyncingRef.current = false;
       setIsStopping(false);

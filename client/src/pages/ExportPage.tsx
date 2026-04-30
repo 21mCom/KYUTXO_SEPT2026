@@ -1,4 +1,5 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
+import { getActivityBus } from "@/lib/activity-bus";
 import { Download, Lock, FileJson, AlertCircle, CheckCircle2, FolderOpen, FileSpreadsheet, Paperclip } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -344,6 +345,15 @@ export default function ExportPage() {
     try {
       setProgressMessage("Gathering records...");
       setProgress(10);
+      try {
+        getActivityBus().publishTask({
+          id: 'evidence-export',
+          label: 'Exporting Backup',
+          phase: 'Gathering records',
+          current: 0,
+          total: 6,
+        });
+      } catch {}
 
       const EXPORT_BATCH = 1000;
       const rawRecords: Record[] = [];
@@ -377,6 +387,15 @@ export default function ExportPage() {
 
       setProgress(20);
       setProgressMessage("Generating CSV files...");
+      try {
+        getActivityBus().publishTask({
+          id: 'evidence-export',
+          label: 'Exporting Backup',
+          phase: 'Generating CSV files',
+          current: 1,
+          total: 6,
+        });
+      } catch {}
 
       const customFields = rawCustomFields as CustomFieldDef[];
 
@@ -392,6 +411,15 @@ export default function ExportPage() {
 
       setProgress(55);
       setProgressMessage("Gathering attachment files...");
+      try {
+        getActivityBus().publishTask({
+          id: 'evidence-export',
+          label: 'Exporting Backup',
+          phase: 'Gathering attachment files',
+          current: 2,
+          total: 6,
+        });
+      } catch {}
 
       // List and read all attachment files
       const attachmentFilePaths = await listAllAttachmentFiles();
@@ -400,7 +428,17 @@ export default function ExportPage() {
       for (let i = 0; i < attachmentFilePaths.length; i++) {
         const filePath = attachmentFilePaths[i];
         setProgressMessage(`Reading attachment ${i + 1} of ${attachmentFilePaths.length}...`);
-        
+        if (i === 0 || i === Math.floor(attachmentFilePaths.length / 2)) {
+          try {
+            getActivityBus().publishTask({
+              id: 'evidence-export',
+              label: 'Exporting Backup',
+              phase: `Reading ${attachmentFilePaths.length} attachment${attachmentFilePaths.length !== 1 ? 's' : ''}`,
+              current: 3,
+              total: 6,
+            });
+          } catch {}
+        }
         const fileData = await readAttachmentFile(filePath);
         if (fileData) {
           attachmentFiles.push({ path: filePath, data: fileData });
@@ -445,9 +483,28 @@ export default function ExportPage() {
         attachmentsFolder?.file(file.path, file.data);
       }
 
+      try {
+        getActivityBus().publishTask({
+          id: 'evidence-export',
+          label: 'Exporting Backup',
+          phase: 'Creating ZIP archive',
+          current: 4,
+          total: 6,
+        });
+      } catch {}
+
       if (encrypted) {
         setProgress(75);
         setProgressMessage("Encrypting data...");
+        try {
+          getActivityBus().publishTask({
+            id: 'evidence-export',
+            label: 'Exporting Backup',
+            phase: 'Encrypting data',
+            current: 5,
+            total: 6,
+          });
+        } catch {}
         
         const salt = generateSalt();
         const exportKey = await deriveKey(password, salt);
@@ -546,6 +603,15 @@ Keep this backup in a secure location.
 
       setProgress(85);
       setProgressMessage("Compressing ZIP file...");
+      try {
+        getActivityBus().publishTask({
+          id: 'evidence-export',
+          label: 'Exporting Backup',
+          phase: 'Compressing ZIP',
+          current: 6,
+          total: 6,
+        });
+      } catch {}
 
       const zipBlob = await zip.generateAsync({ 
         type: "blob",
@@ -572,6 +638,7 @@ Keep this backup in a secure location.
       setProgress(100);
       setProgressMessage("Export complete!");
       setExportComplete(true);
+      try { getActivityBus().completeTask('evidence-export'); } catch {}
 
       toast({
         title: "Export Successful",
@@ -580,6 +647,7 @@ Keep this backup in a secure location.
 
     } catch (error) {
       console.error("Export failed:", error);
+      try { getActivityBus().completeTask('evidence-export'); } catch {}
       toast({
         variant: "destructive",
         title: "Export Failed",

@@ -23,6 +23,7 @@ import {
 import { migrateAttachmentPaths } from '@/lib/attachments';
 import { hasLegacyEncryptedRecords, decryptLegacyRecords, getTotalTableCount, type LegacyDecryptProgress } from '@/lib/legacy-decrypt';
 import { decryptLegacyAttachmentFiles, type FileDecryptProgress } from '@/lib/legacy-decrypt-files';
+import { getActivityBus } from '@/lib/activity-bus';
 
 interface AuthContextType {
   isInitialized: boolean | null;
@@ -87,6 +88,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         encryptionKey,
         (progress) => {
           setFileDecryptProgress(progress);
+          try {
+            getActivityBus().publishTask({
+              id: 'file-decrypt',
+              label: 'Decrypting Attachment Files',
+              phase: `${progress.current} / ${progress.total} files`,
+              current: progress.current,
+              total: progress.total,
+            });
+          } catch {}
         },
       );
 
@@ -99,6 +109,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       console.error('[FileDecrypt] Migration failed:', error);
     } finally {
       setFileDecryptProgress(null);
+      try { getActivityBus().completeTask('file-decrypt'); } catch {}
     }
   }, []);
 
@@ -140,6 +151,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         encryptionKey,
         (progress) => {
           setLegacyMigrationProgress(progress);
+          try {
+            getActivityBus().publishTask({
+              id: 'legacy-decrypt',
+              label: 'Migrating Encrypted Data',
+              phase: `${progress.tableName} (table ${progress.tableIndex + 1}/${progress.tableCount})`,
+              current: progress.current,
+              total: progress.total,
+            });
+          } catch {}
         },
         {
           alreadyCompletedTables: completedTables,
@@ -176,6 +196,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setLegacyMigrationResult({ totalDecrypted: 0, totalFailed: 0, unexpectedError: true });
     } finally {
       setLegacyMigrationProgress(null);
+      try { getActivityBus().completeTask('legacy-decrypt'); } catch {}
     }
   }, [runLegacyFileDecryptMigration]);
 

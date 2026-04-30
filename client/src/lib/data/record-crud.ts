@@ -1,5 +1,6 @@
 import { db, notifyDbChange, type Record, type Attachment, type RecordOrigin, type RecordOriginType, type DerivationTemplate, type AddressImportance } from '../database';
 import { ensureOwner, ensureWalletName, ensureSeedName, ensureWalletSoftware } from './vocabulary-crud';
+import { getActivityBus } from '../activity-bus';
 
 async function syncRecordVocabulary(
   data: Partial<Record>
@@ -88,41 +89,64 @@ export async function bulkCreateRecords(
 
   console.log(`[bulkCreateRecords] Creating ${records.length} records...`);
   const startTime = performance.now();
+  try {
+    getActivityBus().publishTask({
+      id: 'bulk-create-records',
+      label: 'Creating Records',
+      phase: `Inserting ${records.length} records`,
+      current: 0,
+      total: records.length,
+    });
+  } catch {}
 
-  const fullRecords = records.map(buildFullRecord);
+  try {
+    const fullRecords = records.map(buildFullRecord);
 
-  const ids = await db.transaction('rw', db.records, async () => {
-    return await db.records.bulkAdd(fullRecords, { allKeys: true });
-  });
+    try {
+      getActivityBus().publishTask({
+        id: 'bulk-create-records',
+        label: 'Creating Records',
+        phase: `Writing ${records.length} records`,
+        current: fullRecords.length,
+        total: records.length,
+      });
+    } catch {}
 
-  if (!options?.skipVocabularySync) {
-    const vocabularyValues = {
-      owners: new Set<string>(),
-      walletNames: new Set<string>(),
-      seedNames: new Set<string>(),
-      walletSoftware: new Set<string>(),
-    };
+    const ids = await db.transaction('rw', db.records, async () => {
+      return await db.records.bulkAdd(fullRecords, { allKeys: true });
+    });
 
-    for (const data of records) {
-      if (data.owner && data.owner !== 'Unknown') vocabularyValues.owners.add(data.owner);
-      if (data.walletName) vocabularyValues.walletNames.add(data.walletName);
-      if (data.seedName) vocabularyValues.seedNames.add(data.seedName);
-      if (data.walletSoftware) vocabularyValues.walletSoftware.add(data.walletSoftware);
+    if (!options?.skipVocabularySync) {
+      const vocabularyValues = {
+        owners: new Set<string>(),
+        walletNames: new Set<string>(),
+        seedNames: new Set<string>(),
+        walletSoftware: new Set<string>(),
+      };
+
+      for (const data of records) {
+        if (data.owner && data.owner !== 'Unknown') vocabularyValues.owners.add(data.owner);
+        if (data.walletName) vocabularyValues.walletNames.add(data.walletName);
+        if (data.seedName) vocabularyValues.seedNames.add(data.seedName);
+        if (data.walletSoftware) vocabularyValues.walletSoftware.add(data.walletSoftware);
+      }
+
+      batchSyncVocabulary(vocabularyValues).catch((err) => {
+        console.warn('[bulkCreateRecords] Vocabulary sync failed:', err);
+      });
     }
 
-    batchSyncVocabulary(vocabularyValues).catch((err) => {
-      console.warn('[bulkCreateRecords] Vocabulary sync failed:', err);
-    });
+    if (!options?.skipNotification) {
+      notifyDbChange('records');
+    }
+
+    const duration = performance.now() - startTime;
+    console.log(`[bulkCreateRecords] Created ${ids.length} records in ${duration.toFixed(0)}ms`);
+
+    return ids as number[];
+  } finally {
+    try { getActivityBus().completeTask('bulk-create-records'); } catch {}
   }
-
-  if (!options?.skipNotification) {
-    notifyDbChange('records');
-  }
-
-  const duration = performance.now() - startTime;
-  console.log(`[bulkCreateRecords] Created ${ids.length} records in ${duration.toFixed(0)}ms`);
-
-  return ids as number[];
 }
 
 export interface UpdateRecordOptions {
@@ -219,82 +243,104 @@ export async function bulkUpdateRecords(
   
   console.log(`[bulkUpdateRecords] Processing ${updates.length} records...`);
   const startTime = performance.now();
-  
-  const ids = updates.map(u => u.id);
-  const existingRecords = await db.records.where('id').anyOf(ids).toArray();
-  
-  const existingMap = new Map<number, Record>();
-  for (const record of existingRecords) {
-    existingMap.set(record.id!, record);
-  }
-  
-  const recordsToSave: Record[] = [];
-  const allChanges: Partial<Record>[] = [];
-  let errorCount = 0;
-  
-  for (const { id, changes } of updates) {
-    const existing = existingMap.get(id);
-    if (!existing) {
-      console.warn(`[bulkUpdateRecords] Record ${id} not found, skipping`);
-      errorCount++;
-      continue;
-    }
-    
-    const merged = {
-      ...existing,
-      ...changes,
-      id,
-      updatedAt: now,
-    };
-    if (changes.inputString !== undefined) {
-      merged.inputStringLower = changes.inputString ? changes.inputString.toLowerCase() : '';
-    }
-    const updated: Record = merged;
-    
-    recordsToSave.push(updated);
-    allChanges.push(changes);
-  }
-  
-  await db.transaction('rw', db.records, async () => {
-    await db.records.bulkPut(recordsToSave);
-  });
-  
-  if (!options?.skipVocabularySync) {
-    const vocabularyValues = {
-      owners: new Set<string>(),
-      walletNames: new Set<string>(),
-      seedNames: new Set<string>(),
-      walletSoftware: new Set<string>(),
-    };
-    
-    for (const changes of allChanges) {
-      if (changes.owner && changes.owner !== 'Unknown') {
-        vocabularyValues.owners.add(changes.owner);
-      }
-      if (changes.walletName) {
-        vocabularyValues.walletNames.add(changes.walletName);
-      }
-      if (changes.seedName) {
-        vocabularyValues.seedNames.add(changes.seedName);
-      }
-      if (changes.walletSoftware) {
-        vocabularyValues.walletSoftware.add(changes.walletSoftware);
-      }
-    }
-    
-    batchSyncVocabulary(vocabularyValues).catch((err) => {
-      console.warn('[bulkUpdateRecords] Vocabulary sync failed:', err);
+  try {
+    getActivityBus().publishTask({
+      id: 'bulk-update-records',
+      label: 'Updating Records',
+      phase: `Updating ${updates.length} records`,
+      current: 0,
+      total: updates.length,
     });
+  } catch {}
+  
+  try {
+    const ids = updates.map(u => u.id);
+    const existingRecords = await db.records.where('id').anyOf(ids).toArray();
+    try {
+      getActivityBus().publishTask({
+        id: 'bulk-update-records',
+        label: 'Updating Records',
+        phase: `Writing ${updates.length} records`,
+        current: existingRecords.length,
+        total: updates.length,
+      });
+    } catch {}
+
+    const existingMap = new Map<number, Record>();
+    for (const record of existingRecords) {
+      existingMap.set(record.id!, record);
+    }
+    
+    const recordsToSave: Record[] = [];
+    const allChanges: Partial<Record>[] = [];
+    let errorCount = 0;
+    
+    for (const { id, changes } of updates) {
+      const existing = existingMap.get(id);
+      if (!existing) {
+        console.warn(`[bulkUpdateRecords] Record ${id} not found, skipping`);
+        errorCount++;
+        continue;
+      }
+      
+      const merged = {
+        ...existing,
+        ...changes,
+        id,
+        updatedAt: now,
+      };
+      if (changes.inputString !== undefined) {
+        merged.inputStringLower = changes.inputString ? changes.inputString.toLowerCase() : '';
+      }
+      const updated: Record = merged;
+      
+      recordsToSave.push(updated);
+      allChanges.push(changes);
+    }
+    
+    await db.transaction('rw', db.records, async () => {
+      await db.records.bulkPut(recordsToSave);
+    });
+    
+    if (!options?.skipVocabularySync) {
+      const vocabularyValues = {
+        owners: new Set<string>(),
+        walletNames: new Set<string>(),
+        seedNames: new Set<string>(),
+        walletSoftware: new Set<string>(),
+      };
+      
+      for (const changes of allChanges) {
+        if (changes.owner && changes.owner !== 'Unknown') {
+          vocabularyValues.owners.add(changes.owner);
+        }
+        if (changes.walletName) {
+          vocabularyValues.walletNames.add(changes.walletName);
+        }
+        if (changes.seedName) {
+          vocabularyValues.seedNames.add(changes.seedName);
+        }
+        if (changes.walletSoftware) {
+          vocabularyValues.walletSoftware.add(changes.walletSoftware);
+        }
+      }
+      
+      batchSyncVocabulary(vocabularyValues).catch((err) => {
+        console.warn('[bulkUpdateRecords] Vocabulary sync failed:', err);
+      });
+    }
+    
+    if (!options?.skipNotification) {
+      notifyDbChange('records');
+    }
+    
+    const duration = performance.now() - startTime;
+    console.log(`[bulkUpdateRecords] Completed: ${recordsToSave.length} records in ${duration.toFixed(0)}ms (${(duration / recordsToSave.length).toFixed(1)}ms/record)`);
+
+    return { successCount: recordsToSave.length, errorCount };
+  } finally {
+    try { getActivityBus().completeTask('bulk-update-records'); } catch {}
   }
-  
-  if (!options?.skipNotification) {
-    notifyDbChange('records');
-  }
-  
-  const duration = performance.now() - startTime;
-  console.log(`[bulkUpdateRecords] Completed: ${recordsToSave.length} records in ${duration.toFixed(0)}ms (${(duration / recordsToSave.length).toFixed(1)}ms/record)`);
-  
-  return { successCount: recordsToSave.length, errorCount };
 }
 
 export interface DeleteRecordOptions {
