@@ -9,11 +9,13 @@ interface ScrollPositionIndicatorProps {
   scrollElement: HTMLElement | null;
   label?: string;
   fadeOutDelay?: number;
+  fadeOutDuration?: number;
   className?: string;
   variant?: ScrollPositionVariant;
 }
 
 const DEFAULT_FADE_OUT_DELAY_MS = 1500;
+const DEFAULT_FADE_OUT_DURATION_MS = 300;
 const INITIAL_FLASH_MS = 1000;
 
 const variantStyles: Record<ScrollPositionVariant, { wrapper: string; pill: string }> = {
@@ -53,6 +55,7 @@ export function ScrollPositionIndicator({
   scrollElement,
   label = "rows",
   fadeOutDelay = DEFAULT_FADE_OUT_DELAY_MS,
+  fadeOutDuration = DEFAULT_FADE_OUT_DURATION_MS,
   className,
   variant = "default",
 }: ScrollPositionIndicatorProps) {
@@ -105,11 +108,11 @@ export function ScrollPositionIndicator({
     <div
       className={cn(
         "sticky bottom-0 flex justify-center pointer-events-none py-1 z-20",
-        !prefersReducedMotion && "transition-opacity duration-300",
+        !prefersReducedMotion && "transition-opacity",
         styles.wrapper,
         className,
       )}
-      style={{ opacity: visible ? 1 : 0 }}
+      style={{ opacity: visible ? 1 : 0, transitionDuration: `${fadeOutDuration}ms` }}
       data-testid="scroll-position-indicator"
     >
       <span className={cn("rounded-md text-muted-foreground", styles.pill)}>
