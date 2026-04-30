@@ -159,14 +159,20 @@ export function ContinuityCertificateReport() {
     let cancelled = false;
     loadPartialBundle(currentSelectedSegmentIds).then(persisted => {
       if (cancelled || !persisted) return;
+      const processed = persisted.bundle.summary.totalSegments;
+      const total = persisted.bundle.requestedSegments ?? currentSelectedSegmentIds.length;
       setExportError({
-        message: `Previous incomplete export found (${persisted.bundle.summary.totalSegments} of ${persisted.bundle.requestedSegments ?? currentSelectedSegmentIds.length} segments).`,
+        message: `Previous incomplete export found (${processed} of ${total} segments).`,
         format: persisted.format,
         partialBundle: persisted.bundle,
       });
       setExportProgress({
-        current: persisted.bundle.summary.totalSegments,
-        total: persisted.bundle.requestedSegments ?? currentSelectedSegmentIds.length,
+        current: processed,
+        total,
+      });
+      toast({
+        title: "Incomplete export restored",
+        description: `${processed} of ${total} segments were previously processed. You can resume or download the partial results.`,
       });
     });
     return () => { cancelled = true; };
