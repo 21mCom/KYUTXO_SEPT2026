@@ -47,6 +47,20 @@ interface TableConfig<T> {
   sensitiveFields: (keyof T)[];
 }
 
+export interface LegacyDecryptTableConfig {
+  name: string;
+  table: Table<{ id?: number } & { [key: string]: unknown }>;
+  sensitiveFields: string[];
+}
+
+export function getLegacyDecryptTableConfigs(): LegacyDecryptTableConfig[] {
+  return getTableConfigs().map((c) => ({
+    name: c.name,
+    table: c.table as unknown as Table<{ id?: number } & { [key: string]: unknown }>,
+    sensitiveFields: (c.sensitiveFields as unknown[]).map(String),
+  }));
+}
+
 function getTableConfigs(): TableConfig<LegacyRecord<
   Record | Attachment | Tag | Category | Owner | WalletName |
   SeedName | WalletSoftware | RecordOrigin | TransactionParticipant |

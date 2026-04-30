@@ -69,6 +69,7 @@ import {
 } from "@/lib/vault";
 import JSZip from "jszip";
 import VocabularyManager from "@/components/VocabularyManager";
+import DecryptionVerificationPanel from "@/components/DecryptionVerificationPanel";
 import {
   getSearchFadePreference,
   setSearchFadePreference,
@@ -1392,6 +1393,8 @@ export default function SettingsPage() {
             </div>
           </CardContent>
         </Card>
+
+        <DecryptionVerificationPanel collapsedByDefault />
 
         <Card>
           <CardHeader>
