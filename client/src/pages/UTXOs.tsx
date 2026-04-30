@@ -289,21 +289,24 @@ export default function UTXOs() {
 
     participantsRequestId.current += 1;
     const thisRequestId = participantsRequestId.current;
+    const abortController = new AbortController();
     setParticipantsLoading(true);
 
-    getParticipantsByAddresses(addresses)
+    getParticipantsByAddresses(addresses, abortController.signal)
       .then(result => {
         if (thisRequestId === participantsRequestId.current) {
           setParticipants(result);
           setParticipantsLoading(false);
         }
       })
-      .catch(() => {
+      .catch((e) => {
+        if (e instanceof DOMException && e.name === 'AbortError') return;
         if (thisRequestId === participantsRequestId.current) {
           setParticipants([]);
           setParticipantsLoading(false);
         }
       });
+    return () => { abortController.abort(); };
   }, [processedRecords]);
 
   useEffect(() => {

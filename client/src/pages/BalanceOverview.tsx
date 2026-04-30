@@ -213,12 +213,13 @@ export default function BalanceOverview() {
   useEffect(() => {
     computationId.current += 1;
     const thisId = computationId.current;
+    const abortController = new AbortController();
     setGroupBalances(new Map());
     setUniqueAddressBalances(new Map());
     setComputingGroup(null);
     setComputedCount(0);
 
-    if (recordGroups.size === 0) return;
+    if (recordGroups.size === 0) return () => { abortController.abort(); };
 
     const computeGroups = async () => {
       const entries = Array.from(recordGroups.entries());
@@ -231,8 +232,9 @@ export default function BalanceOverview() {
         const addresses = records.map(r => r.inputString!);
         let participants: TransactionParticipant[];
         try {
-          participants = await getParticipantsByAddresses(addresses);
-        } catch {
+          participants = await getParticipantsByAddresses(addresses, abortController.signal);
+        } catch (e) {
+          if (e instanceof DOMException && e.name === 'AbortError') return;
           participants = [];
         }
         if (thisId !== computationId.current) return;
@@ -308,6 +310,7 @@ export default function BalanceOverview() {
     };
 
     computeGroups();
+    return () => { abortController.abort(); };
   }, [recordGroups, txDbSignal]);
 
   const latestPrice = useMemo(() => {

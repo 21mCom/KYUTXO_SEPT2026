@@ -512,9 +512,10 @@ export async function scanForLightningActivity(
     owner?: string;
     walletName?: string;
     minProbability?: number;
+    signal?: AbortSignal;
   } = {}
 ): Promise<LightningDetectionResult[]> {
-  const { owner, walletName, minProbability = 30 } = options;
+  const { owner, walletName, minProbability = 30, signal } = options;
 
   // Get relevant records based on filters
   let recordsQuery = db.records.where('type').equals('address');
@@ -534,7 +535,7 @@ export async function scanForLightningActivity(
   // Find all transactions involving these addresses
   let participants: TransactionParticipant[];
   if (filteredAddresses.size > 0) {
-    participants = await getParticipantsByAddresses(Array.from(filteredAddresses));
+    participants = await getParticipantsByAddresses(Array.from(filteredAddresses), signal);
   } else {
     participants = [];
   }

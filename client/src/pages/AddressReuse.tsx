@@ -152,7 +152,7 @@ export default function AddressReuse() {
     }
 
     const addressArray = Array.from(addressSet);
-    const relevantParticipants = await getParticipantsByAddresses(addressArray);
+    const relevantParticipants = await getParticipantsByAddresses(addressArray, signal);
     checkAbort(signal);
 
     const relevantTxids = new Set<string>();

@@ -281,6 +281,7 @@ export default function BitcoinFlowVisualizer() {
     }
 
     let cancelled = false;
+    const abortController = new AbortController();
     const loadFilteredAddresses = async () => {
       setFinderLoading(true);
       try {
@@ -307,7 +308,7 @@ export default function BitcoinFlowVisualizer() {
           return;
         }
 
-        const participants = await getParticipantsByAddresses(addressStrings);
+        const participants = await getParticipantsByAddresses(addressStrings, abortController.signal);
 
         const txids = Array.from(new Set(participants.map(p => p.txid)));
         const txMap = new Map<string, number>();
@@ -362,6 +363,7 @@ export default function BitcoinFlowVisualizer() {
           setFilteredAddresses(results);
         }
       } catch (err) {
+        if (err instanceof DOMException && err.name === 'AbortError') return;
         console.error('[FlowVisualizer] Error loading filtered addresses:', err);
         if (!cancelled) {
           setFilteredAddresses([]);
@@ -374,7 +376,7 @@ export default function BitcoinFlowVisualizer() {
     };
 
     loadFilteredAddresses();
-    return () => { cancelled = true; };
+    return () => { cancelled = true; abortController.abort(); };
   }, [filterOwner, filterWallet, filterTag, hasActiveFilter]);
 
   const handleSelectAddress = (address: string) => {

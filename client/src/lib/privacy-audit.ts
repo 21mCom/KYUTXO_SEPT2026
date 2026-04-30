@@ -38,12 +38,13 @@ export interface AuditContext {
 
 async function buildAuditContext(
   userAddresses: string[],
-  onProgress?: (message: string) => void
+  onProgress?: (message: string) => void,
+  signal?: AbortSignal
 ): Promise<AuditContext> {
   const addressSet = new Set(userAddresses);
 
   onProgress?.("Loading transaction participants...");
-  const participants = await getParticipantsByAddresses(userAddresses);
+  const participants = await getParticipantsByAddresses(userAddresses, signal);
 
   const ourTxids = new Set(participants.map((p: TransactionParticipant) => p.txid));
 
@@ -392,7 +393,8 @@ function detectTaintedUTXOMerge(ctx: AuditContext): PrivacyFinding[] {
 
 export async function runPrivacyAudit(
   userAddresses: string[],
-  onProgress?: (message: string) => void
+  onProgress?: (message: string) => void,
+  signal?: AbortSignal
 ): Promise<PrivacyAuditResult> {
   if (userAddresses.length === 0) {
     return {
@@ -404,7 +406,7 @@ export async function runPrivacyAudit(
     };
   }
 
-  const ctx = await buildAuditContext(userAddresses, onProgress);
+  const ctx = await buildAuditContext(userAddresses, onProgress, signal);
 
   onProgress?.("Detecting script type mixing...");
   const scriptMixing = detectScriptTypeMixing(ctx);

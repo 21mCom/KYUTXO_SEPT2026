@@ -21,68 +21,74 @@ export function useAddressStats(
     }
 
     let cancelled = false;
+    const abortController = new AbortController();
     const loadStats = async () => {
-      const addressRecords = records.filter(r => r.type === 'address' && r.inputString && r.id != null);
-      const addressStrings = addressRecords.map(r => r.inputString);
-      if (addressStrings.length === 0) {
-        if (!cancelled) setStats(new Map());
-        return;
-      }
-
-      const participants = await getParticipantsByAddresses(addressStrings);
-
-      const txids = Array.from(new Set(participants.map(p => p.txid)));
-      const txMap = new Map<string, number>();
-      if (txids.length > 0) {
-        const txBatches: string[][] = [];
-        for (let i = 0; i < txids.length; i += 500) {
-          txBatches.push(txids.slice(i, i + 500));
+      try {
+        const addressRecords = records.filter(r => r.type === 'address' && r.inputString && r.id != null);
+        const addressStrings = addressRecords.map(r => r.inputString);
+        if (addressStrings.length === 0) {
+          if (!cancelled) setStats(new Map());
+          return;
         }
-        for (const batch of txBatches) {
-          const txs = await db.blockchainTransactions
-            .where('txid')
-            .anyOf(batch)
-            .toArray();
-          txs.forEach(tx => txMap.set(tx.txid, tx.blockTime));
-        }
-      }
 
-      const result = new Map<string, AddressStats>();
-      const addrAgg = new Map<string, { outputSats: number; inputSats: number; lastTxTime: number; txids: Set<string> }>();
-      participants.forEach(p => {
-        const agg = addrAgg.get(p.address) || { outputSats: 0, inputSats: 0, lastTxTime: 0, txids: new Set<string>() };
-        const blockTime = txMap.get(p.txid) || 0;
-        if (p.role === 'output') {
-          agg.outputSats += p.amount;
-        } else {
-          agg.inputSats += p.amount;
-        }
-        if (blockTime > agg.lastTxTime) {
-          agg.lastTxTime = blockTime;
-        }
-        agg.txids.add(p.txid);
-        addrAgg.set(p.address, agg);
-      });
+        const participants = await getParticipantsByAddresses(addressStrings, abortController.signal);
 
-      for (const record of addressRecords) {
-        const id = String(record.id);
-        const agg = addrAgg.get(record.inputString);
-        if (agg) {
-          result.set(id, {
-            balanceSats: agg.outputSats - agg.inputSats,
-            lastTxDate: agg.lastTxTime,
-            txCount: agg.txids.size,
-          });
+        const txids = Array.from(new Set(participants.map(p => p.txid)));
+        const txMap = new Map<string, number>();
+        if (txids.length > 0) {
+          const txBatches: string[][] = [];
+          for (let i = 0; i < txids.length; i += 500) {
+            txBatches.push(txids.slice(i, i + 500));
+          }
+          for (const batch of txBatches) {
+            const txs = await db.blockchainTransactions
+              .where('txid')
+              .anyOf(batch)
+              .toArray();
+            txs.forEach(tx => txMap.set(tx.txid, tx.blockTime));
+          }
         }
-      }
 
-      if (!cancelled) {
-        setStats(result);
+        const result = new Map<string, AddressStats>();
+        const addrAgg = new Map<string, { outputSats: number; inputSats: number; lastTxTime: number; txids: Set<string> }>();
+        participants.forEach(p => {
+          const agg = addrAgg.get(p.address) || { outputSats: 0, inputSats: 0, lastTxTime: 0, txids: new Set<string>() };
+          const blockTime = txMap.get(p.txid) || 0;
+          if (p.role === 'output') {
+            agg.outputSats += p.amount;
+          } else {
+            agg.inputSats += p.amount;
+          }
+          if (blockTime > agg.lastTxTime) {
+            agg.lastTxTime = blockTime;
+          }
+          agg.txids.add(p.txid);
+          addrAgg.set(p.address, agg);
+        });
+
+        for (const record of addressRecords) {
+          const id = String(record.id);
+          const agg = addrAgg.get(record.inputString);
+          if (agg) {
+            result.set(id, {
+              balanceSats: agg.outputSats - agg.inputSats,
+              lastTxDate: agg.lastTxTime,
+              txCount: agg.txids.size,
+            });
+          }
+        }
+
+        if (!cancelled) {
+          setStats(result);
+        }
+      } catch (e) {
+        if (e instanceof DOMException && e.name === 'AbortError') return;
+        throw e;
       }
     };
 
     loadStats();
-    return () => { cancelled = true; };
+    return () => { cancelled = true; abortController.abort(); };
   }, [records, enabled]);
 
   return stats;

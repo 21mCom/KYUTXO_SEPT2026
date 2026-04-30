@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback, useRef } from "react";
 import { AlertTriangle, FileDown, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -70,6 +70,7 @@ export default function StatementReport() {
   const { owners } = useOwners();
   const { walletNames } = useWalletNames();
 
+  const generateAbortRef = useRef<AbortController | null>(null);
   const filteredTags = useMemo(() => tags.filter(t => t.name), [tags]);
   const filteredOwners = useMemo(() => owners.filter(o => o.name), [owners]);
   const filteredWalletNames = useMemo(() => walletNames.filter(w => w.name), [walletNames]);
@@ -157,6 +158,9 @@ export default function StatementReport() {
   }, []);
 
   const generateReport = useCallback(async () => {
+    generateAbortRef.current?.abort();
+    const abortController = new AbortController();
+    generateAbortRef.current = abortController;
     setIsGenerating(true);
     setHasGenerated(false);
     setRows([]);
@@ -172,7 +176,7 @@ export default function StatementReport() {
 
       const addressSet = new Set(addresses);
 
-      const allParticipants = await getParticipantsByAddresses(addresses);
+      const allParticipants = await getParticipantsByAddresses(addresses, abortController.signal);
 
       const txidSet = new Set(allParticipants.map(p => p.txid));
 
@@ -409,13 +413,20 @@ export default function StatementReport() {
       const zero = resultRows.filter(r => r.netSats === 0).length;
       console.log(`[Statement] Generated ${resultRows.length} rows: ${incoming} incoming, ${outgoing} outgoing, ${zero} zero-net`);
 
-      setRows(resultRows);
-      setHasGenerated(true);
+      if (generateAbortRef.current === abortController) {
+        setRows(resultRows);
+        setHasGenerated(true);
+      }
     } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') return;
       console.error("Failed to generate report:", error);
-      setHasGenerated(true);
+      if (generateAbortRef.current === abortController) {
+        setHasGenerated(true);
+      }
     } finally {
-      setIsGenerating(false);
+      if (generateAbortRef.current === abortController) {
+        setIsGenerating(false);
+      }
     }
   }, [resolveAddresses, startDate, endDate, currency, batchLookupPrices]);
 
