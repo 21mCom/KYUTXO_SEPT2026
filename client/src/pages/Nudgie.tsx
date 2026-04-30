@@ -1,6 +1,5 @@
 import { useState, useMemo, useRef, useCallback } from "react";
 import { useAsyncMemo, yieldToUI, checkAbort } from "@/hooks/use-async-memo";
-import { useDbChangeSignal } from "@/hooks/use-db-change-signal";
 import { useLiveQuery } from "dexie-react-hooks";
 import { format } from "date-fns";
 import { 
@@ -143,13 +142,18 @@ export default function Nudgie() {
   const { walletSoftware } = useWalletSoftware();
   const { enabledCustomFields } = useCustomFields();
 
-  const txDbSignal = useDbChangeSignal(['blockchainTransactions']);
-
-  const allTransactionsCount = useLiveQuery(
-    () => db.blockchainTransactions.count(),
+  const txRevisionRef = useRef(0);
+  const txTableState = useLiveQuery(
+    async () => {
+      const count = await db.blockchainTransactions.count();
+      txRevisionRef.current += 1;
+      return { count, version: txRevisionRef.current };
+    },
     [],
-    0
+    { count: 0, version: 0 }
   );
+  const allTransactionsCount = txTableState.count;
+  const txTableVersion = txTableState.version;
 
   const rawAddressRecords = useLiveQuery(
     async () => {
@@ -233,7 +237,7 @@ export default function Nudgie() {
         return [] as BlockchainTransaction[];
       }
     },
-    [participants, txDbSignal],
+    [participants, txTableVersion],
     undefined as BlockchainTransaction[] | undefined
   );
 
