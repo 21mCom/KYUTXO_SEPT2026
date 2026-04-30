@@ -32,6 +32,11 @@ type IndexedNarrowing =
   | { kind: "multiEntry"; field: string; value: string }
   | { kind: "anyOf"; field: string; values: string[] };
 
+// Lower number = more selective (narrower index → smaller candidate set).
+// Selectivity is approximate; specifically, equality on a high-cardinality
+// text field (label/owner/walletName/etc.) is cheaper than equality on a
+// low-cardinality enum (type/addressImportance/chainType), because the
+// residual predicate has to walk every candidate the index returns.
 const FIELD_PRIORITY: Record<string, number> = {
   inputString_equals: 1,
   inputString_startsWith: 2,
@@ -107,7 +112,6 @@ export interface BuildRecordsQueryParams {
 
 export interface RecordsQueryStrategy {
   source:
-    | "search-or-chain"
     | "column-filter"
     | "address-importance-tiers"
     | "full-table";
@@ -119,13 +123,27 @@ export interface BuildRecordsQueryResult {
   strategy: RecordsQueryStrategy;
 }
 
+/**
+ * Pick the primary indexed narrowing for a Records query.
+ *
+ * Search is intentionally NEVER chosen as the primary narrowing — it is
+ * applied as a residual substring predicate by the caller's filterFn, which
+ * preserves the legacy `.includes()` semantics across label / inputString /
+ * owner / walletName / notes.
+ *
+ * Selection order:
+ *   1. Most selective indexable column filter (by FIELD_PRIORITY).
+ *   2. addressImportance.anyOf(USER_TIERS) when blockchain-discovered are
+ *      excluded (always true when the user hasn't toggled the include).
+ *   3. Full-table scan — only when the user opts in to include blockchain-
+ *      discovered AND has no indexable column filter. Matches legacy
+ *      behavior; bounded by MAX_MATERIALIZE in fetchRecordsPage.
+ */
 export function pickPrimaryNarrowing(
   search: string,
   columnFilters: ColumnFilter[],
   includeBlockchainDiscovered: boolean,
 ): RecordsQueryStrategy {
-  if (search) return { source: "search-or-chain" };
-
   const candidates = columnFilters
     .map(classifyFilter)
     .filter((c): c is { narrow: IndexedNarrowing; priority: number } => c !== null)
@@ -154,23 +172,13 @@ export function buildRecordsCollection(
 
   let collection: Dexie.Collection<DbRecord, number>;
 
-  if (strategy.source === "search-or-chain") {
-    // NOTE: switching from substring (.includes) to indexed prefix on
-    // label/inputStringLower/owner/walletName — required to avoid full-table
-    // scans on 1-2M rows. Substring matches that aren't prefixes (and notes
-    // substring matches with no other narrowing) are no longer surfaced.
-    collection = db.records
-      .where("label").startsWithIgnoreCase(search)
-      .or("inputStringLower").startsWith(search)
-      .or("owner").startsWithIgnoreCase(search)
-      .or("walletName").startsWithIgnoreCase(search);
-  } else if (strategy.source === "column-filter" && strategy.narrowing) {
+  if (strategy.source === "column-filter" && strategy.narrowing) {
     const n = strategy.narrowing;
     if (n.kind === "equals") {
       // Use case-insensitive equality for text fields so the index narrowing
       // matches the case-insensitive comparison done by the residual filterFn.
-      // For enums/scalars (type/addressImportance/chainType, multi-entry tags),
-      // case-sensitive equality is correct.
+      // For enums/scalars (type/addressImportance/chainType) and the pre-
+      // lowered inputStringLower index, case-sensitive equality is correct.
       if (CASE_INSENSITIVE_EQUALS_FIELDS.has(n.field)) {
         collection = db.records.where(n.field).equalsIgnoreCase(n.value);
       } else {
@@ -187,8 +195,9 @@ export function buildRecordsCollection(
     collection = db.records.where(strategy.narrowing.field).anyOf(strategy.narrowing.values);
   } else {
     // Worst-case fallback: only fires when blockchain-discovered are included
-    // AND no indexable filter exists (e.g. only `notes contains X`). Behavior
-    // matches the old code — slow but at least not regressing the result set.
+    // AND no indexable column filter exists. Behavior matches the legacy code
+    // (full-table walk with the residual predicate) — slow but does not
+    // change the result set. Bounded by MAX_MATERIALIZE in fetchRecordsPage.
     collection = db.records.toCollection();
   }
 

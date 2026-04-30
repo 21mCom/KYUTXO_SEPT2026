@@ -82,9 +82,24 @@ beforeEach(() => {
 });
 
 describe("pickPrimaryNarrowing", () => {
-  it("uses the search OR-chain when search is non-empty", () => {
+  it("never picks search as primary — search alone falls back to user tiers when blockchain excluded", () => {
     const s = pickPrimaryNarrowing("foo", [], false);
-    expect(s.source).toBe("search-or-chain");
+    expect(s.source).toBe("address-importance-tiers");
+  });
+
+  it("never picks search as primary — search alone falls back to full-table when blockchain included", () => {
+    const s = pickPrimaryNarrowing("foo", [], true);
+    expect(s.source).toBe("full-table");
+  });
+
+  it("picks the most-selective indexable column filter even when search is also active", () => {
+    const s = pickPrimaryNarrowing(
+      "needle",
+      [{ field: "tags", operator: "includes", value: "Trezor" }],
+      true,
+    );
+    expect(s.source).toBe("column-filter");
+    expect(s.narrowing).toEqual({ kind: "multiEntry", field: "tags", value: "Trezor" });
   });
 
   it("falls back to user-importance tiers when no filters and blockchain excluded", () => {
@@ -152,21 +167,22 @@ describe("pickPrimaryNarrowing", () => {
 });
 
 describe("buildRecordsCollection", () => {
-  it("uses indexed OR-chain across label/inputStringLower/owner/walletName for search", () => {
+  it("does NOT use indexed prefix-search OR-chain for search alone — search must remain a residual substring filter", () => {
     const noop = () => true;
     buildRecordsCollection(
       { search: "foo", columnFilters: [], includeBlockchainDiscovered: false },
       noop,
     );
-    expect(whereSpy).toHaveBeenCalledWith("label");
-    expect(startsWithIgnoreCaseSpy).toHaveBeenCalledWith("where(label)", "foo");
-    expect(orSpy).toHaveBeenCalledWith("inputStringLower");
-    expect(orSpy).toHaveBeenCalledWith("owner");
-    expect(orSpy).toHaveBeenCalledWith("walletName");
-    // residual predicate must be wired
+    // Primary should be addressImportance.anyOf(USER_TIERS); search applied as residual via .and()
+    expect(whereSpy).toHaveBeenCalledWith("addressImportance");
+    expect(anyOfSpy).toHaveBeenCalledWith("where(addressImportance)", USER_TIERS);
+    // CRITICAL: do NOT issue a startsWith on label/inputStringLower/owner/walletName
+    // for the search term — that would silently regress substring semantics.
+    expect(startsWithIgnoreCaseSpy).not.toHaveBeenCalledWith(expect.anything(), "foo");
+    expect(startsWithSpy).not.toHaveBeenCalledWith(expect.anything(), "foo");
+    expect(orSpy).not.toHaveBeenCalled();
+    // residual predicate must be wired via .and()
     expect(andSpy).toHaveBeenCalled();
-    // CRITICAL: no full-table .filter() / no toCollection() on search path
-    expect(toCollectionSpy).not.toHaveBeenCalled();
   });
 
   it("uses where('addressImportance').anyOf(USER_TIERS) when no search and no indexable filter", () => {
@@ -298,7 +314,7 @@ describe("fetchRecordsPage", () => {
       { id: 3 },
     ]);
     const page = await fetchRecordsPage(
-      { collection: c as never, strategy: { source: "search-or-chain" } },
+      { collection: c as never, strategy: { source: "column-filter" } },
       0,
       2,
       () => false,
