@@ -88,6 +88,7 @@ function loadLastBuildMeta(): LastBuildMeta | null {
     if (oldStored !== null) {
       const parsed = parseInt(oldStored, 10);
       if (Number.isFinite(parsed) && parsed > 0) {
+        localStorage.removeItem(LAST_BUILD_DURATION_KEY);
         return { durationSeconds: parsed, transactionCount: 0 };
       }
     }
@@ -358,6 +359,7 @@ export function ContinuityProof({ selectedAddress, onAddressSelect }: Continuity
         };
         try {
           localStorage.setItem(LAST_BUILD_META_KEY, JSON.stringify(meta));
+          localStorage.removeItem(LAST_BUILD_DURATION_KEY);
         } catch {}
         setLastBuildMeta(meta);
       }
