@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef } from "react";
+import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { useLocation } from "wouter";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { PAGE_DEBOUNCE } from "@/config/debounce";
@@ -36,6 +36,7 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { searchPendingClass } from "@/lib/search-pending-class";
 import { buildRecordsCollection, fetchRecordsPage } from "@/lib/records-query";
+import { getActivityBus } from "@/lib/activity-bus";
 
 const USER_CURATED_TIERS: AddressImportance[] = ['verified', 'manual', 'wallet-import', 'xpub-derived'];
 const ALL_TIERS: AddressImportance[] = ['verified', 'manual', 'wallet-import', 'xpub-derived', 'blockchain-discovered', 'pending-review'];
@@ -139,6 +140,8 @@ export default function Records() {
   const [debouncedSearch, isSearchPending] = useDebouncedValue(searchQuery, PAGE_DEBOUNCE.Records);
   const [urlSearchQuery, setUrlSearchQuery] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [retrySig, setRetrySig] = useState(0);
   const [customFieldDefs, setCustomFieldDefs] = useState<CustomField[]>([]);
   
   const [includeBlockchainDiscovered, setIncludeBlockchainDiscovered] = useState(false);
@@ -209,11 +212,30 @@ export default function Records() {
   }, [debouncedSearch, columnFilters, includeBlockchainDiscovered]);
 
   const loadVersionRef = useRef(0);
+  const inFlightRef = useRef(0);
+
+  const retryLoad = useCallback(() => {
+    setLoadError(null);
+    setRetrySig(s => s + 1);
+  }, []);
 
   useEffect(() => {
     const loadRecords = async () => {
       const version = ++loadVersionRef.current;
+      inFlightRef.current++;
       setIsLoading(true);
+      setLoadError(null);
+
+      const bus = getActivityBus();
+      const taskId = `records-load-${version}`;
+      bus.publishTask({
+        id: taskId,
+        label: 'Loading Records',
+        phase: 'Initializing',
+        current: 0,
+        total: 0,
+      });
+
       try {
         const fields = await db.customFields.toArray();
         if (loadVersionRef.current !== version) return;
@@ -260,71 +282,98 @@ export default function Records() {
           columnFilters[0].operator === 'equals'
           ? columnFilters[0].value.trim() : null;
 
-        let count: number;
         const pgOffset = (currentPage - 1) * PAGE_SIZE;
         let rawRecords: DbRecord[];
 
-        if (!filtersActive && includeBlockchainDiscovered) {
-          count = await db.records.count();
-          if (loadVersionRef.current !== version) return;
-          setTotalCount(count);
-          setNavigableCount(count);
-          setResultsTruncated(false);
+        bus.publishTask({
+          id: taskId,
+          label: 'Loading Records',
+          phase: 'Fetching records',
+          current: 1,
+          total: 3,
+        });
 
+        if (!filtersActive && includeBlockchainDiscovered) {
+          // Fire count in the background — do NOT await it.
+          // The count is only needed for pagination display. Awaiting it before
+          // fetching rows was the root cause of the stuck-loading loop: on large
+          // DBs the count can take seconds, and any write arriving during that
+          // window cancels the load and restarts it (another count, etc.).
+          db.records.count().then(c => {
+            if (loadVersionRef.current !== version) return;
+            setTotalCount(c);
+            setNavigableCount(c);
+          }).catch(e => { console.warn('[Records] Background count failed (all+include):', e); });
+
+          // Await only the lightweight page fetch.
           rawRecords = await db.records
             .orderBy('id').reverse()
             .offset(pgOffset).limit(PAGE_SIZE).toArray();
 
-        } else if (!filtersActive && !includeBlockchainDiscovered) {
-          count = (await db.records.count()) - blockchainCount;
           if (loadVersionRef.current !== version) return;
-          setTotalCount(count);
-          setNavigableCount(count);
           setResultsTruncated(false);
 
-          const candidateLimit = pgOffset + PAGE_SIZE;
-          const tierResults = await Promise.all(USER_TIERS.map(tier =>
+        } else if (!filtersActive && !includeBlockchainDiscovered) {
+          // Fire count in background (same reasoning as above).
+          db.records.count().then(total => {
+            if (loadVersionRef.current !== version) return;
+            setTotalCount(total - blockchainCount);
+            setNavigableCount(total - blockchainCount);
+          }).catch(e => { console.warn('[Records] Background count failed (all+exclude):', e); });
+
+          // Await only the page fetch (indexed tier queries, fast).
+          const pageGroups = await Promise.all(USER_TIERS.map(tier =>
             db.records.where('[addressImportance+id]')
               .between([tier, Dexie.minKey], [tier, Dexie.maxKey])
               .reverse()
-              .limit(candidateLimit)
+              .limit(pgOffset + PAGE_SIZE)
               .toArray()
           ));
-          const merged = tierResults.flat()
-            .sort((a, b) => (b.id ?? 0) - (a.id ?? 0));
+
+          if (loadVersionRef.current !== version) return;
+          setResultsTruncated(false);
+          const merged = pageGroups.flat().sort((a, b) => (b.id ?? 0) - (a.id ?? 0));
           rawRecords = merged.slice(pgOffset, pgOffset + PAGE_SIZE);
 
         } else if (singleTypeFilter) {
           const typeVal = singleTypeFilter;
-          if (includeBlockchainDiscovered) {
-            count = await db.records.where('type').equals(typeVal).count();
-          } else {
-            count = await db.records.where('[type+addressImportance]')
-              .anyOf(USER_TIERS.map(tier => [typeVal, tier])).count();
-          }
-          if (loadVersionRef.current !== version) return;
-          setTotalCount(count);
-          setNavigableCount(count);
-          setResultsTruncated(false);
 
+          // Fire count in background.
+          if (includeBlockchainDiscovered) {
+            db.records.where('type').equals(typeVal).count().then(c => {
+              if (loadVersionRef.current !== version) return;
+              setTotalCount(c);
+              setNavigableCount(c);
+            }).catch(e => { console.warn('[Records] Background count failed (type+include):', e); });
+          } else {
+            db.records.where('[type+addressImportance]')
+              .anyOf(USER_TIERS.map(tier => [typeVal, tier])).count().then(c => {
+                if (loadVersionRef.current !== version) return;
+                setTotalCount(c);
+                setNavigableCount(c);
+              }).catch(e => { console.warn('[Records] Background count failed (type+exclude):', e); });
+          }
+
+          // Await only the page fetch.
           if (includeBlockchainDiscovered) {
             rawRecords = await db.records.where('[type+id]')
               .between([typeVal, Dexie.minKey], [typeVal, Dexie.maxKey])
               .reverse()
               .offset(pgOffset).limit(PAGE_SIZE).toArray();
           } else {
-            const candidateLimit = pgOffset + PAGE_SIZE;
-            const tierResults = await Promise.all(USER_TIERS.map(tier =>
+            const groups = await Promise.all(USER_TIERS.map(tier =>
               db.records.where('[type+addressImportance]')
                 .equals([typeVal, tier])
                 .reverse()
-                .limit(candidateLimit)
+                .limit(pgOffset + PAGE_SIZE)
                 .toArray()
             ));
-            const merged = tierResults.flat()
-              .sort((a, b) => (b.id ?? 0) - (a.id ?? 0));
+            const merged = groups.flat().sort((a, b) => (b.id ?? 0) - (a.id ?? 0));
             rawRecords = merged.slice(pgOffset, pgOffset + PAGE_SIZE);
           }
+
+          if (loadVersionRef.current !== version) return;
+          setResultsTruncated(false);
 
         } else {
           const built = buildRecordsCollection(
@@ -340,13 +389,20 @@ export default function Records() {
           if (page === null) return;
           if (loadVersionRef.current !== version) return;
 
-          count = page.total;
           setTotalCount(page.total);
           setNavigableCount(page.effectiveTotal);
           setResultsTruncated(page.truncated);
           rawRecords = page.records;
         }
         if (loadVersionRef.current !== version) return;
+
+        bus.publishTask({
+          id: taskId,
+          label: 'Loading Records',
+          phase: 'Rendering',
+          current: 2,
+          total: 3,
+        });
         
         const converted = rawRecords.map(convertRecord);
         setRecords(converted);
@@ -405,15 +461,25 @@ export default function Records() {
         }
       } catch (error) {
         console.error('[Records] Failed to load records:', error);
-      } finally {
         if (loadVersionRef.current === version) {
+          setLoadError(error instanceof Error ? error.message : 'Failed to load records');
+        }
+      } finally {
+        // Always remove this task from the activity bus — covers success,
+        // cancellation (early return) and error paths.
+        bus.completeTask(taskId);
+        inFlightRef.current--;
+        // Clear loading when this is the active version OR when no other load
+        // is in flight (prevents the flag getting permanently stuck if a chain
+        // of cancelled loads never produced a "winning" finally block).
+        if (loadVersionRef.current === version || inFlightRef.current === 0) {
           setIsLoading(false);
         }
       }
     };
     
     loadRecords();
-  }, [includeBlockchainDiscovered, dbChangeSignal, currentPage, debouncedSearch, columnFilters]);
+  }, [includeBlockchainDiscovered, dbChangeSignal, currentPage, debouncedSearch, columnFilters, retrySig]);
 
   const uniqueFilterValues = useMemo(() => {
     const clean = (names: string[]) => 
@@ -743,8 +809,23 @@ export default function Records() {
               </CardHeader>
               <CardContent>
                 {isLoading ? (
-                  <div className="text-center py-8 text-muted-foreground">
+                  <div className="text-center py-8 text-muted-foreground" data-testid="text-records-loading">
+                    <Loader2 className="h-5 w-5 animate-spin inline mr-2" />
                     Loading records...
+                  </div>
+                ) : loadError ? (
+                  <div className="text-center py-8" data-testid="text-records-load-error">
+                    <AlertCircle className="h-6 w-6 text-destructive mx-auto mb-2" />
+                    <p className="text-destructive font-medium mb-1">Failed to load records</p>
+                    <p className="text-sm text-muted-foreground mb-4">{loadError}</p>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={retryLoad}
+                      data-testid="button-retry-load-records"
+                    >
+                      Retry
+                    </Button>
                   </div>
                 ) : displayRecords.length === 0 ? (
                   <div className="text-center py-8 text-muted-foreground">
