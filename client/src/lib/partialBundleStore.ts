@@ -2,6 +2,8 @@ import { db } from './database';
 import type { EvidenceBundle } from './lineageEngine';
 import type { PartialExportBundle } from './db-types';
 
+export const PARTIAL_BUNDLE_EXPIRY_MS = 7 * 24 * 60 * 60 * 1000;
+
 function buildSelectionKey(segmentIds: string[]): string {
   return [...segmentIds].sort().join(',');
 }
@@ -54,4 +56,14 @@ export async function clearPartialBundle(
 
 export async function clearAllPartialBundles(): Promise<void> {
   await db.partialExportBundles.clear();
+}
+
+export async function deleteExpiredPartialBundles(
+  maxAgeMs: number = PARTIAL_BUNDLE_EXPIRY_MS
+): Promise<number> {
+  const cutoff = Date.now() - maxAgeMs;
+  return db.partialExportBundles
+    .where('createdAt')
+    .below(cutoff)
+    .delete();
 }

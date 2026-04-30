@@ -14,6 +14,7 @@ import {
   savePartialBundle,
   loadPartialBundle,
   clearPartialBundle,
+  deleteExpiredPartialBundles,
 } from "@/lib/partialBundleStore";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -77,6 +78,12 @@ export function ContinuityCertificateReport() {
   const [isDownloadingPartial, setIsDownloadingPartial] = useState(false);
   const exportAbortRef = useRef<AbortController | null>(null);
   const { toast } = useToast();
+
+  useEffect(() => {
+    deleteExpiredPartialBundles().catch(err => {
+      console.warn('[partialBundleStore] Failed to clean up expired bundles:', err);
+    });
+  }, []);
 
   const handleCancelExport = useCallback(() => {
     if (exportAbortRef.current) {
