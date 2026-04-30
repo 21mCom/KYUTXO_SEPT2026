@@ -207,24 +207,42 @@ export function buildRecordsCollection(
   };
 }
 
+export interface FetchRecordsPageResult {
+  records: DbRecord[];
+  /** Exact match count when not truncated; equal to MAX_MATERIALIZE when truncated. */
+  total: number;
+  /** Capped to MAX_MATERIALIZE for pagination math. */
+  effectiveTotal: number;
+  /** True when the materialization cap was hit. UI should render "10,000+" and prompt the user to narrow. */
+  truncated: boolean;
+}
+
 export async function fetchRecordsPage(
   result: BuildRecordsQueryResult,
   pgOffset: number,
   pageSize: number,
   isCancelled: () => boolean,
-): Promise<{
-  records: DbRecord[];
-  total: number;          // full match count (from .count() when truncated)
-  effectiveTotal: number; // capped to MAX_MATERIALIZE for pagination math
-  truncated: boolean;
-} | null> {
+): Promise<FetchRecordsPageResult | null> {
   // Walk the narrowed Collection with an early-stop cap so we never allocate
   // hundreds of thousands of record objects in JS even if the residual
   // predicate (e.g. notes contains) is broad. Cancellation is checked per
   // batch so navigation away aborts the work promptly.
+  //
+  // ORDERING NOTE: rows are collected in the iteration order of the chosen
+  // primary index (NOT globally id-desc), then sorted id-desc IN-WINDOW for
+  // display. When the cap is hit, the materialized window is therefore a
+  // "first N matches by index order" sample, not the globally top-N by id.
+  // The UI surfaces this with the truncation notice and asks the user to
+  // narrow further before drawing conclusions about completeness.
+  //
+  // We deliberately do NOT call result.collection.count() on the truncated
+  // path: count() must walk every candidate the primary index returns and
+  // run the residual JS predicate on each, which is exactly the expensive
+  // path we're trying to avoid on broad search/filter combinations against
+  // 1-2M rows. Instead the UI renders "10,000+" semantics from the
+  // truncated flag.
   const collected: DbRecord[] = [];
   const seen = new Set<number>();
-  let truncated = false;
   let cancelled = false;
 
   await result.collection
@@ -241,30 +259,14 @@ export async function fetchRecordsPage(
 
   if (cancelled || isCancelled()) return null;
 
-  if (collected.length >= MAX_MATERIALIZE) {
-    truncated = true;
-  }
+  const truncated = collected.length >= MAX_MATERIALIZE;
 
   collected.sort((a, b) => (b.id ?? 0) - (a.id ?? 0));
 
-  // When truncated, fall back to .count() for an accurate total since the
-  // materialized slice doesn't represent the full match set. .count() walks
-  // the narrowed index without allocating records, so it's much cheaper
-  // than .toArray() even on broad residual predicates.
-  let total = collected.length;
-  if (truncated) {
-    try {
-      total = await result.collection.count();
-      if (isCancelled()) return null;
-    } catch {
-      total = collected.length;
-    }
-  }
-
   return {
     records: collected.slice(pgOffset, pgOffset + pageSize),
-    total,
-    effectiveTotal: Math.min(total, collected.length),
+    total: collected.length,
+    effectiveTotal: collected.length,
     truncated,
   };
 }

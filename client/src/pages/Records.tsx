@@ -732,8 +732,8 @@ export default function Records() {
                   {searchQuery 
                     ? txidSearchResults.length > 0 
                       ? `Related Address Records (${records.length})`
-                      : `Search Results (${totalCount})` 
-                    : `All Records (${totalCount})`}
+                      : `Search Results (${resultsTruncated ? `${totalCount.toLocaleString()}+` : totalCount.toLocaleString()})` 
+                    : `All Records (${resultsTruncated ? `${totalCount.toLocaleString()}+` : totalCount.toLocaleString()})`}
                 </CardTitle>
                 <CardDescription>
                   {txidSearchResults.length > 0 
@@ -770,14 +770,14 @@ export default function Records() {
                         className="text-sm text-muted-foreground border-t pt-4 mt-4"
                         data-testid="text-results-truncated-notice"
                       >
-                        Matched {displayTotalCount.toLocaleString()} records — showing the first
-                        {' '}{navigableCount.toLocaleString()}. Refine your filters or search to narrow results.
+                        Showing the first {navigableCount.toLocaleString()}+ matches in index order.
+                        Add more filters or refine your search to see exact counts and the full set.
                       </div>
                     )}
                     {displayTotalPages > 1 && (
                       <div className="flex items-center justify-between border-t pt-4 mt-4">
                         <div className="text-sm text-muted-foreground" data-testid="text-pagination-info">
-                          Showing {displayStartIndex + 1}-{Math.min(displayStartIndex + displayRecords.length, navigableCount)} of {displayTotalCount} records
+                          Showing {displayStartIndex + 1}-{Math.min(displayStartIndex + displayRecords.length, navigableCount)} of {resultsTruncated ? `${navigableCount.toLocaleString()}+` : displayTotalCount.toLocaleString()} records
                         </div>
                         <div className="flex items-center gap-2">
                           <Button

@@ -337,9 +337,13 @@ describe("fetchRecordsPage", () => {
     expect(page!.total).toBe(5);
   });
 
-  it("caps materialization at MAX_MATERIALIZE and reports truncated=true with a Collection.count() total", async () => {
+  it("caps materialization at MAX_MATERIALIZE, reports truncated=true, and does NOT call Collection.count() on the truncated path", async () => {
     const big = Array.from({ length: 12_000 }, (_, i) => ({ id: i + 1 }));
-    const c = fakeCollection(big);
+    let countCalls = 0;
+    const c = (() => {
+      const base = fakeCollection(big);
+      return { ...base, count: async () => { countCalls++; return big.length; } };
+    })();
     const page = await fetchRecordsPage(
       { collection: c as never, strategy: { source: "address-importance-tiers" } },
       0,
@@ -347,8 +351,11 @@ describe("fetchRecordsPage", () => {
       () => false,
     );
     expect(page!.truncated).toBe(true);
-    // total comes from the count() call, not from the materialized slice
-    expect(page!.total).toBe(12_000);
+    // total now equals the materialized cap — no full .count() walk on truncate.
+    // The UI renders "10,000+" semantics from the truncated flag instead.
+    expect(page!.total).toBe(10_000);
+    expect(page!.effectiveTotal).toBe(10_000);
+    expect(countCalls).toBe(0);
     // page is sliced from the cap-bounded materialized window
     expect(page!.records.length).toBe(50);
   });
