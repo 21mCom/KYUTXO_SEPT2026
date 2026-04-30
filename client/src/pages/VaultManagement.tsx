@@ -12,6 +12,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { useToast } from "@/hooks/use-toast";
 import DecryptionVerificationPanel from "@/components/DecryptionVerificationPanel";
+import StripMarkersPanel from "@/components/StripMarkersPanel";
 import { updateRecord } from "@/lib/dataFacade";
 import { db } from "@/lib/database";
 import type { VaultMetadata, Record as DbRecord } from "@/lib/database";
@@ -85,6 +86,8 @@ export default function VaultManagement() {
   const [editingNotesVault, setEditingNotesVault] = useState<string | null>(null);
   const [editNotesText, setEditNotesText] = useState("");
   const [savingNotes, setSavingNotes] = useState(false);
+  const [isScanRunning, setIsScanRunning] = useState(false);
+  const [isStripRunning, setIsStripRunning] = useState(false);
   const { toast } = useToast();
 
   useEffect(() => {
@@ -247,8 +250,19 @@ export default function VaultManagement() {
         <h1 className="text-2xl font-semibold" data-testid="heading-vault-management">Vault Management</h1>
       </div>
 
+      <div className="mb-4">
+        <StripMarkersPanel
+          disabled={isScanRunning}
+          onRunningChange={setIsStripRunning}
+        />
+      </div>
+
       <div className="mb-6">
-        <DecryptionVerificationPanel collapsedByDefault />
+        <DecryptionVerificationPanel
+          collapsedByDefault
+          disabled={isStripRunning}
+          onRunningChange={setIsScanRunning}
+        />
       </div>
 
       <div className="mb-6">

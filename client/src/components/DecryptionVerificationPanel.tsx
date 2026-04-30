@@ -165,7 +165,13 @@ function computeTotalSuspicious(state: ScanState): number {
 
 export default function DecryptionVerificationPanel({
   collapsedByDefault = false,
-}: { collapsedByDefault?: boolean } = {}) {
+  disabled = false,
+  onRunningChange,
+}: {
+  collapsedByDefault?: boolean;
+  disabled?: boolean;
+  onRunningChange?: (running: boolean) => void;
+} = {}) {
   const { toast } = useToast();
   const [collapsed, setCollapsed] = useState(collapsedByDefault);
   const [flags, setFlags] = useState<VaultFlagsState>({
@@ -291,6 +297,10 @@ export default function DecryptionVerificationPanel({
   const totalSuspicious = computeTotalSuspicious(scan);
   const hasResult = scan.phase === "done" || scan.phase === "cancelled" || scan.phase === "error";
 
+  useEffect(() => {
+    onRunningChange?.(isRunning);
+  }, [isRunning, onRunningChange]);
+
   return (
     <Card
       className="border-warning/40 bg-warning/5 dark:bg-warning/10"
@@ -327,7 +337,7 @@ export default function DecryptionVerificationPanel({
         <CardContent className="space-y-4">
           <div className="flex flex-wrap items-center gap-2">
             {!isRunning ? (
-              <Button onClick={runScan} data-testid="button-run-decryption-scan">
+              <Button onClick={runScan} disabled={disabled} data-testid="button-run-decryption-scan">
                 <Play className="h-4 w-4 mr-2" />
                 Run scan
               </Button>

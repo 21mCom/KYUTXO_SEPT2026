@@ -290,3 +290,116 @@ export async function decryptLegacyRecords(
 
   return { totalDecrypted, totalFailed, tableErrors, completedTableNames };
 }
+
+// ---------------------------------------------------------------------------
+// Strip stale legacy marker fields
+// ---------------------------------------------------------------------------
+
+export interface StripMarkersProgress {
+  tableName: string;
+  tableIndex: number;
+  tableCount: number;
+  rowsCleaned: number;
+}
+
+export interface StripMarkersResult {
+  totalCleaned: number;
+  tableResults: Array<{ tableName: string; rowsCleaned: number }>;
+  tableErrors: string[];
+}
+
+const LEGACY_MARKER_KEYS_TO_STRIP = ['_legacyEncryptedPayload', 'isEncrypted', 'encryptedPayload'] as const;
+
+function hasAnyLegacyMarker(row: Record<string, unknown>): boolean {
+  for (const key of LEGACY_MARKER_KEYS_TO_STRIP) {
+    if (Object.prototype.hasOwnProperty.call(row, key)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export async function stripLegacyMarkers(
+  onProgress?: (progress: StripMarkersProgress) => void,
+  signal?: AbortSignal,
+): Promise<StripMarkersResult> {
+  const configs = getTableConfigs();
+  const tableCount = configs.length;
+  let totalCleaned = 0;
+  const tableResults: Array<{ tableName: string; rowsCleaned: number }> = [];
+  const tableErrors: string[] = [];
+
+  for (let i = 0; i < configs.length; i++) {
+    if (signal?.aborted) break;
+    const config = configs[i];
+    let rowsCleaned = 0;
+    let lastProcessedId = 0;
+    let hasMore = true;
+
+    while (hasMore) {
+      if (signal?.aborted) break;
+
+      let chunk: LegacyRecord<{ id?: number }>[];
+      try {
+        chunk = await config.table
+          .where('id')
+          .above(lastProcessedId)
+          .limit(BATCH_SIZE)
+          .toArray();
+      } catch (err) {
+        const msg = `Failed to read ${config.name}: ${err instanceof Error ? err.message : String(err)}`;
+        console.error(`[StripMarkers] ${msg}`);
+        tableErrors.push(msg);
+        break;
+      }
+
+      if (chunk.length === 0) {
+        hasMore = false;
+        break;
+      }
+
+      lastProcessedId = (chunk[chunk.length - 1] as { id: number }).id;
+
+      const markerItems = chunk.filter(item =>
+        hasAnyLegacyMarker(item as unknown as Record<string, unknown>),
+      );
+
+      if (markerItems.length > 0) {
+        const cleanedBatch = markerItems.map(item => {
+          const cleaned = { ...item } as Record<string, unknown>;
+          for (const key of LEGACY_MARKER_KEYS_TO_STRIP) {
+            delete cleaned[key];
+          }
+          return cleaned;
+        });
+
+        try {
+          await config.table.bulkPut(cleanedBatch as Parameters<typeof config.table.bulkPut>[0]);
+          rowsCleaned += cleanedBatch.length;
+        } catch (err) {
+          const msg = `Failed to write ${config.name}: ${err instanceof Error ? err.message : String(err)}`;
+          console.error(`[StripMarkers] ${msg}`);
+          tableErrors.push(msg);
+        }
+      }
+
+      onProgress?.({
+        tableName: config.name,
+        tableIndex: i,
+        tableCount,
+        rowsCleaned,
+      });
+
+      if (chunk.length < BATCH_SIZE) {
+        hasMore = false;
+      }
+
+      await new Promise(r => setTimeout(r, 0));
+    }
+
+    tableResults.push({ tableName: config.name, rowsCleaned });
+    totalCleaned += rowsCleaned;
+  }
+
+  return { totalCleaned, tableResults, tableErrors };
+}
