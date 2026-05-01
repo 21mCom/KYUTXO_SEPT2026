@@ -14,6 +14,7 @@ import {
   stripLegacyMarkers,
   type StripMarkersProgress,
   type StripMarkersResult,
+  type StripMarkersTableResult,
 } from "@/lib/legacy-decrypt";
 
 type StripPhase = "idle" | "running" | "done" | "cancelled" | "error";
@@ -143,7 +144,7 @@ export default function StripMarkersPanel({ disabled = false, onRunningChange }:
             <span className="text-sm text-muted-foreground flex items-center gap-2">
               <Loader2 className="h-3 w-3 animate-spin" />
               {state.progress
-                ? `Processing ${state.progress.tableName} (${state.progress.tableIndex + 1} / ${state.progress.tableCount})…`
+                ? `${state.progress.phase === "verify" ? "Verifying" : "Processing"} ${state.progress.tableName} (${state.progress.tableIndex + 1} / ${state.progress.tableCount})…`
                 : "Starting…"}
             </span>
           )}
@@ -171,20 +172,14 @@ export default function StripMarkersPanel({ disabled = false, onRunningChange }:
             <div className="text-sm font-medium">Per-table summary</div>
             <div className="grid gap-1 text-xs">
               {state.result.tableResults
-                .filter((t) => t.rowsCleaned > 0)
+                .filter((t) => t.rowsBefore > 0)
                 .map((t) => (
-                  <div
+                  <TableResultRow
                     key={t.tableName}
-                    className="flex items-center justify-between gap-2 rounded-md border p-2 flex-wrap"
-                    data-testid={`strip-result-${t.tableName.replace(/\s+/g, "-")}`}
-                  >
-                    <span>{t.tableName}</span>
-                    <span className="font-mono text-muted-foreground">
-                      {t.rowsCleaned} row{t.rowsCleaned === 1 ? "" : "s"} cleaned
-                    </span>
-                  </div>
+                    result={t}
+                  />
                 ))}
-              {state.result.tableResults.every((t) => t.rowsCleaned === 0) && (
+              {state.result.tableResults.every((t) => t.rowsBefore === 0) && (
                 <div className="text-muted-foreground italic" data-testid="text-no-markers-found">
                   No stale marker fields were found in any table.
                 </div>
@@ -194,6 +189,26 @@ export default function StripMarkersPanel({ disabled = false, onRunningChange }:
         )}
       </CardContent>
     </Card>
+  );
+}
+
+function TableResultRow({ result }: { result: StripMarkersTableResult }) {
+  const allClean = result.rowsRemaining === 0;
+  return (
+    <div
+      className="flex items-center justify-between gap-2 rounded-md border p-2 flex-wrap"
+      data-testid={`strip-result-${result.tableName.replace(/\s+/g, "-")}`}
+    >
+      <span>{result.tableName}</span>
+      <span className="font-mono text-muted-foreground flex items-center gap-2">
+        {result.rowsBefore} before → {result.rowsCleaned} cleaned
+        {allClean ? (
+          <CheckCircle2 className="h-3 w-3 text-green-600 dark:text-green-400" data-testid={`icon-clean-${result.tableName.replace(/\s+/g, "-")}`} />
+        ) : (
+          <span className="text-destructive">({result.rowsRemaining} remaining)</span>
+        )}
+      </span>
+    </div>
   );
 }
 
@@ -241,35 +256,47 @@ function StripResultBanner({
   }
 
   const hasErrors = result.tableErrors.length > 0;
+  const hasVerificationErrors = result.verificationErrors.length > 0;
+  const verifiedClean = result.totalRemaining === 0 && !hasVerificationErrors;
 
-  if (result.totalCleaned === 0) {
+  if (result.totalBefore === 0) {
+    const anyIssue = hasErrors || hasVerificationErrors;
     return (
       <div
         className={`rounded-md border p-3 flex items-start gap-2 ${
-          hasErrors
+          anyIssue
             ? "border-destructive/40 bg-destructive/10"
             : "border-green-500/40 bg-green-500/10"
         }`}
         data-testid="strip-verdict-clean"
       >
-        {hasErrors ? (
+        {anyIssue ? (
           <XCircle className="h-4 w-4 text-destructive mt-0.5 shrink-0" />
         ) : (
           <CheckCircle2 className="h-4 w-4 text-green-600 dark:text-green-400 mt-0.5 shrink-0" />
         )}
         <div className="text-sm">
-          <div className={`font-medium ${hasErrors ? "text-destructive" : "text-green-700 dark:text-green-300"}`}>
-            {hasErrors ? "Completed with errors — no rows cleaned" : "No stale markers found"}
+          <div className={`font-medium ${anyIssue ? "text-destructive" : "text-green-700 dark:text-green-300"}`}>
+            {hasErrors
+              ? "Completed with errors — no rows cleaned"
+              : hasVerificationErrors
+              ? "No markers found — verification incomplete"
+              : "No stale markers found"}
           </div>
           <div className="text-muted-foreground">
             {hasErrors
               ? "Errors prevented some tables from being processed."
+              : hasVerificationErrors
+              ? "Verification could not confirm all tables are clean — some reads failed."
               : "Every table was already free of legacy marker fields."}
           </div>
-          {hasErrors && (
+          {anyIssue && (
             <ul className="mt-1 space-y-0.5 text-xs text-destructive list-disc list-inside">
               {result.tableErrors.map((e, i) => (
                 <li key={i}>{e}</li>
+              ))}
+              {result.verificationErrors.map((e, i) => (
+                <li key={`v-${i}`}>{e}</li>
               ))}
             </ul>
           )}
@@ -278,30 +305,57 @@ function StripResultBanner({
     );
   }
 
+  const verdictColor = !verifiedClean
+    ? "border-destructive/40 bg-destructive/10"
+    : hasErrors
+    ? "border-yellow-500/40 bg-yellow-500/10"
+    : "border-green-500/40 bg-green-500/10";
+
+  const iconColor = !verifiedClean
+    ? "text-destructive"
+    : hasErrors
+    ? "text-yellow-600 dark:text-yellow-400"
+    : "text-green-600 dark:text-green-400";
+
+  const titleColor = !verifiedClean
+    ? "text-destructive"
+    : hasErrors
+    ? "text-yellow-700 dark:text-yellow-300"
+    : "text-green-700 dark:text-green-300";
+
   return (
     <div
-      className={`rounded-md border p-3 flex items-start gap-2 ${
-        hasErrors
-          ? "border-yellow-500/40 bg-yellow-500/10"
-          : "border-green-500/40 bg-green-500/10"
-      }`}
+      className={`rounded-md border p-3 flex items-start gap-2 ${verdictColor}`}
       data-testid="strip-verdict-done"
     >
-      <CheckCircle2 className={`h-4 w-4 mt-0.5 shrink-0 ${hasErrors ? "text-yellow-600 dark:text-yellow-400" : "text-green-600 dark:text-green-400"}`} />
+      {verifiedClean ? (
+        <CheckCircle2 className={`h-4 w-4 mt-0.5 shrink-0 ${iconColor}`} />
+      ) : (
+        <XCircle className={`h-4 w-4 mt-0.5 shrink-0 ${iconColor}`} />
+      )}
       <div className="text-sm">
-        <div className={`font-medium ${hasErrors ? "text-yellow-700 dark:text-yellow-300" : "text-green-700 dark:text-green-300"}`}>
-          {result.totalCleaned} row{result.totalCleaned === 1 ? "" : "s"} cleaned
-          {hasErrors && " — with errors"}
+        <div className={`font-medium ${titleColor}`}>
+          {result.totalCleaned} of {result.totalBefore} row{result.totalBefore === 1 ? "" : "s"} cleaned
+          {!verifiedClean && result.totalRemaining > 0 && ` — ${result.totalRemaining} remaining`}
+          {hasVerificationErrors && " — verification incomplete"}
+          {verifiedClean && hasErrors && " — with errors"}
         </div>
         <div className="text-muted-foreground">
-          {hasErrors
+          {hasVerificationErrors
+            ? "Verification could not complete for all tables — the remaining count may be inaccurate."
+            : result.totalRemaining > 0
+            ? `Verification found ${result.totalRemaining} row${result.totalRemaining === 1 ? "" : "s"} still carrying stale markers.`
+            : hasErrors
             ? `Stale markers removed where possible. ${result.tableErrors.length} table error${result.tableErrors.length === 1 ? "" : "s"} occurred.`
-            : "All stale legacy marker fields have been removed."}
+            : "Verification confirmed: all stale legacy marker fields have been removed."}
         </div>
-        {hasErrors && (
+        {(hasErrors || hasVerificationErrors) && (
           <ul className="mt-1 space-y-0.5 text-xs text-destructive list-disc list-inside">
             {result.tableErrors.map((e, i) => (
               <li key={i}>{e}</li>
+            ))}
+            {result.verificationErrors.map((e, i) => (
+              <li key={`v-${i}`}>{e}</li>
             ))}
           </ul>
         )}

@@ -300,12 +300,23 @@ export interface StripMarkersProgress {
   tableIndex: number;
   tableCount: number;
   rowsCleaned: number;
+  phase: "strip" | "verify";
+}
+
+export interface StripMarkersTableResult {
+  tableName: string;
+  rowsBefore: number;
+  rowsCleaned: number;
+  rowsRemaining: number;
 }
 
 export interface StripMarkersResult {
   totalCleaned: number;
-  tableResults: Array<{ tableName: string; rowsCleaned: number }>;
+  totalBefore: number;
+  totalRemaining: number;
+  tableResults: StripMarkersTableResult[];
   tableErrors: string[];
+  verificationErrors: string[];
 }
 
 const LEGACY_MARKER_KEYS_TO_STRIP = ['_legacyEncryptedPayload', 'isEncrypted', 'encryptedPayload'] as const;
@@ -319,6 +330,38 @@ function hasAnyLegacyMarker(row: Record<string, unknown>): boolean {
   return false;
 }
 
+async function countRowsWithMarkers(
+  config: ReturnType<typeof getTableConfigs>[number],
+  signal?: AbortSignal,
+): Promise<number> {
+  let count = 0;
+  let lastProcessedId = 0;
+  let hasMore = true;
+
+  while (hasMore) {
+    if (signal?.aborted) break;
+    let chunk: LegacyRecord<{ id?: number }>[];
+    try {
+      chunk = await config.table
+        .where('id')
+        .above(lastProcessedId)
+        .limit(BATCH_SIZE)
+        .toArray();
+    } catch (err) {
+      throw new Error(
+        `Failed to read ${config.name} during verification: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    if (chunk.length === 0) break;
+    lastProcessedId = (chunk[chunk.length - 1] as { id: number }).id;
+    count += chunk.filter(item => hasAnyLegacyMarker(item as unknown as Record<string, unknown>)).length;
+    if (chunk.length < BATCH_SIZE) hasMore = false;
+    await new Promise(r => setTimeout(r, 0));
+  }
+
+  return count;
+}
+
 export async function stripLegacyMarkers(
   onProgress?: (progress: StripMarkersProgress) => void,
   signal?: AbortSignal,
@@ -326,12 +369,17 @@ export async function stripLegacyMarkers(
   const configs = getTableConfigs();
   const tableCount = configs.length;
   let totalCleaned = 0;
-  const tableResults: Array<{ tableName: string; rowsCleaned: number }> = [];
+  let totalBefore = 0;
+  let totalRemaining = 0;
+  const tableResults: StripMarkersTableResult[] = [];
   const tableErrors: string[] = [];
+  const verificationErrors: string[] = [];
 
+  // Phase 1: strip markers
   for (let i = 0; i < configs.length; i++) {
     if (signal?.aborted) break;
     const config = configs[i];
+    let rowsBefore = 0;
     let rowsCleaned = 0;
     let lastProcessedId = 0;
     let hasMore = true;
@@ -364,6 +412,8 @@ export async function stripLegacyMarkers(
         hasAnyLegacyMarker(item as unknown as Record<string, unknown>),
       );
 
+      rowsBefore += markerItems.length;
+
       if (markerItems.length > 0) {
         const cleanedBatch = markerItems.map(item => {
           const cleaned = { ...item } as Record<string, unknown>;
@@ -388,6 +438,7 @@ export async function stripLegacyMarkers(
         tableIndex: i,
         tableCount,
         rowsCleaned,
+        phase: "strip",
       });
 
       if (chunk.length < BATCH_SIZE) {
@@ -397,9 +448,40 @@ export async function stripLegacyMarkers(
       await new Promise(r => setTimeout(r, 0));
     }
 
-    tableResults.push({ tableName: config.name, rowsCleaned });
+    tableResults.push({ tableName: config.name, rowsBefore, rowsCleaned, rowsRemaining: 0 });
     totalCleaned += rowsCleaned;
+    totalBefore += rowsBefore;
   }
 
-  return { totalCleaned, tableResults, tableErrors };
+  // Phase 2: verification — count any remaining marker rows
+  for (let i = 0; i < configs.length; i++) {
+    if (signal?.aborted) break;
+    const config = configs[i];
+
+    onProgress?.({
+      tableName: config.name,
+      tableIndex: i,
+      tableCount,
+      rowsCleaned: tableResults[i]?.rowsCleaned ?? 0,
+      phase: "verify",
+    });
+
+    try {
+      const remaining = await countRowsWithMarkers(config, signal);
+      if (tableResults[i]) {
+        tableResults[i].rowsRemaining = remaining;
+      }
+      totalRemaining += remaining;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`[StripMarkers] ${msg}`);
+      verificationErrors.push(msg);
+      // rowsRemaining stays 0 but verification for this table is incomplete;
+      // callers must check verificationErrors to determine if the count is trustworthy.
+    }
+
+    await new Promise(r => setTimeout(r, 0));
+  }
+
+  return { totalCleaned, totalBefore, totalRemaining, tableResults, tableErrors, verificationErrors };
 }
