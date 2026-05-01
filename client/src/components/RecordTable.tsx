@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import {
   Table,
   TableBody,
@@ -176,6 +176,15 @@ export function RecordTable({
   const [localAddressStats, setLocalAddressStats] = useState<Map<string, AddressStats>>(new Map());
   const addressStats = precomputedAddressStats || localAddressStats;
 
+  // Always-current ref so the stats effect reads records without depending on them reactively.
+  // This prevents the stats query being cancelled on every sync write — it only restarts
+  // when the set of IDs on the current page actually changes (page navigation).
+  const recordsRef = useRef(records);
+  recordsRef.current = records;
+
+  // Stable key: changes only when the page's record IDs change, not when record data changes.
+  const pageRecordKey = records.map(r => r.id).join(',');
+
   useEffect(() => {
     const loadAttachmentCounts = async () => {
       const recordIds = records.map(r => Number(r.id));
@@ -199,7 +208,8 @@ export function RecordTable({
   useEffect(() => {
     if (precomputedAddressStats) return;
     const needsStats = tableColumns.balance || tableColumns.lastTxDate || tableColumns.txCount;
-    if (!needsStats || records.length === 0) {
+    const currentRecords = recordsRef.current;
+    if (!needsStats || currentRecords.length === 0) {
       setLocalAddressStats(new Map());
       return;
     }
@@ -208,7 +218,7 @@ export function RecordTable({
     const abortController = new AbortController();
     const loadStats = async () => {
       try {
-        const addressRecords = records.filter(r => r.type === 'address' && r.inputString);
+        const addressRecords = currentRecords.filter(r => r.type === 'address' && r.inputString);
         const addressStrings = addressRecords.map(r => r.inputString);
         if (addressStrings.length === 0) {
           setLocalAddressStats(new Map());
@@ -266,13 +276,15 @@ export function RecordTable({
         }
       } catch (e) {
         if (e instanceof DOMException && e.name === 'AbortError') return;
-        throw e;
+        console.error('[RecordTable] Stats load error:', e);
       }
     };
 
     loadStats();
     return () => { cancelled = true; abortController.abort(); };
-  }, [records, tableColumns.balance, tableColumns.lastTxDate, tableColumns.txCount, precomputedAddressStats]);
+  // recordsRef.current is intentionally omitted — it's a ref, always current, not reactive.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pageRecordKey, tableColumns.balance, tableColumns.lastTxDate, tableColumns.txCount, precomputedAddressStats]);
 
   const handleSort = (column: SortColumn) => {
     // Attachments sorting requires attachment counts which are only available here
