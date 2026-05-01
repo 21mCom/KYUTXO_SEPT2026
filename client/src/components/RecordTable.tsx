@@ -31,6 +31,7 @@ import { useSettings, useCustomFields, toggleTableColumn, toggleCustomFieldColum
 import { db, type CustomField } from "@/lib/database";
 import { getParticipantsByAddresses } from "@/lib/dataFacade";
 import { Separator } from "@/components/ui/separator";
+import { Skeleton } from "@/components/ui/skeleton";
 import { formatBTC } from "@/lib/bitcoin";
 
 type SortDirection = "asc" | "desc" | null;
@@ -174,6 +175,7 @@ export function RecordTable({
   const sortDirection = isInternalComputedSort ? internalSortDirection : (isExternallyControlled ? (externalSortDirection ?? null) : internalSortDirection);
 
   const [localAddressStats, setLocalAddressStats] = useState<Map<string, AddressStats>>(new Map());
+  const [statsLoading, setStatsLoading] = useState(false);
   const addressStats = precomputedAddressStats || localAddressStats;
 
   // Always-current ref so the stats effect reads records without depending on them reactively.
@@ -211,9 +213,11 @@ export function RecordTable({
     const currentRecords = recordsRef.current;
     if (!needsStats || currentRecords.length === 0) {
       setLocalAddressStats(new Map());
+      setStatsLoading(false);
       return;
     }
 
+    setStatsLoading(true);
     let cancelled = false;
     const abortController = new AbortController();
     const loadStats = async () => {
@@ -222,6 +226,7 @@ export function RecordTable({
         const addressStrings = addressRecords.map(r => r.inputString);
         if (addressStrings.length === 0) {
           setLocalAddressStats(new Map());
+          if (!cancelled) setStatsLoading(false);
           return;
         }
 
@@ -273,10 +278,12 @@ export function RecordTable({
 
         if (!cancelled) {
           setLocalAddressStats(stats);
+          setStatsLoading(false);
         }
       } catch (e) {
         if (e instanceof DOMException && e.name === 'AbortError') return;
         console.error('[RecordTable] Stats load error:', e);
+        if (!cancelled) setStatsLoading(false);
       }
     };
 
@@ -752,22 +759,34 @@ export function RecordTable({
                 )}
                 {tableColumns.balance && (
                   <TableCell className="text-sm text-right tabular-nums">
-                    {record.type === 'address' && addressStats.has(record.id)
-                      ? formatBTC(addressStats.get(record.id)!.balanceSats)
+                    {record.type === 'address'
+                      ? statsLoading && !addressStats.has(record.id)
+                        ? <Skeleton className="h-4 w-16 ml-auto" />
+                        : addressStats.has(record.id)
+                          ? formatBTC(addressStats.get(record.id)!.balanceSats)
+                          : <span className="text-muted-foreground">-</span>
                       : <span className="text-muted-foreground">-</span>}
                   </TableCell>
                 )}
                 {tableColumns.lastTxDate && (
                   <TableCell className="text-sm text-muted-foreground">
-                    {record.type === 'address' && addressStats.has(record.id) && addressStats.get(record.id)!.lastTxDate > 0
-                      ? formatBlockTime(addressStats.get(record.id)!.lastTxDate)
+                    {record.type === 'address'
+                      ? statsLoading && !addressStats.has(record.id)
+                        ? <Skeleton className="h-4 w-24" />
+                        : addressStats.has(record.id) && addressStats.get(record.id)!.lastTxDate > 0
+                          ? formatBlockTime(addressStats.get(record.id)!.lastTxDate)
+                          : "-"
                       : "-"}
                   </TableCell>
                 )}
                 {tableColumns.txCount && (
                   <TableCell className="text-sm text-right tabular-nums">
-                    {record.type === 'address' && addressStats.has(record.id)
-                      ? addressStats.get(record.id)!.txCount
+                    {record.type === 'address'
+                      ? statsLoading && !addressStats.has(record.id)
+                        ? <Skeleton className="h-4 w-10 ml-auto" />
+                        : addressStats.has(record.id)
+                          ? addressStats.get(record.id)!.txCount
+                          : <span className="text-muted-foreground">-</span>
                       : <span className="text-muted-foreground">-</span>}
                   </TableCell>
                 )}
