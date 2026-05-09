@@ -37,8 +37,10 @@ import Nudgie from "@/pages/Nudgie";
 import BitcoinFlowVisualizer from "@/pages/BitcoinFlowVisualizer";
 import BulkEditor from "@/pages/BulkEditor";
 import QuickTagger from "@/pages/QuickTagger";
-import { lazy, Suspense, useState } from "react";
+import { lazy, Suspense, useState, useEffect, useRef } from "react";
 import { ActivityBusProvider, useActivityBus } from "@/lib/activity-bus";
+import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
+import { ActivityMonitorBody } from "@/components/ActivityMonitorPanel";
 
 const UIAssets = lazy(() => import("@/pages/UIAssets"));
 const IconsReference = lazy(() => import("@/pages/IconsReference"));
@@ -112,7 +114,19 @@ function AppRoutes() {
 }
 
 function ActivityPulseDot() {
-  const { tasks, isStuck, monitorEnabled, monitorPanelOpen, setMonitorPanelOpen } = useActivityBus();
+  const { tasks, isStuck, monitorEnabled } = useActivityBus();
+  const [open, setOpen] = useState(false);
+  const prevActiveRef = useRef(tasks.length > 0);
+
+  useEffect(() => {
+    const wasActive = prevActiveRef.current;
+    const isActive = tasks.length > 0;
+    if (wasActive && !isActive && open) {
+      setOpen(false);
+    }
+    prevActiveRef.current = isActive;
+  }, [tasks.length, open]);
+
   if (!monitorEnabled) return null;
   const active = tasks.length > 0;
   const dotClass = !active
@@ -126,13 +140,27 @@ function ActivityPulseDot() {
     ? 'Operation appears stuck — click to open monitor'
     : `${tasks.length} operation${tasks.length > 1 ? 's' : ''} in progress — click to open monitor`;
   return (
-    <button
-      className={`absolute top-2 left-8 h-2 w-2 rounded-full cursor-pointer ${dotClass} ${monitorPanelOpen ? 'ring-1 ring-offset-1 ring-foreground/30' : ''}`}
-      title={title}
-      data-testid="activity-pulse-dot"
-      onClick={() => setMonitorPanelOpen(!monitorPanelOpen)}
-      aria-label={title}
-    />
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          className={`absolute top-2 left-8 h-2 w-2 rounded-full cursor-pointer ${dotClass} ${open ? 'ring-1 ring-offset-1 ring-foreground/30' : ''}`}
+          title={title}
+          data-testid="activity-pulse-dot"
+          aria-label={title}
+        />
+      </PopoverTrigger>
+      <PopoverContent
+        align="start"
+        sideOffset={8}
+        className="w-80 p-3"
+        data-testid="popover-activity-monitor"
+      >
+        <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-1">
+          Activity Monitor
+        </div>
+        <ActivityMonitorBody />
+      </PopoverContent>
+    </Popover>
   );
 }
 

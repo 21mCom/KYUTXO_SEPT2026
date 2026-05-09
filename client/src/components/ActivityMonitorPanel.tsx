@@ -89,9 +89,80 @@ function EventRow({ event }: { event: ActivityEvent }) {
   );
 }
 
+export function ActivityMonitorBody() {
+  const { tasks, events, storageQuota } = useActivityBus();
+  useLiveTick(tasks.length > 0 ? 1500 : 60_000);
+
+  const hasActiveTasks = tasks.length > 0;
+  const storagePct = storageQuota && storageQuota.quota > 0
+    ? Math.round((storageQuota.usage / storageQuota.quota) * 100)
+    : 0;
+  const storageWarn = storagePct > 80;
+
+  return (
+    <div className="space-y-3" data-testid="activity-monitor-body">
+      {hasActiveTasks && (
+        <div>
+          <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1 px-1">
+            Active ({tasks.length})
+          </div>
+          <div className="px-1">
+            {tasks.map(task => (
+              <TaskRow key={task.id} task={task} />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {storageQuota && storageQuota.quota > 0 && (
+        <div className="px-1">
+          <div className="flex items-center justify-between text-xs text-muted-foreground mb-1">
+            <span className="flex items-center gap-1">
+              <Database className="h-3 w-3" />
+              Storage
+            </span>
+            <span className={storageWarn ? 'text-amber-500' : ''}>
+              {formatBytes(storageQuota.usage)} / {formatBytes(storageQuota.quota)} ({storagePct}%)
+            </span>
+          </div>
+          <Progress
+            value={storagePct}
+            className={`h-1 ${storageWarn ? '[&>div]:bg-amber-500' : ''}`}
+          />
+          {storageWarn && (
+            <div className="text-xs text-amber-500 mt-1 flex items-center gap-1">
+              <AlertTriangle className="h-3 w-3" />
+              Storage above 80%
+            </div>
+          )}
+        </div>
+      )}
+
+      {events.length > 0 && (
+        <div>
+          <div className="flex items-center justify-between mb-1 px-1">
+            <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Recent Activity</span>
+            <span className="text-xs text-muted-foreground/60">newest first</span>
+          </div>
+          <ScrollArea className="h-40 px-1">
+            {events.map(event => (
+              <EventRow key={event.id} event={event} />
+            ))}
+          </ScrollArea>
+        </div>
+      )}
+
+      {!hasActiveTasks && events.length === 0 && (
+        <div className="text-xs text-muted-foreground px-1 py-2 text-center">
+          No recent activity
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function ActivityMonitorPanel() {
-  const { tasks, events, storageQuota, isStuck, monitorEnabled, monitorPanelOpen, setMonitorPanelOpen } = useActivityBus();
-  useLiveTick(monitorPanelOpen && tasks.length > 0 ? 1500 : 60_000);
+  const { tasks, isStuck, monitorEnabled, monitorPanelOpen, setMonitorPanelOpen, storageQuota } = useActivityBus();
 
   if (!monitorEnabled) return null;
 
@@ -126,63 +197,8 @@ export function ActivityMonitorPanel() {
       </button>
 
       {monitorPanelOpen && (
-        <div className="mt-2 space-y-3" data-testid="activity-monitor-expanded">
-          {hasActiveTasks && (
-            <div>
-              <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1 px-1">
-                Active ({tasks.length})
-              </div>
-              <div className="px-1">
-                {tasks.map(task => (
-                  <TaskRow key={task.id} task={task} />
-                ))}
-              </div>
-            </div>
-          )}
-
-          {storageQuota && storageQuota.quota > 0 && (
-            <div className="px-1">
-              <div className="flex items-center justify-between text-xs text-muted-foreground mb-1">
-                <span className="flex items-center gap-1">
-                  <Database className="h-3 w-3" />
-                  Storage
-                </span>
-                <span className={storageWarn ? 'text-amber-500' : ''}>
-                  {formatBytes(storageQuota.usage)} / {formatBytes(storageQuota.quota)} ({storagePct}%)
-                </span>
-              </div>
-              <Progress
-                value={storagePct}
-                className={`h-1 ${storageWarn ? '[&>div]:bg-amber-500' : ''}`}
-              />
-              {storageWarn && (
-                <div className="text-xs text-amber-500 mt-1 flex items-center gap-1">
-                  <AlertTriangle className="h-3 w-3" />
-                  Storage above 80%
-                </div>
-              )}
-            </div>
-          )}
-
-          {events.length > 0 && (
-            <div>
-              <div className="flex items-center justify-between mb-1 px-1">
-                <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Recent Activity</span>
-                <span className="text-xs text-muted-foreground/60">newest first</span>
-              </div>
-              <ScrollArea className="h-40 px-1">
-                {events.map(event => (
-                  <EventRow key={event.id} event={event} />
-                ))}
-              </ScrollArea>
-            </div>
-          )}
-
-          {!hasActiveTasks && events.length === 0 && (
-            <div className="text-xs text-muted-foreground px-1 py-2 text-center">
-              No recent activity
-            </div>
-          )}
+        <div className="mt-2" data-testid="activity-monitor-expanded">
+          <ActivityMonitorBody />
         </div>
       )}
     </div>
