@@ -49,6 +49,34 @@ const STUCK_THRESHOLD_MS = 15_000;
 const WATCHDOG_INTERVAL_MS = 2_000;
 const STORAGE_CHECK_INTERVAL_MS = 60_000;
 const MONITOR_ENABLED_KEY = 'activity-monitor-enabled';
+const EVENTS_STORAGE_KEY = 'activity-events';
+const EVENTS_PERSIST_DEBOUNCE_MS = 500;
+
+function loadPersistedEvents(): ActivityEvent[] {
+  try {
+    const raw = sessionStorage.getItem(EVENTS_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    const valid: ActivityEvent[] = [];
+    for (const item of parsed) {
+      if (
+        item &&
+        typeof item.id === 'string' &&
+        typeof item.kind === 'string' &&
+        typeof item.label === 'string' &&
+        typeof item.message === 'string' &&
+        typeof item.ts === 'number'
+      ) {
+        valid.push(item as ActivityEvent);
+        if (valid.length >= MAX_EVENTS) break;
+      }
+    }
+    return valid;
+  } catch {
+    return [];
+  }
+}
 
 const ActivityBusContext = createContext<ActivityBusContextType | null>(null);
 
@@ -87,13 +115,38 @@ export function ActivityBusProvider({ children }: { children: ReactNode }) {
   };
 
   const [tasks, setTasks] = useState<ActivityTask[]>([]);
-  const [events, setEvents] = useState<ActivityEvent[]>([]);
+  const [events, setEvents] = useState<ActivityEvent[]>(loadPersistedEvents);
   const [storageQuota, setStorageQuota] = useState<StorageQuota | null>(null);
   const [isStuck, setIsStuck] = useState(false);
   const [monitorEnabled, setMonitorEnabledState] = useState(monitorEnabledInit);
   const [monitorPanelOpen, setMonitorPanelOpen] = useState(false);
 
   const tasksRef = useRef<ActivityTask[]>([]);
+  const eventsRef = useRef<ActivityEvent[]>(events);
+  const persistTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    eventsRef.current = events;
+    if (persistTimerRef.current !== null) return;
+    persistTimerRef.current = setTimeout(() => {
+      persistTimerRef.current = null;
+      try {
+        sessionStorage.setItem(EVENTS_STORAGE_KEY, JSON.stringify(eventsRef.current));
+      } catch {}
+    }, EVENTS_PERSIST_DEBOUNCE_MS);
+  }, [events]);
+
+  useEffect(() => {
+    return () => {
+      if (persistTimerRef.current !== null) {
+        clearTimeout(persistTimerRef.current);
+        persistTimerRef.current = null;
+        try {
+          sessionStorage.setItem(EVENTS_STORAGE_KEY, JSON.stringify(eventsRef.current));
+        } catch {}
+      }
+    };
+  }, []);
 
   const pushEvent = useCallback((event: Omit<ActivityEvent, 'id' | 'ts'>) => {
     const full: ActivityEvent = { ...event, id: makeEventId(), ts: Date.now() };
