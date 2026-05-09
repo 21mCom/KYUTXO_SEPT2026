@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 import {
   CheckCircle2,
   ChevronDown,
@@ -96,7 +96,14 @@ interface StripMarkersPanelProps {
   onRunningChange?: (running: boolean) => void;
 }
 
-export default function StripMarkersPanel({ disabled = false, onRunningChange }: StripMarkersPanelProps) {
+export interface StripMarkersPanelHandle {
+  runStrip: () => void;
+}
+
+const StripMarkersPanel = forwardRef<StripMarkersPanelHandle, StripMarkersPanelProps>(function StripMarkersPanel(
+  { disabled = false, onRunningChange },
+  ref,
+) {
   const [state, setState] = useState<StripState>(initialState);
   const [persisted, setPersisted] = useState<PersistedStripResult | null>(null);
   const [persistedExpanded, setPersistedExpanded] = useState(false);
@@ -152,6 +159,8 @@ export default function StripMarkersPanel({ disabled = false, onRunningChange }:
     abortRef.current?.abort();
     setState((prev) => ({ ...prev, phase: "cancelled" }));
   }, []);
+
+  useImperativeHandle(ref, () => ({ runStrip }), [runStrip]);
 
   const isRunning = state.phase === "running";
   const isDone = state.phase === "done" || state.phase === "cancelled" || state.phase === "error";
@@ -273,7 +282,9 @@ export default function StripMarkersPanel({ disabled = false, onRunningChange }:
       </CardContent>
     </Card>
   );
-}
+});
+
+export default StripMarkersPanel;
 
 function PersistedResultSummary({
   persisted,
