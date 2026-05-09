@@ -1101,10 +1101,16 @@ db.on('ready', async () => {
 
 // Simple database change notification system
 // Components can subscribe to be notified when data changes
-type ChangeListener = (tables: string[]) => void;
+export type DbChangeOrigin = 'blockchain-sync' | 'user' | string;
+export interface DbChangeMeta {
+  origin?: DbChangeOrigin;
+}
+type ChangeListener = (tables: string[], meta?: DbChangeMeta) => void;
 const changeListeners: Set<ChangeListener> = new Set();
 let bulkOperationDepth = 0;
 let pendingBulkTables = new Set<string>();
+let pendingBulkOrigins = new Set<DbChangeOrigin>();
+let pendingBulkHasUntagged = false;
 
 export function subscribeToDbChanges(listener: ChangeListener): () => void {
   changeListeners.add(listener);
@@ -1113,15 +1119,22 @@ export function subscribeToDbChanges(listener: ChangeListener): () => void {
   };
 }
 
-export function notifyDbChange(tables: string | string[]): void {
+export function notifyDbChange(tables: string | string[], meta?: DbChangeMeta): void {
   const tableArray = Array.isArray(tables) ? tables : [tables];
   if (bulkOperationDepth > 0) {
     tableArray.forEach(t => pendingBulkTables.add(t));
+    if (meta?.origin) {
+      pendingBulkOrigins.add(meta.origin);
+    } else {
+      // Track untagged notifications so a mixed batch (some tagged, some not)
+      // is treated as mixed and emits no origin to subscribers.
+      pendingBulkHasUntagged = true;
+    }
     return;
   }
   changeListeners.forEach(listener => {
     try {
-      listener(tableArray);
+      listener(tableArray, meta);
     } catch (e) {
       console.error('Error in database change listener:', e);
     }
@@ -1143,13 +1156,26 @@ export function endBulkOperation(): void {
     if (pendingBulkTables.size > 0) {
       const tables = Array.from(pendingBulkTables);
       pendingBulkTables = new Set();
+      // Only forward an origin if every deferred notification in the batch
+      // carried the same origin. Any untagged notification, or a mix of
+      // distinct origins, is treated as mixed and drops the origin so
+      // subscribers fall back to the safe default of reloading.
+      const origins = Array.from(pendingBulkOrigins);
+      const hadUntagged = pendingBulkHasUntagged;
+      pendingBulkOrigins = new Set();
+      pendingBulkHasUntagged = false;
+      const meta: DbChangeMeta | undefined =
+        origins.length === 1 && !hadUntagged ? { origin: origins[0] } : undefined;
       changeListeners.forEach(listener => {
         try {
-          listener(tables);
+          listener(tables, meta);
         } catch (e) {
           console.error('Error in database change listener:', e);
         }
       });
+    } else {
+      pendingBulkOrigins = new Set();
+      pendingBulkHasUntagged = false;
     }
   }
 }

@@ -1,26 +1,49 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
-import { subscribeToDbChanges } from '@/lib/database';
+import { subscribeToDbChanges, type DbChangeMeta } from '@/lib/database';
 
-export function useDbChangeSignal(tables: string[], debounceMs?: number): number {
+export interface UseDbChangeSignalOptions {
+  /**
+   * Predicate that returns true if a notification should bump the signal.
+   * Receives the changed tables and any metadata published by the writer.
+   * If omitted, every notification matching `tables` (or a broadcast) bumps.
+   */
+  filter?: (changedTables: string[], meta?: DbChangeMeta) => boolean;
+}
+
+export function useDbChangeSignal(
+  tables: string[],
+  debounceMs?: number,
+  options?: UseDbChangeSignalOptions,
+): number {
   const changeVersionRef = useRef(0);
   const [dbChangeSignal, setDbChangeSignal] = useState(0);
   const stableTables = useMemo(() => tables, [tables.join(',')]);
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  useEffect(() => {
-    const unsubscribe = subscribeToDbChanges((changedTables) => {
-      if (changedTables.length === 0 || changedTables.some(t => stableTables.includes(t))) {
-        const bump = () => {
-          changeVersionRef.current += 1;
-          setDbChangeSignal(changeVersionRef.current);
-        };
+  // Keep the latest filter in a ref so we don't have to resubscribe each render
+  // when the caller passes a fresh closure (which is the common case).
+  const filterRef = useRef(options?.filter);
+  filterRef.current = options?.filter;
 
-        if (debounceMs != null && debounceMs > 0) {
-          if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
-          debounceTimerRef.current = setTimeout(bump, debounceMs);
-        } else {
-          bump();
-        }
+  useEffect(() => {
+    const unsubscribe = subscribeToDbChanges((changedTables, meta) => {
+      const tableMatches =
+        changedTables.length === 0 || changedTables.some(t => stableTables.includes(t));
+      if (!tableMatches) return;
+
+      const filter = filterRef.current;
+      if (filter && !filter(changedTables, meta)) return;
+
+      const bump = () => {
+        changeVersionRef.current += 1;
+        setDbChangeSignal(changeVersionRef.current);
+      };
+
+      if (debounceMs != null && debounceMs > 0) {
+        if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+        debounceTimerRef.current = setTimeout(bump, debounceMs);
+      } else {
+        bump();
       }
     });
 

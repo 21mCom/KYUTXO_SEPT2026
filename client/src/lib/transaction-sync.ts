@@ -164,7 +164,7 @@ export class TransactionSyncService {
 
   private flushNotifications(): void {
     if (this.pendingDbNotifications.size > 0) {
-      notifyDbChange(Array.from(this.pendingDbNotifications));
+      notifyDbChange(Array.from(this.pendingDbNotifications), { origin: 'blockchain-sync' });
       this.pendingDbNotifications.clear();
     }
   }

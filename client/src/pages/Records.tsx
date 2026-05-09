@@ -167,7 +167,17 @@ export default function Records() {
     participantAddresses: string[];
   }[]>([]);
   
-  const dbChangeSignal = useDbChangeSignal(['records'], 250);
+  const dbChangeSignal = useDbChangeSignal(['records'], 250, {
+    // When blockchain-discovered records are hidden (the default), background
+    // transaction-sync writes don't affect what's visible. Skip those reloads
+    // entirely so heavy sync sessions don't restart count/list queries.
+    filter: (_tables, meta) => {
+      if (meta?.origin === 'blockchain-sync' && !includeBlockchainDiscovered) {
+        return false;
+      }
+      return true;
+    },
+  });
 
   const { tags: vocabTags } = useTags();
   const { categories: vocabCategories } = useCategories();
