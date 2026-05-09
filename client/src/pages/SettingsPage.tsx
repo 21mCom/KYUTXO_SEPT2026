@@ -70,6 +70,7 @@ import {
 import JSZip from "jszip";
 import VocabularyManager from "@/components/VocabularyManager";
 import DecryptionVerificationPanel from "@/components/DecryptionVerificationPanel";
+import StripMarkersPanel from "@/components/StripMarkersPanel";
 import {
   getSearchFadePreference,
   setSearchFadePreference,
@@ -114,6 +115,8 @@ export default function SettingsPage() {
   const [isChangingPassword, setIsChangingPassword] = useState(false);
   const [isMigratingAttachments, setIsMigratingAttachments] = useState(false);
   const [searchFadeIntensity, setSearchFadeIntensity] = useState<SearchFadeOption>(getSearchFadePreference);
+  const [isScanRunning, setIsScanRunning] = useState(false);
+  const [isStripRunning, setIsStripRunning] = useState(false);
   const { monitorEnabled, setMonitorEnabled } = useActivityBus();
 
   const handleToggleBuiltInField = async (field: keyof typeof fieldVisibility) => {
@@ -1409,7 +1412,16 @@ export default function SettingsPage() {
           </CardContent>
         </Card>
 
-        <DecryptionVerificationPanel collapsedByDefault />
+        <StripMarkersPanel
+          disabled={isScanRunning}
+          onRunningChange={setIsStripRunning}
+        />
+
+        <DecryptionVerificationPanel
+          collapsedByDefault
+          disabled={isStripRunning}
+          onRunningChange={setIsScanRunning}
+        />
 
         <Card>
           <CardHeader>
