@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   CheckCircle2,
+  ChevronDown,
+  ChevronRight,
   Loader2,
   Play,
   Square,
   Trash2,
+  X,
   XCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -32,6 +35,62 @@ const initialState: StripState = {
   result: null,
 };
 
+const PERSISTED_RESULT_KEY = "kyutxo:stripMarkers:lastResult";
+
+interface PersistedStripResult {
+  result: StripMarkersResult;
+  timestamp: number;
+}
+
+function loadPersistedResult(): PersistedStripResult | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(PERSISTED_RESULT_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as PersistedStripResult;
+    if (
+      !parsed ||
+      typeof parsed !== "object" ||
+      typeof parsed.timestamp !== "number" ||
+      !parsed.result ||
+      !Array.isArray(parsed.result.tableResults)
+    ) {
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function savePersistedResult(result: StripMarkersResult): PersistedStripResult | null {
+  if (typeof window === "undefined") return null;
+  const payload: PersistedStripResult = { result, timestamp: Date.now() };
+  try {
+    window.localStorage.setItem(PERSISTED_RESULT_KEY, JSON.stringify(payload));
+    return payload;
+  } catch {
+    return null;
+  }
+}
+
+function clearPersistedResult(): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.removeItem(PERSISTED_RESULT_KEY);
+  } catch {
+    // ignore
+  }
+}
+
+function formatTimestamp(ts: number): string {
+  try {
+    return new Date(ts).toLocaleString();
+  } catch {
+    return new Date(ts).toISOString();
+  }
+}
+
 interface StripMarkersPanelProps {
   disabled?: boolean;
   onRunningChange?: (running: boolean) => void;
@@ -39,7 +98,13 @@ interface StripMarkersPanelProps {
 
 export default function StripMarkersPanel({ disabled = false, onRunningChange }: StripMarkersPanelProps) {
   const [state, setState] = useState<StripState>(initialState);
+  const [persisted, setPersisted] = useState<PersistedStripResult | null>(null);
+  const [persistedExpanded, setPersistedExpanded] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    setPersisted(loadPersistedResult());
+  }, []);
 
   const runStrip = useCallback(async () => {
     if (abortRef.current) {
@@ -66,6 +131,8 @@ export default function StripMarkersPanel({ disabled = false, onRunningChange }:
         }));
       } else {
         setState({ phase: "done", progress: null, result });
+        const saved = savePersistedResult(result);
+        if (saved) setPersisted(saved);
       }
     } catch (err) {
       if (!ctrl.signal.aborted) {
@@ -88,6 +155,13 @@ export default function StripMarkersPanel({ disabled = false, onRunningChange }:
 
   const isRunning = state.phase === "running";
   const isDone = state.phase === "done" || state.phase === "cancelled" || state.phase === "error";
+  const showPersisted = !isRunning && !isDone && persisted !== null;
+
+  const handleClearPersisted = useCallback(() => {
+    clearPersistedResult();
+    setPersisted(null);
+    setPersistedExpanded(false);
+  }, []);
 
   useEffect(() => {
     onRunningChange?.(isRunning);
@@ -163,6 +237,15 @@ export default function StripMarkersPanel({ disabled = false, onRunningChange }:
           </div>
         )}
 
+        {showPersisted && persisted && (
+          <PersistedResultSummary
+            persisted={persisted}
+            expanded={persistedExpanded}
+            onToggle={() => setPersistedExpanded((v) => !v)}
+            onClear={handleClearPersisted}
+          />
+        )}
+
         {isDone && state.result && (
           <StripResultBanner phase={state.phase} result={state.result} errorMessage={state.errorMessage} />
         )}
@@ -189,6 +272,101 @@ export default function StripMarkersPanel({ disabled = false, onRunningChange }:
         )}
       </CardContent>
     </Card>
+  );
+}
+
+function PersistedResultSummary({
+  persisted,
+  expanded,
+  onToggle,
+  onClear,
+}: {
+  persisted: PersistedStripResult;
+  expanded: boolean;
+  onToggle: () => void;
+  onClear: () => void;
+}) {
+  const { result, timestamp } = persisted;
+  const hasErrors = result.tableErrors.length > 0;
+  const hasVerificationErrors = result.verificationErrors.length > 0;
+  const verifiedClean = result.totalRemaining === 0 && !hasVerificationErrors && !hasErrors;
+  const Chevron = expanded ? ChevronDown : ChevronRight;
+
+  return (
+    <div
+      className="rounded-md border p-3 space-y-2"
+      data-testid="section-strip-last-run"
+    >
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <button
+          type="button"
+          onClick={onToggle}
+          className="flex items-center gap-2 text-sm font-medium hover-elevate rounded-md px-1 -mx-1 py-0.5"
+          data-testid="button-toggle-last-run"
+        >
+          <Chevron className="h-4 w-4 text-muted-foreground" />
+          {verifiedClean ? (
+            <CheckCircle2 className="h-4 w-4 text-green-600 dark:text-green-400" />
+          ) : (
+            <XCircle className="h-4 w-4 text-destructive" />
+          )}
+          <span>Last run</span>
+          <span
+            className="text-xs text-muted-foreground font-normal"
+            data-testid="text-last-run-timestamp"
+          >
+            {formatTimestamp(timestamp)}
+          </span>
+        </button>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={onClear}
+          data-testid="button-clear-last-run"
+        >
+          <X className="h-4 w-4 mr-1" />
+          Clear result
+        </Button>
+      </div>
+
+      <div className="text-xs text-muted-foreground" data-testid="text-last-run-summary">
+        {result.totalBefore === 0
+          ? "No stale markers were found."
+          : `${result.totalCleaned} of ${result.totalBefore} row${result.totalBefore === 1 ? "" : "s"} cleaned${
+              result.totalRemaining > 0 ? ` — ${result.totalRemaining} remaining` : ""
+            }${hasVerificationErrors ? " — verification incomplete" : ""}${
+              hasErrors ? " — with errors" : ""
+            }`}
+      </div>
+
+      {expanded && (
+        <div className="space-y-2 pt-1">
+          {result.tableResults.filter((t) => t.rowsBefore > 0).length > 0 ? (
+            <div className="grid gap-1 text-xs">
+              {result.tableResults
+                .filter((t) => t.rowsBefore > 0)
+                .map((t) => (
+                  <TableResultRow key={t.tableName} result={t} />
+                ))}
+            </div>
+          ) : (
+            <div className="text-xs text-muted-foreground italic">
+              No stale marker fields were found in any table.
+            </div>
+          )}
+          {(hasErrors || hasVerificationErrors) && (
+            <ul className="space-y-0.5 text-xs text-destructive list-disc list-inside">
+              {result.tableErrors.map((e, i) => (
+                <li key={i}>{e}</li>
+              ))}
+              {result.verificationErrors.map((e, i) => (
+                <li key={`v-${i}`}>{e}</li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 
