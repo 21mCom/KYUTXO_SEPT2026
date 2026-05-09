@@ -40,7 +40,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { useToast } from "@/hooks/use-toast";
-import { useAddressStats } from "@/hooks/use-address-stats";
+import { useAddressStatsWithLoading } from "@/hooks/use-address-stats";
 import { validateBitcoinInput } from "@/lib/bitcoin";
 import { getRecordAttachments } from "@/lib/attachments";
 import type { Record } from "@/lib/database";
@@ -116,7 +116,7 @@ export default function Dashboard() {
   const { toast } = useToast();
 
   const statsEnabled = tableColumns.balance || tableColumns.lastTxDate || tableColumns.txCount;
-  const allAddressStats = useAddressStats(records, statsEnabled);
+  const { stats: allAddressStats, isLoading: allAddressStatsLoading } = useAddressStatsWithLoading(records, statsEnabled);
 
   // Load attachments when selected record changes
   useEffect(() => {
@@ -1040,6 +1040,7 @@ export default function Dashboard() {
                   selectedIds={selectedIds}
                   onSelectionChange={setSelectedIds}
                   precomputedAddressStats={allAddressStats}
+                  statsLoading={statsEnabled && allAddressStatsLoading}
                 />
               </>
             )}

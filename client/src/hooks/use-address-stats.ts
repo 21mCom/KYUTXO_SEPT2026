@@ -12,11 +12,21 @@ export function useAddressStats(
   records: Array<{ id?: number | string; type: string; inputString: string }>,
   enabled: boolean = true
 ): Map<string, AddressStats> {
+  const { stats } = useAddressStatsWithLoading(records, enabled);
+  return stats;
+}
+
+export function useAddressStatsWithLoading(
+  records: Array<{ id?: number | string; type: string; inputString: string }>,
+  enabled: boolean = true
+): { stats: Map<string, AddressStats>; isLoading: boolean } {
   const [stats, setStats] = useState<Map<string, AddressStats>>(new Map());
+  const [isLoading, setIsLoading] = useState(false);
 
   useEffect(() => {
     if (!enabled || records.length === 0) {
       setStats(new Map());
+      setIsLoading(false);
       return;
     }
 
@@ -27,9 +37,13 @@ export function useAddressStats(
         const addressRecords = records.filter(r => r.type === 'address' && r.inputString && r.id != null);
         const addressStrings = addressRecords.map(r => r.inputString);
         if (addressStrings.length === 0) {
-          if (!cancelled) setStats(new Map());
+          if (!cancelled) {
+            setStats(new Map());
+            setIsLoading(false);
+          }
           return;
         }
+        if (!cancelled) setIsLoading(true);
 
         const participants = await getParticipantsByAddresses(addressStrings, abortController.signal);
 
@@ -80,9 +94,11 @@ export function useAddressStats(
 
         if (!cancelled) {
           setStats(result);
+          setIsLoading(false);
         }
       } catch (e) {
         if (e instanceof DOMException && e.name === 'AbortError') return;
+        if (!cancelled) setIsLoading(false);
         throw e;
       }
     };
@@ -91,5 +107,5 @@ export function useAddressStats(
     return () => { cancelled = true; abortController.abort(); };
   }, [records, enabled]);
 
-  return stats;
+  return { stats, isLoading };
 }

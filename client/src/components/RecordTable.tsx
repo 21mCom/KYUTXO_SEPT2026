@@ -111,6 +111,7 @@ interface RecordTableProps {
   selectedIds?: Set<string>;
   onSelectionChange?: (selectedIds: Set<string>) => void;
   precomputedAddressStats?: Map<string, AddressStats>;
+  statsLoading?: boolean;
 }
 
 interface SortableHeaderProps {
@@ -160,6 +161,7 @@ export function RecordTable({
   selectedIds = new Set(),
   onSelectionChange,
   precomputedAddressStats,
+  statsLoading: externalStatsLoading,
 }: RecordTableProps) {
   const { tableColumns, customFieldColumns } = useSettings();
   const { enabledCustomFields } = useCustomFields();
@@ -175,8 +177,9 @@ export function RecordTable({
   const sortDirection = isInternalComputedSort ? internalSortDirection : (isExternallyControlled ? (externalSortDirection ?? null) : internalSortDirection);
 
   const [localAddressStats, setLocalAddressStats] = useState<Map<string, AddressStats>>(new Map());
-  const [statsLoading, setStatsLoading] = useState(false);
+  const [localStatsLoading, setLocalStatsLoading] = useState(false);
   const addressStats = precomputedAddressStats || localAddressStats;
+  const statsLoading = precomputedAddressStats ? (externalStatsLoading ?? false) : localStatsLoading;
 
   // Always-current ref so the stats effect reads records without depending on them reactively.
   // This prevents the stats query being cancelled on every sync write — it only restarts
@@ -213,11 +216,11 @@ export function RecordTable({
     const currentRecords = recordsRef.current;
     if (!needsStats || currentRecords.length === 0) {
       setLocalAddressStats(new Map());
-      setStatsLoading(false);
+      setLocalStatsLoading(false);
       return;
     }
 
-    setStatsLoading(true);
+    setLocalStatsLoading(true);
     let cancelled = false;
     const abortController = new AbortController();
     const loadStats = async () => {
@@ -226,7 +229,7 @@ export function RecordTable({
         const addressStrings = addressRecords.map(r => r.inputString);
         if (addressStrings.length === 0) {
           setLocalAddressStats(new Map());
-          if (!cancelled) setStatsLoading(false);
+          if (!cancelled) setLocalStatsLoading(false);
           return;
         }
 
@@ -278,12 +281,12 @@ export function RecordTable({
 
         if (!cancelled) {
           setLocalAddressStats(stats);
-          setStatsLoading(false);
+          setLocalStatsLoading(false);
         }
       } catch (e) {
         if (e instanceof DOMException && e.name === 'AbortError') return;
         console.error('[RecordTable] Stats load error:', e);
-        if (!cancelled) setStatsLoading(false);
+        if (!cancelled) setLocalStatsLoading(false);
       }
     };
 
