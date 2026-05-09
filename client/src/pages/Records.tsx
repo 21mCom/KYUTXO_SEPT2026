@@ -140,6 +140,8 @@ export default function Records() {
   const [debouncedSearch, isSearchPending] = useDebouncedValue(searchQuery, PAGE_DEBOUNCE.Records);
   const [urlSearchQuery, setUrlSearchQuery] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [loadPhase, setLoadPhase] = useState<string>('Initializing');
+  const [countLoading, setCountLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [retrySig, setRetrySig] = useState(0);
   const [customFieldDefs, setCustomFieldDefs] = useState<CustomField[]>([]);
@@ -224,6 +226,8 @@ export default function Records() {
       const version = ++loadVersionRef.current;
       inFlightRef.current++;
       setIsLoading(true);
+      setLoadPhase('Initializing');
+      setCountLoading(false);
       setLoadError(null);
 
       const bus = getActivityBus();
@@ -236,11 +240,17 @@ export default function Records() {
         total: 0,
       });
 
+      const setPhase = (phase: string) => {
+        if (loadVersionRef.current === version) setLoadPhase(phase);
+      };
+
       try {
+        setPhase('Loading custom fields');
         const fields = await db.customFields.toArray();
         if (loadVersionRef.current !== version) return;
         setCustomFieldDefs(fields);
         
+        setPhase('Counting blockchain records');
         const blockchainCount = await db.records
           .where('addressImportance')
           .anyOf(['blockchain-discovered', 'pending-review'])
@@ -285,6 +295,7 @@ export default function Records() {
         const pgOffset = (currentPage - 1) * PAGE_SIZE;
         let rawRecords: DbRecord[];
 
+        setPhase('Fetching records');
         bus.publishTask({
           id: taskId,
           label: 'Loading Records',
@@ -299,11 +310,13 @@ export default function Records() {
           // fetching rows was the root cause of the stuck-loading loop: on large
           // DBs the count can take seconds, and any write arriving during that
           // window cancels the load and restarts it (another count, etc.).
+          setCountLoading(true);
           db.records.count().then(c => {
             if (loadVersionRef.current !== version) return;
             setTotalCount(c);
             setNavigableCount(c);
-          }).catch(e => { console.warn('[Records] Background count failed (all+include):', e); });
+          }).catch(e => { console.warn('[Records] Background count failed (all+include):', e); })
+            .finally(() => { if (loadVersionRef.current === version) setCountLoading(false); });
 
           // Await only the lightweight page fetch.
           rawRecords = await db.records
@@ -315,11 +328,13 @@ export default function Records() {
 
         } else if (!filtersActive && !includeBlockchainDiscovered) {
           // Fire count in background (same reasoning as above).
+          setCountLoading(true);
           db.records.count().then(total => {
             if (loadVersionRef.current !== version) return;
             setTotalCount(total - blockchainCount);
             setNavigableCount(total - blockchainCount);
-          }).catch(e => { console.warn('[Records] Background count failed (all+exclude):', e); });
+          }).catch(e => { console.warn('[Records] Background count failed (all+exclude):', e); })
+            .finally(() => { if (loadVersionRef.current === version) setCountLoading(false); });
 
           // Await only the page fetch (indexed tier queries, fast).
           const pageGroups = await Promise.all(USER_TIERS.map(tier =>
@@ -339,19 +354,22 @@ export default function Records() {
           const typeVal = singleTypeFilter;
 
           // Fire count in background.
+          setCountLoading(true);
           if (includeBlockchainDiscovered) {
             db.records.where('type').equals(typeVal).count().then(c => {
               if (loadVersionRef.current !== version) return;
               setTotalCount(c);
               setNavigableCount(c);
-            }).catch(e => { console.warn('[Records] Background count failed (type+include):', e); });
+            }).catch(e => { console.warn('[Records] Background count failed (type+include):', e); })
+              .finally(() => { if (loadVersionRef.current === version) setCountLoading(false); });
           } else {
             db.records.where('[type+addressImportance]')
               .anyOf(USER_TIERS.map(tier => [typeVal, tier])).count().then(c => {
                 if (loadVersionRef.current !== version) return;
                 setTotalCount(c);
                 setNavigableCount(c);
-              }).catch(e => { console.warn('[Records] Background count failed (type+exclude):', e); });
+              }).catch(e => { console.warn('[Records] Background count failed (type+exclude):', e); })
+              .finally(() => { if (loadVersionRef.current === version) setCountLoading(false); });
           }
 
           // Await only the page fetch.
@@ -396,6 +414,7 @@ export default function Records() {
         }
         if (loadVersionRef.current !== version) return;
 
+        setPhase('Rendering');
         bus.publishTask({
           id: taskId,
           label: 'Loading Records',
@@ -794,12 +813,27 @@ export default function Records() {
           <div className="lg:col-span-2">
             <Card>
               <CardHeader>
-                <CardTitle>
-                  {searchQuery 
-                    ? txidSearchResults.length > 0 
-                      ? `Related Address Records (${records.length})`
-                      : `Search Results (${resultsTruncated ? `${totalCount.toLocaleString()}+` : totalCount.toLocaleString()})` 
-                    : `All Records (${resultsTruncated ? `${totalCount.toLocaleString()}+` : totalCount.toLocaleString()})`}
+                <CardTitle className="flex items-center gap-2">
+                  <span data-testid="text-records-title">
+                    {(() => {
+                      const countLabel = countLoading
+                        ? '?'
+                        : (resultsTruncated ? `${totalCount.toLocaleString()}+` : totalCount.toLocaleString());
+                      if (searchQuery) {
+                        if (txidSearchResults.length > 0) {
+                          return `Related Address Records (${records.length})`;
+                        }
+                        return `Search Results (${countLabel})`;
+                      }
+                      return `All Records (${countLabel})`;
+                    })()}
+                  </span>
+                  {(isLoading || countLoading) && (
+                    <Loader2
+                      className="h-4 w-4 animate-spin text-muted-foreground"
+                      data-testid="spinner-records-title"
+                    />
+                  )}
                 </CardTitle>
                 <CardDescription>
                   {txidSearchResults.length > 0 
@@ -811,7 +845,9 @@ export default function Records() {
                 {isLoading ? (
                   <div className="text-center py-8 text-muted-foreground" data-testid="text-records-loading">
                     <Loader2 className="h-5 w-5 animate-spin inline mr-2" />
-                    Loading records...
+                    <span data-testid="text-records-loading-phase">
+                      {loadPhase ? `${loadPhase}…` : 'Loading records…'}
+                    </span>
                   </div>
                 ) : loadError ? (
                   <div className="text-center py-8" data-testid="text-records-load-error">
