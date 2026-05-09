@@ -24,7 +24,10 @@ function collectTsxFiles(dir: string, rel = ""): string[] {
     const relPath = rel ? `${rel}/${entry.name}` : entry.name;
     if (entry.isDirectory()) {
       results.push(...collectTsxFiles(path.join(dir, entry.name), relPath));
-    } else if (entry.name.endsWith(".tsx")) {
+    } else if (
+      entry.name.endsWith(".tsx") &&
+      !entry.name.endsWith(".test.tsx")
+    ) {
       results.push(relPath);
     }
   }
