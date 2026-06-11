@@ -5,11 +5,25 @@ import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover
 import { ActivityMonitorBody } from "@/components/ActivityMonitorPanel";
 import { useActivityBus } from "@/lib/activity-bus";
 
+const ACTIVITY_MONITOR_PINNED_KEY = 'activity-monitor-pinned';
+
 export function ActivityPulseDot() {
   const { tasks, isStuck, monitorEnabled } = useActivityBus();
   const [open, setOpen] = useState(false);
-  const [pinned, setPinned] = useState(false);
+  const [pinned, setPinned] = useState(() => {
+    try {
+      return localStorage.getItem(ACTIVITY_MONITOR_PINNED_KEY) === 'true';
+    } catch {
+      return false;
+    }
+  });
   const prevActiveRef = useRef(tasks.length > 0);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(ACTIVITY_MONITOR_PINNED_KEY, String(pinned));
+    } catch {}
+  }, [pinned]);
 
   useEffect(() => {
     const wasActive = prevActiveRef.current;
