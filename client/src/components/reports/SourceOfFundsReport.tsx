@@ -1,5 +1,5 @@
 import { useState, useMemo } from "react";
-import { type Record as DBRecord, type TransactionParticipant, type BlockchainTransaction, type PriceData } from "@/lib/database";
+import { type Record as DBRecord, type TransactionParticipant, type BlockchainTransaction, type PriceData, USER_CURATED_TIERS } from "@/lib/database";
 import { useAddressRecords } from "@/hooks/use-address-records";
 import { getParticipantsByAddress, getParticipantsByTxid, getTransactionByTxid } from "@/lib/dataFacade";
 import { getPriceDataByKey, getLatestPriceOnOrBefore } from "@/lib/data/price-data-crud";
@@ -58,7 +58,7 @@ export function SourceOfFundsReport() {
     if (!records) return [];
     return records.filter(r => 
       r.addressImportance && 
-      ['verified', 'manual', 'wallet-import', 'xpub-derived'].includes(r.addressImportance)
+      USER_CURATED_TIERS.includes(r.addressImportance)
     ).sort((a, b) => (a.label || '').localeCompare(b.label || ''));
   }, [records]);
 
@@ -121,7 +121,7 @@ export function SourceOfFundsReport() {
         const isInternalTransfer = currentOwner && inputRecords.some(({ record: ir }) =>
           ir?.owner === currentOwner &&
           ir?.addressImportance &&
-          ['verified', 'manual', 'wallet-import', 'xpub-derived'].includes(ir.addressImportance)
+          USER_CURATED_TIERS.includes(ir.addressImportance)
         );
 
         const primaryInput = inputRecords[0];

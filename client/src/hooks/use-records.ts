@@ -66,7 +66,6 @@ export function useRecords(options?: { limit?: number }) {
   };
 }
 
-const USER_CURATED_TIERS: string[] = ['verified', 'manual', 'wallet-import', 'xpub-derived'];
 const BLOCKCHAIN_DISCOVERED_TIERS: string[] = ['blockchain-discovered', 'pending-review'];
 
 export function useFilteredRecords(

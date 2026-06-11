@@ -7,7 +7,8 @@ import {
   type Record,
   type LineageConfidence,
   type CustodyStatus,
-  type AddressImportance
+  type AddressImportance,
+  USER_CURATED_TIERS
 } from './database';
 import { getParticipantsByTxid, bulkAddUtxoLineage, addCustodySegment } from './dataFacade';
 import { getActivityBus } from './activity-bus';
@@ -51,7 +52,7 @@ function calculateConfidence(
 // Check if an address is owned by the user (based on importance tier)
 function isOwnedAddress(importance: AddressImportance | undefined): boolean {
   if (!importance) return false;
-  return ['verified', 'manual', 'wallet-import', 'xpub-derived'].includes(importance);
+  return USER_CURATED_TIERS.includes(importance);
 }
 
 // Get record for an address

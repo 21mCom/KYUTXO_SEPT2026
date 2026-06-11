@@ -7,7 +7,7 @@ import { PAGE_DEBOUNCE } from "@/config/debounce";
 import { useDbChangeSignal } from "@/hooks/use-db-change-signal";
 import { useLiveQuery } from "dexie-react-hooks";
 import { format } from "date-fns";
-import { BlockchainTransaction, TransactionParticipant, Record, type AddressImportance } from "@/lib/database";
+import { BlockchainTransaction, TransactionParticipant, Record, USER_CURATED_TIERS } from "@/lib/database";
 import { bulkGetRecords, getAddressRecordsByImportanceTiers } from "@/lib/data/record-crud";
 import {
   countTransactions,
@@ -104,8 +104,6 @@ interface VirtualizedLoadedStats {
   loadedLinkedAddressCount: number;
   loadedTxCount: number;
 }
-// User-curated importance tiers (exclude blockchain-discovered and pending-review by default)
-const USER_CURATED_TIERS: AddressImportance[] = ['verified', 'manual', 'wallet-import', 'xpub-derived'];
 
 function TransactionCard({
   tx,

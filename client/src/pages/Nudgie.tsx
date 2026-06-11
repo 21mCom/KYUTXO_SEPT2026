@@ -13,6 +13,7 @@ import {
   FLOW_TYPE_OPTIONS,
   ACQUISITION_METHOD_OPTIONS,
   DISPOSITION_TYPE_OPTIONS,
+  USER_CURATED_TIERS,
 } from "@/lib/database";
 import { updateRecord, createRecord, getParticipantsByAddresses } from "@/lib/dataFacade";
 import {
@@ -80,7 +81,6 @@ import {
   File as FileIcon
 } from "lucide-react";
 
-const USER_CURATED_TIERS = ['verified', 'manual', 'wallet-import', 'xpub-derived'];
 
 function satsToBtc(sats: number | undefined): string {
   if (sats === undefined || sats === null) return "0.00000000";

@@ -11,6 +11,18 @@ export type AddressImportance =
   | 'blockchain-discovered' // Auto-discovered from blockchain sync
   | 'pending-review';       // Awaiting user review
 
+// The importance tiers that represent user-curated ("owned") addresses, i.e.
+// addresses the user has explicitly added or verified rather than ones that were
+// auto-discovered from the blockchain. Use this single source of truth instead of
+// re-declaring the array on each page/hook so they never disagree about which
+// addresses count as user-owned.
+export const USER_CURATED_TIERS: AddressImportance[] = [
+  'verified',
+  'manual',
+  'wallet-import',
+  'xpub-derived',
+];
+
 // Flow type for transactions - fundamental direction/purpose
 export type FlowType = 
   | 'received'        // Incoming funds from external source

@@ -2,7 +2,7 @@ import { useState, useMemo } from "react";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { PAGE_DEBOUNCE } from "@/config/debounce";
 import { format } from "date-fns";
-import { db, Record, AddressImportance } from "@/lib/database";
+import { db, Record, AddressImportance, USER_CURATED_TIERS } from "@/lib/database";
 import { useDbChangeSignal } from "@/hooks/use-db-change-signal";
 import { useAsyncMemo, checkAbort } from "@/hooks/use-async-memo";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -78,8 +78,6 @@ const IMPORTANCE_OPTIONS: { value: AddressImportance | 'all'; label: string }[] 
   { value: 'pending-review', label: 'Pending Review' },
 ];
 
-// User-curated importance tiers (exclude blockchain-discovered and pending-review by default)
-const USER_CURATED_TIERS: AddressImportance[] = ['verified', 'manual', 'wallet-import', 'xpub-derived'];
 const ALL_TIERS: AddressImportance[] = ['verified', 'manual', 'wallet-import', 'xpub-derived', 'blockchain-discovered', 'pending-review'];
 
 export default function AddressReuse() {

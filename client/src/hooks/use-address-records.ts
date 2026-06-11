@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { type Record as DbRecord, type AddressImportance } from "@/lib/database";
+import { type Record as DbRecord, USER_CURATED_TIERS } from "@/lib/database";
 import { getRecordsByType, getRecordsByTypeAndImportanceTiers } from "@/lib/data/record-crud";
 import { useDbChangeSignal } from "./use-db-change-signal";
 
@@ -14,13 +14,6 @@ import { useDbChangeSignal } from "./use-db-change-signal";
  * entirely, and even when we don't, the 250ms debounce collapses a sync flood
  * into a single reload. Read-only and offline — never touches the network.
  */
-
-const USER_CURATED_TIERS: AddressImportance[] = [
-  'verified',
-  'manual',
-  'wallet-import',
-  'xpub-derived',
-];
 
 export interface UseAddressRecordsOptions {
   /** When false, only user-curated tiers are loaded and sync pulses are ignored. */

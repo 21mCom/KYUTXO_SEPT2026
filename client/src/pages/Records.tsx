@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { ArrowLeft, Search as SearchIcon, Database, Hash, ExternalLink, AlertCircle, Trash2, X, ChevronLeft, ChevronRight, Loader2, RefreshCw } from "lucide-react";
 import { BlockchainToggle } from "@/components/BlockchainToggle";
-import { db, type Record as DbRecord, type VaultMetadata, type AddressImportance, type ChainType, type CustomField, type BlockchainTransaction, type TransactionParticipant } from "@/lib/database";
+import { db, type Record as DbRecord, type VaultMetadata, type AddressImportance, type ChainType, type CustomField, type BlockchainTransaction, type TransactionParticipant, USER_CURATED_TIERS } from "@/lib/database";
 import { useDbChangeSignal } from "@/hooks/use-db-change-signal";
 import { deleteRecord, getParticipantsByTxids } from "@/lib/dataFacade";
 import { getAllCustomFields } from "@/lib/data/custom-fields-crud";
@@ -51,7 +51,6 @@ import { searchPendingClass } from "@/lib/search-pending-class";
 import { buildRecordsCollection, fetchRecordsPage } from "@/lib/records-query";
 import { getActivityBus } from "@/lib/activity-bus";
 
-const USER_CURATED_TIERS: AddressImportance[] = ['verified', 'manual', 'wallet-import', 'xpub-derived'];
 const ALL_TIERS: AddressImportance[] = ['verified', 'manual', 'wallet-import', 'xpub-derived', 'blockchain-discovered', 'pending-review'];
 
 interface ConvertedRecord {
@@ -308,9 +307,6 @@ export default function Records() {
           return true;
         };
         
-        const USER_TIERS: AddressImportance[] =
-          ['verified', 'manual', 'wallet-import', 'xpub-derived'];
-
         const singleTypeFilter = !search && columnFilters.length === 1 &&
           columnFilters[0].field === 'type' &&
           columnFilters[0].operator === 'equals'
@@ -359,7 +355,7 @@ export default function Records() {
             .finally(() => { if (loadVersionRef.current === version) setCountLoading(false); });
 
           // Await only the page fetch (indexed tier queries, fast).
-          const pageGroups = await Promise.all(USER_TIERS.map(tier =>
+          const pageGroups = await Promise.all(USER_CURATED_TIERS.map(tier =>
             getAddressRecordsByImportanceTierLimited(tier, pgOffset + PAGE_SIZE)
           ));
 
@@ -381,7 +377,7 @@ export default function Records() {
             }).catch(e => { console.warn('[Records] Background count failed (type+include):', e); })
               .finally(() => { if (loadVersionRef.current === version) setCountLoading(false); });
           } else {
-            countRecordsByTypeAndImportanceTiers(typeVal, USER_TIERS).then(c => {
+            countRecordsByTypeAndImportanceTiers(typeVal, USER_CURATED_TIERS).then(c => {
                 if (loadVersionRef.current !== version) return;
                 setTotalCount(c);
                 setNavigableCount(c);
@@ -393,7 +389,7 @@ export default function Records() {
           if (includeBlockchainDiscovered) {
             rawRecords = await getRecordsPageByTypeIdReverse(typeVal, pgOffset, PAGE_SIZE);
           } else {
-            const groups = await Promise.all(USER_TIERS.map(tier =>
+            const groups = await Promise.all(USER_CURATED_TIERS.map(tier =>
               getRecordsByTypeAndImportanceLimited(typeVal, tier, pgOffset + PAGE_SIZE)
             ));
             const merged = groups.flat().sort((a, b) => (b.id ?? 0) - (a.id ?? 0));

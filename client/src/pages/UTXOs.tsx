@@ -8,7 +8,7 @@ import { useAddressRecords } from "@/hooks/use-address-records";
 import { useLiveQuery } from "dexie-react-hooks";
 import { format } from "date-fns";
 import { Link } from "wouter";
-import { BlockchainTransaction, TransactionParticipant, Record as DbRecord, PriceData } from "@/lib/database";
+import { BlockchainTransaction, TransactionParticipant, Record as DbRecord, PriceData, USER_CURATED_TIERS } from "@/lib/database";
 import { getAllAddressSyncState } from "@/lib/data/address-sync-crud";
 import { getPriceDataByAsset } from "@/lib/data/price-data-crud";
 import { countRecordsByTypeAndImportanceTiers, getTransactionsByTxids } from "@/lib/dataFacade";
@@ -166,9 +166,6 @@ interface AddressGroup {
 
 type SortColumn = "amount" | "date" | "address" | "gain";
 type SortDirection = "asc" | "desc";
-
-// User-curated importance tiers (exclude blockchain-discovered and pending-review by default)
-const USER_CURATED_TIERS = ['verified', 'manual', 'wallet-import', 'xpub-derived'];
 
 export default function UTXOs() {
   const initialSettings = useMemo(() => loadSettings(), []);

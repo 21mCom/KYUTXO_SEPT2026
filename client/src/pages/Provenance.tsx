@@ -73,7 +73,7 @@ import {
   type AddressExplorationResult,
   type ProvenanceFilter
 } from "@/lib/provenance";
-import { type Record as DbRecord, type AddressImportance } from "@/lib/database";
+import { type Record as DbRecord, type AddressImportance, USER_CURATED_TIERS } from "@/lib/database";
 import { getRecordsByType } from "@/lib/dataFacade";
 import { formatDistanceToNow, format } from "date-fns";
 import { ContinuityProof } from "@/components/ContinuityProof";
@@ -110,7 +110,7 @@ export default function Provenance() {
   
   // Tier filter state
   const [enabledTiers, setEnabledTiers] = useState<Set<AddressImportance>>(
-    () => new Set<AddressImportance>(['verified', 'manual', 'wallet-import', 'xpub-derived'])
+    () => new Set<AddressImportance>(USER_CURATED_TIERS)
   );
   const [excludePendingReview, setExcludePendingReview] = useState(true);
   
