@@ -76,6 +76,7 @@ import {
 import { db, type Record as DbRecord, type AddressImportance } from "@/lib/database";
 import { formatDistanceToNow, format } from "date-fns";
 import { ContinuityProof } from "@/components/ContinuityProof";
+import { usePageShortcuts } from "@/hooks/use-page-shortcuts";
 
 const ALL_IMPORTANCE_TIERS: AddressImportance[] = [
   'verified', 'manual', 'wallet-import', 'xpub-derived', 'blockchain-discovered', 'pending-review'
@@ -84,6 +85,10 @@ const ALL_IMPORTANCE_TIERS: AddressImportance[] = [
 export default function Provenance() {
   const [, navigate] = useLocation();
   const { toast } = useToast();
+
+  usePageShortcuts("Provenance", [
+    { keys: ["Enter"], action: "Explore the entered address (while the address field is focused)" },
+  ]);
   
   const [stats, setStats] = useState<{
     labeledAddresses: number;

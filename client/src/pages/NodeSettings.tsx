@@ -41,6 +41,7 @@ import {
 } from "@/components/ui/tooltip";
 import { useToast } from "@/hooks/use-toast";
 import { useNodeSettings } from "@/hooks/use-node-settings";
+import { usePageShortcuts } from "@/hooks/use-page-shortcuts";
 import { NodeProviderType, NodeSettings as NodeSettingsType, DEFAULT_TRUSTED_LOCAL_HOSTS } from "@/lib/database";
 import { 
   testConnectionWithSettings, 
@@ -152,6 +153,10 @@ const PROVIDER_OPTIONS: { value: NodeProviderType; label: string; description: s
 export default function NodeSettings() {
   const { nodeSettings, updateSettings, resetToDefaults, isLoading } = useNodeSettings();
   const { toast } = useToast();
+
+  usePageShortcuts("Node Settings", [
+    { keys: ["Enter"], action: "Add the entered trusted local host (while the host field is focused)" },
+  ]);
   
   const [isTesting, setIsTesting] = useState(false);
   const [testResult, setTestResult] = useState<{

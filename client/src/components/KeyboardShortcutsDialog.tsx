@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { Keyboard } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -9,7 +9,12 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import { KEYBOARD_SHORTCUTS } from "@/config/shortcuts";
+import {
+  KEYBOARD_SHORTCUTS,
+  getPageShortcuts,
+  subscribePageShortcuts,
+  type ShortcutGroup,
+} from "@/config/shortcuts";
 
 function isTypingTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
@@ -24,6 +29,11 @@ function isTypingTarget(target: EventTarget | null): boolean {
 
 export function KeyboardShortcutsDialog() {
   const [open, setOpen] = useState(false);
+  const pageShortcuts = useSyncExternalStore(
+    subscribePageShortcuts,
+    getPageShortcuts,
+    getPageShortcuts,
+  );
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -41,6 +51,14 @@ export function KeyboardShortcutsDialog() {
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, []);
+
+  const pageGroup: ShortcutGroup | null =
+    pageShortcuts && pageShortcuts.shortcuts.length > 0
+      ? {
+          category: `This page · ${pageShortcuts.page}`,
+          shortcuts: pageShortcuts.shortcuts,
+        }
+      : null;
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
@@ -62,6 +80,37 @@ export function KeyboardShortcutsDialog() {
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-5">
+          {pageGroup && (
+            <div key={pageGroup.category} className="space-y-2">
+              <div
+                className="text-xs font-semibold uppercase tracking-wider text-muted-foreground"
+                data-testid="text-shortcut-category-this-page"
+              >
+                {pageGroup.category}
+              </div>
+              <div className="space-y-1.5">
+                {pageGroup.shortcuts.map((shortcut) => (
+                  <div
+                    key={shortcut.action}
+                    className="flex items-center justify-between gap-3"
+                    data-testid={`row-shortcut-${shortcut.keys.join("-").toLowerCase()}`}
+                  >
+                    <span className="text-sm text-foreground">{shortcut.action}</span>
+                    <span className="flex flex-shrink-0 items-center gap-1">
+                      {shortcut.keys.map((key, index) => (
+                        <kbd
+                          key={`${shortcut.action}-${key}-${index}`}
+                          className="rounded border bg-muted px-1.5 py-0.5 font-mono text-xs text-foreground"
+                        >
+                          {key}
+                        </kbd>
+                      ))}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
           {KEYBOARD_SHORTCUTS.map((group) => (
             <div key={group.category} className="space-y-2">
               <div

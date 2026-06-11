@@ -21,6 +21,7 @@ import {
 import { SiBitcoin } from "react-icons/si";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useFlowData, type FlowNode } from "@/hooks/use-flow-data";
+import { usePageShortcuts } from "@/hooks/use-page-shortcuts";
 import { HopPathExplorer } from "@/components/HopPathExplorer";
 import { RecordDetailPanel } from "@/components/RecordDetailPanel";
 import { db, type ChainType, type AddressImportance, type VaultMetadata, type FlowType, type AcquisitionMethod, type DispositionType, type CounterpartyType } from "@/lib/database";
@@ -249,6 +250,10 @@ export default function BitcoinFlowVisualizer() {
   const [hopDepth, setHopDepth] = useState([3]);
   const [allowBlockchainApi, setAllowBlockchainApi] = useState(false);
   const { flowData, isLoading, error, dataSource, fetchFlow } = useFlowData();
+
+  usePageShortcuts("Flow Visualizer", [
+    { keys: ["Enter"], action: "Trace the entered address (while the address field is focused)" },
+  ]);
 
   const flowPathData = useMemo(() => {
     if (!flowData) return { nodes: [], links: [] };

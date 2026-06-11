@@ -24,6 +24,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Separator } from "@/components/ui/separator";
+import { usePageShortcuts } from "@/hooks/use-page-shortcuts";
 
 import { useTags, createTag, updateTag, deleteTag, getTagUsageCount } from "@/hooks/use-tags";
 import { useCategories, createCategory, updateCategory, deleteCategory, getCategoryUsageCount } from "@/hooks/use-categories";
@@ -318,6 +319,10 @@ function VocabSection({ config }: { config: VocabSectionConfig }) {
 }
 
 export default function VocabularyManager() {
+  usePageShortcuts("Settings · Vocabulary", [
+    { keys: ["Enter"], action: "Save the vocabulary item being added or edited (while its name field is focused)" },
+  ]);
+
   const { tags, isLoading: tagsLoading } = useTags();
   const { categories, isLoading: categoriesLoading } = useCategories();
   const { walletNames, isLoading: walletNamesLoading } = useWalletNames();
