@@ -1,6 +1,11 @@
 import { useState, useEffect } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { db, NodeSettings, NodeProviderType, DEFAULT_TRUSTED_LOCAL_HOSTS } from '@/lib/database';
+import { NodeSettings, NodeProviderType, DEFAULT_TRUSTED_LOCAL_HOSTS } from '@/lib/database';
+import {
+  getNodeSettings,
+  putNodeSettings,
+  updateNodeSettings as updateStoredNodeSettings,
+} from '@/lib/data/node-settings-crud';
 
 const DEFAULT_NODE_SETTINGS: NodeSettings = {
   id: 'default',
@@ -19,7 +24,7 @@ export function useNodeSettings() {
   const [hasTimedOut, setHasTimedOut] = useState(false);
   
   const settings = useLiveQuery(
-    () => db.nodeSettings.get('default'),
+    () => getNodeSettings('default'),
     []
   );
 
@@ -48,11 +53,11 @@ export function useNodeSettings() {
     : DEFAULT_NODE_SETTINGS;
 
   const updateSettings = async (updates: Partial<Omit<NodeSettings, 'id'>>) => {
-    const existing = await db.nodeSettings.get('default');
+    const existing = await getNodeSettings('default');
     if (existing) {
-      await db.nodeSettings.update('default', updates);
+      await updateStoredNodeSettings('default', updates);
     } else {
-      await db.nodeSettings.put({
+      await putNodeSettings({
         ...DEFAULT_NODE_SETTINGS,
         ...updates,
       });
@@ -60,7 +65,7 @@ export function useNodeSettings() {
   };
 
   const resetToDefaults = async () => {
-    await db.nodeSettings.put(DEFAULT_NODE_SETTINGS);
+    await putNodeSettings(DEFAULT_NODE_SETTINGS);
   };
 
   const setConnectionStatus = async (status: string, connected: boolean) => {

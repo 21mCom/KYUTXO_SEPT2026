@@ -1,6 +1,6 @@
 import { useLiveQuery } from 'dexie-react-hooks';
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { db, type Record, type RecordOriginType } from '@/lib/database';
+import { type Record, type RecordOriginType } from '@/lib/database';
 import { uploadAttachment, deleteAttachment } from '@/lib/attachments';
 import { 
   createRecord as facadeCreateRecord,
@@ -8,6 +8,20 @@ import {
   deleteRecord as facadeDeleteRecord,
   createRecordOrigin,
 } from '@/lib/dataFacade';
+import {
+  getRecentRecordsByUpdatedAt,
+  getRecordsPageByUpdatedAt,
+  getRecordsPageByUpdatedAtFiltered,
+  countRecords,
+  countRecordsByImportanceTiers,
+  countRecordsByTypeAndImportanceTiers,
+  getRecord,
+  getRecordsByInputStrings,
+  findRecordByInputString,
+  searchRecordsByQuery,
+  getRecordsByTypeFiltered,
+  getRecentRecordsFiltered,
+} from '@/lib/data/record-crud';
 import { useDbChangeSignal } from '@/hooks/use-db-change-signal';
 
 const RECORDS_TABLES = ['records'];
@@ -26,11 +40,7 @@ export function useRecords(options?: { limit?: number }) {
     const version = ++loadVersionRef.current;
     setIsLoading(true);
     try {
-      const rawRecords = await db.records
-        .orderBy('updatedAt')
-        .reverse()
-        .limit(recordLimit)
-        .toArray();
+      const rawRecords = await getRecentRecordsByUpdatedAt(recordLimit);
       if (loadVersionRef.current !== version) return;
       setRecords(rawRecords);
     } catch (error) {
@@ -84,37 +94,36 @@ export function useFilteredRecords(
       const effectiveOffset = pgOffset ?? 0;
 
       if (includeBD) {
-        total = await db.records.count();
+        total = await countRecords();
         if (loadVersionRef.current !== version) return;
 
-        rawRecords = await db.records
-          .orderBy('updatedAt').reverse()
-          .offset(effectiveOffset).limit(effectiveLimit).toArray();
+        rawRecords = await getRecordsPageByUpdatedAt(effectiveOffset, effectiveLimit);
       } else {
-        const blockchainCount = await db.records
-          .where('addressImportance')
-          .anyOf(['blockchain-discovered', 'pending-review'])
-          .count();
-        total = (await db.records.count()) - blockchainCount;
+        const blockchainCount = await countRecordsByImportanceTiers([
+          'blockchain-discovered',
+          'pending-review',
+        ]);
+        total = (await countRecords()) - blockchainCount;
         if (loadVersionRef.current !== version) return;
 
         const excludeBlockchain = (r: Record) =>
           r.addressImportance !== 'blockchain-discovered' &&
           r.addressImportance !== 'pending-review';
 
-        rawRecords = await db.records
-          .orderBy('updatedAt').reverse()
-          .filter(excludeBlockchain)
-          .offset(effectiveOffset).limit(effectiveLimit).toArray();
+        rawRecords = await getRecordsPageByUpdatedAtFiltered(
+          effectiveOffset,
+          effectiveLimit,
+          excludeBlockchain,
+        );
       }
 
       if (loadVersionRef.current !== version) return;
       setTotalCount(total);
 
-      const bdCount = await db.records
-        .where('[type+addressImportance]')
-        .anyOf(BLOCKCHAIN_DISCOVERED_TIERS.map(tier => ['address', tier]))
-        .count();
+      const bdCount = await countRecordsByTypeAndImportanceTiers(
+        'address',
+        BLOCKCHAIN_DISCOVERED_TIERS as ('blockchain-discovered' | 'pending-review')[],
+      );
       if (loadVersionRef.current !== version) return;
       setBlockchainDiscoveredCount(bdCount);
 
@@ -148,7 +157,7 @@ export function useRecord(id: number | undefined) {
   const [record, setRecord] = useState<Record | undefined>();
   
   const rawRecord = useLiveQuery(
-    () => id ? db.records.get(id) : undefined,
+    () => id ? getRecord(id) : undefined,
     [id]
   );
   
@@ -308,10 +317,7 @@ export async function lookupRecordsByInputStrings(inputStrings: string[]): Promi
   const allRecords: Record[] = [];
   for (let i = 0; i < unique.length; i += CHUNK_SIZE) {
     const chunk = unique.slice(i, i + CHUNK_SIZE);
-    const records = await db.records
-      .where('inputString')
-      .anyOf(chunk)
-      .toArray();
+    const records = await getRecordsByInputStrings(chunk);
     allRecords.push(...records);
   }
 
@@ -324,10 +330,7 @@ export async function lookupRecordsByInputStrings(inputStrings: string[]): Promi
   const unmatchedEntries = unique.filter(s => !result.has(s.toLowerCase()));
   for (const s of unmatchedEntries) {
     try {
-      const match = await db.records
-        .where('inputString')
-        .equalsIgnoreCase(s)
-        .first();
+      const match = await findRecordByInputString(s);
       if (match && match.inputString) {
         result.set(match.inputString.trim().toLowerCase(), match);
       }
@@ -340,24 +343,7 @@ export async function lookupRecordsByInputStrings(inputStrings: string[]): Promi
 }
 
 export async function searchRecords(query: string) {
-  if (!query.trim()) {
-    return db.records.orderBy('updatedAt').reverse().limit(200).toArray();
-  }
-  
-  const lowerQuery = query.toLowerCase();
-  
-  return db.records
-    .orderBy('updatedAt')
-    .reverse()
-    .filter(record => 
-      record.label.toLowerCase().includes(lowerQuery) ||
-      record.inputString.toLowerCase().includes(lowerQuery) ||
-      record.notes?.toLowerCase().includes(lowerQuery) ||
-      record.tags.some(tag => tag.toLowerCase().includes(lowerQuery)) ||
-      record.categories.some(cat => cat.toLowerCase().includes(lowerQuery))
-    )
-    .limit(200)
-    .toArray();
+  return searchRecordsByQuery(query, 200);
 }
 
 export async function filterRecords(filters: {
@@ -375,18 +361,8 @@ export async function filterRecords(filters: {
   };
 
   if (filters.type && filters.type !== 'all') {
-    return db.records
-      .where('type')
-      .equals(filters.type)
-      .filter(additionalFilter)
-      .limit(500)
-      .toArray();
+    return getRecordsByTypeFiltered(filters.type, additionalFilter, 500);
   }
-  
-  return db.records
-    .orderBy('updatedAt')
-    .reverse()
-    .filter(additionalFilter)
-    .limit(500)
-    .toArray();
+
+  return getRecentRecordsFiltered(additionalFilter, 500);
 }

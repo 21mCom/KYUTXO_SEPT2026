@@ -8,10 +8,22 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { ArrowLeft, Search as SearchIcon, Database, Hash, ExternalLink, AlertCircle, Trash2, X, ChevronLeft, ChevronRight, Loader2 } from "lucide-react";
 import { BlockchainToggle } from "@/components/BlockchainToggle";
-import Dexie from "dexie";
 import { db, type Record as DbRecord, type VaultMetadata, type AddressImportance, type ChainType, type CustomField, type BlockchainTransaction, type TransactionParticipant } from "@/lib/database";
 import { useDbChangeSignal } from "@/hooks/use-db-change-signal";
 import { deleteRecord, getParticipantsByTxids } from "@/lib/dataFacade";
+import { getAllCustomFields } from "@/lib/data/custom-fields-crud";
+import {
+  getRecord,
+  countRecords,
+  getRecordsPageByIdReverse,
+  getAddressRecordsByImportanceTierLimited,
+  countRecordsByTypeAndImportanceTiers,
+  getRecordsPageByTypeIdReverse,
+  getRecordsByTypeAndImportanceLimited,
+  getRecordsByInputStrings,
+  countRecordsByType,
+} from "@/lib/data/record-crud";
+import { getTransactionsByTxidStartsWith } from "@/lib/data/transaction-crud";
 import { RecordTable } from "@/components/RecordTable";
 import { RecordDetailPanel } from "@/components/RecordDetailPanel";
 import { ClickableAddress } from "@/components/ClickableAddress";
@@ -256,7 +268,7 @@ export default function Records() {
 
       try {
         setPhase('Loading custom fields');
-        const fields = await db.customFields.toArray();
+        const fields = await getAllCustomFields();
         if (loadVersionRef.current !== version) return;
         setCustomFieldDefs(fields);
         
@@ -294,7 +306,7 @@ export default function Records() {
           return true;
         };
         
-        const USER_TIERS: DbRecord['addressImportance'][] =
+        const USER_TIERS: AddressImportance[] =
           ['verified', 'manual', 'wallet-import', 'xpub-derived'];
 
         const singleTypeFilter = !search && columnFilters.length === 1 &&
@@ -321,7 +333,7 @@ export default function Records() {
           // DBs the count can take seconds, and any write arriving during that
           // window cancels the load and restarts it (another count, etc.).
           setCountLoading(true);
-          db.records.count().then(c => {
+          countRecords().then(c => {
             if (loadVersionRef.current !== version) return;
             setTotalCount(c);
             setNavigableCount(c);
@@ -329,9 +341,7 @@ export default function Records() {
             .finally(() => { if (loadVersionRef.current === version) setCountLoading(false); });
 
           // Await only the lightweight page fetch.
-          rawRecords = await db.records
-            .orderBy('id').reverse()
-            .offset(pgOffset).limit(PAGE_SIZE).toArray();
+          rawRecords = await getRecordsPageByIdReverse(pgOffset, PAGE_SIZE);
 
           if (loadVersionRef.current !== version) return;
           setResultsTruncated(false);
@@ -339,7 +349,7 @@ export default function Records() {
         } else if (!filtersActive && !includeBlockchainDiscovered) {
           // Fire count in background (same reasoning as above).
           setCountLoading(true);
-          db.records.count().then(total => {
+          countRecords().then(total => {
             if (loadVersionRef.current !== version) return;
             setTotalCount(total - blockchainCount);
             setNavigableCount(total - blockchainCount);
@@ -348,11 +358,7 @@ export default function Records() {
 
           // Await only the page fetch (indexed tier queries, fast).
           const pageGroups = await Promise.all(USER_TIERS.map(tier =>
-            db.records.where('[addressImportance+id]')
-              .between([tier, Dexie.minKey], [tier, Dexie.maxKey])
-              .reverse()
-              .limit(pgOffset + PAGE_SIZE)
-              .toArray()
+            getAddressRecordsByImportanceTierLimited(tier, pgOffset + PAGE_SIZE)
           ));
 
           if (loadVersionRef.current !== version) return;
@@ -366,15 +372,14 @@ export default function Records() {
           // Fire count in background.
           setCountLoading(true);
           if (includeBlockchainDiscovered) {
-            db.records.where('type').equals(typeVal).count().then(c => {
+            countRecordsByType(typeVal).then(c => {
               if (loadVersionRef.current !== version) return;
               setTotalCount(c);
               setNavigableCount(c);
             }).catch(e => { console.warn('[Records] Background count failed (type+include):', e); })
               .finally(() => { if (loadVersionRef.current === version) setCountLoading(false); });
           } else {
-            db.records.where('[type+addressImportance]')
-              .anyOf(USER_TIERS.map(tier => [typeVal, tier])).count().then(c => {
+            countRecordsByTypeAndImportanceTiers(typeVal, USER_TIERS).then(c => {
                 if (loadVersionRef.current !== version) return;
                 setTotalCount(c);
                 setNavigableCount(c);
@@ -384,17 +389,10 @@ export default function Records() {
 
           // Await only the page fetch.
           if (includeBlockchainDiscovered) {
-            rawRecords = await db.records.where('[type+id]')
-              .between([typeVal, Dexie.minKey], [typeVal, Dexie.maxKey])
-              .reverse()
-              .offset(pgOffset).limit(PAGE_SIZE).toArray();
+            rawRecords = await getRecordsPageByTypeIdReverse(typeVal, pgOffset, PAGE_SIZE);
           } else {
             const groups = await Promise.all(USER_TIERS.map(tier =>
-              db.records.where('[type+addressImportance]')
-                .equals([typeVal, tier])
-                .reverse()
-                .limit(pgOffset + PAGE_SIZE)
-                .toArray()
+              getRecordsByTypeAndImportanceLimited(typeVal, tier, pgOffset + PAGE_SIZE)
             ));
             const merged = groups.flat().sort((a, b) => (b.id ?? 0) - (a.id ?? 0));
             rawRecords = merged.slice(pgOffset, pgOffset + PAGE_SIZE);
@@ -438,11 +436,7 @@ export default function Records() {
         
         if (isTxidSearch) {
           try {
-            const matchingTxs = await db.blockchainTransactions
-              .where('txid')
-              .startsWithIgnoreCase(search)
-              .limit(50)
-              .toArray();
+            const matchingTxs = await getTransactionsByTxidStartsWith(search, 50);
             if (loadVersionRef.current !== version) return;
             
             if (matchingTxs.length > 0) {
@@ -463,10 +457,7 @@ export default function Records() {
               setTxidSearchResults(txResults);
               
               const participantAddresses = new Set(participants.map(p => p.address));
-              const relatedRawRecords = await db.records
-                .where('inputString')
-                .anyOf(Array.from(participantAddresses))
-                .toArray();
+              const relatedRawRecords = await getRecordsByInputStrings(Array.from(participantAddresses));
               if (loadVersionRef.current !== version) return;
               
               const relatedConverted = relatedRawRecords.map(convertRecord);
@@ -536,7 +527,7 @@ export default function Records() {
     
     const loadRecord = async () => {
       try {
-        const record = await db.records.get(parseInt(selectedRecordId));
+        const record = await getRecord(parseInt(selectedRecordId));
         if (!record) return;
         setDirectLoadedRecord(convertRecord(record));
       } catch (error) {

@@ -163,3 +163,27 @@ export async function clearAllEvidenceData(
     notifyDbChange(['evidence', 'evidenceAttachments']);
   }
 }
+
+// =============================================================================
+// READ HELPERS
+// =============================================================================
+
+export async function getAllEvidence(): Promise<Evidence[]> {
+  return db.evidence.toArray();
+}
+
+export async function getAllEvidenceAttachments(): Promise<EvidenceAttachment[]> {
+  return db.evidenceAttachments.toArray();
+}
+
+export async function getEvidenceAttachmentsByEvidenceId(
+  evidenceId: number
+): Promise<EvidenceAttachment[]> {
+  return db.evidenceAttachments.where('evidenceId').equals(evidenceId).toArray();
+}
+
+export async function countEvidenceAttachmentsByEvidenceId(
+  evidenceId: number
+): Promise<number> {
+  return db.evidenceAttachments.where('evidenceId').equals(evidenceId).count();
+}

@@ -1,6 +1,7 @@
 import { useState, useMemo, useRef, useCallback, useEffect } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
-import { db, type CustodySegment, type UtxoLineage } from "@/lib/database";
+import { type CustodySegment, type UtxoLineage } from "@/lib/database";
+import { getAllCustodySegments, getAllUtxoLineage } from "@/lib/data/lineage-crud";
 import { 
   generateEvidenceBundle, 
   downloadEvidenceBundle,
@@ -92,11 +93,11 @@ export function ContinuityCertificateReport() {
   }, []);
 
   const segments = useLiveQuery(async () => {
-    return await db.custodySegments.toArray();
+    return await getAllCustodySegments();
   }, []);
 
   const lineageRecords = useLiveQuery(async () => {
-    return await db.utxoLineage.toArray();
+    return await getAllUtxoLineage();
   }, []);
 
   const certificateData = useMemo((): CertificateData[] => {

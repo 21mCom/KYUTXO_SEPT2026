@@ -4,7 +4,33 @@
 import { db, notifyDbChange, type Record, type BlockchainTransaction, type TransactionParticipant, type AddressSyncState, type NodeSettings, type PausedSyncState, type SkippedAddress, type AddressBlacklist, type SyncProtectionSettings, DEFAULT_SYNC_PROTECTION } from './database';
 import { createProvider, createProviderFromSettings, parseTransaction, MINIMUM_CONFIRMATIONS, type ProviderType, type ParsedTransaction, type BlockchainProvider, type ApiTransaction } from './blockchain-api';
 import { validateAddress } from './bitcoin';
-import { createRecord, createRecordOrigin, updateRecord, addTransaction, bulkAddParticipants, bulkPutParticipants } from './dataFacade';
+import {
+  createRecord,
+  createRecordOrigin,
+  updateRecord,
+  addTransaction,
+  bulkAddParticipants,
+  bulkPutParticipants,
+  addSkippedAddress,
+  updateSkippedAddress,
+  dismissAllSkippedAddresses,
+  getSkippedAddressesByRun,
+  getActiveSkippedAddresses,
+  getBlacklistEntryByAddress,
+  isAddressBlacklisted,
+  addToBlacklist as addToBlacklistCrud,
+  removeFromBlacklistByAddress,
+  getAllBlacklist,
+  getPausedSyncState,
+  putPausedSyncState,
+  deletePausedSyncState,
+  getAddressSyncStateByAddress,
+  addAddressSyncState,
+  updateAddressSyncState,
+  countAddressSyncState,
+  getLatestAddressSyncState,
+  getNodeSettings,
+} from './dataFacade';
 
 // Legacy source filter type - kept for backwards compatibility
 export type SourceFilter = 'manual-only' | 'include-tx-import' | 'include-blockchain-sync' | 'all' | 'custom';
@@ -262,8 +288,7 @@ export class TransactionSyncService {
   }
 
   private async isBlacklisted(address: string): Promise<boolean> {
-    const entry = await db.addressBlacklist.where('address').equals(address).first();
-    return !!entry;
+    return isAddressBlacklisted(address);
   }
 
   private async recordSkippedAddress(
@@ -272,7 +297,7 @@ export class TransactionSyncService {
     syncRunTimestamp: number,
     opts?: { txCount?: number; errorMessage?: string; discoveredFromRecordId?: number; syncDepth?: number }
   ): Promise<void> {
-    await db.skippedAddresses.add({
+    await addSkippedAddress({
       address,
       reason,
       txCount: opts?.txCount,
@@ -281,7 +306,6 @@ export class TransactionSyncService {
       discoveredFromRecordId: opts?.discoveredFromRecordId,
       syncDepth: opts?.syncDepth,
       dismissed: false,
-      createdAt: Date.now(),
     });
   }
 
@@ -479,37 +503,36 @@ export class TransactionSyncService {
 
   // Blacklist management
   async addToBlacklist(address: string, reason?: string): Promise<void> {
-    const existing = await db.addressBlacklist.where('address').equals(address).first();
+    const existing = await getBlacklistEntryByAddress(address);
     if (!existing) {
-      await db.addressBlacklist.add({
+      await addToBlacklistCrud({
         address,
         reason,
-        addedAt: Date.now(),
       });
     }
   }
 
   async removeFromBlacklist(address: string): Promise<void> {
-    await db.addressBlacklist.where('address').equals(address).delete();
+    await removeFromBlacklistByAddress(address);
   }
 
   async getBlacklist(): Promise<AddressBlacklist[]> {
-    return db.addressBlacklist.toArray();
+    return getAllBlacklist();
   }
 
   async getSkippedAddresses(syncRunTimestamp?: number): Promise<SkippedAddress[]> {
     if (syncRunTimestamp) {
-      return db.skippedAddresses.where('syncRunTimestamp').equals(syncRunTimestamp).toArray();
+      return getSkippedAddressesByRun(syncRunTimestamp);
     }
-    return db.skippedAddresses.where('dismissed').equals(0).toArray();
+    return getActiveSkippedAddresses();
   }
 
   async dismissSkippedAddress(id: number): Promise<void> {
-    await db.skippedAddresses.update(id, { dismissed: true });
+    await updateSkippedAddress(id, { dismissed: true });
   }
 
   async dismissAllSkipped(): Promise<void> {
-    await db.skippedAddresses.where('dismissed').equals(0).modify({ dismissed: true });
+    await dismissAllSkippedAddresses();
   }
 
   // Pause sync and save state for resuming later
@@ -541,18 +564,18 @@ export class TransactionSyncService {
       addressesSynced: result.addressesSynced,
     };
     
-    await db.pausedSyncState.put(pausedState);
+    await putPausedSyncState(pausedState);
     console.log(`[TransactionSync] Saved paused state: ${remainingRecordIds.length} addresses remaining`);
   }
 
   // Get paused sync state
   async getPausedState(): Promise<PausedSyncState | undefined> {
-    return db.pausedSyncState.get('default');
+    return getPausedSyncState('default');
   }
 
   // Clear paused sync state (when sync completes or user cancels resume)
   async clearPausedState(): Promise<void> {
-    await db.pausedSyncState.delete('default');
+    await deletePausedSyncState('default');
     console.log('[TransactionSync] Cleared paused state');
   }
 
@@ -615,7 +638,7 @@ export class TransactionSyncService {
 
   // Create a sync service from saved node settings
   static async fromSettings(): Promise<TransactionSyncService> {
-    const settings = await db.nodeSettings.get('default');
+    const settings = await getNodeSettings('default');
     const service = new TransactionSyncService();
     
     if (settings) {
@@ -1313,7 +1336,7 @@ export class TransactionSyncService {
   ): Promise<{ imported: number; updated: number; newRecords: number; apiTxCount: number; skippedAlreadySynced: number; skippedUnconfirmed: number }> {
     const stats = { imported: 0, updated: 0, newRecords: 0, apiTxCount: 0, skippedAlreadySynced: 0, skippedUnconfirmed: 0 };
 
-    const syncState = await db.addressSyncState.where('address').equals(address).first();
+    const syncState = await getAddressSyncStateByAddress(address);
 
     let apiTransactions: ApiTransaction[];
     try {
@@ -1452,13 +1475,13 @@ export class TransactionSyncService {
     }).length;
 
     if (syncState) {
-      await db.addressSyncState.update(syncState.id!, {
+      await updateAddressSyncState(syncState.id!, {
         lastSyncedHeight: currentHeight,
         lastSyncedAt: Date.now(),
         txCount,
       });
     } else {
-      await db.addressSyncState.add({
+      await addAddressSyncState({
         address,
         recordId,
         lastSyncedHeight: currentHeight,
@@ -1778,10 +1801,10 @@ export class TransactionSyncService {
     lastSyncTime: number | null;
   }> {
     const totalAddresses = await db.records.where('type').equals('address').count();
-    const syncedAddresses = await db.addressSyncState.count();
+    const syncedAddresses = await countAddressSyncState();
     const totalTransactions = await db.blockchainTransactions.count();
     
-    const lastSync = await db.addressSyncState.orderBy('lastSyncedAt').reverse().first();
+    const lastSync = await getLatestAddressSyncState();
     
     return {
       totalAddresses,

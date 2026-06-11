@@ -12,11 +12,16 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { formatBTC } from "@/lib/bitcoin";
-import { db } from "@/lib/database";
 import { useTags } from "@/hooks/use-tags";
 import { useOwners } from "@/hooks/use-owners";
 import { useWalletNames } from "@/hooks/use-wallet-names";
 import { getParticipantsByTxids, getParticipantsByAddresses } from "@/lib/dataFacade";
+import { getRecordsByType } from "@/lib/data/record-crud";
+import {
+  getTransactionsByTxids,
+  getParticipantsByPrevOutKeys,
+} from "@/lib/data/transaction-crud";
+import { getPriceDataByDateCurrencyAssetKeys } from "@/lib/data/price-data-crud";
 import type { TransactionParticipant, BlockchainTransaction } from "@/lib/database";
 
 type BalanceMode = "modeA" | "modeB" | "modeC";
@@ -83,7 +88,7 @@ export default function StatementReport() {
         .filter(a => a.length > 0);
     }
 
-    const rawRecords = await db.records.where("type").equals("address").toArray();
+    const rawRecords = await getRecordsByType('address');
     let records = rawRecords;
     if (filterOwner) {
       records = records.filter(r => r.owner === filterOwner);
@@ -119,10 +124,7 @@ export default function StatementReport() {
     for (let i = 0; i < allDateKeys.length; i += 500) {
       const batch = allDateKeys.slice(i, i + 500);
       const keys = batch.map(d => [d, "USD", "BTC"] as [string, string, string]);
-      const results = await db.priceData
-        .where("[date+currency+asset]")
-        .anyOf(keys)
-        .toArray();
+      const results = await getPriceDataByDateCurrencyAssetKeys(keys);
       for (const r of results) {
         pricesByDate.set(r.date, r.close);
       }
@@ -195,7 +197,7 @@ export default function StatementReport() {
         for (let i = 0; i < ourOutputs.length; i += 500) {
           const batch = ourOutputs.slice(i, i + 500);
           const keys = batch.map(o => [o.txid, o.vout] as [string, number]);
-          const raw = await db.transactionParticipants.where('[prevTxid+prevVout]').anyOf(keys).toArray();
+          const raw = await getParticipantsByPrevOutKeys(keys);
           const spendingInputs = raw;
           allSpendingInputs.push(...spendingInputs);
           if (i + 500 < ourOutputs.length) {
@@ -234,7 +236,7 @@ export default function StatementReport() {
       const txMap = new Map<string, BlockchainTransaction>();
       for (let i = 0; i < txids.length; i += 500) {
         const batch = txids.slice(i, i + 500);
-        const txs = await db.blockchainTransactions.where("txid").anyOf(batch).toArray();
+        const txs = await getTransactionsByTxids(batch);
         for (const tx of txs) {
           txMap.set(tx.txid, tx);
         }

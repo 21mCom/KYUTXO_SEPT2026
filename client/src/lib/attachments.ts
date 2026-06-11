@@ -1,6 +1,14 @@
 import { db } from '@/lib/database';
 import { isElectron, getElectronAPI } from '@/lib/electron';
 import { updateEvidenceAttachment } from '@/lib/data/evidence-crud';
+import {
+  addAttachment,
+  deleteAttachment as deleteAttachmentRecord,
+  getAttachment,
+  getAllAttachments,
+  getAttachmentsByRecordId,
+  updateAttachment,
+} from '@/lib/data/attachments-crud';
 
 async function hashIdentifier(identifier: string): Promise<string> {
   const encoder = new TextEncoder();
@@ -71,13 +79,12 @@ export async function uploadAttachment(
       objectStoragePath = data.objectStoragePath;
     }
 
-    const attachmentId = await db.attachments.add({
+    const attachmentId = await addAttachment({
       recordId,
       filename: file.name,
       mimeType: file.type,
       size: file.size, // Original file size
       objectStoragePath,
-      createdAt: Date.now(),
     });
 
     return {
@@ -125,7 +132,7 @@ export async function downloadAttachment(objectPath: string): Promise<Blob> {
 
 // Download attachment by ID (looks up encryption status from metadata)
 export async function downloadAttachmentById(attachmentId: number): Promise<{ blob: Blob; filename: string; mimeType: string }> {
-  const attachment = await db.attachments.get(attachmentId);
+  const attachment = await getAttachment(attachmentId);
   if (!attachment) {
     throw new Error('Attachment not found');
   }
@@ -145,7 +152,7 @@ export async function downloadAttachmentById(attachmentId: number): Promise<{ bl
 // Delete attachment - works in both Electron and web modes
 export async function deleteAttachment(id: number): Promise<void> {
   try {
-    const attachment = await db.attachments.get(id);
+    const attachment = await getAttachment(id);
     if (!attachment) {
       throw new Error('Attachment not found');
     }
@@ -171,14 +178,14 @@ export async function deleteAttachment(id: number): Promise<void> {
       }
     }
 
-    await db.attachments.delete(id);
+    await deleteAttachmentRecord(id);
   } catch (error) {
     throw new Error(`Failed to delete attachment: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
 }
 
 export async function getRecordAttachments(recordId: number) {
-  return db.attachments.where('recordId').equals(recordId).toArray();
+  return getAttachmentsByRecordId(recordId);
 }
 
 export function getAttachmentIcon(mimeType: string): string {
@@ -385,7 +392,7 @@ async function renameAttachmentFile(oldRelPath: string, newRelPath: string): Pro
 export async function migrateAttachmentPaths(
   onProgress?: (current: number, total: number, message: string) => void
 ): Promise<{ migrated: number; failed: number }> {
-  const allAttachments = await db.attachments.toArray();
+  const allAttachments = await getAllAttachments();
   const allEvidence = await db.evidenceAttachments.toArray();
 
   const needsMigration: Array<{
@@ -472,7 +479,7 @@ export async function migrateAttachmentPaths(
 
       try {
         if (item.table === 'attachments') {
-          await db.attachments.update(item.id, { objectStoragePath: newStoragePath });
+          await updateAttachment(item.id, { objectStoragePath: newStoragePath }, { skipNotification: true });
         } else {
           await updateEvidenceAttachment(item.id, { objectStoragePath: newStoragePath }, { skipNotification: true });
         }

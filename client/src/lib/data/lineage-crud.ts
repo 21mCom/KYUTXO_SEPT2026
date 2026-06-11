@@ -149,3 +149,23 @@ export async function clearLineageSnapshots(
     notifyDbChange('lineageSnapshots');
   }
 }
+
+// =============================================================================
+// READ HELPERS
+// =============================================================================
+
+export async function getAllUtxoLineage(): Promise<UtxoLineage[]> {
+  return db.utxoLineage.toArray();
+}
+
+export async function getAllCustodySegments(): Promise<CustodySegment[]> {
+  return db.custodySegments.toArray();
+}
+
+export async function countUtxoLineage(): Promise<number> {
+  return db.utxoLineage.count();
+}
+
+export async function countCustodySegments(): Promise<number> {
+  return db.custodySegments.count();
+}

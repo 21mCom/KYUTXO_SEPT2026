@@ -1,14 +1,13 @@
 import { useState, useMemo, useEffect } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { format } from "date-fns";
-import { db } from "@/lib/database";
 import { 
   scanForLightningActivity, 
   LightningDetectionResult,
   getClassificationLabel,
   getClassificationBadgeVariant
 } from "@/lib/lightning-detection";
-import { getOwners, getWalletNames } from "@/lib/dataFacade";
+import { getOwners, getWalletNames, countTransactions } from "@/lib/dataFacade";
 import { ClickableAddress } from "@/components/ClickableAddress";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -112,7 +111,7 @@ export default function LightningSpeculator() {
   }, []);
 
   const transactionCount = useLiveQuery(
-    () => db.blockchainTransactions.count(),
+    () => countTransactions(),
     []
   );
 

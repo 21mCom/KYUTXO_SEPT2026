@@ -30,8 +30,8 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { db } from "@/lib/database";
 import type { Record as DbRecord } from "@/lib/database";
+import { getRecordsByType } from "@/lib/dataFacade";
 import { searchPendingClass } from "@/lib/search-pending-class";
 
 interface WalletStats {
@@ -146,7 +146,7 @@ export default function WalletOverview() {
   const loadWalletStats = async () => {
     setLoading(true);
     try {
-      const rawRecords = await db.records.where('type').equals('address').toArray();
+      const rawRecords = await getRecordsByType('address');
       const records = rawRecords;
 
       // Filter to only address records with wallet names

@@ -7,7 +7,19 @@ import { PAGE_DEBOUNCE } from "@/config/debounce";
 import { useDbChangeSignal } from "@/hooks/use-db-change-signal";
 import { useLiveQuery } from "dexie-react-hooks";
 import { format } from "date-fns";
-import { db, BlockchainTransaction, TransactionParticipant, Record } from "@/lib/database";
+import { BlockchainTransaction, TransactionParticipant, Record, type AddressImportance } from "@/lib/database";
+import { bulkGetRecords, getAddressRecordsByImportanceTiers } from "@/lib/data/record-crud";
+import {
+  countTransactions,
+  countTransactionsWithOpReturn,
+  getTransactionsByTxids,
+  bulkGetTransactionsByPrimaryKeys,
+  getTransactionsPageByBlockTime,
+  getOpReturnTransactionsPageByBlockTime,
+  getOrderedTransactionPrimaryKeysByBlockTime,
+  getOpReturnTransactionPrimaryKeys,
+  getParticipantsByRecordIds,
+} from "@/lib/data/transaction-crud";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -92,7 +104,7 @@ interface VirtualizedLoadedStats {
   loadedTxCount: number;
 }
 // User-curated importance tiers (exclude blockchain-discovered and pending-review by default)
-const USER_CURATED_TIERS = ['verified', 'manual', 'wallet-import', 'xpub-derived'];
+const USER_CURATED_TIERS: AddressImportance[] = ['verified', 'manual', 'wallet-import', 'xpub-derived'];
 
 function TransactionCard({
   tx,
@@ -410,7 +422,7 @@ function VirtualizedTransactionList({
           if (p.recordId != null) recordIds.add(p.recordId);
         }
         if (recordIds.size > 0) {
-          const records = await db.records.bulkGet(Array.from(recordIds));
+          const records = await bulkGetRecords(Array.from(recordIds));
           if (!cancelled) {
             for (const r of records) {
               if (r && r.type === 'address' && r.inputString) {
@@ -643,10 +655,7 @@ export default function Transactions() {
   const curatedRecords = useLiveQuery(
     async () => {
       if (includeBlockchainDiscovered) return null;
-      return db.records
-        .where('[type+addressImportance]')
-        .anyOf(USER_CURATED_TIERS.map(tier => ['address', tier]))
-        .toArray();
+      return getAddressRecordsByImportanceTiers(USER_CURATED_TIERS);
     },
     [includeBlockchainDiscovered]
   );
@@ -666,10 +675,7 @@ export default function Transactions() {
     for (let i = 0; i < recordIds.length; i += batchSize) {
       checkAbort(signal);
       const batch = recordIds.slice(i, i + batchSize);
-      const matchingParticipants = await db.transactionParticipants
-        .where('recordId')
-        .anyOf(batch)
-        .toArray();
+      const matchingParticipants = await getParticipantsByRecordIds(batch);
       matchingParticipants.forEach(p => txids.add(p.txid));
       if (i + batchSize < recordIds.length) await yieldToUI();
     }
@@ -677,14 +683,14 @@ export default function Transactions() {
   }, [curatedRecords, includeBlockchainDiscovered], new Set<string>());
 
   const { value: txCounts } = useAsyncMemo(async (signal) => {
-    const totalDbCount = await db.blockchainTransactions.count();
+    const totalDbCount = await countTransactions();
     checkAbort(signal);
 
     let filteredCount: number;
     if (includeBlockchainDiscovered && !opReturnOnly) {
       filteredCount = totalDbCount;
     } else if (includeBlockchainDiscovered && opReturnOnly) {
-      filteredCount = await db.blockchainTransactions.where('hasOpReturn').equals(true).count();
+      filteredCount = await countTransactionsWithOpReturn();
       checkAbort(signal);
     } else if (!includeBlockchainDiscovered && opReturnOnly) {
       let count = 0;
@@ -692,7 +698,7 @@ export default function Transactions() {
       const batchSize = 500;
       for (let i = 0; i < txidArray.length; i += batchSize) {
         const batch = txidArray.slice(i, i + batchSize);
-        const txs = await db.blockchainTransactions.where('txid').anyOf(batch).toArray();
+        const txs = await getTransactionsByTxids(batch);
         count += txs.filter(tx => tx.hasOpReturn).length;
         checkAbort(signal);
       }
@@ -721,20 +727,11 @@ export default function Transactions() {
     const needsFilter = !includeBlockchainDiscovered || opReturnOnly;
 
     if (!needsFilter) {
-      return db.blockchainTransactions
-        .orderBy('blockTime').reverse()
-        .offset(dbOffset).limit(ITEMS_PER_PAGE)
-        .toArray();
+      return getTransactionsPageByBlockTime(dbOffset, ITEMS_PER_PAGE);
     }
 
     if (includeBlockchainDiscovered && opReturnOnly) {
-      return db.blockchainTransactions
-        .orderBy('blockTime')
-        .reverse()
-        .filter(tx => tx.hasOpReturn === true)
-        .offset(dbOffset)
-        .limit(ITEMS_PER_PAGE)
-        .toArray();
+      return getOpReturnTransactionsPageByBlockTime(dbOffset, ITEMS_PER_PAGE);
     }
 
     const txidArray = Array.from(userCuratedTxidSet);
@@ -743,7 +740,7 @@ export default function Transactions() {
     for (let i = 0; i < txidArray.length; i += batchSize) {
       checkAbort(signal);
       const batch = txidArray.slice(i, i + batchSize);
-      const batchTxs = await db.blockchainTransactions.where('txid').anyOf(batch).toArray();
+      const batchTxs = await getTransactionsByTxids(batch);
       allCurated.push(...batchTxs);
       if (i + batchSize < txidArray.length) await yieldToUI();
     }
@@ -828,7 +825,7 @@ export default function Transactions() {
           }
         }
         if (missingRecordIds.size > 0) {
-          const records = await db.records.bulkGet(Array.from(missingRecordIds));
+          const records = await bulkGetRecords(Array.from(missingRecordIds));
           checkAbort(signal);
           for (const r of records) {
             if (r && r.type === 'address' && r.inputString) {
@@ -880,9 +877,7 @@ export default function Transactions() {
 
     if (includeBlockchainDiscovered) {
       if (opReturnOnly) {
-        const allKeys = await db.blockchainTransactions
-          .where('hasOpReturn').equals(true)
-          .primaryKeys();
+        const allKeys = await getOpReturnTransactionPrimaryKeys();
         checkAbort(signal);
         scanTotal = allKeys.length;
         setSearchProgress({ scanned: 0, total: scanTotal, matches: 0 });
@@ -890,7 +885,7 @@ export default function Transactions() {
         for (let i = 0; i < allKeys.length; i += BATCH_SIZE) {
           checkAbort(signal);
           const batchKeys = allKeys.slice(i, i + BATCH_SIZE);
-          const batchRaw = await db.blockchainTransactions.bulkGet(batchKeys as string[]);
+          const batchRaw = await bulkGetTransactionsByPrimaryKeys(batchKeys);
           const batch = batchRaw.filter(Boolean) as BlockchainTransaction[];
           const matches = await filterBatch(batch);
           totalMatchCount += matches.length;
@@ -903,9 +898,7 @@ export default function Transactions() {
           if (i + BATCH_SIZE < allKeys.length) await yieldToUI();
         }
       } else {
-        const allKeys = await db.blockchainTransactions
-          .orderBy('blockTime').reverse()
-          .primaryKeys();
+        const allKeys = await getOrderedTransactionPrimaryKeysByBlockTime();
         checkAbort(signal);
         scanTotal = allKeys.length;
         setSearchProgress({ scanned: 0, total: scanTotal, matches: 0 });
@@ -913,7 +906,7 @@ export default function Transactions() {
         for (let i = 0; i < allKeys.length; i += BATCH_SIZE) {
           checkAbort(signal);
           const batchKeys = allKeys.slice(i, i + BATCH_SIZE);
-          const batchRaw = await db.blockchainTransactions.bulkGet(batchKeys as string[]);
+          const batchRaw = await bulkGetTransactionsByPrimaryKeys(batchKeys);
           const batch = batchRaw.filter(Boolean) as BlockchainTransaction[];
           const matches = await filterBatch(batch);
           totalMatchCount += matches.length;
@@ -934,7 +927,7 @@ export default function Transactions() {
       for (let i = 0; i < txidArray.length; i += BATCH_SIZE) {
         checkAbort(signal);
         const batchTxids = txidArray.slice(i, i + BATCH_SIZE);
-        let batch = await db.blockchainTransactions.where('txid').anyOf(batchTxids).toArray();
+        let batch = await getTransactionsByTxids(batchTxids);
         if (opReturnOnly) {
           batch = batch.filter(tx => tx.hasOpReturn === true);
         }
@@ -1006,7 +999,7 @@ export default function Transactions() {
       }
     }
     if (recordIds.size === 0) return [] as Record[];
-    const records = await db.records.bulkGet(Array.from(recordIds));
+    const records = await bulkGetRecords(Array.from(recordIds));
     return records.filter(Boolean) as Record[];
   }, [broadParticipantMap], [] as Record[]);
 
@@ -1089,7 +1082,7 @@ export default function Transactions() {
       }
     }
     if (recordIds.size === 0) return [] as Record[];
-    const records = await db.records.bulkGet(Array.from(recordIds));
+    const records = await bulkGetRecords(Array.from(recordIds));
     return records.filter(Boolean) as Record[];
   }, [pageParticipantMap], [] as Record[]);
 

@@ -1,5 +1,18 @@
 import { useState, useEffect, type ReactNode } from 'react';
 import { db } from '@/lib/database';
+import { countAttachments } from '@/lib/data/attachments-crud';
+import { countAddressSyncState } from '@/lib/data/address-sync-crud';
+import { countPriceData } from '@/lib/data/price-data-crud';
+import {
+  countRecords,
+  countRecordsByType,
+  countRecordsByImportance,
+  eachAddressRecord,
+} from '@/lib/data/record-crud';
+import {
+  countTransactions,
+  countTransactionParticipants,
+} from '@/lib/data/transaction-crud';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -106,19 +119,19 @@ async function loadAllStats(): Promise<StatsData> {
     priceData,
     ...importanceCounts
   ] = await Promise.all([
-    db.records.count(),
-    db.records.where('type').equals('address').count(),
-    db.records.where('type').equals('transaction').count(),
-    db.records.where('type').equals('other').count(),
+    countRecords(),
+    countRecordsByType('address'),
+    countRecordsByType('transaction'),
+    countRecordsByType('other'),
     db.tags.count(),
     db.categories.count(),
-    db.attachments.count(),
-    db.blockchainTransactions.count(),
-    db.transactionParticipants.count(),
-    db.addressSyncState.count(),
-    db.priceData.count(),
+    countAttachments(),
+    countTransactions(),
+    countTransactionParticipants(),
+    countAddressSyncState(),
+    countPriceData(),
     ...IMPORTANCE_TIERS.map(tier =>
-      db.records.where('addressImportance').equals(tier).count()
+      countRecordsByImportance(tier as Parameters<typeof countRecordsByImportance>[0])
     ),
   ]);
 
@@ -136,7 +149,7 @@ async function loadAllStats(): Promise<StatsData> {
   const sourceBreakdown: { [key: string]: number } = {};
   const ownerBreakdown: { [key: string]: number } = {};
 
-  await db.records.where('type').equals('address').each(record => {
+  await eachAddressRecord(record => {
     const source = record.source || 'manual';
     sourceBreakdown[source] = (sourceBreakdown[source] || 0) + 1;
 

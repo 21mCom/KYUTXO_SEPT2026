@@ -2,7 +2,7 @@ import { useState, useCallback } from "react";
 import { Copy, Check, FileText, ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { db, type Record as DbRecord } from "@/lib/database";
+import { getRecordsByInputString } from "@/lib/data/record-crud";
 import { useRecordPreview } from "@/contexts/RecordPreviewContext";
 
 interface TxidLinkProps {
@@ -54,7 +54,7 @@ export function TxidLink({
     
     setIsResolving(true);
     try {
-      const rawRecords = await db.records.where('inputString').equals(txid).toArray();
+      const rawRecords = await getRecordsByInputString(txid);
       if (rawRecords.length > 0) {
         const record = rawRecords[0];
         const foundRecordId = record.id!;

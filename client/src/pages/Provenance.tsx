@@ -73,7 +73,8 @@ import {
   type AddressExplorationResult,
   type ProvenanceFilter
 } from "@/lib/provenance";
-import { db, type Record as DbRecord, type AddressImportance } from "@/lib/database";
+import { type Record as DbRecord, type AddressImportance } from "@/lib/database";
+import { getRecordsByType } from "@/lib/dataFacade";
 import { formatDistanceToNow, format } from "date-fns";
 import { ContinuityProof } from "@/components/ContinuityProof";
 import { usePageShortcuts } from "@/hooks/use-page-shortcuts";
@@ -131,7 +132,7 @@ export default function Provenance() {
     const s = await getProvenanceStats();
     setStats(s);
     
-    const rawAddresses = await db.records.where('type').equals('address').toArray();
+    const rawAddresses = await getRecordsByType('address');
     const addresses = rawAddresses;
     setAllAddresses(addresses);
     

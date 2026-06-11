@@ -50,7 +50,8 @@ import {
   type CustodySegment,
   type UtxoLineage
 } from "@/lib/lineageEngine";
-import { db } from "@/lib/database";
+import { countUtxoLineage, countCustodySegments } from "@/lib/data/lineage-crud";
+import { countTransactions } from "@/lib/data/transaction-crud";
 import { computeOverallProgress, decideCancelAction } from "@/lib/buildProgress";
 import { useSettings } from "@/hooks/use-settings";
 import { format, formatDistanceToNow } from "date-fns";
@@ -235,9 +236,9 @@ export function ContinuityProof({ selectedAddress, onAddressSelect }: Continuity
 
   // Load stats on mount
   const loadStats = useCallback(async () => {
-    const lineageCount = await db.utxoLineage.count();
-    const segmentCount = await db.custodySegments.count();
-    const txCount = await db.blockchainTransactions.count();
+    const lineageCount = await countUtxoLineage();
+    const segmentCount = await countCustodySegments();
+    const txCount = await countTransactions();
     setStats({ lineageCount, segmentCount });
     setCurrentTransactionCount(txCount);
   }, []);
@@ -350,7 +351,7 @@ export function ContinuityProof({ selectedAddress, onAddressSelect }: Continuity
       const peakRate = rateTrackingRef.current.lineagePeakRate;
 
       if (totalSeconds > 0) {
-        const txCount = await db.blockchainTransactions.count();
+        const txCount = await countTransactions();
         const meta: LastBuildMeta = {
           durationSeconds: totalSeconds,
           transactionCount: txCount,

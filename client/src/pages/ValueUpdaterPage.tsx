@@ -7,7 +7,8 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useTags } from "@/hooks/use-tags";
 import { useCategories } from "@/hooks/use-categories";
-import { db, type Record as DbRecord, beginBulkOperation, endBulkOperation } from "@/lib/database";
+import { type Record as DbRecord, beginBulkOperation, endBulkOperation } from "@/lib/database";
+import { getRecordsByOffsetLimit } from "@/lib/dataFacade";
 import { useOwners } from "@/hooks/use-owners";
 import { useWalletNames } from "@/hooks/use-wallet-names";
 import { useSeedNames, SEED_NAME_MAX_LENGTH } from "@/hooks/use-seed-names";
@@ -222,7 +223,7 @@ export default function ValueUpdaterPage() {
       let hasMore = true;
 
       while (hasMore) {
-        const batch = await db.records.offset(offset).limit(BATCH_SIZE).toArray();
+        const batch = await getRecordsByOffsetLimit(offset, BATCH_SIZE);
         const batchValues = extractValuesFromRecords(batch, ALL_FIELDS_LIST);
         for (const [field, entries] of batchValues.entries()) {
           const counter = fieldCounters.get(field)!;
@@ -338,7 +339,7 @@ export default function ValueUpdaterPage() {
     let offset = 0;
     let hasMore = true;
     while (hasMore) {
-      const batch = await db.records.offset(offset).limit(BATCH_SIZE).toArray();
+      const batch = await getRecordsByOffsetLimit(offset, BATCH_SIZE);
       results.push(...batch);
       hasMore = batch.length === BATCH_SIZE;
       offset += BATCH_SIZE;

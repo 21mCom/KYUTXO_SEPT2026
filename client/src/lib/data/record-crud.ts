@@ -1,3 +1,4 @@
+import Dexie from 'dexie';
 import { db, notifyDbChange, type Record, type Attachment, type RecordOrigin, type RecordOriginType, type DerivationTemplate, type AddressImportance } from '../database';
 import { ensureOwner, ensureWalletName, ensureSeedName, ensureWalletSoftware } from './vocabulary-crud';
 import { getActivityBus } from '../activity-bus';
@@ -348,7 +349,8 @@ export interface DeleteRecordOptions {
 }
 
 export async function deleteRecord(id: number, options?: DeleteRecordOptions): Promise<void> {
-  const attachments = await db.attachments.where('recordId').equals(id).toArray();
+  const { getAttachmentsByRecordId, deleteAttachmentsByRecordId } = await import('./attachments-crud');
+  const attachments = await getAttachmentsByRecordId(id);
 
   for (const attachment of attachments) {
     try {
@@ -363,7 +365,7 @@ export async function deleteRecord(id: number, options?: DeleteRecordOptions): P
     }
   }
 
-  await db.attachments.where('recordId').equals(id).delete();
+  await deleteAttachmentsByRecordId(id, { skipNotification: true });
   await db.records.delete(id);
   
   if (!options?.skipNotification) {
@@ -383,6 +385,308 @@ export async function clearAllRecords(options?: ClearAllRecordsOptions): Promise
   }
 }
 
+// =============================================================================
+// READ HELPERS
+// =============================================================================
+
+export async function getRecord(id: number): Promise<Record | undefined> {
+  return db.records.get(id);
+}
+
+export async function bulkGetRecords(ids: number[]): Promise<(Record | undefined)[]> {
+  return db.records.bulkGet(ids);
+}
+
+export async function getRecordsByIds(ids: number[]): Promise<Record[]> {
+  if (ids.length === 0) return [];
+  return db.records.where('id').anyOf(ids).toArray();
+}
+
+export async function getAllRecords(): Promise<Record[]> {
+  return db.records.toArray();
+}
+
+export async function countRecords(): Promise<number> {
+  return db.records.count();
+}
+
+export async function countRecordsByType(type: string): Promise<number> {
+  return db.records.where('type').equals(type).count();
+}
+
+export async function countRecordsByImportance(tier: AddressImportance): Promise<number> {
+  return db.records.where('addressImportance').equals(tier).count();
+}
+
+export async function countRecordsByImportanceTiers(tiers: AddressImportance[]): Promise<number> {
+  if (tiers.length === 0) return 0;
+  return db.records.where('addressImportance').anyOf(tiers).count();
+}
+
+export async function getRecordsByType(type: string): Promise<Record[]> {
+  return db.records.where('type').equals(type).toArray();
+}
+
+export async function getRecordsByInputString(inputString: string): Promise<Record[]> {
+  return db.records.where('inputString').equals(inputString).toArray();
+}
+
+export async function getRecordsByInputStrings(values: string[]): Promise<Record[]> {
+  if (values.length === 0) return [];
+  return db.records.where('inputString').anyOf(values).toArray();
+}
+
+export async function getAddressRecordsByImportanceTiers(
+  tiers: AddressImportance[]
+): Promise<Record[]> {
+  if (tiers.length === 0) return [];
+  return db.records
+    .where('[type+addressImportance]')
+    .anyOf(tiers.map(t => ['address', t]))
+    .toArray();
+}
+
+export async function getAddressRecordsByImportanceTiersFiltered(
+  tiers: AddressImportance[],
+  filter: (r: Record) => boolean
+): Promise<Record[]> {
+  if (tiers.length === 0) return [];
+  return db.records
+    .where('[type+addressImportance]')
+    .anyOf(tiers.map(t => ['address', t]))
+    .filter(filter)
+    .toArray();
+}
+
+export async function getRecordsByIndexedFieldAnyOfFiltered(
+  field: string,
+  values: string[],
+  filter: (r: Record) => boolean,
+  limit: number
+): Promise<Record[]> {
+  if (values.length === 0) return [];
+  return db.records
+    .where(field)
+    .anyOf(values)
+    .filter(filter)
+    .limit(limit)
+    .toArray();
+}
+
+export async function countRecordsByImportanceTiersDirect(
+  tiers: AddressImportance[]
+): Promise<number> {
+  if (tiers.length === 0) return 0;
+  return db.records.where('addressImportance').anyOf(tiers).count();
+}
+
+export async function countAddressRecordsByImportanceTiers(
+  tiers: AddressImportance[]
+): Promise<number> {
+  if (tiers.length === 0) return 0;
+  return db.records
+    .where('[type+addressImportance]')
+    .anyOf(tiers.map(t => ['address', t]))
+    .count();
+}
+
+export async function getRecentRecordsByUpdatedAt(limit: number): Promise<Record[]> {
+  return db.records.orderBy('updatedAt').reverse().limit(limit).toArray();
+}
+
+export async function getRecordsPageByUpdatedAt(
+  offset: number,
+  limit: number
+): Promise<Record[]> {
+  return db.records.orderBy('updatedAt').reverse().offset(offset).limit(limit).toArray();
+}
+
+export async function getRecordsPageByUpdatedAtFiltered(
+  offset: number,
+  limit: number,
+  filter: (r: Record) => boolean
+): Promise<Record[]> {
+  return db.records
+    .orderBy('updatedAt')
+    .reverse()
+    .filter(filter)
+    .offset(offset)
+    .limit(limit)
+    .toArray();
+}
+
+export async function getRecordsPageByIdReverse(
+  offset: number,
+  limit: number
+): Promise<Record[]> {
+  return db.records.orderBy('id').reverse().offset(offset).limit(limit).toArray();
+}
+
+export async function getAddressRecordsByImportanceTierLimited(
+  tier: AddressImportance,
+  limit: number
+): Promise<Record[]> {
+  return db.records
+    .where('[addressImportance+id]')
+    .between([tier, Dexie.minKey], [tier, Dexie.maxKey])
+    .reverse()
+    .limit(limit)
+    .toArray();
+}
+
+export async function getRecordsPageByTypeIdReverse(
+  type: string,
+  offset: number,
+  limit: number
+): Promise<Record[]> {
+  return db.records
+    .where('[type+id]')
+    .between([type, Dexie.minKey], [type, Dexie.maxKey])
+    .reverse()
+    .offset(offset)
+    .limit(limit)
+    .toArray();
+}
+
+export async function getRecordsByTypeAndImportanceLimited(
+  type: string,
+  tier: AddressImportance,
+  limit: number
+): Promise<Record[]> {
+  return db.records
+    .where('[type+addressImportance]')
+    .equals([type, tier])
+    .reverse()
+    .limit(limit)
+    .toArray();
+}
+
+export async function countRecordsByTypeAndImportanceTiers(
+  type: string,
+  tiers: AddressImportance[]
+): Promise<number> {
+  if (tiers.length === 0) return 0;
+  return db.records
+    .where('[type+addressImportance]')
+    .anyOf(tiers.map(t => [type, t]))
+    .count();
+}
+
+export async function getRecordsByTypeAndImportanceTiers(
+  type: string,
+  tiers: AddressImportance[]
+): Promise<Record[]> {
+  if (tiers.length === 0) return [];
+  return db.records
+    .where('[type+addressImportance]')
+    .anyOf(tiers.map(t => [type, t]))
+    .toArray();
+}
+
+export async function getRecordsByDiscoveredFromIds(
+  parentIds: number[]
+): Promise<Record[]> {
+  if (parentIds.length === 0) return [];
+  return db.records
+    .where('discoveredFromRecordId')
+    .anyOf(parentIds)
+    .toArray();
+}
+
+export async function countRecordsByDiscoveredFromIdFiltered(
+  parentId: number,
+  filter: (r: Record) => boolean
+): Promise<number> {
+  return db.records
+    .where('discoveredFromRecordId')
+    .equals(parentId)
+    .filter(filter)
+    .count();
+}
+
+export async function getRecordsByTypeFilteredAll(
+  type: string,
+  filter: (r: Record) => boolean
+): Promise<Record[]> {
+  return db.records
+    .where('type')
+    .equals(type)
+    .filter(filter)
+    .toArray();
+}
+
+export async function getRecordsByFilter(
+  filter: (r: Record) => boolean
+): Promise<Record[]> {
+  return db.records.filter(filter).toArray();
+}
+
+export async function getRecordsAfterId(afterId: number, limit: number): Promise<Record[]> {
+  return db.records.where('id').above(afterId).limit(limit).toArray();
+}
+
+export async function getRecordsByOffsetLimit(
+  offset: number,
+  limit: number
+): Promise<Record[]> {
+  return db.records.offset(offset).limit(limit).toArray();
+}
+
+export async function eachAddressRecord(
+  callback: (record: Record) => void
+): Promise<void> {
+  return db.records.where('type').equals('address').each(callback);
+}
+
+export async function getRecordsByTypeFiltered(
+  type: string,
+  filter: (r: Record) => boolean,
+  limit: number
+): Promise<Record[]> {
+  return db.records
+    .where('type')
+    .equals(type)
+    .filter(filter)
+    .limit(limit)
+    .toArray();
+}
+
+export async function getRecentRecordsFiltered(
+  filter: (r: Record) => boolean,
+  limit: number
+): Promise<Record[]> {
+  return db.records
+    .orderBy('updatedAt')
+    .reverse()
+    .filter(filter)
+    .limit(limit)
+    .toArray();
+}
+
+export async function searchRecordsByQuery(
+  query: string,
+  limit: number = 200
+): Promise<Record[]> {
+  if (!query.trim()) {
+    return db.records.orderBy('updatedAt').reverse().limit(limit).toArray();
+  }
+
+  const lowerQuery = query.toLowerCase();
+
+  return db.records
+    .orderBy('updatedAt')
+    .reverse()
+    .filter(record =>
+      record.label.toLowerCase().includes(lowerQuery) ||
+      record.inputString.toLowerCase().includes(lowerQuery) ||
+      (record.notes?.toLowerCase().includes(lowerQuery) ?? false) ||
+      (record.tags?.some(t => t.toLowerCase().includes(lowerQuery)) ?? false) ||
+      (record.categories?.some(c => c.toLowerCase().includes(lowerQuery)) ?? false)
+    )
+    .limit(limit)
+    .toArray();
+}
+
 export async function findRecordByInputString(inputString: string): Promise<Record | undefined> {
   if (!inputString) return undefined;
 
@@ -397,17 +701,13 @@ export async function findRecordByInputString(inputString: string): Promise<Reco
 export async function createRecordOrigin(
   data: Omit<RecordOrigin, 'id' | 'createdAt'>
 ): Promise<number> {
-  const origin: RecordOrigin = {
-    ...data,
-    createdAt: Date.now(),
-  };
-
-  const id = await db.recordOrigins.add(origin);
-  return id as number;
+  const { addRecordOrigin } = await import('./record-origins-crud');
+  return addRecordOrigin(data, { skipNotification: true });
 }
 
 export async function getRecordOrigins(recordId: number): Promise<RecordOrigin[]> {
-  return db.recordOrigins.where('recordId').equals(recordId).toArray();
+  const { getRecordOriginsByRecordId } = await import('./record-origins-crud');
+  return getRecordOriginsByRecordId(recordId);
 }
 
 export function mergeRecordWithOrigins(
@@ -474,8 +774,8 @@ export async function saveDerivationTemplate(template: {
   seedName?: string;
   notes?: string;
 }): Promise<number> {
-  const now = Date.now();
-  const derivationTemplate: DerivationTemplate = {
+  const { addDerivationTemplate } = await import('./derivation-templates-crud');
+  return await addDerivationTemplate({
     fingerprint: template.fingerprint,
     scriptType: template.scriptType,
     derivationPath: template.derivationPath,
@@ -486,9 +786,5 @@ export async function saveDerivationTemplate(template: {
     walletName: template.walletName,
     seedName: template.seedName,
     notes: template.notes,
-    createdAt: now,
-    updatedAt: now,
-  };
-  
-  return await db.derivationTemplates.add(derivationTemplate);
+  }, { skipNotification: true });
 }

@@ -56,10 +56,18 @@ import {
   restoreSeedName,
   restoreWalletSoftware,
 } from "@/lib/data/vocabulary-crud";
-import { bulkCreateRecords, clearAllRecords, type CreateRecordData } from "@/lib/data/record-crud";
+import { bulkCreateRecords, clearAllRecords, getRecordsByInputStrings, type CreateRecordData } from "@/lib/data/record-crud";
 import { clearTransactions, clearParticipants } from "@/lib/data/transaction-crud";
 import { addUtxoLineage, addCustodySegment, clearUtxoLineage, clearCustodySegments } from "@/lib/data/lineage-crud";
 import { bulkAddEvidence, clearEvidence, clearEvidenceAttachments, addEvidenceAttachment as addEvidenceAttachmentCrud } from "@/lib/data/evidence-crud";
+import { clearAttachments, addAttachment, getAllAttachments, type CreateAttachmentData } from "@/lib/data/attachments-crud";
+import { clearRecordOrigins } from "@/lib/data/record-origins-crud";
+import { clearCustomFields, addCustomField as addCustomFieldCrud, getCustomFieldBySlug } from "@/lib/data/custom-fields-crud";
+import { clearAddressSyncState } from "@/lib/data/address-sync-crud";
+import { clearPriceData, addPriceData } from "@/lib/data/price-data-crud";
+import { clearNodeSettings, addNodeSettings } from "@/lib/data/node-settings-crud";
+import { clearDerivationTemplates, addDerivationTemplate, getAllDerivationTemplates, type CreateDerivationTemplateData } from "@/lib/data/derivation-templates-crud";
+import { updateSettings } from "@/lib/data/settings-crud";
 import { deriveKey, decrypt, base64ToBuffer, verifyPassword } from "@/lib/crypto";
 import { getVaultSettings, vaultDb } from "@/lib/vault";
 import { generateSalt, hashPassword, bufferToBase64 } from "@/lib/crypto";
@@ -252,14 +260,14 @@ export default function SettingsPage() {
       await clearAllRecords({ skipNotification: true });
       await db.tags.clear();
       await db.categories.clear();
-      await db.attachments.clear();
-      await db.recordOrigins.clear();
-      await db.customFields.clear();
+      await clearAttachments({ skipNotification: true });
+      await clearRecordOrigins({ skipNotification: true });
+      await clearCustomFields({ skipNotification: true });
       
       // Clear blockchain sync data
       await clearTransactions({ skipNotification: true });
       await clearParticipants({ skipNotification: true });
-      await db.addressSyncState.clear();
+      await clearAddressSyncState({ skipNotification: true });
       
       // Clear vocabulary tables
       await db.owners.clear();
@@ -268,10 +276,10 @@ export default function SettingsPage() {
       await db.walletSoftware.clear();
       
       // Clear price data
-      await db.priceData.clear();
+      await clearPriceData({ skipNotification: true });
 
       // Reset settings to defaults (but keep them)
-      await db.settings.update('default', {
+      await updateSettings('default', {
         fieldVisibility: {
           seedName: true,
           walletSoftware: true,
@@ -552,18 +560,18 @@ export default function SettingsPage() {
         await clearAllRecords({ skipNotification: true });
         await db.tags.clear();
         await db.categories.clear();
-        await db.attachments.clear();
-        await db.recordOrigins.clear();
-        await db.customFields.clear();
+        await clearAttachments({ skipNotification: true });
+        await clearRecordOrigins({ skipNotification: true });
+        await clearCustomFields({ skipNotification: true });
         await db.owners.clear();
         await db.walletNames.clear();
         await db.seedNames.clear();
         await db.walletSoftware.clear();
-        await db.derivationTemplates.clear();
+        await clearDerivationTemplates({ skipNotification: true });
         await clearEvidence({ skipNotification: true });
         await clearEvidenceAttachments({ skipNotification: true });
-        await db.priceData.clear();
-        await db.nodeSettings.clear();
+        await clearPriceData({ skipNotification: true });
+        await clearNodeSettings({ skipNotification: true });
         await clearUtxoLineage({ skipNotification: true });
         await clearCustodySegments({ skipNotification: true });
       }
@@ -586,7 +594,7 @@ export default function SettingsPage() {
           const MERGE_BATCH = 500;
           for (let i = 0; i < backupInputStrings.length; i += MERGE_BATCH) {
             const batch = backupInputStrings.slice(i, i + MERGE_BATCH);
-            const found = await db.records.where('inputString').anyOf(batch).toArray();
+            const found = await getRecordsByInputStrings(batch);
             for (const r of found) {
               existingInputStrings.add(r.inputString);
             }
@@ -710,7 +718,7 @@ export default function SettingsPage() {
         // Build set of existing attachments for merge mode (recordId + filename combo)
         let existingAttachmentKeys = new Set<string>();
         if (restoreMode === "merge") {
-          const existingAttachments = await db.attachments.toArray();
+          const existingAttachments = await getAllAttachments();
           for (const att of existingAttachments) {
             const key = `${att.recordId}:${att.filename}`;
             existingAttachmentKeys.add(key);
@@ -726,7 +734,7 @@ export default function SettingsPage() {
             continue;
           }
           
-          const newAttachment = {
+          const newAttachment: CreateAttachmentData = {
             recordId: attData.recordId,
             filename: attData.filename || "unknown",
             mimeType: attData.mimeType || "application/octet-stream",
@@ -735,7 +743,7 @@ export default function SettingsPage() {
             createdAt: attData.createdAt || Date.now(),
           };
           
-          await db.attachments.add(newAttachment as any);
+          await addAttachment(newAttachment, { skipNotification: true });
           attachmentsAdded++;
         }
       }
@@ -805,13 +813,13 @@ export default function SettingsPage() {
         for (const field of backupCustomFields) {
           const { id, ...fieldData } = field;
           if (restoreMode === "merge") {
-            const existing = await db.customFields.where('slug').equals(fieldData.slug).first();
+            const existing = await getCustomFieldBySlug(fieldData.slug);
             if (!existing) {
-              await db.customFields.add({ ...fieldData, createdAt: fieldData.createdAt || Date.now() });
+              await addCustomFieldCrud({ ...fieldData, createdAt: fieldData.createdAt || Date.now() }, { skipNotification: true });
               customFieldsAdded++;
             }
           } else {
-            await db.customFields.add({ ...fieldData, createdAt: fieldData.createdAt || Date.now() });
+            await addCustomFieldCrud({ ...fieldData, createdAt: fieldData.createdAt || Date.now() }, { skipNotification: true });
             customFieldsAdded++;
           }
         }
@@ -940,7 +948,7 @@ export default function SettingsPage() {
         // Track existing templates by fingerprint+scriptType for merge mode
         let existingTemplateKeys = new Set<string>();
         if (restoreMode === "merge") {
-          const existingTemplates = await db.derivationTemplates.toArray();
+          const existingTemplates = await getAllDerivationTemplates();
           for (const t of existingTemplates) {
             existingTemplateKeys.add(`${t.fingerprint}:${t.scriptType}`);
           }
@@ -954,7 +962,7 @@ export default function SettingsPage() {
             continue;
           }
           
-          const newTemplate = {
+          const newTemplate: CreateDerivationTemplateData = {
             fingerprint: templateData.fingerprint || "unknown",
             scriptType: templateData.scriptType || "P2WPKH",
             derivationPath: templateData.derivationPath || "m/84'/0'/0'",
@@ -969,7 +977,7 @@ export default function SettingsPage() {
             updatedAt: templateData.updatedAt || Date.now(),
           };
           
-          await db.derivationTemplates.add(newTemplate as any);
+          await addDerivationTemplate(newTemplate, { skipNotification: true });
           templatesAdded++;
         }
       }
@@ -1028,7 +1036,7 @@ export default function SettingsPage() {
       if (priceData && priceData.length > 0) {
         for (const pd of priceData) {
           const { id, ...pdData } = pd;
-          await db.priceData.add(pdData);
+          await addPriceData(pdData, { skipNotification: true });
           priceDataAdded++;
         }
       }
@@ -1037,7 +1045,7 @@ export default function SettingsPage() {
       if (backupNodeSettings && backupNodeSettings.length > 0) {
         for (const ns of backupNodeSettings) {
           const { id, ...nsData } = ns;
-          await db.nodeSettings.add(nsData);
+          await addNodeSettings(nsData, { skipNotification: true });
         }
       }
 

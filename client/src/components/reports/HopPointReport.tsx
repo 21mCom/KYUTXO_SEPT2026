@@ -1,7 +1,7 @@
 import { useState, useMemo } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
-import { db, type Record as DBRecord, type TransactionParticipant, type BlockchainTransaction, type AddressImportance } from "@/lib/database";
-import { getParticipantsByAddress, getParticipantsByTxid } from "@/lib/dataFacade";
+import { type Record as DBRecord, type TransactionParticipant, type BlockchainTransaction, type AddressImportance } from "@/lib/database";
+import { getParticipantsByAddress, getParticipantsByTxid, getRecordsByType } from "@/lib/dataFacade";
 import { useRecordPreview } from "@/contexts/RecordPreviewContext";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -49,7 +49,7 @@ export function HopPointReport() {
   const [minTierFilter, setMinTierFilter] = useState<AddressImportance>('xpub-derived');
 
   const rawRecords = useLiveQuery(
-    () => db.records.where('type').equals('address').toArray(),
+    () => getRecordsByType('address'),
     []
   );
 

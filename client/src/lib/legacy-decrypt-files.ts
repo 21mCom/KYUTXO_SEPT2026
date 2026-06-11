@@ -1,5 +1,6 @@
 import { decryptBinary } from './crypto';
 import { db } from './database';
+import { getAllAttachments } from './data/attachments-crud';
 import { isElectron, getElectronAPI } from './electron';
 
 export interface FileDecryptProgress {
@@ -68,7 +69,7 @@ export async function decryptLegacyAttachmentFiles(
   key: CryptoKey,
   onProgress?: (progress: FileDecryptProgress) => void,
 ): Promise<FileDecryptResult> {
-  const allAttachments = await db.attachments.toArray();
+  const allAttachments = await getAllAttachments();
   const allEvidenceAttachments = await db.evidenceAttachments.toArray();
 
   const allFiles: Array<{ objectStoragePath: string; source: string; id: number }> = [];

@@ -1,7 +1,10 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { useDbChangeSignal } from "@/hooks/use-db-change-signal";
 import { useLiveQuery } from "dexie-react-hooks";
-import { db, BlockchainTransaction, TransactionParticipant, Record as DbRecord } from "@/lib/database";
+import { BlockchainTransaction, TransactionParticipant, Record as DbRecord } from "@/lib/database";
+import { getRecordsByType } from "@/lib/data/record-crud";
+import { getTransactionsByTxids } from "@/lib/data/transaction-crud";
+import { getBtcUsdPriceData } from "@/lib/data/price-data-crud";
 
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -182,15 +185,12 @@ export default function BalanceOverview() {
   const [computedCount, setComputedCount] = useState(0);
 
   const rawRecords = useLiveQuery(
-    () => db.records.where('type').equals('address').toArray(),
+    () => getRecordsByType('address'),
     []
   );
 
   const priceData = useLiveQuery(
-    () => db.priceData
-      .where('asset').equals('BTC')
-      .filter(p => p.currency === 'USD')
-      .toArray(),
+    () => getBtcUsdPriceData(),
     []
   );
 
@@ -248,7 +248,7 @@ export default function BalanceOverview() {
           const batchSize = 500;
           for (let i = 0; i < txidArray.length; i += batchSize) {
             const batch = txidArray.slice(i, i + batchSize);
-            const txs = await db.blockchainTransactions.where('txid').anyOf(batch).toArray();
+            const txs = await getTransactionsByTxids(batch);
             for (const tx of txs) txidToTx.set(tx.txid, tx);
             if (thisId !== computationId.current) return;
           }

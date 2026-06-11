@@ -10,6 +10,16 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Progress } from "@/components/ui/progress";
 import { useToast } from "@/hooks/use-toast";
 import { db, type Record } from "@/lib/database";
+import { countAttachments, getAllAttachments } from "@/lib/data/attachments-crud";
+import { countDerivationTemplates, getAllDerivationTemplates } from "@/lib/data/derivation-templates-crud";
+import { getAllRecordOrigins } from "@/lib/data/record-origins-crud";
+import { getAllCustomFields } from "@/lib/data/custom-fields-crud";
+import { getAllPriceData } from "@/lib/data/price-data-crud";
+import { getAllSettings } from "@/lib/data/settings-crud";
+import { getAllNodeSettings } from "@/lib/data/node-settings-crud";
+import { countRecords, getRecordsAfterId } from "@/lib/data/record-crud";
+import { getAllEvidence, getAllEvidenceAttachments } from "@/lib/data/evidence-crud";
+import { getAllUtxoLineage, getAllCustodySegments } from "@/lib/data/lineage-crud";
 import { encrypt, deriveKey, generateSalt, bufferToBase64 } from "@/lib/crypto";
 import { isElectron, getElectronAPI } from "@/lib/electron";
 import JSZip from "jszip";
@@ -297,15 +307,15 @@ export default function ExportPage() {
   useEffect(() => {
     const loadCounts = async () => {
       try {
-        const records = await db.records.count();
-        const attachments = await db.attachments.count();
+        const records = await countRecords();
+        const attachments = await countAttachments();
         const tags = await db.tags.count();
         const categories = await db.categories.count();
         const owners = await db.owners.count();
         const walletNames = await db.walletNames.count();
         const seedNames = await db.seedNames.count();
         const walletSoftware = await db.walletSoftware.count();
-        const derivationTemplates = await db.derivationTemplates.count();
+        const derivationTemplates = await countDerivationTemplates();
         setRecordCount(records);
         setAttachmentCount(attachments);
         setTagCount(tags);
@@ -359,7 +369,7 @@ export default function ExportPage() {
       const rawRecords: Record[] = [];
       let lastRecordId = 0;
       while (true) {
-        const batch = await db.records.where('id').above(lastRecordId).limit(EXPORT_BATCH).toArray();
+        const batch = await getRecordsAfterId(lastRecordId, EXPORT_BATCH);
         if (batch.length === 0) break;
         rawRecords.push(...batch);
         const lastItem = batch[batch.length - 1];
@@ -369,21 +379,21 @@ export default function ExportPage() {
 
       const rawTags = await db.tags.toArray();
       const rawCategories = await db.categories.toArray();
-      const rawAttachments = await db.attachments.toArray();
-      const rawOrigins = await db.recordOrigins.toArray();
-      const rawCustomFields = await db.customFields.toArray();
+      const rawAttachments = await getAllAttachments();
+      const rawOrigins = await getAllRecordOrigins();
+      const rawCustomFields = await getAllCustomFields();
       const rawOwners = await db.owners.toArray();
       const rawWalletNames = await db.walletNames.toArray();
       const rawSeedNames = await db.seedNames.toArray();
       const rawWalletSoftware = await db.walletSoftware.toArray();
-      const rawDerivationTemplates = await db.derivationTemplates.toArray();
-      const rawEvidence = await db.evidence.toArray();
-      const rawEvidenceAttachments = await db.evidenceAttachments.toArray();
-      const rawPriceData = await db.priceData.toArray();
-      const rawSettings = await db.settings.toArray();
-      const rawNodeSettings = await db.nodeSettings.toArray();
-      const rawUtxoLineage = await db.utxoLineage.toArray();
-      const rawCustodySegments = await db.custodySegments.toArray();
+      const rawDerivationTemplates = await getAllDerivationTemplates();
+      const rawEvidence = await getAllEvidence();
+      const rawEvidenceAttachments = await getAllEvidenceAttachments();
+      const rawPriceData = await getAllPriceData();
+      const rawSettings = await getAllSettings();
+      const rawNodeSettings = await getAllNodeSettings();
+      const rawUtxoLineage = await getAllUtxoLineage();
+      const rawCustodySegments = await getAllCustodySegments();
 
       setProgress(20);
       setProgressMessage("Generating CSV files...");

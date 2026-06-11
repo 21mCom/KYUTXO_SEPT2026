@@ -32,8 +32,8 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
-import { db, Record as DbRecord, TransactionParticipant, BlockchainTransaction, PriceData } from "@/lib/database";
-import { getParticipantsByTxid } from "@/lib/dataFacade";
+import { Record as DbRecord, TransactionParticipant, BlockchainTransaction, PriceData } from "@/lib/database";
+import { getParticipantsByTxid, getTransactionByTxid, getRecordsByType } from "@/lib/dataFacade";
 import { cn } from "@/lib/utils";
 
 interface UTXO {
@@ -103,19 +103,15 @@ export function UTXODetailPanel({ open, onClose, utxo, latestPrice }: UTXODetail
     const loadFundingTransaction = async () => {
       setIsLoadingFunding(true);
       try {
-        const tx = await db.blockchainTransactions.where('txid').equals(utxo.txid).first();
+        const tx = await getTransactionByTxid(utxo.txid);
         setFundingTx(tx || null);
 
         const txParticipants = await getParticipantsByTxid(utxo.txid);
         const inputs = txParticipants.filter(p => p.role === 'input');
 
         const addressSet = new Set(inputs.map(i => i.address));
-        const rawRecords = await db.records
-          .where('type').equals('address')
-          .filter(r => Boolean(r.inputString && addressSet.has(r.inputString)))
-          .toArray();
-
-        const records = rawRecords;
+        const allAddressRecords = await getRecordsByType('address');
+        const records = allAddressRecords.filter(r => Boolean(r.inputString && addressSet.has(r.inputString)));
 
         const recordMap = new Map<string, DbRecord>();
         records.forEach(r => {

@@ -29,7 +29,8 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { createRecord } from "@/hooks/use-records";
 import { syncTagsToMaster, syncCategoriesToMaster, createRecordOrigin, saveDerivationTemplate } from "@/lib/dataFacade";
-import { db, beginBulkOperation, endBulkOperation } from "@/lib/database";
+import { beginBulkOperation, endBulkOperation } from "@/lib/database";
+import { getRecordsByType } from "@/lib/dataFacade";
 import { updateRecord } from "@/hooks/use-records";
 import { 
   deriveDualChainAddresses,
@@ -365,7 +366,7 @@ export default function BulkImport() {
         vaultNotes: null,
       };
 
-      const existingRecords = await db.records.where('type').equals('address').toArray();
+      const existingRecords = await getRecordsByType('address');
       const recordLookup = new Map<string, (typeof existingRecords)[0]>();
       for (const r of existingRecords) {
         if (r.inputString) {

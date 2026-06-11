@@ -3,6 +3,8 @@
 
 import { db, type Record, type TransactionParticipant, type BlockchainTransaction, type AddressImportance } from './database';
 import { getParticipantsByAddress, getParticipantsByTxid, updateRecord } from './dataFacade';
+import { countAddressSyncState } from './data/address-sync-crud';
+import { addRecordOrigin } from './data/record-origins-crud';
 
 // Importance tier levels (higher number = higher importance)
 export const IMPORTANCE_TIERS: { [key in AddressImportance]: number } = {
@@ -445,7 +447,7 @@ export async function getProvenanceStats(): Promise<{
     .filter(r => !!r.label && r.label !== '' && r.owner !== 'Pending Review')
     .count();
 
-  const syncedAddresses = await db.addressSyncState.count();
+  const syncedAddresses = await countAddressSyncState();
   const transactionsStored = await db.blockchainTransactions.count();
   
   // Potential connections = pairs of labeled addresses
@@ -615,7 +617,7 @@ export async function upgradeAddressImportance(
     
     await updateRecord(recordId, { addressImportance: newImportance });
     
-    await db.recordOrigins.add({
+    await addRecordOrigin({
       recordId,
       originType: 'manual', // Manual action to upgrade
       createdAt: now,

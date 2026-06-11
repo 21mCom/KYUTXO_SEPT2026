@@ -2,7 +2,7 @@ import { useState, useCallback } from "react";
 import { Copy, Check, FileText } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { db, type Record as DbRecord } from "@/lib/database";
+import { getRecordsByInputString } from "@/lib/data/record-crud";
 import { useRecordPreview } from "@/contexts/RecordPreviewContext";
 
 interface AddressLinkProps {
@@ -52,7 +52,7 @@ export function AddressLink({
     
     setIsResolving(true);
     try {
-      const rawRecords = await db.records.where('inputString').equals(address).toArray();
+      const rawRecords = await getRecordsByInputString(address);
       if (rawRecords.length > 0) {
         const record = rawRecords[0];
         const foundRecordId = record.id!;

@@ -15,6 +15,15 @@ import {
   DISPOSITION_TYPE_OPTIONS,
 } from "@/lib/database";
 import { updateRecord, createRecord, getParticipantsByAddresses } from "@/lib/dataFacade";
+import {
+  countTransactions,
+  getTransactionsByTxids,
+} from "@/lib/data/transaction-crud";
+import {
+  getAddressRecordsByImportanceTiers,
+  getAddressRecordsByImportanceTiersFiltered,
+  getRecordsByType,
+} from "@/lib/data/record-crud";
 import { uploadAttachment } from "@/lib/attachments";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -145,7 +154,7 @@ export default function Nudgie() {
   const txRevisionRef = useRef(0);
   const txTableState = useLiveQuery(
     async () => {
-      const count = await db.blockchainTransactions.count();
+      const count = await countTransactions();
       txRevisionRef.current += 1;
       return { count, version: txRevisionRef.current };
     },
@@ -158,15 +167,11 @@ export default function Nudgie() {
   const rawAddressRecords = useLiveQuery(
     async () => {
       const [curatedRecords, blockchainRecords] = await Promise.all([
-        db.records
-          .where('[type+addressImportance]')
-          .anyOf(USER_CURATED_TIERS.map(tier => ['address', tier]))
-          .toArray(),
-        db.records
-          .where('[type+addressImportance]')
-          .anyOf([['address', 'blockchain-discovered'], ['address', 'pending-review']])
-          .filter(r => r.syncDepth === 0 || r.syncDepth === undefined)
-          .toArray()
+        getAddressRecordsByImportanceTiers(USER_CURATED_TIERS),
+        getAddressRecordsByImportanceTiersFiltered(
+          ['blockchain-discovered', 'pending-review'],
+          r => r.syncDepth === 0 || r.syncDepth === undefined,
+        ),
       ]);
       return [...curatedRecords, ...blockchainRecords];
     },
@@ -175,7 +180,7 @@ export default function Nudgie() {
 
   const rawTransactionRecords = useLiveQuery(
     async () => {
-      return db.records.where('type').equals('transaction').toArray();
+      return getRecordsByType('transaction');
     },
     []
   );
@@ -224,7 +229,7 @@ export default function Nudgie() {
         for (let i = 0; i < txidArray.length; i += batchSize) {
           checkAbort(signal);
           const batch = txidArray.slice(i, i + batchSize);
-          const txs = await db.blockchainTransactions.where('txid').anyOf(batch).toArray();
+          const txs = await getTransactionsByTxids(batch);
           results.push(...txs);
           if (i + batchSize < txidArray.length) {
             await yieldToUI();

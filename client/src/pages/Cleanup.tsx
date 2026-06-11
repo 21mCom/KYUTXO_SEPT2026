@@ -21,6 +21,8 @@ import {
 import { Trash2, Search, RefreshCw, AlertTriangle, CheckCircle2, Network, ArrowUpDown, Link2, Shield, XCircle, ChevronLeft, ChevronRight, Unplug } from "lucide-react";
 import { db, Record, RecordOrigin } from "@/lib/database";
 import { deleteRecord, getParticipantsByTxids } from "@/lib/dataFacade";
+import { getRecord } from "@/lib/data/record-crud";
+import { deleteRecordOriginsByRecordId } from "@/lib/data/record-origins-crud";
 import { yieldToUI } from "@/hooks/use-async-memo";
 
 type Scope = 'addresses' | 'transactions' | 'both';
@@ -608,11 +610,10 @@ export default function Cleanup() {
           await yieldToUI();
         }
 
-        const records = await db.records.where('id').equals(id).toArray();
-        if (records.length === 0) { skipped++; continue; }
+        const record = await getRecord(id);
+        if (!record) { skipped++; continue; }
 
         if (scanMode === 'blockchain-only' || scanMode === 'unconnected') {
-          const record = records[0];
           const origins = await bulkGetOriginsByRecordId(new Set([id]));
           const recordOrigins = origins.get(id) || [];
           if (!isBlockchainOnlyRecord(record, recordOrigins) || hasUserMetadata(record, recordOrigins)) {
@@ -621,7 +622,7 @@ export default function Cleanup() {
           }
         }
 
-        await db.recordOrigins.where('recordId').equals(id).delete();
+        await deleteRecordOriginsByRecordId(id);
         await deleteRecord(id);
         deleted++;
       }

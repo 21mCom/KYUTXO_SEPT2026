@@ -76,7 +76,7 @@ import {
 } from "@/components/ui/form";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useToast } from "@/hooks/use-toast";
-import { db, type Evidence, type EvidenceAttachment, EVIDENCE_DOCUMENT_TYPE_OPTIONS, EVIDENCE_IMPORTANCE_OPTIONS, type EvidenceDocumentType, type EvidenceImportance } from "@/lib/database";
+import { type Evidence, type EvidenceAttachment, EVIDENCE_DOCUMENT_TYPE_OPTIONS, EVIDENCE_IMPORTANCE_OPTIONS, type EvidenceDocumentType, type EvidenceImportance } from "@/lib/database";
 import { 
   addEvidence, 
   updateEvidence, 
@@ -84,6 +84,8 @@ import {
   getEvidenceAttachments,
   addEvidenceAttachment,
   deleteEvidenceAttachment,
+  getAllEvidence,
+  countEvidenceAttachmentsByEvidenceId,
 } from "@/lib/dataFacade";
 import { uploadFile, downloadFile, deleteFile, getFileBlob, isPreviewableType, getPreviewType } from "@/lib/attachments";
 import { useDropzone } from "react-dropzone";
@@ -127,7 +129,7 @@ export default function EvidencePage() {
   const [sortDirection, setSortDirection] = useState<'desc' | 'asc'>('desc');
   const [attachmentCounts, setAttachmentCounts] = useState<Map<number, number>>(new Map());
 
-  const rawEvidence = useLiveQuery(() => db.evidence.toArray(), []);
+  const rawEvidence = useLiveQuery(() => getAllEvidence(), []);
   const [loadedEvidence, setLoadedEvidence] = useState<Evidence[]>([]);
 
   useLiveQuery(async () => {
@@ -193,7 +195,7 @@ export default function EvidencePage() {
       const counts = new Map<number, number>();
       for (const ev of loadedEvidence) {
         if (ev.id) {
-          const count = await db.evidenceAttachments.where('evidenceId').equals(ev.id).count();
+          const count = await countEvidenceAttachmentsByEvidenceId(ev.id);
           counts.set(ev.id, count);
         }
       }

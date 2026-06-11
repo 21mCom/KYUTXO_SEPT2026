@@ -1,6 +1,9 @@
 import { createContext, useContext, useState, useCallback, useEffect, type ReactNode } from "react";
 import { useLocation } from "wouter";
-import { db, type Record as DbRecord, type Attachment, type VaultMetadata, type AddressImportance, type ChainType, type CustomField, type FlowType, type AcquisitionMethod, type DispositionType, type CounterpartyType } from "@/lib/database";
+import { type Record as DbRecord, type Attachment, type VaultMetadata, type AddressImportance, type ChainType, type CustomField, type FlowType, type AcquisitionMethod, type DispositionType, type CounterpartyType } from "@/lib/database";
+import { getAllCustomFields } from "@/lib/data/custom-fields-crud";
+import { getAttachmentsByRecordIdOrIdentifier } from "@/lib/data/attachments-crud";
+import { getRecord, getRecordsByInputString } from "@/lib/data/record-crud";
 import { RecordDetailPanel } from "@/components/RecordDetailPanel";
 import { useToast } from "@/hooks/use-toast";
 
@@ -109,7 +112,7 @@ export function RecordPreviewProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const loadCustomFields = async () => {
       try {
-        const fields = await db.customFields.toArray();
+        const fields = await getAllCustomFields();
         setCustomFieldDefs(fields);
       } catch (error) {
         console.error('[RecordPreview] Failed to load custom fields:', error);
@@ -120,12 +123,7 @@ export function RecordPreviewProvider({ children }: { children: ReactNode }) {
 
   const loadAttachments = useCallback(async (recordId: number, inputString: string) => {
     try {
-      const atts = await db.attachments
-        .where('recordId')
-        .equals(recordId)
-        .or('identifier')
-        .equals(inputString)
-        .toArray();
+      const atts = await getAttachmentsByRecordIdOrIdentifier(recordId, inputString);
       setAttachments(atts);
     } catch (error) {
       console.error('[RecordPreview] Failed to load attachments:', error);
@@ -137,7 +135,7 @@ export function RecordPreviewProvider({ children }: { children: ReactNode }) {
     setIsLoading(true);
     
     try {
-      const rawRecord = await db.records.get(recordId);
+      const rawRecord = await getRecord(recordId);
       if (!rawRecord) {
         setIsLoading(false);
         toast({
@@ -199,7 +197,7 @@ export function RecordPreviewProvider({ children }: { children: ReactNode }) {
     setIsLoading(true);
     
     try {
-      const rawRecords = await db.records.where('inputString').equals(inputString).toArray();
+      const rawRecords = await getRecordsByInputString(inputString);
       if (rawRecords.length === 0) {
         // No record found - navigate to Records page with search
         setIsLoading(false);

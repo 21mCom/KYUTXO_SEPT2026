@@ -1,19 +1,14 @@
 import { db, type Attachment, type EvidenceAttachment, type TransactionParticipant } from '../database';
+import { addAttachment, getAttachmentsByRecordId } from './attachments-crud';
 
 export async function createAttachment(
   data: Omit<Attachment, 'id' | 'createdAt'>
 ): Promise<number> {
-  const attachment: Attachment = {
-    ...data,
-    createdAt: Date.now(),
-  };
-
-  const id = await db.attachments.add(attachment);
-  return id as number;
+  return addAttachment(data, { skipNotification: true });
 }
 
 export async function getAttachments(recordId: number): Promise<Attachment[]> {
-  return db.attachments.where('recordId').equals(recordId).toArray();
+  return getAttachmentsByRecordId(recordId);
 }
 
 export async function getEvidenceAttachments(evidenceId: number): Promise<EvidenceAttachment[]> {

@@ -5,10 +5,11 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { db, beginBulkOperation, endBulkOperation } from "@/lib/database";
+import { beginBulkOperation, endBulkOperation } from "@/lib/database";
 import type { Record as DbRecord, Tag } from "@/lib/database";
 import { createTag } from "@/lib/data/vocabulary-crud";
-import { updateRecord } from "@/lib/data/record-crud";
+import { updateRecord, getRecordsByType } from "@/lib/data/record-crud";
+import { getInputParticipants } from "@/lib/data/transaction-crud";
 import { useTags } from "@/hooks/use-tags";
 import { useToast } from "@/hooks/use-toast";
 
@@ -91,7 +92,7 @@ export default function QuantumRiskScanner() {
       setResults([]);
       setScanState("analyzing");
 
-      const allRecords = await db.records.where("type").equals("address").toArray();
+      const allRecords = await getRecordsByType('address');
 
       if (allRecords.length === 0) {
         toast({
@@ -102,7 +103,7 @@ export default function QuantumRiskScanner() {
         return;
       }
 
-      const inputParticipants = await db.transactionParticipants.where("role").equals("input").toArray();
+      const inputParticipants = await getInputParticipants();
       const spentRecordIds = new Set(
         inputParticipants
           .filter(p => p.recordId != null)

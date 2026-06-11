@@ -2,7 +2,7 @@ import { Edit, Paperclip, Wallet as WalletIcon, User, Users, Upload, QrCode, Key
 import { formatBTC } from "@/lib/bitcoin";
 import DiscoveryTreeDialog from "./DiscoveryTreeDialog";
 import { useLocation } from "wouter";
-import { getRecordOrigins, getParticipantsByAddress, getParticipantsByTxid } from "@/lib/dataFacade";
+import { getRecordOrigins, getParticipantsByAddress, getParticipantsByTxid, getTransactionByTxid, getTransactionsByTxids } from "@/lib/dataFacade";
 import { detectSingularFieldConflicts } from "@/lib/conflict-detection";
 import { Link } from "wouter";
 import { useState, useEffect } from "react";
@@ -314,10 +314,7 @@ function TransactionHistorySection({ address }: { address: string }) {
         const batchSize = 500;
         for (let i = 0; i < txids.length; i += batchSize) {
           const batch = txids.slice(i, i + batchSize);
-          const txs = await db.blockchainTransactions
-            .where('txid')
-            .anyOf(batch)
-            .toArray();
+          const txs = await getTransactionsByTxids(batch);
           for (const tx of txs) {
             txMap.set(tx.txid, tx.blockTime);
           }
@@ -543,7 +540,7 @@ export function RecordDetailPanel({
         return;
       }
       try {
-        const tx = await db.blockchainTransactions.where('txid').equals(record.inputString).first();
+        const tx = await getTransactionByTxid(record.inputString);
         setBlockchainTx(tx ?? null);
       } catch (error) {
         console.error("Failed to fetch blockchain transaction:", error);

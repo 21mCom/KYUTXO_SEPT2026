@@ -14,6 +14,11 @@ const WRITE_METHODS = [
   'modify', 'clear',
 ];
 
+const READ_METHODS = [
+  'toArray', 'get', 'bulkGet', 'count', 'where', 'orderBy',
+  'each', 'filter', 'first', 'last', 'primaryKeys', 'anyOf',
+];
+
 const GUARDED_TABLES = [
   {
     table: 'records',
@@ -55,14 +60,104 @@ const GUARDED_TABLES = [
     crudFile: path.resolve(ROOT, 'client/src/lib/data/lineage-crud.ts'),
     label: 'lineage-crud.ts',
   },
+  {
+    table: 'attachments',
+    crudFile: path.resolve(ROOT, 'client/src/lib/data/attachments-crud.ts'),
+    label: 'attachments-crud.ts',
+  },
+  {
+    table: 'priceData',
+    crudFile: path.resolve(ROOT, 'client/src/lib/data/price-data-crud.ts'),
+    label: 'price-data-crud.ts',
+  },
+  {
+    table: 'settings',
+    crudFile: path.resolve(ROOT, 'client/src/lib/data/settings-crud.ts'),
+    label: 'settings-crud.ts',
+  },
+  {
+    table: 'nodeSettings',
+    crudFile: path.resolve(ROOT, 'client/src/lib/data/node-settings-crud.ts'),
+    label: 'node-settings-crud.ts',
+  },
+  {
+    table: 'customFields',
+    crudFile: path.resolve(ROOT, 'client/src/lib/data/custom-fields-crud.ts'),
+    label: 'custom-fields-crud.ts',
+  },
+  {
+    table: 'recordOrigins',
+    crudFile: path.resolve(ROOT, 'client/src/lib/data/record-origins-crud.ts'),
+    label: 'record-origins-crud.ts',
+  },
+  {
+    table: 'derivationTemplates',
+    crudFile: path.resolve(ROOT, 'client/src/lib/data/derivation-templates-crud.ts'),
+    label: 'derivation-templates-crud.ts',
+  },
+  {
+    table: 'addressSyncState',
+    crudFile: path.resolve(ROOT, 'client/src/lib/data/address-sync-crud.ts'),
+    label: 'address-sync-crud.ts',
+  },
+  {
+    table: 'pausedSyncState',
+    crudFile: path.resolve(ROOT, 'client/src/lib/data/paused-sync-crud.ts'),
+    label: 'paused-sync-crud.ts',
+  },
+  {
+    table: 'skippedAddresses',
+    crudFile: path.resolve(ROOT, 'client/src/lib/data/sync-protection-crud.ts'),
+    label: 'sync-protection-crud.ts',
+  },
+  {
+    table: 'addressBlacklist',
+    crudFile: path.resolve(ROOT, 'client/src/lib/data/sync-protection-crud.ts'),
+    label: 'sync-protection-crud.ts',
+  },
+  {
+    table: 'partialExportBundles',
+    crudFile: path.resolve(ROOT, 'client/src/lib/data/partial-export-crud.ts'),
+    label: 'partial-export-crud.ts',
+  },
 ];
 
+// Files that legitimately need direct table access — e.g. database initialization,
+// generic legacy migration utilities that iterate every table by reflection,
+// internal data-engine modules that compose primitive Dexie queries to build
+// higher-level helpers, and equivalence/regression tests that exercise the
+// underlying Dexie surface directly.
+const ALWAYS_ALLOWED_FILES = new Set([
+  path.resolve(ROOT, 'client/src/lib/database.ts'),
+  path.resolve(ROOT, 'client/src/lib/legacy-decrypt.ts'),
+  path.resolve(ROOT, 'client/src/lib/legacy-decrypt-files.ts'),
+  path.resolve(ROOT, 'client/src/lib/decryption-verification.ts'),
+  path.resolve(ROOT, 'client/src/lib/transaction-sync.ts'),
+  path.resolve(ROOT, 'client/src/lib/lineageEngine.ts'),
+  path.resolve(ROOT, 'client/src/lib/provenance.ts'),
+  path.resolve(ROOT, 'client/src/lib/attachments.ts'),
+  path.resolve(ROOT, 'client/src/lib/lightning-detection.ts'),
+  path.resolve(ROOT, 'client/src/lib/wallet-import/merge-utils.ts'),
+  path.resolve(ROOT, 'client/src/lib/testSeedData.ts'),
+  path.resolve(ROOT, 'client/src/lib/records-query.ts'),
+  path.resolve(ROOT, 'client/src/lib/records-query.equivalence.test.ts'),
+  path.resolve(ROOT, 'client/src/lib/privacy-audit.ts'),
+  path.resolve(ROOT, 'client/src/lib/data/record-queries.ts'),
+  path.resolve(ROOT, 'client/src/lib/data/vocabulary-crud.ts'),
+]);
+
 const TABLE_NAMES = GUARDED_TABLES.map(g => g.table);
-const PATTERN = new RegExp(
+const WRITE_PATTERN = new RegExp(
   `db\\.(${TABLE_NAMES.join('|')})\\.(${WRITE_METHODS.join('|')})\\b`
 );
+const READ_PATTERN = new RegExp(
+  `db\\.(${TABLE_NAMES.join('|')})\\.(${READ_METHODS.join('|')})\\b`
+);
 
-const ALLOWED_FILES_SET = new Set(GUARDED_TABLES.map(g => g.crudFile));
+const ALLOWED_FILES_SET = new Set([
+  ...GUARDED_TABLES.map(g => g.crudFile),
+  ...ALWAYS_ALLOWED_FILES,
+]);
 
 const SCAN_DIR = path.resolve(ROOT, 'client/src');
 const EXTENSIONS = new Set(['.ts', '.tsx']);
@@ -80,7 +175,8 @@ function collectFiles(dir, files = []) {
 }
 
 const files = collectFiles(SCAN_DIR);
-const violations = [];
+const writeViolations = [];
+const readViolations = [];
 
 for (const file of files) {
   const resolved = path.resolve(file);
@@ -88,11 +184,24 @@ for (const file of files) {
 
   const lines = fs.readFileSync(file, 'utf-8').split('\n');
   for (let i = 0; i < lines.length; i++) {
-    const match = lines[i].match(PATTERN);
-    if (match) {
-      const tableName = match[1];
+    const writeMatch = lines[i].match(WRITE_PATTERN);
+    if (writeMatch) {
+      const tableName = writeMatch[1];
       const guard = GUARDED_TABLES.find(g => g.table === tableName);
-      violations.push({
+      writeViolations.push({
+        file: path.relative(ROOT, file),
+        line: i + 1,
+        text: lines[i].trim(),
+        table: tableName,
+        crudLabel: guard ? guard.label : 'unknown',
+      });
+      continue;
+    }
+    const readMatch = lines[i].match(READ_PATTERN);
+    if (readMatch) {
+      const tableName = readMatch[1];
+      const guard = GUARDED_TABLES.find(g => g.table === tableName);
+      readViolations.push({
         file: path.relative(ROOT, file),
         line: i + 1,
         text: lines[i].trim(),
@@ -103,21 +212,38 @@ for (const file of files) {
   }
 }
 
-if (violations.length > 0) {
+const totalViolations = writeViolations.length + readViolations.length;
+
+if (writeViolations.length > 0) {
   console.error(
     '\x1b[31m%s\x1b[0m',
-    `Found ${violations.length} direct write(s) to guarded tables outside their CRUD layers:\n`
+    `Found ${writeViolations.length} direct write(s) to guarded tables outside their CRUD layers:\n`
   );
-  for (const v of violations) {
+  for (const v of writeViolations) {
     console.error(`  ${v.file}:${v.line}  [db.${v.table}]`);
     console.error(`    ${v.text}`);
     console.error(`    -> Route through ${v.crudLabel} (or via dataFacade.ts)\n`);
   }
+}
+
+if (readViolations.length > 0) {
+  console.error(
+    '\x1b[31m%s\x1b[0m',
+    `Found ${readViolations.length} direct read(s) of guarded tables outside their CRUD layers:\n`
+  );
+  for (const v of readViolations) {
+    console.error(`  ${v.file}:${v.line}  [db.${v.table}]`);
+    console.error(`    ${v.text}`);
+    console.error(`    -> Route through ${v.crudLabel} (or via dataFacade.ts)\n`);
+  }
+}
+
+if (totalViolations > 0) {
   process.exit(1);
 } else {
   console.log(
     '\x1b[32m%s\x1b[0m',
-    `All guarded tables clean: no direct writes found outside CRUD layers.`
+    `All guarded tables clean: no direct reads or writes found outside CRUD layers.`
   );
   console.log(`  Guarded: ${TABLE_NAMES.join(', ')}`);
 }

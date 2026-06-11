@@ -43,7 +43,12 @@ import { useToast } from "@/hooks/use-toast";
 import { 
   bulkUpdateRecords,
 } from "@/lib/dataFacade";
-import { db, type Record } from "@/lib/database";
+import {
+  countRecords,
+  getRecordsByIndexedFieldAnyOfFiltered,
+  getRecentRecordsFiltered,
+} from "@/lib/data/record-crud";
+import { type Record } from "@/lib/database";
 import { uploadAttachment, formatFileSize } from "@/lib/attachments";
 import { Progress } from "@/components/ui/progress";
 import { ScrollPositionIndicator } from "@/components/ScrollPositionIndicator";
@@ -155,12 +160,12 @@ async function runFilterQuery(
         ? (record: Record) => otherConditions.every(c => matchCondition(record, c))
         : () => true;
 
-      return db.records
-        .where(indexableCondition.field as string)
-        .anyOf(values)
-        .filter(filterFn)
-        .limit(limit)
-        .toArray();
+      return getRecordsByIndexedFieldAnyOfFiltered(
+        indexableCondition.field as string,
+        values,
+        filterFn,
+        limit,
+      );
     }
 
     const multiEntryCondition = conditions.find(c => {
@@ -180,21 +185,16 @@ async function runFilterQuery(
         ? (record: Record) => otherConditions.every(c => matchCondition(record, c))
         : () => true;
 
-      return db.records
-        .where(multiEntryCondition.field as string)
-        .anyOf(values)
-        .filter(filterFn)
-        .limit(limit)
-        .toArray();
+      return getRecordsByIndexedFieldAnyOfFiltered(
+        multiEntryCondition.field as string,
+        values,
+        filterFn,
+        limit,
+      );
     }
   }
 
-  return db.records
-    .orderBy('updatedAt')
-    .reverse()
-    .filter(matchRecord)
-    .limit(limit)
-    .toArray();
+  return getRecentRecordsFiltered(matchRecord, limit);
 }
 
 const PREVIEW_ROW_HEIGHT = 40;
@@ -470,7 +470,7 @@ export default function BulkEditor() {
   const dbChangeSignal = useDbChangeSignal(['records'], 500);
 
   useEffect(() => {
-    db.records.count().then(setTotalRecordCount).catch(() => setTotalRecordCount(null));
+    countRecords().then(setTotalRecordCount).catch(() => setTotalRecordCount(null));
   }, [dbChangeSignal]);
 
   useEffect(() => {

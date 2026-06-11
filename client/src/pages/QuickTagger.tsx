@@ -41,8 +41,8 @@ import { useOwners, createOwner } from "@/hooks/use-owners";
 import { useWalletNames, createWalletName } from "@/hooks/use-wallet-names";
 import { useSeedNames, createSeedName } from "@/hooks/use-seed-names";
 import { useWalletSoftware, createWalletSoftware } from "@/hooks/use-wallet-software";
-import { syncTagsToMaster, syncCategoriesToMaster, createRecordOrigin } from "@/lib/dataFacade";
-import { db, beginBulkOperation, endBulkOperation } from "@/lib/database";
+import { syncTagsToMaster, syncCategoriesToMaster, createRecordOrigin, getRecord } from "@/lib/dataFacade";
+import { beginBulkOperation, endBulkOperation } from "@/lib/database";
 import { validateBitcoinInput } from "@/lib/bitcoin";
 import { 
   COUNTERPARTY_TYPE_OPTIONS,
@@ -359,7 +359,7 @@ export default function QuickTagger() {
         }
 
         if (currentRecordId) {
-          const existingRecord = await db.records.get(currentRecordId);
+          const existingRecord = await getRecord(currentRecordId);
           if (existingRecord) {
             const mergedTags = Array.from(new Set([...existingRecord.tags, ...selectedTags]));
             const mergedCategories = Array.from(new Set([...existingRecord.categories, ...selectedCategories]));

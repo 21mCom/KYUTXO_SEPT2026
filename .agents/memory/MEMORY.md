@@ -1,0 +1,1 @@
+- [CRUD guard layer](crud-guard-layer.md) — guarded Dexie tables need typed helpers for reads+writes; typed helpers are stricter than Dexie, annotate tier arrays as `AddressImportance[]`.

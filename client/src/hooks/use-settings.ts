@@ -1,5 +1,17 @@
 import { useLiveQuery } from 'dexie-react-hooks';
-import { db, type Settings, type CustomField } from '@/lib/database';
+import { type Settings, type CustomField } from '@/lib/database';
+import {
+  getSettings as getStoredSettings,
+  updateSettings as updateStoredSettings,
+} from '@/lib/data/settings-crud';
+import {
+  addCustomField as addStoredCustomField,
+  updateCustomField as updateStoredCustomField,
+  deleteCustomField as deleteStoredCustomField,
+  getCustomField as getStoredCustomField,
+  getCustomFieldBySlug,
+  getAllCustomFields,
+} from '@/lib/data/custom-fields-crud';
 
 const defaultTableColumns = {
   tags: true,
@@ -29,7 +41,7 @@ const defaultFieldVisibility = {
 import { DEFAULT_CANCEL_CONFIRM_THRESHOLD } from '@/lib/buildProgress';
 
 export function useSettings() {
-  const settings = useLiveQuery(() => db.settings.get('default'));
+  const settings = useLiveQuery(() => getStoredSettings('default'));
   
   return {
     settings: settings || null,
@@ -42,7 +54,7 @@ export function useSettings() {
 }
 
 export function useCustomFields() {
-  const customFields = useLiveQuery(() => db.customFields.toArray());
+  const customFields = useLiveQuery(() => getAllCustomFields());
   
   return {
     customFields: customFields || [],
@@ -52,9 +64,9 @@ export function useCustomFields() {
 }
 
 export async function updateFieldVisibility(fields: Partial<Settings['fieldVisibility']>) {
-  const settings = await db.settings.get('default');
+  const settings = await getStoredSettings('default');
   if (settings) {
-    await db.settings.update('default', {
+    await updateStoredSettings('default', {
       fieldVisibility: {
         ...settings.fieldVisibility,
         ...fields,
@@ -64,9 +76,9 @@ export async function updateFieldVisibility(fields: Partial<Settings['fieldVisib
 }
 
 export async function toggleFieldVisibility(field: keyof Settings['fieldVisibility']) {
-  const settings = await db.settings.get('default');
+  const settings = await getStoredSettings('default');
   if (settings && settings.fieldVisibility) {
-    await db.settings.update('default', {
+    await updateStoredSettings('default', {
       fieldVisibility: {
         ...settings.fieldVisibility,
         [field]: !settings.fieldVisibility[field],
@@ -76,9 +88,9 @@ export async function toggleFieldVisibility(field: keyof Settings['fieldVisibili
 }
 
 export async function updateTableColumns(columns: Partial<Settings['tableColumns']>) {
-  const settings = await db.settings.get('default');
+  const settings = await getStoredSettings('default');
   if (settings) {
-    await db.settings.update('default', {
+    await updateStoredSettings('default', {
       tableColumns: {
         ...settings.tableColumns,
         ...columns,
@@ -88,9 +100,9 @@ export async function updateTableColumns(columns: Partial<Settings['tableColumns
 }
 
 export async function toggleTableColumn(column: keyof Settings['tableColumns']) {
-  const settings = await db.settings.get('default');
+  const settings = await getStoredSettings('default');
   if (settings && settings.tableColumns) {
-    await db.settings.update('default', {
+    await updateStoredSettings('default', {
       tableColumns: {
         ...settings.tableColumns,
         [column]: !settings.tableColumns[column],
@@ -100,19 +112,19 @@ export async function toggleTableColumn(column: keyof Settings['tableColumns']) 
 }
 
 export async function updateCancelConfirmThreshold(value: number) {
-  const settings = await db.settings.get('default');
+  const settings = await getStoredSettings('default');
   if (settings) {
-    await db.settings.update('default', {
+    await updateStoredSettings('default', {
       cancelConfirmThreshold: value,
     });
   }
 }
 
 export async function toggleCustomFieldColumn(slug: string) {
-  const settings = await db.settings.get('default');
+  const settings = await getStoredSettings('default');
   if (settings) {
     const currentColumns = settings.customFieldColumns || {};
-    await db.settings.update('default', {
+    await updateStoredSettings('default', {
       customFieldColumns: {
         ...currentColumns,
         [slug]: !currentColumns[slug],
@@ -134,21 +146,20 @@ export async function addCustomField(name: string): Promise<number | undefined> 
   const slug = generateSlug(name);
   
   // Check for duplicate slug
-  const existing = await db.customFields.where('slug').equals(slug).first();
+  const existing = await getCustomFieldBySlug(slug);
   if (existing) {
     throw new Error(`A field with this name already exists`);
   }
   
-  return db.customFields.add({
+  return addStoredCustomField({
     name,
     slug,
     enabled: true,
-    createdAt: Date.now(),
   });
 }
 
 export async function updateCustomField(id: number, updates: Partial<Pick<CustomField, 'name' | 'enabled'>>) {
-  const field = await db.customFields.get(id);
+  const field = await getStoredCustomField(id);
   if (!field) return;
   
   const updateData: Partial<CustomField> = {};
@@ -156,7 +167,7 @@ export async function updateCustomField(id: number, updates: Partial<Pick<Custom
   if (updates.name !== undefined && updates.name !== field.name) {
     const newSlug = generateSlug(updates.name);
     // Check for duplicate slug (excluding current field)
-    const existing = await db.customFields.where('slug').equals(newSlug).first();
+    const existing = await getCustomFieldBySlug(newSlug);
     if (existing && existing.id !== id) {
       throw new Error(`A field with this name already exists`);
     }
@@ -169,17 +180,17 @@ export async function updateCustomField(id: number, updates: Partial<Pick<Custom
   }
   
   if (Object.keys(updateData).length > 0) {
-    await db.customFields.update(id, updateData);
+    await updateStoredCustomField(id, updateData);
   }
 }
 
 export async function toggleCustomField(id: number) {
-  const field = await db.customFields.get(id);
+  const field = await getStoredCustomField(id);
   if (field) {
-    await db.customFields.update(id, { enabled: !field.enabled });
+    await updateStoredCustomField(id, { enabled: !field.enabled });
   }
 }
 
 export async function deleteCustomField(id: number) {
-  await db.customFields.delete(id);
+  await deleteStoredCustomField(id);
 }

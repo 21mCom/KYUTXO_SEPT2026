@@ -27,8 +27,9 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
-import { db, type Record as DBRecord, type RecordOrigin } from "@/lib/database";
-import { getRecordOrigins, updateRecord } from "@/lib/dataFacade";
+import { type Record as DBRecord, type RecordOrigin } from "@/lib/database";
+import { getRecordOrigins, updateRecord, getRecordsByIds } from "@/lib/dataFacade";
+import { getAllRecordOrigins } from "@/lib/data/record-origins-crud";
 import { 
   SINGULAR_FIELDS, 
   detectSingularFieldConflicts, 
@@ -71,7 +72,7 @@ export default function ConflictResolution() {
   async function loadRecordsWithConflicts() {
     setIsLoading(true);
     try {
-      const allOrigins = await db.recordOrigins.toArray();
+      const allOrigins = await getAllRecordOrigins();
       const originCountByRecordId = new Map<number, number>();
       allOrigins.forEach(o => {
         originCountByRecordId.set(o.recordId, (originCountByRecordId.get(o.recordId) || 0) + 1);
@@ -87,7 +88,7 @@ export default function ConflictResolution() {
         return;
       }
       
-      const records = await db.records.where('id').anyOf(multiOriginIds).toArray();
+      const records = await getRecordsByIds(multiOriginIds);
       
       const recordsWithConflictData: RecordWithConflicts[] = [];
       

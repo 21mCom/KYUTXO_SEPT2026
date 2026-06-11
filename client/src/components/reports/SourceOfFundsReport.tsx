@@ -1,7 +1,8 @@
 import { useState, useMemo } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
-import { db, type Record as DBRecord, type TransactionParticipant, type BlockchainTransaction, type PriceData } from "@/lib/database";
-import { getParticipantsByAddress, getParticipantsByTxid } from "@/lib/dataFacade";
+import { type Record as DBRecord, type TransactionParticipant, type BlockchainTransaction, type PriceData } from "@/lib/database";
+import { getParticipantsByAddress, getParticipantsByTxid, getRecordsByType, getTransactionByTxid } from "@/lib/dataFacade";
+import { getPriceDataByKey, getLatestPriceOnOrBefore } from "@/lib/data/price-data-crud";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -51,7 +52,7 @@ export function SourceOfFundsReport() {
   const [currency, setCurrency] = useState("USD");
 
   const rawRecords = useLiveQuery(
-    () => db.records.where('type').equals('address').toArray(),
+    () => getRecordsByType('address'),
     []
   );
 
@@ -106,7 +107,7 @@ export function SourceOfFundsReport() {
       const currentOwner = record.owner;
 
       for (const txid of inputTxids) {
-        const tx = await db.blockchainTransactions.where('txid').equals(txid).first();
+        const tx = await getTransactionByTxid(txid);
         if (!tx) continue;
 
         const txParticipants = await getParticipantsByTxid(txid);
@@ -137,10 +138,7 @@ export function SourceOfFundsReport() {
         const primaryInput = inputRecords[0];
         
         const txDate = new Date(tx.blockTime * 1000).toISOString().split('T')[0];
-        const priceData = await db.priceData
-          .where('[date+currency+asset]')
-          .equals([txDate, currency, 'BTC'])
-          .first();
+        const priceData = await getPriceDataByKey(txDate, currency, 'BTC');
 
         const amountBTC = myOutput.amount / 100000000;
         const costBasisUSD = priceData?.close ? amountBTC * priceData.close : undefined;
@@ -162,11 +160,7 @@ export function SourceOfFundsReport() {
       fundingSources.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
       const today = new Date().toISOString().split('T')[0];
-      const currentPrice = await db.priceData
-        .where('date')
-        .belowOrEqual(today)
-        .and(p => p.currency === currency && p.asset === 'BTC')
-        .last();
+      const currentPrice = await getLatestPriceOnOrBefore(today, currency, 'BTC');
 
       const currentValueUSD = currentPrice?.close 
         ? (currentBalanceSats / 100000000) * currentPrice.close 

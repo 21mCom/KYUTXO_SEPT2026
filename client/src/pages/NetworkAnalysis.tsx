@@ -18,7 +18,13 @@ import {
   GitBranch,
   Circle,
 } from "lucide-react";
-import { db } from "@/lib/database";
+import {
+  getRecordsByType,
+  countTransactionParticipants,
+  getAllTransactionParticipants,
+  getParticipantsByRecordIds,
+  getParticipantsByTxids,
+} from "@/lib/dataFacade";
 import type { Record as KRecord, TransactionParticipant } from "@/lib/db-types";
 import {
   buildNetworkGraph,
@@ -88,7 +94,7 @@ export default function NetworkAnalysis() {
   useEffect(() => {
     (async () => {
       try {
-        const rawRecords = await db.records.where('type').equals('address').toArray();
+        const rawRecords = await getRecordsByType('address');
         const ownerSet = new Set<string>();
         const walletSet = new Set<string>();
         for (const r of rawRecords) {
@@ -120,7 +126,7 @@ export default function NetworkAnalysis() {
     abortRef.current = controller;
 
     try {
-      let rawRecords = await db.records.where('type').equals('address').toArray();
+      let rawRecords = await getRecordsByType('address');
       if (controller.signal.aborted) return;
 
       if (controller.signal.aborted) return;
@@ -147,7 +153,7 @@ export default function NetworkAnalysis() {
       let participants: TransactionParticipant[];
 
       if (filterMode === "all") {
-        const totalParticipants = await db.transactionParticipants.count();
+        const totalParticipants = await countTransactionParticipants();
         if (totalParticipants > MAX_NODES * 200) {
           setError(
             `Your transaction participant table has ${totalParticipants.toLocaleString()} entries. ` +
@@ -156,7 +162,7 @@ export default function NetworkAnalysis() {
           setIsAnalyzing(false);
           return;
         }
-        participants = await db.transactionParticipants.toArray();
+        participants = await getAllTransactionParticipants();
       } else {
         const batchSize = 500;
         const recordIds = filteredRecords.map(r => r.id).filter((id): id is number => id !== undefined);
@@ -165,10 +171,7 @@ export default function NetworkAnalysis() {
         for (let i = 0; i < recordIds.length; i += batchSize) {
           if (controller.signal.aborted) return;
           const batch = recordIds.slice(i, i + batchSize);
-          const batchParticipants = await db.transactionParticipants
-            .where('recordId')
-            .anyOf(batch)
-            .toArray();
+          const batchParticipants = await getParticipantsByRecordIds(batch);
           for (const p of batchParticipants) txidSet.add(p.txid);
           setProgress(`Loaded participants for ${Math.min(i + batchSize, recordIds.length).toLocaleString()} of ${recordIds.length.toLocaleString()} records...`);
         }
@@ -178,7 +181,7 @@ export default function NetworkAnalysis() {
         for (let i = 0; i < txids.length; i += batchSize) {
           if (controller.signal.aborted) return;
           const batch = txids.slice(i, i + batchSize);
-          const batchP = await db.transactionParticipants.where('txid').anyOf(batch).toArray();
+          const batchP = await getParticipantsByTxids(batch);
           participants.push(...batchP);
           if (i % (batchSize * 5) === 0) {
             setProgress(`Loaded participants for ${Math.min(i + batchSize, txids.length).toLocaleString()} of ${txids.length.toLocaleString()} transactions...`);

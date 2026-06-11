@@ -20,10 +20,10 @@ import { Progress } from "@/components/ui/progress";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { db, beginBulkOperation, endBulkOperation } from "@/lib/database";
+import { beginBulkOperation, endBulkOperation } from "@/lib/database";
 import type { Record as DbRecord } from "@/lib/database";
 import { createTag } from "@/lib/data/vocabulary-crud";
-import { updateRecord } from "@/lib/data/record-crud";
+import { updateRecord, getRecordsByType } from "@/lib/data/record-crud";
 import { useTags } from "@/hooks/use-tags";
 import { useOwners } from "@/hooks/use-owners";
 import { useWalletNames } from "@/hooks/use-wallet-names";
@@ -90,7 +90,7 @@ export default function PrivacyAudit() {
       setStatusMessage("Loading address records...");
       setScanState("analyzing");
 
-      let records = await db.records.where("type").equals("address").toArray();
+      let records = await getRecordsByType('address');
 
       if (records.length === 0) {
         toast({ title: "No Records", description: "No address records found to audit." });
@@ -174,7 +174,7 @@ export default function PrivacyAudit() {
         }
       }
 
-      const records = await db.records.where("type").equals("address").toArray();
+      const records = await getRecordsByType('address');
 
       const addressToRecord = new Map<string, DbRecord>();
       for (const r of records) {

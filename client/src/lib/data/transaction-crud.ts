@@ -1,3 +1,4 @@
+import type { IndexableType } from 'dexie';
 import { db, notifyDbChange, type BlockchainTransaction, type TransactionParticipant } from '../database';
 
 export type CreateTransactionData = Omit<BlockchainTransaction, 'id'>;
@@ -104,4 +105,119 @@ export async function clearAllTransactionData(
   if (!options?.skipNotification) {
     notifyDbChange(['blockchainTransactions', 'transactionParticipants']);
   }
+}
+
+// =============================================================================
+// READ HELPERS — blockchainTransactions
+// =============================================================================
+
+export async function getTransactionByTxid(
+  txid: string
+): Promise<BlockchainTransaction | undefined> {
+  return db.blockchainTransactions.where('txid').equals(txid).first();
+}
+
+export async function getTransactionsByTxids(
+  txids: string[]
+): Promise<BlockchainTransaction[]> {
+  if (txids.length === 0) return [];
+  return db.blockchainTransactions.where('txid').anyOf(txids).toArray();
+}
+
+export async function bulkGetTransactionsByPrimaryKeys(
+  keys: string[]
+): Promise<(BlockchainTransaction | undefined)[]> {
+  if (keys.length === 0) return [];
+  return db.blockchainTransactions.bulkGet(keys);
+}
+
+export async function countTransactions(): Promise<number> {
+  return db.blockchainTransactions.count();
+}
+
+export async function countTransactionsWithOpReturn(): Promise<number> {
+  return db.blockchainTransactions.where('hasOpReturn').equals(true as unknown as IndexableType).count();
+}
+
+export async function getTransactionsPageByBlockTime(
+  offset: number,
+  limit: number
+): Promise<BlockchainTransaction[]> {
+  return db.blockchainTransactions
+    .orderBy('blockTime')
+    .reverse()
+    .offset(offset)
+    .limit(limit)
+    .toArray();
+}
+
+export async function getOpReturnTransactionsPageByBlockTime(
+  offset: number,
+  limit: number
+): Promise<BlockchainTransaction[]> {
+  return db.blockchainTransactions
+    .orderBy('blockTime')
+    .reverse()
+    .filter(tx => tx.hasOpReturn === true)
+    .offset(offset)
+    .limit(limit)
+    .toArray();
+}
+
+export async function getTransactionsByTxidStartsWith(
+  prefix: string,
+  limit: number
+): Promise<BlockchainTransaction[]> {
+  return db.blockchainTransactions
+    .where('txid')
+    .startsWithIgnoreCase(prefix)
+    .limit(limit)
+    .toArray();
+}
+
+export async function getOrderedTransactionPrimaryKeysByBlockTime(): Promise<string[]> {
+  return (await db.blockchainTransactions
+    .orderBy('blockTime')
+    .reverse()
+    .primaryKeys()) as unknown as string[];
+}
+
+export async function getOpReturnTransactionPrimaryKeys(): Promise<string[]> {
+  return (await db.blockchainTransactions
+    .where('hasOpReturn')
+    .equals(true as unknown as IndexableType)
+    .primaryKeys()) as unknown as string[];
+}
+
+// =============================================================================
+// READ HELPERS — transactionParticipants
+// =============================================================================
+
+export async function countTransactionParticipants(): Promise<number> {
+  return db.transactionParticipants.count();
+}
+
+export async function getAllTransactionParticipants(): Promise<TransactionParticipant[]> {
+  return db.transactionParticipants.toArray();
+}
+
+export async function getInputParticipants(): Promise<TransactionParticipant[]> {
+  return db.transactionParticipants.where('role').equals('input').toArray();
+}
+
+export async function getParticipantsByPrevOutKeys(
+  keys: Array<[string, number]>
+): Promise<TransactionParticipant[]> {
+  if (keys.length === 0) return [];
+  return db.transactionParticipants
+    .where('[prevTxid+prevVout]')
+    .anyOf(keys)
+    .toArray();
+}
+
+export async function getParticipantsByRecordIds(
+  recordIds: number[]
+): Promise<TransactionParticipant[]> {
+  if (recordIds.length === 0) return [];
+  return db.transactionParticipants.where('recordId').anyOf(recordIds).toArray();
 }

@@ -24,7 +24,15 @@ import {
   Database
 } from "lucide-react";
 import { parsePriceCSV, DATA_SOURCE_URL, getSourceDisplayName, type ParseResult } from "@/lib/price-parser";
-import { db, type PriceData } from "@/lib/database";
+import { type PriceData } from "@/lib/database";
+import {
+  addPriceData,
+  updatePriceData,
+  clearPriceData,
+  countPriceData,
+  getPriceDataByKey,
+  getPriceDataByAsset,
+} from "@/lib/data/price-data-crud";
 
 export default function PriceImport() {
   const [, navigate] = useLocation();
@@ -40,10 +48,7 @@ export default function PriceImport() {
   const [existingDateRange, setExistingDateRange] = useState<{ first: string; last: string } | null>(null);
   
   const loadExistingDataInfo = useCallback(async (targetAsset: string, targetCurrency: string) => {
-    const existing = await db.priceData
-      .where('asset').equals(targetAsset)
-      .filter(p => p.currency === targetCurrency)
-      .toArray();
+    const existing = await getPriceDataByAsset(targetAsset, targetCurrency);
     
     setExistingCount(existing.length);
     
@@ -122,16 +127,17 @@ export default function PriceImport() {
       let updated = 0;
       
       for (const pricePoint of priceDataToInsert) {
-        const existing = await db.priceData
-          .where('[date+currency+asset]')
-          .equals([pricePoint.date, pricePoint.currency, pricePoint.asset])
-          .first();
+        const existing = await getPriceDataByKey(
+          pricePoint.date,
+          pricePoint.currency,
+          pricePoint.asset,
+        );
         
         if (existing) {
-          await db.priceData.update(existing.id!, pricePoint);
+          await updatePriceData(existing.id!, pricePoint);
           updated++;
         } else {
-          await db.priceData.add(pricePoint);
+          await addPriceData(pricePoint);
           inserted++;
         }
       }
@@ -156,8 +162,8 @@ export default function PriceImport() {
   
   const handleDeleteAllPriceData = async () => {
     try {
-      const count = await db.priceData.count();
-      await db.priceData.clear();
+      const count = await countPriceData();
+      await clearPriceData();
       toast({
         title: "Price Data Cleared",
         description: `Deleted ${count} price records.`,
