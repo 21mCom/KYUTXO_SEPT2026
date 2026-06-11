@@ -23,6 +23,19 @@ export const USER_CURATED_TIERS: AddressImportance[] = [
   'xpub-derived',
 ];
 
+// The complete set of importance tiers, ordered from highest to lowest priority
+// (matches the hierarchy documented on AddressImportance). Use this single source
+// of truth instead of re-declaring the full six-element array on each
+// page/component/engine so they never drift apart if the tier set changes.
+export const ALL_IMPORTANCE_TIERS: AddressImportance[] = [
+  'verified',
+  'manual',
+  'wallet-import',
+  'xpub-derived',
+  'blockchain-discovered',
+  'pending-review',
+];
+
 // Flow type for transactions - fundamental direction/purpose
 export type FlowType = 
   | 'received'        // Incoming funds from external source

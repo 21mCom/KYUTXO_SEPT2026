@@ -5,7 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Filter, Plus, X, ChevronDown, ChevronRight } from "lucide-react";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import type { AddressImportance } from "@/lib/database";
+import { type AddressImportance, ALL_IMPORTANCE_TIERS } from "@/lib/database";
 
 export interface ColumnFilter {
   id: string;
@@ -33,7 +33,7 @@ const FILTERABLE_FIELDS: FilterableField[] = [
   { key: 'tags', label: 'Tags', type: 'array' },
   { key: 'categories', label: 'Categories', type: 'array' },
   { key: 'source', label: 'Source', type: 'text' },
-  { key: 'addressImportance', label: 'Importance', type: 'enum', options: ['verified', 'manual', 'wallet-import', 'xpub-derived', 'blockchain-discovered', 'pending-review'] as AddressImportance[] },
+  { key: 'addressImportance', label: 'Importance', type: 'enum', options: ALL_IMPORTANCE_TIERS },
   { key: 'chainType', label: 'Chain', type: 'enum', options: ['mainnet', 'testnet', 'signet', 'regtest'] },
   { key: 'hasNotes', label: 'Has Notes', type: 'boolean' },
 ];

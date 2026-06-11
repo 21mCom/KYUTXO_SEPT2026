@@ -51,8 +51,6 @@ import { searchPendingClass } from "@/lib/search-pending-class";
 import { buildRecordsCollection, fetchRecordsPage } from "@/lib/records-query";
 import { getActivityBus } from "@/lib/activity-bus";
 
-const ALL_TIERS: AddressImportance[] = ['verified', 'manual', 'wallet-import', 'xpub-derived', 'blockchain-discovered', 'pending-review'];
-
 interface ConvertedRecord {
   id: string;
   type: "address" | "transaction" | "other";

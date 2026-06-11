@@ -73,15 +73,11 @@ import {
   type AddressExplorationResult,
   type ProvenanceFilter
 } from "@/lib/provenance";
-import { type Record as DbRecord, type AddressImportance, USER_CURATED_TIERS } from "@/lib/database";
+import { type Record as DbRecord, type AddressImportance, USER_CURATED_TIERS, ALL_IMPORTANCE_TIERS } from "@/lib/database";
 import { getRecordsByType } from "@/lib/dataFacade";
 import { formatDistanceToNow, format } from "date-fns";
 import { ContinuityProof } from "@/components/ContinuityProof";
 import { usePageShortcuts } from "@/hooks/use-page-shortcuts";
-
-const ALL_IMPORTANCE_TIERS: AddressImportance[] = [
-  'verified', 'manual', 'wallet-import', 'xpub-derived', 'blockchain-discovered', 'pending-review'
-];
 
 export default function Provenance() {
   const [, navigate] = useLocation();

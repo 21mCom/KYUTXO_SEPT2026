@@ -1,5 +1,5 @@
 import { useState, useEffect, type ReactNode } from 'react';
-import { db } from '@/lib/database';
+import { db, ALL_IMPORTANCE_TIERS } from '@/lib/database';
 import { countAttachments } from '@/lib/data/attachments-crud';
 import { countAddressSyncState } from '@/lib/data/address-sync-crud';
 import { countPriceData } from '@/lib/data/price-data-crud';
@@ -103,8 +103,6 @@ interface StatsData {
 }
 
 async function loadAllStats(): Promise<StatsData> {
-  const IMPORTANCE_TIERS = ['verified', 'manual', 'wallet-import', 'xpub-derived', 'blockchain-discovered', 'pending-review'];
-
   const [
     totalRecords,
     addressCount,
@@ -130,13 +128,13 @@ async function loadAllStats(): Promise<StatsData> {
     countTransactionParticipants(),
     countAddressSyncState(),
     countPriceData(),
-    ...IMPORTANCE_TIERS.map(tier =>
+    ...ALL_IMPORTANCE_TIERS.map(tier =>
       countRecordsByImportance(tier as Parameters<typeof countRecordsByImportance>[0])
     ),
   ]);
 
   const importanceBreakdown: { [key: string]: number } = {};
-  IMPORTANCE_TIERS.forEach((tier, i) => {
+  ALL_IMPORTANCE_TIERS.forEach((tier, i) => {
     importanceBreakdown[tier] = importanceCounts[i];
   });
 

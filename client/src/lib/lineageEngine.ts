@@ -8,7 +8,8 @@ import {
   type LineageConfidence,
   type CustodyStatus,
   type AddressImportance,
-  USER_CURATED_TIERS
+  USER_CURATED_TIERS,
+  ALL_IMPORTANCE_TIERS
 } from './database';
 import { getParticipantsByTxid, bulkAddUtxoLineage, addCustodySegment } from './dataFacade';
 import { getActivityBus } from './activity-bus';
@@ -65,9 +66,7 @@ async function getRecordForAddress(address: string): Promise<Record | undefined>
   if (records.length === 0) return undefined;
   
   // Get the best record (highest importance)
-  const importanceOrder: AddressImportance[] = [
-    'verified', 'manual', 'wallet-import', 'xpub-derived', 'blockchain-discovered', 'pending-review'
-  ];
+  const importanceOrder = ALL_IMPORTANCE_TIERS;
   
   let bestRecord = records[0];
   for (const record of records) {
