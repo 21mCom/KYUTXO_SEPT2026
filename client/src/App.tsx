@@ -10,7 +10,7 @@ import { AuthProvider, useAuth } from "@/contexts/AuthContext";
 import { RecordPreviewProvider } from "@/contexts/RecordPreviewContext";
 import { LoginScreen } from "@/components/LoginScreen";
 import { Button } from "@/components/ui/button";
-import { LogOut } from "lucide-react";
+import { LogOut, Pin, PinOff } from "lucide-react";
 import { useAdaptiveLocation } from "@/lib/hashLocation";
 import Dashboard from "@/pages/Dashboard";
 import ValueUpdaterPage from "@/pages/ValueUpdaterPage";
@@ -116,16 +116,17 @@ function AppRoutes() {
 function ActivityPulseDot() {
   const { tasks, isStuck, monitorEnabled } = useActivityBus();
   const [open, setOpen] = useState(false);
+  const [pinned, setPinned] = useState(false);
   const prevActiveRef = useRef(tasks.length > 0);
 
   useEffect(() => {
     const wasActive = prevActiveRef.current;
     const isActive = tasks.length > 0;
-    if (wasActive && !isActive && open) {
+    if (wasActive && !isActive && open && !pinned) {
       setOpen(false);
     }
     prevActiveRef.current = isActive;
-  }, [tasks.length, open]);
+  }, [tasks.length, open, pinned]);
 
   useEffect(() => {
     if (!monitorEnabled) return;
@@ -173,8 +174,22 @@ function ActivityPulseDot() {
         className="w-80 p-3"
         data-testid="popover-activity-monitor"
       >
-        <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-1">
-          Activity Monitor
+        <div className="flex items-center justify-between gap-2 mb-2 px-1">
+          <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+            Activity Monitor
+          </span>
+          <Button
+            size="icon"
+            variant="ghost"
+            className={`toggle-elevate ${pinned ? 'toggle-elevated' : ''}`}
+            onClick={() => setPinned(p => !p)}
+            title={pinned ? 'Unpin — popover will close when tasks finish' : 'Pin — keep popover open after tasks finish'}
+            aria-label={pinned ? 'Unpin activity monitor' : 'Pin activity monitor'}
+            aria-pressed={pinned}
+            data-testid="button-pin-activity-monitor"
+          >
+            {pinned ? <Pin className="h-4 w-4 text-foreground" /> : <PinOff className="h-4 w-4 text-muted-foreground" />}
+          </Button>
         </div>
         <ActivityMonitorBody />
       </PopoverContent>
