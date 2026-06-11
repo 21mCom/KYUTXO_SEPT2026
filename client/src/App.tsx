@@ -127,6 +127,24 @@ function ActivityPulseDot() {
     prevActiveRef.current = isActive;
   }, [tasks.length, open]);
 
+  useEffect(() => {
+    if (!monitorEnabled) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (
+        event.altKey &&
+        !event.metaKey &&
+        !event.ctrlKey &&
+        !event.shiftKey &&
+        (event.key === 'a' || event.key === 'A')
+      ) {
+        event.preventDefault();
+        setOpen(prev => !prev);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [monitorEnabled]);
+
   if (!monitorEnabled) return null;
   const active = tasks.length > 0;
   const dotClass = !active
@@ -135,10 +153,10 @@ function ActivityPulseDot() {
     ? 'bg-amber-500'
     : 'bg-green-500 animate-pulse';
   const title = !active
-    ? 'Activity monitor — idle (click to open)'
+    ? 'Activity monitor — idle (click or press Alt+A to open)'
     : isStuck
-    ? 'Operation appears stuck — click to open monitor'
-    : `${tasks.length} operation${tasks.length > 1 ? 's' : ''} in progress — click to open monitor`;
+    ? 'Operation appears stuck — click or press Alt+A to open monitor'
+    : `${tasks.length} operation${tasks.length > 1 ? 's' : ''} in progress — click or press Alt+A to open monitor`;
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
