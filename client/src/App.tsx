@@ -11,6 +11,7 @@ import { RecordPreviewProvider } from "@/contexts/RecordPreviewContext";
 import { LoginScreen } from "@/components/LoginScreen";
 import { Button } from "@/components/ui/button";
 import { LogOut, Pin, PinOff } from "lucide-react";
+import { KeyboardShortcutsDialog } from "@/components/KeyboardShortcutsDialog";
 import { useAdaptiveLocation } from "@/lib/hashLocation";
 import Dashboard from "@/pages/Dashboard";
 import ValueUpdaterPage from "@/pages/ValueUpdaterPage";
@@ -218,6 +219,7 @@ function AuthenticatedApp() {
                   <ActivityPulseDot />
                 </div>
                 <div className="flex items-center gap-2">
+                  <KeyboardShortcutsDialog />
                   <ThemeToggle />
                   <Button
                     size="icon"
