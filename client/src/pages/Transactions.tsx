@@ -43,9 +43,23 @@ import {
   Info
 } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { getParticipantsByTxids } from "@/lib/dataFacade";
+import { getParticipantsByTxids } from "@/lib/participant-repo";
 import { ClickableAddress } from "@/components/ClickableAddress";
 import { searchPendingClass } from "@/lib/search-pending-class";
+import { Switch } from "@/components/ui/switch";
+import {
+  isSqlitePrototypeEnabled,
+  setSqlitePrototypeEnabled,
+  setActiveBackend,
+  ensureSqliteInit,
+  getSqliteStatus,
+  seedSqlite,
+  cancelSqliteSeeding,
+  sqliteCountParticipants,
+  type SeedProgress,
+  type StorageMode,
+} from "@/lib/sqlite-client";
+import { Database } from "lucide-react";
 
 const ITEMS_PER_PAGE = 25;
 const MAX_COLLECTED_MATCHES = 50_000;
@@ -307,12 +321,14 @@ function VirtualizedTransactionList({
   toggleExpanded,
   baseAddressToRecord,
   onStatsChange,
+  backendVersion = 0,
 }: {
   transactions: BlockchainTransaction[];
   expandedTxs: Set<string>;
   toggleExpanded: (txid: string) => void;
   baseAddressToRecord: Map<string, Record>;
   onStatsChange?: (stats: VirtualizedLoadedStats) => void;
+  backendVersion?: number;
 }) {
   const parentRef = useRef<HTMLDivElement>(null);
   const participantCacheRef = useRef(new Map<string, TransactionParticipant[]>());
@@ -337,7 +353,7 @@ function VirtualizedTransactionList({
     statsRef.current = { volume: 0, txCount: 0, linkedAddresses: new Set(), allAddresses: new Set() };
     setCacheVersion(0);
     onStatsChange?.({ loadedVolume: 0, loadedLinkedAddressCount: 0, loadedTxCount: 0 });
-  }, [txIdentity]);
+  }, [txIdentity, backendVersion]);
 
   const virtualizer = useVirtualizer({
     count: transactions.length,
@@ -530,6 +546,85 @@ export default function Transactions() {
   const handleVirtualizedStatsChange = useCallback((stats: VirtualizedLoadedStats) => {
     setVirtualizedStats(stats);
   }, []);
+
+  // --- SQLite-WASM prototype (Task #229) -----------------------------------
+  const [sqliteEnabled, setSqliteEnabled] = useState(() => isSqlitePrototypeEnabled());
+  const [sqliteReady, setSqliteReady] = useState(false);
+  const [sqliteStorageMode, setSqliteStorageMode] = useState<StorageMode | null>(null);
+  const [seedProgress, setSeedProgress] = useState<SeedProgress | null>(null);
+  const [backendVersion, setBackendVersion] = useState(0);
+
+  const activateSqlite = useCallback(async () => {
+    try {
+      const initResult = await ensureSqliteInit();
+      setSqliteStorageMode(initResult.storageMode);
+      console.log(
+        `[sqlite-proto] initialized — SQLite ${initResult.sqliteVersion}, storage: ${initResult.storageMode}`
+      );
+
+      const status = await getSqliteStatus();
+      if (status.rowCount === 0) {
+        const result = await seedSqlite((p) => setSeedProgress(p));
+        setSeedProgress(null);
+        if (result.cancelled) {
+          console.log('[sqlite-proto] seeding cancelled by user');
+          return false;
+        }
+        console.log(
+          `[sqlite-proto] seeded ${result.rowCount.toLocaleString()} participants in ${result.durationMs.toFixed(0)}ms`
+        );
+      } else {
+        console.log(`[sqlite-proto] reusing persisted data: ${status.rowCount.toLocaleString()} participants`);
+      }
+
+      // One-time count benchmark for direct comparison.
+      const dexieT0 = performance.now();
+      const dexieCount = await db.transactionParticipants.count();
+      const dexieT1 = performance.now();
+      const sqliteT0 = performance.now();
+      const sqliteCount = await sqliteCountParticipants();
+      const sqliteT1 = performance.now();
+      console.log(
+        `[bench] countParticipants  Dexie ${(dexieT1 - dexieT0).toFixed(1)}ms (${dexieCount})  |  ` +
+          `SQLite ${(sqliteT1 - sqliteT0).toFixed(1)}ms (${sqliteCount})`
+      );
+
+      setActiveBackend('sqlite');
+      setSqliteReady(true);
+      setBackendVersion((v) => v + 1);
+      return true;
+    } catch (err) {
+      console.error('[sqlite-proto] activation failed', err);
+      setSeedProgress(null);
+      return false;
+    }
+  }, []);
+
+  const handleSqliteToggle = useCallback((checked: boolean) => {
+    setSqliteEnabled(checked);
+    setSqlitePrototypeEnabled(checked);
+    if (checked) {
+      activateSqlite();
+    } else {
+      setActiveBackend('dexie');
+      setSqliteReady(false);
+      setSeedProgress(null);
+      setBackendVersion((v) => v + 1);
+    }
+  }, [activateSqlite]);
+
+  // Restore active backend on mount if the preference was previously enabled.
+  useEffect(() => {
+    if (sqliteEnabled) {
+      activateSqlite();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const handleCancelSeed = useCallback(() => {
+    cancelSqliteSeeding();
+  }, []);
+  // -------------------------------------------------------------------------
 
   const [debouncedSearch, isSearchPending] = useDebouncedValue(search, PAGE_DEBOUNCE.Transactions);
 
@@ -901,7 +996,7 @@ export default function Transactions() {
       map.set(p.txid, existing);
     }
     return map;
-  }, [needsBroadParticipants, preFilteredTransactions], new Map<string, TransactionParticipant[]>());
+  }, [needsBroadParticipants, preFilteredTransactions, backendVersion], new Map<string, TransactionParticipant[]>());
 
   const { value: broadRecords } = useAsyncMemo(async (signal) => {
     const recordIds = new Set<number>();
@@ -984,7 +1079,7 @@ export default function Transactions() {
       map.set(p.txid, existing);
     }
     return map;
-  }, [needsClientSideFiltering, paginatedTransactionSlice, needsBroadParticipants, broadParticipantMap], new Map<string, TransactionParticipant[]>());
+  }, [needsClientSideFiltering, paginatedTransactionSlice, needsBroadParticipants, broadParticipantMap, backendVersion], new Map<string, TransactionParticipant[]>());
 
   const { value: pageRecords } = useAsyncMemo(async (signal) => {
     const recordIds = new Set<number>();
@@ -1153,14 +1248,54 @@ export default function Transactions() {
             View synced transaction data with amounts, fees, and linked addresses
           </p>
         </div>
-        <BlockchainToggle
-          checked={includeBlockchainDiscovered}
-          onCheckedChange={(checked) => {
-            setIncludeBlockchainDiscovered(checked);
-            setCurrentPage(1);
-          }}
-          hiddenCount={blockchainOnlyTxCount}
-        />
+        <div className="flex flex-col items-end gap-3">
+          <BlockchainToggle
+            checked={includeBlockchainDiscovered}
+            onCheckedChange={(checked) => {
+              setIncludeBlockchainDiscovered(checked);
+              setCurrentPage(1);
+            }}
+            hiddenCount={blockchainOnlyTxCount}
+          />
+          <div className="flex flex-col items-end gap-1.5" data-testid="sqlite-prototype-toggle">
+            <div className="flex items-center gap-2">
+              <Database className="h-4 w-4 text-muted-foreground" />
+              <span className="text-sm">SQLite-WASM prototype</span>
+              <Switch
+                checked={sqliteEnabled}
+                onCheckedChange={handleSqliteToggle}
+                disabled={!!seedProgress}
+                data-testid="switch-sqlite-backend"
+              />
+            </div>
+            {seedProgress ? (
+              <div className="flex items-center gap-2" data-testid="text-seed-progress">
+                <div className="w-40 h-1.5 bg-muted rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-primary rounded-full transition-all duration-300"
+                    style={{
+                      width: `${seedProgress.total > 0 ? Math.min(100, (seedProgress.processed / seedProgress.total) * 100) : 0}%`,
+                    }}
+                  />
+                </div>
+                <span className="text-xs text-muted-foreground tabular-nums">
+                  Seeding {seedProgress.processed.toLocaleString()}/{seedProgress.total.toLocaleString()}
+                </span>
+                <button
+                  className="text-xs text-muted-foreground underline hover-elevate rounded-md px-1"
+                  onClick={handleCancelSeed}
+                  data-testid="button-cancel-seed"
+                >
+                  Cancel
+                </button>
+              </div>
+            ) : sqliteEnabled && sqliteReady ? (
+              <span className="text-xs text-muted-foreground" data-testid="text-sqlite-status">
+                Active{sqliteStorageMode ? ` · ${sqliteStorageMode === 'opfs-sahpool' ? 'OPFS (persistent)' : 'in-memory (fallback)'}` : ''} · benchmarks in console
+              </span>
+            ) : null}
+          </div>
+        </div>
       </div>
 
       {/* Stats Overview */}
@@ -1426,6 +1561,7 @@ export default function Transactions() {
           toggleExpanded={toggleExpanded}
           baseAddressToRecord={addressToRecord}
           onStatsChange={handleVirtualizedStatsChange}
+          backendVersion={backendVersion}
         />
       ) : (
         <div className="flex-1 overflow-y-auto space-y-3">
