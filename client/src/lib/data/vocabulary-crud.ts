@@ -47,7 +47,7 @@ export async function deleteTag(id: number): Promise<void> {
   const tag = await db.tags.get(id);
   if (!tag) return;
 
-  const records = await db.records.filter(r => r.tags.includes(tag.name)).toArray();
+  const records = await db.records.where('tags').equals(tag.name).toArray();
   if (records.length > 0) {
     await bulkUpdateRecords(
       records.map(record => ({
@@ -61,7 +61,7 @@ export async function deleteTag(id: number): Promise<void> {
 }
 
 export async function getTagUsageCount(tagName: string): Promise<number> {
-  return db.records.filter(r => r.tags.includes(tagName)).count();
+  return db.records.where('tags').equals(tagName).count();
 }
 
 export async function createCategory(name: string): Promise<number> {
@@ -107,7 +107,7 @@ export async function deleteCategory(id: number): Promise<void> {
   const category = await db.categories.get(id);
   if (!category) return;
 
-  const records = await db.records.filter(r => r.categories.includes(category.name)).toArray();
+  const records = await db.records.where('categories').equals(category.name).toArray();
   if (records.length > 0) {
     await bulkUpdateRecords(
       records.map(record => ({
@@ -121,7 +121,7 @@ export async function deleteCategory(id: number): Promise<void> {
 }
 
 export async function getCategoryUsageCount(categoryName: string): Promise<number> {
-  return db.records.filter(r => r.categories.includes(categoryName)).count();
+  return db.records.where('categories').equals(categoryName).count();
 }
 
 export async function createOwner(name: string): Promise<number> {
@@ -315,7 +315,7 @@ export async function getWalletSoftwareUsageCount(walletSoftwareValue: string): 
 }
 
 export async function propagateTagRename(oldName: string, newName: string): Promise<number> {
-  const records = await db.records.filter(r => r.tags.includes(oldName)).toArray();
+  const records = await db.records.where('tags').equals(oldName).toArray();
   if (records.length === 0) return 0;
   await bulkUpdateRecords(
     records.map(record => ({
@@ -327,7 +327,7 @@ export async function propagateTagRename(oldName: string, newName: string): Prom
 }
 
 export async function propagateCategoryRename(oldName: string, newName: string): Promise<number> {
-  const records = await db.records.filter(r => r.categories.includes(oldName)).toArray();
+  const records = await db.records.where('categories').equals(oldName).toArray();
   if (records.length === 0) return 0;
   await bulkUpdateRecords(
     records.map(record => ({

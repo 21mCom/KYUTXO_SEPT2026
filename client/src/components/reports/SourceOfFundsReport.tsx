@@ -1,7 +1,7 @@
 import { useState, useMemo } from "react";
-import { useLiveQuery } from "dexie-react-hooks";
 import { type Record as DBRecord, type TransactionParticipant, type BlockchainTransaction, type PriceData } from "@/lib/database";
-import { getParticipantsByAddress, getParticipantsByTxid, getRecordsByType, getTransactionByTxid } from "@/lib/dataFacade";
+import { useAddressRecords } from "@/hooks/use-address-records";
+import { getParticipantsByAddress, getParticipantsByTxid, getTransactionByTxid } from "@/lib/dataFacade";
 import { getPriceDataByKey, getLatestPriceOnOrBefore } from "@/lib/data/price-data-crud";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -51,19 +51,8 @@ export function SourceOfFundsReport() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [currency, setCurrency] = useState("USD");
 
-  const rawRecords = useLiveQuery(
-    () => getRecordsByType('address'),
-    []
-  );
-
-  const records = useLiveQuery(
-    async () => {
-      if (!rawRecords) return [];
-      return rawRecords;
-    },
-    [rawRecords],
-    []
-  );
+  const { records: rawRecords } = useAddressRecords();
+  const records = rawRecords;
 
   const ownedRecords = useMemo(() => {
     if (!records) return [];

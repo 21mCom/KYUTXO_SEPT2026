@@ -31,6 +31,7 @@ import {
   getLatestAddressSyncState,
   getNodeSettings,
 } from './dataFacade';
+import { recomputeAddressStats } from './data/address-stats';
 
 // Legacy source filter type - kept for backwards compatibility
 export type SourceFilter = 'manual-only' | 'include-tx-import' | 'include-blockchain-sync' | 'all' | 'custom';
@@ -143,6 +144,10 @@ export class TransactionSyncService {
   private abortController: AbortController | null = null;
   private parentMetadataCache: Map<number, ParentMetadata> = new Map();
   private pendingDbNotifications: Set<string> = new Set();
+  // Address strings whose locally-stored transaction data changed during the
+  // current sync run. After the run completes we recompute their cached stats
+  // from local data only (no network). Reset at the start of each run.
+  private statsTouchedAddresses: Set<string> = new Set();
   private knownAddressSet: Set<string> | null = null;
   private connectedOnlyMode: boolean = false;
   private addressesFilteredCount: number = 0;
@@ -192,6 +197,23 @@ export class TransactionSyncService {
     if (this.pendingDbNotifications.size > 0) {
       notifyDbChange(Array.from(this.pendingDbNotifications), { origin: 'blockchain-sync' });
       this.pendingDbNotifications.clear();
+    }
+  }
+
+  /**
+   * Recompute cached per-address stats for the addresses this sync run touched,
+   * using LOCAL data only (participant rows + cached block times). Never makes
+   * any network call. Safe to call at the end of a sync run; it clears the
+   * touched-address set so subsequent runs start fresh.
+   */
+  private async recomputeTouchedAddressStats(): Promise<void> {
+    if (this.statsTouchedAddresses.size === 0) return;
+    const addresses = Array.from(this.statsTouchedAddresses);
+    this.statsTouchedAddresses = new Set();
+    try {
+      await recomputeAddressStats({ addresses, origin: 'blockchain-sync' });
+    } catch (err) {
+      console.warn('[TransactionSync] Address stats recompute failed (non-fatal):', err);
     }
   }
   
@@ -494,6 +516,7 @@ export class TransactionSyncService {
       }
     } finally {
       this.abortController = null;
+      await this.recomputeTouchedAddressStats();
       this.flushNotifications();
       this.parentMetadataCache.clear();
     }
@@ -1319,6 +1342,8 @@ export class TransactionSyncService {
     } finally {
       this.pauseRequested = false;
       this.abortController = null;
+      // Recompute cached stats for touched addresses from local data only.
+      await this.recomputeTouchedAddressStats();
       // Flush any remaining deferred notifications and clear caches
       this.flushNotifications();
       this.parentMetadataCache.clear();
@@ -1401,6 +1426,10 @@ export class TransactionSyncService {
       // Collect participants for batch insert
       const participantsBatch: TransactionParticipant[] = [];
 
+      // Record which addresses had their local tx data change, so we can
+      // recompute their cached stats from local data after the sync run.
+      this.statsTouchedAddresses.add(address);
+
       for (const input of parsed.inputs) {
         let inputRecordId: number | undefined;
         if (input.address) {
@@ -1416,6 +1445,8 @@ export class TransactionSyncService {
             await this.updateFirstSeenBlockTime(result.recordId, parsed.blockTime);
           }
         }
+
+        if (input.address) this.statsTouchedAddresses.add(input.address);
 
         participantsBatch.push({
           txid: parsed.txid,
@@ -1442,6 +1473,8 @@ export class TransactionSyncService {
           if (result.isNew) stats.newRecords++;
           await this.updateFirstSeenBlockTime(result.recordId, parsed.blockTime);
         }
+
+        if (output.address) this.statsTouchedAddresses.add(output.address);
 
         participantsBatch.push({
           txid: parsed.txid,
@@ -1588,6 +1621,9 @@ export class TransactionSyncService {
       const resolved = localOutputCache.get(key);
       if (resolved && resolved.address) {
         resolvedAddresses.add(resolved.address);
+        // These addresses now have a known input amount, so their balance
+        // changed — mark them for a local-only stats recompute.
+        this.statsTouchedAddresses.add(resolved.address);
       }
     }
 

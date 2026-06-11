@@ -19,6 +19,7 @@ import {
   getOrderedTransactionPrimaryKeysByBlockTime,
   getOpReturnTransactionPrimaryKeys,
   getParticipantsByRecordIds,
+  countTransactionParticipants,
 } from "@/lib/data/transaction-crud";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -591,7 +592,7 @@ export default function Transactions() {
 
       // One-time count benchmark for direct comparison.
       const dexieT0 = performance.now();
-      const dexieCount = await db.transactionParticipants.count();
+      const dexieCount = await countTransactionParticipants();
       const dexieT1 = performance.now();
       const sqliteT0 = performance.now();
       const sqliteCount = await sqliteCountParticipants();

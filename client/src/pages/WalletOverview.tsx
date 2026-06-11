@@ -31,7 +31,7 @@ import {
 } from "@/components/ui/table";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { Record as DbRecord } from "@/lib/database";
-import { getRecordsByType } from "@/lib/dataFacade";
+import { useAddressRecords } from "@/hooks/use-address-records";
 import { searchPendingClass } from "@/lib/search-pending-class";
 
 interface WalletStats {
@@ -143,11 +143,12 @@ export default function WalletOverview() {
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
   const [expandedWallets, setExpandedWallets] = useState<Set<string>>(new Set());
 
+  const { records: allAddressRecords } = useAddressRecords();
+
   const loadWalletStats = async () => {
     setLoading(true);
     try {
-      const rawRecords = await getRecordsByType('address');
-      const records = rawRecords;
+      const records = allAddressRecords;
 
       // Filter to only address records with wallet names
       const addressRecords = records.filter(r => r.walletName);
@@ -214,7 +215,8 @@ export default function WalletOverview() {
 
   useEffect(() => {
     loadWalletStats();
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [allAddressRecords]);
 
   const sortedAndFilteredStats = useMemo(() => {
     let filtered = walletStats;

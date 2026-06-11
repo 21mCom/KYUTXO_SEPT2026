@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { ArrowLeft, Search as SearchIcon, Database, Hash, ExternalLink, AlertCircle, Trash2, X, ChevronLeft, ChevronRight, Loader2 } from "lucide-react";
+import { ArrowLeft, Search as SearchIcon, Database, Hash, ExternalLink, AlertCircle, Trash2, X, ChevronLeft, ChevronRight, Loader2, RefreshCw } from "lucide-react";
 import { BlockchainToggle } from "@/components/BlockchainToggle";
 import { db, type Record as DbRecord, type VaultMetadata, type AddressImportance, type ChainType, type CustomField, type BlockchainTransaction, type TransactionParticipant } from "@/lib/database";
 import { useDbChangeSignal } from "@/hooks/use-db-change-signal";
@@ -24,6 +24,7 @@ import {
   countRecordsByType,
 } from "@/lib/data/record-crud";
 import { getTransactionsByTxidStartsWith } from "@/lib/data/transaction-crud";
+import { recomputeAddressStats } from "@/lib/data/address-stats";
 import { RecordTable } from "@/components/RecordTable";
 import { RecordDetailPanel } from "@/components/RecordDetailPanel";
 import { ClickableAddress } from "@/components/ClickableAddress";
@@ -168,6 +169,7 @@ export default function Records() {
   const [bulkDeleteDialogOpen, setBulkDeleteDialogOpen] = useState(false);
   const [singleDeleteTarget, setSingleDeleteTarget] = useState<string | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [isRecomputingSelection, setIsRecomputingSelection] = useState(false);
   
   const { toast } = useToast();
   
@@ -634,6 +636,29 @@ export default function Records() {
     }
   };
 
+  const handleRecomputeSelection = async () => {
+    if (selectedIds.size === 0) return;
+    setIsRecomputingSelection(true);
+    try {
+      const recordIds = Array.from(selectedIds)
+        .map(id => parseInt(id))
+        .filter(n => !Number.isNaN(n));
+      const result = await recomputeAddressStats({ recordIds, origin: "user" });
+      toast({
+        title: "Stats Recomputed",
+        description: `Updated cached stats for ${result.updated.toLocaleString()} address${result.updated !== 1 ? "es" : ""}.`,
+      });
+    } catch (error) {
+      toast({
+        title: "Recompute failed",
+        description: error instanceof Error ? error.message : "Failed to recompute stats",
+        variant: "destructive",
+      });
+    } finally {
+      setIsRecomputingSelection(false);
+    }
+  };
+
   const handleDeleteRequest = (id: string) => {
     setSingleDeleteTarget(id);
   };
@@ -798,15 +823,31 @@ export default function Records() {
                 Clear
               </Button>
             </div>
-            <Button
-              variant="destructive"
-              size="sm"
-              onClick={() => setBulkDeleteDialogOpen(true)}
-              data-testid="button-bulk-delete"
-            >
-              <Trash2 className="h-4 w-4 mr-1" />
-              Delete Selected
-            </Button>
+            <div className="flex items-center gap-2 flex-wrap">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleRecomputeSelection}
+                disabled={isRecomputingSelection}
+                data-testid="button-recompute-selection"
+              >
+                {isRecomputingSelection ? (
+                  <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+                ) : (
+                  <RefreshCw className="h-4 w-4 mr-1" />
+                )}
+                Recompute Stats
+              </Button>
+              <Button
+                variant="destructive"
+                size="sm"
+                onClick={() => setBulkDeleteDialogOpen(true)}
+                data-testid="button-bulk-delete"
+              >
+                <Trash2 className="h-4 w-4 mr-1" />
+                Delete Selected
+              </Button>
+            </div>
           </div>
         )}
 

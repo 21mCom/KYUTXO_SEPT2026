@@ -1,7 +1,7 @@
 import { useState, useMemo } from "react";
-import { useLiveQuery } from "dexie-react-hooks";
 import { type Record as DBRecord, type TransactionParticipant, type BlockchainTransaction, type AddressImportance } from "@/lib/database";
-import { getParticipantsByAddress, getParticipantsByTxid, getRecordsByType } from "@/lib/dataFacade";
+import { useAddressRecords } from "@/hooks/use-address-records";
+import { getParticipantsByAddress, getParticipantsByTxid } from "@/lib/dataFacade";
 import { useRecordPreview } from "@/contexts/RecordPreviewContext";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -48,19 +48,8 @@ export function HopPointReport() {
   const [connections, setConnections] = useState<ConnectionContext[]>([]);
   const [minTierFilter, setMinTierFilter] = useState<AddressImportance>('xpub-derived');
 
-  const rawRecords = useLiveQuery(
-    () => getRecordsByType('address'),
-    []
-  );
-
-  const records = useLiveQuery(
-    async () => {
-      if (!rawRecords) return [];
-      return rawRecords;
-    },
-    [rawRecords],
-    []
-  );
+  const { records: rawRecords } = useAddressRecords();
+  const records = rawRecords;
 
   const knownAddresses = useMemo(() => {
     if (!records) return new Set<string>();

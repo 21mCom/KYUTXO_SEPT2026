@@ -146,6 +146,22 @@ export interface Record {
   // For addresses: earliest tx involving this address
   // For transactions: the block confirmation time
   firstSeenBlockTime?: number;
+
+  // === Per-address stats cache (address-type records only) ===
+  // These are a cache derived from locally-stored transaction data, computed
+  // during user-initiated sync or a local-only recompute. They are NEVER kept
+  // fresh by any background/automatic network access.
+  // Standard-mode balance in satoshis (sum of outputs to this address minus
+  // sum of inputs from this address), as computed from participant rows.
+  cachedBalanceSats?: number;
+  // Number of distinct transactions involving this address.
+  cachedTxCount?: number;
+  // Block time (Unix seconds) of the most recent transaction for this address.
+  cachedLastActivityTime?: number;
+  // Timestamp (ms) when the stats cache was last computed. When undefined, the
+  // address has no fetched transaction data yet → UI shows "not synced" instead
+  // of a misleading zero balance.
+  statsComputedAt?: number;
   
   // === Transaction-specific metadata fields ===
   // Flow type: direction/purpose of the transaction

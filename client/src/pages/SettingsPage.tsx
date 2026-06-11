@@ -57,6 +57,7 @@ import {
   restoreWalletSoftware,
 } from "@/lib/data/vocabulary-crud";
 import { bulkCreateRecords, clearAllRecords, getRecordsByInputStrings, type CreateRecordData } from "@/lib/data/record-crud";
+import { recomputeAddressStats } from "@/lib/data/address-stats";
 import { clearTransactions, clearParticipants } from "@/lib/data/transaction-crud";
 import { addUtxoLineage, addCustodySegment, clearUtxoLineage, clearCustodySegments } from "@/lib/data/lineage-crud";
 import { bulkAddEvidence, clearEvidence, clearEvidenceAttachments, addEvidenceAttachment as addEvidenceAttachmentCrud } from "@/lib/data/evidence-crud";
@@ -121,6 +122,13 @@ export default function SettingsPage() {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [isChangingPassword, setIsChangingPassword] = useState(false);
   const [isMigratingAttachments, setIsMigratingAttachments] = useState(false);
+
+  // Recompute address stats state
+  const [isRecomputingStats, setIsRecomputingStats] = useState(false);
+  const [recomputeProgress, setRecomputeProgress] = useState(0);
+  const [recomputeMessage, setRecomputeMessage] = useState("");
+  const recomputeAbortRef = useRef<AbortController | null>(null);
+
   const [searchFadeIntensity, setSearchFadeIntensity] = useState<SearchFadeOption>(getSearchFadePreference);
   const [, setIsStripRunning] = useState(false);
   const { monitorEnabled, setMonitorEnabled } = useActivityBus();
@@ -442,6 +450,57 @@ export default function SettingsPage() {
     } finally {
       setIsMigratingAttachments(false);
     }
+  };
+
+  const handleRecomputeStats = async () => {
+    const controller = new AbortController();
+    recomputeAbortRef.current = controller;
+    setIsRecomputingStats(true);
+    setRecomputeProgress(0);
+    setRecomputeMessage("Preparing...");
+    try {
+      const result = await recomputeAddressStats({
+        origin: "user",
+        signal: controller.signal,
+        onProgress: ({ processed, total }) => {
+          const pct = total > 0 ? Math.round((processed / total) * 100) : 100;
+          setRecomputeProgress(pct);
+          setRecomputeMessage(
+            total > 0
+              ? `Processed ${processed.toLocaleString()} of ${total.toLocaleString()} addresses...`
+              : "No address records to process.",
+          );
+        },
+      });
+      if (result.cancelled) {
+        toast({
+          title: "Recompute Cancelled",
+          description: `Stopped after updating ${result.updated.toLocaleString()} address${result.updated !== 1 ? "es" : ""}.`,
+        });
+      } else {
+        toast({
+          title: "Stats Recomputed",
+          description: `Updated cached stats for ${result.updated.toLocaleString()} address${result.updated !== 1 ? "es" : ""}.`,
+        });
+      }
+    } catch (error) {
+      console.error("Recompute address stats failed:", error);
+      toast({
+        variant: "destructive",
+        title: "Recompute Failed",
+        description: error instanceof Error ? error.message : "An error occurred while recomputing stats.",
+      });
+    } finally {
+      recomputeAbortRef.current = null;
+      setIsRecomputingStats(false);
+      setRecomputeProgress(0);
+      setRecomputeMessage("");
+    }
+  };
+
+  const handleCancelRecompute = () => {
+    recomputeAbortRef.current?.abort();
+    setRecomputeMessage("Cancelling...");
   };
 
   // Handle file selection for restore
@@ -1490,6 +1549,35 @@ export default function SettingsPage() {
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <div>
+                <Label className="text-base">Recompute Address Stats</Label>
+                <p className="text-sm text-muted-foreground">
+                  Rebuild cached balances, transaction counts, and last-activity dates from locally stored data. No network access.
+                </p>
+              </div>
+              <Button
+                variant="outline"
+                onClick={handleRecomputeStats}
+                disabled={isRecomputingStats}
+                data-testid="button-recompute-stats"
+              >
+                {isRecomputingStats ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Recomputing...
+                  </>
+                ) : (
+                  <>
+                    <RefreshCw className="h-4 w-4 mr-2" />
+                    Recompute
+                  </>
+                )}
+              </Button>
+            </div>
+
+            <Separator />
+
             <div className="flex items-center justify-between">
               <div>
                 <Label className="text-base">Restore from Backup</Label>
@@ -1880,6 +1968,32 @@ export default function SettingsPage() {
                   Restore Backup
                 </>
               )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isRecomputingStats}>
+        <DialogContent className="sm:max-w-md" data-testid="dialog-recompute-stats">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <RefreshCw className="h-5 w-5" />
+              Recomputing Address Stats
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <Progress value={recomputeProgress} data-testid="progress-recompute-stats" />
+            <p className="text-sm text-muted-foreground" data-testid="text-recompute-message">
+              {recomputeMessage}
+            </p>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={handleCancelRecompute}
+              data-testid="button-cancel-recompute"
+            >
+              Cancel
             </Button>
           </DialogFooter>
         </DialogContent>

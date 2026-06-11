@@ -1,8 +1,8 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { useDbChangeSignal } from "@/hooks/use-db-change-signal";
+import { useAddressRecords } from "@/hooks/use-address-records";
 import { useLiveQuery } from "dexie-react-hooks";
 import { BlockchainTransaction, TransactionParticipant, Record as DbRecord } from "@/lib/database";
-import { getRecordsByType } from "@/lib/data/record-crud";
 import { getTransactionsByTxids } from "@/lib/data/transaction-crud";
 import { getBtcUsdPriceData } from "@/lib/data/price-data-crud";
 
@@ -184,10 +184,7 @@ export default function BalanceOverview() {
   const [computingGroup, setComputingGroup] = useState<string | null>(null);
   const [computedCount, setComputedCount] = useState(0);
 
-  const rawRecords = useLiveQuery(
-    () => getRecordsByType('address'),
-    []
-  );
+  const { records: rawRecords } = useAddressRecords();
 
   const priceData = useLiveQuery(
     () => getBtcUsdPriceData(),

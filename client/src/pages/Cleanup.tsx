@@ -23,6 +23,7 @@ import { db, Record, RecordOrigin } from "@/lib/database";
 import { deleteRecord, getParticipantsByTxids } from "@/lib/dataFacade";
 import { getRecord } from "@/lib/data/record-crud";
 import { deleteRecordOriginsByRecordId } from "@/lib/data/record-origins-crud";
+import { recomputeAddressStats } from "@/lib/data/address-stats";
 import { yieldToUI } from "@/hooks/use-async-memo";
 
 type Scope = 'addresses' | 'transactions' | 'both';
@@ -603,6 +604,11 @@ export default function Cleanup() {
       const idsToDelete = Array.from(selectedIds);
       setDeleteProgress({ current: 0, total: idsToDelete.length });
 
+      // Track addresses whose cached stats may be affected by the deletion so we
+      // can recompute them locally afterwards (no network access).
+      const affectedAddresses = new Set<string>();
+      const deletedTxids: string[] = [];
+
       for (let i = 0; i < idsToDelete.length; i++) {
         const id = idsToDelete[i];
         if (i % 10 === 0) {
@@ -622,13 +628,36 @@ export default function Cleanup() {
           }
         }
 
+        if (record.type === 'address' && record.inputString) {
+          affectedAddresses.add(record.inputString);
+        } else if (record.type === 'transaction' && record.inputString) {
+          deletedTxids.push(record.inputString);
+        }
+
         await deleteRecordOriginsByRecordId(id);
         await deleteRecord(id);
         deleted++;
       }
 
+      // Collect participant addresses of any deleted transaction records — these
+      // are the addresses whose balances/counts could change.
+      if (deletedTxids.length > 0) {
+        const participants = await getParticipantsByTxids(deletedTxids);
+        for (const p of participants) {
+          if (p.address) affectedAddresses.add(p.address);
+        }
+      }
+
       setCandidates(prev => prev.filter(c => !selectedIds.has(c.record.id!)));
       setSelectedIds(new Set());
+
+      if (affectedAddresses.size > 0) {
+        try {
+          await recomputeAddressStats({ addresses: Array.from(affectedAddresses), origin: "user" });
+        } catch (statsError) {
+          console.error('Failed to recompute address stats after cleanup:', statsError);
+        }
+      }
 
       const desc = skipped > 0
         ? `Deleted ${deleted} records. Skipped ${skipped} records that no longer qualify.`

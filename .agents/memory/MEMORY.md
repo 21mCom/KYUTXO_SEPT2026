@@ -1,1 +1,3 @@
 - [CRUD guard layer](crud-guard-layer.md) — guarded Dexie tables need typed helpers for reads+writes; typed helpers are stricter than Dexie, annotate tier arrays as `AddressImportance[]`.
+- [Address-records loading & sync-signal scoping](address-records-hook.md) — analysis pages load address records via a shared hook over the debounced db-change signal bus, NOT raw useLiveQuery, to scope blockchain-sync write floods.
+- [No automatic network access](offline-network-constraint.md) — KYUTXO stats/recompute must stay local-only (IndexedDB or during user-initiated sync); never add background/automatic network calls.

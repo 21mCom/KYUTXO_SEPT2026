@@ -344,6 +344,72 @@ export async function bulkUpdateRecords(
   }
 }
 
+export interface AddressStatsCacheValues {
+  cachedBalanceSats: number;
+  cachedTxCount: number;
+  cachedLastActivityTime: number;
+  statsComputedAt: number;
+}
+
+export interface BulkUpdateAddressStatsOptions {
+  skipNotification?: boolean;
+  origin?: 'user' | 'blockchain-sync' | string;
+}
+
+/**
+ * Write per-address stats cache values onto address records. This is the only
+ * sanctioned path for persisting the stats cache (CRUD-guard compliant). It uses
+ * Dexie's bulkPut after merging, so it never clobbers other fields.
+ */
+export async function bulkUpdateAddressStats(
+  updates: Array<{ id: number; stats: AddressStatsCacheValues | null }>,
+  options?: BulkUpdateAddressStatsOptions
+): Promise<number> {
+  if (updates.length === 0) return 0;
+
+  const ids = updates.map(u => u.id);
+  const existing = await db.records.where('id').anyOf(ids).toArray();
+  const existingMap = new Map<number, Record>();
+  for (const r of existing) {
+    if (r.id != null) existingMap.set(r.id, r);
+  }
+
+  const toSave: Record[] = [];
+  for (const { id, stats } of updates) {
+    const current = existingMap.get(id);
+    if (!current) continue;
+    if (stats === null) {
+      // Reset to "not synced" — strip the cache fields entirely.
+      const cleared = { ...current };
+      delete cleared.cachedBalanceSats;
+      delete cleared.cachedTxCount;
+      delete cleared.cachedLastActivityTime;
+      delete cleared.statsComputedAt;
+      toSave.push(cleared);
+    } else {
+      toSave.push({
+        ...current,
+        cachedBalanceSats: stats.cachedBalanceSats,
+        cachedTxCount: stats.cachedTxCount,
+        cachedLastActivityTime: stats.cachedLastActivityTime,
+        statsComputedAt: stats.statsComputedAt,
+      });
+    }
+  }
+
+  if (toSave.length === 0) return 0;
+
+  await db.transaction('rw', db.records, async () => {
+    await db.records.bulkPut(toSave);
+  });
+
+  if (!options?.skipNotification) {
+    notifyDbChange('records', options?.origin ? { origin: options.origin } : undefined);
+  }
+
+  return toSave.length;
+}
+
 export interface DeleteRecordOptions {
   skipNotification?: boolean;
 }

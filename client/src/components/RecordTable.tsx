@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef } from "react";
+import { useState, useEffect, useMemo } from "react";
 import {
   Table,
   TableBody,
@@ -29,7 +29,6 @@ import {
 } from "@/components/ui/popover";
 import { useSettings, useCustomFields, toggleTableColumn, toggleCustomFieldColumn } from "@/hooks/use-settings";
 import { db, type CustomField } from "@/lib/database";
-import { getParticipantsByAddresses } from "@/lib/dataFacade";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatBTC } from "@/lib/bitcoin";
@@ -41,6 +40,7 @@ interface AddressStats {
   balanceSats: number;
   lastTxDate: number;
   txCount: number;
+  synced: boolean;
 }
 
 // Format Unix timestamp (seconds) to human-readable date
@@ -96,6 +96,10 @@ interface Record {
   syncDepth?: number;
   maxSyncedDepth?: number;
   firstSeenBlockTime?: number;
+  cachedBalanceSats?: number;
+  cachedTxCount?: number;
+  cachedLastActivityTime?: number;
+  statsComputedAt?: number;
 }
 
 interface RecordTableProps {
@@ -176,19 +180,23 @@ export function RecordTable({
   const sortColumn = isInternalComputedSort ? internalSortColumn : (isExternallyControlled ? (externalSortColumn ?? null) : internalSortColumn);
   const sortDirection = isInternalComputedSort ? internalSortDirection : (isExternallyControlled ? (externalSortDirection ?? null) : internalSortDirection);
 
-  const [localAddressStats, setLocalAddressStats] = useState<Map<string, AddressStats>>(new Map());
-  const [localStatsLoading, setLocalStatsLoading] = useState(false);
+  // Address stats are read directly from the per-record cache (computed locally
+  // during sync / manual recompute). No participant scan or network access here.
+  const localAddressStats = useMemo(() => {
+    const result = new Map<string, AddressStats>();
+    for (const record of records) {
+      if (record.type !== 'address' || !record.inputString || record.id == null) continue;
+      result.set(String(record.id), {
+        balanceSats: record.cachedBalanceSats ?? 0,
+        lastTxDate: record.cachedLastActivityTime ?? 0,
+        txCount: record.cachedTxCount ?? 0,
+        synced: record.statsComputedAt != null,
+      });
+    }
+    return result;
+  }, [records]);
   const addressStats = precomputedAddressStats || localAddressStats;
-  const statsLoading = precomputedAddressStats ? (externalStatsLoading ?? false) : localStatsLoading;
-
-  // Always-current ref so the stats effect reads records without depending on them reactively.
-  // This prevents the stats query being cancelled on every sync write — it only restarts
-  // when the set of IDs on the current page actually changes (page navigation).
-  const recordsRef = useRef(records);
-  recordsRef.current = records;
-
-  // Stable key: changes only when the page's record IDs change, not when record data changes.
-  const pageRecordKey = records.map(r => r.id).join(',');
+  const statsLoading = precomputedAddressStats ? (externalStatsLoading ?? false) : false;
 
   useEffect(() => {
     const loadAttachmentCounts = async () => {
@@ -209,92 +217,6 @@ export function RecordTable({
       loadAttachmentCounts();
     }
   }, [records]);
-
-  useEffect(() => {
-    if (precomputedAddressStats) return;
-    const needsStats = tableColumns.balance || tableColumns.lastTxDate || tableColumns.txCount;
-    const currentRecords = recordsRef.current;
-    if (!needsStats || currentRecords.length === 0) {
-      setLocalAddressStats(new Map());
-      setLocalStatsLoading(false);
-      return;
-    }
-
-    setLocalStatsLoading(true);
-    let cancelled = false;
-    const abortController = new AbortController();
-    const loadStats = async () => {
-      try {
-        const addressRecords = currentRecords.filter(r => r.type === 'address' && r.inputString);
-        const addressStrings = addressRecords.map(r => r.inputString);
-        if (addressStrings.length === 0) {
-          setLocalAddressStats(new Map());
-          if (!cancelled) setLocalStatsLoading(false);
-          return;
-        }
-
-        const participants = await getParticipantsByAddresses(addressStrings, abortController.signal);
-
-        const txids = Array.from(new Set(participants.map(p => p.txid)));
-        const txMap = new Map<string, number>();
-        if (txids.length > 0) {
-          const txBatches: string[][] = [];
-          for (let i = 0; i < txids.length; i += 500) {
-            txBatches.push(txids.slice(i, i + 500));
-          }
-          for (const batch of txBatches) {
-            const txs = await db.blockchainTransactions
-              .where('txid')
-              .anyOf(batch)
-              .toArray();
-            txs.forEach(tx => txMap.set(tx.txid, tx.blockTime));
-          }
-        }
-
-        const stats = new Map<string, AddressStats>();
-        const addrAgg = new Map<string, { outputSats: number; inputSats: number; lastTxTime: number; txids: Set<string> }>();
-        participants.forEach(p => {
-          const agg = addrAgg.get(p.address) || { outputSats: 0, inputSats: 0, lastTxTime: 0, txids: new Set<string>() };
-          const blockTime = txMap.get(p.txid) || 0;
-          if (p.role === 'output') {
-            agg.outputSats += p.amount;
-          } else {
-            agg.inputSats += p.amount;
-          }
-          if (blockTime > agg.lastTxTime) {
-            agg.lastTxTime = blockTime;
-          }
-          agg.txids.add(p.txid);
-          addrAgg.set(p.address, agg);
-        });
-
-        for (const record of addressRecords) {
-          const agg = addrAgg.get(record.inputString);
-          if (agg) {
-            stats.set(record.id, {
-              balanceSats: agg.outputSats - agg.inputSats,
-              lastTxDate: agg.lastTxTime,
-              txCount: agg.txids.size,
-            });
-          }
-        }
-
-        if (!cancelled) {
-          setLocalAddressStats(stats);
-          setLocalStatsLoading(false);
-        }
-      } catch (e) {
-        if (e instanceof DOMException && e.name === 'AbortError') return;
-        console.error('[RecordTable] Stats load error:', e);
-        if (!cancelled) setLocalStatsLoading(false);
-      }
-    };
-
-    loadStats();
-    return () => { cancelled = true; abortController.abort(); };
-  // recordsRef.current is intentionally omitted — it's a ref, always current, not reactive.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pageRecordKey, tableColumns.balance, tableColumns.lastTxDate, tableColumns.txCount, precomputedAddressStats]);
 
   const handleSort = (column: SortColumn) => {
     // Attachments sorting requires attachment counts which are only available here
@@ -761,13 +683,13 @@ export function RecordTable({
                   </TableCell>
                 )}
                 {tableColumns.balance && (
-                  <TableCell className="text-sm text-right tabular-nums">
+                  <TableCell className="text-sm text-right tabular-nums" data-testid={`text-balance-${record.id}`}>
                     {record.type === 'address'
                       ? statsLoading && !addressStats.has(record.id)
                         ? <Skeleton className="h-4 w-16 ml-auto" />
-                        : addressStats.has(record.id)
-                          ? formatBTC(addressStats.get(record.id)!.balanceSats)
-                          : <span className="text-muted-foreground">-</span>
+                        : !addressStats.get(record.id)?.synced
+                          ? <span className="text-muted-foreground text-xs italic">Not synced</span>
+                          : formatBTC(addressStats.get(record.id)!.balanceSats)
                       : <span className="text-muted-foreground">-</span>}
                   </TableCell>
                 )}
@@ -776,9 +698,11 @@ export function RecordTable({
                     {record.type === 'address'
                       ? statsLoading && !addressStats.has(record.id)
                         ? <Skeleton className="h-4 w-24" />
-                        : addressStats.has(record.id) && addressStats.get(record.id)!.lastTxDate > 0
-                          ? formatBlockTime(addressStats.get(record.id)!.lastTxDate)
-                          : "-"
+                        : !addressStats.get(record.id)?.synced
+                          ? <span className="text-xs italic">Not synced</span>
+                          : addressStats.get(record.id)!.lastTxDate > 0
+                            ? formatBlockTime(addressStats.get(record.id)!.lastTxDate)
+                            : "-"
                       : "-"}
                   </TableCell>
                 )}
@@ -787,9 +711,9 @@ export function RecordTable({
                     {record.type === 'address'
                       ? statsLoading && !addressStats.has(record.id)
                         ? <Skeleton className="h-4 w-10 ml-auto" />
-                        : addressStats.has(record.id)
-                          ? addressStats.get(record.id)!.txCount
-                          : <span className="text-muted-foreground">-</span>
+                        : !addressStats.get(record.id)?.synced
+                          ? <span className="text-muted-foreground text-xs italic">Not synced</span>
+                          : addressStats.get(record.id)!.txCount
                       : <span className="text-muted-foreground">-</span>}
                   </TableCell>
                 )}

@@ -1,111 +1,59 @@
-import { useState, useEffect } from "react";
-import { db } from "@/lib/database";
-import { getParticipantsByAddresses } from "@/lib/dataFacade";
+import { useMemo } from "react";
 
 export interface AddressStats {
   balanceSats: number;
   lastTxDate: number;
   txCount: number;
+  /** Whether this address has had its stats computed from fetched tx data. */
+  synced: boolean;
 }
 
+type StatsRecord = {
+  id?: number | string;
+  type: string;
+  inputString: string;
+  cachedBalanceSats?: number;
+  cachedTxCount?: number;
+  cachedLastActivityTime?: number;
+  statsComputedAt?: number;
+};
+
+/**
+ * Reads per-address stats from the cache stored on each address record. The
+ * cache is maintained locally during user-initiated sync and via the manual
+ * recompute lever — this hook performs NO database scans and NO network access,
+ * so it is fully synchronous and cheap.
+ *
+ * Addresses whose `statsComputedAt` is undefined are returned with
+ * `synced: false` so the UI can show a "not synced" marker instead of a
+ * misleading zero balance.
+ */
 export function useAddressStats(
-  records: Array<{ id?: number | string; type: string; inputString: string }>,
+  records: Array<StatsRecord>,
   enabled: boolean = true
 ): Map<string, AddressStats> {
-  const { stats } = useAddressStatsWithLoading(records, enabled);
-  return stats;
+  return useAddressStatsWithLoading(records, enabled).stats;
 }
 
 export function useAddressStatsWithLoading(
-  records: Array<{ id?: number | string; type: string; inputString: string }>,
+  records: Array<StatsRecord>,
   enabled: boolean = true
 ): { stats: Map<string, AddressStats>; isLoading: boolean } {
-  const [stats, setStats] = useState<Map<string, AddressStats>>(new Map());
-  const [isLoading, setIsLoading] = useState(false);
-
-  useEffect(() => {
-    if (!enabled || records.length === 0) {
-      setStats(new Map());
-      setIsLoading(false);
-      return;
+  const stats = useMemo(() => {
+    const result = new Map<string, AddressStats>();
+    if (!enabled) return result;
+    for (const record of records) {
+      if (record.type !== 'address' || !record.inputString || record.id == null) continue;
+      const synced = record.statsComputedAt != null;
+      result.set(String(record.id), {
+        balanceSats: record.cachedBalanceSats ?? 0,
+        lastTxDate: record.cachedLastActivityTime ?? 0,
+        txCount: record.cachedTxCount ?? 0,
+        synced,
+      });
     }
-
-    let cancelled = false;
-    const abortController = new AbortController();
-    const loadStats = async () => {
-      try {
-        const addressRecords = records.filter(r => r.type === 'address' && r.inputString && r.id != null);
-        const addressStrings = addressRecords.map(r => r.inputString);
-        if (addressStrings.length === 0) {
-          if (!cancelled) {
-            setStats(new Map());
-            setIsLoading(false);
-          }
-          return;
-        }
-        if (!cancelled) setIsLoading(true);
-
-        const participants = await getParticipantsByAddresses(addressStrings, abortController.signal);
-
-        const txids = Array.from(new Set(participants.map(p => p.txid)));
-        const txMap = new Map<string, number>();
-        if (txids.length > 0) {
-          const txBatches: string[][] = [];
-          for (let i = 0; i < txids.length; i += 500) {
-            txBatches.push(txids.slice(i, i + 500));
-          }
-          for (const batch of txBatches) {
-            const txs = await db.blockchainTransactions
-              .where('txid')
-              .anyOf(batch)
-              .toArray();
-            txs.forEach(tx => txMap.set(tx.txid, tx.blockTime));
-          }
-        }
-
-        const result = new Map<string, AddressStats>();
-        const addrAgg = new Map<string, { outputSats: number; inputSats: number; lastTxTime: number; txids: Set<string> }>();
-        participants.forEach(p => {
-          const agg = addrAgg.get(p.address) || { outputSats: 0, inputSats: 0, lastTxTime: 0, txids: new Set<string>() };
-          const blockTime = txMap.get(p.txid) || 0;
-          if (p.role === 'output') {
-            agg.outputSats += p.amount;
-          } else {
-            agg.inputSats += p.amount;
-          }
-          if (blockTime > agg.lastTxTime) {
-            agg.lastTxTime = blockTime;
-          }
-          agg.txids.add(p.txid);
-          addrAgg.set(p.address, agg);
-        });
-
-        for (const record of addressRecords) {
-          const id = String(record.id);
-          const agg = addrAgg.get(record.inputString);
-          if (agg) {
-            result.set(id, {
-              balanceSats: agg.outputSats - agg.inputSats,
-              lastTxDate: agg.lastTxTime,
-              txCount: agg.txids.size,
-            });
-          }
-        }
-
-        if (!cancelled) {
-          setStats(result);
-          setIsLoading(false);
-        }
-      } catch (e) {
-        if (e instanceof DOMException && e.name === 'AbortError') return;
-        if (!cancelled) setIsLoading(false);
-        throw e;
-      }
-    };
-
-    loadStats();
-    return () => { cancelled = true; abortController.abort(); };
+    return result;
   }, [records, enabled]);
 
-  return { stats, isLoading };
+  return { stats, isLoading: false };
 }

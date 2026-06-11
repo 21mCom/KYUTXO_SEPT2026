@@ -4,13 +4,14 @@ import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { PAGE_DEBOUNCE } from "@/config/debounce";
 import { useAsyncMemo, yieldToUI, checkAbort } from "@/hooks/use-async-memo";
 import { useDbChangeSignal } from "@/hooks/use-db-change-signal";
+import { useAddressRecords } from "@/hooks/use-address-records";
 import { useLiveQuery } from "dexie-react-hooks";
 import { format } from "date-fns";
 import { Link } from "wouter";
 import { BlockchainTransaction, TransactionParticipant, Record as DbRecord, PriceData } from "@/lib/database";
 import { getAllAddressSyncState } from "@/lib/data/address-sync-crud";
 import { getPriceDataByAsset } from "@/lib/data/price-data-crud";
-import { getRecordsByType, getRecordsByTypeAndImportanceTiers, countRecordsByTypeAndImportanceTiers, getTransactionsByTxids } from "@/lib/dataFacade";
+import { countRecordsByTypeAndImportanceTiers, getTransactionsByTxids } from "@/lib/dataFacade";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -206,16 +207,7 @@ export default function UTXOs() {
   const [participantsLoading, setParticipantsLoading] = useState(false);
   const participantsRequestId = useRef(0);
 
-  const rawRecords = useLiveQuery(
-    async () => {
-      if (includeBlockchainDiscovered) {
-        return getRecordsByType('address');
-      } else {
-        return getRecordsByTypeAndImportanceTiers('address', USER_CURATED_TIERS as any);
-      }
-    },
-    [includeBlockchainDiscovered]
-  );
+  const { records: rawRecords } = useAddressRecords({ includeBlockchainDiscovered });
   
   // Count blockchain-discovered records using compound index
   const blockchainDiscoveredCount = useLiveQuery(
