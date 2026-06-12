@@ -4,6 +4,7 @@ import {
   COUNTERPARTY_TYPE_OPTIONS,
   ACQUISITION_METHOD_OPTIONS,
   DISPOSITION_TYPE_OPTIONS,
+  getImportanceTierOptions,
 } from "@/lib/database";
 
 type FieldType = 'text' | 'select' | 'array' | 'enum';
@@ -16,14 +17,7 @@ interface FieldDef {
   vocabularyKey?: 'owners' | 'walletNames' | 'seedNames' | 'walletSoftware' | 'tags' | 'categories';
 }
 
-const ADDRESS_IMPORTANCE_OPTIONS = [
-  { value: 'verified', label: 'Verified' },
-  { value: 'manual', label: 'Manual' },
-  { value: 'wallet-import', label: 'Wallet Import' },
-  { value: 'xpub-derived', label: 'XPUB Derived' },
-  { value: 'blockchain-discovered', label: 'Blockchain Discovered' },
-  { value: 'pending-review', label: 'Pending Review' },
-];
+const ADDRESS_IMPORTANCE_OPTIONS = getImportanceTierOptions();
 
 const CHAIN_TYPE_OPTIONS = [
   { value: 'receive', label: 'Receive (External)' },

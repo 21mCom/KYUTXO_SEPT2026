@@ -36,6 +36,33 @@ export const ALL_IMPORTANCE_TIERS: AddressImportance[] = [
   'pending-review',
 ];
 
+// Canonical human-readable labels for each importance tier. This is the single
+// source of truth for tier display names. Keeping it next to ALL_IMPORTANCE_TIERS
+// (and typed as a full mapping over AddressImportance) means a newly added or
+// renamed tier forces a label here too, so the per-page option arrays derived
+// from it can never silently drift from the tier set.
+export const IMPORTANCE_TIER_LABELS: { [K in AddressImportance]: string } = {
+  'verified': 'Verified',
+  'manual': 'Manual',
+  'wallet-import': 'Wallet Import',
+  'xpub-derived': 'XPUB Derived',
+  'blockchain-discovered': 'Blockchain Discovered',
+  'pending-review': 'Pending Review',
+};
+
+// Build a {value,label} option array covering every importance tier, in the
+// canonical ALL_IMPORTANCE_TIERS order. Pass `overrides` to customize the
+// display label for specific tiers on a given page without re-declaring the
+// whole list (so the value set stays in sync with the tier set).
+export function getImportanceTierOptions(
+  overrides?: { [K in AddressImportance]?: string },
+): { value: AddressImportance; label: string }[] {
+  return ALL_IMPORTANCE_TIERS.map((value) => ({
+    value,
+    label: overrides?.[value] ?? IMPORTANCE_TIER_LABELS[value],
+  }));
+}
+
 // Flow type for transactions - fundamental direction/purpose
 export type FlowType = 
   | 'received'        // Incoming funds from external source

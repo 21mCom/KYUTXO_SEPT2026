@@ -1,5 +1,5 @@
 import { useState, useEffect, type ReactNode } from 'react';
-import { db, ALL_IMPORTANCE_TIERS } from '@/lib/database';
+import { db, ALL_IMPORTANCE_TIERS, IMPORTANCE_TIER_LABELS } from '@/lib/database';
 import { countAttachments } from '@/lib/data/attachments-crud';
 import { countAddressSyncState } from '@/lib/data/address-sync-crud';
 import { countPriceData } from '@/lib/data/price-data-crud';
@@ -215,13 +215,13 @@ export default function DataStats() {
     'pending-review': 'bg-gray-400',
   };
 
+  // Derived from the shared tier labels so it stays in sync with the tier set;
+  // this page keeps its own labels for a few tiers.
   const importanceLabels: { [key: string]: string } = {
-    'verified': 'Verified',
+    ...IMPORTANCE_TIER_LABELS,
     'manual': 'Manual Entry',
     'wallet-import': 'Wallet Data Sync',
     'xpub-derived': 'xPub Derived',
-    'blockchain-discovered': 'Blockchain Discovered',
-    'pending-review': 'Pending Review',
   };
 
   return (

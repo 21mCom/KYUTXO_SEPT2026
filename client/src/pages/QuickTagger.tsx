@@ -49,6 +49,7 @@ import {
   FLOW_TYPE_OPTIONS,
   ACQUISITION_METHOD_OPTIONS,
   DISPOSITION_TYPE_OPTIONS,
+  getImportanceTierOptions,
   type AddressImportance,
   type CounterpartyType,
   type FlowType,
@@ -56,15 +57,8 @@ import {
   type DispositionType,
 } from "@/lib/database";
 
-// Address importance options for dropdown
-const ADDRESS_IMPORTANCE_OPTIONS: { value: AddressImportance; label: string }[] = [
-  { value: 'verified', label: 'Verified' },
-  { value: 'manual', label: 'Manual' },
-  { value: 'wallet-import', label: 'Wallet Import' },
-  { value: 'xpub-derived', label: 'XPUB Derived' },
-  { value: 'blockchain-discovered', label: 'Blockchain Discovered' },
-  { value: 'pending-review', label: 'Pending Review' },
-];
+// Address importance options for dropdown (derived from the shared tier set)
+const ADDRESS_IMPORTANCE_OPTIONS: { value: AddressImportance; label: string }[] = getImportanceTierOptions();
 
 interface ParsedEntry {
   raw: string;

@@ -2,7 +2,7 @@ import { useState, useMemo } from "react";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { PAGE_DEBOUNCE } from "@/config/debounce";
 import { format } from "date-fns";
-import { db, Record, AddressImportance, USER_CURATED_TIERS, ALL_IMPORTANCE_TIERS } from "@/lib/database";
+import { db, Record, AddressImportance, USER_CURATED_TIERS, ALL_IMPORTANCE_TIERS, getImportanceTierOptions } from "@/lib/database";
 import { useDbChangeSignal } from "@/hooks/use-db-change-signal";
 import { useAsyncMemo, checkAbort } from "@/hooks/use-async-memo";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -67,15 +67,14 @@ interface AddressReuseInfo {
   record?: Record;
 }
 
-// Importance tier display labels and order
+// Importance tier display labels and order. Derived from the shared tier set so
+// it stays in sync; this page keeps its own labels for a couple of tiers.
 const IMPORTANCE_OPTIONS: { value: AddressImportance | 'all'; label: string }[] = [
   { value: 'all', label: 'All Tiers' },
-  { value: 'verified', label: 'Verified' },
-  { value: 'manual', label: 'Manual' },
-  { value: 'wallet-import', label: 'Wallet Data Sync' },
-  { value: 'xpub-derived', label: 'xPub Derived' },
-  { value: 'blockchain-discovered', label: 'Blockchain Discovered' },
-  { value: 'pending-review', label: 'Pending Review' },
+  ...getImportanceTierOptions({
+    'wallet-import': 'Wallet Data Sync',
+    'xpub-derived': 'xPub Derived',
+  }),
 ];
 
 
