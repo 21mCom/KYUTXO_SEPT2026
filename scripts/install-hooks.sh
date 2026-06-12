@@ -3,18 +3,27 @@ set -e
 
 HOOK_DIR="$(git rev-parse --git-dir)/hooks"
 HOOK_FILE="$HOOK_DIR/pre-commit"
-CHECK_CMD="node scripts/check-crud-guards.js"
+CRUD_CMD="node scripts/check-crud-guards.js"
+LOCKFILE_CMD="node scripts/check-lockfile-urls.js"
 
-if [ -f "$HOOK_FILE" ] && grep -qF "$CHECK_CMD" "$HOOK_FILE"; then
-  echo "Pre-commit hook already contains the CRUD guards check."
-  exit 0
-fi
+append_check() {
+  cmd="$1"
+  label="$2"
 
-if [ -f "$HOOK_FILE" ]; then
-  echo "$CHECK_CMD" >> "$HOOK_FILE"
-  echo "Appended CRUD guards check to existing pre-commit hook."
-else
-  printf '#!/bin/sh\n%s\n' "$CHECK_CMD" > "$HOOK_FILE"
-  chmod +x "$HOOK_FILE"
-  echo "Pre-commit hook installed successfully."
-fi
+  if [ -f "$HOOK_FILE" ] && grep -qF "$cmd" "$HOOK_FILE"; then
+    echo "Pre-commit hook already contains the $label check."
+    return 0
+  fi
+
+  if [ -f "$HOOK_FILE" ]; then
+    echo "$cmd" >> "$HOOK_FILE"
+    echo "Appended $label check to existing pre-commit hook."
+  else
+    printf '#!/bin/sh\n%s\n' "$cmd" > "$HOOK_FILE"
+    chmod +x "$HOOK_FILE"
+    echo "Pre-commit hook installed with $label check."
+  fi
+}
+
+append_check "$CRUD_CMD" "CRUD guards"
+append_check "$LOCKFILE_CMD" "lockfile URLs"
