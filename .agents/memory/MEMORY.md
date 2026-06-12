@@ -1,1 +1,5 @@
 - [Post-merge db:push timeout](post-merge-timeout.md) — drizzle `db:push` is slow (~10-23s) and a no-op here (IndexedDB-first app); fix timeouts by raising the post-merge timeout, not removing the step.
+- [CI push-back loop](ci-pushback-loop.md) — GitHub Actions committing/pushing back to main breaks Replit Sync (perpetual push rejection); derive build version from run_number, never commit it back.
+- [Address-records hook](address-records-hook.md) — heavy analysis pages load address records via shared `useAddressRecords` hook + debounced db-change signal bus, not raw `useLiveQuery`, to survive sync write floods.
+- [CRUD guard layer](crud-guard-layer.md) — guarded Dexie tables require typed CRUD modules for reads AND writes (enforced by `crud-guards`); note the strict-typing pitfall when migrating direct Dexie queries.
+- [No automatic network access](offline-network-constraint.md) — per-address stats/recompute must be local-only or user-initiated sync; background fetch would leak watched addresses (hard product constraint).
