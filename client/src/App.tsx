@@ -171,7 +171,8 @@ function LegacyMigrationOverlay() {
   }
 
   if (fileDecryptProgress) {
-    const filePct = fileDecryptProgress.total > 0
+    const hasFileTotal = fileDecryptProgress.total > 0;
+    const filePct = hasFileTotal
       ? Math.round((fileDecryptProgress.current / fileDecryptProgress.total) * 100)
       : 0;
 
@@ -185,12 +186,14 @@ function LegacyMigrationOverlay() {
           </p>
           <div className="w-full bg-muted rounded-full h-2">
             <div
-              className="bg-primary h-2 rounded-full transition-all duration-200"
-              style={{ width: `${filePct}%` }}
+              className={`bg-primary h-2 rounded-full transition-all duration-200 ${hasFileTotal ? '' : 'w-full animate-pulse'}`}
+              style={hasFileTotal ? { width: `${filePct}%` } : undefined}
             />
           </div>
           <p className="text-sm text-muted-foreground">
-            {fileDecryptProgress.current} / {fileDecryptProgress.total} files ({filePct}%)
+            {hasFileTotal
+              ? `${fileDecryptProgress.current} / ${fileDecryptProgress.total} files (${filePct}%)`
+              : (fileDecryptProgress.phase || 'Preparing')}
           </p>
           {fileDecryptProgress.decrypted > 0 && (
             <p className="text-xs text-muted-foreground">
@@ -265,12 +268,14 @@ function LegacyMigrationOverlay() {
         </p>
         <div className="w-full bg-muted rounded-full h-2">
           <div
-            className="bg-primary h-2 rounded-full transition-all duration-200"
-            style={{ width: `${pct}%` }}
+            className={`bg-primary h-2 rounded-full transition-all duration-200 ${progress.total > 0 ? '' : 'w-full animate-pulse'}`}
+            style={progress.total > 0 ? { width: `${pct}%` } : undefined}
           />
         </div>
         <p className="text-sm text-muted-foreground">
-          {progress.current} / {progress.total} records ({pct}%)
+          {progress.total > 0
+            ? `${progress.current} / ${progress.total} records (${pct}%)`
+            : `${progress.current} records processed`}
           {progress.failed > 0 && ` — ${progress.failed} failed`}
         </p>
         <p className="text-xs text-muted-foreground">
@@ -285,7 +290,14 @@ function LegacyMigrationOverlay() {
 }
 
 function AppContent() {
-  const { isAuthenticated, isInitialized, isLoading } = useAuth();
+  const {
+    isAuthenticated,
+    isInitialized,
+    isLoading,
+    isMigrating,
+    legacyMigrationProgress,
+    fileDecryptProgress,
+  } = useAuth();
 
   if (isInitialized === null || isLoading) {
     return (
@@ -302,10 +314,27 @@ function AppContent() {
     return <LoginScreen />;
   }
 
+  // While startup migrations are running, do not mount the authenticated app.
+  // Its data queries (Dashboard, Records) would otherwise compete with the
+  // migration for IndexedDB transactions and fail. The overlay covers the
+  // screen when progress is available; the fallback below covers the brief
+  // window before the first progress event is emitted.
+  const migrationActive =
+    isMigrating || legacyMigrationProgress !== null || fileDecryptProgress !== null;
+
   return (
     <>
       <LegacyMigrationOverlay />
-      <AuthenticatedApp />
+      {migrationActive ? (
+        <div className="min-h-screen flex items-center justify-center bg-background">
+          <div className="text-center">
+            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto" />
+            <p className="mt-4 text-muted-foreground">Preparing your vault...</p>
+          </div>
+        </div>
+      ) : (
+        <AuthenticatedApp />
+      )}
     </>
   );
 }

@@ -9,6 +9,33 @@ export interface FileDecryptProgress {
   decrypted: number;
   failed: number;
   skipped: number;
+  phase?: string;
+}
+
+const FILE_OP_TIMEOUT_MS = 30000;
+
+/**
+ * Rejects if the underlying promise does not settle within `ms`. Used so a
+ * single stuck file read/write cannot freeze the entire migration — the file is
+ * simply counted as failed and the loop moves on.
+ */
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error(`${label} timed out after ${ms}ms`)),
+      ms,
+    );
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      },
+    );
+  });
 }
 
 export interface FileDecryptResult {
@@ -69,6 +96,12 @@ export async function decryptLegacyAttachmentFiles(
   key: CryptoKey,
   onProgress?: (progress: FileDecryptProgress) => void,
 ): Promise<FileDecryptResult> {
+  // Enumerating every attachment can take a while on large vaults; surface a
+  // "preparing" phase so the UI never sits silently on 0/0.
+  if (onProgress) {
+    onProgress({ current: 0, total: 0, decrypted: 0, failed: 0, skipped: 0, phase: 'Preparing file list' });
+  }
+
   const allAttachments = await getAllAttachments();
   const allEvidenceAttachments = await db.evidenceAttachments.toArray();
 
@@ -99,7 +132,11 @@ export async function decryptLegacyAttachmentFiles(
     const file = allFiles[i];
 
     try {
-      const encryptedData = await readFileBytes(file.objectStoragePath);
+      const encryptedData = await withTimeout(
+        readFileBytes(file.objectStoragePath),
+        FILE_OP_TIMEOUT_MS,
+        `Read ${file.objectStoragePath}`,
+      );
 
       if (encryptedData.byteLength < 28) {
         skipped++;
@@ -120,7 +157,11 @@ export async function decryptLegacyAttachmentFiles(
         continue;
       }
 
-      await writeFileBytes(file.objectStoragePath, plainData);
+      await withTimeout(
+        writeFileBytes(file.objectStoragePath, plainData),
+        FILE_OP_TIMEOUT_MS,
+        `Write ${file.objectStoragePath}`,
+      );
       decrypted++;
       console.log(`[FileDecrypt] Decrypted ${file.source} #${file.id}: ${file.objectStoragePath}`);
     } catch (err) {

@@ -125,15 +125,63 @@ export function getTotalTableCount(): number {
   return getTableConfigs().length;
 }
 
+const ABORT_RETRY_ATTEMPTS = 5;
+
+/**
+ * Detects transient IndexedDB failures that are worth retrying. Large vaults
+ * (5GB+) regularly hit transaction aborts when several heavy operations run at
+ * once; these resolve on a short backoff.
+ */
+function isRetryableDbError(err: unknown): boolean {
+  const name = (err as { name?: string } | null | undefined)?.name ?? '';
+  const message = err instanceof Error ? err.message : String(err);
+  return (
+    name === 'AbortError' ||
+    name === 'TransactionInactiveError' ||
+    name === 'UnknownError' ||
+    /abort|transaction.*(inactive|finished)|timed? ?out/i.test(message)
+  );
+}
+
+/**
+ * Runs an IndexedDB operation with bounded exponential backoff on transient
+ * abort errors. Non-retryable errors are rethrown immediately. All operations
+ * passed here must be idempotent (keyset reads, bulkPut of the same rows).
+ */
+async function withDbRetry<T>(
+  fn: () => Promise<T>,
+  label: string,
+  attempts = ABORT_RETRY_ATTEMPTS,
+): Promise<T> {
+  let delay = 150;
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (attempt >= attempts || !isRetryableDbError(err)) throw err;
+      console.warn(
+        `[LegacyDecrypt] ${label} failed (attempt ${attempt}/${attempts}), retrying in ${delay}ms:`,
+        err instanceof Error ? err.message : err,
+      );
+      await new Promise(r => setTimeout(r, delay));
+      delay = Math.min(delay * 2, 2000);
+    }
+  }
+}
+
 export async function hasLegacyEncryptedRecords(alreadyCompletedTables?: string[]): Promise<boolean> {
   const configs = getTableConfigs();
   const completed = new Set(alreadyCompletedTables ?? []);
   for (const config of configs) {
     if (completed.has(config.name)) continue;
-    const firstLegacy = await config.table
-      .filter((item: LegacyRecord<{ id?: number }>) => !!item._legacyEncryptedPayload)
-      .limit(1)
-      .toArray();
+    const firstLegacy = await withDbRetry(
+      () =>
+        config.table
+          .filter((item: LegacyRecord<{ id?: number }>) => !!item._legacyEncryptedPayload)
+          .limit(1)
+          .toArray(),
+      `Probe ${config.name}`,
+    );
     if (firstLegacy.length > 0) return true;
   }
   return false;
@@ -161,41 +209,45 @@ export async function decryptLegacyRecords(
   for (let i = 0; i < remainingConfigs.length; i++) {
     const config = remainingConfigs[i];
 
-    let tableTotal: number;
+    // Fast, indexed row count for the progress denominator. The old code used
+    // `.filter(...).count()`, which forces a full-table scan and aborts on very
+    // large tables (5GB+). A failure here must NOT skip the table — fall back to
+    // indeterminate progress and let the batched walk below do the real work.
+    let tableTotal = 0;
     try {
-      tableTotal = await config.table
-        .filter((item: LegacyRecord<{ id?: number }>) => !!item._legacyEncryptedPayload)
-        .count();
+      tableTotal = await withDbRetry(() => config.table.count(), `Count ${config.name}`);
     } catch (err) {
-      const msg = `Failed to count ${config.name}: ${err instanceof Error ? err.message : String(err)}`;
-      console.error(`[LegacyDecrypt] ${msg}`);
-      tableErrors.push(msg);
-      continue;
-    }
-
-    if (tableTotal === 0) {
-      completedTableNames.push(config.name);
-      await options?.onTableComplete?.(config.name);
-      continue;
+      console.warn(
+        `[LegacyDecrypt] Could not pre-count ${config.name}, continuing with indeterminate progress:`,
+        err instanceof Error ? err.message : err,
+      );
+      tableTotal = 0;
     }
 
     let lastProcessedId = 0;
+    let tableProcessed = 0;
     let tableDecrypted = 0;
     let tableFailed = 0;
+    let tableReadFailed = false;
     let hasMore = true;
 
     while (hasMore) {
       let chunk: LegacyRecord<{ id?: number }>[];
       try {
-        chunk = await config.table
-          .where('id')
-          .above(lastProcessedId)
-          .limit(BATCH_SIZE)
-          .toArray();
+        chunk = await withDbRetry(
+          () =>
+            config.table
+              .where('id')
+              .above(lastProcessedId)
+              .limit(BATCH_SIZE)
+              .toArray(),
+          `Read ${config.name}`,
+        );
       } catch (err) {
         const msg = `Failed to read ${config.name}: ${err instanceof Error ? err.message : String(err)}`;
         console.error(`[LegacyDecrypt] ${msg}`);
         tableErrors.push(msg);
+        tableReadFailed = true;
         break;
       }
 
@@ -205,6 +257,7 @@ export async function decryptLegacyRecords(
       }
 
       lastProcessedId = (chunk[chunk.length - 1] as { id: number }).id;
+      tableProcessed += chunk.length;
 
       const legacyItems = chunk.filter(item => !!item._legacyEncryptedPayload);
 
@@ -236,7 +289,10 @@ export async function decryptLegacyRecords(
 
         if (updatedBatch.length > 0) {
           try {
-            await config.table.bulkPut(updatedBatch as Parameters<typeof config.table.bulkPut>[0]);
+            await withDbRetry(
+              () => config.table.bulkPut(updatedBatch as Parameters<typeof config.table.bulkPut>[0]),
+              `Write ${config.name}`,
+            );
             tableDecrypted += updatedBatch.length;
           } catch (err) {
             const msg = `Failed to write ${config.name}: ${err instanceof Error ? err.message : String(err)}`;
@@ -252,7 +308,7 @@ export async function decryptLegacyRecords(
           tableName: config.name,
           tableIndex: skippedCount + i,
           tableCount: totalTableCount,
-          current: tableDecrypted + tableFailed,
+          current: tableProcessed,
           total: tableTotal,
           failed: tableFailed,
         });
@@ -265,7 +321,11 @@ export async function decryptLegacyRecords(
       await new Promise(r => setTimeout(r, 0));
     }
 
-    if (tableFailed === 0) {
+    // Only mark a table complete if it was fully scanned (no permanent read
+    // failure) AND every encrypted row decrypted successfully. The previous
+    // code marked a table complete even after a mid-table read break, which
+    // could permanently skip rows that were never decrypted.
+    if (!tableReadFailed && tableFailed === 0) {
       completedTableNames.push(config.name);
       await options?.onTableComplete?.(config.name);
     }

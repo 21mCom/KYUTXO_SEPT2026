@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from 'react';
+import { createContext, useContext, useState, useEffect, useCallback, useRef, type ReactNode } from 'react';
 import { 
   generateSalt, 
   hashPassword, 
@@ -32,6 +32,7 @@ interface AuthContextType {
   login: (password: string) => Promise<boolean>;
   logout: () => void;
   isLoading: boolean;
+  isMigrating: boolean;
   legacyMigrationProgress: LegacyDecryptProgress | null;
   legacyMigrationResult: { totalDecrypted: number; totalFailed: number; unexpectedError?: boolean } | null;
   fileDecryptProgress: FileDecryptProgress | null;
@@ -43,6 +44,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [isInitialized, setIsInitialized] = useState<boolean | null>(null);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const [isMigrating, setIsMigrating] = useState(false);
+  // Single-flight guard: a startup migration is fired-and-forgotten from login,
+  // so a quick logout/re-login could otherwise launch a second concurrent run
+  // and reintroduce the IndexedDB contention this migration hardening avoids.
+  const migrationInFlightRef = useRef(false);
   const [legacyMigrationProgress, setLegacyMigrationProgress] = useState<LegacyDecryptProgress | null>(null);
   const [legacyMigrationResult, setLegacyMigrationResult] = useState<{ totalDecrypted: number; totalFailed: number; unexpectedError?: boolean } | null>(null);
   const [fileDecryptProgress, setFileDecryptProgress] = useState<FileDecryptProgress | null>(null);
@@ -200,6 +206,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [runLegacyFileDecryptMigration]);
 
+  const runStartupMigrations = useCallback(async (password: string, saltBase64: string) => {
+    // Single-flight: if a migration is already running (e.g. it was started by a
+    // previous login and the user logged out then back in), do not start a
+    // second one. The original run is still progressing against the same vault.
+    if (migrationInFlightRef.current) return;
+    migrationInFlightRef.current = true;
+    setIsMigrating(true);
+    try {
+      // Serialize heavy startup work. Running attachment-path normalization and
+      // legacy decryption concurrently on a large vault starves both into
+      // IndexedDB transaction aborts. Path normalization must also complete
+      // before file decryption reads those paths.
+      await runAttachmentPathMigration();
+      await runLegacyDecryptMigration(password, saltBase64);
+    } finally {
+      migrationInFlightRef.current = false;
+      setIsMigrating(false);
+    }
+  }, [runAttachmentPathMigration, runLegacyDecryptMigration]);
+
   const setupPassword = useCallback(async (password: string) => {
     setIsLoading(true);
     try {
@@ -230,8 +256,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       if (isValid) {
         setIsAuthenticated(true);
-        runAttachmentPathMigration();
-        runLegacyDecryptMigration(password, settings.salt);
+        runStartupMigrations(password, settings.salt);
         return true;
       }
 
@@ -239,10 +264,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } finally {
       setIsLoading(false);
     }
-  }, [runAttachmentPathMigration, runLegacyDecryptMigration]);
+  }, [runStartupMigrations]);
 
   const logout = useCallback(() => {
     setIsAuthenticated(false);
+    // Do NOT clear isMigrating if a startup migration is still running in the
+    // background — keep the gate up so a re-login does not mount the data-heavy
+    // app on top of the ongoing migration. The migration's own finally resets it.
+    if (!migrationInFlightRef.current) {
+      setIsMigrating(false);
+    }
     setLegacyMigrationProgress(null);
     setLegacyMigrationResult(null);
     setFileDecryptProgress(null);
@@ -257,6 +288,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         login,
         logout,
         isLoading,
+        isMigrating,
         legacyMigrationProgress,
         legacyMigrationResult,
         fileDecryptProgress,
