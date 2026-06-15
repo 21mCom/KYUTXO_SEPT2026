@@ -20,7 +20,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Trash2, Search, RefreshCw, AlertTriangle, CheckCircle2, Network, ArrowUpDown, Link2, Shield, XCircle, ChevronLeft, ChevronRight, Unplug } from "lucide-react";
 import { db, Record, RecordOrigin } from "@/lib/database";
-import { deleteRecord, getParticipantsByTxids } from "@/lib/dataFacade";
+import { deleteRecord, getParticipantsByTxids, countAttachmentsByRecordIds } from "@/lib/dataFacade";
 import { getRecord } from "@/lib/data/record-crud";
 import { deleteRecordOriginsByRecordId } from "@/lib/data/record-origins-crud";
 import { recomputeAddressStats } from "@/lib/data/address-stats";
@@ -234,6 +234,7 @@ export default function Cleanup() {
   const [isScanning, setIsScanning] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [showConfirmDialog, setShowConfirmDialog] = useState(false);
+  const [attachmentImpact, setAttachmentImpact] = useState<number | null>(null);
   const [hasScanned, setHasScanned] = useState(false);
   const [originAddress, setOriginAddress] = useState('');
   const [sortField, setSortField] = useState<SortField>('depth');
@@ -592,6 +593,18 @@ export default function Cleanup() {
         .map(c => c.record.id!)
     );
     setSelectedIds(safeIds);
+  };
+
+  const openConfirmDialog = async () => {
+    setAttachmentImpact(null);
+    setShowConfirmDialog(true);
+    try {
+      const count = await countAttachmentsByRecordIds(Array.from(selectedIds));
+      setAttachmentImpact(count);
+    } catch (error) {
+      console.error('Failed to count affected attachments:', error);
+      setAttachmentImpact(null);
+    }
   };
 
   const handleDelete = async () => {
@@ -1009,7 +1022,7 @@ export default function Cleanup() {
                     <Button
                       variant="destructive"
                       size="sm"
-                      onClick={() => setShowConfirmDialog(true)}
+                      onClick={openConfirmDialog}
                       disabled={selectedIds.size === 0 || isDeleting}
                       data-testid="button-delete-selected"
                     >
@@ -1165,6 +1178,14 @@ export default function Cleanup() {
                     <br /><br />
                     <strong className="text-amber-600">Warning:</strong> Some selected records have user-added
                     metadata that will be lost.
+                  </>
+                )}
+                {attachmentImpact !== null && attachmentImpact > 0 && (
+                  <>
+                    <br /><br />
+                    <strong>{attachmentImpact.toLocaleString()} attached file{attachmentImpact === 1 ? '' : 's'}</strong> on
+                    these records will be kept on disk — not deleted — and can be recovered from
+                    Settings &gt; Deleted Attachments.
                   </>
                 )}
                 <br /><br />

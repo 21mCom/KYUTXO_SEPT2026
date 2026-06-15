@@ -5,6 +5,7 @@ export * from './data/transaction-crud';
 export * from './data/lineage-crud';
 export * from './data/evidence-crud';
 export * from './data/attachments-crud';
+export * from './data/trash-crud';
 export * from './data/price-data-crud';
 export * from './data/settings-crud';
 export * from './data/node-settings-crud';

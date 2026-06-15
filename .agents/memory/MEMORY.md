@@ -1,2 +1,3 @@
 - [Legacy migration gotchas](legacy-migration-gotchas.md) — inputStringLower goes stale after legacy record decryption; attachment path prefix mismatch + root-folder attachments skipped.
 - [Records query & toggle semantics](records-query-semantics.md) — blockchain-discovered+pending-review hidden by default toggle explains "missing" record counts; global search is always a residual JS scan.
+- [Attachment delete protection](attachment-delete-protection.md) — record/attachment delete archives metadata + keeps file bytes; physical purge is explicit-only (Settings/upload-rollback).

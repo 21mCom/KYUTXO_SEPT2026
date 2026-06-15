@@ -78,6 +78,13 @@ export async function getAttachmentsByRecordId(recordId: number): Promise<Attach
   return db.attachments.where('recordId').equals(recordId).toArray();
 }
 
+// Count how many attachment files belong to the given records. Used to warn the
+// user how many files a bulk record deletion will affect.
+export async function countAttachmentsByRecordIds(recordIds: number[]): Promise<number> {
+  if (recordIds.length === 0) return 0;
+  return db.attachments.where('recordId').anyOf(recordIds).count();
+}
+
 export async function getAttachmentsByRecordIdOrIdentifier(
   recordId: number,
   identifier: string

@@ -2,6 +2,7 @@ import { db } from '@/lib/database';
 import { isElectron, getElectronAPI } from '@/lib/electron';
 import { updateEvidenceAttachment } from '@/lib/data/evidence-crud';
 import { getRecord } from '@/lib/data/record-crud';
+import { archiveAttachments } from '@/lib/data/trash-crud';
 import {
   addAttachment,
   deleteAttachment as deleteAttachmentRecord,
@@ -183,6 +184,20 @@ export async function deleteAttachment(id: number): Promise<void> {
   } catch (error) {
     throw new Error(`Failed to delete attachment: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
+}
+
+// Remove an attachment from its record WITHOUT destroying the file. The file
+// bytes are left on disk and the metadata is archived so the file stays
+// recoverable (download or permanent purge from Settings > Deleted Attachments).
+// Use this for user-initiated deletes. deleteAttachment() above still physically
+// removes the file and is reserved for rolling back a failed upload.
+export async function trashAttachment(id: number): Promise<void> {
+  const attachment = await getAttachment(id);
+  if (!attachment) {
+    throw new Error('Attachment not found');
+  }
+  await archiveAttachments([attachment], 'attachment-delete', { skipNotification: true });
+  await deleteAttachmentRecord(id);
 }
 
 export async function getRecordAttachments(recordId: number) {

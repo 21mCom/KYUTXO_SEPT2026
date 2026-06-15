@@ -243,6 +243,24 @@ export interface Attachment {
   createdAt: number;
 }
 
+// Metadata for an attachment whose database row was deleted but whose file is
+// intentionally kept on disk so it stays recoverable. Deleting a record (or an
+// attachment) archives a row here instead of destroying the file; the user can
+// download it back or permanently purge it from Settings.
+export interface TrashedAttachment {
+  id?: number;
+  recordId: number;
+  // The address/txid the file was attached to, when known (for display only).
+  identifier?: string;
+  filename: string;
+  mimeType: string;
+  size: number;
+  // Where the file still lives on disk (unchanged from the original attachment).
+  objectStoragePath: string;
+  deletedAt: number;
+  source: 'record-delete' | 'attachment-delete';
+}
+
 export interface Tag {
   id?: number;
   name: string;

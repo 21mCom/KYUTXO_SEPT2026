@@ -416,26 +416,27 @@ export interface DeleteRecordOptions {
 
 export async function deleteRecord(id: number, options?: DeleteRecordOptions): Promise<void> {
   const { getAttachmentsByRecordId, deleteAttachmentsByRecordId } = await import('./attachments-crud');
+  const { archiveAttachments } = await import('./trash-crud');
   const attachments = await getAttachmentsByRecordId(id);
 
-  for (const attachment of attachments) {
-    try {
-      const response = await fetch(`/api/attachments/${attachment.objectStoragePath}`, {
-        method: 'DELETE',
-      });
-      if (!response.ok) {
-        console.error(`Failed to delete attachment ${attachment.id}`);
-      }
-    } catch (error) {
-      console.error(`Error deleting attachment ${attachment.id}:`, error);
-    }
+  // Deleting a record must NOT destroy its attachment files. Instead we archive
+  // the attachment metadata so the file (which is intentionally left on disk)
+  // stays recoverable from Settings > Deleted Attachments, and is reported as
+  // recoverable by the read-only "Check Attachments" audit. Archiving happens
+  // before any rows are removed; if it throws we abort so nothing becomes
+  // unrecoverable. The raw file-DELETE that used to run here was removed.
+  if (attachments.length > 0) {
+    await archiveAttachments(attachments, 'record-delete', { skipNotification: true });
   }
 
   await deleteAttachmentsByRecordId(id, { skipNotification: true });
   await db.records.delete(id);
-  
+
   if (!options?.skipNotification) {
     notifyDbChange('records');
+    if (attachments.length > 0) {
+      notifyDbChange('trashedAttachments');
+    }
   }
 }
 

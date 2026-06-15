@@ -13,7 +13,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { formatFileSize, downloadAttachmentById, deleteAttachment } from "@/lib/attachments";
+import { formatFileSize, downloadAttachmentById, trashAttachment } from "@/lib/attachments";
 import type { Attachment } from "@/lib/database";
 import { useToast } from "@/hooks/use-toast";
 
@@ -65,10 +65,10 @@ export function AttachmentList({ attachments, onDelete }: AttachmentListProps) {
     if (!deleteTarget) return;
 
     try {
-      await deleteAttachment(deleteTarget.id!);
+      await trashAttachment(deleteTarget.id!);
       toast({
-        title: "Attachment Deleted",
-        description: `${deleteTarget.filename} has been deleted`,
+        title: "Attachment Removed",
+        description: `${deleteTarget.filename} was removed. The file is kept and can be recovered from Settings.`,
       });
       setDeleteDialogOpen(false);
       setDeleteTarget(null);
@@ -76,8 +76,8 @@ export function AttachmentList({ attachments, onDelete }: AttachmentListProps) {
     } catch (error) {
       toast({
         variant: "destructive",
-        title: "Delete Failed",
-        description: error instanceof Error ? error.message : "Failed to delete attachment",
+        title: "Remove Failed",
+        description: error instanceof Error ? error.message : "Failed to remove attachment",
       });
     }
   };
@@ -138,14 +138,15 @@ export function AttachmentList({ attachments, onDelete }: AttachmentListProps) {
       <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete Attachment?</AlertDialogTitle>
+            <AlertDialogTitle>Remove Attachment?</AlertDialogTitle>
             <AlertDialogDescription>
-              Are you sure you want to delete "{deleteTarget?.filename}"? This action cannot be undone.
+              Remove "{deleteTarget?.filename}" from this record? The file is kept and can be
+              recovered from Settings if you need it later.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={handleDeleteConfirm}>Delete</AlertDialogAction>
+            <AlertDialogAction onClick={handleDeleteConfirm}>Remove</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

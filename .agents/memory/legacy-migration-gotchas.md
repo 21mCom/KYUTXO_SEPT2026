@@ -32,7 +32,7 @@ security checks.
 `migrateAttachmentPaths` parses `[attachments/]<dir>/<file>` (2-3 segments). A legacy path that is a
 single segment (`file.pdf` or `attachments/file.pdf`) yields fileName===undefined and hits
 `if(!dirName||!fileName)continue` → never migrated to the hashed/opaque layout, never re-decrypted
-via the normal flow. No code physically deletes them — they are orphaned/unreadable, likely still on
-disk. "PDF failures" are not file-type-specific (AES-GCM is type-agnostic); they just happened to be
+via the normal flow. The migration does not delete them — they are orphaned/unreadable, likely still
+on disk. "PDF failures" are not file-type-specific (AES-GCM is type-agnostic); they just happened to be
 among the root-folder files. Recovery must be copy-then-verify-then-DB-update and must NOT delete old
 dirs until verified.

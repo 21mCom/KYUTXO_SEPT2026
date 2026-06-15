@@ -1,5 +1,5 @@
 import { useState, useRef } from "react";
-import { Moon, Eye, Database, Plus, Trash2, Pencil, AlertTriangle, Upload, RefreshCw, Loader2, Paperclip, KeyRound, Shield } from "lucide-react";
+import { Moon, Eye, Database, Plus, Trash2, Pencil, AlertTriangle, Upload, RefreshCw, Loader2, Paperclip, KeyRound, Shield, Download } from "lucide-react";
 import { isElectron, getElectronAPI } from "@/lib/electron";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
@@ -47,7 +47,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { useAuth } from "@/contexts/AuthContext";
-import { db, type Evidence } from "@/lib/database";
+import { db, type Evidence, type TrashedAttachment } from "@/lib/database";
 import {
   restoreTag,
   restoreCategory,
@@ -72,7 +72,8 @@ import { updateSettings } from "@/lib/data/settings-crud";
 import { deriveKey, decrypt, base64ToBuffer, verifyPassword } from "@/lib/crypto";
 import { getVaultSettings, vaultDb } from "@/lib/vault";
 import { generateSalt, hashPassword, bufferToBase64 } from "@/lib/crypto";
-import { migrateAttachmentPaths, auditAttachments, type AttachmentAuditResult } from "@/lib/attachments";
+import { migrateAttachmentPaths, auditAttachments, downloadFile, deleteFile, formatFileSize, type AttachmentAuditResult } from "@/lib/attachments";
+import { getTrashedAttachments, deleteTrashedAttachment } from "@/lib/data/trash-crud";
 import { 
   setAttachmentPathsMigrated,
 } from "@/lib/vault";
@@ -124,6 +125,10 @@ export default function SettingsPage() {
   const [isMigratingAttachments, setIsMigratingAttachments] = useState(false);
   const [isAuditingAttachments, setIsAuditingAttachments] = useState(false);
   const [attachmentAudit, setAttachmentAudit] = useState<AttachmentAuditResult | null>(null);
+  const [trashList, setTrashList] = useState<TrashedAttachment[] | null>(null);
+  const [isLoadingTrash, setIsLoadingTrash] = useState(false);
+  const [isPurgingTrash, setIsPurgingTrash] = useState(false);
+  const [showEmptyTrashDialog, setShowEmptyTrashDialog] = useState(false);
 
   // Recompute address stats state
   const [isRecomputingStats, setIsRecomputingStats] = useState(false);
@@ -476,6 +481,89 @@ export default function SettingsPage() {
       });
     } finally {
       setIsAuditingAttachments(false);
+    }
+  };
+
+  const handleLoadTrash = async () => {
+    setIsLoadingTrash(true);
+    try {
+      const items = await getTrashedAttachments();
+      setTrashList(items);
+    } catch (error) {
+      console.error("Failed to load deleted attachments:", error);
+      toast({
+        variant: "destructive",
+        title: "Could Not Load",
+        description: error instanceof Error ? error.message : "Failed to load deleted attachments.",
+      });
+    } finally {
+      setIsLoadingTrash(false);
+    }
+  };
+
+  const handleDownloadTrashed = async (item: TrashedAttachment) => {
+    try {
+      await downloadFile(item.objectStoragePath, item.filename);
+    } catch (error) {
+      console.error("Failed to download deleted attachment:", error);
+      toast({
+        variant: "destructive",
+        title: "Download Failed",
+        description:
+          error instanceof Error ? error.message : "The file may have already been permanently removed.",
+      });
+    }
+  };
+
+  const handlePurgeTrashed = async (item: TrashedAttachment) => {
+    try {
+      await deleteFile(item.objectStoragePath);
+      await deleteTrashedAttachment(item.id!);
+      setTrashList((prev) => (prev ? prev.filter((t) => t.id !== item.id) : prev));
+      toast({
+        title: "File Permanently Removed",
+        description: `${item.filename} was deleted from disk.`,
+      });
+    } catch (error) {
+      console.error("Failed to purge deleted attachment:", error);
+      toast({
+        variant: "destructive",
+        title: "Could Not Remove File",
+        description: error instanceof Error ? error.message : "An error occurred while removing the file.",
+      });
+    }
+  };
+
+  const handleEmptyTrash = async () => {
+    setShowEmptyTrashDialog(false);
+    setIsPurgingTrash(true);
+    try {
+      const items = trashList ?? (await getTrashedAttachments());
+      let removed = 0;
+      for (const item of items) {
+        try {
+          await deleteFile(item.objectStoragePath);
+          await deleteTrashedAttachment(item.id!, { skipNotification: true });
+          removed++;
+        } catch (error) {
+          console.error("Failed to purge", item.objectStoragePath, error);
+        }
+      }
+      const remaining = await getTrashedAttachments();
+      setTrashList(remaining);
+      toast({
+        title: "Trash Emptied",
+        description: `Permanently removed ${removed.toLocaleString()} file${removed === 1 ? "" : "s"}.`,
+      });
+    } catch (error) {
+      console.error("Failed to empty trash:", error);
+      toast({
+        variant: "destructive",
+        title: "Could Not Empty Trash",
+        description: error instanceof Error ? error.message : "An error occurred.",
+      });
+    } finally {
+      setIsPurgingTrash(false);
     }
   };
 
@@ -1620,6 +1708,136 @@ export default function SettingsPage() {
                 )}
               </div>
             )}
+
+            <Separator />
+
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <div>
+                <Label className="text-base">Deleted Attachments (Recoverable)</Label>
+                <p className="text-sm text-muted-foreground">
+                  When you delete records or attachments, their files are kept here so you can get
+                  them back. Download a file to recover it, or permanently remove files to free up space.
+                </p>
+              </div>
+              <Button
+                variant="outline"
+                onClick={handleLoadTrash}
+                disabled={isLoadingTrash}
+                data-testid="button-load-trash"
+              >
+                {isLoadingTrash ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Loading...
+                  </>
+                ) : (
+                  <>
+                    <RefreshCw className="h-4 w-4 mr-2" />
+                    Show
+                  </>
+                )}
+              </Button>
+            </div>
+            {trashList !== null && (
+              <div className="rounded-md border p-4 space-y-3 text-sm" data-testid="container-trash-list">
+                {trashList.length === 0 ? (
+                  <p className="text-muted-foreground" data-testid="text-trash-empty">
+                    No deleted attachments. Nothing to recover.
+                  </p>
+                ) : (
+                  <>
+                    <div className="flex items-center justify-between gap-2 flex-wrap">
+                      <span className="text-muted-foreground" data-testid="text-trash-summary">
+                        {trashList.length.toLocaleString()} recoverable file{trashList.length === 1 ? "" : "s"}
+                        {" · "}
+                        {formatFileSize(trashList.reduce((sum, t) => sum + (t.size || 0), 0))}
+                      </span>
+                      <Button
+                        variant="destructive"
+                        size="sm"
+                        onClick={() => setShowEmptyTrashDialog(true)}
+                        disabled={isPurgingTrash}
+                        data-testid="button-empty-trash"
+                      >
+                        {isPurgingTrash ? (
+                          <>
+                            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                            Removing...
+                          </>
+                        ) : (
+                          <>
+                            <Trash2 className="h-4 w-4 mr-2" />
+                            Permanently delete all
+                          </>
+                        )}
+                      </Button>
+                    </div>
+                    <div className="space-y-2 max-h-80 overflow-auto" data-testid="list-trash-items">
+                      {trashList.slice(0, 300).map((item) => (
+                        <div
+                          key={item.id}
+                          className="flex items-center justify-between gap-3 rounded-md border p-2"
+                          data-testid={`trash-item-${item.id}`}
+                        >
+                          <div className="min-w-0">
+                            <p className="truncate font-medium" data-testid={`text-trash-filename-${item.id}`}>
+                              {item.filename}
+                            </p>
+                            <p className="text-xs text-muted-foreground truncate">
+                              {formatFileSize(item.size)}
+                              {" · "}
+                              {new Date(item.deletedAt).toLocaleDateString()}
+                              {item.identifier ? ` · ${item.identifier}` : ""}
+                            </p>
+                          </div>
+                          <div className="flex gap-1 flex-shrink-0">
+                            <Button
+                              size="icon"
+                              variant="outline"
+                              onClick={() => handleDownloadTrashed(item)}
+                              data-testid={`button-download-trash-${item.id}`}
+                            >
+                              <Download className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              size="icon"
+                              variant="outline"
+                              onClick={() => handlePurgeTrashed(item)}
+                              data-testid={`button-purge-trash-${item.id}`}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    {trashList.length > 300 && (
+                      <p className="text-xs text-muted-foreground">
+                        Showing the 300 most recent. Use "Permanently delete all" to clear everything.
+                      </p>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
+
+            <AlertDialog open={showEmptyTrashDialog} onOpenChange={setShowEmptyTrashDialog}>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Permanently delete all recoverable files?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    This permanently removes every deleted attachment file from disk. This cannot be
+                    undone. Any file you have not downloaded will be lost.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel data-testid="button-cancel-empty-trash">Cancel</AlertDialogCancel>
+                  <AlertDialogAction onClick={handleEmptyTrash} data-testid="button-confirm-empty-trash">
+                    Permanently delete all
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
           </CardContent>
         </Card>
 

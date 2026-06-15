@@ -10,6 +10,7 @@ import type {
   TransactionParticipant, AddressSyncState, NodeSettings, DerivationTemplate,
   UtxoLineage, CustodySegment, LineageSnapshot, Evidence, EvidenceAttachment,
   PausedSyncState, SkippedAddress, AddressBlacklist, PartialExportBundle,
+  TrashedAttachment,
 } from './db-types';
 
 export class KYUTXODatabase extends Dexie {
@@ -56,9 +57,19 @@ export class KYUTXODatabase extends Dexie {
   skippedAddresses!: Table<SkippedAddress>;
   addressBlacklist!: Table<AddressBlacklist>;
   partialExportBundles!: Table<PartialExportBundle>;
+  // Recoverable metadata for attachments whose record/row was deleted; the file
+  // bytes are kept on disk so they can be downloaded back or purged from Settings.
+  trashedAttachments!: Table<TrashedAttachment>;
 
   constructor() {
     super('KYUTXODatabase');
+
+    // v32: add the recoverable attachment "trash" table. Deleting a record or
+    // attachment no longer unlinks the file — it archives metadata here while the
+    // file stays on disk. Delta declaration: all other tables inherit from v31.
+    this.version(32).stores({
+      trashedAttachments: '++id, recordId, objectStoragePath, deletedAt',
+    });
 
     this.version(31).stores({
       records: '++id, type, inputString, inputStringLower, label, owner, walletName, seedName, walletSoftware, *tags, *categories, createdAt, updatedAt, chainType, syncDepth, addressImportance, [type+addressImportance], [addressImportance+id], [type+id], [owner+id], [walletName+id], flowType, discoveredFromRecordId',
