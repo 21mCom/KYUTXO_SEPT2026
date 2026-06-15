@@ -19,7 +19,10 @@ import {
   addLegacyDecryptCompletedTable,
   isLegacyFileDecryptComplete,
   setLegacyFileDecryptComplete,
+  isInputStringLowerRepaired,
+  setInputStringLowerRepaired,
 } from '@/lib/vault';
+import { repairInputStringLower } from '@/lib/data/record-crud';
 import { migrateAttachmentPaths } from '@/lib/attachments';
 import { hasLegacyEncryptedRecords, decryptLegacyRecords, getTotalTableCount, type LegacyDecryptProgress } from '@/lib/legacy-decrypt';
 import { decryptLegacyAttachmentFiles, type FileDecryptProgress } from '@/lib/legacy-decrypt-files';
@@ -206,6 +209,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [runLegacyFileDecryptMigration]);
 
+  // Repairs stale `inputStringLower` left behind by the legacy decryption on
+  // vaults that already migrated (see repairInputStringLower). Guarded by a
+  // one-time flag and only marked done when the pass fully succeeds, so a
+  // partial failure retries on the next login instead of leaving records
+  // unsearchable.
+  const runInputStringLowerRepair = useCallback(async () => {
+    try {
+      if (await isInputStringLowerRepaired()) return;
+      const result = await repairInputStringLower();
+      if (result.ok) {
+        await setInputStringLowerRepaired(true);
+        if (result.fixed > 0) {
+          console.log(`[InputStringLowerRepair] Repaired ${result.fixed} of ${result.scanned} records`);
+        }
+      } else {
+        console.warn('[InputStringLowerRepair] Incomplete — will retry next login');
+      }
+    } catch (err) {
+      console.error('[InputStringLowerRepair] Failed:', err);
+    }
+  }, []);
+
   const runStartupMigrations = useCallback(async (password: string, saltBase64: string) => {
     // Single-flight: if a migration is already running (e.g. it was started by a
     // previous login and the user logged out then back in), do not start a
@@ -220,11 +245,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // before file decryption reads those paths.
       await runAttachmentPathMigration();
       await runLegacyDecryptMigration(password, saltBase64);
+      await runInputStringLowerRepair();
     } finally {
       migrationInFlightRef.current = false;
       setIsMigrating(false);
     }
-  }, [runAttachmentPathMigration, runLegacyDecryptMigration]);
+  }, [runAttachmentPathMigration, runLegacyDecryptMigration, runInputStringLowerRepair]);
 
   const setupPassword = useCallback(async (password: string) => {
     setIsLoading(true);

@@ -1252,7 +1252,10 @@ export default function Transactions() {
           <div className="flex flex-col items-end gap-1.5" data-testid="sqlite-prototype-toggle">
             <div className="flex items-center gap-2">
               <Database className="h-4 w-4 text-muted-foreground" />
-              <span className="text-sm">SQLite-WASM prototype</span>
+              <span className="text-sm">
+                SQLite-WASM prototype{" "}
+                <span className="text-xs text-muted-foreground">(experimental)</span>
+              </span>
               <Switch
                 checked={sqliteEnabled}
                 onCheckedChange={handleSqliteToggle}
@@ -1587,13 +1590,38 @@ export default function Transactions() {
           ) : paginatedTransactionSlice.length === 0 ? (
             <Card>
               <CardContent className="py-12 text-center">
-                <p className="text-muted-foreground">
-                  {search || hasActiveSearchFilters(searchFilters) ? "No transactions match your search" : "No transactions synced yet"}
-                </p>
-                {!search && !hasActiveSearchFilters(searchFilters) && (
-                  <p className="text-sm text-muted-foreground mt-2">
-                    Use Transaction Sync to fetch blockchain data for your addresses
+                {search || hasActiveSearchFilters(searchFilters) ? (
+                  <p className="text-muted-foreground" data-testid="text-empty-transactions">
+                    No transactions match your search
                   </p>
+                ) : !includeBlockchainDiscovered && blockchainOnlyTxCount > 0 ? (
+                  <div className="flex flex-col items-center gap-3">
+                    <p className="text-muted-foreground" data-testid="text-empty-transactions">
+                      {blockchainOnlyTxCount.toLocaleString()} transaction{blockchainOnlyTxCount !== 1 ? "s are" : " is"} hidden
+                    </p>
+                    <p className="text-sm text-muted-foreground max-w-md">
+                      These transactions only touch blockchain-discovered addresses you haven't labeled yet. They're hidden by default to keep things fast.
+                    </p>
+                    <Button
+                      variant="outline"
+                      onClick={() => {
+                        setIncludeBlockchainDiscovered(true);
+                        setCurrentPage(1);
+                      }}
+                      data-testid="button-show-hidden-transactions"
+                    >
+                      Show all transactions
+                    </Button>
+                  </div>
+                ) : (
+                  <>
+                    <p className="text-muted-foreground" data-testid="text-empty-transactions">
+                      No transactions synced yet
+                    </p>
+                    <p className="text-sm text-muted-foreground mt-2">
+                      Use Transaction Sync to fetch blockchain data for your addresses
+                    </p>
+                  </>
                 )}
               </CardContent>
             </Card>

@@ -72,7 +72,7 @@ import { updateSettings } from "@/lib/data/settings-crud";
 import { deriveKey, decrypt, base64ToBuffer, verifyPassword } from "@/lib/crypto";
 import { getVaultSettings, vaultDb } from "@/lib/vault";
 import { generateSalt, hashPassword, bufferToBase64 } from "@/lib/crypto";
-import { migrateAttachmentPaths } from "@/lib/attachments";
+import { migrateAttachmentPaths, auditAttachments, type AttachmentAuditResult } from "@/lib/attachments";
 import { 
   setAttachmentPathsMigrated,
 } from "@/lib/vault";
@@ -122,6 +122,8 @@ export default function SettingsPage() {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [isChangingPassword, setIsChangingPassword] = useState(false);
   const [isMigratingAttachments, setIsMigratingAttachments] = useState(false);
+  const [isAuditingAttachments, setIsAuditingAttachments] = useState(false);
+  const [attachmentAudit, setAttachmentAudit] = useState<AttachmentAuditResult | null>(null);
 
   // Recompute address stats state
   const [isRecomputingStats, setIsRecomputingStats] = useState(false);
@@ -449,6 +451,31 @@ export default function SettingsPage() {
       });
     } finally {
       setIsMigratingAttachments(false);
+    }
+  };
+
+  const handleAuditAttachments = async () => {
+    setIsAuditingAttachments(true);
+    try {
+      const result = await auditAttachments();
+      setAttachmentAudit(result);
+      const issues = result.missingFiles.length + result.orphanedFiles.length;
+      toast({
+        title: issues === 0 ? "Audit Complete — All Good" : "Audit Complete",
+        description:
+          issues === 0
+            ? `All ${result.matched} attachment${result.matched !== 1 ? "s" : ""} on record match a file on disk.`
+            : `${result.matched} matched, ${result.missingFiles.length} missing file${result.missingFiles.length !== 1 ? "s" : ""}, ${result.orphanedFiles.length} unreferenced file${result.orphanedFiles.length !== 1 ? "s" : ""}.`,
+      });
+    } catch (error) {
+      console.error("Attachment audit failed:", error);
+      toast({
+        variant: "destructive",
+        title: "Audit Failed",
+        description: error instanceof Error ? error.message : "An error occurred during the audit.",
+      });
+    } finally {
+      setIsAuditingAttachments(false);
     }
   };
 
@@ -1535,6 +1562,64 @@ export default function SettingsPage() {
                 )}
               </Button>
             </div>
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <div>
+                <Label className="text-base">Check Attachments</Label>
+                <p className="text-sm text-muted-foreground">
+                  Compare your records against the files on disk. Read-only — nothing is changed or deleted.
+                </p>
+              </div>
+              <Button
+                variant="outline"
+                onClick={handleAuditAttachments}
+                disabled={isAuditingAttachments}
+                data-testid="button-audit-attachments"
+              >
+                {isAuditingAttachments ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Checking...
+                  </>
+                ) : (
+                  <>
+                    <RefreshCw className="h-4 w-4 mr-2" />
+                    Check
+                  </>
+                )}
+              </Button>
+            </div>
+            {attachmentAudit && (
+              <div
+                className="rounded-md border p-4 space-y-2 text-sm"
+                data-testid="text-attachment-audit-result"
+              >
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <span className="text-muted-foreground">Attachments on record</span>
+                  <span data-testid="text-audit-total-rows">{attachmentAudit.totalDbRows}</span>
+                </div>
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <span className="text-muted-foreground">Files found on disk</span>
+                  <span data-testid="text-audit-total-files">{attachmentAudit.totalDiskFiles}</span>
+                </div>
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <span className="text-muted-foreground">Matched</span>
+                  <span data-testid="text-audit-matched">{attachmentAudit.matched}</span>
+                </div>
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <span className="text-muted-foreground">Missing files (on record but not on disk)</span>
+                  <span data-testid="text-audit-missing">{attachmentAudit.missingFiles.length}</span>
+                </div>
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <span className="text-muted-foreground">Unreferenced files (on disk but not on record)</span>
+                  <span data-testid="text-audit-orphaned">{attachmentAudit.orphanedFiles.length}</span>
+                </div>
+                {attachmentAudit.missingFiles.length === 0 && attachmentAudit.orphanedFiles.length === 0 && (
+                  <p className="text-muted-foreground pt-1">
+                    Everything matches. No missing or unreferenced files.
+                  </p>
+                )}
+              </div>
+            )}
           </CardContent>
         </Card>
 

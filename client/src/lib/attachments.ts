@@ -1,6 +1,7 @@
 import { db } from '@/lib/database';
 import { isElectron, getElectronAPI } from '@/lib/electron';
 import { updateEvidenceAttachment } from '@/lib/data/evidence-crud';
+import { getRecord } from '@/lib/data/record-crud';
 import {
   addAttachment,
   deleteAttachment as deleteAttachmentRecord,
@@ -389,6 +390,151 @@ async function renameAttachmentFile(oldRelPath: string, newRelPath: string): Pro
   }
 }
 
+// ---- Byte-level helpers (copy = read + write + verify; never deletes) ------
+
+async function readAttachmentBytes(relPath: string): Promise<ArrayBuffer> {
+  if (isElectron()) {
+    const api = getElectronAPI();
+    const result = await api.readAttachment(relPath);
+    if (!result.success) throw new Error(result.error || 'Read failed');
+    return result.data!;
+  }
+  const encoded = relPath.split('/').map(s => encodeURIComponent(s)).join('/');
+  const response = await fetch(`/api/attachments/download/${encoded}`);
+  if (!response.ok) throw new Error(`Download failed: ${response.status}`);
+  return response.arrayBuffer();
+}
+
+async function writeAttachmentBytes(relPath: string, data: ArrayBuffer): Promise<void> {
+  if (isElectron()) {
+    const api = getElectronAPI();
+    const result = await api.writeAttachment(relPath, data);
+    if (!result.success) throw new Error(result.error || 'Write failed');
+    return;
+  }
+  const pathWithoutPrefix = relPath.startsWith('attachments/')
+    ? relPath.slice('attachments/'.length)
+    : relPath;
+  const blob = new Blob([data], { type: 'application/octet-stream' });
+  const formData = new FormData();
+  formData.append('file', blob, 'file');
+  formData.append('relativePath', pathWithoutPrefix);
+  const response = await fetch('/api/attachments/write', { method: 'POST', body: formData });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ error: 'Write failed' }));
+    throw new Error(error.error || 'Write failed');
+  }
+}
+
+// Copy a file to a new relative path and verify the copy is byte-identical. The
+// original is intentionally left in place — recovery must never delete data.
+// Verification compares every byte (not just length) so a same-length corrupted
+// copy can never replace the original in the DB row.
+async function copyAndVerifyAttachmentFile(srcRelPath: string, destRelPath: string): Promise<void> {
+  const data = await readAttachmentBytes(srcRelPath);
+  await writeAttachmentBytes(destRelPath, data);
+  const verify = await readAttachmentBytes(destRelPath);
+  const src = new Uint8Array(data);
+  const dst = new Uint8Array(verify);
+  if (src.byteLength !== dst.byteLength) {
+    throw new Error(`Copy verification failed: ${dst.byteLength} != ${src.byteLength} bytes`);
+  }
+  for (let i = 0; i < src.byteLength; i++) {
+    if (src[i] !== dst[i]) {
+      throw new Error(`Copy verification failed: byte mismatch at offset ${i}`);
+    }
+  }
+}
+
+async function listAllAttachmentFiles(): Promise<string[]> {
+  if (isElectron()) {
+    const api = getElectronAPI();
+    const result = await api.listAllAttachments();
+    if (!result.success) throw new Error(result.error || 'List failed');
+    return result.files ?? [];
+  }
+  const response = await fetch('/api/attachments/list-all');
+  if (!response.ok) throw new Error(`List failed: ${response.status}`);
+  const data = await response.json();
+  return data.files ?? [];
+}
+
+// Normalize a DB-stored path so it can be compared against the on-disk relative
+// paths from listAllAttachmentFiles (forward slashes, no `attachments/` prefix).
+function normalizeStoredPath(p: string): string {
+  const fwd = p.replace(/\\/g, '/');
+  return fwd.startsWith('attachments/') ? fwd.slice('attachments/'.length) : fwd;
+}
+
+export interface AttachmentAuditRow {
+  source: 'attachments' | 'evidenceAttachments';
+  id: number;
+  objectStoragePath: string;
+}
+
+export interface AttachmentAuditResult {
+  totalDbRows: number;
+  totalDiskFiles: number;
+  matched: number;
+  missingFiles: AttachmentAuditRow[];
+  orphanedFiles: string[];
+}
+
+// Read-only reconciliation of database attachment rows against files on disk.
+// Never moves, writes, or deletes anything — it only reports the truth so the
+// user can see what is recoverable before running any migration.
+export async function auditAttachments(): Promise<AttachmentAuditResult> {
+  const diskFiles = await listAllAttachmentFiles();
+  const diskSet = new Set(diskFiles.map(f => f.replace(/\\/g, '/')));
+  const referenced = new Set<string>();
+
+  const allAttachments = await getAllAttachments();
+  const allEvidence = await db.evidenceAttachments.toArray();
+
+  let matched = 0;
+  const missingFiles: AttachmentAuditRow[] = [];
+
+  const check = (source: AttachmentAuditRow['source'], id: number, p: string) => {
+    const norm = normalizeStoredPath(p);
+    if (diskSet.has(norm)) {
+      matched++;
+      referenced.add(norm);
+    } else {
+      missingFiles.push({ source, id, objectStoragePath: p });
+    }
+  };
+
+  for (const att of allAttachments) {
+    if (att.objectStoragePath) check('attachments', att.id!, att.objectStoragePath);
+  }
+  for (const att of allEvidence) {
+    if (att.objectStoragePath) check('evidenceAttachments', att.id!, att.objectStoragePath);
+  }
+
+  const orphanedFiles = Array.from(diskSet).filter(f => !referenced.has(f));
+
+  return {
+    totalDbRows: allAttachments.length + allEvidence.length,
+    totalDiskFiles: diskSet.size,
+    matched,
+    missingFiles,
+    orphanedFiles,
+  };
+}
+
+// Classifies a stored path: 'skip' (already in hashed/opaque scheme or empty),
+// 'rename' (legacy two-segment plaintext path), or 'root' (single-segment file
+// stranded at the attachments root — previously skipped entirely).
+function classifyStoredPath(objectStoragePath: string): 'skip' | 'rename' | 'root' {
+  const parts = objectStoragePath.replace(/\\/g, '/').split('/').filter(Boolean);
+  const segs = parts[0] === 'attachments' ? parts.slice(1) : parts;
+  if (segs.length >= 2) {
+    return (isAlreadyHashed(segs[0]) && isOpaqueFilename(segs[1])) ? 'skip' : 'rename';
+  }
+  if (segs.length === 1) return 'root';
+  return 'skip';
+}
+
 export async function migrateAttachmentPaths(
   onProgress?: (current: number, total: number, message: string) => void
 ): Promise<{ migrated: number; failed: number }> {
@@ -400,38 +546,29 @@ export async function migrateAttachmentPaths(
     id: number;
     objectStoragePath: string;
     recordId?: number;
+    isRootFile: boolean;
   }> = [];
 
   for (const att of allAttachments) {
-    const pathParts = att.objectStoragePath.replace(/\\/g, '/').split('/');
-    const hasPrefix = pathParts[0] === 'attachments';
-    const dirName = hasPrefix ? pathParts[1] : pathParts[0];
-    const fileName = hasPrefix ? pathParts[2] : pathParts[1];
-
-    if (!dirName || !fileName) continue;
-    if (isAlreadyHashed(dirName) && isOpaqueFilename(fileName)) continue;
-
+    const kind = classifyStoredPath(att.objectStoragePath);
+    if (kind === 'skip') continue;
     needsMigration.push({
       table: 'attachments',
       id: att.id!,
       objectStoragePath: att.objectStoragePath,
       recordId: att.recordId,
+      isRootFile: kind === 'root',
     });
   }
 
   for (const att of allEvidence) {
-    const pathParts = att.objectStoragePath.replace(/\\/g, '/').split('/');
-    const hasPrefix = pathParts[0] === 'attachments';
-    const dirName = hasPrefix ? pathParts[1] : pathParts[0];
-    const fileName = hasPrefix ? pathParts[2] : pathParts[1];
-
-    if (!dirName || !fileName) continue;
-    if (isAlreadyHashed(dirName) && isOpaqueFilename(fileName)) continue;
-
+    const kind = classifyStoredPath(att.objectStoragePath);
+    if (kind === 'skip') continue;
     needsMigration.push({
       table: 'evidenceAttachments',
       id: att.id!,
       objectStoragePath: att.objectStoragePath,
+      isRootFile: kind === 'root',
     });
   }
 
@@ -449,53 +586,94 @@ export async function migrateAttachmentPaths(
     }
 
     try {
-      const pathParts = item.objectStoragePath.replace(/\\/g, '/').split('/');
-      const hasPrefix = pathParts[0] === 'attachments';
-      const dirName = hasPrefix ? pathParts[1] : pathParts[0];
-      const oldFileName = hasPrefix ? pathParts[2] : pathParts[1];
+      if (item.isRootFile) {
+        // Single-segment file stranded at the attachments root. Recover it into
+        // the hashed/opaque scheme by COPYING (read+write+verify) then updating
+        // the DB row. The original root file is never deleted, so a failed copy
+        // can never lose data and re-running is safe (the migrated row is
+        // re-classified as 'skip' and the leftover root file shows up in the
+        // audit as orphaned, ready for the user to clean up manually).
+        const parts = item.objectStoragePath.replace(/\\/g, '/').split('/').filter(Boolean);
+        const hasPrefix = parts[0] === 'attachments';
+        const rootName = hasPrefix ? parts[1] : parts[0];
 
-      let newDirName = dirName;
-      if (!isAlreadyHashed(dirName)) {
-        newDirName = await hashIdentifier(dirName);
-      }
+        // Resolve the target hashed directory. Record attachments hash the
+        // owning record's identifier so list-attachments(identifier) keeps
+        // working; evidence/record-less files mint a fresh opaque identifier
+        // because the original is unrecoverable (only the hashed dir is stored).
+        let identifier: string;
+        if (item.table === 'attachments' && item.recordId != null) {
+          const rec = await getRecord(item.recordId);
+          identifier = rec?.inputString || `orphan_${item.recordId}`;
+        } else {
+          identifier = `evidence_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
+        }
+        const newDirName = await hashIdentifier(identifier);
+        const ext = rootName.includes('.') ? rootName.substring(rootName.lastIndexOf('.')) : '';
+        const newFileName = generateOpaqueFilename(ext);
+        const newRelPath = `${newDirName}/${newFileName}`;
+        const newStoragePath = hasPrefix ? `attachments/${newRelPath}` : newRelPath;
 
-      let newFileName = oldFileName;
-      if (!isOpaqueFilename(oldFileName)) {
-        const ext = oldFileName.includes('.') ? oldFileName.substring(oldFileName.lastIndexOf('.')) : '';
-        newFileName = generateOpaqueFilename(ext);
-      }
+        console.log(`[Migration] Recovering root file: ${item.objectStoragePath} -> ${newStoragePath}`);
+        await copyAndVerifyAttachmentFile(item.objectStoragePath.replace(/\\/g, '/'), newStoragePath);
 
-      const oldRelPath = `${dirName}/${oldFileName}`;
-      const newRelPath = `${newDirName}/${newFileName}`;
-
-      let didRenameFile = false;
-      if (oldRelPath !== newRelPath) {
-        console.log(`[Migration] Renaming: ${oldRelPath} -> ${newRelPath}`);
-        await renameAttachmentFile(oldRelPath, newRelPath);
-        didRenameFile = true;
-      }
-
-      const newStoragePath = hasPrefix ? `attachments/${newRelPath}` : newRelPath;
-
-      try {
         if (item.table === 'attachments') {
           await updateAttachment(item.id, { objectStoragePath: newStoragePath }, { skipNotification: true });
         } else {
           await updateEvidenceAttachment(item.id, { objectStoragePath: newStoragePath }, { skipNotification: true });
         }
-      } catch (dbError) {
-        if (didRenameFile) {
-          try {
-            await renameAttachmentFile(newRelPath, oldRelPath);
-          } catch (rollbackError) {
-            console.error(`Rollback failed for attachment ${item.id}:`, rollbackError);
-          }
-        }
-        throw dbError;
-      }
 
-      console.log(`[Migration] Successfully migrated attachment ${item.id}: ${item.objectStoragePath} -> ${newStoragePath}`);
-      migrated++;
+        console.log(`[Migration] Recovered root file for attachment ${item.id}: ${item.objectStoragePath} -> ${newStoragePath}`);
+        migrated++;
+      } else {
+        const pathParts = item.objectStoragePath.replace(/\\/g, '/').split('/');
+        const hasPrefix = pathParts[0] === 'attachments';
+        const dirName = hasPrefix ? pathParts[1] : pathParts[0];
+        const oldFileName = hasPrefix ? pathParts[2] : pathParts[1];
+
+        let newDirName = dirName;
+        if (!isAlreadyHashed(dirName)) {
+          newDirName = await hashIdentifier(dirName);
+        }
+
+        let newFileName = oldFileName;
+        if (!isOpaqueFilename(oldFileName)) {
+          const ext = oldFileName.includes('.') ? oldFileName.substring(oldFileName.lastIndexOf('.')) : '';
+          newFileName = generateOpaqueFilename(ext);
+        }
+
+        const oldRelPath = `${dirName}/${oldFileName}`;
+        const newRelPath = `${newDirName}/${newFileName}`;
+
+        let didRenameFile = false;
+        if (oldRelPath !== newRelPath) {
+          console.log(`[Migration] Renaming: ${oldRelPath} -> ${newRelPath}`);
+          await renameAttachmentFile(oldRelPath, newRelPath);
+          didRenameFile = true;
+        }
+
+        const newStoragePath = hasPrefix ? `attachments/${newRelPath}` : newRelPath;
+
+        try {
+          if (item.table === 'attachments') {
+            await updateAttachment(item.id, { objectStoragePath: newStoragePath }, { skipNotification: true });
+          } else {
+            await updateEvidenceAttachment(item.id, { objectStoragePath: newStoragePath }, { skipNotification: true });
+          }
+        } catch (dbError) {
+          if (didRenameFile) {
+            try {
+              await renameAttachmentFile(newRelPath, oldRelPath);
+            } catch (rollbackError) {
+              console.error(`Rollback failed for attachment ${item.id}:`, rollbackError);
+            }
+          }
+          throw dbError;
+        }
+
+        console.log(`[Migration] Successfully migrated attachment ${item.id}: ${item.objectStoragePath} -> ${newStoragePath}`);
+        migrated++;
+      }
     } catch (error) {
       console.error(`Failed to migrate attachment ${item.id} (${item.table}):`, error);
       failed++;

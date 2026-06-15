@@ -19,6 +19,28 @@ async function ensureDir(dirPath: string): Promise<void> {
   }
 }
 
+// Safely resolve a caller-supplied relative attachment path to an absolute path
+// inside ATTACHMENTS_DIR. Strips a leading `attachments/` prefix (Electron stores
+// without it), rejects absolute paths and any `..` traversal segment, and enforces
+// a path-separator boundary so a sibling directory like `attachments_evil` cannot
+// satisfy the check by string prefix alone. Returns null when the path is unsafe.
+export function resolveAttachmentPath(relativePath: unknown): string | null {
+  if (typeof relativePath !== 'string' || relativePath.length === 0) return null;
+  const stripped = relativePath.startsWith('attachments/')
+    ? relativePath.slice('attachments/'.length)
+    : relativePath;
+  if (path.isAbsolute(stripped)) return null;
+  const segments = stripped.split(/[\\/]+/);
+  if (segments.some((s) => s === '..')) return null;
+  const base = path.resolve(ATTACHMENTS_DIR);
+  const resolved = path.resolve(base, stripped);
+  // Require the resolved path to be strictly INSIDE the attachments dir. Every
+  // legitimate attachment is a file with a name, so the base directory itself
+  // (e.g. an empty path or "attachments/") is never a valid target.
+  if (!resolved.startsWith(base + path.sep)) return null;
+  return resolved;
+}
+
 // Sanitize identifier for use as directory name
 function sanitizeIdentifier(identifier: string): string {
   if (!identifier) return 'unknown';
@@ -105,6 +127,11 @@ router.get('/list-all', async (req, res) => {
             // Return relative paths like "identifier/filename.ext"
             result.push(path.join(entry.name, file));
           }
+        } else if (entry.isFile()) {
+          // Root-level (single-segment) legacy files. Without this branch they
+          // are invisible to backups and the attachment audit, which makes them
+          // look "missing" even though they are still on disk.
+          result.push(entry.name);
         }
       }
     } catch (error) {
@@ -137,9 +164,8 @@ router.post('/write', upload.single('file'), async (req: Request, res) => {
     }
 
     // Security check: ensure path stays within ATTACHMENTS_DIR
-    const filePath = path.join(ATTACHMENTS_DIR, relativePath);
-    const resolvedPath = path.resolve(filePath);
-    if (!resolvedPath.startsWith(path.resolve(ATTACHMENTS_DIR))) {
+    const filePath = resolveAttachmentPath(relativePath);
+    if (!filePath) {
       return res.status(403).json({ error: 'Access denied' });
     }
 
@@ -166,17 +192,9 @@ router.post('/rename', async (req: Request, res) => {
       return res.status(400).json({ error: 'Both oldPath and newPath are required' });
     }
 
-    if (oldPath.includes('..') || newPath.includes('..') || path.isAbsolute(oldPath) || path.isAbsolute(newPath)) {
-      return res.status(403).json({ error: 'Access denied' });
-    }
-
-    const oldFilePath = path.join(ATTACHMENTS_DIR, oldPath);
-    const newFilePath = path.join(ATTACHMENTS_DIR, newPath);
-
-    const resolvedOld = path.resolve(oldFilePath);
-    const resolvedNew = path.resolve(newFilePath);
-    const resolvedBase = path.resolve(ATTACHMENTS_DIR);
-    if (!resolvedOld.startsWith(resolvedBase + path.sep) || !resolvedNew.startsWith(resolvedBase + path.sep)) {
+    const oldFilePath = resolveAttachmentPath(oldPath);
+    const newFilePath = resolveAttachmentPath(newPath);
+    if (!oldFilePath || !newFilePath) {
       return res.status(403).json({ error: 'Access denied' });
     }
 
@@ -213,11 +231,11 @@ router.post('/rename', async (req: Request, res) => {
 router.get('/download/:path(*)', async (req, res) => {
   try {
     const relativePath = req.params.path;
-    const filePath = path.join(DATA_DIR, relativePath);
-
-    // Security check: ensure path is within DATA_DIR
-    const resolvedPath = path.resolve(filePath);
-    if (!resolvedPath.startsWith(path.resolve(DATA_DIR))) {
+    // Resolve against ATTACHMENTS_DIR regardless of whether the stored path
+    // carries an `attachments/` prefix (Electron stores without it). This keeps
+    // both prefixed and non-prefixed paths readable while rejecting traversal.
+    const filePath = resolveAttachmentPath(relativePath);
+    if (!filePath) {
       return res.status(403).json({ error: 'Access denied' });
     }
 
@@ -244,11 +262,10 @@ router.get('/download/:path(*)', async (req, res) => {
 router.delete('/:path(*)', async (req, res) => {
   try {
     const relativePath = req.params.path;
-    const filePath = path.join(DATA_DIR, relativePath);
-
-    // Security check: ensure path is within DATA_DIR
-    const resolvedPath = path.resolve(filePath);
-    if (!resolvedPath.startsWith(path.resolve(DATA_DIR))) {
+    // Resolve against ATTACHMENTS_DIR regardless of whether the stored path
+    // carries an `attachments/` prefix (Electron stores without it).
+    const filePath = resolveAttachmentPath(relativePath);
+    if (!filePath) {
       return res.status(403).json({ error: 'Access denied' });
     }
 

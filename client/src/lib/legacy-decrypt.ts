@@ -45,6 +45,10 @@ interface TableConfig<T> {
   name: string;
   table: Table<T>;
   sensitiveFields: (keyof T)[];
+  // Runs after sensitive fields are restored onto a decrypted row. Used to
+  // recompute derived/index columns (e.g. inputStringLower) that depend on a
+  // restored field — without this, indexed lookups silently miss the row.
+  postProcess?: (restored: globalThis.Record<string, unknown>) => void;
 }
 
 function getTableConfigs(): TableConfig<LegacyRecord<
@@ -57,6 +61,16 @@ function getTableConfigs(): TableConfig<LegacyRecord<
       name: 'Records',
       table: db.records as Table<LegacyRecord<Record>>,
       sensitiveFields: ['inputString', 'label', 'notes', 'seedName', 'walletSoftware', 'owner', 'walletName', 'source', 'customFields', 'costBasisUsd'] as (keyof Record)[],
+      // inputStringLower backs case-insensitive / fast inputString lookups. It
+      // must be re-derived from the restored plaintext inputString: the v30
+      // migration only set it while records were still encrypted (empty
+      // inputString), so without this every decrypted record would be unfindable
+      // via the inputStringLower index.
+      postProcess: (restored) => {
+        const inputString = restored.inputString;
+        restored.inputStringLower =
+          typeof inputString === 'string' ? inputString.toLowerCase() : '';
+      },
     },
     {
       name: 'Attachments',
@@ -277,6 +291,8 @@ export async function decryptLegacyRecords(
                 (restored as globalThis.Record<string, unknown>)[fieldStr] = sensitiveData[fieldStr];
               }
             }
+
+            config.postProcess?.(restored as globalThis.Record<string, unknown>);
 
             delete restored._legacyEncryptedPayload;
             delete restored.isEncrypted;

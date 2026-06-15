@@ -476,6 +476,72 @@ export async function countRecords(): Promise<number> {
   return db.records.count();
 }
 
+/**
+ * One-time repair for vaults migrated off field-level encryption. The legacy
+ * decryption restored `inputString` but (in older builds) left `inputStringLower`
+ * empty, so the case-insensitive / fast-path index silently missed those rows.
+ * Walks every record via keyset iteration (abort-safe on large 5GB+ vaults —
+ * never a single full-table .modify) and rewrites only the rows whose
+ * `inputStringLower` is out of sync, preserving every other field including
+ * updatedAt.
+ *
+ * Returns counts plus `ok`; callers should only persist a "done" flag when `ok`
+ * is true, so a partial failure retries on next login instead of leaving rows
+ * unsearchable.
+ */
+export async function repairInputStringLower(
+  onProgress?: (scanned: number, fixed: number) => void,
+): Promise<{ scanned: number; fixed: number; ok: boolean }> {
+  const BATCH = 1000;
+  let lastId = 0;
+  let scanned = 0;
+  let fixed = 0;
+  let ok = true;
+
+  try {
+    for (;;) {
+      const chunk = await db.records
+        .where('id')
+        .above(lastId)
+        .limit(BATCH)
+        .toArray();
+      if (chunk.length === 0) break;
+      lastId = chunk[chunk.length - 1].id!;
+      scanned += chunk.length;
+
+      const toFix: Record[] = [];
+      for (const r of chunk) {
+        const expected = r.inputString ? r.inputString.toLowerCase() : '';
+        if (r.inputStringLower !== expected) {
+          toFix.push({ ...r, inputStringLower: expected });
+        }
+      }
+
+      if (toFix.length > 0) {
+        await db.records.bulkPut(toFix);
+        fixed += toFix.length;
+      }
+
+      onProgress?.(scanned, fixed);
+      if (chunk.length < BATCH) break;
+      // Yield between batches so a huge vault does not freeze the renderer.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+  } catch (err) {
+    ok = false;
+    console.error(
+      '[repairInputStringLower] Failed:',
+      err instanceof Error ? err.message : err,
+    );
+  }
+
+  if (fixed > 0) {
+    notifyDbChange('records');
+  }
+
+  return { scanned, fixed, ok };
+}
+
 export async function countRecordsByType(type: string): Promise<number> {
   return db.records.where('type').equals(type).count();
 }
@@ -623,6 +689,102 @@ export async function getRecordsByTypeAndImportanceLimited(
     .where('[type+addressImportance]')
     .equals([type, tier])
     .reverse()
+    .limit(limit)
+    .toArray();
+}
+
+// ---------------------------------------------------------------------------
+// Keyset (cursor) pagination.
+//
+// The `.offset(n)` paths above are O(n): Dexie walks and discards every row
+// before the requested page, so deep pages take minutes on a 100k+ vault.
+// Records are ordered id-descending and `id` is the unique primary key, so we
+// can page by an exclusive id boundary instead: each page fetches only
+// PAGE_SIZE rows below the previous page's smallest id. The caller (Records.tsx)
+// caches the per-page boundary as the user navigates Next/Previous, so adjacent
+// navigation is O(PAGE_SIZE) regardless of depth. A rare non-adjacent jump
+// (e.g. the clamp-to-last-page after a count shrink) falls back to the offset
+// helpers above.
+// ---------------------------------------------------------------------------
+
+export interface RecordsKeysetPageOptions {
+  limit: number;
+  /** Exclusive upper id bound: only rows with id strictly below this are returned. Omit for the first page. */
+  beforeIdExclusive?: number;
+}
+
+export async function getRecordsPageByIdReverseKeyset(
+  opts: RecordsKeysetPageOptions
+): Promise<Record[]> {
+  const { limit, beforeIdExclusive } = opts;
+  if (beforeIdExclusive == null) {
+    return db.records.orderBy('id').reverse().limit(limit).toArray();
+  }
+  return db.records
+    .where('id')
+    .below(beforeIdExclusive)
+    .reverse()
+    .limit(limit)
+    .toArray();
+}
+
+export async function getAddressRecordsByImportanceTierPage(
+  tier: AddressImportance,
+  opts: RecordsKeysetPageOptions
+): Promise<Record[]> {
+  const { limit, beforeIdExclusive } = opts;
+  return db.records
+    .where('[addressImportance+id]')
+    .between(
+      [tier, Dexie.minKey],
+      [tier, beforeIdExclusive ?? Dexie.maxKey],
+      true,
+      beforeIdExclusive == null
+    )
+    .reverse()
+    .limit(limit)
+    .toArray();
+}
+
+export async function getRecordsPageByTypeIdReverseKeyset(
+  type: string,
+  opts: RecordsKeysetPageOptions
+): Promise<Record[]> {
+  const { limit, beforeIdExclusive } = opts;
+  return db.records
+    .where('[type+id]')
+    .between(
+      [type, Dexie.minKey],
+      [type, beforeIdExclusive ?? Dexie.maxKey],
+      true,
+      beforeIdExclusive == null
+    )
+    .reverse()
+    .limit(limit)
+    .toArray();
+}
+
+export async function getRecordsPageByTypeAndImportanceTiersKeyset(
+  type: string,
+  tiers: AddressImportance[],
+  opts: RecordsKeysetPageOptions
+): Promise<Record[]> {
+  if (tiers.length === 0) return [];
+  const { limit, beforeIdExclusive } = opts;
+  // The [type+addressImportance] index can't keyset by id (it has no id
+  // component), so walk the [type+id] index id-desc from the boundary and keep
+  // only rows in the requested tiers, stopping once we have a full page.
+  const tierSet = new Set(tiers);
+  return db.records
+    .where('[type+id]')
+    .between(
+      [type, Dexie.minKey],
+      [type, beforeIdExclusive ?? Dexie.maxKey],
+      true,
+      beforeIdExclusive == null
+    )
+    .reverse()
+    .and((r) => tierSet.has(r.addressImportance as AddressImportance))
     .limit(limit)
     .toArray();
 }

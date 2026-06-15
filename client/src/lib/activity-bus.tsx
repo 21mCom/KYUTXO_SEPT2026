@@ -294,32 +294,49 @@ export function ActivityBusProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!('PerformanceObserver' in window)) return;
     let observer: PerformanceObserver;
+    // Long tasks fire for any block >50ms; browser attribution is almost always
+    // empty (the old "(unknown)" noise). Instead of one event per task, ignore
+    // minor blocks and aggregate bursts into a single periodic summary so the
+    // activity feed stays readable during heavy scans.
+    const LONGTASK_MIN_MS = 100;
+    const LONGTASK_FLUSH_MS = 3000;
+    let pending = { count: 0, total: 0, max: 0 };
+    let flushTimer: ReturnType<typeof setInterval> | null = null;
+
+    const flush = () => {
+      if (pending.count === 0) return;
+      const { count, total, max } = pending;
+      pending = { count: 0, total: 0, max: 0 };
+      try {
+        _pushEvent?.({
+          kind: 'longtask',
+          label: 'Long Task',
+          message: count === 1
+            ? `Main thread blocked ${max}ms`
+            : `Main thread blocked ${count}× (${total}ms total, longest ${max}ms)`,
+          duration: max,
+        });
+      } catch {}
+    };
+
     try {
       observer = new PerformanceObserver((list) => {
         for (const entry of list.getEntries()) {
-          if (entry.entryType === 'longtask') {
-            const duration = Math.round(entry.duration);
-            const attribution = (entry as PerformanceEntry & { attribution?: Array<{ name?: string; containerSrc?: string }> }).attribution;
-            const src = attribution?.[0]?.containerSrc || attribution?.[0]?.name || 'unknown';
-            let source = 'unknown';
-            if (src.includes('sync') || src.includes('transaction')) source = 'sync';
-            else if (src.includes('render') || src.includes('react')) source = 'render';
-            else if (src.includes('query') || src.includes('dexie') || src.includes('idb')) source = 'query';
-            try {
-              _pushEvent?.({
-                kind: 'longtask',
-                label: 'Long Task',
-                message: `Main thread blocked ${duration}ms (${source})`,
-                duration,
-              });
-            } catch {}
-          }
+          if (entry.entryType !== 'longtask') continue;
+          const duration = Math.round(entry.duration);
+          if (duration < LONGTASK_MIN_MS) continue;
+          pending.count += 1;
+          pending.total += duration;
+          if (duration > pending.max) pending.max = duration;
         }
       });
       observer.observe({ entryTypes: ['longtask'] });
+      flushTimer = setInterval(flush, LONGTASK_FLUSH_MS);
     } catch {}
     return () => {
       try { observer?.disconnect(); } catch {}
+      if (flushTimer) clearInterval(flushTimer);
+      flush();
     };
   }, []);
 

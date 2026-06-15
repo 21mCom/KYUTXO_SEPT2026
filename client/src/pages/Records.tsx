@@ -22,6 +22,10 @@ import {
   getRecordsByTypeAndImportanceLimited,
   getRecordsByInputStrings,
   countRecordsByType,
+  getRecordsPageByIdReverseKeyset,
+  getAddressRecordsByImportanceTierPage,
+  getRecordsPageByTypeIdReverseKeyset,
+  getRecordsPageByTypeAndImportanceTiersKeyset,
 } from "@/lib/data/record-crud";
 import { getTransactionsByTxidStartsWith } from "@/lib/data/transaction-crud";
 import { recomputeAddressStats } from "@/lib/data/address-stats";
@@ -48,7 +52,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
 import { searchPendingClass } from "@/lib/search-pending-class";
-import { buildRecordsCollection, fetchRecordsPage } from "@/lib/records-query";
+import { buildRecordsCollection, buildIdentifierSearchCollection, looksLikeBitcoinIdentifier, fetchRecordsPage } from "@/lib/records-query";
 import { getActivityBus } from "@/lib/activity-bus";
 
 interface ConvertedRecord {
@@ -101,6 +105,26 @@ function convertRecord(r: DbRecord): ConvertedRecord {
     discoveredInTxid: r.discoveredInTxid,
     discoveredFromRecordId: r.discoveredFromRecordId,
   };
+}
+
+// Merge several id-descending tier streams into a single id-descending page.
+// Used by the keyset tier branches: each group holds up to `limit` rows below
+// the page anchor; the global top `limit` ids must each be within their tier's
+// top `limit`, so flatten, dedupe by id (defensive), sort id-desc, slice.
+function mergeTopRecordsById(groups: DbRecord[][], limit: number): DbRecord[] {
+  const seen = new Set<number>();
+  const merged: DbRecord[] = [];
+  for (const group of groups) {
+    for (const r of group) {
+      const id = r.id;
+      if (typeof id === 'number' && !seen.has(id)) {
+        seen.add(id);
+        merged.push(r);
+      }
+    }
+  }
+  merged.sort((a, b) => (b.id ?? 0) - (a.id ?? 0));
+  return merged.slice(0, limit);
 }
 
 function matchesColumnFilter(record: DbRecord, filter: ColumnFilter): boolean {
@@ -236,6 +260,16 @@ export default function Records() {
 
   const loadVersionRef = useRef(0);
   const inFlightRef = useRef(0);
+  // Keyset (cursor) pagination cache. `anchors` maps a page number to the
+  // exclusive id boundary to start that page below (page 1 maps to undefined =
+  // start from the top). Boundaries are filled in as the user navigates
+  // Next/Previous, so adjacent navigation is O(PAGE_SIZE) instead of O(offset).
+  // `signature` captures the query identity (filters/search/include/db version);
+  // when it changes the cache is reset so stale boundaries are never reused.
+  const pageAnchorsRef = useRef<{ signature: string; anchors: Map<number, number | undefined> }>({
+    signature: '',
+    anchors: new Map<number, number | undefined>([[1, undefined]]),
+  });
 
   const retryLoad = useCallback(() => {
     setLoadError(null);
@@ -281,6 +315,10 @@ export default function Records() {
         
         const search = debouncedSearch.toLowerCase().trim();
         const isTxidSearch = search.length >= 8 && /^[a-fA-F0-9]+$/.test(search);
+        // Exact identifier fast-path: a pasted full address/txid routes to the
+        // inputStringLower index instead of the residual cross-field substring
+        // scan (the 15-20 min freeze on large vaults). See records-query.ts.
+        const identifierSearch = looksLikeBitcoinIdentifier(search);
         const filtersActive = search !== '' || columnFilters.length > 0;
         
         const filterFn = (record: DbRecord): boolean => {
@@ -313,6 +351,36 @@ export default function Records() {
         const pgOffset = (currentPage - 1) * PAGE_SIZE;
         let rawRecords: DbRecord[];
 
+        // Keyset pagination setup. Reset the cursor cache when the query identity
+        // (filters/search/include) or the DB version changes, so we never reuse a
+        // stale id boundary. `hasAnchor` is true for page 1 (boundary = undefined)
+        // and for any page we previously cached a boundary for during sequential
+        // navigation; otherwise we fall back to the O(offset) helpers for that one
+        // load (e.g. the clamp-to-last-page jump after a count shrink).
+        const anchorState = pageAnchorsRef.current;
+        const querySignature = JSON.stringify({
+          inc: includeBlockchainDiscovered,
+          search,
+          filters: columnFilters,
+          db: dbChangeSignal,
+        });
+        if (anchorState.signature !== querySignature) {
+          anchorState.signature = querySignature;
+          anchorState.anchors = new Map<number, number | undefined>([[1, undefined]]);
+        }
+        const hasAnchor = anchorState.anchors.has(currentPage);
+        const beforeIdExclusive = anchorState.anchors.get(currentPage);
+        // Record the boundary for the next page once a full page is loaded; a
+        // short page means there is no next page, so we leave it unset.
+        const recordNextAnchor = (rows: DbRecord[]) => {
+          if (rows.length === PAGE_SIZE) {
+            const lastId = rows[rows.length - 1].id;
+            if (typeof lastId === 'number') {
+              anchorState.anchors.set(currentPage + 1, lastId);
+            }
+          }
+        };
+
         setPhase('Fetching records');
         bus.publishTask({
           id: taskId,
@@ -336,11 +404,14 @@ export default function Records() {
           }).catch(e => { console.warn('[Records] Background count failed (all+include):', e); })
             .finally(() => { if (loadVersionRef.current === version) setCountLoading(false); });
 
-          // Await only the lightweight page fetch.
-          rawRecords = await getRecordsPageByIdReverse(pgOffset, PAGE_SIZE);
+          // Await only the lightweight page fetch (keyset when possible).
+          rawRecords = hasAnchor
+            ? await getRecordsPageByIdReverseKeyset({ limit: PAGE_SIZE, beforeIdExclusive })
+            : await getRecordsPageByIdReverse(pgOffset, PAGE_SIZE);
 
           if (loadVersionRef.current !== version) return;
           setResultsTruncated(false);
+          recordNextAnchor(rawRecords);
 
         } else if (!filtersActive && !includeBlockchainDiscovered) {
           // Fire count in background (same reasoning as above).
@@ -353,14 +424,25 @@ export default function Records() {
             .finally(() => { if (loadVersionRef.current === version) setCountLoading(false); });
 
           // Await only the page fetch (indexed tier queries, fast).
-          const pageGroups = await Promise.all(USER_CURATED_TIERS.map(tier =>
-            getAddressRecordsByImportanceTierLimited(tier, pgOffset + PAGE_SIZE)
-          ));
+          if (hasAnchor) {
+            // Keyset: fetch up to PAGE_SIZE rows below the boundary from each
+            // tier, then k-way merge to the global top PAGE_SIZE.
+            const pageGroups = await Promise.all(USER_CURATED_TIERS.map(tier =>
+              getAddressRecordsByImportanceTierPage(tier, { limit: PAGE_SIZE, beforeIdExclusive })
+            ));
+            if (loadVersionRef.current !== version) return;
+            rawRecords = mergeTopRecordsById(pageGroups, PAGE_SIZE);
+          } else {
+            const pageGroups = await Promise.all(USER_CURATED_TIERS.map(tier =>
+              getAddressRecordsByImportanceTierLimited(tier, pgOffset + PAGE_SIZE)
+            ));
+            if (loadVersionRef.current !== version) return;
+            const merged = pageGroups.flat().sort((a, b) => (b.id ?? 0) - (a.id ?? 0));
+            rawRecords = merged.slice(pgOffset, pgOffset + PAGE_SIZE);
+          }
 
-          if (loadVersionRef.current !== version) return;
           setResultsTruncated(false);
-          const merged = pageGroups.flat().sort((a, b) => (b.id ?? 0) - (a.id ?? 0));
-          rawRecords = merged.slice(pgOffset, pgOffset + PAGE_SIZE);
+          recordNextAnchor(rawRecords);
 
         } else if (singleTypeFilter) {
           const typeVal = singleTypeFilter;
@@ -383,9 +465,19 @@ export default function Records() {
               .finally(() => { if (loadVersionRef.current === version) setCountLoading(false); });
           }
 
-          // Await only the page fetch.
+          // Await only the page fetch (keyset when possible).
           if (includeBlockchainDiscovered) {
-            rawRecords = await getRecordsPageByTypeIdReverse(typeVal, pgOffset, PAGE_SIZE);
+            rawRecords = hasAnchor
+              ? await getRecordsPageByTypeIdReverseKeyset(typeVal, { limit: PAGE_SIZE, beforeIdExclusive })
+              : await getRecordsPageByTypeIdReverse(typeVal, pgOffset, PAGE_SIZE);
+          } else if (hasAnchor) {
+            // Keyset: walk [type+id] id-desc from the boundary, keeping only the
+            // user-curated tiers, until a full page is collected.
+            rawRecords = await getRecordsPageByTypeAndImportanceTiersKeyset(
+              typeVal,
+              USER_CURATED_TIERS,
+              { limit: PAGE_SIZE, beforeIdExclusive },
+            );
           } else {
             const groups = await Promise.all(USER_CURATED_TIERS.map(tier =>
               getRecordsByTypeAndImportanceLimited(typeVal, tier, pgOffset + PAGE_SIZE)
@@ -396,6 +488,29 @@ export default function Records() {
 
           if (loadVersionRef.current !== version) return;
           setResultsTruncated(false);
+          recordNextAnchor(rawRecords);
+
+        } else if (identifierSearch) {
+          // Pasted full address/txid: indexed equality lookup on
+          // inputStringLower (fast) instead of the residual substring scan.
+          const built = buildIdentifierSearchCollection(
+            identifierSearch,
+            { search, columnFilters, includeBlockchainDiscovered },
+            filterFn,
+          );
+          const page = await fetchRecordsPage(
+            built,
+            pgOffset,
+            PAGE_SIZE,
+            () => loadVersionRef.current !== version,
+          );
+          if (page === null) return;
+          if (loadVersionRef.current !== version) return;
+
+          setTotalCount(page.total);
+          setNavigableCount(page.effectiveTotal);
+          setResultsTruncated(page.truncated);
+          rawRecords = page.records;
 
         } else {
           const built = buildRecordsCollection(

@@ -71,6 +71,8 @@ vi.mock("@/lib/database", () => ({
 
 import {
   buildRecordsCollection,
+  buildIdentifierSearchCollection,
+  looksLikeBitcoinIdentifier,
   pickPrimaryNarrowing,
   fetchRecordsPage,
   USER_TIERS,
@@ -369,5 +371,84 @@ describe("fetchRecordsPage", () => {
       () => true,
     );
     expect(page).toBeNull();
+  });
+});
+
+describe("looksLikeBitcoinIdentifier", () => {
+  it("detects a 64-hex transaction id (case-insensitive)", () => {
+    const txid = "a".repeat(64);
+    expect(looksLikeBitcoinIdentifier(txid)).toBe(txid);
+    const mixed = "ABCDEF" + "0".repeat(58);
+    expect(looksLikeBitcoinIdentifier(mixed)).toBe(mixed);
+  });
+
+  it("detects bech32 / bech32m addresses (mainnet, testnet, regtest)", () => {
+    const bc1 = "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq";
+    const tb1 = "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx";
+    const taproot = "bc1p" + "0".repeat(58);
+    expect(looksLikeBitcoinIdentifier(bc1)).toBe(bc1);
+    expect(looksLikeBitcoinIdentifier(tb1)).toBe(tb1);
+    expect(looksLikeBitcoinIdentifier(taproot)).toBe(taproot);
+  });
+
+  it("detects legacy base58 P2PKH / P2SH addresses", () => {
+    const p2pkh = "1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2";
+    const p2sh = "3J98t1WpEZ73CNmQviecrnyiWrnqRhWNLy";
+    expect(looksLikeBitcoinIdentifier(p2pkh)).toBe(p2pkh);
+    expect(looksLikeBitcoinIdentifier(p2sh)).toBe(p2sh);
+  });
+
+  it("trims surrounding whitespace before matching", () => {
+    const p2pkh = "1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2";
+    expect(looksLikeBitcoinIdentifier(`  ${p2pkh}  `)).toBe(p2pkh);
+  });
+
+  it("returns null for ordinary search words and partial identifiers", () => {
+    expect(looksLikeBitcoinIdentifier("alice")).toBeNull();
+    expect(looksLikeBitcoinIdentifier("cold storage")).toBeNull();
+    expect(looksLikeBitcoinIdentifier("")).toBeNull();
+    expect(looksLikeBitcoinIdentifier("   ")).toBeNull();
+    // 63 hex chars (one short of a txid) must NOT match
+    expect(looksLikeBitcoinIdentifier("a".repeat(63))).toBeNull();
+    // 65 hex chars (one over) must NOT match
+    expect(looksLikeBitcoinIdentifier("a".repeat(65))).toBeNull();
+  });
+});
+
+describe("buildIdentifierSearchCollection", () => {
+  it("routes a pasted identifier to the inputStringLower equality index (lowercased)", () => {
+    const noop = () => true;
+    const addr = "1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2";
+    buildIdentifierSearchCollection(
+      addr,
+      { search: addr.toLowerCase(), columnFilters: [], includeBlockchainDiscovered: false },
+      noop,
+    );
+    // The synthetic inputString-equals filter is the most selective narrowing,
+    // so it must drive a case-insensitive equality on the inputStringLower index.
+    expect(whereSpy).toHaveBeenCalledWith("inputStringLower");
+    expect(equalsSpy).toHaveBeenCalledWith("where(inputStringLower)", addr.toLowerCase());
+    // It must NOT fall back to the user-tier / full-table scan.
+    expect(anyOfSpy).not.toHaveBeenCalled();
+    expect(toCollectionSpy).not.toHaveBeenCalled();
+    // residual predicate wired via .and()
+    expect(andSpy).toHaveBeenCalled();
+  });
+
+  it("keeps the identifier as the primary narrowing even alongside other column filters", () => {
+    const noop = () => true;
+    const addr = "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq";
+    buildIdentifierSearchCollection(
+      addr,
+      {
+        search: addr,
+        columnFilters: [{ field: "type", operator: "equals", value: "address" }],
+        includeBlockchainDiscovered: true,
+      },
+      noop,
+    );
+    // inputStringLower equals (priority 1) wins over type equals (priority 10).
+    expect(whereSpy).toHaveBeenCalledWith("inputStringLower");
+    expect(equalsSpy).toHaveBeenCalledWith("where(inputStringLower)", addr);
   });
 });

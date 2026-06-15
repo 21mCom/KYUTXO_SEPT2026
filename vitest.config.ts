@@ -14,6 +14,10 @@ export default defineConfig({
     },
   },
   test: {
-    include: ["client/src/**/*.test.ts", "client/src/**/*.test.tsx"],
+    include: [
+      "client/src/**/*.test.ts",
+      "client/src/**/*.test.tsx",
+      "server/**/*.test.ts",
+    ],
   },
 });

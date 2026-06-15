@@ -2,6 +2,16 @@ const path = require('path');
 const fs = require('fs');
 
 function registerFileHandlers(ipcMain, { dataDir, attachmentsDir, portableMode }) {
+  // Stored attachment paths may or may not carry an `attachments/` prefix
+  // depending on which backend wrote them: the Express server stores paths WITH
+  // the prefix (relative to the data dir), while Electron stores them WITHOUT it
+  // (relative to attachmentsDir). Strip a leading prefix so both forms resolve
+  // here instead of producing an unreadable `attachmentsDir/attachments/...`.
+  const stripAttachmentsPrefix = (p) =>
+    typeof p === 'string' && p.startsWith('attachments/')
+      ? p.slice('attachments/'.length)
+      : p;
+
   ipcMain.handle('get-app-data-path', () => {
     return require('electron').app.getPath('userData');
   });
@@ -48,7 +58,7 @@ function registerFileHandlers(ipcMain, { dataDir, attachmentsDir, portableMode }
       if (!relativePath || relativePath.includes('..') || path.isAbsolute(relativePath)) {
         return { success: false, error: 'Invalid relative path' };
       }
-      const filePath = path.join(attachmentsDir, relativePath);
+      const filePath = path.join(attachmentsDir, stripAttachmentsPrefix(relativePath));
       const resolvedPath = path.resolve(filePath);
       const resolvedAttachmentsDir = path.resolve(attachmentsDir);
       if (!resolvedPath.startsWith(resolvedAttachmentsDir + path.sep) && resolvedPath !== resolvedAttachmentsDir) {
@@ -66,7 +76,7 @@ function registerFileHandlers(ipcMain, { dataDir, attachmentsDir, portableMode }
       if (!relativePath || relativePath.includes('..') || path.isAbsolute(relativePath)) {
         return { success: false, error: 'Invalid relative path' };
       }
-      const filePath = path.join(attachmentsDir, relativePath);
+      const filePath = path.join(attachmentsDir, stripAttachmentsPrefix(relativePath));
       const resolvedPath = path.resolve(filePath);
       const resolvedAttachmentsDir = path.resolve(attachmentsDir);
       if (!resolvedPath.startsWith(resolvedAttachmentsDir + path.sep) && resolvedPath !== resolvedAttachmentsDir) {
@@ -106,8 +116,8 @@ function registerFileHandlers(ipcMain, { dataDir, attachmentsDir, portableMode }
         return { success: false, error: 'Invalid new path' };
       }
 
-      const oldFilePath = path.join(attachmentsDir, oldPath);
-      const newFilePath = path.join(attachmentsDir, newPath);
+      const oldFilePath = path.join(attachmentsDir, stripAttachmentsPrefix(oldPath));
+      const newFilePath = path.join(attachmentsDir, stripAttachmentsPrefix(newPath));
 
       const resolvedOld = path.resolve(oldFilePath);
       const resolvedNew = path.resolve(newFilePath);
@@ -165,6 +175,11 @@ function registerFileHandlers(ipcMain, { dataDir, attachmentsDir, portableMode }
             // Return relative paths like "identifier/filename.ext"
             result.push(path.join(entry.name, file));
           }
+        } else if (entry.isFile()) {
+          // Root-level (single-segment) legacy files. Without this branch they
+          // are invisible to backups and the attachment audit, which makes them
+          // look "missing" even though they are still on disk.
+          result.push(entry.name);
         }
       }
       
@@ -182,7 +197,7 @@ function registerFileHandlers(ipcMain, { dataDir, attachmentsDir, portableMode }
         return { success: false, error: 'Invalid relative path' };
       }
       
-      const filePath = path.join(attachmentsDir, relativePath);
+      const filePath = path.join(attachmentsDir, stripAttachmentsPrefix(relativePath));
       
       // Security: Ensure resolved path is within attachmentsDir
       const resolvedPath = path.resolve(filePath);

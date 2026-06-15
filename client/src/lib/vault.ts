@@ -10,6 +10,7 @@ export interface VaultSettings {
   legacyDecryptComplete?: boolean;
   legacyDecryptCompletedTables?: string[];
   legacyFileDecryptComplete?: boolean;
+  inputStringLowerRepaired?: boolean;
 }
 
 class VaultDatabase extends Dexie {
@@ -100,6 +101,18 @@ export async function addLegacyDecryptCompletedTable(tableName: string): Promise
       }
     }
   });
+}
+
+export async function isInputStringLowerRepaired(): Promise<boolean> {
+  const settings = await vaultDb.vault.get('main');
+  return settings?.inputStringLowerRepaired ?? false;
+}
+
+export async function setInputStringLowerRepaired(repaired: boolean): Promise<void> {
+  const settings = await vaultDb.vault.get('main');
+  if (settings) {
+    await vaultDb.vault.update('main', { inputStringLowerRepaired: repaired });
+  }
 }
 
 export async function isLegacyFileDecryptComplete(): Promise<boolean> {

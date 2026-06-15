@@ -207,6 +207,59 @@ export function buildRecordsCollection(
   };
 }
 
+// Conservative, dependency-free detection of a complete Bitcoin identifier
+// (full address or 64-hex txid) pasted into the global search box. Kept free of
+// bitcoinjs-lib so this stays a pure, fast, easily-tested query module.
+//
+// Returns the trimmed identifier when the search looks like a complete address
+// or txid, else null. The patterns require a FULL identifier (anchored, with
+// realistic length bounds), so ordinary words/labels do not trigger the
+// fast-path. A rare false positive only means an exact-match lookup for a
+// string already shaped exactly like an address — which is what the user wants.
+export function looksLikeBitcoinIdentifier(search: string): string | null {
+  const t = (search ?? "").trim();
+  if (!t) return null;
+  // Transaction id: exactly 64 hex chars.
+  if (/^[0-9a-f]{64}$/i.test(t)) return t;
+  // Bech32 / Bech32m (segwit v0, taproot) — mainnet/testnet/regtest prefixes.
+  if (/^(bc1|tb1|bcrt1)[a-z0-9]{6,90}$/i.test(t)) return t;
+  // Base58Check legacy (P2PKH '1', P2SH '3', testnet 'm'/'n'/'2').
+  if (/^[123mn][a-km-zA-HJ-NP-Z1-9]{25,39}$/.test(t)) return t;
+  return null;
+}
+
+/**
+ * Fast-path collection for a global search that is a complete Bitcoin
+ * identifier (address or txid). Instead of the residual cross-field substring
+ * scan — which on a large vault walks the full user-tier / full-table candidate
+ * set and runs five `.includes()` checks per row (the 15-20 min freeze) — this
+ * routes the identifier to the `inputStringLower` equality index by injecting a
+ * synthetic `inputString equals` column filter. `classifyFilter` maps that to
+ * `inputStringLower.equals(value)` at top priority, so the existing,
+ * equivalence-tested `buildRecordsCollection` machinery does the indexed lookup.
+ *
+ * SEMANTICS: an identifier search resolves to records whose tracked
+ * `inputString` equals the identifier (the canonical record for that
+ * address/txid), NOT records that merely mention it inside notes/label. This is
+ * the intended product behavior for pasting an identifier to jump to its record.
+ * Free-text (non-identifier) search keeps the legacy substring semantics.
+ */
+export function buildIdentifierSearchCollection(
+  identifier: string,
+  params: BuildRecordsQueryParams,
+  residualPredicate: (record: DbRecord) => boolean,
+): BuildRecordsQueryResult {
+  const synthetic: ColumnFilter = {
+    field: "inputString",
+    operator: "equals",
+    value: identifier,
+  };
+  return buildRecordsCollection(
+    { ...params, columnFilters: [synthetic, ...params.columnFilters] },
+    residualPredicate,
+  );
+}
+
 export interface FetchRecordsPageResult {
   records: DbRecord[];
   /** Exact match count when not truncated; equal to MAX_MATERIALIZE when truncated. */
