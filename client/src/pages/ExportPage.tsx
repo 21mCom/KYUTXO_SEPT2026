@@ -20,6 +20,8 @@ import { getAllNodeSettings } from "@/lib/data/node-settings-crud";
 import { countRecords, getRecordsAfterId } from "@/lib/data/record-crud";
 import { getAllEvidence, getAllEvidenceAttachments } from "@/lib/data/evidence-crud";
 import { getAllUtxoLineage, getAllCustodySegments } from "@/lib/data/lineage-crud";
+import { getAllTransactions, getAllTransactionParticipants } from "@/lib/data/transaction-crud";
+import { getAllAddressSyncState } from "@/lib/data/address-sync-crud";
 import { encrypt, deriveKey, generateSalt, bufferToBase64 } from "@/lib/crypto";
 import { isElectron, getElectronAPI } from "@/lib/electron";
 import JSZip from "jszip";
@@ -87,6 +89,9 @@ interface ExportData {
     nodeSettings: any[];
     utxoLineage: any[];
     custodySegments: any[];
+    blockchainTransactions: any[];
+    transactionParticipants: any[];
+    addressSyncState: any[];
   };
 }
 
@@ -394,6 +399,9 @@ export default function ExportPage() {
       const rawNodeSettings = await getAllNodeSettings();
       const rawUtxoLineage = await getAllUtxoLineage();
       const rawCustodySegments = await getAllCustodySegments();
+      const rawBlockchainTransactions = await getAllTransactions();
+      const rawTransactionParticipants = await getAllTransactionParticipants();
+      const rawAddressSyncState = await getAllAddressSyncState();
 
       setProgress(20);
       setProgressMessage("Generating CSV files...");
@@ -481,6 +489,9 @@ export default function ExportPage() {
           nodeSettings: rawNodeSettings,
           utxoLineage: rawUtxoLineage,
           custodySegments: rawCustodySegments,
+          blockchainTransactions: rawBlockchainTransactions,
+          transactionParticipants: rawTransactionParticipants,
+          addressSyncState: rawAddressSyncState,
         },
       };
 

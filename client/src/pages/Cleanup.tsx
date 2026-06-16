@@ -55,12 +55,22 @@ const isBlockchainOnlyRecord = (record: Record, origins: RecordOrigin[]): boolea
   return true;
 };
 
+// Placeholder values written by blockchain sync, NOT real user-entered metadata.
+// A sync-discovered record is created with owner='Pending Review' (and older
+// data may carry 'Pending Review' as a stale label/notes). Treating these
+// sentinels as genuine user metadata wrongly shields auto-discovered records
+// from cleanup, leaving the user unable to remove them.
+const SYNC_PLACEHOLDER = 'Pending Review';
+
+const isMeaningfulText = (value: string | undefined | null): boolean =>
+  !!value && value.trim() !== '' && value.trim() !== SYNC_PLACEHOLDER;
+
 const hasUserMetadata = (record: Record, origins: RecordOrigin[]): boolean => {
-  if (record.label && record.label.trim() !== '') return true;
-  if (record.notes && record.notes.trim() !== '') return true;
+  if (isMeaningfulText(record.label)) return true;
+  if (isMeaningfulText(record.notes)) return true;
   if (record.tags && record.tags.length > 0) return true;
   if (record.categories && record.categories.length > 0) return true;
-  if (record.owner) return true;
+  if (isMeaningfulText(record.owner)) return true;
   if (record.walletName) return true;
   if (record.seedName) return true;
   if (record.walletSoftware) return true;
@@ -72,11 +82,11 @@ const hasUserMetadata = (record: Record, origins: RecordOrigin[]): boolean => {
   if (record.dispositionType) return true;
   if (record.costBasisUsd !== undefined && record.costBasisUsd !== null) return true;
   for (const origin of origins) {
-    if (origin.label && origin.label.trim() !== '') return true;
-    if (origin.notes && origin.notes.trim() !== '') return true;
+    if (isMeaningfulText(origin.label)) return true;
+    if (isMeaningfulText(origin.notes)) return true;
     if (origin.tags && origin.tags.length > 0) return true;
     if (origin.categories && origin.categories.length > 0) return true;
-    if (origin.owner) return true;
+    if (isMeaningfulText(origin.owner)) return true;
     if (origin.walletName) return true;
     if (origin.seedName) return true;
     if (origin.walletSoftware) return true;

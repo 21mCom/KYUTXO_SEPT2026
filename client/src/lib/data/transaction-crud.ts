@@ -20,6 +20,19 @@ export async function addTransaction(
   return id as number;
 }
 
+export async function bulkAddTransactions(
+  transactions: CreateTransactionData[],
+  options?: TransactionWriteOptions
+): Promise<void> {
+  if (transactions.length === 0) return;
+
+  await db.blockchainTransactions.bulkAdd(transactions);
+
+  if (!options?.skipNotification) {
+    notifyDbChange('blockchainTransactions');
+  }
+}
+
 export async function bulkAddParticipants(
   participants: TransactionParticipant[],
   options?: TransactionWriteOptions
@@ -110,6 +123,10 @@ export async function clearAllTransactionData(
 // =============================================================================
 // READ HELPERS — blockchainTransactions
 // =============================================================================
+
+export async function getAllTransactions(): Promise<BlockchainTransaction[]> {
+  return db.blockchainTransactions.toArray();
+}
 
 export async function getTransactionByTxid(
   txid: string

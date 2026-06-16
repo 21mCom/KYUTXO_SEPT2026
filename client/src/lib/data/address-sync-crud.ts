@@ -19,6 +19,19 @@ export async function addAddressSyncState(
   return id as number;
 }
 
+export async function bulkAddAddressSyncState(
+  data: CreateAddressSyncStateData[],
+  options?: AddressSyncStateWriteOptions
+): Promise<void> {
+  if (data.length === 0) return;
+
+  await db.addressSyncState.bulkAdd(data as AddressSyncState[]);
+
+  if (!options?.skipNotification) {
+    notifyDbChange('addressSyncState');
+  }
+}
+
 export async function updateAddressSyncState(
   id: number,
   changes: Partial<AddressSyncState>,

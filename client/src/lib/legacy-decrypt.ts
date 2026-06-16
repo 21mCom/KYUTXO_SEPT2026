@@ -44,8 +44,12 @@ type LegacyRecord<T> = T & {
 interface TableConfig<T> {
   name: string;
   table: Table<T>;
+  // Historical list of the columns that were encrypted for this table. The
+  // restore loop no longer uses it to decide which fields to write back — it now
+  // restores every field found in the decrypted payload. Retained only as
+  // documentation and as a reference for the recovery audit.
   sensitiveFields: (keyof T)[];
-  // Runs after sensitive fields are restored onto a decrypted row. Used to
+  // Runs after the decrypted fields are restored onto a row. Used to
   // recompute derived/index columns (e.g. inputStringLower) that depend on a
   // restored field — without this, indexed lookups silently miss the row.
   postProcess?: (restored: globalThis.Record<string, unknown>) => void;
@@ -201,6 +205,111 @@ export async function hasLegacyEncryptedRecords(alreadyCompletedTables?: string[
   return false;
 }
 
+export interface LegacyAuditTableResult {
+  tableName: string;
+  totalRows: number;
+  encryptedRows: number;
+  sampledRows: number;
+  fieldNames: string[];
+  decryptFailures: number;
+  alreadyMigrated: boolean;
+}
+
+export interface LegacyAuditResult {
+  tables: LegacyAuditTableResult[];
+}
+
+/**
+ * READ-ONLY diagnostic. For each table it counts how many rows still carry an
+ * encrypted payload, decrypts a small sample, and reports the field NAMES found
+ * inside (never the values) plus whether the table was already marked migrated.
+ * This lets the user confirm exactly what is recoverable for their own vault
+ * BEFORE running any destructive migration. It writes nothing.
+ */
+export async function auditLegacyPayloads(
+  key: CryptoKey,
+  options?: { sampleSize?: number; alreadyCompletedTables?: string[] },
+): Promise<LegacyAuditResult> {
+  const sampleSize = Math.max(0, options?.sampleSize ?? 5);
+  const alreadyCompleted = new Set(options?.alreadyCompletedTables ?? []);
+  const configs = getTableConfigs();
+  const tables: LegacyAuditTableResult[] = [];
+
+  for (const config of configs) {
+    let totalRows = 0;
+    try {
+      totalRows = await withDbRetry(() => config.table.count(), `Audit count ${config.name}`);
+    } catch {
+      totalRows = 0;
+    }
+
+    let encryptedRows = 0;
+    const samples: string[] = [];
+    let lastProcessedId = 0;
+    let hasMore = true;
+
+    while (hasMore) {
+      let chunk: LegacyRecord<{ id?: number }>[];
+      try {
+        chunk = await withDbRetry(
+          () =>
+            config.table
+              .where('id')
+              .above(lastProcessedId)
+              .limit(BATCH_SIZE)
+              .toArray(),
+          `Audit read ${config.name}`,
+        );
+      } catch {
+        break;
+      }
+
+      if (chunk.length === 0) break;
+      lastProcessedId = (chunk[chunk.length - 1] as { id: number }).id;
+
+      for (const item of chunk) {
+        if (item._legacyEncryptedPayload) {
+          encryptedRows++;
+          if (samples.length < sampleSize) {
+            samples.push(item._legacyEncryptedPayload);
+          }
+        }
+      }
+
+      if (chunk.length < BATCH_SIZE) hasMore = false;
+      await new Promise(r => setTimeout(r, 0));
+    }
+
+    const fieldNameSet = new Set<string>();
+    let decryptFailures = 0;
+    for (const payload of samples) {
+      try {
+        const decryptedJson = await decrypt(payload, key);
+        const data = JSON.parse(decryptedJson) as globalThis.Record<string, unknown>;
+        for (const fieldKey of Object.keys(data)) {
+          if (fieldKey === 'id') continue;
+          if ((LEGACY_MARKER_KEYS_TO_STRIP as readonly string[]).includes(fieldKey)) continue;
+          fieldNameSet.add(fieldKey);
+        }
+      } catch {
+        decryptFailures++;
+      }
+    }
+
+    tables.push({
+      tableName: config.name,
+      totalRows,
+      encryptedRows,
+      sampledRows: samples.length,
+      fieldNames: Array.from(fieldNameSet).sort(),
+      decryptFailures,
+      alreadyMigrated: alreadyCompleted.has(config.name),
+    });
+  }
+
+  return { tables };
+}
+
 export async function decryptLegacyRecords(
   key: CryptoKey,
   onProgress?: (progress: LegacyDecryptProgress) => void,
@@ -283,20 +392,28 @@ export async function decryptLegacyRecords(
             const decryptedJson = await decrypt(item._legacyEncryptedPayload!, key);
             const sensitiveData = JSON.parse(decryptedJson) as globalThis.Record<string, unknown>;
 
+            // Restore EVERY field present in the decrypted payload, not just a
+            // fixed whitelist. The old whitelist silently dropped any encrypted
+            // field that was not listed (e.g. amount, date, addressImportance,
+            // cachedBalanceSats), leaving those columns permanently at their
+            // defaults. We skip only the row id (the primary key must never
+            // change) and the legacy marker keys (housekeeping, not real schema).
             const restored = { ...item };
 
-            for (const field of config.sensitiveFields) {
-              const fieldStr = field as string;
-              if (fieldStr in sensitiveData) {
-                (restored as globalThis.Record<string, unknown>)[fieldStr] = sensitiveData[fieldStr];
-              }
+            for (const fieldKey of Object.keys(sensitiveData)) {
+              if (fieldKey === 'id') continue;
+              if ((LEGACY_MARKER_KEYS_TO_STRIP as readonly string[]).includes(fieldKey)) continue;
+              (restored as globalThis.Record<string, unknown>)[fieldKey] = sensitiveData[fieldKey];
             }
 
             config.postProcess?.(restored as globalThis.Record<string, unknown>);
 
-            delete restored._legacyEncryptedPayload;
-            delete restored.isEncrypted;
-            delete restored.encryptedPayload;
+            // Intentionally KEEP the encrypted markers in place here. They are
+            // the only recoverable source of the original values, so deleting
+            // them at decrypt time turned any partial/failed migration into
+            // permanent data loss. The markers are removed later by the
+            // separate, user-initiated strip step, run only once the restore has
+            // been verified.
             updatedBatch.push(restored);
           } catch {
             tableFailed++;
