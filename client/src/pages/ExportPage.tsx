@@ -13,15 +13,30 @@ import { db } from "@/lib/database";
 import { countAttachments } from "@/lib/data/attachments-crud";
 import { countDerivationTemplates } from "@/lib/data/derivation-templates-crud";
 import { countRecords } from "@/lib/data/record-crud";
+import { countTransactions, countTransactionParticipants } from "@/lib/data/transaction-crud";
+import { countAddressSyncState } from "@/lib/data/address-sync-crud";
 import { isElectron, getElectronAPI } from "@/lib/electron";
 import { exportBackup } from "@/lib/backup/export";
 import {
   MemorySink,
   BackupCancelledError,
   openFileSystemSink,
+  openElectronFileSink,
+  supportsFileSystemAccess,
+  supportsElectronBackup,
+  decideExportSinkKind,
+  isMemoryFallbackSafe,
   downloadBlob,
   type BackupSink,
 } from "@/lib/backup/sink";
+
+// Above these counts a pure in-memory (download) export is refused to avoid an
+// out-of-memory crash. The streaming-to-disk paths (desktop, File System Access
+// API) have no such limit. MEMORY_EXPORT_ROW_LIMIT applies to the AGGREGATE of
+// all streamed large tables (records + transactions + participants +
+// addressSyncState), since the in-memory archive holds them all at once.
+const MEMORY_EXPORT_ROW_LIMIT = 50000;
+const MEMORY_EXPORT_ATTACHMENT_LIMIT = 5000;
 
 // Helper to list all attachment files
 async function listAllAttachmentFiles(): Promise<string[]> {
@@ -129,21 +144,109 @@ export default function ExportPage() {
       ? `kyutxo-backup-encrypted-${dateStr}.zip`
       : `kyutxo-backup-${dateStr}.zip`;
 
-    // Choose an output sink: stream straight to disk when the File System
-    // Access API is available (scale-safe), otherwise buffer in memory and
-    // trigger a browser download (works everywhere, holds the archive in RAM).
-    let fsSink: BackupSink | null = null;
+    // Fetch FRESH counts right before choosing a sink, rather than relying on
+    // the display state loaded in useEffect (which may be stale, still zero, or
+    // have failed to load). The in-memory fallback buffers the whole archive, so
+    // the safety decision must reflect the true size at export time. If the
+    // counts cannot be loaded we treat the dataset as unsafe-by-default.
+    let totalRowCount = 0;
+    let exportAttachmentCount = 0;
+    let countsKnown = false;
     try {
-      fsSink = await openFileSystemSink(fileName);
+      const [records, transactions, participants, syncState, attachments] =
+        await Promise.all([
+          countRecords(),
+          countTransactions(),
+          countTransactionParticipants(),
+          countAddressSyncState(),
+          countAttachments(),
+        ]);
+      totalRowCount = records + transactions + participants + syncState;
+      exportAttachmentCount = attachments;
+      countsKnown = true;
+    } catch (error) {
+      console.error("Failed to load counts before export:", error);
+      countsKnown = false;
+    }
+
+    const memorySafetyInput = {
+      totalRowCount,
+      attachmentCount: exportAttachmentCount,
+      memoryRowLimit: MEMORY_EXPORT_ROW_LIMIT,
+      memoryAttachmentLimit: MEMORY_EXPORT_ATTACHMENT_LIMIT,
+      countsKnown,
+    };
+
+    // Pick where the backup bytes go. The streaming-to-disk paths (Electron
+    // desktop, browser File System Access API) never hold the whole archive in
+    // memory. The in-memory download fallback does, so it is only used for small
+    // datasets of known size — larger or unknown-size ones are refused rather
+    // than risking an out-of-memory crash.
+    const sinkKind = decideExportSinkKind({
+      isElectron: isElectron(),
+      supportsFileSystemAccess: supportsFileSystemAccess(),
+      supportsElectronBackup: supportsElectronBackup(),
+      ...memorySafetyInput,
+    });
+
+    if (sinkKind === "blocked") {
+      setExporting(false);
+      toast({
+        variant: "destructive",
+        title: "Backup Too Large For This Browser",
+        description:
+          "This dataset is too large to export safely from a web browser without streaming-to-disk support. Use the desktop app, or a Chromium-based browser that can save directly to a file.",
+      });
+      return;
+    }
+
+    let sink: BackupSink | null = null;
+    let memorySink: MemorySink | null = null;
+    let savedToDisk = false;
+    try {
+      if (sinkKind === "electron") {
+        sink = await openElectronFileSink(fileName);
+        savedToDisk = true;
+      } else if (sinkKind === "filesystem") {
+        sink = await openFileSystemSink(fileName);
+        savedToDisk = true;
+      }
+      // A disk path can still report "unsupported" at open time (null) even when
+      // the capability check passed; fall back to memory only when the dataset
+      // is small and its size is known (same gate as the primary decision).
+      if (!sink) {
+        if (!isMemoryFallbackSafe(memorySafetyInput)) {
+          setExporting(false);
+          toast({
+            variant: "destructive",
+            title: "Backup Too Large For This Browser",
+            description:
+              "This dataset is too large to export safely without streaming-to-disk support. Use the desktop app, or a Chromium-based browser that can save directly to a file.",
+          });
+          return;
+        }
+        memorySink = new MemorySink();
+        sink = memorySink;
+        savedToDisk = false;
+      }
     } catch (error) {
       if (error instanceof BackupCancelledError) {
         setExporting(false);
         return; // user dismissed the save dialog
       }
-      fsSink = null; // unsupported → fall back to memory
+      setExporting(false);
+      toast({
+        variant: "destructive",
+        title: "Export Failed",
+        description: error instanceof Error ? error.message : "Could not start the export.",
+      });
+      return;
     }
-    const memorySink = fsSink ? null : new MemorySink();
-    const sink: BackupSink = fsSink ?? memorySink!;
+
+    if (!sink) {
+      setExporting(false);
+      return;
+    }
 
     try {
       getActivityBus().publishTask({
@@ -178,7 +281,7 @@ export default function ExportPage() {
 
       toast({
         title: "Export Successful",
-        description: fsSink
+        description: savedToDisk
           ? `Your backup "${fileName}" has been saved.`
           : `Your backup "${fileName}" has been downloaded.`,
       });
@@ -223,8 +326,9 @@ export default function ExportPage() {
           <AlertCircle className="h-4 w-4" />
           <AlertDescription>
             Export includes all records, transactions, tags, categories, vocabulary, lineage data, and attachment files.
-            Large databases are streamed directly to disk when your browser supports it, otherwise the backup is
-            downloaded as a ZIP file to your default download location.
+            Large databases stream directly to disk in the desktop app and in browsers that support saving to a file.
+            In other browsers, smaller backups download as a ZIP file; very large databases must be exported from the
+            desktop app.
           </AlertDescription>
         </Alert>
 

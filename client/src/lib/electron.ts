@@ -156,6 +156,11 @@ interface ElectronAPI {
   listAllAttachments: () => Promise<{ success: boolean; files?: string[]; error?: string }>;
   writeAttachment: (relativePath: string, data: ArrayBuffer) => Promise<{ success: boolean; error?: string }>;
   renameAttachment: (oldPath: string, newPath: string) => Promise<{ success: boolean; error?: string }>;
+  // Streaming backup writer (export) — chunks are written straight to disk.
+  backupOpen: (suggestedName: string) => Promise<{ success: boolean; id?: string; filePath?: string; canceled?: boolean; error?: string }>;
+  backupWrite: (id: string, data: ArrayBuffer) => Promise<{ success: boolean; error?: string }>;
+  backupClose: (id: string) => Promise<{ success: boolean; error?: string }>;
+  backupAbort: (id: string) => Promise<{ success: boolean; error?: string }>;
   isPortableMode: () => Promise<boolean>;
   // Tor proxy operations
   torTest: (torProxyUrl?: string) => Promise<TorTestResult>;

@@ -25,6 +25,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('write-attachment', { relativePath, data }),
   renameAttachment: (oldPath, newPath) =>
     ipcRenderer.invoke('rename-attachment', { oldPath, newPath }),
+
+  // Streaming backup writer (export): chunks go straight to disk, so the full
+  // archive never has to be buffered in renderer memory.
+  backupOpen: (suggestedName) => ipcRenderer.invoke('backup-open', { suggestedName }),
+  backupWrite: (id, data) => ipcRenderer.invoke('backup-write', { id, data }),
+  backupClose: (id) => ipcRenderer.invoke('backup-close', { id }),
+  backupAbort: (id) => ipcRenderer.invoke('backup-abort', { id }),
   
   // Portable mode support
   isPortableMode: () => ipcRenderer.invoke('is-portable-mode'),

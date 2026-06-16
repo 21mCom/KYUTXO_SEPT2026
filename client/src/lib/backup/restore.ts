@@ -72,7 +72,7 @@ export interface RestoreOptions {
   password?: string;
   attachmentWriter: AttachmentFileWriter;
   clearInline?: () => Promise<void>;
-  restoreInline?: (data: Record<string, unknown[]>) => Promise<void>;
+  restoreInline?: (data: Record<string, unknown>) => Promise<void>;
   onProgress?: (p: RestoreProgress) => void;
   signal?: AbortSignal;
 }
@@ -122,6 +122,11 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
   const restoreInlineFn = opts.restoreInline ?? restoreInlineTables;
 
   let manifest: BackupManifest | null = null;
+  // Set synchronously when the manifest entry's header is reached. onEntry is
+  // fflate's sync header callback, whereas `manifest` is only assigned later in
+  // the async consumer chain — so ordering checks must use this flag, not
+  // `manifest`, which lags behind by one (or more) entry headers.
+  let manifestSeen = false;
   let key: CryptoKey | null = null;
   const idMap = new Map<number, number>();
   const counts = {
@@ -208,6 +213,7 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
   await readZipStream(opts.source, {
     onEntry(name) {
       if (name === MANIFEST_FILENAME) {
+        manifestSeen = true;
         return collectBytesConsumer(async (bytes) => {
           throwIfAborted();
           const parsed = JSON.parse(new TextDecoder().decode(bytes));
@@ -244,12 +250,12 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
         });
       }
 
-      // Every non-manifest entry is data. The manifest handler is what verifies
-      // the password, clears existing data, and derives the decryption key — and
-      // because readZipStream serializes entries, it has already run by now for a
-      // well-formed archive. Reject any archive that front-loads data before the
-      // manifest rather than writing rows into a not-yet-cleared vault.
-      if (!manifest) {
+      // Every non-manifest entry is data. The manifest must physically precede
+      // all data so its async handler (verify password, derive key, clear the
+      // vault) runs — on the serialized consumer chain — before any data row is
+      // written. `manifestSeen` reflects header order (set synchronously above),
+      // so reject any archive that front-loads data before the manifest.
+      if (!manifestSeen) {
         if (
           isStreamedTablePath(name) ||
           (name.startsWith(`${ATTACHMENTS_DIR}/`) && !name.endsWith("/"))

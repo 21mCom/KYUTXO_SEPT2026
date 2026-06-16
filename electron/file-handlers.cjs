@@ -221,6 +221,85 @@ function registerFileHandlers(ipcMain, { dataDir, attachmentsDir, portableMode }
       return { success: false, error: error.message };
     }
   });
+
+  // --- Streaming backup writer (for export) ---------------------------------
+  // The renderer streams ZIP byte-chunks straight to a user-chosen file via a
+  // Node write stream, so the full archive never has to be buffered in memory.
+  // This is the scale-safe desktop path and does not depend on the browser's
+  // File System Access API (which may be unavailable inside Electron).
+  const backupStreams = new Map();
+  let backupSeq = 0;
+
+  ipcMain.handle('backup-open', async (event, { suggestedName }) => {
+    try {
+      const { dialog, BrowserWindow } = require('electron');
+      const win = BrowserWindow.fromWebContents(event.sender);
+      const defaultName =
+        typeof suggestedName === 'string' && suggestedName ? suggestedName : 'kyutxo-backup.zip';
+      const result = await dialog.showSaveDialog(win, {
+        defaultPath: defaultName,
+        filters: [{ name: 'KYUTXO Backup', extensions: ['zip'] }],
+      });
+      if (result.canceled || !result.filePath) {
+        return { success: false, canceled: true };
+      }
+      const stream = fs.createWriteStream(result.filePath);
+      await new Promise((resolve, reject) => {
+        stream.once('open', resolve);
+        stream.once('error', reject);
+      });
+      const id = `backup_${++backupSeq}`;
+      backupStreams.set(id, { stream, filePath: result.filePath });
+      return { success: true, id, filePath: result.filePath };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('backup-write', async (event, { id, data }) => {
+    try {
+      const entry = backupStreams.get(id);
+      if (!entry) return { success: false, error: 'Unknown backup stream' };
+      const buffer = Buffer.from(data);
+      await new Promise((resolve, reject) => {
+        entry.stream.write(buffer, (err) => (err ? reject(err) : resolve()));
+      });
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('backup-close', async (event, { id }) => {
+    try {
+      const entry = backupStreams.get(id);
+      if (!entry) return { success: false, error: 'Unknown backup stream' };
+      await new Promise((resolve, reject) => {
+        entry.stream.end((err) => (err ? reject(err) : resolve()));
+      });
+      backupStreams.delete(id);
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('backup-abort', async (event, { id }) => {
+    try {
+      const entry = backupStreams.get(id);
+      if (!entry) return { success: true };
+      entry.stream.destroy();
+      backupStreams.delete(id);
+      try {
+        fs.unlinkSync(entry.filePath);
+      } catch {
+        // Best effort: the partial file may already be gone.
+      }
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
 }
 
 module.exports = { registerFileHandlers };

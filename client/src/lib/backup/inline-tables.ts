@@ -130,7 +130,7 @@ export async function clearInlineTables(): Promise<void> {
 }
 
 export async function restoreInlineTables(
-  data: Record<string, unknown[]>,
+  data: Record<string, unknown>,
 ): Promise<void> {
   const arr = (k: string): any[] => (Array.isArray(data[k]) ? (data[k] as any[]) : []);
   const now = Date.now();
