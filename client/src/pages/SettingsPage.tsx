@@ -78,6 +78,9 @@ import {
   setAttachmentPathsMigrated,
 } from "@/lib/vault";
 import JSZip from "jszip";
+import { peekManifest, restoreV3Backup, type AttachmentFileWriter } from "@/lib/backup/restore";
+import { blobChunks } from "@/lib/backup/zip-stream";
+import { isV3Manifest } from "@/lib/backup/format";
 import VocabularyManager from "@/components/VocabularyManager";
 import StripMarkersPanel from "@/components/StripMarkersPanel";
 import MigrationAuditPanel from "@/components/MigrationAuditPanel";
@@ -670,6 +673,67 @@ export default function SettingsPage() {
     setRestoreMessage("Reading backup file...");
 
     try {
+      // v3 streaming backups: peek the manifest (first ZIP entry) without
+      // reading the whole archive. If it is a v3 backup, restore it with the
+      // streaming pipeline that never loads a whole table into memory. Older
+      // backups (no formatVersion / a `.data` blob) fall through to the legacy
+      // JSON path below, which is left untouched for backward compatibility.
+      const manifestPeek = await peekManifest(blobChunks(restoreFile));
+      if (isV3Manifest(manifestPeek)) {
+        const attachmentWriter: AttachmentFileWriter = {
+          async write(relativePath, fileData) {
+            if (isElectron()) {
+              const api = getElectronAPI();
+              const result = await api.writeAttachment(relativePath, fileData);
+              if (!result.success) {
+                throw new Error(result.error || `Failed to write attachment ${relativePath}`);
+              }
+            } else {
+              const formData = new FormData();
+              formData.append('file', new Blob([fileData]));
+              formData.append('relativePath', relativePath);
+              const response = await fetch('/api/attachments/write', {
+                method: 'POST',
+                body: formData,
+              });
+              if (!response.ok) {
+                const errorData = await response.json().catch(() => ({}));
+                throw new Error(errorData.error || response.statusText);
+              }
+            }
+          },
+        };
+
+        const result = await restoreV3Backup({
+          source: blobChunks(restoreFile),
+          password: restorePassword || undefined,
+          attachmentWriter,
+          onProgress: (p) => {
+            setRestoreProgress(p.percent);
+            setRestoreMessage(p.phase);
+          },
+        });
+
+        setRestoreProgress(100);
+        setRestoreMessage("Restore complete!");
+
+        toast({
+          title: "Restore Successful",
+          description: `Restored ${result.counts.records} records, ${result.counts.blockchainTransactions} transactions, ${result.counts.transactionParticipants} participants, ${result.counts.attachmentFiles} attachment files. Existing data was replaced.`,
+        });
+
+        setTimeout(() => {
+          setRestoreDialogOpen(false);
+          setRestoreFile(null);
+          setRestorePassword("");
+          setRestoreProgress(0);
+          setRestoreMessage("");
+          setBackupInfo(null);
+          window.location.reload();
+        }, 1500);
+        return;
+      }
+
       const zip = await JSZip.loadAsync(restoreFile);
       const backupFile = zip.file("backup.json");
       

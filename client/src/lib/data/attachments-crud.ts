@@ -127,6 +127,15 @@ export async function getAllAttachments(): Promise<Attachment[]> {
   return db.attachments.toArray();
 }
 
+// Bounded id-keyset page. Used by the streaming backup export so the whole
+// attachment-metadata table is never materialised at once.
+export async function getAttachmentsAfterId(
+  afterId: number,
+  limit: number
+): Promise<Attachment[]> {
+  return db.attachments.where('id').above(afterId).limit(limit).toArray();
+}
+
 export async function countAttachments(): Promise<number> {
   return db.attachments.count();
 }

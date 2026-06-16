@@ -64,6 +64,15 @@ export async function getAllAddressSyncState(): Promise<AddressSyncState[]> {
   return db.addressSyncState.toArray();
 }
 
+// Bounded id-keyset page. Used by the streaming backup export so the whole
+// address-sync-state table is never materialised at once.
+export async function getAddressSyncStateAfterId(
+  afterId: number,
+  limit: number
+): Promise<AddressSyncState[]> {
+  return db.addressSyncState.where('id').above(afterId).limit(limit).toArray();
+}
+
 export async function countAddressSyncState(): Promise<number> {
   return db.addressSyncState.count();
 }

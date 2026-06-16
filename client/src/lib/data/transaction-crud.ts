@@ -128,6 +128,16 @@ export async function getAllTransactions(): Promise<BlockchainTransaction[]> {
   return db.blockchainTransactions.toArray();
 }
 
+// Bounded id-keyset page. Used by the streaming backup export so the whole
+// transaction table is never materialised at once: callers walk the table by
+// repeatedly passing the last id they saw.
+export async function getTransactionsAfterId(
+  afterId: number,
+  limit: number
+): Promise<BlockchainTransaction[]> {
+  return db.blockchainTransactions.where('id').above(afterId).limit(limit).toArray();
+}
+
 export async function getTransactionByTxid(
   txid: string
 ): Promise<BlockchainTransaction | undefined> {
@@ -216,6 +226,15 @@ export async function countTransactionParticipants(): Promise<number> {
 
 export async function getAllTransactionParticipants(): Promise<TransactionParticipant[]> {
   return db.transactionParticipants.toArray();
+}
+
+// Bounded id-keyset page. Used by the streaming backup export so the whole
+// participant table is never materialised at once.
+export async function getTransactionParticipantsAfterId(
+  afterId: number,
+  limit: number
+): Promise<TransactionParticipant[]> {
+  return db.transactionParticipants.where('id').above(afterId).limit(limit).toArray();
 }
 
 export async function getInputParticipants(): Promise<TransactionParticipant[]> {

@@ -9,22 +9,19 @@ import { Switch } from "@/components/ui/switch";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Progress } from "@/components/ui/progress";
 import { useToast } from "@/hooks/use-toast";
-import { db, type Record } from "@/lib/database";
-import { countAttachments, getAllAttachments } from "@/lib/data/attachments-crud";
-import { countDerivationTemplates, getAllDerivationTemplates } from "@/lib/data/derivation-templates-crud";
-import { getAllRecordOrigins } from "@/lib/data/record-origins-crud";
-import { getAllCustomFields } from "@/lib/data/custom-fields-crud";
-import { getAllPriceData } from "@/lib/data/price-data-crud";
-import { getAllSettings } from "@/lib/data/settings-crud";
-import { getAllNodeSettings } from "@/lib/data/node-settings-crud";
-import { countRecords, getRecordsAfterId } from "@/lib/data/record-crud";
-import { getAllEvidence, getAllEvidenceAttachments } from "@/lib/data/evidence-crud";
-import { getAllUtxoLineage, getAllCustodySegments } from "@/lib/data/lineage-crud";
-import { getAllTransactions, getAllTransactionParticipants } from "@/lib/data/transaction-crud";
-import { getAllAddressSyncState } from "@/lib/data/address-sync-crud";
-import { encrypt, deriveKey, generateSalt, bufferToBase64 } from "@/lib/crypto";
+import { db } from "@/lib/database";
+import { countAttachments } from "@/lib/data/attachments-crud";
+import { countDerivationTemplates } from "@/lib/data/derivation-templates-crud";
+import { countRecords } from "@/lib/data/record-crud";
 import { isElectron, getElectronAPI } from "@/lib/electron";
-import JSZip from "jszip";
+import { exportBackup } from "@/lib/backup/export";
+import {
+  MemorySink,
+  BackupCancelledError,
+  openFileSystemSink,
+  downloadBlob,
+  type BackupSink,
+} from "@/lib/backup/sink";
 
 // Helper to list all attachment files
 async function listAllAttachmentFiles(): Promise<string[]> {
@@ -55,236 +52,6 @@ async function readAttachmentFile(relativePath: string): Promise<ArrayBuffer | n
     }
     return null;
   }
-}
-
-interface CustomFieldDef {
-  id?: number;
-  name: string;
-  slug: string;
-  enabled: boolean;
-  createdAt: number;
-}
-
-interface ExportData {
-  version: string;
-  exportDate: string;
-  encrypted: boolean;
-  salt?: string;
-  data: {
-    records: any[];
-    tags: any[];
-    categories: any[];
-    attachments: any[];
-    recordOrigins: any[];
-    customFields: CustomFieldDef[];
-    owners: any[];
-    walletNames: any[];
-    seedNames: any[];
-    walletSoftware: any[];
-    derivationTemplates: any[];
-    evidence: any[];
-    evidenceAttachments: any[];
-    priceData: any[];
-    settings: any[];
-    nodeSettings: any[];
-    utxoLineage: any[];
-    custodySegments: any[];
-    blockchainTransactions: any[];
-    transactionParticipants: any[];
-    addressSyncState: any[];
-  };
-}
-
-function escapeCSVField(value: any): string {
-  if (value === null || value === undefined) return "";
-  const str = String(value);
-  if (str.includes(",") || str.includes('"') || str.includes("\n") || str.includes("\r")) {
-    return `"${str.replace(/"/g, '""')}"`;
-  }
-  return str;
-}
-
-function generateRecordsCSV(records: any[], attachments: any[], customFields: CustomFieldDef[]): string {
-  // Static headers
-  const staticHeaders = [
-    "id",
-    "type",
-    "inputString",
-    "label",
-    "notes",
-    "amount",
-    "date",
-    "tags",
-    "categories",
-    "attachments",
-    "seedName",
-    "walletSoftware",
-    "privateKeyStatus",
-    "owner",
-    "walletName",
-    "source",
-    "chainType",
-    "derivationPath",
-    "xpub",
-    "isVaultXpub",
-    "vaultName",
-    "vaultM",
-    "vaultN",
-    "vaultNotes",
-    "createdAt",
-    "updatedAt",
-  ];
-
-  // Add custom field headers (sorted by name for consistency)
-  const sortedCustomFields = [...customFields].sort((a, b) => a.name.localeCompare(b.name));
-  const customFieldHeaders = sortedCustomFields.map(f => `custom:${f.name}`);
-  const headers = [...staticHeaders, ...customFieldHeaders];
-
-  // Build a map of recordId -> attachment filenames for quick lookup
-  const attachmentsByRecord = new Map<number, string[]>();
-  for (const att of attachments) {
-    if (att.recordId) {
-      const existing = attachmentsByRecord.get(att.recordId) || [];
-      existing.push(att.filename);
-      attachmentsByRecord.set(att.recordId, existing);
-    }
-  }
-
-  const rows = records.map((record) => {
-    const recordAttachments = attachmentsByRecord.get(record.id) || [];
-    const staticValues = [
-      escapeCSVField(record.id),
-      escapeCSVField(record.type),
-      escapeCSVField(record.inputString),
-      escapeCSVField(record.label),
-      escapeCSVField(record.notes),
-      escapeCSVField(record.amount),
-      escapeCSVField(record.date),
-      escapeCSVField(record.tags?.join(";") || ""),
-      escapeCSVField(record.categories?.join(";") || ""),
-      escapeCSVField(recordAttachments.join(";") || ""),
-      escapeCSVField(record.seedName),
-      escapeCSVField(record.walletSoftware),
-      escapeCSVField(record.privateKeyStatus),
-      escapeCSVField(record.owner),
-      escapeCSVField(record.walletName),
-      escapeCSVField(record.source),
-      escapeCSVField(record.chainType),
-      escapeCSVField(record.derivationPath),
-      escapeCSVField(record.xpub),
-      escapeCSVField(record.vault?.isVaultXpub),
-      escapeCSVField(record.vault?.vaultName),
-      escapeCSVField(record.vault?.m),
-      escapeCSVField(record.vault?.n),
-      escapeCSVField(record.vault?.vaultNotes),
-      escapeCSVField(record.createdAt ? new Date(record.createdAt).toISOString() : ""),
-      escapeCSVField(record.updatedAt ? new Date(record.updatedAt).toISOString() : ""),
-    ];
-
-    // Add custom field values in same order as headers
-    const customFieldValues = sortedCustomFields.map(f => 
-      escapeCSVField(record.customFields?.[f.slug] || "")
-    );
-
-    return [...staticValues, ...customFieldValues].join(",");
-  });
-
-  return [headers.join(","), ...rows].join("\n");
-}
-
-function generateTagsCSV(tags: any[]): string {
-  const headers = ["id", "name", "color", "createdAt"];
-  const rows = tags.map((tag) => [
-    escapeCSVField(tag.id),
-    escapeCSVField(tag.name),
-    escapeCSVField(tag.color),
-    escapeCSVField(tag.createdAt ? new Date(tag.createdAt).toISOString() : ""),
-  ].join(","));
-  return [headers.join(","), ...rows].join("\n");
-}
-
-function generateCategoriesCSV(categories: any[]): string {
-  const headers = ["id", "name", "createdAt"];
-  const rows = categories.map((cat) => [
-    escapeCSVField(cat.id),
-    escapeCSVField(cat.name),
-    escapeCSVField(cat.createdAt ? new Date(cat.createdAt).toISOString() : ""),
-  ].join(","));
-  return [headers.join(","), ...rows].join("\n");
-}
-
-function generateAttachmentsCSV(attachments: any[]): string {
-  const headers = ["id", "recordId", "filename", "mimeType", "size", "objectStoragePath", "createdAt"];
-  const rows = attachments.map((att) => [
-    escapeCSVField(att.id),
-    escapeCSVField(att.recordId),
-    escapeCSVField(att.filename),
-    escapeCSVField(att.mimeType),
-    escapeCSVField(att.size),
-    escapeCSVField(att.objectStoragePath),
-    escapeCSVField(att.createdAt ? new Date(att.createdAt).toISOString() : ""),
-  ].join(","));
-  return [headers.join(","), ...rows].join("\n");
-}
-
-function generateOwnersCSV(owners: any[]): string {
-  const headers = ["id", "name", "createdAt"];
-  const rows = owners.map((owner) => [
-    escapeCSVField(owner.id),
-    escapeCSVField(owner.name),
-    escapeCSVField(owner.createdAt ? new Date(owner.createdAt).toISOString() : ""),
-  ].join(","));
-  return [headers.join(","), ...rows].join("\n");
-}
-
-function generateWalletNamesCSV(walletNames: any[]): string {
-  const headers = ["id", "name", "createdAt"];
-  const rows = walletNames.map((wn) => [
-    escapeCSVField(wn.id),
-    escapeCSVField(wn.name),
-    escapeCSVField(wn.createdAt ? new Date(wn.createdAt).toISOString() : ""),
-  ].join(","));
-  return [headers.join(","), ...rows].join("\n");
-}
-
-function generateSeedNamesCSV(seedNames: any[]): string {
-  const headers = ["id", "name", "createdAt"];
-  const rows = seedNames.map((sn) => [
-    escapeCSVField(sn.id),
-    escapeCSVField(sn.name),
-    escapeCSVField(sn.createdAt ? new Date(sn.createdAt).toISOString() : ""),
-  ].join(","));
-  return [headers.join(","), ...rows].join("\n");
-}
-
-function generateWalletSoftwareCSV(walletSoftware: any[]): string {
-  const headers = ["id", "name", "createdAt"];
-  const rows = walletSoftware.map((ws) => [
-    escapeCSVField(ws.id),
-    escapeCSVField(ws.name),
-    escapeCSVField(ws.createdAt ? new Date(ws.createdAt).toISOString() : ""),
-  ].join(","));
-  return [headers.join(","), ...rows].join("\n");
-}
-
-function generateDerivationTemplatesCSV(templates: any[]): string {
-  const headers = ["id", "fingerprint", "scriptType", "derivationPath", "xpub", "gapLimit", "network", "owner", "walletName", "seedName", "notes", "createdAt", "updatedAt"];
-  const rows = templates.map((t) => [
-    escapeCSVField(t.id),
-    escapeCSVField(t.fingerprint),
-    escapeCSVField(t.scriptType),
-    escapeCSVField(t.derivationPath),
-    escapeCSVField(t.xpub),
-    escapeCSVField(t.gapLimit),
-    escapeCSVField(t.network),
-    escapeCSVField(t.owner),
-    escapeCSVField(t.walletName),
-    escapeCSVField(t.seedName),
-    escapeCSVField(t.notes),
-    escapeCSVField(t.createdAt ? new Date(t.createdAt).toISOString() : ""),
-    escapeCSVField(t.updatedAt ? new Date(t.updatedAt).toISOString() : ""),
-  ].join(","));
-  return [headers.join(","), ...rows].join("\n");
 }
 
 export default function ExportPage() {
@@ -357,304 +124,52 @@ export default function ExportPage() {
     setProgress(0);
     setExportComplete(false);
 
+    const dateStr = new Date().toISOString().split('T')[0];
+    const fileName = encrypted
+      ? `kyutxo-backup-encrypted-${dateStr}.zip`
+      : `kyutxo-backup-${dateStr}.zip`;
+
+    // Choose an output sink: stream straight to disk when the File System
+    // Access API is available (scale-safe), otherwise buffer in memory and
+    // trigger a browser download (works everywhere, holds the archive in RAM).
+    let fsSink: BackupSink | null = null;
     try {
-      setProgressMessage("Gathering records...");
-      setProgress(10);
-      try {
-        getActivityBus().publishTask({
-          id: 'evidence-export',
-          label: 'Exporting Backup',
-          phase: 'Gathering records',
-          current: 0,
-          total: 6,
-        });
-      } catch {}
-
-      const EXPORT_BATCH = 1000;
-      const rawRecords: Record[] = [];
-      let lastRecordId = 0;
-      while (true) {
-        const batch = await getRecordsAfterId(lastRecordId, EXPORT_BATCH);
-        if (batch.length === 0) break;
-        rawRecords.push(...batch);
-        const lastItem = batch[batch.length - 1];
-        if (!lastItem.id) break;
-        lastRecordId = lastItem.id;
+      fsSink = await openFileSystemSink(fileName);
+    } catch (error) {
+      if (error instanceof BackupCancelledError) {
+        setExporting(false);
+        return; // user dismissed the save dialog
       }
+      fsSink = null; // unsupported → fall back to memory
+    }
+    const memorySink = fsSink ? null : new MemorySink();
+    const sink: BackupSink = fsSink ?? memorySink!;
 
-      const rawTags = await db.tags.toArray();
-      const rawCategories = await db.categories.toArray();
-      const rawAttachments = await getAllAttachments();
-      const rawOrigins = await getAllRecordOrigins();
-      const rawCustomFields = await getAllCustomFields();
-      const rawOwners = await db.owners.toArray();
-      const rawWalletNames = await db.walletNames.toArray();
-      const rawSeedNames = await db.seedNames.toArray();
-      const rawWalletSoftware = await db.walletSoftware.toArray();
-      const rawDerivationTemplates = await getAllDerivationTemplates();
-      const rawEvidence = await getAllEvidence();
-      const rawEvidenceAttachments = await getAllEvidenceAttachments();
-      const rawPriceData = await getAllPriceData();
-      const rawSettings = await getAllSettings();
-      const rawNodeSettings = await getAllNodeSettings();
-      const rawUtxoLineage = await getAllUtxoLineage();
-      const rawCustodySegments = await getAllCustodySegments();
-      const rawBlockchainTransactions = await getAllTransactions();
-      const rawTransactionParticipants = await getAllTransactionParticipants();
-      const rawAddressSyncState = await getAllAddressSyncState();
+    try {
+      getActivityBus().publishTask({
+        id: 'evidence-export',
+        label: 'Exporting Backup',
+        phase: 'Starting',
+        current: 0,
+        total: 1,
+      });
+    } catch {}
 
-      setProgress(20);
-      setProgressMessage("Generating CSV files...");
-      try {
-        getActivityBus().publishTask({
-          id: 'evidence-export',
-          label: 'Exporting Backup',
-          phase: 'Generating CSV files',
-          current: 1,
-          total: 6,
-        });
-      } catch {}
-
-      const customFields = rawCustomFields as CustomFieldDef[];
-
-      const recordsCSV = generateRecordsCSV(rawRecords, rawAttachments, customFields);
-      const tagsCSV = generateTagsCSV(rawTags);
-      const categoriesCSV = generateCategoriesCSV(rawCategories);
-      const attachmentsCSV = generateAttachmentsCSV(rawAttachments);
-      const ownersCSV = generateOwnersCSV(rawOwners);
-      const walletNamesCSV = generateWalletNamesCSV(rawWalletNames);
-      const seedNamesCSV = generateSeedNamesCSV(rawSeedNames);
-      const walletSoftwareCSV = generateWalletSoftwareCSV(rawWalletSoftware);
-      const derivationTemplatesCSV = generateDerivationTemplatesCSV(rawDerivationTemplates);
-
-      setProgress(55);
-      setProgressMessage("Gathering attachment files...");
-      try {
-        getActivityBus().publishTask({
-          id: 'evidence-export',
-          label: 'Exporting Backup',
-          phase: 'Gathering attachment files',
-          current: 2,
-          total: 6,
-        });
-      } catch {}
-
-      // List and read all attachment files
-      const attachmentFilePaths = await listAllAttachmentFiles();
-      const attachmentFiles: { path: string; data: ArrayBuffer }[] = [];
-      
-      for (let i = 0; i < attachmentFilePaths.length; i++) {
-        const filePath = attachmentFilePaths[i];
-        setProgressMessage(`Reading attachment ${i + 1} of ${attachmentFilePaths.length}...`);
-        if (i === 0 || i === Math.floor(attachmentFilePaths.length / 2)) {
-          try {
-            getActivityBus().publishTask({
-              id: 'evidence-export',
-              label: 'Exporting Backup',
-              phase: `Reading ${attachmentFilePaths.length} attachment${attachmentFilePaths.length !== 1 ? 's' : ''}`,
-              current: 3,
-              total: 6,
-            });
-          } catch {}
-        }
-        const fileData = await readAttachmentFile(filePath);
-        if (fileData) {
-          attachmentFiles.push({ path: filePath, data: fileData });
-        }
-      }
-
-      setProgress(65);
-      setProgressMessage("Creating ZIP archive...");
-
-      const exportData: ExportData = {
-        version: "2.2.0",
-        exportDate: new Date().toISOString(),
-        encrypted: encrypted,
-        data: {
-          records: rawRecords,
-          tags: rawTags,
-          categories: rawCategories,
-          attachments: rawAttachments,
-          recordOrigins: rawOrigins,
-          customFields: customFields,
-          owners: rawOwners,
-          walletNames: rawWalletNames,
-          seedNames: rawSeedNames,
-          walletSoftware: rawWalletSoftware,
-          derivationTemplates: rawDerivationTemplates,
-          evidence: rawEvidence,
-          evidenceAttachments: rawEvidenceAttachments,
-          priceData: rawPriceData,
-          settings: rawSettings,
-          nodeSettings: rawNodeSettings,
-          utxoLineage: rawUtxoLineage,
-          custodySegments: rawCustodySegments,
-          blockchainTransactions: rawBlockchainTransactions,
-          transactionParticipants: rawTransactionParticipants,
-          addressSyncState: rawAddressSyncState,
+    try {
+      await exportBackup({
+        sink,
+        encrypted,
+        password,
+        attachmentIO: { listAll: listAllAttachmentFiles, read: readAttachmentFile },
+        onProgress: (p) => {
+          setProgress(p.percent);
+          setProgressMessage(p.phase);
         },
-      };
-
-      const zip = new JSZip();
-      const dateStr = new Date().toISOString().split('T')[0];
-      
-      // Add attachment files to ZIP under attachments/ folder
-      const attachmentsFolder = zip.folder("attachments");
-      for (const file of attachmentFiles) {
-        attachmentsFolder?.file(file.path, file.data);
-      }
-
-      try {
-        getActivityBus().publishTask({
-          id: 'evidence-export',
-          label: 'Exporting Backup',
-          phase: 'Creating ZIP archive',
-          current: 4,
-          total: 6,
-        });
-      } catch {}
-
-      if (encrypted) {
-        setProgress(75);
-        setProgressMessage("Encrypting data...");
-        try {
-          getActivityBus().publishTask({
-            id: 'evidence-export',
-            label: 'Exporting Backup',
-            phase: 'Encrypting data',
-            current: 5,
-            total: 6,
-          });
-        } catch {}
-        
-        const salt = generateSalt();
-        const exportKey = await deriveKey(password, salt);
-        
-        const encryptedJson = await encrypt(JSON.stringify(exportData.data), exportKey);
-        const encryptedRecordsCSV = await encrypt(recordsCSV, exportKey);
-        const encryptedTagsCSV = await encrypt(tagsCSV, exportKey);
-        const encryptedCategoriesCSV = await encrypt(categoriesCSV, exportKey);
-        const encryptedAttachmentsCSV = await encrypt(attachmentsCSV, exportKey);
-        const encryptedOwnersCSV = await encrypt(ownersCSV, exportKey);
-        const encryptedWalletNamesCSV = await encrypt(walletNamesCSV, exportKey);
-        const encryptedSeedNamesCSV = await encrypt(seedNamesCSV, exportKey);
-        const encryptedWalletSoftwareCSV = await encrypt(walletSoftwareCSV, exportKey);
-        const encryptedDerivationTemplatesCSV = await encrypt(derivationTemplatesCSV, exportKey);
-
-        const encryptedExport = {
-          version: exportData.version,
-          exportDate: exportData.exportDate,
-          encrypted: true,
-          salt: bufferToBase64(salt),
-          data: encryptedJson,
-        };
-
-        zip.file("backup.json", JSON.stringify(encryptedExport, null, 2));
-        zip.file("records.csv.encrypted", encryptedRecordsCSV);
-        zip.file("tags.csv.encrypted", encryptedTagsCSV);
-        zip.file("categories.csv.encrypted", encryptedCategoriesCSV);
-        zip.file("attachments.csv.encrypted", encryptedAttachmentsCSV);
-        zip.file("owners.csv.encrypted", encryptedOwnersCSV);
-        zip.file("wallet_names.csv.encrypted", encryptedWalletNamesCSV);
-        zip.file("seed_names.csv.encrypted", encryptedSeedNamesCSV);
-        zip.file("wallet_software.csv.encrypted", encryptedWalletSoftwareCSV);
-        zip.file("derivation_templates.csv.encrypted", encryptedDerivationTemplatesCSV);
-        zip.file("README.txt", `KYUTXO Encrypted Backup
-========================
-Export Date: ${exportData.exportDate}
-Version: ${exportData.version}
-
-This backup is encrypted with AES-256-GCM.
-You will need your export password to import this backup.
-
-Files:
-- backup.json: Full encrypted database export
-- records.csv.encrypted: Encrypted records spreadsheet
-- tags.csv.encrypted: Encrypted tags list
-- categories.csv.encrypted: Encrypted categories list
-- attachments.csv.encrypted: Encrypted attachment metadata
-- owners.csv.encrypted: Encrypted owners vocabulary
-- wallet_names.csv.encrypted: Encrypted wallet names vocabulary
-- seed_names.csv.encrypted: Encrypted seed names vocabulary
-- wallet_software.csv.encrypted: Encrypted wallet software vocabulary
-- derivation_templates.csv.encrypted: Encrypted derivation templates
-- attachments/: Folder containing ${attachmentFiles.length} attachment file(s)
-
-Note: Attachment files are included in this backup and stored unencrypted. 
-They will be restored automatically when you import this backup. 
-Keep this backup in a secure location.
-`);
-
-      } else {
-        zip.file("backup.json", JSON.stringify(exportData, null, 2));
-        zip.file("records.csv", recordsCSV);
-        zip.file("tags.csv", tagsCSV);
-        zip.file("categories.csv", categoriesCSV);
-        zip.file("attachments.csv", attachmentsCSV);
-        zip.file("owners.csv", ownersCSV);
-        zip.file("wallet_names.csv", walletNamesCSV);
-        zip.file("seed_names.csv", seedNamesCSV);
-        zip.file("wallet_software.csv", walletSoftwareCSV);
-        zip.file("derivation_templates.csv", derivationTemplatesCSV);
-        zip.file("README.txt", `KYUTXO Backup
-========================
-Export Date: ${exportData.exportDate}
-Version: ${exportData.version}
-
-This backup is NOT encrypted. Store it securely.
-
-Files:
-- backup.json: Full database export (JSON format)
-- records.csv: Records spreadsheet (can open in Excel/Google Sheets)
-- tags.csv: Tags list
-- categories.csv: Categories list
-- attachments.csv: Attachment metadata
-- owners.csv: Owners vocabulary
-- wallet_names.csv: Wallet names vocabulary
-- seed_names.csv: Seed names vocabulary
-- wallet_software.csv: Wallet software vocabulary
-- derivation_templates.csv: Derivation templates
-- attachments/: Folder containing ${attachmentFiles.length} attachment file(s)
-
-Note: Attachment files are included in this backup and stored unencrypted.
-They will be restored automatically when you import this backup.
-Keep this backup in a secure location.
-`);
-      }
-
-      setProgress(85);
-      setProgressMessage("Compressing ZIP file...");
-      try {
-        getActivityBus().publishTask({
-          id: 'evidence-export',
-          label: 'Exporting Backup',
-          phase: 'Compressing ZIP',
-          current: 6,
-          total: 6,
-        });
-      } catch {}
-
-      const zipBlob = await zip.generateAsync({ 
-        type: "blob",
-        compression: "DEFLATE",
-        compressionOptions: { level: 6 }
       });
 
-      setProgress(95);
-      setProgressMessage("Downloading...");
-
-      const fileName = encrypted 
-        ? `kyutxo-backup-encrypted-${dateStr}.zip`
-        : `kyutxo-backup-${dateStr}.zip`;
-
-      const url = URL.createObjectURL(zipBlob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = fileName;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(url);
+      if (memorySink && memorySink.blob) {
+        downloadBlob(memorySink.blob, fileName);
+      }
 
       setProgress(100);
       setProgressMessage("Export complete!");
@@ -663,17 +178,25 @@ Keep this backup in a secure location.
 
       toast({
         title: "Export Successful",
-        description: `Your backup "${fileName}" has been downloaded.`,
+        description: fsSink
+          ? `Your backup "${fileName}" has been saved.`
+          : `Your backup "${fileName}" has been downloaded.`,
       });
-
     } catch (error) {
-      console.error("Export failed:", error);
       try { getActivityBus().completeTask('evidence-export'); } catch {}
-      toast({
-        variant: "destructive",
-        title: "Export Failed",
-        description: error instanceof Error ? error.message : "Failed to export data",
-      });
+      if (error instanceof BackupCancelledError) {
+        toast({
+          title: "Export Cancelled",
+          description: "The backup was cancelled before completion.",
+        });
+      } else {
+        console.error("Export failed:", error);
+        toast({
+          variant: "destructive",
+          title: "Export Failed",
+          description: error instanceof Error ? error.message : "Failed to export data",
+        });
+      }
     } finally {
       setExporting(false);
     }
@@ -699,8 +222,9 @@ Keep this backup in a secure location.
         <Alert>
           <AlertCircle className="h-4 w-4" />
           <AlertDescription>
-            Export includes all records, tags, categories, and attachment metadata in both JSON and CSV formats.
-            The backup will be downloaded as a ZIP file to your browser's default download location.
+            Export includes all records, transactions, tags, categories, vocabulary, lineage data, and attachment files.
+            Large databases are streamed directly to disk when your browser supports it, otherwise the backup is
+            downloaded as a ZIP file to your default download location.
           </AlertDescription>
         </Alert>
 
@@ -817,16 +341,8 @@ Keep this backup in a secure location.
             <div className="text-sm space-y-2">
               <p className="font-medium">The ZIP file contains:</p>
               <ul className="list-disc list-inside text-muted-foreground space-y-1 ml-2">
-                <li><code className="text-xs bg-muted px-1 rounded">backup.json</code> - Complete database in JSON format</li>
-                <li><code className="text-xs bg-muted px-1 rounded">records.csv</code> - Records spreadsheet (Excel/Sheets compatible)</li>
-                <li><code className="text-xs bg-muted px-1 rounded">tags.csv</code> - Tags list</li>
-                <li><code className="text-xs bg-muted px-1 rounded">categories.csv</code> - Categories list</li>
-                <li><code className="text-xs bg-muted px-1 rounded">attachments.csv</code> - Attachment metadata</li>
-                <li><code className="text-xs bg-muted px-1 rounded">owners.csv</code> - Owners vocabulary</li>
-                <li><code className="text-xs bg-muted px-1 rounded">wallet_names.csv</code> - Wallet names vocabulary</li>
-                <li><code className="text-xs bg-muted px-1 rounded">seed_names.csv</code> - Seed names vocabulary</li>
-                <li><code className="text-xs bg-muted px-1 rounded">wallet_software.csv</code> - Wallet software vocabulary</li>
-                <li><code className="text-xs bg-muted px-1 rounded">derivation_templates.csv</code> - Derivation templates</li>
+                <li><code className="text-xs bg-muted px-1 rounded">backup.json</code> - Manifest with counts, settings, and smaller tables</li>
+                <li><code className="text-xs bg-muted px-1 rounded">tables/</code> - Large tables (records, transactions, participants, attachments, sync state) as streamed NDJSON</li>
                 <li><code className="text-xs bg-muted px-1 rounded">attachments/</code> - Folder containing all attachment files</li>
               </ul>
             </div>
@@ -868,7 +384,7 @@ Keep this backup in a secure location.
             </div>
             <div className="flex justify-between text-sm">
               <span className="text-muted-foreground">Format</span>
-              <span className="font-medium">ZIP (JSON + CSV)</span>
+              <span className="font-medium">ZIP (JSON + NDJSON)</span>
             </div>
           </CardContent>
         </Card>
