@@ -1,2 +1,2 @@
 - [Large-vault startup migrations](large-vault-startup-migrations.md) — batched once-only startup repairs run in background; fresh-vault skip only when empty; file-decrypt resume freezes-not-breaks.
-- [Backup streaming guards](backup-streaming-guards.md) — fflate onEntry is sync (track manifest order with a sync flag, not the async value); memory-export OOM guard must aggregate ALL streamed-table counts + be unsafe-by-default.
+- [Backup streaming guards](backup-streaming-guards.md) — fflate onEntry is sync (manifest-order via a flag); memory-export OOM guard must aggregate all streamed-table counts.

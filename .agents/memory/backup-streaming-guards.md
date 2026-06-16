@@ -30,8 +30,8 @@ millions of `blockchainTransactions` / `transactionParticipants` /
 `addressSyncState` rows still OOMs.
 
 **Why:** Code review rejected the first cut for exactly this — small records +
-huge tx tables selected `MemorySink` and crashed. Task #254 targets 10M tx / 20M
-participants.
+huge tx tables selected `MemorySink` and crashed. The streaming backup rework
+targets vaults with ~10M transactions / ~20M participants.
 
 **How to apply:** Gate the memory fallback on the **aggregate** row count across
 all streamed large tables (records + transactions + participants +

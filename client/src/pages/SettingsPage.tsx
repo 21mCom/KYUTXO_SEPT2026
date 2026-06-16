@@ -631,16 +631,31 @@ export default function SettingsPage() {
     setBackupInfo(null);
 
     try {
+      // v3 streaming backups: read ONLY the manifest (first ZIP entry) via the
+      // streaming peek so a multi-GB backup is never loaded into memory just to
+      // preview it. The v3 manifest carries counts/encrypted/date in plaintext.
+      const manifestPeek = await peekManifest(blobChunks(file));
+      if (isV3Manifest(manifestPeek)) {
+        setBackupInfo({
+          encrypted: manifestPeek.encrypted || false,
+          date: manifestPeek.exportDate || "Unknown",
+          recordCount: manifestPeek.counts?.records ?? 0,
+        });
+        return;
+      }
+
+      // Legacy backups (single backup.json holding the whole vault): unchanged
+      // whole-file read for backward compatibility.
       const zip = await JSZip.loadAsync(file);
       const backupFile = zip.file("backup.json");
-      
+
       if (!backupFile) {
         throw new Error("Invalid backup file - missing backup.json");
       }
 
       const content = await backupFile.async("text");
       const backup = JSON.parse(content);
-      
+
       setBackupInfo({
         encrypted: backup.encrypted || false,
         date: backup.exportDate || "Unknown",
