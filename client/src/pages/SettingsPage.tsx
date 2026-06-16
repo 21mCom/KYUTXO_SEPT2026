@@ -78,7 +78,8 @@ import {
   setAttachmentPathsMigrated,
 } from "@/lib/vault";
 import JSZip from "jszip";
-import { peekManifest, restoreV3Backup, type AttachmentFileWriter } from "@/lib/backup/restore";
+import { peekManifest, restoreV3Backup, RestoreInterruptedError, type AttachmentFileWriter } from "@/lib/backup/restore";
+import { BackupCancelledError } from "@/lib/backup/sink";
 import { blobChunks } from "@/lib/backup/zip-stream";
 import { isV3Manifest } from "@/lib/backup/format";
 import VocabularyManager from "@/components/VocabularyManager";
@@ -119,6 +120,14 @@ export default function SettingsPage() {
   const [restoreProgress, setRestoreProgress] = useState(0);
   const [restoreMessage, setRestoreMessage] = useState("");
   const [backupInfo, setBackupInfo] = useState<{ encrypted: boolean; date: string; recordCount: number } | null>(null);
+  // Cancel support for the v3 streaming restore. `restoreCancellable` gates the
+  // cancel button (the legacy whole-file path has no abort point). `clearedRef`
+  // tracks the point of no return — once the destructive clear runs, cancelling
+  // can no longer keep the existing vault, so we warn before allowing it.
+  const [restoreCancellable, setRestoreCancellable] = useState(false);
+  const [showCancelRestoreConfirm, setShowCancelRestoreConfirm] = useState(false);
+  const restoreAbortRef = useRef<AbortController | null>(null);
+  const restoreClearedRef = useRef(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [changePasswordDialogOpen, setChangePasswordDialogOpen] = useState(false);
@@ -686,6 +695,9 @@ export default function SettingsPage() {
     setIsRestoring(true);
     setRestoreProgress(0);
     setRestoreMessage("Reading backup file...");
+    setRestoreCancellable(false);
+    restoreClearedRef.current = false;
+    restoreAbortRef.current = null;
 
     try {
       // v3 streaming backups: peek the manifest (first ZIP entry) without
@@ -719,11 +731,19 @@ export default function SettingsPage() {
           },
         };
 
+        const controller = new AbortController();
+        restoreAbortRef.current = controller;
+        setRestoreCancellable(true);
+
         const result = await restoreV3Backup({
           source: blobChunks(restoreFile),
           password: restorePassword || undefined,
           attachmentWriter,
+          signal: controller.signal,
           onProgress: (p) => {
+            // Once clearing begins, the existing vault is being destroyed; mark
+            // the point of no return so cancel prompts for confirmation.
+            if (p.percent >= 8) restoreClearedRef.current = true;
             setRestoreProgress(p.percent);
             setRestoreMessage(p.phase);
           },
@@ -1474,6 +1494,59 @@ export default function SettingsPage() {
       }, 1500);
 
     } catch (error) {
+      // User-initiated cancel of the v3 streaming restore. The library tells us
+      // which side of the destructive clear the cancel happened on so we can
+      // give an honest message about the resulting vault state.
+      if (error instanceof BackupCancelledError) {
+        setRestoreProgress(0);
+        setRestoreMessage("");
+        if (error.clearedBeforeCancel) {
+          // Old data was already wiped and only part of the backup written; the
+          // library reset the vault to a known-empty state. Reload so the UI
+          // reflects the empty vault and prompt the user to restore again.
+          toast({
+            variant: "destructive",
+            title: "Restore Cancelled",
+            description:
+              "Your existing data had already been cleared, so the vault is now empty. Run the restore again to recover your data.",
+          });
+          setTimeout(() => {
+            setRestoreDialogOpen(false);
+            setRestoreFile(null);
+            setRestorePassword("");
+            setBackupInfo(null);
+            window.location.reload();
+          }, 2000);
+        } else {
+          // Cancelled before the clear: nothing was touched.
+          toast({
+            title: "Restore Cancelled",
+            description: "No changes were made — your existing data is intact.",
+          });
+        }
+        return;
+      }
+      // Cancelled after the clear, but the vault could NOT be reset to a clean
+      // state — it is in an unknown partial state. Be explicit and reload so the
+      // UI reflects the real (partial) contents and prompt a re-restore.
+      if (error instanceof RestoreInterruptedError) {
+        console.error("Restore interrupted:", error);
+        setRestoreProgress(0);
+        setRestoreMessage("");
+        toast({
+          variant: "destructive",
+          title: "Restore Interrupted",
+          description: error.message,
+        });
+        setTimeout(() => {
+          setRestoreDialogOpen(false);
+          setRestoreFile(null);
+          setRestorePassword("");
+          setBackupInfo(null);
+          window.location.reload();
+        }, 2500);
+        return;
+      }
       console.error("Restore failed:", error);
       toast({
         variant: "destructive",
@@ -1484,7 +1557,28 @@ export default function SettingsPage() {
       setRestoreMessage("");
     } finally {
       setIsRestoring(false);
+      setRestoreCancellable(false);
+      restoreAbortRef.current = null;
+      restoreClearedRef.current = false;
     }
+  };
+
+  // Cancel button on the restore dialog. Before the destructive clear we abort
+  // immediately (existing data is safe). After it, we confirm first because the
+  // vault has already been wiped and cancelling will leave it empty.
+  const handleRequestCancelRestore = () => {
+    if (restoreClearedRef.current) {
+      setShowCancelRestoreConfirm(true);
+    } else {
+      restoreAbortRef.current?.abort();
+      setRestoreMessage("Cancelling...");
+    }
+  };
+
+  const confirmCancelRestore = () => {
+    setShowCancelRestoreConfirm(false);
+    restoreAbortRef.current?.abort();
+    setRestoreMessage("Cancelling...");
   };
 
   const isLoading = settingsLoading || customFieldsLoading;
@@ -2429,46 +2523,84 @@ export default function SettingsPage() {
             </div>
 
             {isRestoring && (
-              <div className="space-y-2">
+              <div className="space-y-2" data-testid="restore-progress">
                 <div className="flex items-center justify-between text-sm">
-                  <span>{restoreMessage}</span>
+                  <span data-testid="text-restore-phase">{restoreMessage}</span>
                   <span>{restoreProgress}%</span>
                 </div>
                 <Progress value={restoreProgress} />
+                {restoreCancellable && (
+                  <p className="text-xs text-muted-foreground">
+                    {restoreClearedRef.current
+                      ? "Existing data has been cleared. Cancelling now will leave the vault empty."
+                      : "You can cancel safely until the existing data starts being replaced."}
+                  </p>
+                )}
               </div>
             )}
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => {
-              setRestoreDialogOpen(false);
-              setRestoreFile(null);
-              setRestorePassword("");
-              setRestoreProgress(0);
-              setRestoreMessage("");
-              setBackupInfo(null);
-            }} disabled={isRestoring}>
-              Cancel
-            </Button>
-            <Button
-              onClick={handleRestore}
-              disabled={isRestoring || !restoreFile || (backupInfo?.encrypted && !restorePassword)}
-              data-testid="button-confirm-restore"
-            >
-              {isRestoring ? (
-                <>
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  Restoring...
-                </>
-              ) : (
-                <>
+            {isRestoring ? (
+              <Button
+                variant="destructive"
+                onClick={handleRequestCancelRestore}
+                disabled={!restoreCancellable}
+                data-testid="button-cancel-restore"
+              >
+                {restoreCancellable ? "Cancel Restore" : "Restoring..."}
+              </Button>
+            ) : (
+              <>
+                <Button variant="outline" onClick={() => {
+                  setRestoreDialogOpen(false);
+                  setRestoreFile(null);
+                  setRestorePassword("");
+                  setRestoreProgress(0);
+                  setRestoreMessage("");
+                  setBackupInfo(null);
+                }}>
+                  Cancel
+                </Button>
+                <Button
+                  onClick={handleRestore}
+                  disabled={!restoreFile || (backupInfo?.encrypted && !restorePassword)}
+                  data-testid="button-confirm-restore"
+                >
                   <Upload className="h-4 w-4 mr-2" />
                   Restore Backup
-                </>
-              )}
-            </Button>
+                </Button>
+              </>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Confirm cancel after the destructive clear has begun */}
+      <AlertDialog open={showCancelRestoreConfirm} onOpenChange={setShowCancelRestoreConfirm}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="h-5 w-5 text-destructive" />
+              Cancel restore?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              Your existing data has already been cleared to make room for the backup.
+              If you cancel now, the vault will be left empty and you'll need to run
+              the restore again to recover your data. Continue restoring instead?
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel data-testid="button-keep-restoring">Keep restoring</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={confirmCancelRestore}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              data-testid="button-confirm-cancel-restore"
+            >
+              Cancel and empty vault
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <Dialog open={isRecomputingStats}>
         <DialogContent className="sm:max-w-md" data-testid="dialog-recompute-stats">

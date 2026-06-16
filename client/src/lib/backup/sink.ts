@@ -24,7 +24,12 @@ export interface BackupSink {
 }
 
 // User cancelled the native save dialog — distinct from "feature unsupported".
+// On the restore side it also signals a user-initiated abort; `clearedBeforeCancel`
+// then tells the caller whether the destructive clear had already run (so the
+// vault was reset to a known-empty state) or the existing vault is still intact.
 export class BackupCancelledError extends Error {
+  clearedBeforeCancel?: boolean;
+
   constructor(message = "Backup cancelled") {
     super(message);
     this.name = "BackupCancelledError";

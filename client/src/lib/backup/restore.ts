@@ -58,6 +58,20 @@ import {
 import type { TransactionParticipant } from "@/lib/database";
 import { clearInlineTables, restoreInlineTables } from "./inline-tables";
 
+// Thrown when a restore is cancelled AFTER the destructive clear but the vault
+// could NOT be reset to a clean state. The vault is then in an unknown partial
+// state — distinct from BackupCancelledError, which always implies a known
+// outcome (existing data intact, or a verified-empty vault).
+export class RestoreInterruptedError extends Error {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message);
+    this.name = "RestoreInterruptedError";
+    if (options?.cause !== undefined) {
+      (this as { cause?: unknown }).cause = options.cause;
+    }
+  }
+}
+
 export interface AttachmentFileWriter {
   write(relPath: string, data: ArrayBuffer): Promise<void>;
 }
@@ -138,9 +152,26 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
     attachmentFiles: 0,
   };
 
+  // Becomes true once the destructive clear has run. After this point the
+  // existing vault is gone, so a user-initiated cancel cannot return to the
+  // prior state — instead we reset to a known-empty state (see clearVault).
+  let cleared = false;
+
   const throwIfAborted = () => {
     if (opts.signal?.aborted) throw new BackupCancelledError();
   };
+
+  // Wipes every table touched by a restore. Used both for the initial
+  // destructive clear and to reset to a known-empty state if the user cancels
+  // mid-restore after that clear has already happened.
+  async function clearVault(): Promise<void> {
+    await clearAllRecords({ skipNotification: true });
+    await clearAttachments({ skipNotification: true });
+    await clearParticipants({ skipNotification: true });
+    await clearTransactions({ skipNotification: true });
+    await clearAddressSyncState({ skipNotification: true });
+    await clearInlineFn();
+  }
 
   const total = () =>
     manifest
@@ -210,86 +241,123 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
     report(`Restoring ${table}...`);
   }
 
-  await readZipStream(opts.source, {
-    onEntry(name) {
-      if (name === MANIFEST_FILENAME) {
-        manifestSeen = true;
-        return collectBytesConsumer(async (bytes) => {
-          throwIfAborted();
-          const parsed = JSON.parse(new TextDecoder().decode(bytes));
-          if (!isV3Manifest(parsed)) {
-            throw new Error("Not a v3 backup");
-          }
-          manifest = parsed;
-
-          if (manifest.encrypted) {
-            if (!opts.password) throw new Error("Password required for encrypted backup");
-            const salt = base64ToBuffer(manifest.salt ?? "");
-            key = await deriveKey(opts.password, salt);
-            // Verify BEFORE any destructive clear.
-            let ok = false;
-            try {
-              ok = (await decrypt(manifest.check ?? "", key)) === CHECK_SENTINEL;
-            } catch {
-              ok = false;
+  try {
+    await readZipStream(opts.source, {
+      onEntry(name) {
+        if (name === MANIFEST_FILENAME) {
+          manifestSeen = true;
+          return collectBytesConsumer(async (bytes) => {
+            throwIfAborted();
+            const parsed = JSON.parse(new TextDecoder().decode(bytes));
+            if (!isV3Manifest(parsed)) {
+              throw new Error("Not a v3 backup");
             }
-            if (!ok) throw new Error("Invalid password or corrupted backup");
-          }
+            manifest = parsed;
 
-          opts.onProgress?.({ percent: 8, phase: "Clearing existing data..." });
-          await clearAllRecords({ skipNotification: true });
-          await clearAttachments({ skipNotification: true });
-          await clearParticipants({ skipNotification: true });
-          await clearTransactions({ skipNotification: true });
-          await clearAddressSyncState({ skipNotification: true });
-          await clearInlineFn();
+            if (manifest.encrypted) {
+              if (!opts.password) throw new Error("Password required for encrypted backup");
+              const salt = base64ToBuffer(manifest.salt ?? "");
+              key = await deriveKey(opts.password, salt);
+              // Verify BEFORE any destructive clear.
+              let ok = false;
+              try {
+                ok = (await decrypt(manifest.check ?? "", key)) === CHECK_SENTINEL;
+              } catch {
+                ok = false;
+              }
+              if (!ok) throw new Error("Invalid password or corrupted backup");
+            }
 
-          opts.onProgress?.({ percent: 9, phase: "Restoring metadata..." });
-          const inline = await parseInline(manifest, key);
-          await restoreInlineFn(inline);
-        });
-      }
+            // A cancel requested before the clear leaves the existing vault
+            // intact; check one last time on the point-of-no-return boundary.
+            throwIfAborted();
+            opts.onProgress?.({ percent: 8, phase: "Clearing existing data..." });
+            await clearVault();
+            cleared = true;
 
-      // Every non-manifest entry is data. The manifest must physically precede
-      // all data so its async handler (verify password, derive key, clear the
-      // vault) runs — on the serialized consumer chain — before any data row is
-      // written. `manifestSeen` reflects header order (set synchronously above),
-      // so reject any archive that front-loads data before the manifest.
-      if (!manifestSeen) {
-        if (
-          isStreamedTablePath(name) ||
-          (name.startsWith(`${ATTACHMENTS_DIR}/`) && !name.endsWith("/"))
-        ) {
-          throw new Error("Malformed backup: manifest must be the first entry");
+            opts.onProgress?.({ percent: 9, phase: "Restoring metadata..." });
+            const inline = await parseInline(manifest, key);
+            await restoreInlineFn(inline);
+          });
         }
+
+        // Every non-manifest entry is data. The manifest must physically precede
+        // all data so its async handler (verify password, derive key, clear the
+        // vault) runs — on the serialized consumer chain — before any data row is
+        // written. `manifestSeen` reflects header order (set synchronously above),
+        // so reject any archive that front-loads data before the manifest.
+        if (!manifestSeen) {
+          if (
+            isStreamedTablePath(name) ||
+            (name.startsWith(`${ATTACHMENTS_DIR}/`) && !name.endsWith("/"))
+          ) {
+            throw new Error("Malformed backup: manifest must be the first entry");
+          }
+        }
+
+        const table = isStreamedTablePath(name);
+        if (table) {
+          return lineConsumer(async (line) => {
+            const rows = await parseBatchLine(line, key);
+            if (rows.length) await handleBatch(table, rows);
+          });
+        }
+
+        if (name.startsWith(`${ATTACHMENTS_DIR}/`) && !name.endsWith("/")) {
+          const relPath = name.slice(ATTACHMENTS_DIR.length + 1);
+          return collectBytesConsumer(async (bytes) => {
+            throwIfAborted();
+            const ab = bytes.buffer.slice(
+              bytes.byteOffset,
+              bytes.byteOffset + bytes.byteLength,
+            ) as ArrayBuffer;
+            await opts.attachmentWriter.write(relPath, ab);
+            counts.attachmentFiles += 1;
+            processed += 1;
+            report("Restoring attachment files...");
+          });
+        }
+
+        return null; // ignore anything else
+      },
+    });
+  } catch (err) {
+    const aborted = opts.signal?.aborted ?? false;
+    if (err instanceof BackupCancelledError || aborted) {
+      if (!cleared) {
+        // Cancelled before the destructive clear: the existing vault was never
+        // touched, so it is left fully intact.
+        const cancelErr =
+          err instanceof BackupCancelledError ? err : new BackupCancelledError();
+        cancelErr.clearedBeforeCancel = false;
+        throw cancelErr;
       }
 
-      const table = isStreamedTablePath(name);
-      if (table) {
-        return lineConsumer(async (line) => {
-          const rows = await parseBatchLine(line, key);
-          if (rows.length) await handleBatch(table, rows);
-        });
+      // Cancelled after the clear: the old vault is already gone and only part
+      // of the backup was written. We must reset to a known-empty state so the
+      // vault is never left half-restored. This cleanup MUST succeed for us to
+      // honestly report an empty vault — if it fails, the vault is in an unknown
+      // partial state, so we fail CLOSED with a distinct hard error rather than
+      // claiming a clean cancel.
+      opts.onProgress?.({ percent: 0, phase: "Cancelling — clearing partial data..." });
+      try {
+        await clearVault();
+      } catch (cleanupErr) {
+        throw new RestoreInterruptedError(
+          "Restore was cancelled after the existing data had been cleared, but the " +
+            "vault could not be reset to a clean state. The vault is now in an " +
+            "unknown, partial state — restore again to recover your data.",
+          { cause: cleanupErr },
+        );
       }
-
-      if (name.startsWith(`${ATTACHMENTS_DIR}/`) && !name.endsWith("/")) {
-        const relPath = name.slice(ATTACHMENTS_DIR.length + 1);
-        return collectBytesConsumer(async (bytes) => {
-          throwIfAborted();
-          const ab = bytes.buffer.slice(
-            bytes.byteOffset,
-            bytes.byteOffset + bytes.byteLength,
-          ) as ArrayBuffer;
-          await opts.attachmentWriter.write(relPath, ab);
-          counts.attachmentFiles += 1;
-          processed += 1;
-          report("Restoring attachment files...");
-        });
-      }
-
-      return null; // ignore anything else
-    },
-  });
+      opts.onProgress?.({ percent: 0, phase: "Cancelled — vault is empty" });
+      const cancelErr =
+        err instanceof BackupCancelledError ? err : new BackupCancelledError();
+      cancelErr.clearedBeforeCancel = true;
+      throw cancelErr;
+    }
+    throw err;
+  }
 
   if (!manifest) throw new Error("Invalid backup: missing manifest");
   opts.onProgress?.({ percent: 100, phase: "Restore complete" });
