@@ -48,12 +48,8 @@ import {
   clearNodeSettings,
 } from "@/lib/data/node-settings-crud";
 import {
-  getAllUtxoLineage,
-  getAllCustodySegments,
   bulkAddUtxoLineage,
-  addCustodySegment,
-  clearUtxoLineage,
-  clearCustodySegments,
+  bulkAddCustodySegments,
 } from "@/lib/data/lineage-crud";
 
 export async function readInlineTables(): Promise<Record<string, unknown[]>> {
@@ -75,8 +71,6 @@ export async function readInlineTables(): Promise<Record<string, unknown[]>> {
     priceData,
     settings,
     nodeSettings,
-    utxoLineage,
-    custodySegments,
   ] = await Promise.all([
     getAllRecordOrigins(),
     getAllCustomFields(),
@@ -86,8 +80,6 @@ export async function readInlineTables(): Promise<Record<string, unknown[]>> {
     getAllPriceData(),
     getAllSettings(),
     getAllNodeSettings(),
-    getAllUtxoLineage(),
-    getAllCustodySegments(),
   ]);
 
   return {
@@ -105,8 +97,6 @@ export async function readInlineTables(): Promise<Record<string, unknown[]>> {
     priceData,
     settings,
     nodeSettings,
-    utxoLineage,
-    custodySegments,
   };
 }
 
@@ -124,9 +114,9 @@ export async function clearInlineTables(): Promise<void> {
   await clearEvidenceAttachments({ skipNotification: true });
   await clearPriceData({ skipNotification: true });
   await clearNodeSettings({ skipNotification: true });
-  await clearUtxoLineage({ skipNotification: true });
-  await clearCustodySegments({ skipNotification: true });
   // NOTE: settings is intentionally not cleared (matches legacy restore).
+  // utxoLineage and custodySegments are streamed tables now; the restore
+  // orchestrator clears them, not this inline path.
 }
 
 export async function restoreInlineTables(
@@ -228,17 +218,24 @@ export async function restoreInlineTables(
     await addNodeSettings(d, { skipNotification: true });
   }
 
+  // utxoLineage and custodySegments are streamed tables now, so NEW backups
+  // carry them as NDJSON (handled by the restore orchestrator) and won't have
+  // them inline. But OLDER v3 backups stored them inline — restore those here
+  // when present so upgrading the format never silently drops lineage data.
   const lineageRows = arr("utxoLineage").map((ul) => {
     const { id, ...d } = ul;
     return d;
   });
   if (lineageRows.length) {
-    await bulkAddUtxoLineage(lineageRows, { skipNotification: true });
+    await bulkAddUtxoLineage(lineageRows as any[], { skipNotification: true });
   }
 
-  for (const cs of arr("custodySegments")) {
+  const segmentRows = arr("custodySegments").map((cs) => {
     const { id, ...d } = cs;
-    await addCustodySegment(d, { skipNotification: true });
+    return d;
+  });
+  if (segmentRows.length) {
+    await bulkAddCustodySegments(segmentRows as any[], { skipNotification: true });
   }
 
   // NOTE: recordOrigins and settings are intentionally NOT restored

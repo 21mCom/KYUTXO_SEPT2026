@@ -15,6 +15,7 @@ import { countDerivationTemplates } from "@/lib/data/derivation-templates-crud";
 import { countRecords } from "@/lib/data/record-crud";
 import { countTransactions, countTransactionParticipants } from "@/lib/data/transaction-crud";
 import { countAddressSyncState } from "@/lib/data/address-sync-crud";
+import { countUtxoLineage, countCustodySegments } from "@/lib/data/lineage-crud";
 import { isElectron, getElectronAPI } from "@/lib/electron";
 import { exportBackup } from "@/lib/backup/export";
 import {
@@ -34,7 +35,8 @@ import {
 // out-of-memory crash. The streaming-to-disk paths (desktop, File System Access
 // API) have no such limit. MEMORY_EXPORT_ROW_LIMIT applies to the AGGREGATE of
 // all streamed large tables (records + transactions + participants +
-// addressSyncState), since the in-memory archive holds them all at once.
+// addressSyncState + utxoLineage + custodySegments), since the in-memory archive
+// holds them all at once.
 const MEMORY_EXPORT_ROW_LIMIT = 50000;
 const MEMORY_EXPORT_ATTACHMENT_LIMIT = 5000;
 
@@ -153,15 +155,30 @@ export default function ExportPage() {
     let exportAttachmentCount = 0;
     let countsKnown = false;
     try {
-      const [records, transactions, participants, syncState, attachments] =
-        await Promise.all([
-          countRecords(),
-          countTransactions(),
-          countTransactionParticipants(),
-          countAddressSyncState(),
-          countAttachments(),
-        ]);
-      totalRowCount = records + transactions + participants + syncState;
+      const [
+        records,
+        transactions,
+        participants,
+        syncState,
+        utxoLineage,
+        custodySegments,
+        attachments,
+      ] = await Promise.all([
+        countRecords(),
+        countTransactions(),
+        countTransactionParticipants(),
+        countAddressSyncState(),
+        countUtxoLineage(),
+        countCustodySegments(),
+        countAttachments(),
+      ]);
+      totalRowCount =
+        records +
+        transactions +
+        participants +
+        syncState +
+        utxoLineage +
+        custodySegments;
       exportAttachmentCount = attachments;
       countsKnown = true;
     } catch (error) {

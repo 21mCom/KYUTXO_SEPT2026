@@ -58,8 +58,20 @@ import {
   countAddressSyncState,
   type CreateAddressSyncStateData,
 } from "@/lib/data/address-sync-crud";
+import {
+  bulkAddUtxoLineage,
+  bulkAddCustodySegments,
+  clearUtxoLineage,
+  clearCustodySegments,
+  countUtxoLineage,
+  countCustodySegments,
+} from "@/lib/data/lineage-crud";
 import { restoreTag } from "@/lib/data/vocabulary-crud";
-import type { TransactionParticipant } from "@/lib/database";
+import type {
+  TransactionParticipant,
+  UtxoLineage,
+  CustodySegment,
+} from "@/lib/database";
 
 // Big tables >> BATCH, inline tables << BATCH, so "max single toArray <= BATCH"
 // means no whole big table was ever pulled into memory.
@@ -68,6 +80,8 @@ const N_TX = 200;
 const N_PART = 200;
 const N_ATT = 150;
 const N_SYNC = 80;
+const N_LINEAGE = 140;
+const N_SEGMENTS = 90;
 const N_TAGS = 4;
 const N_FILES = 5;
 const BATCH = 25;
@@ -112,6 +126,8 @@ beforeAll(async () => {
   await clearParticipants({ skipNotification: true });
   await clearTransactions({ skipNotification: true });
   await clearAddressSyncState({ skipNotification: true });
+  await clearUtxoLineage({ skipNotification: true });
+  await clearCustodySegments({ skipNotification: true });
   await db.tags.clear();
 
   // Records first so we can hang dependents off their real ids.
@@ -179,6 +195,50 @@ beforeAll(async () => {
     } as unknown as CreateAddressSyncStateData);
   }
   await bulkAddAddressSyncState(syncRows, { skipNotification: true });
+
+  // Lineage tables carry no recordId — they relink by txid/vout, so they stream
+  // as-is like blockchainTransactions.
+  const lineageRows: UtxoLineage[] = [];
+  for (let i = 0; i < N_LINEAGE; i++) {
+    lineageRows.push({
+      spentTxid: (i % N_TX).toString(16).padStart(64, "0"),
+      spentVout: i % 4,
+      spentAddress: `addr-${String((i % N_REC) + 1).padStart(5, "0")}`,
+      spentAmount: 1000 + i,
+      consumingTxid: ((i + 1) % N_TX).toString(16).padStart(64, "0"),
+      createdTxid: ((i + 1) % N_TX).toString(16).padStart(64, "0"),
+      createdVout: (i + 1) % 4,
+      createdAddress: `addr-${String(((i + 1) % N_REC) + 1).padStart(5, "0")}`,
+      createdAmount: 900 + i,
+      spentOwned: i % 2 === 0,
+      createdOwned: i % 3 === 0,
+      isChange: i % 5 === 0,
+      confidence: "high",
+      blockTime: 1_231_006_505 + i * 600,
+      blockHeight: Math.floor(i / 3),
+      createdAt: 1000 + i,
+    } as unknown as UtxoLineage);
+  }
+  await bulkAddUtxoLineage(lineageRows, { skipNotification: true });
+
+  const segmentRows: CustodySegment[] = [];
+  for (let i = 0; i < N_SEGMENTS; i++) {
+    segmentRows.push({
+      segmentId: `seg-${String(i).padStart(6, "0")}`,
+      originTxid: (i % N_TX).toString(16).padStart(64, "0"),
+      originVout: i % 4,
+      originAddress: `addr-${String((i % N_REC) + 1).padStart(5, "0")}`,
+      originDate: 1_231_006_505 + i * 600,
+      originAmount: 5000 + i,
+      currentAmount: 5000 + i,
+      status: "active",
+      hopCount: i % 3,
+      evidenceTxids: [(i % N_TX).toString(16).padStart(64, "0")],
+      createdAt: 1000 + i,
+      updatedAt: 1000 + i,
+    } as unknown as CustodySegment);
+  }
+  await bulkAddCustodySegments(segmentRows, { skipNotification: true });
 
   for (let i = 0; i < N_TAGS; i++) {
     await restoreTag({ name: `tag-${i}`, color: "#888888", createdAt: 1000 + i });
@@ -255,6 +315,8 @@ describe("v3 backup restore stays bounded and round-trips", () => {
     expect(result.counts.transactionParticipants).toBe(N_PART);
     expect(result.counts.attachments).toBe(N_ATT);
     expect(result.counts.addressSyncState).toBe(N_SYNC);
+    expect(result.counts.utxoLineage).toBe(N_LINEAGE);
+    expect(result.counts.custodySegments).toBe(N_SEGMENTS);
     expect(result.counts.attachmentFiles).toBe(N_FILES);
 
     // The live tables actually hold the restored rows.
@@ -263,6 +325,8 @@ describe("v3 backup restore stays bounded and round-trips", () => {
     expect(await countTransactionParticipants()).toBe(N_PART);
     expect(await countAttachments()).toBe(N_ATT);
     expect(await countAddressSyncState()).toBe(N_SYNC);
+    expect(await countUtxoLineage()).toBe(N_LINEAGE);
+    expect(await countCustodySegments()).toBe(N_SEGMENTS);
     expect(await db.tags.count()).toBe(N_TAGS);
 
     // Attachment file bytes survived the round-trip exactly.

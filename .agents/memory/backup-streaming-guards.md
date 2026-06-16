@@ -34,13 +34,35 @@ huge tx tables selected `MemorySink` and crashed. The streaming backup rework
 targets vaults with ~10M transactions / ~20M participants.
 
 **How to apply:** Gate the memory fallback on the **aggregate** row count across
-all streamed large tables (records + transactions + participants +
-addressSyncState) plus attachment count, via the pure `isMemoryFallbackSafe()` /
-`decideExportSinkKind()` in `lib/backup/sink.ts`. Fetch **fresh** counts at
-export time (CRUD count fns), not from async display state which may be stale/0/
-failed. Treat unknown counts as **unsafe-by-default** (`countsKnown=false` →
-block). Prefer streaming-to-disk sinks (Electron IPC `ElectronFileSink`, then
-browser File System Access) so the archive never lives in memory; only fall back
-to memory for small, known-size datasets. Residual (not yet done): guard is
-count-based, not byte-based — many huge attachment files could still bloat an
-in-memory archive.
+all streamed large tables plus attachment count, via the pure
+`isMemoryFallbackSafe()` / `decideExportSinkKind()` in `lib/backup/sink.ts`.
+Fetch **fresh** counts at export time (CRUD count fns), not from async display
+state which may be stale/0/failed. Treat unknown counts as **unsafe-by-default**
+(`countsKnown=false` → block). Prefer streaming-to-disk sinks (Electron IPC
+`ElectronFileSink`, then browser File System Access) so the archive never lives
+in memory; only fall back to memory for small, known-size datasets. Residual
+(not yet done): guard is count-based, not byte-based — many huge attachment files
+could still bloat an in-memory archive.
+
+# Adding a table to STREAMED_TABLES is a multi-file invariant
+
+The set of NDJSON-streamed big tables is **not** localized to `format.ts`. Each
+table in `STREAMED_TABLES` must be wired in lockstep across several files or the
+backup silently mis-handles it.
+
+**Why:** Lineage tables (`utxoLineage`, `custodySegments`) started inline and
+were later promoted to the streamed path. They carry **no `recordId`**, so —
+like `blockchainTransactions` — they relink by their own keys (txid/vout,
+segmentId) and need NO id-map remapping; `records` only has to be first for the
+tables that DO depend on its old→new id map.
+
+**How to apply:** When adding a streamed table you must touch ALL of:
+`format.ts` (`STREAMED_TABLES` + `BackupCounts`); `export.ts` (`STREAM_READERS`
+page reader + count in `Promise.all` + `counts` + `totalUnits`); `restore.ts`
+(`handleBatch` branch, `counts`, `RestoreResult`, `total()` denominator, and a
+**clear** in the manifest handler); a paged `get*AfterId` + a `bulkAdd*` + a
+`count*` in the table's CRUD; and the `ExportPage.tsx` memory-fallback aggregate
+(`totalRowCount`) so the OOM guard doesn't undercount. If the table was
+previously inline, also REMOVE it from `inline-tables.ts` read/clear, but KEEP a
+defensive inline-restore fallback so OLD backups (which still carry it inline)
+don't silently drop that data.

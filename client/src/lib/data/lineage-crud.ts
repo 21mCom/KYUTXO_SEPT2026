@@ -68,6 +68,19 @@ export async function addCustodySegment(
   return id as number;
 }
 
+export async function bulkAddCustodySegments(
+  records: CustodySegment[],
+  options?: LineageWriteOptions
+): Promise<void> {
+  if (records.length === 0) return;
+
+  await db.custodySegments.bulkAdd(records);
+
+  if (!options?.skipNotification) {
+    notifyDbChange('custodySegments');
+  }
+}
+
 export async function clearCustodySegments(
   options?: LineageWriteOptions
 ): Promise<void> {
@@ -160,6 +173,24 @@ export async function getAllUtxoLineage(): Promise<UtxoLineage[]> {
 
 export async function getAllCustodySegments(): Promise<CustodySegment[]> {
   return db.custodySegments.toArray();
+}
+
+// Bounded id-keyset page. Used by the streaming backup export so the whole
+// utxoLineage table is never materialised at once.
+export async function getUtxoLineageAfterId(
+  afterId: number,
+  limit: number
+): Promise<UtxoLineage[]> {
+  return db.utxoLineage.where('id').above(afterId).limit(limit).toArray();
+}
+
+// Bounded id-keyset page. Used by the streaming backup export so the whole
+// custodySegments table is never materialised at once.
+export async function getCustodySegmentsAfterId(
+  afterId: number,
+  limit: number
+): Promise<CustodySegment[]> {
+  return db.custodySegments.where('id').above(afterId).limit(limit).toArray();
 }
 
 export async function countUtxoLineage(): Promise<number> {

@@ -55,7 +55,17 @@ import {
   clearAddressSyncState,
   type CreateAddressSyncStateData,
 } from "@/lib/data/address-sync-crud";
-import type { TransactionParticipant } from "@/lib/database";
+import {
+  bulkAddUtxoLineage,
+  bulkAddCustodySegments,
+  clearUtxoLineage,
+  clearCustodySegments,
+} from "@/lib/data/lineage-crud";
+import type {
+  TransactionParticipant,
+  UtxoLineage,
+  CustodySegment,
+} from "@/lib/database";
 import { clearInlineTables, restoreInlineTables } from "./inline-tables";
 
 // Thrown when a restore is cancelled AFTER the destructive clear but the vault
@@ -99,6 +109,8 @@ export interface RestoreResult {
     transactionParticipants: number;
     addressSyncState: number;
     blockchainTransactions: number;
+    utxoLineage: number;
+    custodySegments: number;
     attachmentFiles: number;
   };
 }
@@ -149,6 +161,8 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
     transactionParticipants: 0,
     addressSyncState: 0,
     blockchainTransactions: 0,
+    utxoLineage: 0,
+    custodySegments: 0,
     attachmentFiles: 0,
   };
 
@@ -170,6 +184,8 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
     await clearParticipants({ skipNotification: true });
     await clearTransactions({ skipNotification: true });
     await clearAddressSyncState({ skipNotification: true });
+    await clearUtxoLineage({ skipNotification: true });
+    await clearCustodySegments({ skipNotification: true });
     await clearInlineFn();
   }
 
@@ -180,6 +196,8 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
           manifest.counts.transactionParticipants +
           manifest.counts.addressSyncState +
           manifest.counts.blockchainTransactions +
+          (manifest.counts.utxoLineage ?? 0) +
+          (manifest.counts.custodySegments ?? 0) +
           manifest.counts.attachmentFiles) || 1
       : 1;
   let processed = 0;
@@ -236,6 +254,16 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
       const out = rows.map(({ id, ...d }) => d as CreateTransactionData);
       if (out.length) await bulkAddTransactions(out, { skipNotification: true });
       counts.blockchainTransactions += out.length;
+    } else if (table === "utxoLineage") {
+      // No recordId: rows relink by txid/vout, so insert as-is (drop old id).
+      const out = rows.map(({ id, ...d }) => d as UtxoLineage);
+      if (out.length) await bulkAddUtxoLineage(out, { skipNotification: true });
+      counts.utxoLineage += out.length;
+    } else if (table === "custodySegments") {
+      // No recordId: rows relink by segmentId/txid, so insert as-is (drop old id).
+      const out = rows.map(({ id, ...d }) => d as CustodySegment);
+      if (out.length) await bulkAddCustodySegments(out, { skipNotification: true });
+      counts.custodySegments += out.length;
     }
     processed += rows.length;
     report(`Restoring ${table}...`);

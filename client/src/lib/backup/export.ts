@@ -36,6 +36,12 @@ import {
   getAddressSyncStateAfterId,
   countAddressSyncState,
 } from "@/lib/data/address-sync-crud";
+import {
+  getUtxoLineageAfterId,
+  getCustodySegmentsAfterId,
+  countUtxoLineage,
+  countCustodySegments,
+} from "@/lib/data/lineage-crud";
 import { readInlineTables } from "./inline-tables";
 
 export interface AttachmentFileIO {
@@ -69,6 +75,8 @@ const STREAM_READERS: Record<StreamedTable, PageReader> = {
   transactionParticipants: getTransactionParticipantsAfterId as unknown as PageReader,
   addressSyncState: getAddressSyncStateAfterId as unknown as PageReader,
   blockchainTransactions: getTransactionsAfterId as unknown as PageReader,
+  utxoLineage: getUtxoLineageAfterId as unknown as PageReader,
+  custodySegments: getCustodySegmentsAfterId as unknown as PageReader,
 };
 
 const DEFAULT_BATCH = 1000;
@@ -102,12 +110,16 @@ export async function exportBackup(opts: ExportOptions): Promise<void> {
     participantsCount,
     addressSyncCount,
     transactionsCount,
+    utxoLineageCount,
+    custodySegmentsCount,
   ] = await Promise.all([
     countRecords(),
     countAttachments(),
     countTransactionParticipants(),
     countAddressSyncState(),
     countTransactions(),
+    countUtxoLineage(),
+    countCustodySegments(),
   ]);
 
   opts.onProgress?.({ percent: 2, phase: "Listing attachment files..." });
@@ -119,6 +131,8 @@ export async function exportBackup(opts: ExportOptions): Promise<void> {
     transactionParticipants: participantsCount,
     addressSyncState: addressSyncCount,
     blockchainTransactions: transactionsCount,
+    utxoLineage: utxoLineageCount,
+    custodySegments: custodySegmentsCount,
     attachmentFiles: attachmentPaths.length,
   };
 
@@ -128,6 +142,8 @@ export async function exportBackup(opts: ExportOptions): Promise<void> {
     counts.transactionParticipants +
     counts.addressSyncState +
     counts.blockchainTransactions +
+    counts.utxoLineage +
+    counts.custodySegments +
     counts.attachmentFiles || 1;
   let processedUnits = 0;
   const reportUnits = (phase: string) => {
