@@ -2,6 +2,7 @@ import Dexie from 'dexie';
 import { db, notifyDbChange, type Record, type Attachment, type RecordOrigin, type RecordOriginType, type DerivationTemplate, type AddressImportance } from '../database';
 import { ensureOwner, ensureWalletName, ensureSeedName, ensureWalletSoftware } from './vocabulary-crud';
 import { getActivityBus } from '../activity-bus';
+import { type GroupBy, GROUP_EMPTY_KEY, addressMatchesGroup, type AddressBalanceRow } from '../balance-grouping';
 
 async function syncRecordVocabulary(
   data: Partial<Record>
@@ -348,6 +349,7 @@ export interface AddressStatsCacheValues {
   cachedBalanceSats: number;
   cachedTxCount: number;
   cachedLastActivityTime: number;
+  cachedUtxoCount: number;
   statsComputedAt: number;
 }
 
@@ -384,6 +386,7 @@ export async function bulkUpdateAddressStats(
       delete cleared.cachedBalanceSats;
       delete cleared.cachedTxCount;
       delete cleared.cachedLastActivityTime;
+      delete cleared.cachedUtxoCount;
       delete cleared.statsComputedAt;
       toSave.push(cleared);
     } else {
@@ -392,6 +395,7 @@ export async function bulkUpdateAddressStats(
         cachedBalanceSats: stats.cachedBalanceSats,
         cachedTxCount: stats.cachedTxCount,
         cachedLastActivityTime: stats.cachedLastActivityTime,
+        cachedUtxoCount: stats.cachedUtxoCount,
         statsComputedAt: stats.statsComputedAt,
       });
     }
@@ -810,6 +814,66 @@ export async function getRecordsByTypeAndImportanceTiers(
     .where('[type+addressImportance]')
     .anyOf(tiers.map(t => [type, t]))
     .toArray();
+}
+
+/**
+ * Fetch the lightweight per-address rows (id, address, balance, utxo count,
+ * label) belonging to a single balance-overview group, reading only the cached
+ * stats fields — never participants or transactions. Used when the user expands
+ * one group, so the page never holds every address in memory.
+ *
+ * For non-empty buckets we use the appropriate index (walletName / seedName /
+ * owner / *tags / *categories). The "empty" bucket (e.g. "Unassigned") can't be
+ * indexed and must also absorb any record literally named the sentinel, so it
+ * scans the address table in id-keyset batches, yielding between batches.
+ * Only addresses with a positive cachedUtxoCount are returned.
+ */
+export async function getAddressBalanceRowsForGroup(
+  groupBy: GroupBy,
+  groupKey: string,
+): Promise<AddressBalanceRow[]> {
+  const rows: AddressBalanceRow[] = [];
+  const pushIfUtxo = (r: Record): void => {
+    if (r.id == null || !r.inputString) return;
+    const utxoCount = r.cachedUtxoCount ?? 0;
+    if (utxoCount <= 0) return;
+    rows.push({
+      id: r.id,
+      address: r.inputString,
+      sats: r.cachedBalanceSats ?? 0,
+      utxoCount,
+      label: r.label || undefined,
+    });
+  };
+
+  if (groupKey !== GROUP_EMPTY_KEY[groupBy]) {
+    const indexField =
+      groupBy === 'wallet' ? 'walletName'
+      : groupBy === 'seed' ? 'seedName'
+      : groupBy === 'owner' ? 'owner'
+      : groupBy === 'tag' ? 'tags'
+      : 'categories';
+    await db.records
+      .where(indexField)
+      .equals(groupKey)
+      .each((r) => { if (r.type === 'address') pushIfUtxo(r); });
+    return rows;
+  }
+
+  const BATCH = 1000;
+  let beforeIdExclusive: number | undefined = undefined;
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const batch = await getRecordsPageByTypeIdReverseKeyset('address', { limit: BATCH, beforeIdExclusive });
+    if (batch.length === 0) break;
+    for (const r of batch) {
+      if (addressMatchesGroup(r, groupBy, groupKey)) pushIfUtxo(r);
+    }
+    beforeIdExclusive = batch[batch.length - 1].id ?? undefined;
+    if (batch.length < BATCH || beforeIdExclusive == null) break;
+    await new Promise(resolve => setTimeout(resolve, 0));
+  }
+  return rows;
 }
 
 export async function getRecordsByDiscoveredFromIds(

@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { PAGE_DEBOUNCE } from "@/config/debounce";
 import { useLocation } from "wouter";
@@ -31,7 +31,8 @@ import {
 } from "@/components/ui/table";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { Record as DbRecord } from "@/lib/database";
-import { useAddressRecords } from "@/hooks/use-address-records";
+import { useDbChangeSignal } from "@/hooks/use-db-change-signal";
+import { countRecordsByType, getRecordsPageByTypeIdReverseKeyset } from "@/lib/data/record-crud";
 import { searchPendingClass } from "@/lib/search-pending-class";
 
 interface WalletStats {
@@ -42,11 +43,12 @@ interface WalletStats {
   changeUsed: number;
   unknownTotal: number;
   unknownUsed: number;
-  addressIds: number[];
 }
 
 type SortField = 'walletName' | 'receiveUsage' | 'changeUsage' | 'totalUsage';
 type SortDirection = 'asc' | 'desc';
+
+const WALLET_AGG_BATCH = 1000;
 
 function parseChainType(record: DbRecord): 'receive' | 'change' | 'unknown' {
   // First check explicit chainType field
@@ -142,81 +144,98 @@ export default function WalletOverview() {
   const [sortField, setSortField] = useState<SortField>('walletName');
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
   const [expandedWallets, setExpandedWallets] = useState<Set<string>>(new Set());
+  const [progress, setProgress] = useState({ processed: 0, total: 0 });
+  const [refreshTick, setRefreshTick] = useState(0);
 
-  const { records: allAddressRecords } = useAddressRecords();
+  const dbSignal = useDbChangeSignal(["records"]);
+  const computationId = useRef(0);
 
-  const loadWalletStats = async () => {
-    setLoading(true);
-    try {
-      const records = allAddressRecords;
-
-      // Filter to only address records with wallet names
-      const addressRecords = records.filter(r => r.walletName);
-      
-      // Build a set of addresses that appear in transactions
-      const usedAddresses = new Set<string>();
-      
-      // Check each address against transactions by looking at discoveredInTxid or firstSeenBlockTime
-      for (const record of addressRecords) {
-        // An address is "used" if it has transaction activity
-        // We detect this by checking if it has firstSeenBlockTime (indicates blockchain activity)
-        // or if it was discovered in a transaction
-        if (record.firstSeenBlockTime || record.discoveredInTxid) {
-          usedAddresses.add(record.inputString);
-        }
-      }
-      
-      // Group by wallet name
-      const walletMap = new Map<string, WalletStats>();
-      
-      for (const record of addressRecords) {
-        const walletName = record.walletName!;
-        const chainType = parseChainType(record);
-        const isUsed = usedAddresses.has(record.inputString);
-        
-        if (!walletMap.has(walletName)) {
-          walletMap.set(walletName, {
-            walletName,
-            receiveTotal: 0,
-            receiveUsed: 0,
-            changeTotal: 0,
-            changeUsed: 0,
-            unknownTotal: 0,
-            unknownUsed: 0,
-            addressIds: []
-          });
-        }
-        
-        const stats = walletMap.get(walletName)!;
-        
-        if (chainType === 'receive') {
-          stats.receiveTotal++;
-          if (isUsed) stats.receiveUsed++;
-        } else if (chainType === 'change') {
-          stats.changeTotal++;
-          if (isUsed) stats.changeUsed++;
-        } else {
-          stats.unknownTotal++;
-          if (isUsed) stats.unknownUsed++;
-        }
-        
-        if (record.id) {
-          stats.addressIds.push(record.id);
-        }
-      }
-      
-      setWalletStats(Array.from(walletMap.values()));
-    } catch (error) {
-      console.error("Failed to load wallet stats:", error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
+  // Aggregate per-wallet stats by paging address records in id-keyset batches,
+  // yielding between batches. We never load the whole table into memory at once.
   useEffect(() => {
-    loadWalletStats();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [allAddressRecords]);
+    computationId.current += 1;
+    const thisId = computationId.current;
+    const abort = new AbortController();
+    const signal = abort.signal;
+
+    setLoading(true);
+    setProgress({ processed: 0, total: 0 });
+
+    const run = async () => {
+      const total = await countRecordsByType("address");
+      if (thisId !== computationId.current) return;
+      setProgress({ processed: 0, total });
+
+      const walletMap = new Map<string, WalletStats>();
+      let beforeIdExclusive: number | undefined = undefined;
+      let processed = 0;
+
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        if (signal.aborted) return;
+        const batch = await getRecordsPageByTypeIdReverseKeyset("address", {
+          limit: WALLET_AGG_BATCH,
+          beforeIdExclusive,
+        });
+        if (batch.length === 0) break;
+
+        for (const record of batch) {
+          if (!record.walletName) continue;
+          const walletName = record.walletName;
+          const chainType = parseChainType(record);
+          // An address is "used" if it shows blockchain activity.
+          const isUsed = !!(record.firstSeenBlockTime || record.discoveredInTxid);
+
+          let stats = walletMap.get(walletName);
+          if (!stats) {
+            stats = {
+              walletName,
+              receiveTotal: 0,
+              receiveUsed: 0,
+              changeTotal: 0,
+              changeUsed: 0,
+              unknownTotal: 0,
+              unknownUsed: 0,
+            };
+            walletMap.set(walletName, stats);
+          }
+
+          if (chainType === "receive") {
+            stats.receiveTotal++;
+            if (isUsed) stats.receiveUsed++;
+          } else if (chainType === "change") {
+            stats.changeTotal++;
+            if (isUsed) stats.changeUsed++;
+          } else {
+            stats.unknownTotal++;
+            if (isUsed) stats.unknownUsed++;
+          }
+        }
+
+        processed += batch.length;
+        if (thisId === computationId.current) setProgress({ processed, total });
+
+        beforeIdExclusive = batch[batch.length - 1].id ?? undefined;
+        if (batch.length < WALLET_AGG_BATCH || beforeIdExclusive == null) break;
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+
+      if (thisId !== computationId.current || signal.aborted) return;
+      setWalletStats(Array.from(walletMap.values()));
+      setLoading(false);
+    };
+
+    run().catch((error) => {
+      if (thisId === computationId.current) {
+        console.error("Failed to load wallet stats:", error);
+        setLoading(false);
+      }
+    });
+
+    return () => {
+      abort.abort();
+    };
+  }, [dbSignal, refreshTick]);
 
   const sortedAndFilteredStats = useMemo(() => {
     let filtered = walletStats;
@@ -321,7 +340,7 @@ export default function WalletOverview() {
           <Button
             variant="outline"
             size="sm"
-            onClick={loadWalletStats}
+            onClick={() => setRefreshTick((t) => t + 1)}
             disabled={loading}
             data-testid="button-refresh"
           >
@@ -397,8 +416,13 @@ export default function WalletOverview() {
       <Card className={`flex-1 overflow-hidden ${searchPendingClass(isSearchPending, 'WalletOverview')}`}>
         <ScrollArea className="h-full">
           {loading ? (
-            <div className="flex items-center justify-center h-48">
+            <div className="flex flex-col items-center justify-center h-48 gap-3">
               <RefreshCw className="h-6 w-6 animate-spin text-muted-foreground" />
+              {progress.total > 0 && (
+                <p className="text-xs text-muted-foreground/60" data-testid="text-agg-progress">
+                  {Math.min(progress.processed, progress.total).toLocaleString()} / {progress.total.toLocaleString()} addresses
+                </p>
+              )}
             </div>
           ) : sortedAndFilteredStats.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-48 text-center p-4">

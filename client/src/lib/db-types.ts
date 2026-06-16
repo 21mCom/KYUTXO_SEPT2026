@@ -214,6 +214,12 @@ export interface Record {
   // address has no fetched transaction data yet → UI shows "not synced" instead
   // of a misleading zero balance.
   statsComputedAt?: number;
+  // Number of unspent outputs (UTXOs) currently held by this address, computed
+  // per-address from local participant data (exact when prevout data exists,
+  // otherwise an amount/time heuristic). When `statsComputedAt` is set but this
+  // is undefined, the address predates the utxo-count cache and needs a one-time
+  // backfill recompute.
+  cachedUtxoCount?: number;
   
   // === Transaction-specific metadata fields ===
   // Flow type: direction/purpose of the transaction

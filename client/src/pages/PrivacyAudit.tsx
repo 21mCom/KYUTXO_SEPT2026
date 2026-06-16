@@ -23,7 +23,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { beginBulkOperation, endBulkOperation } from "@/lib/database";
 import type { Record as DbRecord } from "@/lib/database";
 import { createTag } from "@/lib/data/vocabulary-crud";
-import { updateRecord, getRecordsByType } from "@/lib/data/record-crud";
+import { updateRecord, countRecordsByType, getRecordsPageByTypeIdReverseKeyset, getRecordsByInputStrings } from "@/lib/data/record-crud";
 import { useTags } from "@/hooks/use-tags";
 import { useOwners } from "@/hooks/use-owners";
 import { useWalletNames } from "@/hooks/use-wallet-names";
@@ -41,6 +41,9 @@ import {
 } from "@/lib/privacy-audit";
 
 type ScanState = "idle" | "analyzing" | "tagging" | "complete";
+
+const AUDIT_INPUT_BATCH = 1000;
+const TAG_FETCH_BATCH = 500;
 
 const FINDING_TYPE_META: Record<PrivacyFindingType, { label: string; icon: typeof Shield }> = {
   SCRIPT_TYPE_MIXING: { label: "Script Type Mixing", icon: Fingerprint },
@@ -90,30 +93,45 @@ export default function PrivacyAudit() {
       setStatusMessage("Loading address records...");
       setScanState("analyzing");
 
-      let records = await getRecordsByType('address');
+      const totalAddresses = await countRecordsByType('address');
 
-      if (records.length === 0) {
+      if (totalAddresses === 0) {
         toast({ title: "No Records", description: "No address records found to audit." });
         setScanState("idle");
         return;
       }
 
-      let filtered = records;
-      if (selectedOwner !== "all") {
-        filtered = filtered.filter(r => r.owner === selectedOwner);
-      }
-      if (selectedWallet !== "all") {
-        filtered = filtered.filter(r => r.walletName === selectedWallet);
+      // Stream inputStrings in id-keyset batches, applying the owner/wallet
+      // filters in-loop, so we never hold the whole address table in memory.
+      const userAddresses: string[] = [];
+      let beforeIdExclusive: number | undefined = undefined;
+      let scanned = 0;
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        const batch = await getRecordsPageByTypeIdReverseKeyset('address', {
+          limit: AUDIT_INPUT_BATCH,
+          beforeIdExclusive,
+        });
+        if (batch.length === 0) break;
+        for (const r of batch) {
+          if (selectedOwner !== "all" && r.owner !== selectedOwner) continue;
+          if (selectedWallet !== "all" && r.walletName !== selectedWallet) continue;
+          if (r.inputString) userAddresses.push(r.inputString);
+        }
+        scanned += batch.length;
+        setStatusMessage(`Loading address records... ${scanned.toLocaleString()} / ${totalAddresses.toLocaleString()}`);
+        beforeIdExclusive = batch[batch.length - 1].id ?? undefined;
+        if (batch.length < AUDIT_INPUT_BATCH || beforeIdExclusive == null) break;
+        await new Promise(resolve => setTimeout(resolve, 0));
       }
 
-      if (filtered.length === 0) {
+      if (userAddresses.length === 0) {
         toast({ title: "No Matching Records", description: "No address records match the selected filters." });
         setScanState("idle");
         return;
       }
 
       setScanState("analyzing");
-      const userAddresses = filtered.map(r => r.inputString).filter(Boolean);
 
       const auditResult = await runPrivacyAudit(userAddresses, (msg) => {
         setStatusMessage(msg);
@@ -174,12 +192,17 @@ export default function PrivacyAudit() {
         }
       }
 
-      const records = await getRecordsByType('address');
-
+      // Fetch only the records for addresses that actually have findings,
+      // in chunks, instead of loading the entire address table.
+      const tagAddresses = Array.from(addressToFindings.keys());
       const addressToRecord = new Map<string, DbRecord>();
-      for (const r of records) {
-        if (r.inputString) {
-          addressToRecord.set(r.inputString, r);
+      for (let i = 0; i < tagAddresses.length; i += TAG_FETCH_BATCH) {
+        const slice = tagAddresses.slice(i, i + TAG_FETCH_BATCH);
+        const found = await getRecordsByInputStrings(slice);
+        for (const r of found) {
+          if (r.inputString) {
+            addressToRecord.set(r.inputString, r);
+          }
         }
       }
 

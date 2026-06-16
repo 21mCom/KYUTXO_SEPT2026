@@ -204,6 +204,7 @@ function buildAddressRecord(i: number): CreateRecordData {
     cachedBalanceSats: (i % 1000) * 1000,
     cachedTxCount: i % 50,
     cachedLastActivityTime: BASE_BLOCK_TIME + i * 600,
+    cachedUtxoCount: (i % 1000) === 0 ? 0 : ((i % 3) + 1),
     statsComputedAt: BASE_BLOCK_TIME * 1000,
   };
 }

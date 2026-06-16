@@ -44,10 +44,82 @@ interface AddressAgg {
   inputSats: number;
   lastTxTime: number;
   txids: Set<string>;
+  outputs: TransactionParticipant[];
+  inputs: TransactionParticipant[];
 }
 
 function isAborted(signal?: AbortSignal): boolean {
   return !!signal?.aborted;
+}
+
+/**
+ * Count the unspent outputs (UTXOs) currently held by a single address from its
+ * own output/input participant rows. This mirrors BalanceOverview's former
+ * in-page logic, but evaluated per-address so the result is independent of how
+ * addresses are batched:
+ *   - Exact mode (the address has at least one input carrying prevout data):
+ *     an output is unspent unless its outpoint (txid:vout) is referenced by one
+ *     of this address's inputs.
+ *   - Heuristic mode (no prevout data): pair each output with a later input of
+ *     the same amount (FIFO by block time); unmatched outputs are unspent.
+ * Outputs whose transaction has no known block time (unconfirmed/missing) are
+ * ignored, matching the page's prior behaviour.
+ */
+export function computeUtxoCountForAddress(
+  outputs: TransactionParticipant[],
+  inputs: TransactionParticipant[],
+  blockTimeOf: (txid: string) => number,
+): number {
+  const spentOutpoints = new Set<string>();
+  for (const inp of inputs) {
+    if (inp.prevTxid !== undefined && inp.prevVout !== undefined) {
+      spentOutpoints.add(`${inp.prevTxid}:${inp.prevVout}`);
+    }
+  }
+
+  const hasExactData = spentOutpoints.size > 0;
+  if (hasExactData) {
+    let count = 0;
+    for (const output of outputs) {
+      if ((blockTimeOf(output.txid) || 0) <= 0) continue;
+      const outpoint = `${output.txid}:${output.vout ?? 0}`;
+      if (spentOutpoints.has(outpoint)) continue;
+      count += 1;
+    }
+    return count;
+  }
+
+  const outputsWithTime = outputs
+    .map(output => ({ output, blockTime: blockTimeOf(output.txid) || 0 }))
+    .filter(o => o.blockTime > 0)
+    .sort((a, b) => a.blockTime - b.blockTime);
+
+  const inputsByAmount = new Map<number, number[]>();
+  for (const input of inputs) {
+    const blockTime = blockTimeOf(input.txid) || 0;
+    if (blockTime <= 0) continue;
+    const arr = inputsByAmount.get(input.amount) || [];
+    arr.push(blockTime);
+    inputsByAmount.set(input.amount, arr);
+  }
+  inputsByAmount.forEach(arr => arr.sort((a, b) => a - b));
+
+  const matchedIndex = new Map<number, number>();
+  let count = 0;
+  for (const { output, blockTime } of outputsWithTime) {
+    const candidates = inputsByAmount.get(output.amount) || [];
+    const start = matchedIndex.get(output.amount) || 0;
+    let spendIdx = -1;
+    for (let i = start; i < candidates.length; i++) {
+      if (candidates[i] > blockTime) { spendIdx = i; break; }
+    }
+    if (spendIdx >= 0) {
+      matchedIndex.set(output.amount, spendIdx + 1);
+    } else {
+      count += 1;
+    }
+  }
+  return count;
 }
 
 async function loadBlockTimes(txids: string[]): Promise<Map<string, number>> {
@@ -70,8 +142,8 @@ async function loadBlockTimes(txids: string[]): Promise<Map<string, number>> {
 export async function computeStatsForAddresses(
   addresses: string[],
   signal?: AbortSignal
-): Promise<Map<string, { balanceSats: number; lastActivityTime: number; txCount: number }>> {
-  const out = new Map<string, { balanceSats: number; lastActivityTime: number; txCount: number }>();
+): Promise<Map<string, { balanceSats: number; lastActivityTime: number; txCount: number; utxoCount: number }>> {
+  const out = new Map<string, { balanceSats: number; lastActivityTime: number; txCount: number; utxoCount: number }>();
   if (addresses.length === 0) return out;
 
   // Gather participants for these addresses in batches.
@@ -90,12 +162,14 @@ export async function computeStatsForAddresses(
 
   const addrAgg = new Map<string, AddressAgg>();
   for (const p of participants) {
-    const agg = addrAgg.get(p.address) || { outputSats: 0, inputSats: 0, lastTxTime: 0, txids: new Set<string>() };
+    const agg = addrAgg.get(p.address) || { outputSats: 0, inputSats: 0, lastTxTime: 0, txids: new Set<string>(), outputs: [], inputs: [] };
     const blockTime = txMap.get(p.txid) || 0;
     if (p.role === 'output') {
       agg.outputSats += p.amount;
+      agg.outputs.push(p);
     } else {
       agg.inputSats += p.amount;
+      agg.inputs.push(p);
     }
     if (blockTime > agg.lastTxTime) agg.lastTxTime = blockTime;
     agg.txids.add(p.txid);
@@ -107,6 +181,7 @@ export async function computeStatsForAddresses(
       balanceSats: agg.outputSats - agg.inputSats,
       lastActivityTime: agg.lastTxTime,
       txCount: agg.txids.size,
+      utxoCount: computeUtxoCountForAddress(agg.outputs, agg.inputs, (txid) => txMap.get(txid) || 0),
     });
   });
 
@@ -218,6 +293,7 @@ export async function recomputeAddressStats(
           cachedBalanceSats: s ? s.balanceSats : 0,
           cachedTxCount: s ? s.txCount : 0,
           cachedLastActivityTime: s ? s.lastActivityTime : 0,
+          cachedUtxoCount: s ? s.utxoCount : 0,
           statsComputedAt: now,
         },
       });

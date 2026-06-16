@@ -27,6 +27,16 @@ const PATTERNS: RegExp[] = [
   new RegExp(`\\bdb\\.(?:${BIG_TABLES.join("|")})\\.toArray\\s*\\(`, "g"),
   // db.<big>.toCollection(
   new RegExp(`\\bdb\\.(?:${BIG_TABLES.join("|")})\\.toCollection\\s*\\(`, "g"),
+  // Full-load CRUD helpers that read an entire type/tier set into memory. The
+  // trailing `\s*\(` anchors to the exact call name so we do NOT flag the
+  // bounded variants that share a prefix (getRecordsPageByTypeAndImportanceTiersKeyset,
+  // getAddressRecordsByImportanceTiersFiltered, getRecordsByTypeFiltered,
+  // getRecordsByTypeAndImportanceLimited, countRecordsByTypeAndImportanceTiers).
+  /\bgetRecordsByType\s*\(/g,
+  /\bgetAddressRecordsByImportanceTiers\s*\(/g,
+  /\bgetRecordsByTypeAndImportanceTiers\s*\(/g,
+  // useAddressRecords() — the full-load address hook; counts its consumers.
+  /\buseAddressRecords\s*\(/g,
 ];
 
 // The CRUD modules where the bounded helpers AND the (intentional) getAll*/full
@@ -36,13 +46,21 @@ const EXCLUDED_FILES = new Set([
   join(SRC_DIR, "lib", "data", "record-crud.ts"),
   join(SRC_DIR, "lib", "data", "transaction-crud.ts"),
   join(SRC_DIR, "lib", "data", "attachments-crud.ts"),
+  // use-address-records.ts DEFINES the useAddressRecords full-load hook (and
+  // calls getRecordsByType/getRecordsByTypeAndImportanceTiers internally). It is
+  // the single chokepoint, so we exclude its definition and ratchet its
+  // consumers' useAddressRecords() call-sites instead.
+  join(SRC_DIR, "hooks", "use-address-records.ts"),
 ]);
 
 // Current known offenders (June 2026): 6 getAll* call-sites + 1 direct toArray
-// (record-queries.ts) + 1 direct toCollection (records-query.ts) = 8.
-// (Lowered from 10 after migrateAttachmentPaths and decryptLegacyAttachmentFiles
-// dropped their startup getAllAttachments() loads in favour of id-keyset batches.)
-const BASELINE = 8;
+// (record-queries.ts) + 1 direct toCollection (records-query.ts) + 13 full-load
+// helper call-sites (8 getRecordsByType + 2 getAddressRecordsByImportanceTiers +
+// 3 useAddressRecords consumers) = 21.
+// (The overview pages — BalanceOverview/WalletOverview — were migrated off the
+// useAddressRecords full-load to batched keyset aggregation, which is why those
+// consumers no longer appear among the offenders.)
+const BASELINE = 21;
 
 function collectSourceFiles(dir: string, out: string[] = []): string[] {
   for (const entry of readdirSync(dir)) {

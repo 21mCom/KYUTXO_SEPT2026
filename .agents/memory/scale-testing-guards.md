@@ -23,14 +23,24 @@ paths (`primaryKeys()`, `each()`, `sortBy()`, cursor scans that return a small
 final array). Add those if a helper uses them.
 
 ## Static guard (ratchet)
-`scale-guards.static.test.ts` greps client source for unbounded patterns
-(`getAll*()` call-sites + `db.<bigTable>.toArray()/.toCollection()`) outside the
-CRUD definition modules and fails if the count exceeds a BASELINE.
+`scale-guards.static.test.ts` greps client source for unbounded patterns outside
+the CRUD definition modules and fails if the count exceeds a BASELINE. Coverage:
+`getAll*()` call-sites, `db.<bigTable>.toArray()/.toCollection()`, AND the named
+full-load CRUD helpers (`getRecordsByType`, `getAddressRecordsByImportanceTiers`,
+`getRecordsByTypeAndImportanceTiers`, `useAddressRecords`).
 **Why:** stops new full-table loads creeping back in.
 **How to apply:** the count may only go DOWN — after removing an offender, lower
-BASELINE to lock the win. Limitation: it's count-based, so removing one offender
-while adding another can mask a regression; it's a foundation, not a full
-analyzer.
+BASELINE to lock the win. Two non-obvious rules when extending PATTERNS:
+(1) anchor each helper regex with a trailing `\s*\(` on the EXACT name so it does
+NOT match bounded sibling variants that share a prefix (e.g.
+`getRecordsPageByTypeAndImportanceTiersKeyset`,
+`getAddressRecordsByImportanceTiersFiltered`, `getRecordsByTypeAndImportanceLimited`);
+(2) when a full-load is funneled through one hook/wrapper (e.g.
+`use-address-records.ts`), add that file to EXCLUDED_FILES as a *definition
+chokepoint* and ratchet its consumer call-sites instead, so the hook internals +
+its own definition aren't triple-counted.
+Limitation: it's count-based, so removing one offender while adding another can
+mask a regression; it's a foundation, not a full analyzer.
 
 ## Migration-path harness (one-time upgraders)
 `legacy-migration.test.ts` proves the genuine Dexie schema upgraders run on an

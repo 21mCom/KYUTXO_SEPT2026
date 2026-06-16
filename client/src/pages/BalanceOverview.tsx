@@ -1,14 +1,24 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { useDbChangeSignal } from "@/hooks/use-db-change-signal";
-import { useAddressRecords } from "@/hooks/use-address-records";
 import { useLiveQuery } from "dexie-react-hooks";
-import { BlockchainTransaction, TransactionParticipant, Record as DbRecord } from "@/lib/database";
-import { getTransactionsByTxids } from "@/lib/data/transaction-crud";
 import { getBtcUsdPriceData } from "@/lib/data/price-data-crud";
+import {
+  countRecordsByType,
+  getRecordsPageByTypeIdReverseKeyset,
+  getAddressBalanceRowsForGroup,
+} from "@/lib/data/record-crud";
+import { recomputeAddressStats } from "@/lib/data/address-stats";
+import {
+  type GroupBy,
+  type AddressBalanceRow,
+  getGroupKeys,
+} from "@/lib/balance-grouping";
+import { useVirtualizer } from "@tanstack/react-virtual";
 
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Progress } from "@/components/ui/progress";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   Loader2,
@@ -19,19 +29,28 @@ import {
   Check,
 } from "lucide-react";
 import { SiBitcoin } from "react-icons/si";
-import { getParticipantsByAddresses } from "@/lib/dataFacade";
 
-type GroupBy = "wallet" | "seed" | "owner" | "tag" | "category";
 type SortBy = "balance-desc" | "balance-asc" | "name-asc" | "name-desc" | "addresses-desc";
 type DisplayUnit = "btc" | "sats";
 
-interface GroupBalance {
+interface GroupSummary {
   name: string;
   totalSats: number;
   addressCount: number;
   utxoCount: number;
-  addresses: { address: string; sats: number; utxoCount: number; label?: string }[];
 }
+
+type AggResult =
+  | { needsBackfill: true }
+  | {
+      needsBackfill: false;
+      summaries: Map<string, GroupSummary>;
+      totalSats: number;
+      totalAddresses: number;
+      totalUtxos: number;
+    };
+
+const AGG_BATCH = 1000;
 
 function formatBtc(sats: number, unit: DisplayUnit): string {
   if (unit === "sats") {
@@ -44,130 +63,144 @@ function formatUsd(amount: number): string {
   return "$" + amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-function getGroupKeys(record: DbRecord, groupBy: GroupBy): string[] {
-  switch (groupBy) {
-    case "wallet":
-      return [record.walletName || "Unassigned"];
-    case "seed":
-      return [record.seedName || "Unassigned"];
-    case "owner":
-      return [record.owner || "Unassigned"];
-    case "tag":
-      return record.tags && record.tags.length > 0 ? record.tags : ["Untagged"];
-    case "category":
-      return record.categories && record.categories.length > 0 ? record.categories : ["Uncategorized"];
+/**
+ * Phase 1 aggregation: page through every address record by id-keyset, reading
+ * ONLY the cached per-address stats fields (never participants/transactions).
+ * Accumulates per-group totals plus a deduped overall total. Returns
+ * `needsBackfill` if it finds an address whose stats predate `cachedUtxoCount`.
+ */
+async function aggregateGroups(
+  groupBy: GroupBy,
+  signal: AbortSignal,
+  onProgress: (processed: number) => void,
+): Promise<AggResult | null> {
+  const summaries = new Map<string, GroupSummary>();
+  let totalSats = 0;
+  let totalAddresses = 0;
+  let totalUtxos = 0;
+  let processed = 0;
+  let beforeIdExclusive: number | undefined = undefined;
+
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    if (signal.aborted) return null;
+    const batch = await getRecordsPageByTypeIdReverseKeyset("address", {
+      limit: AGG_BATCH,
+      beforeIdExclusive,
+    });
+    if (batch.length === 0) break;
+
+    for (const rec of batch) {
+      // Stats written before cachedUtxoCount existed → trigger one-time backfill.
+      if (rec.statsComputedAt != null && rec.cachedUtxoCount === undefined) {
+        return { needsBackfill: true };
+      }
+      const utxo = rec.cachedUtxoCount ?? 0;
+      if (utxo <= 0) continue;
+      const sats = rec.cachedBalanceSats ?? 0;
+
+      totalSats += sats;
+      totalAddresses += 1;
+      totalUtxos += utxo;
+
+      for (const key of getGroupKeys(rec, groupBy)) {
+        let g = summaries.get(key);
+        if (!g) {
+          g = { name: key, totalSats: 0, addressCount: 0, utxoCount: 0 };
+          summaries.set(key, g);
+        }
+        g.totalSats += sats;
+        g.addressCount += 1;
+        g.utxoCount += utxo;
+      }
+    }
+
+    processed += batch.length;
+    onProgress(processed);
+
+    beforeIdExclusive = batch[batch.length - 1].id ?? undefined;
+    if (batch.length < AGG_BATCH || beforeIdExclusive == null) break;
+    await new Promise((resolve) => setTimeout(resolve, 0));
   }
+
+  return { needsBackfill: false, summaries, totalSats, totalAddresses, totalUtxos };
 }
 
-function computeBalancesForRecords(
-  records: DbRecord[],
-  participants: TransactionParticipant[],
-  txidToTx: Map<string, BlockchainTransaction>,
-): Map<number, { sats: number; count: number; record: DbRecord; address: string }> {
-  const addressToRec = new Map<string, DbRecord>();
-  const recordIdToRec = new Map<number, DbRecord>();
-  for (const record of records) {
-    if (record.inputString) addressToRec.set(record.inputString, record);
-    if (record.id !== undefined) recordIdToRec.set(record.id, record);
-  }
+interface GroupAddressRowsProps {
+  rows: AddressBalanceRow[];
+  displayUnit: DisplayUnit;
+  copiedAddress: string | null;
+  onCopy: (address: string) => void;
+}
 
-  const findRecord = (p: TransactionParticipant): DbRecord | undefined => {
-    return addressToRec.get(p.address)
-      || (p.recordId ? recordIdToRec.get(p.recordId) : undefined);
-  };
+/** Virtualized list of a single expanded group's addresses (cached rows only). */
+function GroupAddressRows({ rows, displayUnit, copiedAddress, onCopy }: GroupAddressRowsProps) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const virtualizer = useVirtualizer({
+    count: rows.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => 34,
+    overscan: 12,
+    measureElement: (el) => el.getBoundingClientRect().height,
+  });
+  const virtualItems = virtualizer.getVirtualItems();
 
-  const outputs: TransactionParticipant[] = [];
-  const spentOutpoints = new Set<string>();
+  return (
+    <div ref={scrollRef} className="max-h-96 overflow-auto px-4 py-2">
+      <div style={{ height: `${virtualizer.getTotalSize()}px`, position: "relative", width: "100%" }}>
+        {virtualItems.map((vi) => {
+          const addr = rows[vi.index];
+          return (
+            <div
+              key={addr.id}
+              data-index={vi.index}
+              ref={virtualizer.measureElement}
+              style={{ position: "absolute", top: 0, left: 0, width: "100%", transform: `translateY(${vi.start}px)` }}
+            >
+              <div
+                className="flex items-center gap-2 py-1.5 text-sm"
+                data-testid={`row-address-${addr.address}`}
+              >
+                <div className="flex-1 min-w-0 flex items-center gap-2">
+                  <span className="font-mono text-xs text-muted-foreground truncate max-w-[200px]">
+                    {addr.address}
+                  </span>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onCopy(addr.address);
+                    }}
+                    className="flex-none text-muted-foreground/40 hover:text-muted-foreground transition-colors"
+                    data-testid={`button-copy-${addr.address}`}
+                  >
+                    {copiedAddress === addr.address ? (
+                      <Check className="h-3 w-3" />
+                    ) : (
+                      <Copy className="h-3 w-3" />
+                    )}
+                  </button>
+                  {addr.label && (
+                    <span className="text-xs text-muted-foreground/70 truncate max-w-[120px]">
+                      {addr.label}
+                    </span>
+                  )}
+                </div>
 
-  for (const p of participants) {
-    if (p.role === 'output') {
-      outputs.push(p);
-    } else if (p.role === 'input') {
-      if (p.prevTxid !== undefined && p.prevVout !== undefined) {
-        spentOutpoints.add(`${p.prevTxid}:${p.prevVout}`);
-      }
-    }
-  }
-
-  const balanceMap = new Map<number, { sats: number; count: number; record: DbRecord; address: string }>();
-
-  const addToBalance = (output: TransactionParticipant, record: DbRecord) => {
-    const rid = record.id!;
-    const existing = balanceMap.get(rid);
-    if (existing) {
-      existing.sats += output.amount;
-      existing.count += 1;
-    } else {
-      balanceMap.set(rid, {
-        sats: output.amount,
-        count: 1,
-        record,
-        address: record.inputString || output.address,
-      });
-    }
-  };
-
-  const hasExactData = spentOutpoints.size > 0;
-
-  if (hasExactData) {
-    for (const output of outputs) {
-      const tx = txidToTx.get(output.txid);
-      if (!tx || tx.blockTime <= 0) continue;
-      const outpoint = `${output.txid}:${output.vout ?? 0}`;
-      if (spentOutpoints.has(outpoint)) continue;
-      const record = findRecord(output);
-      if (!record || record.id === undefined) continue;
-      addToBalance(output, record);
-    }
-    return balanceMap;
-  }
-
-  const outputsWithTime = outputs.map(output => {
-    const tx = txidToTx.get(output.txid);
-    return { output, blockTime: tx?.blockTime ?? 0 };
-  }).filter(o => o.blockTime > 0);
-
-  outputsWithTime.sort((a, b) => a.blockTime - b.blockTime);
-
-  const inputs = participants.filter(p => p.role === 'input');
-  const inputsWithTime = inputs.map(input => {
-    const tx = txidToTx.get(input.txid);
-    return { input, blockTime: tx?.blockTime ?? 0 };
-  }).filter(i => i.blockTime > 0);
-
-  inputsWithTime.sort((a, b) => a.blockTime - b.blockTime);
-
-  const inputsByAddressAmount = new Map<string, { input: TransactionParticipant; blockTime: number }[]>();
-  for (const item of inputsWithTime) {
-    const key = `${item.input.address}:${item.input.amount}`;
-    const existing = inputsByAddressAmount.get(key) || [];
-    existing.push(item);
-    inputsByAddressAmount.set(key, existing);
-  }
-
-  const matchedInputIndices = new Map<string, number>();
-
-  for (const { output, blockTime } of outputsWithTime) {
-    const key = `${output.address}:${output.amount}`;
-    const matchingInputs = inputsByAddressAmount.get(key) || [];
-    const currentIndex = matchedInputIndices.get(key) || 0;
-
-    const spendingInput = matchingInputs.find((item, idx) =>
-      idx >= currentIndex && item.blockTime > blockTime
-    );
-
-    if (spendingInput) {
-      const spendIdx = matchingInputs.indexOf(spendingInput);
-      matchedInputIndices.set(key, spendIdx + 1);
-    } else {
-      const record = findRecord(output);
-      if (record && record.id !== undefined) {
-        addToBalance(output, record);
-      }
-    }
-  }
-
-  return balanceMap;
+                <div className="flex-none flex items-center gap-2">
+                  <span className="text-xs text-muted-foreground/50">
+                    {addr.utxoCount} UTXO{addr.utxoCount !== 1 ? "s" : ""}
+                  </span>
+                  <span className="font-mono text-xs font-medium w-[130px] text-right">
+                    {formatBtc(addr.sats, displayUnit)}
+                  </span>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
 }
 
 export default function BalanceOverview() {
@@ -176,139 +209,125 @@ export default function BalanceOverview() {
   const [displayUnit, setDisplayUnit] = useState<DisplayUnit>("btc");
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
 
-  const txDbSignal = useDbChangeSignal(['blockchainTransactions']);
+  const dbSignal = useDbChangeSignal(["records", "blockchainTransactions"]);
   const computationId = useRef(0);
 
-  const [groupBalances, setGroupBalances] = useState<Map<string, GroupBalance>>(new Map());
-  const [uniqueAddressBalances, setUniqueAddressBalances] = useState<Map<number, { sats: number; count: number }>>(new Map());
-  const [computingGroup, setComputingGroup] = useState<string | null>(null);
-  const [computedCount, setComputedCount] = useState(0);
+  const [phase, setPhase] = useState<"loading" | "backfilling" | "ready">("loading");
+  const [groupSummaries, setGroupSummaries] = useState<Map<string, GroupSummary>>(new Map());
+  const [totals, setTotals] = useState({ sats: 0, addresses: 0, utxos: 0 });
+  const [addressRecordCount, setAddressRecordCount] = useState(0);
+  const [aggProgress, setAggProgress] = useState({ processed: 0, total: 0 });
+  const [backfillProgress, setBackfillProgress] = useState({ processed: 0, total: 0 });
 
-  const { records: rawRecords } = useAddressRecords();
+  // Phase 2: per-group address rows, loaded on demand when a group is expanded.
+  const [groupRows, setGroupRows] = useState<Map<string, AddressBalanceRow[]>>(new Map());
+  const [loadingGroups, setLoadingGroups] = useState<Set<string>>(new Set());
 
-  const priceData = useLiveQuery(
-    () => getBtcUsdPriceData(),
-    []
-  );
+  const groupByRef = useRef(groupBy);
+  groupByRef.current = groupBy;
+  const groupRowsRef = useRef(groupRows);
+  groupRowsRef.current = groupRows;
+  const loadingGroupsRef = useRef(loadingGroups);
+  loadingGroupsRef.current = loadingGroups;
 
-  const processedRecords = rawRecords ?? [];
+  const priceData = useLiveQuery(() => getBtcUsdPriceData(), []);
 
-  const recordGroups = useMemo(() => {
-    const groupMap = new Map<string, DbRecord[]>();
-    for (const record of processedRecords) {
-      if (record.type !== 'address' || !record.inputString) continue;
-      const keys = getGroupKeys(record, groupBy);
-      for (const key of keys) {
-        const existing = groupMap.get(key) || [];
-        existing.push(record);
-        groupMap.set(key, existing);
-      }
-    }
-    return groupMap;
-  }, [processedRecords, groupBy]);
+  // Reset expansion + row caches when the grouping dimension changes.
+  useEffect(() => {
+    setExpandedGroups(new Set());
+    setGroupRows(new Map());
+    setLoadingGroups(new Set());
+  }, [groupBy]);
 
+  // Phase 1: aggregate from the cache (with one-time backfill if data is stale).
   useEffect(() => {
     computationId.current += 1;
     const thisId = computationId.current;
-    const abortController = new AbortController();
-    setGroupBalances(new Map());
-    setUniqueAddressBalances(new Map());
-    setComputingGroup(null);
-    setComputedCount(0);
+    const abort = new AbortController();
+    const signal = abort.signal;
 
-    if (recordGroups.size === 0) return () => { abortController.abort(); };
+    setPhase("loading");
+    setGroupSummaries(new Map());
+    setTotals({ sats: 0, addresses: 0, utxos: 0 });
+    setAggProgress({ processed: 0, total: 0 });
+    setBackfillProgress({ processed: 0, total: 0 });
+    setGroupRows(new Map());
+    setLoadingGroups(new Set());
 
-    const computeGroups = async () => {
-      const entries = Array.from(recordGroups.entries());
+    const run = async () => {
+      const total = await countRecordsByType("address");
+      if (thisId !== computationId.current) return;
+      setAddressRecordCount(total);
+      setAggProgress({ processed: 0, total });
 
-      for (let gi = 0; gi < entries.length; gi++) {
-        const [groupName, records] = entries[gi];
-        if (thisId !== computationId.current) return;
-        setComputingGroup(groupName);
+      let result = await aggregateGroups(groupBy, signal, (p) => {
+        if (thisId === computationId.current) setAggProgress({ processed: p, total });
+      });
+      if (!result || thisId !== computationId.current || signal.aborted) return;
 
-        const addresses = records.map(r => r.inputString!);
-        let participants: TransactionParticipant[];
-        try {
-          participants = await getParticipantsByAddresses(addresses, abortController.signal);
-        } catch (e) {
-          if (e instanceof DOMException && e.name === 'AbortError') return;
-          participants = [];
-        }
-        if (thisId !== computationId.current) return;
-
-        const txids = new Set<string>();
-        for (const p of participants) txids.add(p.txid);
-
-        const txidToTx = new Map<string, BlockchainTransaction>();
-        if (txids.size > 0) {
-          const txidArray = Array.from(txids);
-          const batchSize = 500;
-          for (let i = 0; i < txidArray.length; i += batchSize) {
-            const batch = txidArray.slice(i, i + batchSize);
-            const txs = await getTransactionsByTxids(batch);
-            for (const tx of txs) txidToTx.set(tx.txid, tx);
-            if (thisId !== computationId.current) return;
-          }
-        }
-
-        const balanceMap = computeBalancesForRecords(records, participants, txidToTx);
-        if (thisId !== computationId.current) return;
-
-        const groupBalance: GroupBalance = {
-          name: groupName,
-          totalSats: 0,
-          addressCount: 0,
-          utxoCount: 0,
-          addresses: [],
-        };
-
-        for (const { sats, count, record, address } of balanceMap.values()) {
-          groupBalance.totalSats += sats;
-          groupBalance.utxoCount += count;
-          groupBalance.addressCount += 1;
-          groupBalance.addresses.push({
-            address,
-            sats,
-            utxoCount: count,
-            label: record.label || undefined,
-          });
-        }
-
-        if (balanceMap.size === 0) {
-          setComputedCount(gi + 1);
-          await new Promise(r => setTimeout(r, 0));
-          continue;
-        }
-
-        groupBalance.addresses.sort((a, b) => b.sats - a.sats);
-
-        setGroupBalances(prev => {
-          const next = new Map(prev);
-          next.set(groupName, groupBalance);
-          return next;
-        });
-
-        setUniqueAddressBalances(prev => {
-          const next = new Map(prev);
-          for (const [recordId, bal] of balanceMap.entries()) {
-            if (!next.has(recordId)) {
-              next.set(recordId, { sats: bal.sats, count: bal.count });
+      if (result.needsBackfill) {
+        setPhase("backfilling");
+        setBackfillProgress({ processed: 0, total });
+        const res = await recomputeAddressStats({
+          signal,
+          skipNotification: true,
+          origin: "user",
+          onProgress: (p) => {
+            if (thisId === computationId.current) {
+              setBackfillProgress({ processed: p.processed, total: p.total });
             }
-          }
-          return next;
+          },
         });
+        if (thisId !== computationId.current || signal.aborted || res.cancelled) return;
 
-        setComputedCount(gi + 1);
-
-        await new Promise(r => setTimeout(r, 0));
+        setPhase("loading");
+        setAggProgress({ processed: 0, total });
+        result = await aggregateGroups(groupBy, signal, (p) => {
+          if (thisId === computationId.current) setAggProgress({ processed: p, total });
+        });
+        if (!result || result.needsBackfill || thisId !== computationId.current || signal.aborted) return;
       }
 
-      setComputingGroup(null);
+      setGroupSummaries(result.summaries);
+      setTotals({ sats: result.totalSats, addresses: result.totalAddresses, utxos: result.totalUtxos });
+      setPhase("ready");
     };
 
-    computeGroups();
-    return () => { abortController.abort(); };
-  }, [recordGroups, txDbSignal]);
+    run();
+    return () => {
+      abort.abort();
+    };
+  }, [groupBy, dbSignal]);
+
+  const ensureGroupRows = useCallback(async (name: string) => {
+    if (groupRowsRef.current.has(name) || loadingGroupsRef.current.has(name)) return;
+    setLoadingGroups((prev) => {
+      const next = new Set(prev);
+      next.add(name);
+      return next;
+    });
+    try {
+      const rows = await getAddressBalanceRowsForGroup(groupByRef.current, name);
+      rows.sort((a, b) => b.sats - a.sats);
+      setGroupRows((prev) => {
+        const next = new Map(prev);
+        next.set(name, rows);
+        return next;
+      });
+    } finally {
+      setLoadingGroups((prev) => {
+        const next = new Set(prev);
+        next.delete(name);
+        return next;
+      });
+    }
+  }, []);
+
+  // Re-load rows for any group that is still expanded after a recompute.
+  useEffect(() => {
+    if (phase !== "ready") return;
+    for (const name of Array.from(expandedGroups)) void ensureGroupRows(name);
+  }, [phase, expandedGroups, ensureGroupRows]);
 
   const latestPrice = useMemo(() => {
     if (!priceData || priceData.length === 0) return null;
@@ -317,8 +336,7 @@ export default function BalanceOverview() {
   }, [priceData]);
 
   const groups = useMemo(() => {
-    const result = Array.from(groupBalances.values());
-
+    const result = Array.from(groupSummaries.values());
     switch (sortBy) {
       case "balance-desc":
         result.sort((a, b) => b.totalSats - a.totalSats);
@@ -336,29 +354,22 @@ export default function BalanceOverview() {
         result.sort((a, b) => b.addressCount - a.addressCount);
         break;
     }
-
     return result;
-  }, [groupBalances, sortBy]);
+  }, [groupSummaries, sortBy]);
 
-  const { totalBalance, totalAddresses } = useMemo(() => {
-    let total = 0;
-    for (const { sats } of uniqueAddressBalances.values()) {
-      total += sats;
-    }
-    return { totalBalance: total, totalAddresses: uniqueAddressBalances.size };
-  }, [uniqueAddressBalances]);
-
-  const toggleGroup = useCallback((name: string) => {
-    setExpandedGroups(prev => {
-      const next = new Set(prev);
-      if (next.has(name)) {
-        next.delete(name);
-      } else {
-        next.add(name);
-      }
-      return next;
-    });
-  }, []);
+  const toggleGroup = useCallback(
+    (name: string) => {
+      const willExpand = !expandedGroups.has(name);
+      setExpandedGroups((prev) => {
+        const next = new Set(prev);
+        if (next.has(name)) next.delete(name);
+        else next.add(name);
+        return next;
+      });
+      if (willExpand) void ensureGroupRows(name);
+    },
+    [expandedGroups, ensureGroupRows],
+  );
 
   const [copiedAddress, setCopiedAddress] = useState<string | null>(null);
   const copyAddress = useCallback((address: string) => {
@@ -367,9 +378,9 @@ export default function BalanceOverview() {
     setTimeout(() => setCopiedAddress(null), 2000);
   }, []);
 
-  const isLoading = !rawRecords;
-  const isComputing = computingGroup !== null;
-  const totalGroupCount = recordGroups.size;
+  const totalBalance = totals.sats;
+  const totalAddresses = totals.addresses;
+  const isBusy = phase !== "ready";
 
   const groupByLabel: Record<GroupBy, string> = {
     wallet: "Wallet",
@@ -378,6 +389,11 @@ export default function BalanceOverview() {
     tag: "Tag",
     category: "Category",
   };
+
+  const backfillPct =
+    backfillProgress.total > 0
+      ? Math.round((backfillProgress.processed / backfillProgress.total) * 100)
+      : 0;
 
   return (
     <div className="flex flex-col h-full">
@@ -418,7 +434,7 @@ export default function BalanceOverview() {
             <Button
               variant="outline"
               size="sm"
-              onClick={() => setDisplayUnit(u => u === "btc" ? "sats" : "btc")}
+              onClick={() => setDisplayUnit((u) => (u === "btc" ? "sats" : "btc"))}
               data-testid="button-toggle-unit"
             >
               {displayUnit === "btc" ? "BTC" : "sats"}
@@ -428,12 +444,28 @@ export default function BalanceOverview() {
       </div>
 
       <div className="flex-1 overflow-auto p-4">
-        {isLoading ? (
+        {phase === "backfilling" ? (
+          <div className="flex flex-col items-center justify-center py-20 gap-3 max-w-md mx-auto">
+            <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+            <p className="text-sm text-muted-foreground">Preparing balances for the first time…</p>
+            <div className="w-full">
+              <Progress value={backfillPct} data-testid="progress-backfill" />
+              <p className="text-xs text-muted-foreground/60 text-center mt-2" data-testid="text-backfill-progress">
+                {backfillProgress.processed.toLocaleString()} / {backfillProgress.total.toLocaleString()} addresses
+              </p>
+            </div>
+          </div>
+        ) : phase === "loading" && groupSummaries.size === 0 ? (
           <div className="flex flex-col items-center justify-center py-20 gap-3">
             <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-            <p className="text-sm text-muted-foreground">Loading data...</p>
+            <p className="text-sm text-muted-foreground">Calculating balances…</p>
+            {aggProgress.total > 0 && (
+              <p className="text-xs text-muted-foreground/60" data-testid="text-agg-progress">
+                {Math.min(aggProgress.processed, aggProgress.total).toLocaleString()} / {aggProgress.total.toLocaleString()} addresses
+              </p>
+            )}
           </div>
-        ) : processedRecords.length === 0 ? (
+        ) : phase === "ready" && addressRecordCount === 0 ? (
           <div className="flex flex-col items-center justify-center py-20 gap-3">
             <Wallet className="h-10 w-10 text-muted-foreground/40" />
             <p className="text-sm text-muted-foreground">No address records found</p>
@@ -441,7 +473,7 @@ export default function BalanceOverview() {
               Add addresses first to see balances
             </p>
           </div>
-        ) : groups.length === 0 && !isComputing ? (
+        ) : phase === "ready" && groups.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-20 gap-3">
             <Wallet className="h-10 w-10 text-muted-foreground/40" />
             <p className="text-sm text-muted-foreground">No UTXO data found</p>
@@ -457,19 +489,12 @@ export default function BalanceOverview() {
                   <div>
                     <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">
                       Total Balance
-                      {isComputing && (
-                        <span className="ml-2 text-muted-foreground/60">
-                          ({computedCount}/{totalGroupCount})
-                        </span>
-                      )}
                     </p>
                     <div className="flex items-center gap-2">
                       <p className="text-2xl font-bold font-mono" data-testid="text-total-balance">
                         {formatBtc(totalBalance, displayUnit)}
                       </p>
-                      {isComputing && (
-                        <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-                      )}
+                      {isBusy && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
                     </div>
                     {latestPrice && (
                       <p className="text-sm text-muted-foreground mt-0.5" data-testid="text-total-usd">
@@ -478,7 +503,9 @@ export default function BalanceOverview() {
                     )}
                   </div>
                   <div className="text-right">
-                    <p className="text-xs text-muted-foreground">{groups.length} {groupByLabel[groupBy].toLowerCase()}{groups.length !== 1 ? 's' : ''}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {groups.length} {groupByLabel[groupBy].toLowerCase()}{groups.length !== 1 ? "s" : ""}
+                    </p>
                     <p className="text-xs text-muted-foreground">{totalAddresses} addresses</p>
                   </div>
                 </div>
@@ -489,6 +516,8 @@ export default function BalanceOverview() {
               const isExpanded = expandedGroups.has(group.name);
               const percentage = totalBalance > 0 ? (group.totalSats / totalBalance) * 100 : 0;
               const usdValue = latestPrice ? (group.totalSats / 100_000_000) * latestPrice.price : null;
+              const rows = groupRows.get(group.name);
+              const rowsLoading = loadingGroups.has(group.name);
 
               return (
                 <Card key={group.name} data-testid={`card-group-${group.name}`}>
@@ -512,7 +541,7 @@ export default function BalanceOverview() {
                           {group.addressCount} addr
                         </Badge>
                         <Badge variant="outline" className="text-xs flex-none">
-                          {group.utxoCount} UTXO{group.utxoCount !== 1 ? 's' : ''}
+                          {group.utxoCount} UTXO{group.utxoCount !== 1 ? "s" : ""}
                         </Badge>
                       </div>
                     </div>
@@ -535,64 +564,29 @@ export default function BalanceOverview() {
                   </div>
 
                   {isExpanded && (
-                    <div className="border-t px-4 py-2">
-                      <div className="space-y-1">
-                        {group.addresses.map((addr) => {
-                          return (
-                            <div
-                              key={addr.address}
-                              className="flex items-center gap-2 py-1.5 text-sm"
-                              data-testid={`row-address-${addr.address}`}
-                            >
-                              <div className="flex-1 min-w-0 flex items-center gap-2">
-                                <span className="font-mono text-xs text-muted-foreground truncate max-w-[200px]">
-                                  {addr.address}
-                                </span>
-                                <button
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    copyAddress(addr.address);
-                                  }}
-                                  className="flex-none text-muted-foreground/40 hover:text-muted-foreground transition-colors"
-                                  data-testid={`button-copy-${addr.address}`}
-                                >
-                                  {copiedAddress === addr.address ? (
-                                    <Check className="h-3 w-3" />
-                                  ) : (
-                                    <Copy className="h-3 w-3" />
-                                  )}
-                                </button>
-                                {addr.label && (
-                                  <span className="text-xs text-muted-foreground/70 truncate max-w-[120px]">
-                                    {addr.label}
-                                  </span>
-                                )}
-                              </div>
-
-                              <div className="flex-none flex items-center gap-2">
-                                <span className="text-xs text-muted-foreground/50">
-                                  {addr.utxoCount} UTXO{addr.utxoCount !== 1 ? 's' : ''}
-                                </span>
-                                <span className="font-mono text-xs font-medium w-[130px] text-right">
-                                  {formatBtc(addr.sats, displayUnit)}
-                                </span>
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
+                    <div className="border-t">
+                      {rowsLoading && !rows ? (
+                        <div className="flex items-center justify-center gap-2 py-4 text-sm text-muted-foreground">
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                          <span>Loading addresses…</span>
+                        </div>
+                      ) : rows && rows.length > 0 ? (
+                        <GroupAddressRows
+                          rows={rows}
+                          displayUnit={displayUnit}
+                          copiedAddress={copiedAddress}
+                          onCopy={copyAddress}
+                        />
+                      ) : (
+                        <div className="py-4 text-center text-sm text-muted-foreground">
+                          No addresses with a balance
+                        </div>
+                      )}
                     </div>
                   )}
                 </Card>
               );
             })}
-
-            {isComputing && computingGroup && (
-              <div className="flex items-center justify-center gap-2 py-4 text-sm text-muted-foreground">
-                <Loader2 className="h-4 w-4 animate-spin" />
-                <span>Computing {computingGroup}...</span>
-              </div>
-            )}
           </div>
         )}
       </div>

@@ -19,9 +19,9 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Trash2, Search, RefreshCw, AlertTriangle, CheckCircle2, Network, ArrowUpDown, Link2, Shield, XCircle, ChevronLeft, ChevronRight, Unplug } from "lucide-react";
-import { db, Record, RecordOrigin } from "@/lib/database";
+import { db, Record, RecordOrigin, AddressImportance } from "@/lib/database";
 import { deleteRecord, getParticipantsByTxids, countAttachmentsByRecordIds } from "@/lib/dataFacade";
-import { getRecord } from "@/lib/data/record-crud";
+import { getRecord, getRecordsPageByTypeAndImportanceTiersKeyset, getRecordsPageByTypeIdReverseKeyset } from "@/lib/data/record-crud";
 import { deleteRecordOriginsByRecordId } from "@/lib/data/record-origins-crud";
 import { recomputeAddressStats } from "@/lib/data/address-stats";
 import { yieldToUI } from "@/hooks/use-async-memo";
@@ -258,18 +258,23 @@ export default function Cleanup() {
 
   useEffect(() => {
     const loadSyncedAddresses = async () => {
-      const allRecords = await db.records
-        .where('[type+addressImportance]')
-        .anyOf([
-          ['address', 'verified'],
-          ['address', 'manual'],
-          ['address', 'wallet-import'],
-          ['address', 'xpub-derived'],
-        ])
-        .toArray();
-      const synced = allRecords
-        .filter(r => r.id && (r.maxSyncedDepth !== undefined && r.maxSyncedDepth >= 0))
-        .map(r => ({ id: r.id!, address: r.inputString }));
+      const KNOWN_TIERS: AddressImportance[] = ['verified', 'manual', 'wallet-import', 'xpub-derived'];
+      const BATCH = 1000;
+      const synced: { id: number; address: string }[] = [];
+      let beforeIdExclusive: number | undefined = undefined;
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        const batch = await getRecordsPageByTypeAndImportanceTiersKeyset('address', KNOWN_TIERS, { limit: BATCH, beforeIdExclusive });
+        if (batch.length === 0) break;
+        for (const r of batch) {
+          if (r.id && r.maxSyncedDepth !== undefined && r.maxSyncedDepth >= 0) {
+            synced.push({ id: r.id, address: r.inputString });
+          }
+        }
+        beforeIdExclusive = batch[batch.length - 1].id ?? undefined;
+        if (batch.length < BATCH || beforeIdExclusive == null) break;
+        await new Promise(resolve => setTimeout(resolve, 0));
+      }
       setSyncedAddresses(synced);
     };
     loadSyncedAddresses();
@@ -282,60 +287,31 @@ export default function Cleanup() {
     }
   }, []);
 
-  const scanBlockchainOnly = async (signal: AbortSignal) => {
-    setScanProgress('Loading candidate records...');
-    await yieldToUI();
-
-    let records: Record[] = [];
-    const CANDIDATE_TIERS = ['blockchain-discovered', 'pending-review'];
-
-    if (scope === 'addresses' || scope === 'both') {
-      const addressRecords = await db.records
-        .where('[type+addressImportance]')
-        .anyOf(CANDIDATE_TIERS.map(tier => ['address', tier]))
-        .toArray();
-      for (const r of addressRecords) records.push(r);
-    }
-    if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
-
-    if (scope === 'transactions' || scope === 'both') {
-      const txRecords = await db.records
-        .where('[type+addressImportance]')
-        .anyOf(CANDIDATE_TIERS.map(tier => ['transaction', tier]))
-        .toArray();
-      const txNoImportance = await db.records
-        .where('type').equals('transaction')
-        .filter(r => !r.addressImportance)
-        .toArray();
-      for (const r of txRecords) records.push(r);
-      for (const r of txNoImportance) records.push(r);
-    }
-    if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
-
-    const potentialCandidates = records.filter(r => r.syncDepth !== 0);
-    const total = potentialCandidates.length;
-
-    const BATCH_SIZE = 200;
-    const totalBatches = Math.ceil(total / BATCH_SIZE);
+  // Stream blockchain-discovered / pending-review candidate records (plus legacy
+  // transactions with no importance tier) in id-keyset batches, computing origins
+  // and filtering per batch, so the whole candidate set never lives in memory.
+  const collectBlockchainOnlyCandidates = async (
+    signal: AbortSignal,
+  ): Promise<{ candidates: CleanupCandidate[]; candidateIds: Set<number> }> => {
+    const CANDIDATE_TIERS: AddressImportance[] = ['blockchain-discovered', 'pending-review'];
+    const BATCH = 1000;
     const cleanupCandidates: CleanupCandidate[] = [];
     const candidateIds = new Set<number>();
+    let processed = 0;
 
-    for (let batchIdx = 0; batchIdx < totalBatches; batchIdx++) {
-      if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
-      const batchStart = batchIdx * BATCH_SIZE;
-      const batch = potentialCandidates.slice(batchStart, batchStart + BATCH_SIZE);
-      const processed = batchStart + batch.length;
-
-      setScanProgress(`Checking records... ${processed.toLocaleString()}/${total.toLocaleString()} (${Math.round((processed / total) * 100)}%)`);
+    const processBatch = async (batch: Record[]) => {
+      processed += batch.length;
+      const batchCandidates = batch.filter(r => r.syncDepth !== 0);
+      setScanProgress(`Checking records... ${processed.toLocaleString()} checked`);
       await yieldToUI();
 
       const batchRecordIds = new Set<number>();
-      for (const r of batch) {
+      for (const r of batchCandidates) {
         if (r.id) batchRecordIds.add(r.id);
       }
       const originsMap = await bulkGetOriginsByRecordId(batchRecordIds);
 
-      for (const record of batch) {
+      for (const record of batchCandidates) {
         if (!record.id) continue;
         const origins = originsMap.get(record.id) || [];
         if (isBlockchainOnlyRecord(record, origins) && !hasUserMetadata(record, origins)) {
@@ -343,7 +319,57 @@ export default function Cleanup() {
           candidateIds.add(record.id);
         }
       }
+    };
+
+    const streamTiers = async (type: string) => {
+      let beforeIdExclusive: number | undefined = undefined;
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
+        const batch = await getRecordsPageByTypeAndImportanceTiersKeyset(type, CANDIDATE_TIERS, { limit: BATCH, beforeIdExclusive });
+        if (batch.length === 0) break;
+        await processBatch(batch);
+        beforeIdExclusive = batch[batch.length - 1].id ?? undefined;
+        if (batch.length < BATCH || beforeIdExclusive == null) break;
+      }
+    };
+
+    // Legacy transactions predate the importance tiers, so walk the transaction
+    // id-keyset and keep only those with no tier set.
+    const streamTxNoImportance = async () => {
+      let beforeIdExclusive: number | undefined = undefined;
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
+        const batch = await getRecordsPageByTypeIdReverseKeyset('transaction', { limit: BATCH, beforeIdExclusive });
+        if (batch.length === 0) break;
+        const noImportance = batch.filter(r => !r.addressImportance);
+        if (noImportance.length > 0) await processBatch(noImportance);
+        beforeIdExclusive = batch[batch.length - 1].id ?? undefined;
+        if (batch.length < BATCH || beforeIdExclusive == null) break;
+        await yieldToUI();
+      }
+    };
+
+    if (scope === 'addresses' || scope === 'both') {
+      await streamTiers('address');
     }
+    if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
+
+    if (scope === 'transactions' || scope === 'both') {
+      await streamTiers('transaction');
+      await streamTxNoImportance();
+    }
+    if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
+
+    return { candidates: cleanupCandidates, candidateIds };
+  };
+
+  const scanBlockchainOnly = async (signal: AbortSignal) => {
+    setScanProgress('Loading candidate records...');
+    await yieldToUI();
+
+    const { candidates: cleanupCandidates, candidateIds } = await collectBlockchainOnlyCandidates(signal);
 
     if (cleanupCandidates.length > 0 && !signal.aborted) {
       const connectedIds = await checkTransactionConnections(candidateIds, setScanProgress, signal);
@@ -455,64 +481,7 @@ export default function Cleanup() {
     setScanProgress('Loading candidate records...');
     await yieldToUI();
 
-    let records: Record[] = [];
-    const CANDIDATE_TIERS = ['blockchain-discovered', 'pending-review'];
-
-    if (scope === 'addresses' || scope === 'both') {
-      const addressRecords = await db.records
-        .where('[type+addressImportance]')
-        .anyOf(CANDIDATE_TIERS.map(tier => ['address', tier]))
-        .toArray();
-      for (const r of addressRecords) records.push(r);
-    }
-    if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
-
-    if (scope === 'transactions' || scope === 'both') {
-      const txRecords = await db.records
-        .where('[type+addressImportance]')
-        .anyOf(CANDIDATE_TIERS.map(tier => ['transaction', tier]))
-        .toArray();
-      const txNoImportance = await db.records
-        .where('type').equals('transaction')
-        .filter(r => !r.addressImportance)
-        .toArray();
-      for (const r of txRecords) records.push(r);
-      for (const r of txNoImportance) records.push(r);
-    }
-    if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
-
-    const potentialCandidates = records.filter(r => r.syncDepth !== 0);
-    const total = potentialCandidates.length;
-
-    const BATCH_SIZE = 200;
-    const totalBatches = Math.ceil(total / BATCH_SIZE);
-    const allBlockchainOnly: CleanupCandidate[] = [];
-    const allCandidateIds = new Set<number>();
-
-    for (let batchIdx = 0; batchIdx < totalBatches; batchIdx++) {
-      if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
-      const batchStart = batchIdx * BATCH_SIZE;
-      const batch = potentialCandidates.slice(batchStart, batchStart + BATCH_SIZE);
-      const processed = batchStart + batch.length;
-
-      setScanProgress(`Checking records... ${processed.toLocaleString()}/${total.toLocaleString()} (${Math.round((processed / total) * 100)}%)`);
-      await yieldToUI();
-
-      const batchRecordIds = new Set<number>();
-      for (const r of batch) {
-        if (r.id) batchRecordIds.add(r.id);
-      }
-      const originsMap = await bulkGetOriginsByRecordId(batchRecordIds);
-
-      for (const record of batch) {
-        if (!record.id) continue;
-        const origins = originsMap.get(record.id) || [];
-        if (isBlockchainOnlyRecord(record, origins) && !hasUserMetadata(record, origins)) {
-          allBlockchainOnly.push({ record, origins, hasOtherConnections: false, connectedToKnown: false });
-          allCandidateIds.add(record.id);
-        }
-      }
-    }
+    const { candidates: allBlockchainOnly, candidateIds: allCandidateIds } = await collectBlockchainOnlyCandidates(signal);
 
     if (allBlockchainOnly.length > 0 && !signal.aborted) {
       const connectedIds = await checkTransactionConnections(allCandidateIds, setScanProgress, signal);
