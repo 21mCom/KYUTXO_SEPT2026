@@ -38,9 +38,11 @@ const EXCLUDED_FILES = new Set([
   join(SRC_DIR, "lib", "data", "attachments-crud.ts"),
 ]);
 
-// Current known offenders (June 2026): 8 getAll* call-sites + 1 direct toArray
-// (record-queries.ts) + 1 direct toCollection (records-query.ts) = 10.
-const BASELINE = 10;
+// Current known offenders (June 2026): 6 getAll* call-sites + 1 direct toArray
+// (record-queries.ts) + 1 direct toCollection (records-query.ts) = 8.
+// (Lowered from 10 after migrateAttachmentPaths and decryptLegacyAttachmentFiles
+// dropped their startup getAllAttachments() loads in favour of id-keyset batches.)
+const BASELINE = 8;
 
 function collectSourceFiles(dir: string, out: string[] = []): string[] {
   for (const entry of readdirSync(dir)) {

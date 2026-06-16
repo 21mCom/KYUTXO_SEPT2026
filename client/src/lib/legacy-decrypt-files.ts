@@ -1,6 +1,5 @@
 import { decryptBinary } from './crypto';
 import { db } from './database';
-import { getAllAttachments } from './data/attachments-crud';
 import { isElectron, getElectronAPI } from './electron';
 
 export interface FileDecryptProgress {
@@ -92,91 +91,131 @@ async function writeFileBytes(objectPath: string, data: ArrayBuffer): Promise<vo
   }
 }
 
+/**
+ * Durable resume point. `tableIndex` indexes FILE_DECRYPT_TABLES; `lastId` is the
+ * highest primary key already processed in that table. Everything before it (all
+ * earlier tables fully, plus rows up to `lastId` in the current table) is done.
+ */
+export interface FileDecryptCheckpoint {
+  tableIndex: number;
+  lastId: number;
+}
+
+interface FileDecryptOptions {
+  getCheckpoint?: () => Promise<FileDecryptCheckpoint | null>;
+  saveCheckpoint?: (cp: FileDecryptCheckpoint) => Promise<void>;
+}
+
+const FILE_DECRYPT_TABLES = ['attachments', 'evidenceAttachments'] as const;
+const FILE_DECRYPT_BATCH = 200;
+
 export async function decryptLegacyAttachmentFiles(
   key: CryptoKey,
   onProgress?: (progress: FileDecryptProgress) => void,
+  options?: FileDecryptOptions,
 ): Promise<FileDecryptResult> {
-  // Enumerating every attachment can take a while on large vaults; surface a
-  // "preparing" phase so the UI never sits silently on 0/0.
   if (onProgress) {
     onProgress({ current: 0, total: 0, decrypted: 0, failed: 0, skipped: 0, phase: 'Preparing file list' });
   }
 
-  const allAttachments = await getAllAttachments();
-  const allEvidenceAttachments = await db.evidenceAttachments.toArray();
+  // Indexed counts give a stable progress denominator without loading any rows.
+  const total = (await db.attachments.count()) + (await db.evidenceAttachments.count());
 
-  const allFiles: Array<{ objectStoragePath: string; source: string; id: number }> = [];
-
-  for (const att of allAttachments) {
-    if (att.objectStoragePath) {
-      allFiles.push({ objectStoragePath: att.objectStoragePath, source: 'attachments', id: att.id! });
-    }
-  }
-  for (const att of allEvidenceAttachments) {
-    if (att.objectStoragePath) {
-      allFiles.push({ objectStoragePath: att.objectStoragePath, source: 'evidenceAttachments', id: att.id! });
-    }
-  }
-
-  const total = allFiles.length;
   let decrypted = 0;
   let failed = 0;
   let skipped = 0;
+  let current = 0;
   const errors: string[] = [];
 
   if (total === 0) {
     return { totalDecrypted: 0, totalFailed: 0, totalSkipped: 0, errors: [] };
   }
 
-  for (let i = 0; i < allFiles.length; i++) {
-    const file = allFiles[i];
+  // Resume from the durable checkpoint. The checkpoint only ever advances over
+  // fully-clean batches and is FROZEN the moment a hard (IO) failure occurs, so
+  // an interrupted run resumes at the first failed file and never skips it.
+  // (decrypt-fails and too-small files are benign skips, not failures.)
+  const startCp = (await options?.getCheckpoint?.()) ?? { tableIndex: 0, lastId: 0 };
+  let checkpointFrozen = false;
 
-    try {
-      const encryptedData = await withTimeout(
-        readFileBytes(file.objectStoragePath),
-        FILE_OP_TIMEOUT_MS,
-        `Read ${file.objectStoragePath}`,
-      );
+  for (let tableIndex = startCp.tableIndex; tableIndex < FILE_DECRYPT_TABLES.length; tableIndex++) {
+    const table = FILE_DECRYPT_TABLES[tableIndex];
+    let lastId = tableIndex === startCp.tableIndex ? startCp.lastId : 0;
 
-      if (encryptedData.byteLength < 28) {
-        skipped++;
-        if (onProgress) {
-          onProgress({ current: i + 1, total, decrypted, failed, skipped });
+    for (;;) {
+      const chunk =
+        table === 'attachments'
+          ? await db.attachments.where('id').above(lastId).limit(FILE_DECRYPT_BATCH).toArray()
+          : await db.evidenceAttachments.where('id').above(lastId).limit(FILE_DECRYPT_BATCH).toArray();
+      if (chunk.length === 0) break;
+
+      const batchLastId = chunk[chunk.length - 1].id!;
+      let batchHadFailure = false;
+
+      for (const att of chunk) {
+        current++;
+        const objectStoragePath = att.objectStoragePath;
+        if (!objectStoragePath) {
+          if (onProgress) onProgress({ current, total, decrypted, failed, skipped });
+          continue;
         }
-        continue;
+
+        try {
+          const encryptedData = await withTimeout(
+            readFileBytes(objectStoragePath),
+            FILE_OP_TIMEOUT_MS,
+            `Read ${objectStoragePath}`,
+          );
+
+          if (encryptedData.byteLength < 28) {
+            skipped++;
+          } else {
+            let plainData: ArrayBuffer | null = null;
+            try {
+              plainData = await decryptBinary(encryptedData, key);
+            } catch {
+              skipped++;
+            }
+            if (plainData) {
+              await withTimeout(
+                writeFileBytes(objectStoragePath, plainData),
+                FILE_OP_TIMEOUT_MS,
+                `Write ${objectStoragePath}`,
+              );
+              decrypted++;
+              console.log(`[FileDecrypt] Decrypted ${table} #${att.id}: ${objectStoragePath}`);
+            }
+          }
+        } catch (err) {
+          failed++;
+          batchHadFailure = true;
+          const msg = `${table} #${att.id} (${objectStoragePath}): ${err instanceof Error ? err.message : String(err)}`;
+          console.error(`[FileDecrypt] Failed: ${msg}`);
+          errors.push(msg);
+        }
+
+        if (onProgress) onProgress({ current, total, decrypted, failed, skipped });
       }
 
-      let plainData: ArrayBuffer;
-      try {
-        plainData = await decryptBinary(encryptedData, key);
-      } catch {
-        skipped++;
-        if (onProgress) {
-          onProgress({ current: i + 1, total, decrypted, failed, skipped });
-        }
-        continue;
+      lastId = batchLastId;
+
+      if (batchHadFailure) {
+        // Freeze the checkpoint at its last clean position so a resume retries
+        // this batch (and everything after) rather than skipping the failure.
+        checkpointFrozen = true;
+      } else if (!checkpointFrozen) {
+        await options?.saveCheckpoint?.({ tableIndex, lastId: batchLastId });
       }
 
-      await withTimeout(
-        writeFileBytes(file.objectStoragePath, plainData),
-        FILE_OP_TIMEOUT_MS,
-        `Write ${file.objectStoragePath}`,
-      );
-      decrypted++;
-      console.log(`[FileDecrypt] Decrypted ${file.source} #${file.id}: ${file.objectStoragePath}`);
-    } catch (err) {
-      failed++;
-      const msg = `${file.source} #${file.id} (${file.objectStoragePath}): ${err instanceof Error ? err.message : String(err)}`;
-      console.error(`[FileDecrypt] Failed: ${msg}`);
-      errors.push(msg);
-    }
-
-    if (onProgress) {
-      onProgress({ current: i + 1, total, decrypted, failed, skipped });
-    }
-
-    if (i % 5 === 0) {
+      // Yield between batches so a long run never blocks the main thread.
       await new Promise(r => setTimeout(r, 0));
+      if (chunk.length < FILE_DECRYPT_BATCH) break;
+    }
+
+    // A table finished with no failures so far — advance to the next table's
+    // start so a resume never re-scans a fully-completed table.
+    if (!checkpointFrozen) {
+      await options?.saveCheckpoint?.({ tableIndex: tableIndex + 1, lastId: 0 });
     }
   }
 

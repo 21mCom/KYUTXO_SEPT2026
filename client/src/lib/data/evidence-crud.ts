@@ -187,3 +187,7 @@ export async function countEvidenceAttachmentsByEvidenceId(
 ): Promise<number> {
   return db.evidenceAttachments.where('evidenceId').equals(evidenceId).count();
 }
+
+export async function countEvidenceAttachments(): Promise<number> {
+  return db.evidenceAttachments.count();
+}

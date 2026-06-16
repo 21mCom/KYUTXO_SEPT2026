@@ -10,6 +10,7 @@ import {
   getAllAttachments,
   getAttachmentsByRecordId,
   updateAttachment,
+  countAttachments,
 } from '@/lib/data/attachments-crud';
 
 async function hashIdentifier(identifier: string): Promise<string> {
@@ -550,152 +551,164 @@ function classifyStoredPath(objectStoragePath: string): 'skip' | 'rename' | 'roo
   return 'skip';
 }
 
+interface AttachmentMigrationItem {
+  table: 'attachments' | 'evidenceAttachments';
+  id: number;
+  objectStoragePath: string;
+  recordId?: number;
+  isRootFile: boolean;
+}
+
+// Migrate a single attachment row's stored path into the hashed/opaque scheme.
+// Throws on failure (the caller counts it). Extracted so the keyset loop below
+// stays a thin pump over batches rather than holding the whole table in memory.
+async function migrateOneAttachmentPath(item: AttachmentMigrationItem): Promise<void> {
+  if (item.isRootFile) {
+    // Single-segment file stranded at the attachments root. Recover it into
+    // the hashed/opaque scheme by COPYING (read+write+verify) then updating
+    // the DB row. The original root file is never deleted, so a failed copy
+    // can never lose data and re-running is safe (the migrated row is
+    // re-classified as 'skip' and the leftover root file shows up in the
+    // audit as orphaned, ready for the user to clean up manually).
+    const parts = item.objectStoragePath.replace(/\\/g, '/').split('/').filter(Boolean);
+    const hasPrefix = parts[0] === 'attachments';
+    const rootName = hasPrefix ? parts[1] : parts[0];
+
+    // Resolve the target hashed directory. Record attachments hash the
+    // owning record's identifier so list-attachments(identifier) keeps
+    // working; evidence/record-less files mint a fresh opaque identifier
+    // because the original is unrecoverable (only the hashed dir is stored).
+    let identifier: string;
+    if (item.table === 'attachments' && item.recordId != null) {
+      const rec = await getRecord(item.recordId);
+      identifier = rec?.inputString || `orphan_${item.recordId}`;
+    } else {
+      identifier = `evidence_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
+    }
+    const newDirName = await hashIdentifier(identifier);
+    const ext = rootName.includes('.') ? rootName.substring(rootName.lastIndexOf('.')) : '';
+    const newFileName = generateOpaqueFilename(ext);
+    const newRelPath = `${newDirName}/${newFileName}`;
+    const newStoragePath = hasPrefix ? `attachments/${newRelPath}` : newRelPath;
+
+    console.log(`[Migration] Recovering root file: ${item.objectStoragePath} -> ${newStoragePath}`);
+    await copyAndVerifyAttachmentFile(item.objectStoragePath.replace(/\\/g, '/'), newStoragePath);
+
+    if (item.table === 'attachments') {
+      await updateAttachment(item.id, { objectStoragePath: newStoragePath }, { skipNotification: true });
+    } else {
+      await updateEvidenceAttachment(item.id, { objectStoragePath: newStoragePath }, { skipNotification: true });
+    }
+
+    console.log(`[Migration] Recovered root file for attachment ${item.id}: ${item.objectStoragePath} -> ${newStoragePath}`);
+    return;
+  }
+
+  const pathParts = item.objectStoragePath.replace(/\\/g, '/').split('/');
+  const hasPrefix = pathParts[0] === 'attachments';
+  const dirName = hasPrefix ? pathParts[1] : pathParts[0];
+  const oldFileName = hasPrefix ? pathParts[2] : pathParts[1];
+
+  let newDirName = dirName;
+  if (!isAlreadyHashed(dirName)) {
+    newDirName = await hashIdentifier(dirName);
+  }
+
+  let newFileName = oldFileName;
+  if (!isOpaqueFilename(oldFileName)) {
+    const ext = oldFileName.includes('.') ? oldFileName.substring(oldFileName.lastIndexOf('.')) : '';
+    newFileName = generateOpaqueFilename(ext);
+  }
+
+  const oldRelPath = `${dirName}/${oldFileName}`;
+  const newRelPath = `${newDirName}/${newFileName}`;
+
+  let didRenameFile = false;
+  if (oldRelPath !== newRelPath) {
+    console.log(`[Migration] Renaming: ${oldRelPath} -> ${newRelPath}`);
+    await renameAttachmentFile(oldRelPath, newRelPath);
+    didRenameFile = true;
+  }
+
+  const newStoragePath = hasPrefix ? `attachments/${newRelPath}` : newRelPath;
+
+  try {
+    if (item.table === 'attachments') {
+      await updateAttachment(item.id, { objectStoragePath: newStoragePath }, { skipNotification: true });
+    } else {
+      await updateEvidenceAttachment(item.id, { objectStoragePath: newStoragePath }, { skipNotification: true });
+    }
+  } catch (dbError) {
+    if (didRenameFile) {
+      try {
+        await renameAttachmentFile(newRelPath, oldRelPath);
+      } catch (rollbackError) {
+        console.error(`Rollback failed for attachment ${item.id}:`, rollbackError);
+      }
+    }
+    throw dbError;
+  }
+
+  console.log(`[Migration] Successfully migrated attachment ${item.id}: ${item.objectStoragePath} -> ${newStoragePath}`);
+}
+
+// Normalises every attachment's stored path into the hashed/opaque scheme.
+// Reads each table in id-keyset BATCHES (never the whole table at once) so it
+// stays bounded on vaults with millions of attachment rows, yielding to the
+// event loop between batches so a long run never freezes the UI.
 export async function migrateAttachmentPaths(
   onProgress?: (current: number, total: number, message: string) => void
 ): Promise<{ migrated: number; failed: number }> {
-  const allAttachments = await getAllAttachments();
-  const allEvidence = await db.evidenceAttachments.toArray();
-
-  const needsMigration: Array<{
-    table: 'attachments' | 'evidenceAttachments';
-    id: number;
-    objectStoragePath: string;
-    recordId?: number;
-    isRootFile: boolean;
-  }> = [];
-
-  for (const att of allAttachments) {
-    const kind = classifyStoredPath(att.objectStoragePath);
-    if (kind === 'skip') continue;
-    needsMigration.push({
-      table: 'attachments',
-      id: att.id!,
-      objectStoragePath: att.objectStoragePath,
-      recordId: att.recordId,
-      isRootFile: kind === 'root',
-    });
-  }
-
-  for (const att of allEvidence) {
-    const kind = classifyStoredPath(att.objectStoragePath);
-    if (kind === 'skip') continue;
-    needsMigration.push({
-      table: 'evidenceAttachments',
-      id: att.id!,
-      objectStoragePath: att.objectStoragePath,
-      isRootFile: kind === 'root',
-    });
-  }
-
-  if (needsMigration.length === 0) {
+  const total = (await countAttachments()) + (await db.evidenceAttachments.count());
+  if (total === 0) {
     return { migrated: 0, failed: 0 };
   }
 
+  const BATCH = 500;
   let migrated = 0;
   let failed = 0;
+  let processed = 0;
 
-  for (let i = 0; i < needsMigration.length; i++) {
-    const item = needsMigration[i];
-    if (onProgress) {
-      onProgress(i + 1, needsMigration.length, `Migrating attachment ${i + 1} of ${needsMigration.length}`);
-    }
+  const tables: Array<'attachments' | 'evidenceAttachments'> = ['attachments', 'evidenceAttachments'];
+  for (const table of tables) {
+    let lastId = 0;
+    for (;;) {
+      const chunk =
+        table === 'attachments'
+          ? await db.attachments.where('id').above(lastId).limit(BATCH).toArray()
+          : await db.evidenceAttachments.where('id').above(lastId).limit(BATCH).toArray();
+      if (chunk.length === 0) break;
+      lastId = chunk[chunk.length - 1].id!;
 
-    try {
-      if (item.isRootFile) {
-        // Single-segment file stranded at the attachments root. Recover it into
-        // the hashed/opaque scheme by COPYING (read+write+verify) then updating
-        // the DB row. The original root file is never deleted, so a failed copy
-        // can never lose data and re-running is safe (the migrated row is
-        // re-classified as 'skip' and the leftover root file shows up in the
-        // audit as orphaned, ready for the user to clean up manually).
-        const parts = item.objectStoragePath.replace(/\\/g, '/').split('/').filter(Boolean);
-        const hasPrefix = parts[0] === 'attachments';
-        const rootName = hasPrefix ? parts[1] : parts[0];
+      for (const att of chunk) {
+        processed++;
+        const kind = classifyStoredPath(att.objectStoragePath);
+        if (kind === 'skip') continue;
 
-        // Resolve the target hashed directory. Record attachments hash the
-        // owning record's identifier so list-attachments(identifier) keeps
-        // working; evidence/record-less files mint a fresh opaque identifier
-        // because the original is unrecoverable (only the hashed dir is stored).
-        let identifier: string;
-        if (item.table === 'attachments' && item.recordId != null) {
-          const rec = await getRecord(item.recordId);
-          identifier = rec?.inputString || `orphan_${item.recordId}`;
-        } else {
-          identifier = `evidence_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
+        const item: AttachmentMigrationItem = {
+          table,
+          id: att.id!,
+          objectStoragePath: att.objectStoragePath,
+          recordId: table === 'attachments' ? (att as Attachment).recordId : undefined,
+          isRootFile: kind === 'root',
+        };
+
+        if (onProgress) {
+          onProgress(processed, total, `Migrating attachment ${processed} of ${total}`);
         }
-        const newDirName = await hashIdentifier(identifier);
-        const ext = rootName.includes('.') ? rootName.substring(rootName.lastIndexOf('.')) : '';
-        const newFileName = generateOpaqueFilename(ext);
-        const newRelPath = `${newDirName}/${newFileName}`;
-        const newStoragePath = hasPrefix ? `attachments/${newRelPath}` : newRelPath;
-
-        console.log(`[Migration] Recovering root file: ${item.objectStoragePath} -> ${newStoragePath}`);
-        await copyAndVerifyAttachmentFile(item.objectStoragePath.replace(/\\/g, '/'), newStoragePath);
-
-        if (item.table === 'attachments') {
-          await updateAttachment(item.id, { objectStoragePath: newStoragePath }, { skipNotification: true });
-        } else {
-          await updateEvidenceAttachment(item.id, { objectStoragePath: newStoragePath }, { skipNotification: true });
-        }
-
-        console.log(`[Migration] Recovered root file for attachment ${item.id}: ${item.objectStoragePath} -> ${newStoragePath}`);
-        migrated++;
-      } else {
-        const pathParts = item.objectStoragePath.replace(/\\/g, '/').split('/');
-        const hasPrefix = pathParts[0] === 'attachments';
-        const dirName = hasPrefix ? pathParts[1] : pathParts[0];
-        const oldFileName = hasPrefix ? pathParts[2] : pathParts[1];
-
-        let newDirName = dirName;
-        if (!isAlreadyHashed(dirName)) {
-          newDirName = await hashIdentifier(dirName);
-        }
-
-        let newFileName = oldFileName;
-        if (!isOpaqueFilename(oldFileName)) {
-          const ext = oldFileName.includes('.') ? oldFileName.substring(oldFileName.lastIndexOf('.')) : '';
-          newFileName = generateOpaqueFilename(ext);
-        }
-
-        const oldRelPath = `${dirName}/${oldFileName}`;
-        const newRelPath = `${newDirName}/${newFileName}`;
-
-        let didRenameFile = false;
-        if (oldRelPath !== newRelPath) {
-          console.log(`[Migration] Renaming: ${oldRelPath} -> ${newRelPath}`);
-          await renameAttachmentFile(oldRelPath, newRelPath);
-          didRenameFile = true;
-        }
-
-        const newStoragePath = hasPrefix ? `attachments/${newRelPath}` : newRelPath;
 
         try {
-          if (item.table === 'attachments') {
-            await updateAttachment(item.id, { objectStoragePath: newStoragePath }, { skipNotification: true });
-          } else {
-            await updateEvidenceAttachment(item.id, { objectStoragePath: newStoragePath }, { skipNotification: true });
-          }
-        } catch (dbError) {
-          if (didRenameFile) {
-            try {
-              await renameAttachmentFile(newRelPath, oldRelPath);
-            } catch (rollbackError) {
-              console.error(`Rollback failed for attachment ${item.id}:`, rollbackError);
-            }
-          }
-          throw dbError;
+          await migrateOneAttachmentPath(item);
+          migrated++;
+        } catch (error) {
+          console.error(`Failed to migrate attachment ${item.id} (${item.table}):`, error);
+          failed++;
         }
-
-        console.log(`[Migration] Successfully migrated attachment ${item.id}: ${item.objectStoragePath} -> ${newStoragePath}`);
-        migrated++;
       }
-    } catch (error) {
-      console.error(`Failed to migrate attachment ${item.id} (${item.table}):`, error);
-      failed++;
-    }
 
-    if (i % 10 === 0) {
+      // Yield between batches so the migration never blocks the main thread.
       await new Promise(r => setTimeout(r, 0));
+      if (chunk.length < BATCH) break;
     }
   }
 

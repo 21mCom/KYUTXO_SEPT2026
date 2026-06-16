@@ -19,12 +19,17 @@ import {
   addLegacyDecryptCompletedTable,
   isLegacyFileDecryptComplete,
   setLegacyFileDecryptComplete,
+  getLegacyFileDecryptCheckpoint,
+  setLegacyFileDecryptCheckpoint,
+  markFreshVaultMigrationsComplete,
   isInputStringLowerRepaired,
   setInputStringLowerRepaired,
 } from '@/lib/vault';
-import { repairInputStringLower } from '@/lib/data/record-crud';
+import { repairInputStringLower, countRecords } from '@/lib/data/record-crud';
+import { countAttachments } from '@/lib/data/attachments-crud';
+import { countEvidenceAttachments } from '@/lib/data/evidence-crud';
 import { migrateAttachmentPaths } from '@/lib/attachments';
-import { hasLegacyEncryptedRecords, decryptLegacyRecords, getTotalTableCount, type LegacyDecryptProgress } from '@/lib/legacy-decrypt';
+import { decryptLegacyRecords, getTotalTableCount, type LegacyDecryptProgress } from '@/lib/legacy-decrypt';
 import { decryptLegacyAttachmentFiles, type FileDecryptProgress } from '@/lib/legacy-decrypt-files';
 import { getActivityBus } from '@/lib/activity-bus';
 
@@ -107,6 +112,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             });
           } catch {}
         },
+        {
+          // Durable resume: an interrupted hours-long run continues from the last
+          // clean batch instead of restarting the whole table scan.
+          getCheckpoint: getLegacyFileDecryptCheckpoint,
+          saveCheckpoint: setLegacyFileDecryptCheckpoint,
+        },
       );
 
       console.log(`[FileDecrypt] Complete: ${result.totalDecrypted} decrypted, ${result.totalFailed} failed, ${result.totalSkipped} skipped`);
@@ -135,13 +146,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       const completedTables = await getLegacyDecryptCompletedTables();
 
-      const hasLegacy = await hasLegacyEncryptedRecords(completedTables);
-      if (!hasLegacy) {
-        await setLegacyDecryptComplete(true);
-        await runLegacyFileDecryptMigration(encryptionKey);
-        return;
-      }
-
+      // No upfront "has legacy data?" probe: that probe walked tables on every
+      // unmigrated login. decryptLegacyRecords already scans by keyset batches,
+      // finds nothing on a clean vault, and marks the flag complete — so it is the
+      // single, bounded scanner. (Fresh vaults skip here via isLegacyDecryptComplete.)
       const totalTables = getTotalTableCount();
       setLegacyMigrationProgress({
         tableName: 'Preparing',
@@ -256,18 +264,41 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setIsLoading(true);
     try {
       const salt = generateSalt();
+      const saltBase64 = bufferToBase64(salt);
       const hash = await hashPassword(password, salt);
 
-      await saveVaultSettings(bufferToBase64(salt), hash);
+      await saveVaultSettings(saltBase64, hash);
+
+      // Brand-new vault: nothing legacy to scan/decrypt/repair. Mark every
+      // one-time startup migration done up front so the very first login of a
+      // large fresh vault never walks every big table looking for legacy rows
+      // that cannot exist.
+      //
+      // Guard: only do this when the data DB is genuinely empty. If a vault row
+      // is ever created on top of pre-existing data (e.g. an import flow or an
+      // upgrade that creates the vault late), marking migrations complete would
+      // permanently strand that legacy data unrepaired. We check every table the
+      // startup repairs touch (records, attachments, evidence attachments). These
+      // counts are indexed and effectively free on a fresh (empty) vault.
+      const hasExistingData =
+        (await countRecords()) > 0 ||
+        (await countAttachments()) > 0 ||
+        (await countEvidenceAttachments()) > 0;
+      if (hasExistingData) {
+        // Pre-existing data under a freshly-created vault: run the repairs now in
+        // the background (same fire-and-forget contract as login) so the data is
+        // not left unrepaired until some later login.
+        runStartupMigrations(password, saltBase64);
+      } else {
+        await markFreshVaultMigrationsComplete();
+      }
 
       setIsInitialized(true);
       setIsAuthenticated(true);
-
-      runAttachmentPathMigration();
     } finally {
       setIsLoading(false);
     }
-  }, [runAttachmentPathMigration]);
+  }, [runStartupMigrations]);
 
   const login = useCallback(async (password: string): Promise<boolean> => {
     setIsLoading(true);

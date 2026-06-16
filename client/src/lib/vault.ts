@@ -10,6 +10,7 @@ export interface VaultSettings {
   legacyDecryptComplete?: boolean;
   legacyDecryptCompletedTables?: string[];
   legacyFileDecryptComplete?: boolean;
+  legacyFileDecryptCheckpoint?: { tableIndex: number; lastId: number };
   inputStringLowerRepaired?: boolean;
 }
 
@@ -124,5 +125,58 @@ export async function setLegacyFileDecryptComplete(complete: boolean): Promise<v
   const settings = await vaultDb.vault.get('main');
   if (settings) {
     await vaultDb.vault.update('main', { legacyFileDecryptComplete: complete });
+  }
+}
+
+export async function getLegacyFileDecryptCheckpoint(): Promise<{ tableIndex: number; lastId: number } | null> {
+  const settings = await vaultDb.vault.get('main');
+  return settings?.legacyFileDecryptCheckpoint ?? null;
+}
+
+export async function setLegacyFileDecryptCheckpoint(
+  checkpoint: { tableIndex: number; lastId: number },
+): Promise<void> {
+  const settings = await vaultDb.vault.get('main');
+  if (settings) {
+    await vaultDb.vault.update('main', { legacyFileDecryptCheckpoint: checkpoint });
+  }
+}
+
+/**
+ * Mark every one-time startup migration as already done. Called immediately after
+ * a BRAND-NEW vault is created: a fresh vault has no legacy/un-normalised data, so
+ * there is nothing to scan, decrypt, or repair. Without this, the very first login
+ * of a large fresh vault would needlessly walk every big table looking for legacy
+ * rows that cannot exist. Uses update() so it merges onto the row saved by
+ * saveVaultSettings without clobbering salt/passwordHash.
+ */
+export async function markFreshVaultMigrationsComplete(): Promise<void> {
+  const settings = await vaultDb.vault.get('main');
+  if (settings) {
+    await vaultDb.vault.update('main', {
+      attachmentPathsMigrated: true,
+      legacyDecryptComplete: true,
+      legacyFileDecryptComplete: true,
+      inputStringLowerRepaired: true,
+    });
+  }
+}
+
+/**
+ * DEV-ONLY: undo markFreshVaultMigrationsComplete so a generated legacy fixture
+ * actually exercises the runtime repair passes on the next login. No-ops safely
+ * when no vault row exists (e.g. unit tests that seed data without a vault).
+ */
+export async function resetMigrationFlagsForLegacyFixture(): Promise<void> {
+  const settings = await vaultDb.vault.get('main');
+  if (settings) {
+    await vaultDb.vault.update('main', {
+      attachmentPathsMigrated: false,
+      legacyDecryptComplete: false,
+      legacyDecryptCompletedTables: [],
+      legacyFileDecryptComplete: false,
+      legacyFileDecryptCheckpoint: { tableIndex: 0, lastId: 0 },
+      inputStringLowerRepaired: false,
+    });
   }
 }

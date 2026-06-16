@@ -4,6 +4,7 @@ import { clearAllRecords } from './data/record-crud';
 import { addTransaction, addParticipant, clearTransactions, clearParticipants } from './data/transaction-crud';
 import { addUtxoLineage, updateUtxoLineage, addCustodySegment, clearUtxoLineage, clearCustodySegments, clearLineageSnapshots } from './data/lineage-crud';
 import { ensureOwner, ensureWalletName, ensureSeedName, syncTagsToMaster, syncCategoriesToMaster } from './data/vocabulary-crud';
+import { resetMigrationFlagsForLegacyFixture } from './vault';
 
 /**
  * Test data seeding utility for demonstrating KYUTXO features.
@@ -652,6 +653,12 @@ export async function generateLegacyFixture(
 
   const attachmentRows = buildLegacyAttachmentRows(attachmentCount, recordIds, now);
   await db.attachments.bulkAdd(attachmentRows);
+
+  // Re-arm the one-time startup migrations so this legacy data actually gets
+  // repaired on the next unlock. Without this, a vault whose flags were already
+  // marked complete (e.g. created fresh, then seeded with legacy rows for
+  // testing) would skip the repair passes entirely. No-ops if no vault exists.
+  await resetMigrationFlagsForLegacyFixture();
 
   notifyDbChange(['records', 'attachments']);
 
