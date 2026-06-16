@@ -19,6 +19,7 @@ import type {
   Record as DbRecord,
   BlockchainTransaction,
   TransactionParticipant,
+  Attachment,
 } from "@/lib/database";
 
 const RECORDS_SCHEMA =
@@ -32,12 +33,14 @@ class TestDb extends Dexie {
   records!: Table<DbRecord, number>;
   blockchainTransactions!: Table<BlockchainTransaction, number>;
   transactionParticipants!: Table<TransactionParticipant, number>;
+  attachments!: Table<Attachment, number>;
   constructor(name: string) {
     super(name);
     this.version(1).stores({
       records: RECORDS_SCHEMA,
       blockchainTransactions: "++id, &txid, blockHeight, blockTime, syncedAt, hasOpReturn",
       transactionParticipants: "++id, [txid+role], txid, role, address, recordId, [prevTxid+prevVout]",
+      attachments: "++id, recordId, createdAt",
     });
   }
 }
@@ -57,12 +60,18 @@ const {
   getAllTransactions,
 } = await import("./data/transaction-crud");
 const { getRecordsPageByIdReverseKeyset, countRecords } = await import("./data/record-crud");
+const {
+  getAttachmentsByRecordId,
+  countAttachments,
+  getAllAttachments,
+} = await import("./data/attachments-crud");
 
 // Dataset large enough that "load everything" is unmistakably different from a
 // single page. Kept modest so the suite stays fast under fake-indexeddb.
 const N_TX = 3000;
 const N_PART = 3000;
 const N_REC = 300;
+const N_ATT = 1500;
 const PAGE = 50;
 
 // ---- toArray instrumentation ----------------------------------------------
@@ -119,6 +128,19 @@ beforeAll(async () => {
   }
   await testDb.transactionParticipants.bulkAdd(partRows);
 
+  const attRows: Attachment[] = [];
+  for (let i = 0; i < N_ATT; i++) {
+    attRows.push({
+      recordId: (i % N_REC) + 1,
+      filename: `doc-${i}.pdf`,
+      mimeType: "application/pdf",
+      size: 1024,
+      objectStoragePath: `ab/cd/${i}.pdf`,
+      createdAt: 2000 + i,
+    } as unknown as Attachment);
+  }
+  await testDb.attachments.bulkAdd(attRows);
+
   // Patch AFTER seeding so the bulk inserts don't pollute the counter. Both
   // prototypes are shared across all tables/collections of this Dexie instance.
   tableProto = Object.getPrototypeOf(testDb.blockchainTransactions);
@@ -167,6 +189,15 @@ describe("paginated reads stay bounded by page size", () => {
     expect(rowsMaterialized).toBe(rows.length);
     expect(rowsMaterialized).toBeLessThan(N_PART);
   });
+
+  it("getAttachmentsByRecordId uses an index, materialising only one record's files", async () => {
+    const rows = await measure(() => getAttachmentsByRecordId(1));
+    expect(rows.length).toBeGreaterThan(0);
+    for (const r of rows) expect(r.recordId).toBe(1);
+    // Index lookup pulls only this record's attachments, not the whole table.
+    expect(rowsMaterialized).toBe(rows.length);
+    expect(rowsMaterialized).toBeLessThan(N_ATT);
+  });
 });
 
 describe("counts must not load rows", () => {
@@ -189,6 +220,14 @@ describe("counts must not load rows", () => {
   });
 });
 
+describe("counts must not load rows (attachments)", () => {
+  it("countAttachments materialises zero rows", async () => {
+    const n = await measure(() => countAttachments());
+    expect(n).toBe(N_ATT);
+    expect(rowsMaterialized).toBe(0);
+  });
+});
+
 describe("negative control proves the instrument detects unbounded loads", () => {
   it("getAllTransactions materialises the entire table", async () => {
     const all = await measure(() => getAllTransactions());
@@ -196,5 +235,11 @@ describe("negative control proves the instrument detects unbounded loads", () =>
     // The whole table is pulled into memory — exactly what the paginated helpers
     // above must never do.
     expect(rowsMaterialized).toBeGreaterThanOrEqual(N_TX);
+  });
+
+  it("getAllAttachments materialises the entire table", async () => {
+    const all = await measure(() => getAllAttachments());
+    expect(all).toHaveLength(N_ATT);
+    expect(rowsMaterialized).toBeGreaterThanOrEqual(N_ATT);
   });
 });

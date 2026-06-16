@@ -565,22 +565,74 @@ export async function getTestDataSummary(): Promise<{
 }
 
 /**
- * Generate a SMALL pre-migration ("legacy") fixture for exercising the app's
- * runtime repair paths that run on every unlock.
+ * Build pre-migration ("legacy") RECORD rows that deliberately OMIT
+ * `inputStringLower` — the shape that existed before the v30 schema upgrade and
+ * that the CRUD layer can no longer produce (bulkCreateRecords always sets it).
  *
- * Why direct Dexie writes (this file is crud-guard allowlisted): the CRUD layer
- * always normalises data on write — bulkCreateRecords sets `inputStringLower`
- * via buildFullRecord, and attachments are created with hashed object-storage
- * paths. To exercise the *repair* code we must deliberately persist the OLD,
- * un-normalised shape that the CRUD layer would never produce:
+ * Exported so the migration-path harness can seed these exact rows into an
+ * OLD-version database and then prove the real one-time upgrader backfills them.
+ * Mixed-case `inputString` so the migrated lowercase value is meaningfully
+ * different from the original.
+ */
+export function buildLegacyRecordRows(count: number, now: number): Record[] {
+  const rows: Record[] = [];
+  for (let i = 0; i < count; i++) {
+    rows.push({
+      type: 'address',
+      inputString: `Legacy-Addr-${i}`,
+      // inputStringLower intentionally omitted (pre-v30 shape)
+      label: `Legacy address ${i}`,
+      tags: [],
+      categories: [],
+      createdAt: now,
+      updatedAt: now,
+    });
+  }
+  return rows;
+}
+
+/**
+ * Build pre-migration ("legacy") ATTACHMENT rows at single-segment root paths —
+ * the shape the runtime attachment-path repair migrates to hashed sub-paths.
+ */
+export function buildLegacyAttachmentRows(
+  count: number,
+  recordIds: number[],
+  now: number
+): Attachment[] {
+  const rows: Attachment[] = [];
+  for (let i = 0; i < count; i++) {
+    rows.push({
+      recordId: recordIds[i % recordIds.length],
+      filename: `legacy-doc-${i}.pdf`,
+      mimeType: 'application/pdf',
+      size: 1024,
+      objectStoragePath: `legacy-doc-${i}.pdf`, // single segment = root file
+      createdAt: now,
+    });
+  }
+  return rows;
+}
+
+/**
+ * Generate a SMALL pre-migration ("legacy") fixture of un-normalised data.
  *
- *   - Records WITHOUT `inputStringLower`        -> repairInputStringLower()
+ * Two distinct repair mechanisms consume this shape, and which one runs depends
+ * on the database version when the rows are read:
+ *
+ *   - Records WITHOUT `inputStringLower`        -> v30 one-time schema upgrader
+ *                                                  (and repairInputStringLower())
  *   - Attachments at a single-segment root path -> migrateAttachmentPaths()
  *
- * Note: Dexie schema-version upgrade functions (v27/v29/v30, ...) only run once
- * when the DB version bumps, so they cannot be re-triggered on an already
- * up-to-date database. This fixture therefore targets the runtime repair passes
- * (which scan existing rows on unlock), not the one-time schema upgraders.
+ * This function writes into the ALREADY up-to-date singleton DB, so here the
+ * rows exercise the *runtime repair passes* that scan on every unlock. To
+ * exercise the *one-time schema upgrader* end to end (seed at an old version,
+ * reopen at the current version, watch the real v30 upgrade run) see the
+ * migration-path harness in `legacy-migration.test.ts`, which reuses the same
+ * `buildLegacy*Rows` builders above.
+ *
+ * Why direct Dexie writes (this file is crud-guard allowlisted): the CRUD layer
+ * always normalises data on write, so it can never produce the legacy shape.
  */
 export async function generateLegacyFixture(
   options: { clearExisting?: boolean; records?: number; attachments?: number } = {}
@@ -595,35 +647,10 @@ export async function generateLegacyFixture(
 
   const now = Date.now();
 
-  // Records deliberately OMIT inputStringLower (pre-v30 shape). Mixed-case
-  // inputString so the repaired lowercase value is meaningfully different.
-  const recordRows: Record[] = [];
-  for (let i = 0; i < recordCount; i++) {
-    recordRows.push({
-      type: 'address',
-      inputString: `Legacy-Addr-${i}`,
-      // inputStringLower intentionally omitted
-      label: `Legacy address ${i}`,
-      tags: [],
-      categories: [],
-      createdAt: now,
-      updatedAt: now,
-    });
-  }
+  const recordRows = buildLegacyRecordRows(recordCount, now);
   const recordIds = (await db.records.bulkAdd(recordRows, { allKeys: true })) as number[];
 
-  // Attachments at single-segment root paths (pre-migration shape).
-  const attachmentRows: Attachment[] = [];
-  for (let i = 0; i < attachmentCount; i++) {
-    attachmentRows.push({
-      recordId: recordIds[i % recordIds.length],
-      filename: `legacy-doc-${i}.pdf`,
-      mimeType: 'application/pdf',
-      size: 1024,
-      objectStoragePath: `legacy-doc-${i}.pdf`, // single segment = root file
-      createdAt: now,
-    });
-  }
+  const attachmentRows = buildLegacyAttachmentRows(attachmentCount, recordIds, now);
   await db.attachments.bulkAdd(attachmentRows);
 
   notifyDbChange(['records', 'attachments']);

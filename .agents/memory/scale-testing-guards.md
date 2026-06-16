@@ -32,6 +32,20 @@ BASELINE to lock the win. Limitation: it's count-based, so removing one offender
 while adding another can mask a regression; it's a foundation, not a full
 analyzer.
 
+## Migration-path harness (one-time upgraders)
+`legacy-migration.test.ts` proves the genuine Dexie schema upgraders run on an
+old vault. Dexie `.upgrade()` callbacks fire ONCE when the on-disk version is
+older than the declared version, so you cannot test them against an
+already-current DB or by mocking `@/lib/database`.
+**How to apply:** seed a raw `new Dexie(name)` declaring ONLY the OLD
+`.version(N).stores({...})` (e.g. v29 records schema lacking `inputStringLower`),
+bulkAdd legacy rows, close it; then open `new KYUTXODatabase()` (same DB name) so
+the real chain upgrades N->current. Assert both the data backfill AND that the
+newly-added index is usable (`.where(idx).equals(...)`), not just the field.
+Reuse `buildLegacyRecordRows`/`buildLegacyAttachmentRows` from `testSeedData.ts`
+so seed shape == runtime-fixture shape. Runtime repair passes (on every unlock)
+are a SEPARATE mechanism from these one-time upgraders.
+
 ## Generator constraint
 The large-scale generator (`largeScaleSeed.ts`) must write ONLY through CRUD
 modules (records/tx/participant/attachment CRUD) to satisfy `crud-guards`. The

@@ -75,26 +75,44 @@ card) writes a small set of deliberately pre-migration-shaped rows:
   instead of a hashed `dir/opaque.pdf`) — this gives the runtime attachment-path
   repair something to fix.
 
-This fixture is intentionally **small** — it is about *shape*, not scale. Use it
-to verify the app's on-unlock repair paths still do the right thing.
+This fixture is intentionally **small** — it is about *shape*, not scale.
+
+There are **two** repair mechanisms that consume this legacy shape, and which one
+runs depends on the database version when the rows are read:
+
+1. **Runtime repair passes** — scan existing rows on every unlock (e.g.
+   `repairInputStringLower`, attachment-path migration). The **Generate Legacy
+   Fixture** button writes into the already up-to-date database, so it exercises
+   *these*. Use it to verify the on-unlock repairs still do the right thing.
+2. **One-time schema upgraders** — the Dexie `.upgrade()` callbacks in
+   `database.ts` (e.g. the v30 upgrade that backfills `inputStringLower`). These
+   run **once**, when an old vault is opened at a newer version. They can't be
+   re-triggered on an already-current database, so they are exercised by the
+   **migration-path harness test** (see `legacy-migration.test.ts` below), which
+   seeds a database at the *old* version and reopens it at the current one to
+   watch the real upgrade run end to end.
+
+Both paths reuse the same `buildLegacyRecordRows` / `buildLegacyAttachmentRows`
+builders, so there is one source of truth for "what pre-migration data looks
+like".
 
 > Why direct writes here? The CRUD layer always normalises data on write, so it
-> can never produce the old shape. The fixture lives in `testSeedData.ts`, which
-> is allow-listed by the CRUD guard precisely so it can write this legacy shape
-> directly. Note that Dexie schema-version upgrade functions only run once when
-> the DB version bumps; this fixture targets the runtime repair passes that scan
-> rows on every unlock, not the one-time upgraders.
+> can never produce the old shape. The builders + fixture live in
+> `testSeedData.ts`, which is allow-listed by the CRUD guard precisely so it can
+> write this legacy shape directly.
 
 ---
 
 ## 3. Running the scale guards (automated)
 
-Three test files keep scale regressions from creeping back in. Run them with:
+Four test files keep scale and migration regressions from creeping back in. Run
+them with:
 
 ```bash
 npx vitest run client/src/lib/largeScaleSeed.test.ts \
   client/src/lib/scale-guards.runtime.test.ts \
-  client/src/lib/scale-guards.static.test.ts
+  client/src/lib/scale-guards.static.test.ts \
+  client/src/lib/legacy-migration.test.ts
 ```
 
 ### `largeScaleSeed.test.ts`
@@ -112,11 +130,25 @@ exactly how many rows each helper pulls into memory:
 
 - Paginated reads (`getTransactionsPageByBlockTime`,
   `getRecordsPageByIdReverseKeyset`) must pull **one page**, not the table.
-- Indexed lookups (`getParticipantsByRecordIds`) must pull **only matches**.
-- Counts (`countTransactions`, etc.) must pull **zero rows** — a count must
-  never become "load everything then take `.length`".
-- A **negative control** (`getAllTransactions`) deliberately loads the whole
-  table, proving the instrument can actually tell bounded from unbounded.
+- Indexed lookups (`getParticipantsByRecordIds`, `getAttachmentsByRecordId`) must
+  pull **only matches**.
+- Counts (`countTransactions`, `countAttachments`, etc.) must pull **zero rows** —
+  a count must never become "load everything then take `.length`".
+- **Negative controls** (`getAllTransactions`, `getAllAttachments`) deliberately
+  load the whole table, proving the instrument can actually tell bounded from
+  unbounded.
+
+### `legacy-migration.test.ts`
+
+The **migration-path harness**. It seeds a database at the **old** schema
+version (v29 — records have no `inputStringLower` index or field), then reopens
+it through the **real** `KYUTXODatabase` class so Dexie runs the genuine v30
+upgrade callback from `database.ts`. It then asserts the upgrade backfilled
+`inputStringLower`, that the newly-added index is actually **usable** (a lookup
+`.where("inputStringLower")` returns the migrated record), and that attachments
+survived. This is the only test that exercises the **one-time** upgraders end to
+end — the runtime repair passes can't, because they only run on an
+already-current database. It deliberately does **not** mock `@/lib/database`.
 
 ### `scale-guards.static.test.ts`
 

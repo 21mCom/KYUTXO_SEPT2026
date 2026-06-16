@@ -1,2 +1,14 @@
-- [Scale-testing guards](scale-testing-guards.md) — how to prove Dexie reads stay bounded; runtime toArray-patch gotcha + static ratchet.
+- [Address-records loading & sync-signal scoping](address-records-hook.md) — load address-type records and react to changes without being flooded by blockchain-sync writes.
+- [Attachment files never unlinked on delete](attachment-delete-protection.md) — delete archives metadata, leaves bytes on disk; physical purge is explicit-only. Don't reintroduce unlinking.
+- [Build-time false alarms](build-false-alarms.md) — signals in the build/dev loop that look like regressions but are pre-existing/transient.
+- [CI must not push back to main](ci-pushback-loop.md) — Actions writing commits to main creates a push-rejection loop with Replit Git Sync; safe versioning pattern.
+- [CRUD guard layer (typed data access)](crud-guard-layer.md) — how the guarded-table CRUD layer works + typing pitfall when migrating direct Dexie reads to helpers.
+- [GitHub workflow-scope push rejection](github-workflow-scope-push.md) — why pushing commits touching .github/workflows/ fails via Replit's GitHub login, and how to land them.
+- [Legacy migration gotchas (v1.1.28 decryption)](legacy-migration-gotchas.md) — non-obvious data-integrity traps in the one-time legacy decrypt/path migration on large vaults.
+- [No automatic network access](offline-network-constraint.md) — hard constraint governing the address-stats cache and recompute features.
+- [Post-merge db:push timeout](post-merge-timeout.md) — why the post-merge step times out and the correct fix (raise timeout, keep the step).
+- [Records query & toggle semantics](records-query-semantics.md) — why record counts look "missing" and why search is slow.
+- [Restore/import FK remap](restore-fk-remap.md) — re-inserting rows via bulk*Create (new autoincrement ids) requires remapping dependent rows' FK ids old→new, or links go stale.
+- [Scale-testing guards](scale-testing-guards.md) — how to prove Dexie reads stay bounded; runtime toArray-patch gotcha, static ratchet, and one-time migration-path harness.
+- [Startup migration design](startup-migration-design.md) — how one-time legacy migrations run at login and the invariants that keep large vaults from breaking.
 - [Vitest + fake-indexeddb pattern](vitest-fake-indexeddb.md) — mocking the live `db` binding so CRUD modules hit a test Dexie instance.
