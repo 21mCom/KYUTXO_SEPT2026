@@ -1,4 +1,4 @@
-import { db } from './database';
+import { db, notifyDbChange, type Record, type Attachment } from './database';
 import { createRecord, getParticipantsByTxid } from './dataFacade';
 import { clearAllRecords } from './data/record-crud';
 import { addTransaction, addParticipant, clearTransactions, clearParticipants } from './data/transaction-crud';
@@ -562,4 +562,71 @@ export async function getTestDataSummary(): Promise<{
     lineage: await db.utxoLineage.count(),
     segments: await db.custodySegments.count(),
   };
+}
+
+/**
+ * Generate a SMALL pre-migration ("legacy") fixture for exercising the app's
+ * runtime repair paths that run on every unlock.
+ *
+ * Why direct Dexie writes (this file is crud-guard allowlisted): the CRUD layer
+ * always normalises data on write — bulkCreateRecords sets `inputStringLower`
+ * via buildFullRecord, and attachments are created with hashed object-storage
+ * paths. To exercise the *repair* code we must deliberately persist the OLD,
+ * un-normalised shape that the CRUD layer would never produce:
+ *
+ *   - Records WITHOUT `inputStringLower`        -> repairInputStringLower()
+ *   - Attachments at a single-segment root path -> migrateAttachmentPaths()
+ *
+ * Note: Dexie schema-version upgrade functions (v27/v29/v30, ...) only run once
+ * when the DB version bumps, so they cannot be re-triggered on an already
+ * up-to-date database. This fixture therefore targets the runtime repair passes
+ * (which scan existing rows on unlock), not the one-time schema upgraders.
+ */
+export async function generateLegacyFixture(
+  options: { clearExisting?: boolean; records?: number; attachments?: number } = {}
+): Promise<{ records: number; attachments: number }> {
+  const recordCount = options.records ?? 120;
+  const attachmentCount = options.attachments ?? 40;
+
+  if (options.clearExisting) {
+    await clearTestData();
+    await db.attachments.clear();
+  }
+
+  const now = Date.now();
+
+  // Records deliberately OMIT inputStringLower (pre-v30 shape). Mixed-case
+  // inputString so the repaired lowercase value is meaningfully different.
+  const recordRows: Record[] = [];
+  for (let i = 0; i < recordCount; i++) {
+    recordRows.push({
+      type: 'address',
+      inputString: `Legacy-Addr-${i}`,
+      // inputStringLower intentionally omitted
+      label: `Legacy address ${i}`,
+      tags: [],
+      categories: [],
+      createdAt: now,
+      updatedAt: now,
+    });
+  }
+  const recordIds = (await db.records.bulkAdd(recordRows, { allKeys: true })) as number[];
+
+  // Attachments at single-segment root paths (pre-migration shape).
+  const attachmentRows: Attachment[] = [];
+  for (let i = 0; i < attachmentCount; i++) {
+    attachmentRows.push({
+      recordId: recordIds[i % recordIds.length],
+      filename: `legacy-doc-${i}.pdf`,
+      mimeType: 'application/pdf',
+      size: 1024,
+      objectStoragePath: `legacy-doc-${i}.pdf`, // single segment = root file
+      createdAt: now,
+    });
+  }
+  await db.attachments.bulkAdd(attachmentRows);
+
+  notifyDbChange(['records', 'attachments']);
+
+  return { records: recordCount, attachments: attachmentCount };
 }

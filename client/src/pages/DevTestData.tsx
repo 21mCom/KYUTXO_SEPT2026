@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -7,12 +7,23 @@ import { Separator } from "@/components/ui/separator";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
+import { Progress } from "@/components/ui/progress";
 import { useToast } from "@/hooks/use-toast";
 import { 
   seedTestData, 
   clearTestData, 
-  getTestDataSummary 
+  getTestDataSummary,
+  generateLegacyFixture
 } from "@/lib/testSeedData";
+import {
+  generateLargeVault,
+  REAL_SCALE_CONFIG,
+  MODERATE_CONFIG,
+  SeedAbortError,
+  type LargeVaultConfig,
+  type SeedProgress,
+} from "@/lib/largeScaleSeed";
 import { 
   Database, 
   Trash2, 
@@ -23,7 +34,12 @@ import {
   Info,
   GitBranch,
   ClipboardList,
-  Network
+  Network,
+  Gauge,
+  Boxes,
+  Zap,
+  History,
+  StopCircle
 } from "lucide-react";
 
 interface DataSummary {
@@ -41,10 +57,84 @@ export default function DevTestData() {
   const [clearExisting, setClearExisting] = useState(false);
   const [dataSummary, setDataSummary] = useState<DataSummary | null>(null);
   const [lastAction, setLastAction] = useState<string | null>(null);
+  const [genConfig, setGenConfig] = useState<LargeVaultConfig>({ ...MODERATE_CONFIG });
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [genProgress, setGenProgress] = useState<SeedProgress | null>(null);
+  const [isLegacy, setIsLegacy] = useState(false);
+  const abortRef = useRef<AbortController | null>(null);
 
   const refreshSummary = async () => {
     const summary = await getTestDataSummary();
     setDataSummary(summary);
+  };
+
+  const setConfigField = (field: keyof LargeVaultConfig, value: string) => {
+    const n = Math.max(0, Math.floor(Number(value) || 0));
+    setGenConfig((prev) => ({ ...prev, [field]: n }));
+  };
+
+  const handleGenerateVault = async () => {
+    const controller = new AbortController();
+    abortRef.current = controller;
+    setIsGenerating(true);
+    setGenProgress(null);
+    try {
+      const result = await generateLargeVault(
+        { ...genConfig, clearExisting },
+        { signal: controller.signal, onProgress: setGenProgress }
+      );
+      await refreshSummary();
+      setLastAction(
+        `Generated ${result.records.toLocaleString()} records, ${result.transactions.toLocaleString()} transactions, ` +
+          `${result.participants.toLocaleString()} participants, ${result.attachments.toLocaleString()} attachments ` +
+          `in ${(result.durationMs / 1000).toFixed(1)}s`
+      );
+      toast({ title: "Large Vault Generated", description: "Synthetic data is ready to test against." });
+    } catch (error) {
+      if (error instanceof SeedAbortError) {
+        await refreshSummary();
+        setLastAction("Vault generation cancelled (partial data kept)");
+        toast({ title: "Cancelled", description: "Generation stopped. Any data written so far was kept." });
+      } else {
+        toast({
+          title: "Error",
+          description: error instanceof Error ? error.message : "Failed to generate vault",
+          variant: "destructive",
+        });
+      }
+    } finally {
+      setIsGenerating(false);
+      setGenProgress(null);
+      abortRef.current = null;
+    }
+  };
+
+  const handleCancelGenerate = () => {
+    abortRef.current?.abort();
+  };
+
+  const handleLegacyFixture = async () => {
+    setIsLegacy(true);
+    try {
+      const result = await generateLegacyFixture({ clearExisting });
+      await refreshSummary();
+      setLastAction(
+        `Generated legacy fixture: ${result.records} records missing inputStringLower, ` +
+          `${result.attachments} root-path attachments`
+      );
+      toast({
+        title: "Legacy Fixture Created",
+        description: "Pre-migration shaped data for testing runtime repair paths.",
+      });
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: error instanceof Error ? error.message : "Failed to create legacy fixture",
+        variant: "destructive",
+      });
+    } finally {
+      setIsLegacy(false);
+    }
   };
 
   const handleSeedData = async () => {
@@ -230,6 +320,122 @@ export default function DevTestData() {
             </CardContent>
           </Card>
         </div>
+
+        <Separator />
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Gauge className="h-5 w-5" />
+              Large-Scale Vault (Scale Testing)
+            </CardTitle>
+            <CardDescription>
+              Generate a huge synthetic vault to prove the app holds up at real scale. Data is written in
+              batches through the normal data layer and can be cancelled mid-run. The "Clear existing data"
+              switch above applies here too.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="flex flex-wrap gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setGenConfig({ ...MODERATE_CONFIG })}
+                disabled={isGenerating}
+                data-testid="button-preset-moderate"
+              >
+                <Zap className="h-4 w-4 mr-2" />
+                Moderate preset
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setGenConfig({ ...REAL_SCALE_CONFIG })}
+                disabled={isGenerating}
+                data-testid="button-preset-real"
+              >
+                <Boxes className="h-4 w-4 mr-2" />
+                Real-scale preset
+              </Button>
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              {([
+                ["records", "Records"],
+                ["transactions", "Transactions"],
+                ["participants", "Participants"],
+                ["attachments", "Attachments"],
+              ] as Array<[keyof LargeVaultConfig, string]>).map(([key, label]) => (
+                <div key={key} className="space-y-1">
+                  <Label htmlFor={`gen-${key}`} className="text-xs text-muted-foreground">
+                    {label}
+                  </Label>
+                  <Input
+                    id={`gen-${key}`}
+                    type="number"
+                    min={0}
+                    value={String(genConfig[key] ?? 0)}
+                    onChange={(e) => setConfigField(key, e.target.value)}
+                    disabled={isGenerating}
+                    data-testid={`input-gen-${key}`}
+                  />
+                </div>
+              ))}
+            </div>
+
+            {isGenerating && genProgress && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between gap-2 text-sm">
+                  <span className="capitalize" data-testid="text-gen-phase">
+                    {genProgress.phase}
+                  </span>
+                  <span className="text-muted-foreground" data-testid="text-gen-counts">
+                    {genProgress.current.toLocaleString()} / {genProgress.total.toLocaleString()}
+                  </span>
+                </div>
+                <Progress value={Math.round(genProgress.overall * 100)} data-testid="progress-gen" />
+              </div>
+            )}
+
+            <div className="flex flex-wrap gap-2">
+              {!isGenerating ? (
+                <Button onClick={handleGenerateVault} data-testid="button-generate-vault">
+                  <Play className="h-4 w-4 mr-2" />
+                  Generate Vault
+                </Button>
+              ) : (
+                <Button variant="destructive" onClick={handleCancelGenerate} data-testid="button-cancel-generate">
+                  <StopCircle className="h-4 w-4 mr-2" />
+                  Cancel
+                </Button>
+              )}
+              <Button
+                variant="outline"
+                onClick={handleLegacyFixture}
+                disabled={isGenerating || isLegacy}
+                data-testid="button-legacy-fixture"
+              >
+                {isLegacy ? (
+                  <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                ) : (
+                  <History className="h-4 w-4 mr-2" />
+                )}
+                Generate Legacy Fixture
+              </Button>
+            </div>
+
+            <Alert variant="default">
+              <AlertTriangle className="h-4 w-4" />
+              <AlertTitle>Heads up</AlertTitle>
+              <AlertDescription>
+                The real-scale preset writes roughly 30 million rows and can take many minutes. The legacy
+                fixture intentionally creates small, pre-migration shaped data (records missing the lowercase
+                search index and attachments stored at root paths) so the app's startup repair paths have work
+                to do.
+              </AlertDescription>
+            </Alert>
+          </CardContent>
+        </Card>
 
         <Separator />
 

@@ -1,1 +1,2 @@
-- [Restore/import FK remap](restore-fk-remap.md) — re-inserting rows via bulk*Create (new autoincrement ids) requires remapping dependent rows' FK ids old→new, or links go stale.
+- [Scale-testing guards](scale-testing-guards.md) — how to prove Dexie reads stay bounded; runtime toArray-patch gotcha + static ratchet.
+- [Vitest + fake-indexeddb pattern](vitest-fake-indexeddb.md) — mocking the live `db` binding so CRUD modules hit a test Dexie instance.
