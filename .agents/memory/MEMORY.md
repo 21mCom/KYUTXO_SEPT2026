@@ -1,3 +1,5 @@
 - [Large-vault startup migrations](large-vault-startup-migrations.md) — batched once-only startup repairs run in background; fresh-vault skip only when empty; file-decrypt resume freezes-not-breaks.
 - [Backup streaming guards](backup-streaming-guards.md) — fflate onEntry is sync (manifest-order via a flag); memory-export OOM guard must aggregate all streamed-table counts.
 - [Restore cancellation contract](restore-cancel-contract.md) — cancel before clear keeps vault intact; after clear resets to verified-empty; if cleanup fails, fail closed with a distinct hard error (never claim clean).
+- [Lockfile firewall URLs](lockfile-firewall-urls.md) — any npm install writes package-firewall.replit.local URLs; rewrite to registry.npmjs.org or the lockfile-urls CI gate fails.
+- [fontsource-variable imports](fontsource-variable-imports.md) — bare @fontsource-variable import is wght-only; use opsz.css + *-italic.css to match a Google ital,opsz,wght request.

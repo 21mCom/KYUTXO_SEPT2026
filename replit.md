@@ -42,7 +42,7 @@ KYUTXO features an offline-first architecture built for cross-platform desktop d
 
 ## External Dependencies
 *   **Local File System:** Used for storing attachments with SHA-256 hashed identifiers and opaque filenames.
-*   **Google Fonts CDN:** For the Inter font family.
+*   **Bundled Fonts:** Inter and JetBrains Mono are self-hosted via `@fontsource-variable` and bundled with the app (no external font CDN) for full offline use.
 *   **bitcoinjs-lib:** Bitcoin address validation and network detection.
 *   **bip32:** HD wallet key derivation.
 *   **bip39:** Mnemonic seed phrase handling.

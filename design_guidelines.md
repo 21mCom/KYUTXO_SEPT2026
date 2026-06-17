@@ -5,7 +5,7 @@
 
 ## Typography System
 
-**Font Stack**: Inter via Google Fonts CDN
+**Font Stack**: Inter (self-hosted via @fontsource-variable, bundled — no external CDN)
 - Display/Headers: 600-700 weight, tight tracking (-0.02em)
 - Body Text: 400 weight, 1.5 line-height
 - Data/Tables: 500 weight, tabular-nums for numerical alignment
