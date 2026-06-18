@@ -37,7 +37,8 @@ import {
   LayoutList,
   ShieldAlert,
   Eye,
-  GitBranch
+  GitBranch,
+  FlaskConical
 } from "lucide-react";
 import logoUrl from "@/assets/foot_1764929618997.png";
 import { version as APP_VERSION } from "../../../package.json";
@@ -151,6 +152,7 @@ const navGroups: NavGroup[] = [
       { title: "Node Connection", url: "/node-settings", icon: Server },
       { title: "Value Updater", url: "/value-updater", icon: RefreshCw },
       { title: "Cleanup", url: "/cleanup", icon: Trash2 },
+      { title: "Engine Diagnostics", url: "/engine-diagnostics", icon: FlaskConical },
       { title: "Settings", url: "/settings", icon: Settings },
     ]
   },
