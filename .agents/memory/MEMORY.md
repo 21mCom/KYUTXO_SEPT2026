@@ -4,3 +4,4 @@
 - [Restore cancellation contract](restore-cancel-contract.md) — cancel before clear keeps vault intact; after clear resets to verified-empty; if cleanup fails, fail closed with a distinct hard error (never claim clean).
 - [Lockfile firewall URLs](lockfile-firewall-urls.md) — any npm install writes package-firewall.replit.local URLs; rewrite to registry.npmjs.org or the lockfile-urls CI gate fails.
 - [fontsource-variable imports](fontsource-variable-imports.md) — bare @fontsource-variable import is wght-only; use opsz.css + *-italic.css to match a Google ital,opsz,wght request.
+- [sqlite-wasm Vite loading](sqlite-wasm-vite-loading.md) — sqlite-wasm inits in vitest+prod but dies in dev (SPA returns HTML for .wasm); load wasm via `?url`+locateFile; verify in a real browser. Also: persisted()=no ≠ not-persisted.
