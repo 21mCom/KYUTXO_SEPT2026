@@ -8,13 +8,14 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { ArrowLeft, Search as SearchIcon, Database, Hash, ExternalLink, AlertCircle, Trash2, X, ChevronLeft, ChevronRight, Loader2, RefreshCw } from "lucide-react";
 import { BlockchainToggle } from "@/components/BlockchainToggle";
-import { db, type Record as DbRecord, type VaultMetadata, type AddressImportance, type ChainType, type CustomField, type BlockchainTransaction, type TransactionParticipant, USER_CURATED_TIERS } from "@/lib/database";
+import { type Record as DbRecord, type VaultMetadata, type AddressImportance, type ChainType, type CustomField, type BlockchainTransaction, type TransactionParticipant, USER_CURATED_TIERS } from "@/lib/database";
 import { useDbChangeSignal } from "@/hooks/use-db-change-signal";
 import { deleteRecord, getParticipantsByTxids } from "@/lib/dataFacade";
 import { getAllCustomFields } from "@/lib/data/custom-fields-crud";
 import {
   getRecord,
   countRecords,
+  countBlockchainDiscovered,
   getRecordsPageByIdReverse,
   getAddressRecordsByImportanceTierLimited,
   countRecordsByTypeAndImportanceTiers,
@@ -182,6 +183,7 @@ export default function Records() {
   
   const [includeBlockchainDiscovered, setIncludeBlockchainDiscovered] = useState(false);
   const [totalBlockchainDiscovered, setTotalBlockchainDiscovered] = useState(0);
+  const [loadElapsedSec, setLoadElapsedSec] = useState(0);
   
   const [columnFilters, setColumnFilters] = useState<ColumnFilter[]>([]);
   
@@ -295,8 +297,17 @@ export default function Records() {
         total: 0,
       });
 
+      const t0 = performance.now();
+      // NOTE: never log the raw search text — it can contain addresses/txids the
+      // user would not want captured in a screenshot. Length only.
+      console.log(
+        `[Records] load v${version} start | signal=${dbChangeSignal} | includeBlockchain=${includeBlockchainDiscovered} | page=${currentPage} | searchLen=${debouncedSearch.length}`,
+      );
       const setPhase = (phase: string) => {
-        if (loadVersionRef.current === version) setLoadPhase(phase);
+        if (loadVersionRef.current === version) {
+          setLoadPhase(phase);
+          console.log(`[Records] load v${version} phase="${phase}" +${Math.round(performance.now() - t0)}ms`);
+        }
       };
 
       try {
@@ -304,15 +315,7 @@ export default function Records() {
         const fields = await getAllCustomFields();
         if (loadVersionRef.current !== version) return;
         setCustomFieldDefs(fields);
-        
-        setPhase('Counting blockchain records');
-        const blockchainCount = await db.records
-          .where('addressImportance')
-          .anyOf(['blockchain-discovered', 'pending-review'])
-          .count();
-        if (loadVersionRef.current !== version) return;
-        setTotalBlockchainDiscovered(blockchainCount);
-        
+
         const search = debouncedSearch.toLowerCase().trim();
         const isTxidSearch = search.length >= 8 && /^[a-fA-F0-9]+$/.test(search);
         // Exact identifier fast-path: a pasted full address/txid routes to the
@@ -381,6 +384,59 @@ export default function Records() {
           }
         };
 
+        // Counts run AFTER the first page is rendered for the winning version —
+        // never before. Starting them earlier put expensive count queries on the
+        // IndexedDB thread ahead of the critical row fetch, and any load that got
+        // superseded before render would still spawn uncancellable counts,
+        // amplifying load on huge vaults (the original stuck-loading cause). The
+        // identifier/substring branches already derive their totals from the
+        // awaited page fetch, so here they only refresh the hidden-records badge.
+        const runDeferredCounts = () => {
+          // Count-only default view (no filters, blockchain hidden): one coalesced
+          // pass yields both the visible total and the badge so the
+          // blockchain-discovered count runs at most once.
+          if (!filtersActive && !includeBlockchainDiscovered) {
+            setCountLoading(true);
+            Promise.all([countRecords(), countBlockchainDiscovered()]).then(([total, blockchain]) => {
+              if (loadVersionRef.current !== version) return;
+              const visible = Math.max(0, total - blockchain);
+              setTotalCount(visible);
+              setNavigableCount(visible);
+              setTotalBlockchainDiscovered(blockchain);
+            }).catch(e => { console.warn('[Records] Background count failed (all+exclude):', e); })
+              .finally(() => { if (loadVersionRef.current === version) setCountLoading(false); });
+            return;
+          }
+
+          // Every other mode shows the hidden-records badge independently.
+          countBlockchainDiscovered().then(c => {
+            if (loadVersionRef.current !== version) return;
+            setTotalBlockchainDiscovered(c);
+          }).catch(e => { console.warn('[Records] Background blockchain count failed:', e); });
+
+          if (!filtersActive && includeBlockchainDiscovered) {
+            setCountLoading(true);
+            countRecords().then(c => {
+              if (loadVersionRef.current !== version) return;
+              setTotalCount(c);
+              setNavigableCount(c);
+            }).catch(e => { console.warn('[Records] Background count failed (all+include):', e); })
+              .finally(() => { if (loadVersionRef.current === version) setCountLoading(false); });
+          } else if (singleTypeFilter) {
+            setCountLoading(true);
+            const countPromise = includeBlockchainDiscovered
+              ? countRecordsByType(singleTypeFilter)
+              : countRecordsByTypeAndImportanceTiers(singleTypeFilter, USER_CURATED_TIERS);
+            countPromise.then(c => {
+              if (loadVersionRef.current !== version) return;
+              setTotalCount(c);
+              setNavigableCount(c);
+            }).catch(e => { console.warn('[Records] Background count failed (type):', e); })
+              .finally(() => { if (loadVersionRef.current === version) setCountLoading(false); });
+          }
+          // identifier / substring search: totals already set from the page fetch.
+        };
+
         setPhase('Fetching records');
         bus.publishTask({
           id: taskId,
@@ -391,20 +447,8 @@ export default function Records() {
         });
 
         if (!filtersActive && includeBlockchainDiscovered) {
-          // Fire count in the background — do NOT await it.
-          // The count is only needed for pagination display. Awaiting it before
-          // fetching rows was the root cause of the stuck-loading loop: on large
-          // DBs the count can take seconds, and any write arriving during that
-          // window cancels the load and restarts it (another count, etc.).
-          setCountLoading(true);
-          countRecords().then(c => {
-            if (loadVersionRef.current !== version) return;
-            setTotalCount(c);
-            setNavigableCount(c);
-          }).catch(e => { console.warn('[Records] Background count failed (all+include):', e); })
-            .finally(() => { if (loadVersionRef.current === version) setCountLoading(false); });
-
-          // Await only the lightweight page fetch (keyset when possible).
+          // Await only the lightweight page fetch (keyset when possible). Counts
+          // deferred until after render (see runDeferredCounts).
           rawRecords = hasAnchor
             ? await getRecordsPageByIdReverseKeyset({ limit: PAGE_SIZE, beforeIdExclusive })
             : await getRecordsPageByIdReverse(pgOffset, PAGE_SIZE);
@@ -414,16 +458,8 @@ export default function Records() {
           recordNextAnchor(rawRecords);
 
         } else if (!filtersActive && !includeBlockchainDiscovered) {
-          // Fire count in background (same reasoning as above).
-          setCountLoading(true);
-          countRecords().then(total => {
-            if (loadVersionRef.current !== version) return;
-            setTotalCount(total - blockchainCount);
-            setNavigableCount(total - blockchainCount);
-          }).catch(e => { console.warn('[Records] Background count failed (all+exclude):', e); })
-            .finally(() => { if (loadVersionRef.current === version) setCountLoading(false); });
-
-          // Await only the page fetch (indexed tier queries, fast).
+          // Await only the page fetch (indexed tier queries, fast). Counts
+          // deferred until after render (see runDeferredCounts).
           if (hasAnchor) {
             // Keyset: fetch up to PAGE_SIZE rows below the boundary from each
             // tier, then k-way merge to the global top PAGE_SIZE.
@@ -447,25 +483,8 @@ export default function Records() {
         } else if (singleTypeFilter) {
           const typeVal = singleTypeFilter;
 
-          // Fire count in background.
-          setCountLoading(true);
-          if (includeBlockchainDiscovered) {
-            countRecordsByType(typeVal).then(c => {
-              if (loadVersionRef.current !== version) return;
-              setTotalCount(c);
-              setNavigableCount(c);
-            }).catch(e => { console.warn('[Records] Background count failed (type+include):', e); })
-              .finally(() => { if (loadVersionRef.current === version) setCountLoading(false); });
-          } else {
-            countRecordsByTypeAndImportanceTiers(typeVal, USER_CURATED_TIERS).then(c => {
-                if (loadVersionRef.current !== version) return;
-                setTotalCount(c);
-                setNavigableCount(c);
-              }).catch(e => { console.warn('[Records] Background count failed (type+exclude):', e); })
-              .finally(() => { if (loadVersionRef.current === version) setCountLoading(false); });
-          }
-
-          // Await only the page fetch (keyset when possible).
+          // Await only the page fetch (keyset when possible). Counts deferred
+          // until after render (see runDeferredCounts).
           if (includeBlockchainDiscovered) {
             rawRecords = hasAnchor
               ? await getRecordsPageByTypeIdReverseKeyset(typeVal, { limit: PAGE_SIZE, beforeIdExclusive })
@@ -544,6 +563,12 @@ export default function Records() {
         
         const converted = rawRecords.map(convertRecord);
         setRecords(converted);
+        console.log(`[Records] load v${version} rendered ${converted.length} rows +${Math.round(performance.now() - t0)}ms`);
+
+        // Rows are on screen for the winning version — now kick off the counts.
+        // Loads that got superseded before this point returned earlier and never
+        // start counts, so superseded reloads add no DB pressure.
+        runDeferredCounts();
         
         if (isTxidSearch) {
           try {
@@ -596,6 +621,9 @@ export default function Records() {
           setLoadError(error instanceof Error ? error.message : 'Failed to load records');
         }
       } finally {
+        if (loadVersionRef.current !== version) {
+          console.log(`[Records] load v${version} superseded by v${loadVersionRef.current} +${Math.round(performance.now() - t0)}ms`);
+        }
         // Always remove this task from the activity bus — covers success,
         // cancellation (early return) and error paths.
         bus.completeTask(taskId);
@@ -611,6 +639,22 @@ export default function Records() {
     
     loadRecords();
   }, [includeBlockchainDiscovered, dbChangeSignal, currentPage, debouncedSearch, columnFilters, retrySig]);
+
+  // Watchdog: while a load is continuously in progress, tick an elapsed-seconds
+  // counter. On very large vaults the first load after a big update can take a
+  // while; this both reassures the user and surfaces timing they can screenshot
+  // if something is genuinely stuck.
+  useEffect(() => {
+    if (!isLoading) {
+      setLoadElapsedSec(0);
+      return;
+    }
+    const start = Date.now();
+    const id = setInterval(() => {
+      setLoadElapsedSec(Math.floor((Date.now() - start) / 1000));
+    }, 1000);
+    return () => clearInterval(id);
+  }, [isLoading]);
 
   const uniqueFilterValues = useMemo(() => {
     const clean = (names: string[]) => 
@@ -999,6 +1043,11 @@ export default function Records() {
                     <span data-testid="text-records-loading-phase">
                       {loadPhase ? `${loadPhase}…` : 'Loading records…'}
                     </span>
+                    {loadElapsedSec >= 15 && (
+                      <p className="text-xs mt-2" data-testid="text-records-loading-elapsed">
+                        Working through a large vault — {loadElapsedSec}s elapsed. The first load after a big update can take a little while.
+                      </p>
+                    )}
                   </div>
                 ) : loadError ? (
                   <div className="text-center py-8" data-testid="text-records-load-error">

@@ -482,6 +482,21 @@ export async function countRecords(): Promise<number> {
 }
 
 /**
+ * Count of blockchain-discovered / pending-review records. Used only for UI
+ * display (the "hidden records" badge and pagination math when those records
+ * are excluded). Callers MUST run this in the background (never awaited before
+ * the first page fetch): on very large vaults this indexed anyOf().count() can
+ * still take a long time, and awaiting it was leaving the Records page stuck on
+ * "Loading records…".
+ */
+export async function countBlockchainDiscovered(): Promise<number> {
+  return db.records
+    .where('addressImportance')
+    .anyOf(['blockchain-discovered', 'pending-review'])
+    .count();
+}
+
+/**
  * One-time repair for vaults migrated off field-level encryption. The legacy
  * decryption restored `inputString` but (in older builds) left `inputStringLower`
  * empty, so the case-insensitive / fast-path index silently missed those rows.
