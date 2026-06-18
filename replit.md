@@ -39,6 +39,7 @@ KYUTXO features an offline-first architecture built for cross-platform desktop d
     *   `db.evidence` → `client/src/lib/data/evidence-crud.ts`
     *   `db.evidenceAttachments` → `client/src/lib/data/evidence-crud.ts`
     *   `db.lineageSnapshots` → `client/src/lib/data/lineage-crud.ts`
+*   **No External Resources Guard:** KYUTXO is offline-first, so external CDN/script/style/font links must never ship. A registered validation step (`no-external-resources`, `scripts/check-no-external-resources.js`) scans `client/index.html` and the built `dist/public` output (HTML + CSS) for absolute `http(s)://` references in `<link>`/`<script>` tags and CSS `url(...)`/`@import`, failing if any non-allow-listed host is found. The Electron CSP `connect-src` runtime endpoints (`mempool.space`, `blockstream.info`) are allow-listed. Run `node scripts/check-no-external-resources.js` to verify; run `npm run build` first to also scan the production bundle.
 
 ## External Dependencies
 *   **Local File System:** Used for storing attachments with SHA-256 hashed identifiers and opaque filenames.

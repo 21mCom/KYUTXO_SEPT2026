@@ -37,6 +37,10 @@ args = "crud-guards"
 task = "workflow.run"
 args = "lockfile-urls"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "no-external-resources"
+
 [[workflows.workflow]]
 name = "Start application"
 author = "agent"
@@ -64,6 +68,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-lockfile-urls.js"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "no-external-resources"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-no-external-resources.js"
 
 [workflows.workflow.metadata]
 isValidation = true
