@@ -13,7 +13,10 @@ permissions:
 jobs:
   build-windows:
     if: "!contains(github.event.head_commit.message, '[skip ci]')"
-    runs-on: windows-latest
+    # Pinned to windows-2022: the newer windows-latest (windows-2025) image is not
+    # detected by the @electron/node-gyp fork's Visual Studio finder, breaking the
+    # native better-sqlite3 compile during both `npm ci` and the Electron rebuild.
+    runs-on: windows-2022
 
     steps:
       - name: Checkout code
