@@ -33,9 +33,32 @@ export interface InitResult {
   sqliteVersion: string;
 }
 
+/** Tables mirrored into the SQLite prototype, in seed order. */
+const MIRROR_TABLES = ['transactionParticipants'] as const;
+type MirrorTable = (typeof MIRROR_TABLES)[number];
+
 export interface SeedProgress {
+  /** The table currently streaming. */
+  table: MirrorTable;
+  /** Rows processed for the current table. */
   processed: number;
+  /** Source row count for the current table. */
   total: number;
+  /** 1-based position of the table currently streaming (e.g. 1 of 1). */
+  tableIndex: number;
+  /** Total number of tables mirrored in this seed run. */
+  tableCount: number;
+  /**
+   * Rows processed across every table so far (this table included). Combined
+   * with `overallTotal` this gives a single steady percentage that moves
+   * forward across all tables instead of resetting per table.
+   */
+  overallProcessed: number;
+  /**
+   * Total rows across every table, counted up front before any streaming
+   * begins so a global total is known from the first progress event.
+   */
+  overallTotal: number;
 }
 
 export interface SeedResult {
@@ -241,16 +264,36 @@ async function seedFromIndexedDB(
     return { rowCount: 0, durationMs: performance.now() - start, cancelled: false };
   }
 
+  // Gather every source count up front so the aggregate total is known before
+  // any streaming begins. This lets the UI render one steady percentage that
+  // moves forward across all mirrored tables instead of resetting per table.
   let total = 0;
   try {
     total = await idbCount(idb);
   } catch {
     total = 0;
   }
+  const overallTotal = total;
+  const tableCount = MIRROR_TABLES.length;
+  const tableIndex = 1;
 
   let processed = 0;
   let lastId = 0;
   let cancelled = false;
+
+  const emit = (processedCount: number, tableTotal: number) => {
+    onProgress?.({
+      table: 'transactionParticipants',
+      processed: processedCount,
+      total: tableTotal,
+      tableIndex,
+      tableCount,
+      overallProcessed: processedCount,
+      overallTotal: Math.max(overallTotal, processedCount),
+    });
+  };
+
+  emit(0, total);
 
   try {
     // Each loop iteration awaits a fresh IndexedDB read, which yields control
@@ -267,7 +310,7 @@ async function seedFromIndexedDB(
       insertBatch(batch);
       lastId = batch[batch.length - 1].id;
       processed += batch.length;
-      onProgress?.({ processed, total: Math.max(total, processed) });
+      emit(processed, Math.max(total, processed));
 
       if (batch.length < SEED_CHUNK_SIZE) break;
     }

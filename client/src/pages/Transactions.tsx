@@ -1269,12 +1269,12 @@ export default function Transactions() {
                   <div
                     className="h-full bg-primary rounded-full transition-all duration-300"
                     style={{
-                      width: `${seedProgress.total > 0 ? Math.min(100, (seedProgress.processed / seedProgress.total) * 100) : 0}%`,
+                      width: `${seedProgress.overallTotal > 0 ? Math.min(100, (seedProgress.overallProcessed / seedProgress.overallTotal) * 100) : 0}%`,
                     }}
                   />
                 </div>
                 <span className="text-xs text-muted-foreground tabular-nums">
-                  Seeding {seedProgress.processed.toLocaleString()}/{seedProgress.total.toLocaleString()}
+                  Seeding {seedProgress.overallProcessed.toLocaleString()}/{seedProgress.overallTotal.toLocaleString()}
                 </span>
                 <button
                   className="text-xs text-muted-foreground underline hover-elevate rounded-md px-1"
