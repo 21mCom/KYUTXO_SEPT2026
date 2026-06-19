@@ -9,3 +9,4 @@
 - [Long jobs on Replit](replit-long-jobs-workflow.md) — bash `&`/setsid bg jobs die at the tool-call boundary; run multi-minute scripts as a temporary Replit workflow and read its log file.
 - [owned-UTXO materialization](owned-utxo-materialization.md) — big-vault owned-UTXO count/page materialized once at finalize (engineMeta tier signature gates); live anti-join is the fallback, never change it.
 - [Engine mirror freshness gate](engine-mirror-freshness.md) — engine is a manually-reseeded read replica; gate any live read on a count+maxId+maxUpdatedAt fingerprint match, not just READY; mismatch/error → Dexie.
+- [Records read-path equivalence](records-read-path-equivalence.md) — testing engine vs Dexie Records reads: every fixture row needs a known tier; compare by id windows (keyset vs offset differ); singleTypeFilter only when no search.
