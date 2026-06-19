@@ -341,6 +341,24 @@ describe("seedAll orchestration", () => {
     // Progress was reported for the records table up to the full count.
     const recProgress = progress.filter((p) => p.table === "records");
     expect(recProgress.at(-1)).toMatchObject({ processed: 7 });
+
+    // Aggregate view: a global total (7 + 2 + 4 = 13) is known from the very
+    // first progress event, and tableIndex/tableCount frame the position.
+    expect(progress[0]).toMatchObject({ overallTotal: 13, tableCount: 3, tableIndex: 1 });
+    expect(progress.every((p) => p.overallTotal === 13 && p.tableCount === 3)).toBe(true);
+
+    // overallProcessed never goes backwards and ends at the global total.
+    let prev = -1;
+    for (const p of progress) {
+      expect(p.overallProcessed).toBeGreaterThanOrEqual(prev);
+      prev = p.overallProcessed;
+    }
+    expect(progress.at(-1)?.overallProcessed).toBe(13);
+
+    // Each table reports its own 1-based index in order.
+    expect(progress.filter((p) => p.table === "records").every((p) => p.tableIndex === 1)).toBe(true);
+    expect(progress.filter((p) => p.table === "blockchainTransactions").every((p) => p.tableIndex === 2)).toBe(true);
+    expect(progress.filter((p) => p.table === "transactionParticipants").every((p) => p.tableIndex === 3)).toBe(true);
   });
 
   it("mapped rows are streamed (booleans/arrays normalized), not raw Dexie objects", async () => {

@@ -153,7 +153,7 @@ export default function EngineDiagnostics() {
       const results = await seedAll((p) => {
         setSeedProgress(p);
         const elapsed = (performance.now() - seedStartRef.current) / 1000;
-        if (elapsed > 0) setThroughput(p.processed / elapsed);
+        if (elapsed > 0) setThroughput(p.overallProcessed / elapsed);
       });
       setSeedResults(results);
       await refreshStatus();
@@ -359,14 +359,27 @@ export default function EngineDiagnostics() {
                 {seedProgress && (
                   <div className="space-y-2">
                     <div className="flex items-center justify-between gap-2 text-sm">
-                      <span className="text-muted-foreground">{seedProgress.table}</span>
-                      <span className="tabular-nums" data-testid="text-seed-progress">
-                        {fmtNum(seedProgress.processed)} / {fmtNum(seedProgress.total)}
+                      <span className="text-muted-foreground">
+                        Overall (table {seedProgress.tableIndex} of {seedProgress.tableCount})
+                      </span>
+                      <span className="tabular-nums" data-testid="text-overall-progress">
+                        {fmtNum(seedProgress.overallProcessed)} / {fmtNum(seedProgress.overallTotal)}
                       </span>
                     </div>
-                    <Progress value={seedProgress.total > 0 ? (seedProgress.processed / seedProgress.total) * 100 : 0} />
-                    <div className="text-xs text-muted-foreground tabular-nums" data-testid="text-throughput">
-                      {fmtNum(Math.round(throughput))} rows/sec
+                    <Progress
+                      value={
+                        seedProgress.overallTotal > 0
+                          ? Math.min(100, (seedProgress.overallProcessed / seedProgress.overallTotal) * 100)
+                          : 0
+                      }
+                    />
+                    <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+                      <span className="tabular-nums" data-testid="text-seed-progress">
+                        {seedProgress.table}: {fmtNum(seedProgress.processed)} / {fmtNum(seedProgress.total)}
+                      </span>
+                      <span className="tabular-nums" data-testid="text-throughput">
+                        {fmtNum(Math.round(throughput))} rows/sec
+                      </span>
                     </div>
                   </div>
                 )}

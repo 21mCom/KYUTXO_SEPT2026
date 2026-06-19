@@ -67,6 +67,21 @@ export interface SeedProgress {
   table: MirrorTable;
   processed: number;
   total: number;
+  /** 1-based position of the table currently streaming (e.g. 2 of 3). */
+  tableIndex: number;
+  /** Total number of tables mirrored in this seed run. */
+  tableCount: number;
+  /**
+   * Rows processed across every table so far (this table included). Combined
+   * with `overallTotal` this gives a single steady percentage that moves
+   * forward across all tables instead of resetting per table.
+   */
+  overallProcessed: number;
+  /**
+   * Total rows across every table, counted up front before any streaming
+   * begins so a global total is known from the first progress event.
+   */
+  overallTotal: number;
 }
 
 export interface SeedResult {
@@ -357,24 +372,56 @@ export function cancelSeeding(): void {
   cancelRequested = true;
 }
 
+/** Count a source store up front, treating a missing/erroring store as empty. */
+async function countSource(idb: IDBDatabase, table: MirrorTable): Promise<number> {
+  if (!idb.objectStoreNames.contains(table)) return 0;
+  try {
+    return await idbCount(idb, table);
+  } catch {
+    return 0;
+  }
+}
+
+/** Aggregate context shared across every table so progress is a single steady total. */
+interface SeedAggregate {
+  /** Source row count for this table, counted up front. */
+  sourceCount: number;
+  /** 1-based position of this table in the seed run. */
+  tableIndex: number;
+  /** Total number of tables in the seed run. */
+  tableCount: number;
+  /** Rows already copied by previously-completed tables. */
+  priorProcessed: number;
+  /** Total rows across every table, known before streaming begins. */
+  overallTotal: number;
+}
+
 async function seedTableStream(
   idb: IDBDatabase,
   table: MirrorTable,
+  agg: SeedAggregate,
   onProgress?: (p: SeedProgress) => void,
 ): Promise<SeedResult> {
   const start = performance.now();
   const engine = getEngine();
+  const { sourceCount, tableIndex, tableCount, priorProcessed, overallTotal } = agg;
+
+  const emit = (processed: number, total: number) => {
+    onProgress?.({
+      table,
+      processed,
+      total,
+      tableIndex,
+      tableCount,
+      overallProcessed: priorProcessed + processed,
+      overallTotal,
+    });
+  };
 
   // Empty / new vault: the source store may not exist. Nothing to copy.
   if (!idb.objectStoreNames.contains(table)) {
+    emit(0, sourceCount);
     return { table, copied: 0, sourceCount: 0, durationMs: performance.now() - start, cancelled: false, complete: true };
-  }
-
-  let sourceCount = 0;
-  try {
-    sourceCount = await idbCount(idb, table);
-  } catch {
-    sourceCount = 0;
   }
 
   const map = TABLE_MAPPERS[table];
@@ -382,7 +429,7 @@ async function seedTableStream(
   let copied = 0;
   let cancelled = false;
 
-  onProgress?.({ table, processed: 0, total: sourceCount });
+  emit(0, sourceCount);
 
   // eslint-disable-next-line no-constant-condition
   while (true) {
@@ -399,7 +446,7 @@ async function seedTableStream(
     const lastRow = batch[batch.length - 1] as { id: number };
     lastId = Number(lastRow.id);
     copied += batch.length;
-    onProgress?.({ table, processed: copied, total: Math.max(sourceCount, copied) });
+    emit(copied, Math.max(sourceCount, copied));
 
     if (batch.length < seedChunkSize) break;
   }
@@ -436,10 +483,31 @@ export async function seedAll(onProgress?: (p: SeedProgress) => void): Promise<S
   const results: SeedResult[] = [];
   let cancelled = false;
   try {
+    // Gather every source count up front so the aggregate total is known
+    // before any streaming begins. This lets the UI render one steady
+    // percentage across all tables instead of three bars resetting.
     for (const table of MIRROR_TABLES) {
-      const r = await seedTableStream(idb, table, onProgress);
-      sourceCounts[table] = r.sourceCount;
+      sourceCounts[table] = await countSource(idb, table);
+    }
+    const overallTotal = MIRROR_TABLES.reduce((sum, t) => sum + sourceCounts[t], 0);
+
+    let priorProcessed = 0;
+    for (let i = 0; i < MIRROR_TABLES.length; i++) {
+      const table = MIRROR_TABLES[i];
+      const r = await seedTableStream(
+        idb,
+        table,
+        {
+          sourceCount: sourceCounts[table],
+          tableIndex: i + 1,
+          tableCount: MIRROR_TABLES.length,
+          priorProcessed,
+          overallTotal,
+        },
+        onProgress,
+      );
       results.push(r);
+      priorProcessed += r.copied;
       if (r.cancelled) {
         cancelled = true;
         break;
