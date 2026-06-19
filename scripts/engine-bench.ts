@@ -30,9 +30,15 @@ import {
   createTablesOnly,
   createIndexes,
   buildOwnedUtxos,
+  buildHeuristicOwnedUtxos,
+  heuristicOwnedUtxosReady,
+  countHeuristicOwnedUtxos,
+  getHeuristicOwnedUtxos,
   dropMirrorTables,
   resetSeedMeta,
   generateSyntheticData,
+  insertRecords,
+  insertTransactions,
   markSeedCompleteIfDone,
   isEngineReady,
   integrityCheck,
@@ -44,9 +50,13 @@ import {
   getAddressAggregates,
   getParticipantsByAddresses,
   getParticipantsByTxids,
+  getRecordsFingerprint,
+  getTransactionsFingerprint,
+  getParticipantsFingerprint,
   getDbFileStats,
   MIRROR_TABLES,
   type SyntheticSpec,
+  type OwnedUtxo,
 } from '../client/src/lib/engine/engine-core';
 
 // ---------------------------------------------------------------------------
@@ -177,9 +187,36 @@ function main(): void {
   // INDEXING: build secondary indexes + ANALYZE.
   time('createIndexes (+ANALYZE)', () => createIndexes(db));
 
+  // ---- Heuristic owned-UTXO LIVE baseline (full window-function pass) ----
+  // Measure the heuristic count + first page BEFORE materializing, so the fast
+  // path is NOT yet ready and these run the full window-function computation.
+  // This is the read the page used to do on every load; it doubles as the parity
+  // reference for the materialized fast path below.
+  if (heuristicOwnedUtxosReady(db)) throw new Error('heuristic table unexpectedly ready before build');
+  const HEUR_PAGE = 500;
+  const liveHeurCount = time(
+    'LIVE heuristic count (window fn)',
+    () => countHeuristicOwnedUtxos(db),
+    (n) => `${n.toLocaleString()} heuristic utxos`,
+  );
+  const liveHeurFirstMs0 = performance.now();
+  const liveHeurFirstPage = getHeuristicOwnedUtxos(db, { limit: HEUR_PAGE });
+  const liveHeurFirstMs = performance.now() - liveHeurFirstMs0;
+  phases.push({ label: 'LIVE heuristic first page (window fn)', ms: liveHeurFirstMs, detail: `${liveHeurFirstPage.length} rows` });
+  log(`[${stamp()}]   ✓ ${'LIVE heuristic first page (window fn)'.padEnd(40)} ${fmtMs(liveHeurFirstMs).padStart(10)}   ${liveHeurFirstPage.length} rows`);
+
   // Materialize the owned-UTXO set once (the expensive anti-join happens here so
   // countOwnedUtxos / first-page reads are sub-second below).
   time('buildOwnedUtxos (materialize)', () => buildOwnedUtxos(db), (n) => `${n.toLocaleString()} owned utxos`);
+
+  // Same for the heuristic (no-prevout) owned-UTXO set: the worker builds this at
+  // seed-finish / synthetic-generate time so its count + first page become a
+  // cached scalar + b-tree keyset walk instead of the window-function pass above.
+  const builtHeur = time(
+    'buildHeuristicOwnedUtxos (materialize)',
+    () => buildHeuristicOwnedUtxos(db),
+    (n) => `${n.toLocaleString()} heuristic utxos`,
+  );
 
   // Steady-state read durability.
   time('read pragmas', () => applyReadPragmas(db));
@@ -228,6 +265,127 @@ function main(): void {
     return getParticipantsByTxids(db, txids);
   }, (a) => a.length);
 
+  // ---- Heuristic owned-UTXO FAST path (materialized table) + parity ----
+  // After buildHeuristicOwnedUtxos the fast path is ready: count is a cached
+  // scalar and the first page is a primary-key keyset walk. Assert they agree
+  // with the live window-function baseline byte-for-byte (same count, and the
+  // first page identical row-for-row: id/txid/vout/amount and order).
+  if (!heuristicOwnedUtxosReady(db)) throw new Error('heuristic table not ready after build');
+  let fastHeurCount = 0;
+  q('FAST heuristic count (materialized)', () => {
+    fastHeurCount = countHeuristicOwnedUtxos(db);
+    return fastHeurCount;
+  }, () => fastHeurCount);
+  let fastHeurFirstPage: OwnedUtxo[] = [];
+  q('FAST heuristic first page (materialized)', () => {
+    fastHeurFirstPage = getHeuristicOwnedUtxos(db, { limit: HEUR_PAGE });
+    return fastHeurFirstPage;
+  }, (a) => a.length);
+
+  const rowKey = (u: OwnedUtxo): string => `${u.id}|${u.txid}|${u.vout ?? 'null'}|${u.amount}`;
+  const countParity = liveHeurCount === fastHeurCount && fastHeurCount === builtHeur;
+  const firstPageParity =
+    liveHeurFirstPage.length === fastHeurFirstPage.length &&
+    liveHeurFirstPage.every((u, i) => rowKey(u) === rowKey(fastHeurFirstPage[i]));
+
+  // Deep-page parity: a keyset page from the MIDDLE of the set (fast path b-tree)
+  // vs the same window on the live path. The live path re-runs the full window
+  // function ONCE here (afterId + LIMIT is applied after the CTE), so this is a
+  // single extra pass, not per-batch. Proves paging agreement past the first page.
+  const deepAfterId = fastHeurFirstPage.length > 0 ? fastHeurFirstPage[Math.floor(fastHeurFirstPage.length / 2)].id : undefined;
+  let deepPageParity = true;
+  if (deepAfterId != null) {
+    const fastDeep = getHeuristicOwnedUtxos(db, { afterId: deepAfterId, limit: HEUR_PAGE });
+    db.exec('DROP TABLE IF EXISTS heuristicOwnedUtxos;');
+    const liveDeep = getHeuristicOwnedUtxos(db, { afterId: deepAfterId, limit: HEUR_PAGE });
+    buildHeuristicOwnedUtxos(db);
+    deepPageParity =
+      fastDeep.length === liveDeep.length && fastDeep.every((u, i) => rowKey(u) === rowKey(liveDeep[i]));
+  }
+
+  // Full-set parity: cross-check EVERY row, not just sample pages. The fast side
+  // is a cheap b-tree keyset walk; the live side is a SINGLE window-function pass
+  // (one call, large LIMIT) so we never re-run the window function per batch. The
+  // live materialization holds the whole set in JS, so it is bounded by FULLSET_CAP
+  // (override via BENCH_FULLSET_CAP) to stay memory-safe at the very largest scale.
+  const FULLSET_CAP = num(process.env.BENCH_FULLSET_CAP, 4_000_000);
+  let fastFullCount = 0;
+  let liveFullCount = 0;
+  let fullSetParity = true;
+  let fullSetChecked = false;
+  if (fastHeurCount <= FULLSET_CAP) {
+    fullSetChecked = true;
+    const fast = new Set<string>();
+    q('FAST heuristic full keyset walk', () => {
+      let afterId: number | undefined;
+      while (true) {
+        const batch = getHeuristicOwnedUtxos(db, { afterId, limit: 50_000 });
+        for (const u of batch) fast.add(rowKey(u));
+        if (batch.length < 50_000) break;
+        afterId = batch[batch.length - 1].id;
+      }
+      fastFullCount = fast.size;
+      return fast;
+    }, (s) => s.size);
+
+    db.exec('DROP TABLE IF EXISTS heuristicOwnedUtxos;');
+    const liveT0 = performance.now();
+    const liveAll = getHeuristicOwnedUtxos(db, { limit: fastHeurCount + 1 });
+    phases.push({ label: 'LIVE heuristic full set (window fn, 1 pass)', ms: performance.now() - liveT0, detail: `${liveAll.length} rows` });
+    log(`[${stamp()}]   · ${'LIVE heuristic full set (window fn)'.padEnd(40)} ${fmtMs(performance.now() - liveT0).padStart(10)}   ${liveAll.length} rows`);
+    liveFullCount = liveAll.length;
+    fullSetParity = liveAll.length === fast.size && liveAll.every((u) => fast.has(rowKey(u)));
+    buildHeuristicOwnedUtxos(db);
+  } else {
+    log(`[${stamp()}]   · full-set parity SKIPPED (${fastHeurCount.toLocaleString()} > cap ${FULLSET_CAP.toLocaleString()}); relying on count + first-page + deep-page parity`);
+  }
+  if (!heuristicOwnedUtxosReady(db)) throw new Error('heuristic table not ready after full-set parity check');
+  const heuristicParity = countParity && firstPageParity && deepPageParity && fullSetParity;
+
+  // ---- Freshness gate: prove a stale mirror is DETECTED (→ Dexie fallback) ----
+  // The UTXOs page only trusts the engine when the records/transactions/
+  // participants fingerprints match the live Dexie source. Mutate each table the
+  // way live writes do and confirm every fingerprint moves — so a stale mirror
+  // never silently serves wrong UTXOs.
+  const recFp0 = getRecordsFingerprint(db);
+  const txFp0 = getTransactionsFingerprint(db);
+  const partFp0 = getParticipantsFingerprint(db);
+
+  // (a) create a record → count + maxId + maxUpdatedAt all move.
+  const newRecId = recFp0.maxId + 1;
+  insertRecords(db, [{
+    id: newRecId, type: 'address', inputString: `bc1qfresh${newRecId}`,
+    inputStringLower: `bc1qfresh${newRecId}`, label: 'freshness probe', notes: null,
+    owner: null, walletName: null, seedName: null, walletSoftware: null,
+    addressImportance: 'manual', chainType: null, syncDepth: 0, firstSeenBlockTime: null,
+    cachedBalanceSats: null, cachedTxCount: null, cachedUtxoCount: null, statsComputedAt: null,
+    createdAt: newRecId, updatedAt: recFp0.maxUpdatedAt + 1000, tags: '[]', categories: '[]',
+  }]);
+  // (b) confirm a transaction → count + maxId + maxBlockTime all move.
+  const newTxId = txFp0.maxId + 1;
+  insertTransactions(db, [{
+    id: newTxId, txid: `txfresh${newTxId}`, blockHeight: 800000,
+    blockTime: txFp0.maxBlockTime + 600, fee: 1000, feeRate: 10, vsize: 200, hasOpReturn: 0,
+  }]);
+  // (c) resolve a prevout IN PLACE on an existing input (no insert/delete) →
+  //     only resolvedPrevoutCount moves. This is the subtle drift count+maxId miss.
+  db.run(
+    `UPDATE transactionParticipants SET prevTxid = 'txfresh-probe', prevVout = 0
+       WHERE id = (SELECT id FROM transactionParticipants
+                    WHERE role = 'input' AND prevTxid IS NULL LIMIT 1)`,
+  );
+
+  const recFp1 = getRecordsFingerprint(db);
+  const txFp1 = getTransactionsFingerprint(db);
+  const partFp1 = getParticipantsFingerprint(db);
+  const recDrift = recFp1.count === recFp0.count + 1 && recFp1.maxId > recFp0.maxId && recFp1.maxUpdatedAt > recFp0.maxUpdatedAt;
+  const txDrift = txFp1.count === txFp0.count + 1 && txFp1.maxId > txFp0.maxId && txFp1.maxBlockTime > txFp0.maxBlockTime;
+  const partInPlaceDrift =
+    partFp1.resolvedPrevoutCount === partFp0.resolvedPrevoutCount + 1 &&
+    partFp1.count === partFp0.count && partFp1.maxId === partFp0.maxId;
+  const freshnessGateOk = recDrift && txDrift && partInPlaceDrift;
+  log(`[${stamp()}]   · ${'freshness gate (stale-mirror detect)'.padEnd(40)} ${freshnessGateOk ? 'DETECTED' : 'MISSED'}`);
+
   const fileStats = getDbFileStats(db);
   const sizeOnDisk = fileSize(DB_PATH);
 
@@ -257,11 +415,30 @@ function main(): void {
   console.log(`  sqlite page count: ${fileStats.pageCount.toLocaleString()} @ ${fileStats.pageSize} B`);
   console.log(`  file size on disk: ${fmtBytes(sizeOnDisk)} (${sizeOnDisk.toLocaleString()} B)`);
 
+  console.log('');
+  console.log('--- Heuristic owned-UTXO fast view (Task: verify fast UTXO view) ---');
+  console.log(`  materialized rows:   ${builtHeur.toLocaleString()}`);
+  console.log(`  count parity:        ${countParity ? 'OK' : 'FAIL'} (live=${liveHeurCount.toLocaleString()} fast=${fastHeurCount.toLocaleString()} built=${builtHeur.toLocaleString()})`);
+  console.log(`  first-page parity:   ${firstPageParity ? 'OK' : 'FAIL'} (${liveHeurFirstPage.length} rows, row-for-row id/txid/vout/amount)`);
+  console.log(`  deep-page parity:    ${deepPageParity ? 'OK' : 'FAIL'} (mid-set keyset page, row-for-row)`);
+  console.log(`  full-set parity:     ${fullSetChecked ? (fullSetParity ? 'OK' : 'FAIL') + ` (live=${liveFullCount.toLocaleString()} fast=${fastFullCount.toLocaleString()} distinct outpoints)` : `SKIPPED (count ${fastHeurCount.toLocaleString()} > cap ${FULLSET_CAP.toLocaleString()})`}`);
+  const liveReadMs = liveHeurCount >= 0 ? (phases.find((p) => p.label === 'LIVE heuristic count (window fn)')?.ms ?? 0) + liveHeurFirstMs : 0;
+  const fastReadMs =
+    (queries.find((p) => p.label === 'FAST heuristic count (materialized)')?.ms ?? 0) +
+    (queries.find((p) => p.label === 'FAST heuristic first page (materialized)')?.ms ?? 0);
+  const speedup = fastReadMs > 0 ? liveReadMs / fastReadMs : 0;
+  console.log(`  perf win:            live (count+page) ${fmtMs(liveReadMs)}  →  fast ${fmtMs(fastReadMs)}  (${speedup.toFixed(1)}x faster)`);
+  console.log(`  freshness gate:      ${freshnessGateOk ? 'OK' : 'FAIL'} (stale mirror detected → Dexie fallback)`);
+  console.log(`    record drift:      ${recDrift ? 'detected' : 'MISSED'} (count/maxId/maxUpdatedAt)`);
+  console.log(`    transaction drift: ${txDrift ? 'detected' : 'MISSED'} (count/maxId/maxBlockTime)`);
+  console.log(`    in-place prevout:  ${partInPlaceDrift ? 'detected' : 'MISSED'} (resolvedPrevoutCount only)`);
+
   const totalMs = phases.reduce((a, p) => a + p.ms, 0);
   console.log('');
   console.log(`  TOTAL lifecycle:   ${fmtMs(totalMs)}`);
 
-  const ok = integrity === 'ok' && ready && before === reopen.after;
+  const heuristicOk = heuristicParity && fullSetParity && freshnessGateOk;
+  const ok = integrity === 'ok' && ready && before === reopen.after && heuristicOk;
   console.log('');
   console.log(ok ? 'BENCH OK' : 'BENCH FAILED');
   if (!ok) process.exitCode = 1;
