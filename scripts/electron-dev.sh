@@ -4,6 +4,10 @@
 
 echo "Starting KYUTXO in Electron development mode..."
 
+# Build the native read-engine worker bundle first so main.cjs can spawn it.
+echo "Building native read-engine worker bundle..."
+node scripts/build-native-engine.mjs
+
 # Start the dev server in background
 npm run dev &
 DEV_PID=$!

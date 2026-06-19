@@ -1,25 +1,50 @@
 /**
- * KYUTXO SQLite read-engine — pure core (Task #271).
+ * KYUTXO SQLite read-engine — pure core.
  *
- * This module contains ZERO browser/OPFS/Comlink dependencies. It operates on a
- * sqlite-wasm `Database` handle that the caller supplies, so the exact same SQL
+ * This module contains ZERO browser/OPFS/Comlink/Electron dependencies. It runs
+ * against the small `EngineDb` driver contract (see below), so the exact same SQL
  * logic can be:
- *   - driven by the off-main-thread worker against the OPFS-backed database, and
- *   - unit-tested in Node against an in-memory database.
+ *   - driven by the native better-sqlite3 worker inside Electron's Node side
+ *     (production: DB file lives on the portable USB), and
+ *   - unit-tested and benchmarked in plain Node against better-sqlite3.
  *
  * Responsibilities:
- *   - schema + indexes for the mirrored read tables,
- *   - idempotent, batched inserts (so re-seeding the same rows is a no-op),
- *   - a `seedMeta` high-water table that makes seeding resumable and lets the UI
- *     distinguish "fully mirrored" from "partially mirrored" (never show partial
- *     data as if it were complete),
+ *   - schema for the mirrored read tables, split into `createTablesOnly`
+ *     (bulk-load phase, no secondary indexes) and `createIndexes` (+ANALYZE),
+ *   - batched bulk inserts via the driver's single-transaction `insertMany`,
+ *   - a `seedMeta` high-water table that lets the UI distinguish "fully mirrored"
+ *     from "partially mirrored" (never show partial data as if it were complete);
+ *     the seed uses a full-rebuild model — drop + re-seed on any interruption,
  *   - the target read queries (record page / counts / search, per-address
  *     aggregates, owned-UTXO exact anti-join, participant lookups),
  *   - synthetic data generation for at-scale benchmarking.
  *
  * Source-of-truth remains Dexie/IndexedDB. This engine is a derived read replica.
  */
-import type { Database } from '@sqlite.org/sqlite-wasm';
+
+/**
+ * Minimal database driver contract this engine runs against. Implemented by a
+ * thin adapter over better-sqlite3 (production worker + Node tests/benchmark).
+ * Keeping the engine driver-agnostic means the exact same SQL is exercised in
+ * Node tests and in the packaged Electron app.
+ */
+export interface EngineDb {
+  /** Run one or more statements with no bound parameters (DDL, PRAGMA, ANALYZE). */
+  exec(sql: string): void;
+  /** Run a single parameterized statement (INSERT/UPDATE/DELETE or PRAGMA set). */
+  run(sql: string, bind?: unknown[]): void;
+  /** Select rows as plain objects keyed by column name. */
+  selectRows<T = Record<string, unknown>>(sql: string, bind?: unknown[]): T[];
+  /** Select the first column of the first row as a number (0 when no rows). */
+  selectScalar(sql: string, bind?: unknown[]): number;
+  /**
+   * Prepare `sql` once and run it for every parameter tuple inside a SINGLE
+   * transaction. This is the hot path for bulk-seeding tens of millions of rows.
+   */
+  insertMany(sql: string, rows: unknown[][]): void;
+  /** Run `fn` inside a transaction (commit on success, rollback on throw). */
+  transaction(fn: () => void): void;
+}
 
 // The tables we mirror in this stage. Lineage/custody are intentionally excluded
 // here (not an existential-risk surface) and added when those screens are ported.
@@ -100,41 +125,16 @@ export interface ParticipantRow {
 // Low-level helpers
 // ---------------------------------------------------------------------------
 
-function selectRows<T>(db: Database, sql: string, bind: unknown[] = []): T[] {
-  const rows: T[] = [];
-  db.exec({
-    sql,
-    bind: bind as never,
-    rowMode: 'object',
-    resultRows: rows as unknown[],
-  } as never);
-  return rows;
+function selectRows<T>(db: EngineDb, sql: string, bind: unknown[] = []): T[] {
+  return db.selectRows<T>(sql, bind);
 }
 
-function selectScalar(db: Database, sql: string, bind: unknown[] = []): number {
-  const rows: Array<{ v: number }> = [];
-  db.exec({
-    sql,
-    bind: bind as never,
-    rowMode: 'object',
-    resultRows: rows as unknown[],
-  } as never);
-  return rows[0]?.v ?? 0;
+function selectScalar(db: EngineDb, sql: string, bind: unknown[] = []): number {
+  return db.selectScalar(sql, bind);
 }
 
-function runInTx(db: Database, fn: () => void): void {
-  db.exec('BEGIN');
-  try {
-    fn();
-    db.exec('COMMIT');
-  } catch (err) {
-    try {
-      db.exec('ROLLBACK');
-    } catch {
-      /* ignore rollback failure */
-    }
-    throw err;
-  }
+function runInTx(db: EngineDb, fn: () => void): void {
+  db.transaction(fn);
 }
 
 function chunk<T>(arr: T[], size: number): T[][] {
@@ -147,7 +147,13 @@ function chunk<T>(arr: T[], size: number): T[][] {
 // Schema
 // ---------------------------------------------------------------------------
 
-export function createSchema(db: Database): void {
+/**
+ * Create the mirror + seedMeta TABLES only — NO secondary indexes. The seed path
+ * loads all rows into index-free tables (fast bulk inserts) and then calls
+ * `createIndexes` once at the end. seedMeta always carries its PK so progress can
+ * be tracked while data tables are still index-free.
+ */
+export function createTablesOnly(db: EngineDb): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS records (
       id                 INTEGER PRIMARY KEY,
@@ -173,12 +179,6 @@ export function createSchema(db: Database): void {
       tags               TEXT,
       categories         TEXT
     );
-    CREATE INDEX IF NOT EXISTS idx_records_type_id          ON records(type, id);
-    CREATE INDEX IF NOT EXISTS idx_records_importance_id    ON records(addressImportance, id);
-    CREATE INDEX IF NOT EXISTS idx_records_inputlower       ON records(inputStringLower);
-    CREATE INDEX IF NOT EXISTS idx_records_owner            ON records(owner);
-    CREATE INDEX IF NOT EXISTS idx_records_walletName       ON records(walletName);
-    CREATE INDEX IF NOT EXISTS idx_records_addr_owned       ON records(inputString, type, addressImportance);
 
     CREATE TABLE IF NOT EXISTS blockchainTransactions (
       id          INTEGER PRIMARY KEY,
@@ -190,8 +190,6 @@ export function createSchema(db: Database): void {
       vsize       INTEGER,
       hasOpReturn INTEGER
     );
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_bt_txid     ON blockchainTransactions(txid);
-    CREATE INDEX IF NOT EXISTS idx_bt_blockTime       ON blockchainTransactions(blockTime);
 
     CREATE TABLE IF NOT EXISTS transactionParticipants (
       id         INTEGER PRIMARY KEY,
@@ -205,6 +203,35 @@ export function createSchema(db: Database): void {
       recordId   INTEGER,
       scriptType TEXT
     );
+
+    CREATE TABLE IF NOT EXISTS seedMeta (
+      tableName    TEXT PRIMARY KEY,
+      highWaterId  INTEGER NOT NULL DEFAULT 0,
+      copied       INTEGER NOT NULL DEFAULT 0,
+      sourceCount  INTEGER NOT NULL DEFAULT 0,
+      complete     INTEGER NOT NULL DEFAULT 0,
+      updatedAt    INTEGER NOT NULL DEFAULT 0
+    );
+  `);
+}
+
+/**
+ * Create every secondary index and run ANALYZE. Called once after a bulk load so
+ * index maintenance does not slow the insert phase. Index definitions are the
+ * single source of truth for the engine's read query plans.
+ */
+export function createIndexes(db: EngineDb): void {
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_records_type_id          ON records(type, id);
+    CREATE INDEX IF NOT EXISTS idx_records_importance_id    ON records(addressImportance, id);
+    CREATE INDEX IF NOT EXISTS idx_records_inputlower       ON records(inputStringLower);
+    CREATE INDEX IF NOT EXISTS idx_records_owner            ON records(owner);
+    CREATE INDEX IF NOT EXISTS idx_records_walletName       ON records(walletName);
+    CREATE INDEX IF NOT EXISTS idx_records_addr_owned       ON records(inputString, type, addressImportance);
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_bt_txid     ON blockchainTransactions(txid);
+    CREATE INDEX IF NOT EXISTS idx_bt_blockTime       ON blockchainTransactions(blockTime);
+
     CREATE INDEX IF NOT EXISTS idx_tp_txid_role ON transactionParticipants(txid, role);
     CREATE INDEX IF NOT EXISTS idx_tp_txid      ON transactionParticipants(txid);
     CREATE INDEX IF NOT EXISTS idx_tp_address   ON transactionParticipants(address);
@@ -216,15 +243,36 @@ export function createSchema(db: Database): void {
     -- Covering index so the owned-UTXO sweep avoids row lookups at 20M scale.
     CREATE INDEX IF NOT EXISTS idx_tp_out       ON transactionParticipants(role, address, txid, vout, id);
 
-    CREATE TABLE IF NOT EXISTS seedMeta (
-      tableName    TEXT PRIMARY KEY,
-      highWaterId  INTEGER NOT NULL DEFAULT 0,
-      copied       INTEGER NOT NULL DEFAULT 0,
-      sourceCount  INTEGER NOT NULL DEFAULT 0,
-      complete     INTEGER NOT NULL DEFAULT 0,
-      updatedAt    INTEGER NOT NULL DEFAULT 0
-    );
+    ANALYZE;
   `);
+}
+
+/**
+ * Convenience: tables + indexes in one call. Used by unit tests and any caller
+ * that wants a query-ready database immediately (small data, no bulk-load phase).
+ */
+export function createSchema(db: EngineDb): void {
+  createTablesOnly(db);
+  createIndexes(db);
+}
+
+/**
+ * Drop the mirror DATA tables (records / blockchainTransactions /
+ * transactionParticipants). Used by the full-rebuild seed path on (re)start so
+ * an interrupted seed never leaves half-mirrored rows — we always start clean.
+ * seedMeta is preserved (callers reset it explicitly via `resetSeedMeta`).
+ */
+export function dropMirrorTables(db: EngineDb): void {
+  db.exec(`
+    DROP TABLE IF EXISTS records;
+    DROP TABLE IF EXISTS blockchainTransactions;
+    DROP TABLE IF EXISTS transactionParticipants;
+  `);
+}
+
+/** Clear all per-table seed progress rows (full-rebuild reset). */
+export function resetSeedMeta(db: EngineDb): void {
+  db.exec('DELETE FROM seedMeta;');
 }
 
 // ---------------------------------------------------------------------------
@@ -240,7 +288,7 @@ export interface SeedMeta {
   updatedAt: number;
 }
 
-export function getSeedMeta(db: Database, table: MirrorTable): SeedMeta {
+export function getSeedMeta(db: EngineDb, table: MirrorTable): SeedMeta {
   const rows = selectRows<SeedMeta>(
     db,
     'SELECT tableName, highWaterId, copied, sourceCount, complete, updatedAt FROM seedMeta WHERE tableName = ?',
@@ -258,7 +306,7 @@ export function getSeedMeta(db: Database, table: MirrorTable): SeedMeta {
   );
 }
 
-export function getAllSeedMeta(db: Database): SeedMeta[] {
+export function getAllSeedMeta(db: EngineDb): SeedMeta[] {
   return MIRROR_TABLES.map((t) => getSeedMeta(db, t));
 }
 
@@ -268,12 +316,12 @@ export function getAllSeedMeta(db: Database): SeedMeta[] {
  * the end of the source keyset — see markSeedCompleteIfDone.
  */
 export function upsertSeedProgress(
-  db: Database,
+  db: EngineDb,
   table: MirrorTable,
   fields: { highWaterId: number; copied: number; sourceCount: number; complete?: boolean },
 ): void {
-  db.exec({
-    sql: `
+  db.run(
+    `
       INSERT INTO seedMeta (tableName, highWaterId, copied, sourceCount, complete, updatedAt)
       VALUES (?, ?, ?, ?, ?, ?)
       ON CONFLICT(tableName) DO UPDATE SET
@@ -283,15 +331,15 @@ export function upsertSeedProgress(
         complete    = excluded.complete,
         updatedAt   = excluded.updatedAt
     `,
-    bind: [
+    [
       table,
       fields.highWaterId,
       fields.copied,
       fields.sourceCount,
       fields.complete ? 1 : 0,
       Date.now(),
-    ] as never,
-  } as never);
+    ],
+  );
 }
 
 /**
@@ -300,7 +348,7 @@ export function upsertSeedProgress(
  * from ever being presented as the full dataset.
  */
 export function markSeedCompleteIfDone(
-  db: Database,
+  db: EngineDb,
   table: MirrorTable,
   sourceCount: number,
 ): boolean {
@@ -316,7 +364,7 @@ export function markSeedCompleteIfDone(
   return complete;
 }
 
-export function isTableReady(db: Database, table: MirrorTable): boolean {
+export function isTableReady(db: EngineDb, table: MirrorTable): boolean {
   const meta = getSeedMeta(db, table);
   if (meta.complete !== 1) return false;
   // Defensive: complete flag must be backed by an actual row count that is not
@@ -324,7 +372,7 @@ export function isTableReady(db: Database, table: MirrorTable): boolean {
   return meta.copied >= meta.sourceCount;
 }
 
-export function isEngineReady(db: Database): boolean {
+export function isEngineReady(db: EngineDb): boolean {
   return MIRROR_TABLES.every((t) => isTableReady(db, t));
 }
 
@@ -332,11 +380,11 @@ export function isEngineReady(db: Database): boolean {
 // Counts
 // ---------------------------------------------------------------------------
 
-export function countTable(db: Database, table: MirrorTable): number {
+export function countTable(db: EngineDb, table: MirrorTable): number {
   return selectScalar(db, `SELECT COUNT(*) AS v FROM ${table}`);
 }
 
-export function maxId(db: Database, table: MirrorTable): number {
+export function maxId(db: EngineDb, table: MirrorTable): number {
   return selectScalar(db, `SELECT COALESCE(MAX(id), 0) AS v FROM ${table}`);
 }
 
@@ -344,110 +392,80 @@ export function maxId(db: Database, table: MirrorTable): number {
 // Idempotent batched inserts
 // ---------------------------------------------------------------------------
 
-export function insertRecords(db: Database, rows: RecordRow[]): void {
+export function insertRecords(db: EngineDb, rows: RecordRow[]): void {
   if (rows.length === 0) return;
-  runInTx(db, () => {
-    const stmt = db.prepare(`
-      INSERT OR REPLACE INTO records
+  db.insertMany(
+    `INSERT INTO records
         (id, type, inputString, inputStringLower, label, notes, owner, walletName,
          seedName, walletSoftware, addressImportance, chainType, syncDepth,
          firstSeenBlockTime, cachedBalanceSats, cachedTxCount, cachedUtxoCount,
          statsComputedAt, createdAt, updatedAt, tags, categories)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-    `);
-    try {
-      for (const r of rows) {
-        stmt.bind([
-          r.id,
-          r.type ?? null,
-          r.inputString ?? null,
-          r.inputStringLower ?? null,
-          r.label ?? null,
-          r.notes ?? null,
-          r.owner ?? null,
-          r.walletName ?? null,
-          r.seedName ?? null,
-          r.walletSoftware ?? null,
-          r.addressImportance ?? null,
-          r.chainType ?? null,
-          r.syncDepth ?? null,
-          r.firstSeenBlockTime ?? null,
-          r.cachedBalanceSats ?? null,
-          r.cachedTxCount ?? null,
-          r.cachedUtxoCount ?? null,
-          r.statsComputedAt ?? null,
-          r.createdAt ?? null,
-          r.updatedAt ?? null,
-          r.tags ?? null,
-          r.categories ?? null,
-        ]);
-        stmt.step();
-        stmt.reset();
-      }
-    } finally {
-      stmt.finalize();
-    }
-  });
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+    rows.map((r) => [
+      r.id,
+      r.type ?? null,
+      r.inputString ?? null,
+      r.inputStringLower ?? null,
+      r.label ?? null,
+      r.notes ?? null,
+      r.owner ?? null,
+      r.walletName ?? null,
+      r.seedName ?? null,
+      r.walletSoftware ?? null,
+      r.addressImportance ?? null,
+      r.chainType ?? null,
+      r.syncDepth ?? null,
+      r.firstSeenBlockTime ?? null,
+      r.cachedBalanceSats ?? null,
+      r.cachedTxCount ?? null,
+      r.cachedUtxoCount ?? null,
+      r.statsComputedAt ?? null,
+      r.createdAt ?? null,
+      r.updatedAt ?? null,
+      r.tags ?? null,
+      r.categories ?? null,
+    ]),
+  );
 }
 
-export function insertTransactions(db: Database, rows: TransactionRow[]): void {
+export function insertTransactions(db: EngineDb, rows: TransactionRow[]): void {
   if (rows.length === 0) return;
-  runInTx(db, () => {
-    const stmt = db.prepare(`
-      INSERT OR REPLACE INTO blockchainTransactions
+  db.insertMany(
+    `INSERT INTO blockchainTransactions
         (id, txid, blockHeight, blockTime, fee, feeRate, vsize, hasOpReturn)
-      VALUES (?,?,?,?,?,?,?,?)
-    `);
-    try {
-      for (const r of rows) {
-        stmt.bind([
-          r.id,
-          r.txid,
-          r.blockHeight ?? null,
-          r.blockTime ?? null,
-          r.fee ?? null,
-          r.feeRate ?? null,
-          r.vsize ?? null,
-          r.hasOpReturn ?? null,
-        ]);
-        stmt.step();
-        stmt.reset();
-      }
-    } finally {
-      stmt.finalize();
-    }
-  });
+      VALUES (?,?,?,?,?,?,?,?)`,
+    rows.map((r) => [
+      r.id,
+      r.txid,
+      r.blockHeight ?? null,
+      r.blockTime ?? null,
+      r.fee ?? null,
+      r.feeRate ?? null,
+      r.vsize ?? null,
+      r.hasOpReturn ?? null,
+    ]),
+  );
 }
 
-export function insertParticipants(db: Database, rows: ParticipantRow[]): void {
+export function insertParticipants(db: EngineDb, rows: ParticipantRow[]): void {
   if (rows.length === 0) return;
-  runInTx(db, () => {
-    const stmt = db.prepare(`
-      INSERT OR REPLACE INTO transactionParticipants
+  db.insertMany(
+    `INSERT INTO transactionParticipants
         (id, txid, role, address, amount, vout, prevTxid, prevVout, recordId, scriptType)
-      VALUES (?,?,?,?,?,?,?,?,?,?)
-    `);
-    try {
-      for (const r of rows) {
-        stmt.bind([
-          r.id,
-          r.txid,
-          r.role,
-          r.address,
-          r.amount ?? 0,
-          r.vout ?? null,
-          r.prevTxid ?? null,
-          r.prevVout ?? null,
-          r.recordId ?? null,
-          r.scriptType ?? null,
-        ]);
-        stmt.step();
-        stmt.reset();
-      }
-    } finally {
-      stmt.finalize();
-    }
-  });
+      VALUES (?,?,?,?,?,?,?,?,?,?)`,
+    rows.map((r) => [
+      r.id,
+      r.txid,
+      r.role,
+      r.address,
+      r.amount ?? 0,
+      r.vout ?? null,
+      r.prevTxid ?? null,
+      r.prevVout ?? null,
+      r.recordId ?? null,
+      r.scriptType ?? null,
+    ]),
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -485,7 +503,7 @@ function buildRecordWhere(opts: RecordQueryOptions): { sql: string; bind: unknow
   return { sql, bind };
 }
 
-export function countRecords(db: Database, opts: RecordQueryOptions = {}): number {
+export function countRecords(db: EngineDb, opts: RecordQueryOptions = {}): number {
   const { sql, bind } = buildRecordWhere(opts);
   return selectScalar(db, `SELECT COUNT(*) AS v FROM records ${sql}`, bind);
 }
@@ -501,7 +519,7 @@ export interface RecordPageOptions extends RecordQueryOptions {
  * Records page ordering. Uses id < beforeId so paging never re-scans skipped
  * rows the way OFFSET does.
  */
-export function getRecordPage(db: Database, opts: RecordPageOptions): RecordRow[] {
+export function getRecordPage(db: EngineDb, opts: RecordPageOptions): RecordRow[] {
   const where = buildRecordWhere(opts);
   const clauses: string[] = [];
   const bind: unknown[] = [];
@@ -542,7 +560,7 @@ export interface AddressAggregate {
  * outpoint). Heuristic (no-prevout) mode is intentionally not replicated here;
  * synced data carries prevout data.
  */
-export function getAddressAggregates(db: Database, addresses: string[]): Map<string, AddressAggregate> {
+export function getAddressAggregates(db: EngineDb, addresses: string[]): Map<string, AddressAggregate> {
   const out = new Map<string, AddressAggregate>();
   if (addresses.length === 0) return out;
 
@@ -635,7 +653,7 @@ function ownedTierPlaceholders(tiers: string[]): { sql: string; bind: string[] }
   return { sql: t.map(() => '?').join(','), bind: t };
 }
 
-export function countOwnedUtxos(db: Database, tiers: string[] = OWNED_TIERS): number {
+export function countOwnedUtxos(db: EngineDb, tiers: string[] = OWNED_TIERS): number {
   const { sql: tierSql, bind } = ownedTierPlaceholders(tiers);
   return selectScalar(
     db,
@@ -661,7 +679,7 @@ export function countOwnedUtxos(db: Database, tiers: string[] = OWNED_TIERS): nu
 }
 
 export function getOwnedUtxos(
-  db: Database,
+  db: EngineDb,
   opts: { tiers?: string[]; afterId?: number; limit: number },
 ): OwnedUtxo[] {
   const { sql: tierSql, bind } = ownedTierPlaceholders(opts.tiers ?? OWNED_TIERS);
@@ -703,7 +721,7 @@ export function getOwnedUtxos(
 // Query: participant lookups (compat with the prototype surface)
 // ---------------------------------------------------------------------------
 
-export function getParticipantsByTxids(db: Database, txids: string[]): ParticipantRow[] {
+export function getParticipantsByTxids(db: EngineDb, txids: string[]): ParticipantRow[] {
   if (txids.length === 0) return [];
   const out: ParticipantRow[] = [];
   for (const batch of chunk(txids, PARAM_BATCH_SIZE)) {
@@ -719,7 +737,7 @@ export function getParticipantsByTxids(db: Database, txids: string[]): Participa
   return out;
 }
 
-export function getParticipantsByAddresses(db: Database, addresses: string[]): ParticipantRow[] {
+export function getParticipantsByAddresses(db: EngineDb, addresses: string[]): ParticipantRow[] {
   if (addresses.length === 0) return [];
   const out: ParticipantRow[] = [];
   for (const batch of chunk(addresses, PARAM_BATCH_SIZE)) {
@@ -746,7 +764,7 @@ export interface DbFileStats {
   sizeBytes: number;
 }
 
-export function getDbFileStats(db: Database): DbFileStats {
+export function getDbFileStats(db: EngineDb): DbFileStats {
   const pageCount = selectScalarPragma(db, 'PRAGMA page_count');
   const pageSize = selectScalarPragma(db, 'PRAGMA page_size');
   const freelistCount = selectScalarPragma(db, 'PRAGMA freelist_count');
@@ -758,10 +776,9 @@ export function getDbFileStats(db: Database): DbFileStats {
   };
 }
 
-function selectScalarPragma(db: Database, pragma: string): number {
-  const rows: Array<unknown[]> = [];
-  db.exec({ sql: pragma, rowMode: 'array', resultRows: rows } as never);
-  const v = rows[0]?.[0];
+function selectScalarPragma(db: EngineDb, pragma: string): number {
+  const rows = db.selectRows<Record<string, unknown>>(pragma);
+  const v = rows[0] ? Object.values(rows[0])[0] : undefined;
   return typeof v === 'number' ? v : Number(v ?? 0);
 }
 
@@ -791,14 +808,22 @@ export interface SyntheticSpec {
  * rows where a configurable fraction of outputs are later spent (so the UTXO
  * anti-join has real work to do). Returns the row counts created.
  */
+export interface SeedProgress {
+  phase: 'records' | 'transactions' | 'participants';
+  done: number;
+  total: number;
+}
+
 export function generateSyntheticData(
-  db: Database,
+  db: EngineDb,
   spec: SyntheticSpec,
+  onProgress?: (p: SeedProgress) => void,
 ): { records: number; transactions: number; participants: number } {
   const participantsPerTx = spec.participantsPerTx ?? 4;
   const spentFraction = spec.spentFraction ?? 0.5;
   const batchSize = spec.batchSize ?? 20000;
   const addressCount = Math.max(1, spec.addresses);
+  const estParticipants = spec.transactions * participantsPerTx;
 
   // 1) Address records.
   {
@@ -834,6 +859,7 @@ export function generateSyntheticData(
         });
       }
       insertRecords(db, rows);
+      onProgress?.({ phase: 'records', done: id - 1, total: addressCount });
     }
   }
 
@@ -856,6 +882,7 @@ export function generateSyntheticData(
         });
       }
       insertTransactions(db, rows);
+      onProgress?.({ phase: 'transactions', done: id - 1, total: spec.transactions });
     }
   }
 
@@ -909,9 +936,11 @@ export function generateSyntheticData(
         if (rows.length >= batchSize) {
           insertParticipants(db, rows);
           rows.length = 0;
+          onProgress?.({ phase: 'participants', done: participantId - 1, total: estParticipants });
         }
       }
       if (rows.length > 0) insertParticipants(db, rows);
+      onProgress?.({ phase: 'participants', done: participantId - 1, total: estParticipants });
     }
   }
 
@@ -926,11 +955,53 @@ export function generateSyntheticData(
 // PRAGMA tuning (applied by the worker right after opening the DB).
 // ---------------------------------------------------------------------------
 
-export function applyTuningPragmas(db: Database): void {
+export function applyTuningPragmas(db: EngineDb): void {
   // Larger page cache (negative = KiB). ~64 MiB of cache materially speeds up
   // the index-heavy anti-join on tens of millions of rows.
   db.exec('PRAGMA cache_size = -65536;');
   db.exec('PRAGMA temp_store = MEMORY;');
   db.exec('PRAGMA synchronous = NORMAL;');
   db.exec('PRAGMA foreign_keys = OFF;');
+}
+
+/**
+ * Durable connection pragmas applied immediately after opening the native DB on
+ * removable media. journal_mode=TRUNCATE (NOT WAL) keeps the database to a single
+ * file that survives USB removal cleanly; temp_store=MEMORY keeps temp B-trees off
+ * the slow stick; a large negative cache_size buys ~64 MiB of page cache.
+ */
+export function applyConnectionPragmas(db: EngineDb): void {
+  db.exec('PRAGMA journal_mode = TRUNCATE;');
+  db.exec('PRAGMA temp_store = MEMORY;');
+  db.exec('PRAGMA foreign_keys = OFF;');
+  db.exec('PRAGMA cache_size = -65536;');
+}
+
+/**
+ * Bulk-load pragmas: synchronous=OFF trades crash-durability for speed during the
+ * full-rebuild seed. Safe here because the engine is a DERIVED replica — on any
+ * interruption we drop and re-seed from Dexie, and we run integrity_check before
+ * marking READY. Call applyReadPragmas once the load + index phase completes.
+ */
+export function applyBulkLoadPragmas(db: EngineDb): void {
+  db.exec('PRAGMA synchronous = OFF;');
+}
+
+/** Steady-state pragmas after seeding: restore NORMAL durability for reads. */
+export function applyReadPragmas(db: EngineDb): void {
+  db.exec('PRAGMA synchronous = NORMAL;');
+}
+
+/**
+ * Run PRAGMA integrity_check and collapse the result to a single status string.
+ * Returns 'ok' when the database is sound, otherwise a semicolon-joined list of
+ * the problems SQLite reported. This is the gate the seed runs before marking READY.
+ */
+export function integrityCheck(db: EngineDb): string {
+  const rows = db.selectRows<Record<string, unknown>>('PRAGMA integrity_check');
+  const messages = rows
+    .map((r) => String(Object.values(r)[0] ?? '').trim())
+    .filter((m) => m.length > 0);
+  if (messages.length === 1 && messages[0].toLowerCase() === 'ok') return 'ok';
+  return messages.join('; ') || 'ok';
 }

@@ -56,6 +56,9 @@ jobs:
       - name: Build application for Electron
         run: npx vite build --config vite.config.electron.ts
 
+      - name: Build native read-engine worker bundle
+        run: node scripts/build-native-engine.mjs
+
       - name: Build Electron app
         run: npx electron-builder --config electron-builder.json --win
 

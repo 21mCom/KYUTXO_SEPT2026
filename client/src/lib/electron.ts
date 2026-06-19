@@ -143,6 +143,31 @@ export interface TorStatusResult {
   recommendation: string;
 }
 
+// Native read-engine IPC bridge (better-sqlite3 worker_thread, desktop only).
+// Every channel returns a uniform { ok, result, error } envelope so the renderer
+// never has to catch a rejected invoke. `result` is typed as `unknown` here to
+// keep this module decoupled from engine-core; engine-client.ts casts on unwrap.
+export interface EngineEnvelope<T = unknown> {
+  ok: boolean;
+  result?: T;
+  error?: string;
+}
+
+export interface EngineBridge {
+  init: () => Promise<EngineEnvelope>;
+  status: () => Promise<EngineEnvelope>;
+  seedBegin: () => Promise<EngineEnvelope>;
+  seedBatch: (table: string, rows: unknown[]) => Promise<EngineEnvelope>;
+  seedFinish: (sourceCounts: Record<string, number>) => Promise<EngineEnvelope>;
+  query: (name: string, args: unknown) => Promise<EngineEnvelope>;
+  benchmark: () => Promise<EngineEnvelope>;
+  reopen: () => Promise<EngineEnvelope>;
+  integrityCheck: () => Promise<EngineEnvelope>;
+  clear: () => Promise<EngineEnvelope>;
+  generateSynthetic: (spec: unknown) => Promise<EngineEnvelope>;
+  dbInfo: () => Promise<EngineEnvelope>;
+}
+
 // Type declarations for Electron API exposed via preload
 interface ElectronAPI {
   getAppDataPath: () => Promise<string>;
@@ -174,6 +199,8 @@ interface ElectronAPI {
   electrumBatchGetHistory: (params: ElectrumBatchHistoryParams) => Promise<ElectrumBatchHistoryResult>;
   platform: string;
   isElectron: boolean;
+  // Native read-engine bridge (present only in the desktop build).
+  engine: EngineBridge;
 }
 
 declare global {

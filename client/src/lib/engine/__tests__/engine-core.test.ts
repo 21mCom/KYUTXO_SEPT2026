@@ -1,16 +1,20 @@
-// Correctness tests for the SQLite read-engine pure core (Task #271).
+// Correctness tests for the SQLite read-engine pure core.
 //
-// Runs sqlite-wasm in an in-memory database inside Node (vitest default env), so
-// the exact SQL the worker runs against OPFS is exercised here without any
-// browser. fake-indexeddb/auto is imported only so we can safely import the real
-// computeUtxoCountForAddress (its module graph references indexedDB at import).
+// Runs better-sqlite3 in an in-memory database inside Node (vitest default env),
+// so the EXACT SQL the production Electron worker runs against the native DB on
+// the USB is exercised here without any browser. fake-indexeddb/auto is imported
+// only so we can safely import the real computeUtxoCountForAddress (its module
+// graph references indexedDB at import).
 
 import "fake-indexeddb/auto";
 
 import { describe, it, expect, beforeAll, beforeEach } from "vitest";
-import sqlite3InitModule, { type Database, type Sqlite3Static } from "@sqlite.org/sqlite-wasm";
+import { createInMemoryEngineDb, type BetterSqlite3EngineDb } from "../better-sqlite3-adapter";
 import {
   createSchema,
+  createTablesOnly,
+  dropMirrorTables,
+  resetSeedMeta,
   insertRecords,
   insertTransactions,
   insertParticipants,
@@ -34,11 +38,8 @@ import {
 import { computeUtxoCountForAddress } from "@/lib/data/address-stats";
 import type { TransactionParticipant } from "@/lib/database";
 
-let sqlite3: Sqlite3Static;
-
-async function freshDb(): Promise<Database> {
-  if (!sqlite3) sqlite3 = await sqlite3InitModule();
-  const db = new sqlite3.oo1.DB(":memory:", "c");
+async function freshDb(): Promise<BetterSqlite3EngineDb> {
+  const db = createInMemoryEngineDb();
   createSchema(db);
   return db;
 }
@@ -101,28 +102,33 @@ function toTp(p: ParticipantRow): TransactionParticipant {
 }
 
 describe("engine-core: schema + idempotent inserts", () => {
-  let db: Database;
+  let db: BetterSqlite3EngineDb;
   beforeAll(async () => {
     db = await freshDb();
   });
 
-  it("inserts and counts; re-inserting the same rows is idempotent", () => {
+  it("inserts and counts; a full rebuild drops then re-seeds fresh rows", () => {
     const rows = [rec({ id: 1 }), rec({ id: 2 }), rec({ id: 3 })];
     insertRecords(db, rows);
     expect(countTable(db, "records")).toBe(3);
-    // INSERT OR REPLACE — same ids, no growth.
-    insertRecords(db, rows);
-    expect(countTable(db, "records")).toBe(3);
-    // Re-insert with a changed field updates in place.
-    insertRecords(db, [rec({ id: 2, label: "updated" })]);
+
+    // Full-rebuild model: plain INSERT (no upsert), so re-inserting the same id
+    // is a hard error rather than a silent replace.
+    expect(() => insertRecords(db, [rec({ id: 2 })])).toThrow();
+
+    // To change mirrored data we drop the tables and re-seed from scratch — an
+    // interrupted seed never leaves half-mirrored rows and there is no dup risk.
+    dropMirrorTables(db);
+    createTablesOnly(db);
+    insertRecords(db, [rec({ id: 1 }), rec({ id: 2, label: "updated" }), rec({ id: 3 })]);
     expect(countTable(db, "records")).toBe(3);
     const page = getRecordPage(db, { limit: 10, includeBlockchainDiscovered: true });
     expect(page.find((r) => r.id === 2)?.label).toBe("updated");
   });
 });
 
-describe("engine-core: seedMeta resumability + no-partial-complete", () => {
-  let db: Database;
+describe("engine-core: seedMeta state-machine + no-partial-complete", () => {
+  let db: BetterSqlite3EngineDb;
   beforeEach(async () => {
     db = await freshDb();
   });
@@ -155,19 +161,30 @@ describe("engine-core: seedMeta resumability + no-partial-complete", () => {
     expect(isEngineReady(db)).toBe(true);
   });
 
-  it("resume from high-water mark does not lose or double rows (idempotent)", () => {
-    // Simulate a crash: first half copied + progress persisted.
+  it("a full rebuild on restart drops half-seeded rows and re-seeds clean (no resume)", () => {
+    // Simulate an interrupted seed: first half copied + progress persisted.
     insertRecords(db, [rec({ id: 1 }), rec({ id: 2 }), rec({ id: 3 })]);
     upsertSeedProgress(db, "records", { highWaterId: 3, copied: 3, sourceCount: 6, complete: false });
-    // Resume re-copies an overlapping batch (idempotent) + the rest.
-    insertRecords(db, [rec({ id: 3 }), rec({ id: 4 }), rec({ id: 5 }), rec({ id: 6 })]);
+    expect(isTableReady(db, "records")).toBe(false);
+
+    // Restart = FULL REBUILD (no resume): drop the data tables, recreate them,
+    // reset progress, then seed the entire source from scratch.
+    dropMirrorTables(db);
+    createTablesOnly(db);
+    resetSeedMeta(db);
+    insertRecords(db, [
+      rec({ id: 1 }), rec({ id: 2 }), rec({ id: 3 }),
+      rec({ id: 4 }), rec({ id: 5 }), rec({ id: 6 }),
+    ]);
+    upsertSeedProgress(db, "records", { highWaterId: 6, copied: 6, sourceCount: 6, complete: false });
     expect(countTable(db, "records")).toBe(6);
     expect(markSeedCompleteIfDone(db, "records", 6)).toBe(true);
+    expect(isTableReady(db, "records")).toBe(true);
   });
 });
 
 describe("engine-core: record page / count / search", () => {
-  let db: Database;
+  let db: BetterSqlite3EngineDb;
   beforeAll(async () => {
     db = await freshDb();
     insertRecords(db, [
@@ -210,7 +227,7 @@ describe("engine-core: record page / count / search", () => {
 });
 
 describe("engine-core: UTXO exact anti-join parity vs computeUtxoCountForAddress", () => {
-  let db: Database;
+  let db: BetterSqlite3EngineDb;
   // Build a realistic exact-mode fixture:
   //   A: 3 outputs, spends one of its own outputs (1 spent, 2 unspent)
   //   B: 2 outputs, spends both (0 unspent)
@@ -272,7 +289,7 @@ describe("engine-core: UTXO exact anti-join parity vs computeUtxoCountForAddress
 });
 
 describe("engine-core: owned-UTXO set join (tiers)", () => {
-  let db: Database;
+  let db: BetterSqlite3EngineDb;
   beforeAll(async () => {
     db = await freshDb();
     // Address records: A owned (manual), Z not owned (blockchain-discovered).
@@ -299,7 +316,7 @@ describe("engine-core: owned-UTXO set join (tiers)", () => {
 });
 
 describe("engine-core: owned-UTXO dedup when an address has multiple records", () => {
-  let db: Database;
+  let db: BetterSqlite3EngineDb;
   beforeAll(async () => {
     db = await freshDb();
     // Two owned address records pointing at the SAME address. A naive JOIN would
@@ -329,7 +346,7 @@ describe("engine-core: owned-UTXO dedup when an address has multiple records", (
 });
 
 describe("engine-core: participant lookups", () => {
-  let db: Database;
+  let db: BetterSqlite3EngineDb;
   beforeAll(async () => {
     db = await freshDb();
     insertParticipants(db, [out("tx1", "A", 0, 100), out("tx1", "B", 1, 200), inp("tx2", "A", 50, "tx1", 0)]);

@@ -13,6 +13,7 @@ const {
 
 const { registerFileHandlers } = require('./file-handlers.cjs');
 const { registerElectrumHandlers, stopKeepalive } = require('./electrum-client.cjs');
+const { registerEngineHandlers, stopEngineWorker } = require('./engine-handlers.cjs');
 
 let mainWindow;
 
@@ -163,6 +164,7 @@ function createWindow() {
 
 registerFileHandlers(ipcMain, { dataDir, attachmentsDir, portableMode });
 registerElectrumHandlers(ipcMain);
+registerEngineHandlers(ipcMain, { dataDir, portableMode });
 
 // ============================================================================
 // TOR PROXY IPC HANDLERS
@@ -357,6 +359,7 @@ app.on('window-all-closed', () => {
 app.on('before-quit', () => {
   console.log('[Electrum Pool] Cleaning up connections before quit');
   stopKeepalive();
+  stopEngineWorker();
 });
 
 app.on('activate', () => {

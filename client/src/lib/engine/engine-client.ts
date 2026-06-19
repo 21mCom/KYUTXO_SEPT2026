@@ -1,24 +1,22 @@
 /**
- * Main-thread client for the KYUTXO SQLite read-engine worker (Task #271).
+ * Renderer-side client for the KYUTXO NATIVE read-engine (Task #272).
  *
- * Owns the Worker + Comlink wiring and exposes a typed, promise-based API. Also
- * best-effort requests durable storage from the window (StorageManager.persist()
- * is window-only in most browsers; the worker reads back persisted()/estimate()).
+ * The SQLite work runs in a better-sqlite3 worker_thread on Electron's Node side
+ * (see client/src/workers/engine-node-worker.ts), reached through a FIXED set of
+ * IPC channels exposed by the preload as `window.electronAPI.engine.*`. The
+ * renderer can never pass arbitrary SQL or file paths — only a closed enum of
+ * query names and pre-mapped rows.
+ *
+ * What lives HERE (the renderer): the IndexedDB keyset reader + the Dexie→mirror
+ * row mappers + the PUSH seed loop (seedBegin → stream seedBatch → seedFinish).
+ * The renderer owns the source (Dexie) schema, so it maps rows and streams them;
+ * the worker owns the SQLite side and the EMPTY→LOADING→INDEXING→READY/ERROR
+ * state machine.
  *
  * This is an ISOLATED engine surface — it does not touch the live Dexie data
  * paths. Screens are ported onto it only after the foundation is proven at scale.
  */
-import * as Comlink from 'comlink';
-import type {
-  EngineWorkerApi,
-  InitResult,
-  EngineStatus,
-  SeedProgress,
-  SeedResult,
-  QueryBenchmarkResult,
-  StorageMode,
-  StorageEstimate,
-} from '../../workers/engine-worker';
+import type { EngineBridge, EngineEnvelope } from '../electron';
 import type {
   RecordRow,
   RecordPageOptions,
@@ -28,17 +26,14 @@ import type {
   ParticipantRow,
   SeedMeta,
   MirrorTable,
+  DbFileStats,
   SyntheticSpec,
 } from './engine-core';
+// Type-only — fully erased at build, so the Node worker module (which imports
+// better-sqlite3) is never pulled into the renderer bundle.
+import type { EngineState, EngineSnapshot, BenchmarkRow } from '../../workers/engine-node-worker';
 
 export type {
-  InitResult,
-  EngineStatus,
-  SeedProgress,
-  SeedResult,
-  QueryBenchmarkResult,
-  StorageMode,
-  StorageEstimate,
   RecordRow,
   RecordPageOptions,
   RecordQueryOptions,
@@ -47,112 +42,369 @@ export type {
   ParticipantRow,
   SeedMeta,
   MirrorTable,
+  DbFileStats,
   SyntheticSpec,
+  EngineState,
+  EngineSnapshot,
+  BenchmarkRow,
 };
 
-let worker: Worker | null = null;
-let client: Comlink.Remote<EngineWorkerApi> | null = null;
-let initPromise: Promise<InitResult> | null = null;
-
-function getClient(): Comlink.Remote<EngineWorkerApi> {
-  if (!client) {
-    worker = new Worker(new URL('../../workers/engine-worker.ts', import.meta.url), {
-      type: 'module',
-    });
-    client = Comlink.wrap<EngineWorkerApi>(worker);
-  }
-  return client;
+export interface ReopenResult {
+  before: number;
+  after: number;
+  ready: boolean;
+  fileStats: DbFileStats;
 }
 
-/** Best-effort durable-storage request (window-only API). */
-async function requestPersistence(): Promise<void> {
-  try {
-    if (typeof navigator !== 'undefined' && navigator.storage?.persist) {
-      const already = navigator.storage.persisted ? await navigator.storage.persisted() : false;
-      if (!already) await navigator.storage.persist();
-    }
-  } catch {
-    /* ignore — worker reports the actual persisted state */
-  }
+export interface DbInfo {
+  dbPath: string;
+  portableMode: boolean;
 }
 
-export async function ensureEngineInit(): Promise<InitResult> {
+export interface SeedProgress {
+  table: MirrorTable;
+  processed: number;
+  total: number;
+}
+
+export interface SeedResult {
+  table: MirrorTable;
+  copied: number;
+  sourceCount: number;
+  durationMs: number;
+  cancelled: boolean;
+  complete: boolean;
+}
+
+export interface SyntheticResult {
+  records: number;
+  transactions: number;
+  participants: number;
+}
+
+export const ENGINE_UNAVAILABLE_MESSAGE =
+  'The native read-engine runs only in the KYUTXO desktop app. Open this page from the ' +
+  'desktop build — it is not available in the browser preview.';
+
+// Source IndexedDB (Dexie) database + the stores we mirror.
+const IDB_NAME = 'KYUTXODatabase';
+const SEED_CHUNK_SIZE = 10000;
+const MIRROR_TABLES: MirrorTable[] = ['records', 'blockchainTransactions', 'transactionParticipants'];
+
+// ---------------------------------------------------------------------------
+// IPC plumbing
+// ---------------------------------------------------------------------------
+
+export function isEngineAvailable(): boolean {
+  return typeof window !== 'undefined' && !!window.electronAPI?.engine;
+}
+
+function getEngine(): EngineBridge {
+  const engine = typeof window !== 'undefined' ? window.electronAPI?.engine : undefined;
+  if (!engine) throw new Error(ENGINE_UNAVAILABLE_MESSAGE);
+  return engine;
+}
+
+/** Unwrap the uniform { ok, result, error } envelope into a value or a throw. */
+async function unwrap<T>(p: Promise<EngineEnvelope>): Promise<T> {
+  const env = await p;
+  if (!env || !env.ok) throw new Error(env?.error || 'Engine call failed');
+  return env.result as T;
+}
+
+let initPromise: Promise<EngineSnapshot> | null = null;
+let cancelRequested = false;
+
+export async function ensureEngineInit(): Promise<EngineSnapshot> {
+  if (!isEngineAvailable()) throw new Error(ENGINE_UNAVAILABLE_MESSAGE);
   if (!initPromise) {
-    initPromise = (async () => {
-      await requestPersistence();
-      return getClient().init();
-    })();
+    initPromise = unwrap<EngineSnapshot>(getEngine().init()).catch((err) => {
+      initPromise = null; // allow a retry after a failed init
+      throw err;
+    });
   }
   return initPromise;
 }
 
-export async function getEngineStatus(): Promise<EngineStatus> {
+export async function getEngineStatus(): Promise<EngineSnapshot> {
   await ensureEngineInit();
-  return getClient().getStatus();
+  return unwrap<EngineSnapshot>(getEngine().status());
 }
 
-export async function seedTable(
+export async function getDbInfo(): Promise<DbInfo> {
+  return unwrap<DbInfo>(getEngine().dbInfo());
+}
+
+// ---------------------------------------------------------------------------
+// IndexedDB keyset reader (source = the live Dexie vault)
+// ---------------------------------------------------------------------------
+
+function openIdb(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(IDB_NAME);
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error ?? new Error('Failed to open IndexedDB'));
+    req.onblocked = () => reject(new Error('IndexedDB open blocked'));
+  });
+}
+
+function idbCount(idb: IDBDatabase, store: string): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const tx = idb.transaction(store, 'readonly');
+    const req = tx.objectStore(store).count();
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error ?? new Error('IndexedDB count failed'));
+  });
+}
+
+function idbGetBatch(idb: IDBDatabase, store: string, lastId: number, limit: number): Promise<unknown[]> {
+  return new Promise((resolve, reject) => {
+    const tx = idb.transaction(store, 'readonly');
+    const range = IDBKeyRange.lowerBound(lastId, true);
+    const req = tx.objectStore(store).getAll(range, limit);
+    req.onsuccess = () => resolve(req.result as unknown[]);
+    req.onerror = () => reject(req.error ?? new Error('IndexedDB getAll failed'));
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Row mappers (Dexie object -> mirror row)
+// ---------------------------------------------------------------------------
+
+function toInt(v: unknown): number | null {
+  if (v === null || v === undefined) return null;
+  if (typeof v === 'boolean') return v ? 1 : 0;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function toText(v: unknown): string | null {
+  if (v === null || v === undefined) return null;
+  return String(v);
+}
+
+function jsonArray(v: unknown): string {
+  if (Array.isArray(v)) return JSON.stringify(v);
+  return '[]';
+}
+
+function mapRecord(o: Record<string, unknown>): RecordRow {
+  const inputString = toText(o.inputString) ?? '';
+  return {
+    id: Number(o.id),
+    type: toText(o.type) ?? 'other',
+    inputString,
+    inputStringLower: toText(o.inputStringLower) ?? inputString.toLowerCase(),
+    label: toText(o.label),
+    notes: toText(o.notes),
+    owner: toText(o.owner),
+    walletName: toText(o.walletName),
+    seedName: toText(o.seedName),
+    walletSoftware: toText(o.walletSoftware),
+    addressImportance: toText(o.addressImportance),
+    chainType: toText(o.chainType),
+    syncDepth: toInt(o.syncDepth),
+    firstSeenBlockTime: toInt(o.firstSeenBlockTime),
+    cachedBalanceSats: toInt(o.cachedBalanceSats),
+    cachedTxCount: toInt(o.cachedTxCount),
+    cachedUtxoCount: toInt(o.cachedUtxoCount),
+    statsComputedAt: toInt(o.statsComputedAt),
+    createdAt: toInt(o.createdAt),
+    updatedAt: toInt(o.updatedAt),
+    tags: jsonArray(o.tags),
+    categories: jsonArray(o.categories),
+  };
+}
+
+function mapTransaction(o: Record<string, unknown>) {
+  return {
+    id: Number(o.id),
+    txid: toText(o.txid) ?? '',
+    blockHeight: toInt(o.blockHeight),
+    blockTime: toInt(o.blockTime),
+    fee: toInt(o.fee),
+    feeRate: typeof o.feeRate === 'number' ? o.feeRate : toInt(o.feeRate),
+    vsize: toInt(o.vsize),
+    hasOpReturn: toInt(o.hasOpReturn),
+  };
+}
+
+function mapParticipant(o: Record<string, unknown>): ParticipantRow {
+  return {
+    id: Number(o.id),
+    txid: toText(o.txid) ?? '',
+    role: (toText(o.role) as 'input' | 'output') ?? 'output',
+    address: toText(o.address) ?? '',
+    amount: toInt(o.amount) ?? 0,
+    vout: toInt(o.vout),
+    prevTxid: toText(o.prevTxid),
+    prevVout: toInt(o.prevVout),
+    recordId: toInt(o.recordId),
+    scriptType: toText(o.scriptType),
+  };
+}
+
+const TABLE_MAPPERS: Record<MirrorTable, (o: Record<string, unknown>) => unknown> = {
+  records: mapRecord,
+  blockchainTransactions: mapTransaction,
+  transactionParticipants: mapParticipant,
+};
+
+// ---------------------------------------------------------------------------
+// Seed (PUSH): read Dexie keyset → map → stream batches over IPC
+// ---------------------------------------------------------------------------
+
+export function cancelSeeding(): void {
+  cancelRequested = true;
+}
+
+async function seedTableStream(
+  idb: IDBDatabase,
   table: MirrorTable,
   onProgress?: (p: SeedProgress) => void,
 ): Promise<SeedResult> {
-  await ensureEngineInit();
-  const cb = onProgress ? Comlink.proxy(onProgress) : undefined;
-  return getClient().seedTable(table, cb);
+  const start = performance.now();
+  const engine = getEngine();
+
+  // Empty / new vault: the source store may not exist. Nothing to copy.
+  if (!idb.objectStoreNames.contains(table)) {
+    return { table, copied: 0, sourceCount: 0, durationMs: performance.now() - start, cancelled: false, complete: true };
+  }
+
+  let sourceCount = 0;
+  try {
+    sourceCount = await idbCount(idb, table);
+  } catch {
+    sourceCount = 0;
+  }
+
+  const map = TABLE_MAPPERS[table];
+  let lastId = 0; // full rebuild — seedBegin already dropped everything
+  let copied = 0;
+  let cancelled = false;
+
+  onProgress?.({ table, processed: 0, total: sourceCount });
+
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    if (cancelRequested) {
+      cancelled = true;
+      break;
+    }
+    const batch = await idbGetBatch(idb, table, lastId, SEED_CHUNK_SIZE);
+    if (batch.length === 0) break;
+
+    const mapped = batch.map((o) => map(o as Record<string, unknown>));
+    await unwrap(engine.seedBatch(table, mapped));
+
+    const lastRow = batch[batch.length - 1] as { id: number };
+    lastId = Number(lastRow.id);
+    copied += batch.length;
+    onProgress?.({ table, processed: copied, total: Math.max(sourceCount, copied) });
+
+    if (batch.length < SEED_CHUNK_SIZE) break;
+  }
+
+  return {
+    table,
+    copied,
+    sourceCount,
+    durationMs: performance.now() - start,
+    cancelled,
+    complete: !cancelled && copied >= sourceCount,
+  };
 }
 
+/**
+ * Full-rebuild seed of the whole vault into the engine. Drops + rebuilds via
+ * seedBegin, streams every table, then seedFinish builds indexes, runs
+ * integrity_check and marks the engine READY. On cancel it aborts via clear() so
+ * the worker is never left in a half-seeded LOADING state.
+ */
 export async function seedAll(onProgress?: (p: SeedProgress) => void): Promise<SeedResult[]> {
   await ensureEngineInit();
-  const cb = onProgress ? Comlink.proxy(onProgress) : undefined;
-  return getClient().seedAll(cb);
+  const engine = getEngine();
+  cancelRequested = false;
+
+  await unwrap(engine.seedBegin());
+
+  const idb = await openIdb();
+  const sourceCounts: Record<MirrorTable, number> = {
+    records: 0,
+    blockchainTransactions: 0,
+    transactionParticipants: 0,
+  };
+  const results: SeedResult[] = [];
+  let cancelled = false;
+  try {
+    for (const table of MIRROR_TABLES) {
+      const r = await seedTableStream(idb, table, onProgress);
+      sourceCounts[table] = r.sourceCount;
+      results.push(r);
+      if (r.cancelled) {
+        cancelled = true;
+        break;
+      }
+    }
+  } finally {
+    idb.close();
+  }
+
+  if (cancelled) {
+    // Abort: drop the partial mirror and clear the worker's seeding flag.
+    await unwrap(engine.clear());
+  } else {
+    await unwrap(engine.seedFinish(sourceCounts));
+  }
+  return results;
 }
 
-export async function cancelSeeding(): Promise<void> {
-  if (!client) return;
-  return client.cancelSeeding();
-}
+// ---------------------------------------------------------------------------
+// Lifecycle / diagnostics
+// ---------------------------------------------------------------------------
 
-export async function reopenAndVerify(): Promise<{
-  storageMode: StorageMode;
-  before: number;
-  after: number;
-  fileStats: { pageCount: number; pageSize: number; freelistCount: number; sizeBytes: number };
-}> {
+export async function reopenAndVerify(): Promise<ReopenResult> {
   await ensureEngineInit();
-  return getClient().reopenAndVerify();
+  return unwrap<ReopenResult>(getEngine().reopen());
 }
 
-export async function generateSynthetic(
-  spec: SyntheticSpec,
-): Promise<{ records: number; transactions: number; participants: number }> {
+export async function engineIntegrityCheck(): Promise<string> {
   await ensureEngineInit();
-  return getClient().generateSynthetic(spec);
+  return unwrap<string>(getEngine().integrityCheck());
 }
 
-export async function runQueryBenchmark(): Promise<QueryBenchmarkResult[]> {
+export async function runQueryBenchmark(): Promise<BenchmarkRow[]> {
   await ensureEngineInit();
-  return getClient().runQueryBenchmark();
+  return unwrap<BenchmarkRow[]>(getEngine().benchmark());
 }
 
-export async function clearEngine(): Promise<void> {
+export async function generateSynthetic(spec: SyntheticSpec): Promise<SyntheticResult> {
   await ensureEngineInit();
-  return getClient().clearAll();
+  return unwrap<SyntheticResult>(getEngine().generateSynthetic(spec));
 }
 
-// ---- Query passthrough ----------------------------------------------------
+export async function clearEngine(): Promise<EngineSnapshot> {
+  await ensureEngineInit();
+  return unwrap<EngineSnapshot>(getEngine().clear());
+}
+
+// ---------------------------------------------------------------------------
+// Query passthrough (closed enum of names enforced by the worker)
+// ---------------------------------------------------------------------------
 
 export async function engineGetRecordPage(opts: RecordPageOptions): Promise<RecordRow[]> {
   await ensureEngineInit();
-  return getClient().getRecordPage(opts);
+  return unwrap<RecordRow[]>(getEngine().query('getRecordPage', opts));
 }
 
 export async function engineCountRecords(opts: RecordQueryOptions = {}): Promise<number> {
   await ensureEngineInit();
-  return getClient().countRecords(opts);
+  return unwrap<number>(getEngine().query('countRecords', opts));
 }
 
 export async function engineGetAddressAggregates(addresses: string[]): Promise<AddressAggregate[]> {
   await ensureEngineInit();
-  return getClient().getAddressAggregates(addresses);
+  return unwrap<AddressAggregate[]>(getEngine().query('getAddressAggregates', addresses));
 }
 
 export async function engineGetOwnedUtxos(opts: {
@@ -161,20 +413,20 @@ export async function engineGetOwnedUtxos(opts: {
   limit: number;
 }): Promise<OwnedUtxo[]> {
   await ensureEngineInit();
-  return getClient().getOwnedUtxos(opts);
+  return unwrap<OwnedUtxo[]>(getEngine().query('getOwnedUtxos', opts));
 }
 
 export async function engineCountOwnedUtxos(tiers?: string[]): Promise<number> {
   await ensureEngineInit();
-  return getClient().countOwnedUtxos(tiers);
+  return unwrap<number>(getEngine().query('countOwnedUtxos', tiers));
 }
 
 export async function engineGetParticipantsByTxids(txids: string[]): Promise<ParticipantRow[]> {
   await ensureEngineInit();
-  return getClient().getParticipantsByTxids(txids);
+  return unwrap<ParticipantRow[]>(getEngine().query('getParticipantsByTxids', txids));
 }
 
 export async function engineGetParticipantsByAddresses(addresses: string[]): Promise<ParticipantRow[]> {
   await ensureEngineInit();
-  return getClient().getParticipantsByAddresses(addresses);
+  return unwrap<ParticipantRow[]>(getEngine().query('getParticipantsByAddresses', addresses));
 }

@@ -55,7 +55,24 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('electrum-get-transaction', params),
   electrumBatchGetHistory: (params) =>
     ipcRenderer.invoke('electrum-batch-get-history', params),
-  
+
+  // Native read-engine (better-sqlite3 worker_thread). Fixed channels only —
+  // no arbitrary SQL or file paths cross the bridge.
+  engine: {
+    init: () => ipcRenderer.invoke('engine:init'),
+    status: () => ipcRenderer.invoke('engine:status'),
+    seedBegin: () => ipcRenderer.invoke('engine:seedBegin'),
+    seedBatch: (table, rows) => ipcRenderer.invoke('engine:seedBatch', { table, rows }),
+    seedFinish: (sourceCounts) => ipcRenderer.invoke('engine:seedFinish', { sourceCounts }),
+    query: (name, args) => ipcRenderer.invoke('engine:query', { name, args }),
+    benchmark: () => ipcRenderer.invoke('engine:benchmark'),
+    reopen: () => ipcRenderer.invoke('engine:reopen'),
+    integrityCheck: () => ipcRenderer.invoke('engine:integrityCheck'),
+    clear: () => ipcRenderer.invoke('engine:clear'),
+    generateSynthetic: (spec) => ipcRenderer.invoke('engine:generateSynthetic', { spec }),
+    dbInfo: () => ipcRenderer.invoke('engine:dbInfo'),
+  },
+
   // Platform information
   platform: process.platform,
   isElectron: true,
