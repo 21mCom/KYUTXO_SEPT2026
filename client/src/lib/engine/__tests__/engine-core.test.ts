@@ -398,7 +398,7 @@ describe("engine-core: materialized owned-UTXO table", () => {
     // Built for the default OWNED_TIERS; a custom tier set must not trust the cache.
     expect(ownedUtxosReady(db, ["verified"])).toBe(false);
     // 'verified' tier only matches address B -> exactly one owned utxo.
-    expect(countOwnedUtxos(db, ["verified"])).toBe(1);
+    expect(countOwnedUtxos(db, { tiers: ["verified"] })).toBe(1);
   });
 
   it("invalidates the materialized table on dropMirrorTables", () => {
@@ -406,6 +406,72 @@ describe("engine-core: materialized owned-UTXO table", () => {
     expect(ownedUtxosReady(db)).toBe(false);
     // Recreate empty tables so the db is usable again (mirrors the rebuild path).
     createTablesOnly(db);
+  });
+});
+
+describe("engine-core: owned-UTXO with widened tiers (include blockchain-discovered)", () => {
+  let db: BetterSqlite3EngineDb;
+  beforeAll(async () => {
+    db = await freshDb();
+    insertRecords(db, [
+      rec({ id: 1, inputString: "A", addressImportance: "manual" }),
+      rec({ id: 2, inputString: "Z", addressImportance: "blockchain-discovered" }),
+      rec({ id: 3, inputString: "P", addressImportance: "pending-review" }),
+    ]);
+    insertTransactions(db, [tx(1, "t1", 1000)]);
+    insertParticipants(db, [
+      out("t1", "A", 0, 100), // user-curated, unspent
+      out("t1", "Z", 1, 300), // blockchain-discovered, unspent
+      out("t1", "P", 2, 400), // pending-review, unspent
+    ]);
+  });
+
+  it("default tiers exclude blockchain-discovered / pending-review outputs", () => {
+    expect(countOwnedUtxos(db)).toBe(1);
+    const utxos = getOwnedUtxos(db, { limit: 100 });
+    expect(utxos.map((u) => u.address)).toEqual(["A"]);
+  });
+
+  it("widened tier set includes blockchain-discovered and pending-review outputs", () => {
+    const tiers = ["verified", "manual", "wallet-import", "xpub-derived", "blockchain-discovered", "pending-review"];
+    expect(countOwnedUtxos(db, { tiers })).toBe(3);
+    const utxos = getOwnedUtxos(db, { tiers, limit: 100 });
+    expect(new Set(utxos.map((u) => u.address))).toEqual(new Set(["A", "Z", "P"]));
+  });
+});
+
+describe("engine-core: owned-UTXO as-of a historical block-time cutoff", () => {
+  let db: BetterSqlite3EngineDb;
+  beforeAll(async () => {
+    db = await freshDb();
+    insertRecords(db, [rec({ id: 1, inputString: "A", addressImportance: "manual" })]);
+    // t1 (time 1000) creates two owned outputs; t2 (time 2000) spends vout 1.
+    insertTransactions(db, [tx(1, "t1", 1000), tx(2, "t2", 2000)]);
+    insertParticipants(db, [
+      out("t1", "A", 0, 100), // never spent
+      out("t1", "A", 1, 200), // spent at time 2000
+      inp("t2", "A", 200, "t1", 1),
+    ]);
+  });
+
+  it("counts both outputs as of a time before the spend", () => {
+    // As of 1500 the spend (time 2000) hasn't happened yet, so both are unspent.
+    expect(countOwnedUtxos(db, { asOfBlockTime: 1500 })).toBe(2);
+    const utxos = getOwnedUtxos(db, { asOfBlockTime: 1500, limit: 100 });
+    expect(new Set(utxos.map((u) => u.vout))).toEqual(new Set([0, 1]));
+  });
+
+  it("counts only the unspent output as of a time after the spend", () => {
+    // As of 2500 the spend has occurred, so vout 1 is gone.
+    expect(countOwnedUtxos(db, { asOfBlockTime: 2500 })).toBe(1);
+    const utxos = getOwnedUtxos(db, { asOfBlockTime: 2500, limit: 100 });
+    expect(utxos.map((u) => u.vout)).toEqual([0]);
+  });
+
+  it("excludes outputs created after the cutoff", () => {
+    // As of 500 neither output's creating tx (time 1000) has confirmed yet.
+    expect(countOwnedUtxos(db, { asOfBlockTime: 500 })).toBe(0);
+    expect(getOwnedUtxos(db, { asOfBlockTime: 500, limit: 100 })).toHaveLength(0);
   });
 });
 

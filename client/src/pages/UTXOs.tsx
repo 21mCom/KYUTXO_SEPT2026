@@ -455,11 +455,35 @@ export default function UTXOs() {
     return priceByDate.get(date);
   }, [priceByDate]);
 
-  // The engine can only serve the EXACT owned-UTXO set for user-curated tiers and
-  // has no notion of an "as of" historical cutoff, so the fast path is gated to
-  // exact mode, blockchain-discovered hidden, and no selected date.
-  const engineEligible =
-    utxoMode === 'exact' && !includeBlockchainDiscovered && !selectedDate;
+  // The engine serves the EXACT owned-UTXO set straight from SQLite. It now
+  // covers all three exact-mode views: the default user-curated set (fast path
+  // off the materialized table), the "include blockchain-discovered" view (the
+  // tier set is widened so those addresses are included), and an "as of" date
+  // view (a block-time cutoff bounds both the output and its spend). Only the
+  // heuristic (no-prevout) mode has no engine equivalent and stays on Dexie.
+  const engineEligible = utxoMode === 'exact';
+
+  // When the blockchain-discovered toggle is on, widen the owned-tier set so the
+  // engine includes those addresses; otherwise pass undefined to use the default
+  // user-curated tiers (which can hit the materialized fast path).
+  const engineTiers = useMemo<string[] | undefined>(
+    () =>
+      includeBlockchainDiscovered
+        ? [...USER_CURATED_TIERS, 'blockchain-discovered', 'pending-review']
+        : undefined,
+    [includeBlockchainDiscovered],
+  );
+
+  // Historical "as of" cutoff in unix seconds. Matches the in-browser exact
+  // computation: end-of-selected-day (start-of-day + 86400) so the chosen date
+  // is inclusive. Undefined means "current" (no cutoff).
+  const engineAsOfBlockTime = useMemo<number | undefined>(
+    () =>
+      selectedDate
+        ? Math.floor(selectedDate.getTime() / 1000) + 86400
+        : undefined,
+    [selectedDate],
+  );
 
   // Decide whether to read from the engine. Like the Records screen, we require
   // both engine readiness AND a matching records fingerprint (count + maxId +
@@ -536,7 +560,10 @@ export default function UTXOs() {
     setEngineUtxosLoading(true);
     (async () => {
       try {
-        const total = await engineCountOwnedUtxos();
+        const total = await engineCountOwnedUtxos({
+          tiers: engineTiers,
+          asOfBlockTime: engineAsOfBlockTime,
+        });
         if (cancelled || requestId !== engineLoadRequestId.current) return;
         if (total === 0) {
           setEngineRawUtxos([]);
@@ -549,7 +576,12 @@ export default function UTXOs() {
         let afterId: number | undefined = undefined;
         // eslint-disable-next-line no-constant-condition
         while (true) {
-          const batch = await engineGetOwnedUtxos({ afterId, limit: PAGE });
+          const batch = await engineGetOwnedUtxos({
+            tiers: engineTiers,
+            asOfBlockTime: engineAsOfBlockTime,
+            afterId,
+            limit: PAGE,
+          });
           if (cancelled || requestId !== engineLoadRequestId.current) return;
           owned.push(...batch);
           if (batch.length < PAGE) break;
@@ -571,9 +603,11 @@ export default function UTXOs() {
 
         // Match the Dexie exact path exactly: outputs whose tx has no confirmed
         // block time (blockTime <= 0) are excluded there, so drop them here too.
-        // The engine's own anti-join already filters blockTime > 0 against the
-        // mirror, but block time is re-read from live Dexie above, so we re-apply
-        // the filter on that authoritative value to stay self-consistent.
+        // The engine's own anti-join already filters blockTime > 0 (and, for an
+        // "as of" read, <= cutoff) against the mirror, but block time is re-read
+        // from live Dexie above, so we re-apply the same bounds on that
+        // authoritative value to stay self-consistent with the date view.
+        const cutoff = engineAsOfBlockTime;
         const enriched = owned
           .map((u) => {
             const tx = txMap.get(u.txid);
@@ -583,7 +617,7 @@ export default function UTXOs() {
               blockHeight: tx?.blockHeight ?? 0,
             };
           })
-          .filter((u) => u.blockTime > 0);
+          .filter((u) => u.blockTime > 0 && (cutoff == null || u.blockTime <= cutoff));
         if (cancelled || requestId !== engineLoadRequestId.current) return;
         setEngineRawUtxos(enriched);
         setEngineUtxosLoading(false);
@@ -598,7 +632,7 @@ export default function UTXOs() {
     return () => {
       cancelled = true;
     };
-  }, [engineDecision, txDbSignal]);
+  }, [engineDecision, txDbSignal, engineTiers, engineAsOfBlockTime]);
 
   // Enrich the engine's owned UTXOs with record metadata and price-at-receipt.
   // Kept separate from the fetch so changing price data or record labels does not

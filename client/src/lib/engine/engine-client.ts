@@ -612,14 +612,18 @@ export async function engineGetOwnedUtxos(opts: {
   tiers?: string[];
   afterId?: number;
   limit: number;
+  /** Unix-seconds cutoff for an "as of" historical owned-UTXO read. */
+  asOfBlockTime?: number;
 }): Promise<OwnedUtxo[]> {
   await ensureEngineInit();
   return unwrap<OwnedUtxo[]>(getEngine().query('getOwnedUtxos', opts));
 }
 
-export async function engineCountOwnedUtxos(tiers?: string[]): Promise<number> {
+export async function engineCountOwnedUtxos(
+  opts: { tiers?: string[]; asOfBlockTime?: number } = {},
+): Promise<number> {
   await ensureEngineInit();
-  return unwrap<number>(getEngine().query('countOwnedUtxos', tiers));
+  return unwrap<number>(getEngine().query('countOwnedUtxos', opts));
 }
 
 export async function engineGetParticipantsByTxids(txids: string[]): Promise<ParticipantRow[]> {

@@ -353,9 +353,12 @@ function handleQuery(name: string, args: unknown): unknown {
     case 'getAddressAggregates':
       return Array.from(getAddressAggregates(d, args as string[]).values());
     case 'getOwnedUtxos':
-      return getOwnedUtxos(d, args as { tiers?: string[]; afterId?: number; limit: number });
+      return getOwnedUtxos(
+        d,
+        args as { tiers?: string[]; afterId?: number; limit: number; asOfBlockTime?: number },
+      );
     case 'countOwnedUtxos':
-      return countOwnedUtxos(d, args as string[] | undefined);
+      return countOwnedUtxos(d, args as { tiers?: string[]; asOfBlockTime?: number } | undefined);
     case 'getParticipantsByTxids':
       return getParticipantsByTxids(d, args as string[]);
     case 'getParticipantsByAddresses':

@@ -783,6 +783,68 @@ function tiersSignature(tiers: string[]): string {
   return JSON.stringify([...(tiers.length ? tiers : OWNED_TIERS)].sort());
 }
 
+/**
+ * Build the shared WHERE clause (+ ordered bind params) for the LIVE owned-UTXO
+ * anti-join used by both `countOwnedUtxos` and `getOwnedUtxos` whenever the
+ * materialized fast path cannot serve the request (custom tiers, an "as of"
+ * historical cutoff, or no build yet). Keeping the predicate in one place keeps
+ * the count and the page query in lockstep.
+ *
+ * An owned output is included when: it is a real output (role='output', vout set)
+ * of a confirmed tx (blockTime > 0); its address belongs to a record in one of
+ * the requested tiers; and no input spends its outpoint. When `asOfBlockTime`
+ * (unix seconds) is given, the output's tx must be confirmed at/before the cutoff
+ * AND a spend only counts if the SPENDING input's tx was itself confirmed
+ * at/before the cutoff — i.e. the set of UTXOs as the chain stood at that time.
+ * This mirrors the in-browser exact computation's `blockTime > 0 && <= cutoff`
+ * gating on both the output and the spending input.
+ *
+ * Params are pushed in the exact textual order the `?` placeholders appear:
+ * output-cutoff, tier list, spend-cutoff.
+ */
+function buildLiveOwnedUtxosClause(
+  tiers: string[],
+  asOfBlockTime?: number,
+): { whereSql: string; params: unknown[] } {
+  const { sql: tierSql, bind: tierBind } = ownedTierPlaceholders(tiers);
+  const params: unknown[] = [];
+
+  let outTimeSql = 'AND COALESCE(t.blockTime, 0) > 0';
+  if (asOfBlockTime != null) {
+    outTimeSql += ' AND t.blockTime <= ?';
+    params.push(asOfBlockTime);
+  }
+
+  params.push(...tierBind);
+
+  let spendSql = `AND NOT EXISTS (
+        SELECT 1 FROM transactionParticipants i
+        WHERE i.role = 'input' AND i.prevTxid = o.txid AND i.prevVout = o.vout`;
+  if (asOfBlockTime != null) {
+    spendSql += `
+          AND EXISTS (
+            SELECT 1 FROM blockchainTransactions it
+            WHERE it.txid = i.txid AND COALESCE(it.blockTime, 0) > 0 AND it.blockTime <= ?
+          )`;
+    params.push(asOfBlockTime);
+  }
+  spendSql += `
+      )`;
+
+  const whereSql = `
+    WHERE o.role = 'output'
+      AND o.vout IS NOT NULL
+      ${outTimeSql}
+      AND EXISTS (
+        SELECT 1 FROM records r
+        WHERE r.inputString = o.address AND r.type = 'address'
+          AND r.addressImportance IN (${tierSql})
+      )
+      ${spendSql}`;
+
+  return { whereSql, params };
+}
+
 function ownedUtxosTableExists(db: EngineDb): boolean {
   return (
     selectScalar(
@@ -858,44 +920,41 @@ export function buildOwnedUtxos(db: EngineDb, tiers: string[] = OWNED_TIERS): nu
   return count;
 }
 
-export function countOwnedUtxos(db: EngineDb, tiers: string[] = OWNED_TIERS): number {
-  // Fast path: serve the cached count from the materialized table.
-  if (ownedUtxosReady(db, tiers)) {
+export function countOwnedUtxos(
+  db: EngineDb,
+  opts: { tiers?: string[]; asOfBlockTime?: number } = {},
+): number {
+  const tiers = opts.tiers ?? OWNED_TIERS;
+  // Fast path: serve the cached count from the materialized table. Only valid for
+  // the default tier set with NO historical cutoff — the materialized table has
+  // no time dimension, so an "as of" query must always use the live anti-join.
+  if (opts.asOfBlockTime == null && ownedUtxosReady(db, tiers)) {
     const cached = getEngineMeta(db, OWNED_UTXOS_COUNT_KEY);
     if (cached != null) return Number(cached);
     return selectScalar(db, 'SELECT COUNT(*) AS v FROM ownedUtxos');
   }
-  const { sql: tierSql, bind } = ownedTierPlaceholders(tiers);
+  const { whereSql, params } = buildLiveOwnedUtxosClause(tiers, opts.asOfBlockTime);
   return selectScalar(
     db,
     `
     SELECT COUNT(*) AS v
     FROM transactionParticipants o
     JOIN blockchainTransactions t ON t.txid = o.txid
-    WHERE o.role = 'output'
-      AND o.vout IS NOT NULL
-      AND COALESCE(t.blockTime, 0) > 0
-      AND EXISTS (
-        SELECT 1 FROM records r
-        WHERE r.inputString = o.address AND r.type = 'address'
-          AND r.addressImportance IN (${tierSql})
-      )
-      AND NOT EXISTS (
-        SELECT 1 FROM transactionParticipants i
-        WHERE i.role = 'input' AND i.prevTxid = o.txid AND i.prevVout = o.vout
-      )
+    ${whereSql}
     `,
-    bind,
+    params,
   );
 }
 
 export function getOwnedUtxos(
   db: EngineDb,
-  opts: { tiers?: string[]; afterId?: number; limit: number },
+  opts: { tiers?: string[]; afterId?: number; limit: number; asOfBlockTime?: number },
 ): OwnedUtxo[] {
   const tiers = opts.tiers ?? OWNED_TIERS;
   // Fast path: keyset-page the materialized table by its integer primary key.
-  if (ownedUtxosReady(db, tiers)) {
+  // Skipped for "as of" queries (the table has no time dimension) so a date
+  // cutoff always falls through to the live anti-join below.
+  if (opts.asOfBlockTime == null && ownedUtxosReady(db, tiers)) {
     const params: unknown[] = [];
     let cursor = '';
     if (opts.afterId != null) {
@@ -909,8 +968,7 @@ export function getOwnedUtxos(
       params,
     );
   }
-  const { sql: tierSql, bind } = ownedTierPlaceholders(tiers);
-  const params: unknown[] = [...bind];
+  const { whereSql, params } = buildLiveOwnedUtxosClause(tiers, opts.asOfBlockTime);
   let cursor = '';
   if (opts.afterId != null) {
     cursor = 'AND o.id > ?';
@@ -924,18 +982,7 @@ export function getOwnedUtxos(
            o.amount AS amount, o.recordId AS recordId
     FROM transactionParticipants o
     JOIN blockchainTransactions t ON t.txid = o.txid
-    WHERE o.role = 'output'
-      AND o.vout IS NOT NULL
-      AND COALESCE(t.blockTime, 0) > 0
-      AND EXISTS (
-        SELECT 1 FROM records r
-        WHERE r.inputString = o.address AND r.type = 'address'
-          AND r.addressImportance IN (${tierSql})
-      )
-      AND NOT EXISTS (
-        SELECT 1 FROM transactionParticipants i
-        WHERE i.role = 'input' AND i.prevTxid = o.txid AND i.prevVout = o.vout
-      )
+    ${whereSql}
       ${cursor}
     ORDER BY o.id
     LIMIT ?

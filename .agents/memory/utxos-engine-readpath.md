@@ -5,16 +5,24 @@ description: When/why the UTXOs page reads owned UTXOs from the native SQLite en
 
 # UTXOs screen engine read path
 
-The UTXOs page uses the native SQLite read-engine fast path ONLY when ALL hold:
-exact mode, blockchain-discovered toggle OFF, and no "as of" date selected. Gated
-behind `engineReadyForReads()` AND a records-fingerprint match (count + maxId +
-maxUpdatedAt) exactly like the Records screen; any mismatch/error → Dexie.
+The UTXOs page uses the native SQLite read-engine for ALL exact-mode views: the
+default user-curated set, the "include blockchain-discovered" view, and the "as of"
+date view. The ONLY exact-mode sub-case off the engine is the heuristic (no-prevout)
+mode. Gated behind `engineReadyForReads()` AND a records-fingerprint match (count +
+maxId + maxUpdatedAt) exactly like the Records screen; any mismatch/error → Dexie.
 
-**Why these gates:** the engine's owned-UTXO query is an EXACT prevout anti-join
-over user-curated tiers only (`OWNED_TIERS` == `USER_CURATED_TIERS`); it does not
-replicate the heuristic amount-matching mode and has no historical block-time
-cutoff. So heuristic mode, the blockchain-discovered view, and date filters must
-stay on the in-browser Dexie computation.
+**Engine query shape:** `countOwnedUtxos`/`getOwnedUtxos` take an options object
+`{ tiers?, afterId?, limit, asOfBlockTime? }` (not a bare tiers array). Both build
+the live anti-join via the shared `buildLiveOwnedUtxosClause(tiers, asOfBlockTime?)`
+helper. Bind-param order is fixed: output-cutoff, then tier list, then spend-cutoff.
+- `tiers` undefined → default `OWNED_TIERS` (== `USER_CURATED_TIERS`) and can hit the
+  materialized fast path. Page passes the widened set
+  `[...USER_CURATED_TIERS,'blockchain-discovered','pending-review']` when the toggle is on.
+- `asOfBlockTime` set → live path only (fast path is skipped whenever asOf != null);
+  cutoff bounds BOTH the output's tx blockTime (>0 && <=cutoff) and the spending
+  input's tx blockTime, matching the Dexie exact path. Page cutoff =
+  `floor(selectedDate/1000)+86400` (end-of-day inclusive). Heuristic mode has no engine
+  equivalent and stays on Dexie.
 
 **Why `engineGetAddressAggregates` is intentionally NOT used here** (despite being
 listed alongside getOwnedUtxos/countOwnedUtxos): the page needs individual UTXOs
