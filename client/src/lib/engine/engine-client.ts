@@ -626,6 +626,24 @@ export async function engineCountOwnedUtxos(
   return unwrap<number>(getEngine().query('countOwnedUtxos', opts));
 }
 
+export async function engineGetHeuristicOwnedUtxos(opts: {
+  tiers?: string[];
+  afterId?: number;
+  limit: number;
+  /** Unix-seconds cutoff for an "as of" historical heuristic owned-UTXO read. */
+  asOfBlockTime?: number;
+}): Promise<OwnedUtxo[]> {
+  await ensureEngineInit();
+  return unwrap<OwnedUtxo[]>(getEngine().query('getHeuristicOwnedUtxos', opts));
+}
+
+export async function engineCountHeuristicOwnedUtxos(
+  opts: { tiers?: string[]; asOfBlockTime?: number } = {},
+): Promise<number> {
+  await ensureEngineInit();
+  return unwrap<number>(getEngine().query('countHeuristicOwnedUtxos', opts));
+}
+
 export async function engineGetParticipantsByTxids(txids: string[]): Promise<ParticipantRow[]> {
   await ensureEngineInit();
   return unwrap<ParticipantRow[]>(getEngine().query('getParticipantsByTxids', txids));

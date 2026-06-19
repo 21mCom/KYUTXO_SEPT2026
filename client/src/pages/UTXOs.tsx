@@ -18,6 +18,8 @@ import {
   engineReadyForReads,
   engineGetOwnedUtxos,
   engineCountOwnedUtxos,
+  engineGetHeuristicOwnedUtxos,
+  engineCountHeuristicOwnedUtxos,
   engineGetRecordsFingerprint,
   engineGetTransactionsFingerprint,
   engineGetParticipantsFingerprint,
@@ -455,13 +457,14 @@ export default function UTXOs() {
     return priceByDate.get(date);
   }, [priceByDate]);
 
-  // The engine serves the EXACT owned-UTXO set straight from SQLite. It now
-  // covers all three exact-mode views: the default user-curated set (fast path
-  // off the materialized table), the "include blockchain-discovered" view (the
-  // tier set is widened so those addresses are included), and an "as of" date
-  // view (a block-time cutoff bounds both the output and its spend). Only the
-  // heuristic (no-prevout) mode has no engine equivalent and stays on Dexie.
-  const engineEligible = utxoMode === 'exact';
+  // The engine serves the owned-UTXO set straight from SQLite for BOTH modes:
+  // exact (prevout anti-join) and heuristic (no-prevout amount-matching). Each
+  // mode covers all three views — the default user-curated set (fast path off a
+  // materialized table), the "include blockchain-discovered" view (the tier set
+  // is widened), and an "as of" date view (a block-time cutoff). The mode picks
+  // which engine query to run; anything that fails the freshness gate falls back
+  // to the in-browser Dexie computation for that mode.
+  const engineEligible = utxoMode === 'exact' || utxoMode === 'heuristic';
 
   // When the blockchain-discovered toggle is on, widen the owned-tier set so the
   // engine includes those addresses; otherwise pass undefined to use the default
@@ -558,9 +561,16 @@ export default function UTXOs() {
     const requestId = engineLoadRequestId.current;
     let cancelled = false;
     setEngineUtxosLoading(true);
+    // Pick the engine query for the active mode. The heuristic estimates the
+    // unspent set by FIFO amount-matching (no prevouts); exact uses the prevout
+    // anti-join. Both share the same tier/as-of/keyset contract.
+    const countFn =
+      utxoMode === 'heuristic' ? engineCountHeuristicOwnedUtxos : engineCountOwnedUtxos;
+    const getFn =
+      utxoMode === 'heuristic' ? engineGetHeuristicOwnedUtxos : engineGetOwnedUtxos;
     (async () => {
       try {
-        const total = await engineCountOwnedUtxos({
+        const total = await countFn({
           tiers: engineTiers,
           asOfBlockTime: engineAsOfBlockTime,
         });
@@ -576,7 +586,7 @@ export default function UTXOs() {
         let afterId: number | undefined = undefined;
         // eslint-disable-next-line no-constant-condition
         while (true) {
-          const batch = await engineGetOwnedUtxos({
+          const batch = await getFn({
             tiers: engineTiers,
             asOfBlockTime: engineAsOfBlockTime,
             afterId,
@@ -632,7 +642,7 @@ export default function UTXOs() {
     return () => {
       cancelled = true;
     };
-  }, [engineDecision, txDbSignal, engineTiers, engineAsOfBlockTime]);
+  }, [engineDecision, txDbSignal, engineTiers, engineAsOfBlockTime, utxoMode]);
 
   // Enrich the engine's owned UTXOs with record metadata and price-at-receipt.
   // Kept separate from the fetch so changing price data or record labels does not

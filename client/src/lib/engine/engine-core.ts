@@ -75,6 +75,13 @@ const PARAM_BATCH_SIZE = 800;
 const OWNED_UTXOS_TIERS_KEY = 'owned_utxos_tiers';
 const OWNED_UTXOS_COUNT_KEY = 'owned_utxos_count';
 
+// engineMeta keys for the materialized HEURISTIC owned-UTXO set (see
+// buildHeuristicOwnedUtxos). Mirrors the exact-mode keys above but for the
+// no-prevout amount-matching computation, so the two materialized sets never
+// collide and each is gated on its own tier signature.
+const HEURISTIC_UTXOS_TIERS_KEY = 'heuristic_utxos_tiers';
+const HEURISTIC_UTXOS_COUNT_KEY = 'heuristic_utxos_count';
+
 // ---------------------------------------------------------------------------
 // Row shapes (mirror columns). The worker maps Dexie objects onto these.
 // ---------------------------------------------------------------------------
@@ -280,12 +287,18 @@ export function dropMirrorTables(db: EngineDb): void {
     DROP TABLE IF EXISTS blockchainTransactions;
     DROP TABLE IF EXISTS transactionParticipants;
     DROP TABLE IF EXISTS ownedUtxos;
+    DROP TABLE IF EXISTS heuristicOwnedUtxos;
   `);
   // Invalidate the materialized owned-UTXO metadata so a partial/cleared state
   // never serves a stale count. engineMeta may not exist yet on the very first
   // drop (before createTablesOnly), so ensure it before clearing.
   db.exec('CREATE TABLE IF NOT EXISTS engineMeta (key TEXT PRIMARY KEY, value TEXT);');
-  db.run('DELETE FROM engineMeta WHERE key IN (?, ?)', [OWNED_UTXOS_TIERS_KEY, OWNED_UTXOS_COUNT_KEY]);
+  db.run('DELETE FROM engineMeta WHERE key IN (?, ?, ?, ?)', [
+    OWNED_UTXOS_TIERS_KEY,
+    OWNED_UTXOS_COUNT_KEY,
+    HEURISTIC_UTXOS_TIERS_KEY,
+    HEURISTIC_UTXOS_COUNT_KEY,
+  ]);
 }
 
 /** Clear all per-table seed progress rows (full-rebuild reset). */
@@ -987,6 +1000,250 @@ export function getOwnedUtxos(
     ORDER BY o.id
     LIMIT ?
     `,
+    params,
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Query: heuristic ("estimated", no-prevout) owned-UTXO set
+// ---------------------------------------------------------------------------
+//
+// The heuristic view never reads `prevTxid/prevVout`; it estimates which outputs
+// are still unspent by FIFO amount-matching within each (owned address, amount)
+// group. This mirrors the in-browser computation in UTXOs.tsx exactly:
+//
+//   - Candidate outputs: real outputs (role='output', vout set) of confirmed
+//     txs (blockTime > 0, and <= cutoff for an "as of" read) whose address is an
+//     owned record in one of the requested tiers.
+//   - Candidate inputs: inputs at those same owned addresses, same confirmation
+//     gating. (The page keys matches by `address:amount`; restricting inputs to
+//     owned addresses is equivalent because a non-owned address is a different
+//     key that owned outputs never consult — and it is also a big speedup.)
+//   - Per (address, amount) group: walk outputs in (blockTime, vout) order and
+//     greedily consume the earliest not-yet-used input whose tx confirmed
+//     STRICTLY LATER than the output. A consumed output is "spent".
+//
+// That greedy is provably a maximum matching, and the spent set is always a
+// downward-closed prefix of the outputs in (blockTime, vout, id) order. So the
+// number of spends equals `matched = nIn + MIN(0, minRunningPrefix)` where the
+// running prefix sums +1 per output / -1 per input over (blockTime, typeRank)
+// with inputs (typeRank 0) ordered before outputs (typeRank 1) at the same
+// time. An output is a UTXO iff its ascending rank within the group (by
+// blockTime, vout, id — the id tiebreak matches the page's stable sort, which
+// preserves Dexie primary-key order within a single address) exceeds `matched`.
+//
+// The id tiebreak in the page comes from `.where('address').anyOf(...).toArray()`
+// returning rows in primary-key order within one address value, and the group's
+// rows all share that address, so ordering the SQL by id reproduces it.
+
+/**
+ * Build the shared CTE chain (+ ordered bind params) that exposes a relation
+ * `heuristic_utxos(id, txid, vout, address, amount, recordId)` of the estimated
+ * unspent owned outputs. Both the count and the page query append their own
+ * final SELECT after this prefix, so the count and the listing stay in lockstep.
+ *
+ * Params are pushed in the exact textual order the `?` placeholders appear:
+ * output-cutoff, output tier list, input-cutoff, input tier list.
+ */
+function buildHeuristicCte(
+  tiers: string[],
+  asOfBlockTime?: number,
+): { cteSql: string; params: unknown[] } {
+  const { sql: tierSql, bind: tierBind } = ownedTierPlaceholders(tiers);
+  const params: unknown[] = [];
+
+  let outTimeSql = 'AND COALESCE(t.blockTime, 0) > 0';
+  if (asOfBlockTime != null) {
+    outTimeSql += ' AND t.blockTime <= ?';
+    params.push(asOfBlockTime);
+  }
+  params.push(...tierBind);
+
+  let inTimeSql = 'AND COALESCE(t.blockTime, 0) > 0';
+  if (asOfBlockTime != null) {
+    inTimeSql += ' AND t.blockTime <= ?';
+    params.push(asOfBlockTime);
+  }
+  params.push(...tierBind);
+
+  const cteSql = `
+    WITH oo AS (
+      SELECT o.id AS id, o.txid AS txid, o.vout AS vout, o.address AS address,
+             o.amount AS amount, o.recordId AS recordId, t.blockTime AS bt
+      FROM transactionParticipants o
+      JOIN blockchainTransactions t ON t.txid = o.txid
+      WHERE o.role = 'output'
+        AND o.vout IS NOT NULL
+        ${outTimeSql}
+        AND EXISTS (
+          SELECT 1 FROM records r
+          WHERE r.inputString = o.address AND r.type = 'address'
+            AND r.addressImportance IN (${tierSql})
+        )
+    ),
+    ii AS (
+      SELECT i.address AS address, i.amount AS amount, t.blockTime AS bt
+      FROM transactionParticipants i
+      JOIN blockchainTransactions t ON t.txid = i.txid
+      WHERE i.role = 'input'
+        ${inTimeSql}
+        AND EXISTS (
+          SELECT 1 FROM records r
+          WHERE r.inputString = i.address AND r.type = 'address'
+            AND r.addressImportance IN (${tierSql})
+        )
+    ),
+    events AS (
+      SELECT address, amount, bt, 1 AS typeRank, 1 AS delta FROM oo
+      UNION ALL
+      SELECT address, amount, bt, 0 AS typeRank, -1 AS delta FROM ii
+    ),
+    running AS (
+      SELECT address, amount, delta,
+        SUM(delta) OVER (
+          PARTITION BY address, amount
+          ORDER BY bt, typeRank
+          ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+        ) AS prefix
+      FROM events
+    ),
+    grp AS (
+      SELECT address, amount,
+        SUM(CASE WHEN delta = -1 THEN 1 ELSE 0 END) AS nIn,
+        MIN(prefix) AS minRun
+      FROM running
+      GROUP BY address, amount
+    ),
+    ranked AS (
+      SELECT oo.id AS id, oo.txid AS txid, oo.vout AS vout, oo.address AS address,
+             oo.amount AS amount, oo.recordId AS recordId,
+        ROW_NUMBER() OVER (
+          PARTITION BY oo.address, oo.amount
+          ORDER BY oo.bt, oo.vout, oo.id
+        ) AS rn
+      FROM oo
+    ),
+    heuristic_utxos AS (
+      SELECT r.id AS id, r.txid AS txid, r.vout AS vout, r.address AS address,
+             r.amount AS amount, r.recordId AS recordId
+      FROM ranked r
+      JOIN grp g ON g.address = r.address AND g.amount = r.amount
+      WHERE r.rn > (g.nIn + MIN(0, g.minRun))
+    )`;
+
+  return { cteSql, params };
+}
+
+function heuristicOwnedUtxosTableExists(db: EngineDb): boolean {
+  return (
+    selectScalar(
+      db,
+      "SELECT COUNT(*) AS v FROM sqlite_master WHERE type = 'table' AND name = 'heuristicOwnedUtxos'",
+    ) > 0
+  );
+}
+
+/**
+ * True when the materialized `heuristicOwnedUtxos` table is present AND was built
+ * for the exact tier set requested. Reads fall back to the live computation
+ * otherwise, so unit tests (which never build the table) and custom-tier callers
+ * stay correct.
+ */
+export function heuristicOwnedUtxosReady(db: EngineDb, tiers: string[] = OWNED_TIERS): boolean {
+  if (!heuristicOwnedUtxosTableExists(db)) return false;
+  const built = getEngineMeta(db, HEURISTIC_UTXOS_TIERS_KEY);
+  return built != null && built === tiersSignature(tiers);
+}
+
+/**
+ * Materialize the heuristic owned-UTXO set into a dedicated
+ * `heuristicOwnedUtxos` table so the two hottest big-vault reads
+ * (`countHeuristicOwnedUtxos`, first page of `getHeuristicOwnedUtxos`) become a
+ * cached-scalar read and a primary-key keyset scan instead of the full
+ * window-function computation. Runs the expensive computation EXACTLY ONCE, at
+ * finalize time, matching the engine's full-rebuild replica model. The
+ * participant id is reused as the PRIMARY KEY so ordered keyset paging is a pure
+ * b-tree walk. Returns the materialized row count.
+ */
+export function buildHeuristicOwnedUtxos(db: EngineDb, tiers: string[] = OWNED_TIERS): number {
+  const { cteSql, params } = buildHeuristicCte(tiers);
+  db.exec('DROP TABLE IF EXISTS heuristicOwnedUtxos;');
+  db.exec(`
+    CREATE TABLE heuristicOwnedUtxos (
+      id       INTEGER PRIMARY KEY,
+      txid     TEXT NOT NULL,
+      vout     INTEGER,
+      address  TEXT NOT NULL,
+      amount   INTEGER NOT NULL,
+      recordId INTEGER
+    );
+  `);
+  db.run(
+    `${cteSql}
+    INSERT INTO heuristicOwnedUtxos (id, txid, vout, address, amount, recordId)
+    SELECT id, txid, vout, address, amount, recordId FROM heuristic_utxos`,
+    params,
+  );
+  const count = selectScalar(db, 'SELECT COUNT(*) AS v FROM heuristicOwnedUtxos');
+  // Set the count first, then the tiers signature LAST: heuristicOwnedUtxosReady
+  // gates on the signature, so it only flips to "ready" once the count is stored.
+  setEngineMeta(db, HEURISTIC_UTXOS_COUNT_KEY, String(count));
+  setEngineMeta(db, HEURISTIC_UTXOS_TIERS_KEY, tiersSignature(tiers));
+  return count;
+}
+
+export function countHeuristicOwnedUtxos(
+  db: EngineDb,
+  opts: { tiers?: string[]; asOfBlockTime?: number } = {},
+): number {
+  const tiers = opts.tiers ?? OWNED_TIERS;
+  // Fast path: cached count from the materialized table. Only valid for the
+  // default tier set with NO historical cutoff (the table has no time dimension).
+  if (opts.asOfBlockTime == null && heuristicOwnedUtxosReady(db, tiers)) {
+    const cached = getEngineMeta(db, HEURISTIC_UTXOS_COUNT_KEY);
+    if (cached != null) return Number(cached);
+    return selectScalar(db, 'SELECT COUNT(*) AS v FROM heuristicOwnedUtxos');
+  }
+  const { cteSql, params } = buildHeuristicCte(tiers, opts.asOfBlockTime);
+  return selectScalar(db, `${cteSql} SELECT COUNT(*) AS v FROM heuristic_utxos`, params);
+}
+
+export function getHeuristicOwnedUtxos(
+  db: EngineDb,
+  opts: { tiers?: string[]; afterId?: number; limit: number; asOfBlockTime?: number },
+): OwnedUtxo[] {
+  const tiers = opts.tiers ?? OWNED_TIERS;
+  // Fast path: keyset-page the materialized table by its integer primary key.
+  // Skipped for "as of" queries (the table has no time dimension).
+  if (opts.asOfBlockTime == null && heuristicOwnedUtxosReady(db, tiers)) {
+    const params: unknown[] = [];
+    let cursor = '';
+    if (opts.afterId != null) {
+      cursor = 'WHERE id > ?';
+      params.push(opts.afterId);
+    }
+    params.push(opts.limit);
+    return selectRows<OwnedUtxo>(
+      db,
+      `SELECT id, txid, vout, address, amount, recordId FROM heuristicOwnedUtxos ${cursor} ORDER BY id LIMIT ?`,
+      params,
+    );
+  }
+  const { cteSql, params } = buildHeuristicCte(tiers, opts.asOfBlockTime);
+  let cursor = '';
+  if (opts.afterId != null) {
+    cursor = 'WHERE id > ?';
+    params.push(opts.afterId);
+  }
+  params.push(opts.limit);
+  return selectRows<OwnedUtxo>(
+    db,
+    `${cteSql}
+    SELECT id, txid, vout, address, amount, recordId
+    FROM heuristic_utxos
+    ${cursor}
+    ORDER BY id
+    LIMIT ?`,
     params,
   );
 }

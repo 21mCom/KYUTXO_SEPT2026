@@ -54,6 +54,9 @@ import {
   getAddressAggregates,
   getOwnedUtxos,
   countOwnedUtxos,
+  getHeuristicOwnedUtxos,
+  countHeuristicOwnedUtxos,
+  buildHeuristicOwnedUtxos,
   getParticipantsByTxids,
   getParticipantsByAddresses,
   getDbFileStats,
@@ -238,6 +241,9 @@ function handleSeedFinish(sourceCounts: Record<MirrorTable, number>): EngineSnap
     // Materialize the owned-UTXO set once so countOwnedUtxos / first-page reads
     // are sub-second on big vaults instead of a multi-second per-output anti-join.
     buildOwnedUtxos(d);
+    // Same for the heuristic (no-prevout) owned-UTXO set so its count/first-page
+    // reads are sub-second instead of a full window-function pass.
+    buildHeuristicOwnedUtxos(d);
     applyReadPragmas(d);
     let allComplete = true;
     for (const t of MIRROR_TABLES) {
@@ -311,6 +317,7 @@ function handleGenerateSynthetic(
     state = 'INDEXING';
     createIndexes(d);
     buildOwnedUtxos(d);
+    buildHeuristicOwnedUtxos(d);
     applyReadPragmas(d);
     markSeedCompleteIfDone(d, 'records', result.records);
     markSeedCompleteIfDone(d, 'blockchainTransactions', result.transactions);
@@ -359,6 +366,16 @@ function handleQuery(name: string, args: unknown): unknown {
       );
     case 'countOwnedUtxos':
       return countOwnedUtxos(d, args as { tiers?: string[]; asOfBlockTime?: number } | undefined);
+    case 'getHeuristicOwnedUtxos':
+      return getHeuristicOwnedUtxos(
+        d,
+        args as { tiers?: string[]; afterId?: number; limit: number; asOfBlockTime?: number },
+      );
+    case 'countHeuristicOwnedUtxos':
+      return countHeuristicOwnedUtxos(
+        d,
+        args as { tiers?: string[]; asOfBlockTime?: number } | undefined,
+      );
     case 'getParticipantsByTxids':
       return getParticipantsByTxids(d, args as string[]);
     case 'getParticipantsByAddresses':

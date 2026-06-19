@@ -30,6 +30,10 @@ import {
   countOwnedUtxos,
   buildOwnedUtxos,
   ownedUtxosReady,
+  getHeuristicOwnedUtxos,
+  countHeuristicOwnedUtxos,
+  buildHeuristicOwnedUtxos,
+  heuristicOwnedUtxosReady,
   getParticipantsByTxids,
   getParticipantsByAddresses,
   generateSyntheticData,
@@ -486,6 +490,302 @@ describe("engine-core: participant lookups", () => {
     expect(getParticipantsByTxids(db, ["tx1"]).length).toBe(2);
     expect(getParticipantsByAddresses(db, ["A"]).length).toBe(2);
     expect(getParticipantsByTxids(db, []).length).toBe(0);
+  });
+});
+
+// Reference implementation of the in-browser heuristic (no-prevout) owned-UTXO
+// computation in UTXOs.tsx. Replicated here verbatim (FIFO amount-matching per
+// `address:amount` group, only owned outputs returned) so the engine SQL is held
+// to byte-for-byte parity against the exact algorithm the page runs. Returns the
+// set of unspent outpoints (`txid:vout`).
+function referenceHeuristic(
+  parts: ParticipantRow[],
+  blockTimeOf: (txid: string) => number,
+  owned: Set<string>,
+  cutoff: number = Infinity,
+): Set<string> {
+  const outputs = parts.filter((p) => p.role === "output");
+  const inputs = parts.filter((p) => p.role === "input");
+
+  const outputsWithTime = outputs
+    .map((output) => ({ output, blockTime: blockTimeOf(output.txid) }))
+    .filter((o) => o.blockTime > 0 && o.blockTime <= cutoff);
+  outputsWithTime.sort((a, b) => {
+    if (a.blockTime !== b.blockTime) return a.blockTime - b.blockTime;
+    return (a.output.vout ?? 0) - (b.output.vout ?? 0);
+  });
+
+  const inputsWithTime = inputs
+    .map((input) => ({ input, blockTime: blockTimeOf(input.txid) }))
+    .filter((i) => i.blockTime > 0 && i.blockTime <= cutoff);
+  inputsWithTime.sort((a, b) => a.blockTime - b.blockTime);
+
+  const inputsByAddressAmount = new Map<string, { input: ParticipantRow; blockTime: number }[]>();
+  for (const item of inputsWithTime) {
+    const key = `${item.input.address}:${item.input.amount}`;
+    const existing = inputsByAddressAmount.get(key) || [];
+    existing.push(item);
+    inputsByAddressAmount.set(key, existing);
+  }
+
+  const result = new Set<string>();
+  const matchedInputIndices = new Map<string, number>();
+  for (const { output, blockTime } of outputsWithTime) {
+    const key = `${output.address}:${output.amount}`;
+    const matchingInputs = inputsByAddressAmount.get(key) || [];
+    const currentIndex = matchedInputIndices.get(key) || 0;
+    const spendingInput = matchingInputs.find(
+      (item, idx) => idx >= currentIndex && item.blockTime > blockTime,
+    );
+    if (spendingInput) {
+      matchedInputIndices.set(key, matchingInputs.indexOf(spendingInput) + 1);
+    } else if (owned.has(output.address)) {
+      result.add(`${output.txid}:${output.vout ?? 0}`);
+    }
+  }
+  return result;
+}
+
+const outpointsOf = (utxos: { txid: string; vout: number | null }[]): Set<string> =>
+  new Set(utxos.map((u) => `${u.txid}:${u.vout ?? 0}`));
+
+describe("engine-core: heuristic owned-UTXO parity vs in-browser computation", () => {
+  let db: BetterSqlite3EngineDb;
+  // A multi-group fixture exercising the FIFO amount-matching corners:
+  //   A:500 — out@1000, out@1100, in@1200 -> one spend (prefix), later output unspent
+  //   A:700 — single out@1050, no matching input -> unspent
+  //   B:800 — out@1300, in@1250 (input BEFORE output, useless) -> output unspent
+  //   B:900 — out@1300, out@1400, in@1500 -> one spend, later unspent
+  //   C:100 — out (owned but no block time) -> excluded
+  //   Z:300 — out@1600 but NOT owned -> excluded
+  const txs: TransactionRow[] = [
+    tx(1, "txA1", 1000),
+    tx(2, "txA2", 1100),
+    tx(3, "txAspend", 1200),
+    tx(4, "txA3", 1050),
+    tx(5, "txBin", 1250),
+    tx(6, "txB1", 1300),
+    tx(7, "txB2", 1400),
+    tx(8, "txBspend", 1500),
+    tx(9, "txC1", 0), // no block time
+    tx(10, "txZ1", 1600),
+  ];
+  const parts: ParticipantRow[] = [
+    out("txA1", "A", 0, 500),
+    out("txA2", "A", 1, 500),
+    inp("txAspend", "A", 500, "txA1", 0),
+    out("txA3", "A", 0, 700),
+    inp("txBin", "B", 800, "txBin0", 0),
+    out("txB1", "B", 0, 800),
+    out("txB1", "B", 1, 900),
+    out("txB2", "B", 0, 900),
+    inp("txBspend", "B", 900, "txB1", 1),
+    out("txC1", "C", 0, 100),
+    out("txZ1", "Z", 0, 300),
+  ];
+  const owned = new Set(["A", "B", "C"]);
+
+  beforeAll(async () => {
+    db = await freshDb();
+    insertRecords(db, [
+      rec({ id: 1, inputString: "A", addressImportance: "manual" }),
+      rec({ id: 2, inputString: "B", addressImportance: "verified" }),
+      rec({ id: 3, inputString: "C", addressImportance: "wallet-import" }),
+      rec({ id: 4, inputString: "Z", addressImportance: "blockchain-discovered" }),
+    ]);
+    insertTransactions(db, txs);
+    insertParticipants(db, parts);
+  });
+
+  const blockTimeOf = (txid: string) => txs.find((t) => t.txid === txid)?.blockTime ?? 0;
+
+  it("the live engine set matches the reference set exactly", () => {
+    const expected = referenceHeuristic(parts, blockTimeOf, owned);
+    const got = outpointsOf(getHeuristicOwnedUtxos(db, { limit: 1000 }));
+    expect(got).toEqual(expected);
+    expect(countHeuristicOwnedUtxos(db)).toBe(expected.size);
+  });
+
+  it("the materialized table serves identical results after a build", () => {
+    expect(heuristicOwnedUtxosReady(db)).toBe(false);
+    const built = buildHeuristicOwnedUtxos(db);
+    const expected = referenceHeuristic(parts, blockTimeOf, owned);
+    expect(built).toBe(expected.size);
+    expect(heuristicOwnedUtxosReady(db)).toBe(true);
+    expect(countHeuristicOwnedUtxos(db)).toBe(expected.size);
+    const got = outpointsOf(getHeuristicOwnedUtxos(db, { limit: 1000 }));
+    expect(got).toEqual(expected);
+  });
+
+  it("keyset-pages the materialized table by id", () => {
+    const all = getHeuristicOwnedUtxos(db, { limit: 1000 });
+    expect(all.length).toBeGreaterThan(1);
+    const first = getHeuristicOwnedUtxos(db, { limit: 1 });
+    expect(first).toHaveLength(1);
+    const rest = getHeuristicOwnedUtxos(db, { limit: 1000, afterId: first[0].id });
+    expect(rest.every((u) => u.id > first[0].id)).toBe(true);
+    // Union of the keyset pages equals the full set.
+    expect(outpointsOf([...first, ...rest])).toEqual(outpointsOf(all));
+  });
+
+  it("falls back to the live query when requested tiers differ from the built set", () => {
+    // Built for default OWNED_TIERS; a custom tier set must not trust the cache.
+    expect(heuristicOwnedUtxosReady(db, ["verified"])).toBe(false);
+    // 'verified' tier matches only address B; reference restricted to B.
+    const expected = referenceHeuristic(parts, blockTimeOf, new Set(["B"]));
+    expect(countHeuristicOwnedUtxos(db, { tiers: ["verified"] })).toBe(expected.size);
+    const got = outpointsOf(getHeuristicOwnedUtxos(db, { tiers: ["verified"], limit: 1000 }));
+    expect(got).toEqual(expected);
+  });
+
+  it("invalidates the materialized table on dropMirrorTables", () => {
+    dropMirrorTables(db);
+    expect(heuristicOwnedUtxosReady(db)).toBe(false);
+    createTablesOnly(db);
+  });
+});
+
+describe("engine-core: heuristic owned-UTXO widened tiers parity", () => {
+  let db: BetterSqlite3EngineDb;
+  const txs: TransactionRow[] = [tx(1, "t1", 1000)];
+  const parts: ParticipantRow[] = [
+    out("t1", "A", 0, 100), // user-curated, unspent
+    out("t1", "Z", 1, 300), // blockchain-discovered
+    out("t1", "P", 2, 400), // pending-review
+  ];
+  beforeAll(async () => {
+    db = await freshDb();
+    insertRecords(db, [
+      rec({ id: 1, inputString: "A", addressImportance: "manual" }),
+      rec({ id: 2, inputString: "Z", addressImportance: "blockchain-discovered" }),
+      rec({ id: 3, inputString: "P", addressImportance: "pending-review" }),
+    ]);
+    insertTransactions(db, txs);
+    insertParticipants(db, parts);
+  });
+
+  const blockTimeOf = (txid: string) => txs.find((t) => t.txid === txid)?.blockTime ?? 0;
+
+  it("default tiers exclude blockchain-discovered / pending-review outputs", () => {
+    const expected = referenceHeuristic(parts, blockTimeOf, new Set(["A"]));
+    expect(outpointsOf(getHeuristicOwnedUtxos(db, { limit: 100 }))).toEqual(expected);
+    expect(countHeuristicOwnedUtxos(db)).toBe(expected.size);
+  });
+
+  it("widened tier set includes blockchain-discovered and pending-review outputs", () => {
+    const tiers = ["verified", "manual", "wallet-import", "xpub-derived", "blockchain-discovered", "pending-review"];
+    const expected = referenceHeuristic(parts, blockTimeOf, new Set(["A", "Z", "P"]));
+    expect(countHeuristicOwnedUtxos(db, { tiers })).toBe(expected.size);
+    expect(outpointsOf(getHeuristicOwnedUtxos(db, { tiers, limit: 100 }))).toEqual(expected);
+  });
+});
+
+describe("engine-core: heuristic owned-UTXO as-of cutoff parity", () => {
+  let db: BetterSqlite3EngineDb;
+  // A:500 created by two outputs (t1@1000, t2@1100) and spent once (t3@2000).
+  const txs: TransactionRow[] = [tx(1, "t1", 1000), tx(2, "t2", 1100), tx(3, "t3", 2000)];
+  const parts: ParticipantRow[] = [
+    out("t1", "A", 0, 500),
+    out("t2", "A", 1, 500),
+    inp("t3", "A", 500, "t1", 0),
+  ];
+  const owned = new Set(["A"]);
+  beforeAll(async () => {
+    db = await freshDb();
+    insertRecords(db, [rec({ id: 1, inputString: "A", addressImportance: "manual" })]);
+    insertTransactions(db, txs);
+    insertParticipants(db, parts);
+  });
+
+  const blockTimeOf = (txid: string) => txs.find((t) => t.txid === txid)?.blockTime ?? 0;
+
+  it("before the spend both outputs are unspent", () => {
+    const expected = referenceHeuristic(parts, blockTimeOf, owned, 1500);
+    expect(countHeuristicOwnedUtxos(db, { asOfBlockTime: 1500 })).toBe(expected.size);
+    expect(outpointsOf(getHeuristicOwnedUtxos(db, { asOfBlockTime: 1500, limit: 100 }))).toEqual(expected);
+  });
+
+  it("after the spend one output is consumed (prefix), the later one remains", () => {
+    const expected = referenceHeuristic(parts, blockTimeOf, owned, 2500);
+    expect(countHeuristicOwnedUtxos(db, { asOfBlockTime: 2500 })).toBe(expected.size);
+    const got = outpointsOf(getHeuristicOwnedUtxos(db, { asOfBlockTime: 2500, limit: 100 }));
+    expect(got).toEqual(expected);
+  });
+
+  it("before any output confirms the set is empty", () => {
+    const expected = referenceHeuristic(parts, blockTimeOf, owned, 500);
+    expect(expected.size).toBe(0);
+    expect(countHeuristicOwnedUtxos(db, { asOfBlockTime: 500 })).toBe(0);
+    expect(getHeuristicOwnedUtxos(db, { asOfBlockTime: 500, limit: 100 })).toHaveLength(0);
+  });
+});
+
+describe("engine-core: heuristic owned-UTXO randomized parity", () => {
+  it("matches the reference across many random vaults", async () => {
+    // Deterministic PRNG so failures reproduce.
+    let seed = 0x12345678;
+    const rnd = () => {
+      seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+      return seed / 0x7fffffff;
+    };
+    const pick = <T,>(arr: T[]) => arr[Math.floor(rnd() * arr.length)];
+
+    for (let trial = 0; trial < 40; trial++) {
+      pid = 1; // reset participant id sequence for stable per-trial ids
+      const db = await freshDb();
+
+      const addresses = ["A", "B", "C", "D"];
+      const owned = new Set(addresses.filter(() => rnd() < 0.75));
+      // Ensure at least one owned address so the test is meaningful.
+      if (owned.size === 0) owned.add("A");
+
+      insertRecords(
+        db,
+        addresses.map((a, i) =>
+          rec({
+            id: i + 1,
+            inputString: a,
+            addressImportance: owned.has(a) ? pick(["verified", "manual", "wallet-import"]) : "blockchain-discovered",
+          }),
+        ),
+      );
+
+      const txs: TransactionRow[] = [];
+      const parts: ParticipantRow[] = [];
+      const nTx = 3 + Math.floor(rnd() * 8);
+      const amounts = [100, 200, 300];
+      for (let t = 1; t <= nTx; t++) {
+        const txid = `tx${t}`;
+        // Some txs have no block time (excluded) to exercise that filter.
+        const blockTime = rnd() < 0.1 ? 0 : 1000 + t * 50 + Math.floor(rnd() * 10);
+        txs.push(tx(t, txid, blockTime));
+        const nParts = 1 + Math.floor(rnd() * 4);
+        for (let k = 0; k < nParts; k++) {
+          const addr = pick(addresses);
+          const amount = pick(amounts);
+          if (rnd() < 0.5) {
+            parts.push(out(txid, addr, k, amount));
+          } else {
+            parts.push(inp(txid, addr, amount, `prev${t}_${k}`, k));
+          }
+        }
+      }
+      insertTransactions(db, txs);
+      insertParticipants(db, parts);
+
+      const blockTimeOf = (txid: string) => txs.find((x) => x.txid === txid)?.blockTime ?? 0;
+      const expected = referenceHeuristic(parts, blockTimeOf, owned);
+
+      const live = outpointsOf(getHeuristicOwnedUtxos(db, { limit: 10000 }));
+      expect(live, `trial ${trial} live`).toEqual(expected);
+      expect(countHeuristicOwnedUtxos(db), `trial ${trial} live count`).toBe(expected.size);
+
+      // Materialized path must agree too.
+      buildHeuristicOwnedUtxos(db);
+      const mat = outpointsOf(getHeuristicOwnedUtxos(db, { limit: 10000 }));
+      expect(mat, `trial ${trial} materialized`).toEqual(expected);
+      expect(countHeuristicOwnedUtxos(db), `trial ${trial} materialized count`).toBe(expected.size);
+    }
   });
 });
 
