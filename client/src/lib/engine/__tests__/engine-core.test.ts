@@ -28,6 +28,8 @@ import {
   getAddressAggregates,
   getOwnedUtxos,
   countOwnedUtxos,
+  buildOwnedUtxos,
+  ownedUtxosReady,
   getParticipantsByTxids,
   getParticipantsByAddresses,
   generateSyntheticData,
@@ -342,6 +344,68 @@ describe("engine-core: owned-UTXO dedup when an address has multiple records", (
     // No duplicate ids in the returned page.
     const ids = utxos.map((u) => u.id);
     expect(new Set(ids).size).toBe(ids.length);
+  });
+});
+
+describe("engine-core: materialized owned-UTXO table", () => {
+  let db: BetterSqlite3EngineDb;
+  beforeAll(async () => {
+    db = await freshDb();
+    insertRecords(db, [
+      rec({ id: 1, inputString: "A", addressImportance: "manual" }),
+      rec({ id: 2, inputString: "Z", addressImportance: "blockchain-discovered" }),
+    ]);
+    insertTransactions(db, [tx(1, "t1", 1000), tx(2, "t2", 1100)]);
+    insertParticipants(db, [
+      out("t1", "A", 0, 100), // owned, unspent
+      out("t1", "A", 1, 200), // owned, spent below
+      inp("t2", "A", 200, "t1", 1),
+      out("t1", "Z", 2, 300), // not owned -> excluded
+    ]);
+  });
+
+  it("is not ready before a build (falls back to the live anti-join)", () => {
+    expect(ownedUtxosReady(db)).toBe(false);
+    // Live path still returns correct results.
+    expect(countOwnedUtxos(db)).toBe(1);
+  });
+
+  it("serves identical results from the materialized table after a build", () => {
+    const built = buildOwnedUtxos(db);
+    expect(built).toBe(1);
+    expect(ownedUtxosReady(db)).toBe(true);
+    expect(countOwnedUtxos(db)).toBe(1);
+    const utxos = getOwnedUtxos(db, { limit: 100 });
+    expect(utxos).toHaveLength(1);
+    expect(utxos[0].address).toBe("A");
+    expect(utxos[0].vout).toBe(0);
+  });
+
+  it("keyset-pages the materialized table by id", () => {
+    insertRecords(db, [rec({ id: 3, inputString: "B", addressImportance: "verified" })]);
+    insertTransactions(db, [tx(3, "t3", 1200)]);
+    insertParticipants(db, [out("t3", "B", 0, 400)]); // second owned, unspent utxo
+    buildOwnedUtxos(db);
+    expect(countOwnedUtxos(db)).toBe(2);
+    const first = getOwnedUtxos(db, { limit: 1 });
+    expect(first).toHaveLength(1);
+    const next = getOwnedUtxos(db, { limit: 10, afterId: first[0].id });
+    expect(next).toHaveLength(1);
+    expect(next[0].id).toBeGreaterThan(first[0].id);
+  });
+
+  it("falls back to the live query when requested tiers differ from the built set", () => {
+    // Built for the default OWNED_TIERS; a custom tier set must not trust the cache.
+    expect(ownedUtxosReady(db, ["verified"])).toBe(false);
+    // 'verified' tier only matches address B -> exactly one owned utxo.
+    expect(countOwnedUtxos(db, ["verified"])).toBe(1);
+  });
+
+  it("invalidates the materialized table on dropMirrorTables", () => {
+    dropMirrorTables(db);
+    expect(ownedUtxosReady(db)).toBe(false);
+    // Recreate empty tables so the db is usable again (mirrors the rebuild path).
+    createTablesOnly(db);
   });
 });
 

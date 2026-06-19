@@ -68,6 +68,13 @@ export const OWNED_TIERS = ['verified', 'manual', 'wallet-import', 'xpub-derived
 // but historically 999). Stay well under the conservative ceiling for IN() lists.
 const PARAM_BATCH_SIZE = 800;
 
+// engineMeta keys for the materialized owned-UTXO set (see buildOwnedUtxos). The
+// tiers signature records which owned tiers the materialized table was built for
+// so reads only trust it when the requested tiers match; the count is cached so
+// `countOwnedUtxos` is O(1) instead of scanning a multi-million-row table.
+const OWNED_UTXOS_TIERS_KEY = 'owned_utxos_tiers';
+const OWNED_UTXOS_COUNT_KEY = 'owned_utxos_count';
+
 // ---------------------------------------------------------------------------
 // Row shapes (mirror columns). The worker maps Dexie objects onto these.
 // ---------------------------------------------------------------------------
@@ -212,6 +219,11 @@ export function createTablesOnly(db: EngineDb): void {
       complete     INTEGER NOT NULL DEFAULT 0,
       updatedAt    INTEGER NOT NULL DEFAULT 0
     );
+
+    CREATE TABLE IF NOT EXISTS engineMeta (
+      key   TEXT PRIMARY KEY,
+      value TEXT
+    );
   `);
 }
 
@@ -267,12 +279,34 @@ export function dropMirrorTables(db: EngineDb): void {
     DROP TABLE IF EXISTS records;
     DROP TABLE IF EXISTS blockchainTransactions;
     DROP TABLE IF EXISTS transactionParticipants;
+    DROP TABLE IF EXISTS ownedUtxos;
   `);
+  // Invalidate the materialized owned-UTXO metadata so a partial/cleared state
+  // never serves a stale count. engineMeta may not exist yet on the very first
+  // drop (before createTablesOnly), so ensure it before clearing.
+  db.exec('CREATE TABLE IF NOT EXISTS engineMeta (key TEXT PRIMARY KEY, value TEXT);');
+  db.run('DELETE FROM engineMeta WHERE key IN (?, ?)', [OWNED_UTXOS_TIERS_KEY, OWNED_UTXOS_COUNT_KEY]);
 }
 
 /** Clear all per-table seed progress rows (full-rebuild reset). */
 export function resetSeedMeta(db: EngineDb): void {
   db.exec('DELETE FROM seedMeta;');
+}
+
+// ---------------------------------------------------------------------------
+// engineMeta — small key/value store for derived/materialized state
+// ---------------------------------------------------------------------------
+
+export function getEngineMeta(db: EngineDb, key: string): string | null {
+  const rows = selectRows<{ value: string }>(db, 'SELECT value FROM engineMeta WHERE key = ?', [key]);
+  return rows[0]?.value ?? null;
+}
+
+function setEngineMeta(db: EngineDb, key: string, value: string): void {
+  db.run(
+    'INSERT INTO engineMeta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',
+    [key, value],
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -653,7 +687,93 @@ function ownedTierPlaceholders(tiers: string[]): { sql: string; bind: string[] }
   return { sql: t.map(() => '?').join(','), bind: t };
 }
 
+/** Stable signature for a tier set (order-independent) used to gate the cache. */
+function tiersSignature(tiers: string[]): string {
+  return JSON.stringify([...(tiers.length ? tiers : OWNED_TIERS)].sort());
+}
+
+function ownedUtxosTableExists(db: EngineDb): boolean {
+  return (
+    selectScalar(
+      db,
+      "SELECT COUNT(*) AS v FROM sqlite_master WHERE type = 'table' AND name = 'ownedUtxos'",
+    ) > 0
+  );
+}
+
+/**
+ * True when the materialized `ownedUtxos` table is present AND was built for the
+ * exact tier set requested. Reads fall back to the live anti-join otherwise, so
+ * unit tests (which never build the table) and custom-tier callers stay correct.
+ */
+export function ownedUtxosReady(db: EngineDb, tiers: string[] = OWNED_TIERS): boolean {
+  if (!ownedUtxosTableExists(db)) return false;
+  const built = getEngineMeta(db, OWNED_UTXOS_TIERS_KEY);
+  return built != null && built === tiersSignature(tiers);
+}
+
+/**
+ * Materialize the owned-UTXO set into a dedicated `ownedUtxos` table so the two
+ * hottest big-vault reads (`countOwnedUtxos`, first page of `getOwnedUtxos`)
+ * become a cached-scalar read and a primary-key keyset scan instead of a full
+ * per-output anti-join with two correlated subqueries (owned-tier EXISTS + the
+ * blockTime JOIN) that costs multiple seconds at ~13M participants.
+ *
+ * This runs the expensive anti-join EXACTLY ONCE, at finalize time, which fits
+ * the engine's full-rebuild replica model: the table is dropped on every
+ * seedBegin/clear and rebuilt here after createIndexes. The participant id is
+ * reused as the PRIMARY KEY so ordered keyset paging (`id > ? ORDER BY id`) is a
+ * pure b-tree walk. Returns the materialized row count.
+ */
+export function buildOwnedUtxos(db: EngineDb, tiers: string[] = OWNED_TIERS): number {
+  const { sql: tierSql, bind } = ownedTierPlaceholders(tiers);
+  db.exec('DROP TABLE IF EXISTS ownedUtxos;');
+  db.exec(`
+    CREATE TABLE ownedUtxos (
+      id       INTEGER PRIMARY KEY,
+      txid     TEXT NOT NULL,
+      vout     INTEGER,
+      address  TEXT NOT NULL,
+      amount   INTEGER NOT NULL,
+      recordId INTEGER
+    );
+  `);
+  db.run(
+    `
+    INSERT INTO ownedUtxos (id, txid, vout, address, amount, recordId)
+    SELECT o.id, o.txid, o.vout, o.address, o.amount, o.recordId
+    FROM transactionParticipants o
+    JOIN blockchainTransactions t ON t.txid = o.txid
+    WHERE o.role = 'output'
+      AND o.vout IS NOT NULL
+      AND COALESCE(t.blockTime, 0) > 0
+      AND EXISTS (
+        SELECT 1 FROM records r
+        WHERE r.inputString = o.address AND r.type = 'address'
+          AND r.addressImportance IN (${tierSql})
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM transactionParticipants i
+        WHERE i.role = 'input' AND i.prevTxid = o.txid AND i.prevVout = o.vout
+      )
+    `,
+    bind,
+  );
+  const count = selectScalar(db, 'SELECT COUNT(*) AS v FROM ownedUtxos');
+  // Set the count first, then the tiers signature LAST: ownedUtxosReady gates on
+  // the signature, so it only flips to "ready" once the count is already stored.
+  setEngineMeta(db, OWNED_UTXOS_COUNT_KEY, String(count));
+  setEngineMeta(db, OWNED_UTXOS_TIERS_KEY, tiersSignature(tiers));
+  return count;
+}
+
 export function countOwnedUtxos(db: EngineDb, tiers: string[] = OWNED_TIERS): number {
+  // Fast path: serve the cached count from the materialized table.
+  if (ownedUtxosReady(db, tiers)) {
+    const cached = getEngineMeta(db, OWNED_UTXOS_COUNT_KEY);
+    if (cached != null) return Number(cached);
+    return selectScalar(db, 'SELECT COUNT(*) AS v FROM ownedUtxos');
+  }
   const { sql: tierSql, bind } = ownedTierPlaceholders(tiers);
   return selectScalar(
     db,
@@ -682,7 +802,23 @@ export function getOwnedUtxos(
   db: EngineDb,
   opts: { tiers?: string[]; afterId?: number; limit: number },
 ): OwnedUtxo[] {
-  const { sql: tierSql, bind } = ownedTierPlaceholders(opts.tiers ?? OWNED_TIERS);
+  const tiers = opts.tiers ?? OWNED_TIERS;
+  // Fast path: keyset-page the materialized table by its integer primary key.
+  if (ownedUtxosReady(db, tiers)) {
+    const params: unknown[] = [];
+    let cursor = '';
+    if (opts.afterId != null) {
+      cursor = 'WHERE id > ?';
+      params.push(opts.afterId);
+    }
+    params.push(opts.limit);
+    return selectRows<OwnedUtxo>(
+      db,
+      `SELECT id, txid, vout, address, amount, recordId FROM ownedUtxos ${cursor} ORDER BY id LIMIT ?`,
+      params,
+    );
+  }
+  const { sql: tierSql, bind } = ownedTierPlaceholders(tiers);
   const params: unknown[] = [...bind];
   let cursor = '';
   if (opts.afterId != null) {

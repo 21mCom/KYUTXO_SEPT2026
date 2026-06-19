@@ -29,6 +29,7 @@ import {
   applyReadPragmas,
   createTablesOnly,
   createIndexes,
+  buildOwnedUtxos,
   dropMirrorTables,
   resetSeedMeta,
   generateSyntheticData,
@@ -175,6 +176,10 @@ function main(): void {
 
   // INDEXING: build secondary indexes + ANALYZE.
   time('createIndexes (+ANALYZE)', () => createIndexes(db));
+
+  // Materialize the owned-UTXO set once (the expensive anti-join happens here so
+  // countOwnedUtxos / first-page reads are sub-second below).
+  time('buildOwnedUtxos (materialize)', () => buildOwnedUtxos(db), (n) => `${n.toLocaleString()} owned utxos`);
 
   // Steady-state read durability.
   time('read pragmas', () => applyReadPragmas(db));

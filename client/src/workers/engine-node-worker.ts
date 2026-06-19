@@ -33,6 +33,7 @@ import {
   applyReadPragmas,
   createTablesOnly,
   createIndexes,
+  buildOwnedUtxos,
   generateSyntheticData,
   dropMirrorTables,
   resetSeedMeta,
@@ -231,6 +232,9 @@ function handleSeedFinish(sourceCounts: Record<MirrorTable, number>): EngineSnap
   try {
     state = 'INDEXING';
     createIndexes(d);
+    // Materialize the owned-UTXO set once so countOwnedUtxos / first-page reads
+    // are sub-second on big vaults instead of a multi-second per-output anti-join.
+    buildOwnedUtxos(d);
     applyReadPragmas(d);
     let allComplete = true;
     for (const t of MIRROR_TABLES) {
@@ -303,6 +307,7 @@ function handleGenerateSynthetic(
     const result = generateSyntheticData(d, spec);
     state = 'INDEXING';
     createIndexes(d);
+    buildOwnedUtxos(d);
     applyReadPragmas(d);
     markSeedCompleteIfDone(d, 'records', result.records);
     markSeedCompleteIfDone(d, 'blockchainTransactions', result.transactions);
