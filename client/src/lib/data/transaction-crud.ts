@@ -257,3 +257,60 @@ export async function getParticipantsByRecordIds(
   if (recordIds.length === 0) return [];
   return db.transactionParticipants.where('recordId').anyOf(recordIds).toArray();
 }
+
+// =============================================================================
+// FRESHNESS FINGERPRINTS — compared against the native engine mirror before a
+// read is served from the engine. All reads below are index-only (count + the
+// last row of an ordered index), never full table scans, so the gate stays cheap
+// even on multi-million-row vaults.
+// =============================================================================
+
+/**
+ * Freshness fingerprint for the live `blockchainTransactions` table — total
+ * count, max id, and max blockTime. Owned-UTXO reads JOIN this table and exclude
+ * blockTime <= 0, so a mismatch in any field means the mirror cannot be trusted:
+ * count/maxId catch inserts and deletes; maxBlockTime catches an unconfirmed tx
+ * confirming in place (its new block time becomes the max).
+ */
+export async function getTransactionsFingerprint(): Promise<{
+  count: number;
+  maxId: number;
+  maxBlockTime: number;
+}> {
+  const [count, newestById, newestByBlockTime] = await Promise.all([
+    db.blockchainTransactions.count(),
+    db.blockchainTransactions.orderBy('id').last(),
+    db.blockchainTransactions.orderBy('blockTime').last(),
+  ]);
+  return {
+    count,
+    maxId: newestById?.id ?? 0,
+    maxBlockTime: newestByBlockTime?.blockTime ?? 0,
+  };
+}
+
+/**
+ * Freshness fingerprint for the live `transactionParticipants` table — total
+ * count, max id, and the count of inputs with a resolved prevout. The owned-UTXO
+ * anti-join detects spends via (prevTxid, prevVout), which prevout backfill fills
+ * IN PLACE — so count/maxId alone miss it. The `[prevTxid+prevVout]` compound
+ * index only contains rows where both keys are defined, so counting it yields the
+ * resolved-input count, matching the engine's `prevTxid IS NOT NULL AND prevVout
+ * IS NOT NULL` count, and moves whenever backfill resolves more inputs.
+ */
+export async function getParticipantsFingerprint(): Promise<{
+  count: number;
+  maxId: number;
+  resolvedPrevoutCount: number;
+}> {
+  const [count, newestById, resolvedPrevoutCount] = await Promise.all([
+    db.transactionParticipants.count(),
+    db.transactionParticipants.orderBy('id').last(),
+    db.transactionParticipants.orderBy('[prevTxid+prevVout]').count(),
+  ]);
+  return {
+    count,
+    maxId: newestById?.id ?? 0,
+    resolvedPrevoutCount,
+  };
+}

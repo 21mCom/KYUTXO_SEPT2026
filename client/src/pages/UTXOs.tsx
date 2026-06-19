@@ -12,6 +12,17 @@ import { BlockchainTransaction, TransactionParticipant, Record as DbRecord, Pric
 import { getAllAddressSyncState } from "@/lib/data/address-sync-crud";
 import { getPriceDataByAsset } from "@/lib/data/price-data-crud";
 import { countRecordsByTypeAndImportanceTiers, getTransactionsByTxids } from "@/lib/dataFacade";
+import { getRecordsFingerprint } from "@/lib/data/record-crud";
+import { getTransactionsFingerprint, getParticipantsFingerprint } from "@/lib/data/transaction-crud";
+import {
+  engineReadyForReads,
+  engineGetOwnedUtxos,
+  engineCountOwnedUtxos,
+  engineGetRecordsFingerprint,
+  engineGetTransactionsFingerprint,
+  engineGetParticipantsFingerprint,
+} from "@/lib/engine/engine-client";
+import type { OwnedUtxo } from "@/lib/engine/engine-core";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -195,7 +206,7 @@ export default function UTXOs() {
     saveSettings({ displayUnit, sortColumn, sortDirection, ownerFilter, walletFilter, tagFilter, categoryFilter, utxoMode });
   }, [displayUnit, sortColumn, sortDirection, ownerFilter, walletFilter, tagFilter, categoryFilter, utxoMode]);
 
-  const txDbSignal = useDbChangeSignal(['blockchainTransactions']);
+  const txDbSignal = useDbChangeSignal(['blockchainTransactions', 'transactionParticipants']);
 
   const [transactions, setTransactions] = useState<BlockchainTransaction[] | undefined>(undefined);
   const transactionsRequestId = useRef(0);
@@ -203,6 +214,22 @@ export default function UTXOs() {
   const [participants, setParticipants] = useState<TransactionParticipant[] | undefined>(undefined);
   const [participantsLoading, setParticipantsLoading] = useState(false);
   const participantsRequestId = useRef(0);
+
+  // Native SQLite read-engine integration (mirrors the Records screen). When the
+  // engine is READY and its mirror is fresh, the owned-UTXO set is read straight
+  // from SQLite instead of computing it in-browser from every participant. The
+  // engine only computes the EXACT prevout anti-join for user-curated tiers, so
+  // the fast path is limited to exact mode with the blockchain-discovered toggle
+  // off and no historical "as of" date cutoff; anything else falls back to Dexie.
+  type EngineDecision = 'pending' | 'engine' | 'dexie';
+  const [engineDecision, setEngineDecision] = useState<EngineDecision>('pending');
+  const [engineRawUtxos, setEngineRawUtxos] = useState<
+    (OwnedUtxo & { blockTime: number; blockHeight: number })[] | null
+  >(null);
+  const [engineUtxosLoading, setEngineUtxosLoading] = useState(false);
+  const engineLoadRequestId = useRef(0);
+  // Re-evaluate engine freshness whenever the mirrored source tables change.
+  const recordsDbSignal = useDbChangeSignal(['records']);
 
   const { records: rawRecords } = useAddressRecords({ includeBlockchainDiscovered });
   
@@ -256,6 +283,22 @@ export default function UTXOs() {
   const processedRecords = rawRecords ?? [];
 
   useEffect(() => {
+    // While the engine decision is still resolving, hold off on the expensive
+    // Dexie participant load so we never do it just to throw it away.
+    if (engineDecision === 'pending') {
+      return;
+    }
+
+    // Engine fast path: the owned-UTXO set comes from SQLite, so there is no
+    // need to stream every participant into the browser. Clear the Dexie-derived
+    // state so the in-browser computations short-circuit to empty.
+    if (engineDecision === 'engine') {
+      participantsRequestId.current += 1;
+      setParticipants([]);
+      setParticipantsLoading(false);
+      return;
+    }
+
     if (!processedRecords || processedRecords.length === 0) {
       setParticipants(undefined);
       return;
@@ -290,7 +333,7 @@ export default function UTXOs() {
         }
       });
     return () => { abortController.abort(); };
-  }, [processedRecords]);
+  }, [processedRecords, engineDecision]);
 
   useEffect(() => {
     if (!participants || participants.length === 0) {
@@ -411,6 +454,182 @@ export default function UTXOs() {
     const date = format(new Date(timestamp * 1000), 'yyyy-MM-dd');
     return priceByDate.get(date);
   }, [priceByDate]);
+
+  // The engine can only serve the EXACT owned-UTXO set for user-curated tiers and
+  // has no notion of an "as of" historical cutoff, so the fast path is gated to
+  // exact mode, blockchain-discovered hidden, and no selected date.
+  const engineEligible =
+    utxoMode === 'exact' && !includeBlockchainDiscovered && !selectedDate;
+
+  // Decide whether to read from the engine. Like the Records screen, we require
+  // both engine readiness AND a matching records fingerprint (count + maxId +
+  // maxUpdatedAt) so a stale mirror is never trusted; any mismatch or error
+  // falls back to the in-browser Dexie computation.
+  useEffect(() => {
+    let cancelled = false;
+    if (!engineEligible) {
+      setEngineDecision('dexie');
+      return;
+    }
+    setEngineDecision('pending');
+    (async () => {
+      try {
+        const ready = await engineReadyForReads();
+        if (cancelled) return;
+        if (!ready) {
+          setEngineDecision('dexie');
+          return;
+        }
+        // The owned-UTXO read depends on all three mirror tables (records for
+        // ownership, blockchainTransactions for the blockTime JOIN, and
+        // transactionParticipants for the spend anti-join), so every one must be
+        // proven fresh — checking only records would serve stale UTXOs whenever a
+        // sync or prevout backfill changes the tx/participant tables without
+        // touching records.
+        const [
+          engRecFp, dexRecFp,
+          engTxFp, dexTxFp,
+          engPartFp, dexPartFp,
+        ] = await Promise.all([
+          engineGetRecordsFingerprint(),
+          getRecordsFingerprint(),
+          engineGetTransactionsFingerprint(),
+          getTransactionsFingerprint(),
+          engineGetParticipantsFingerprint(),
+          getParticipantsFingerprint(),
+        ]);
+        if (cancelled) return;
+        const fresh =
+          engRecFp.count === dexRecFp.count &&
+          engRecFp.maxId === dexRecFp.maxId &&
+          engRecFp.maxUpdatedAt === dexRecFp.maxUpdatedAt &&
+          engTxFp.count === dexTxFp.count &&
+          engTxFp.maxId === dexTxFp.maxId &&
+          engTxFp.maxBlockTime === dexTxFp.maxBlockTime &&
+          engPartFp.count === dexPartFp.count &&
+          engPartFp.maxId === dexPartFp.maxId &&
+          engPartFp.resolvedPrevoutCount === dexPartFp.resolvedPrevoutCount;
+        setEngineDecision(fresh ? 'engine' : 'dexie');
+      } catch {
+        if (!cancelled) setEngineDecision('dexie');
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [engineEligible, recordsDbSignal, txDbSignal]);
+
+  // Load the owned-UTXO set from the engine when the fast path is active. Owned
+  // UTXOs are paged by integer primary key (keyset), then enriched with the block
+  // time/height of their txid so the rest of the page (dates, value-at-receipt)
+  // works exactly as it does for the Dexie path. Record metadata and price are
+  // layered on in a cheap memo below so they never trigger a re-fetch.
+  useEffect(() => {
+    if (engineDecision !== 'engine') {
+      setEngineRawUtxos(null);
+      setEngineUtxosLoading(false);
+      return;
+    }
+    engineLoadRequestId.current += 1;
+    const requestId = engineLoadRequestId.current;
+    let cancelled = false;
+    setEngineUtxosLoading(true);
+    (async () => {
+      try {
+        const total = await engineCountOwnedUtxos();
+        if (cancelled || requestId !== engineLoadRequestId.current) return;
+        if (total === 0) {
+          setEngineRawUtxos([]);
+          setEngineUtxosLoading(false);
+          return;
+        }
+
+        const owned: OwnedUtxo[] = [];
+        const PAGE = 10000;
+        let afterId: number | undefined = undefined;
+        // eslint-disable-next-line no-constant-condition
+        while (true) {
+          const batch = await engineGetOwnedUtxos({ afterId, limit: PAGE });
+          if (cancelled || requestId !== engineLoadRequestId.current) return;
+          owned.push(...batch);
+          if (batch.length < PAGE) break;
+          afterId = batch[batch.length - 1].id;
+          await yieldToUI();
+        }
+
+        // Resolve block time/height for every txid in the owned set.
+        const txids = Array.from(new Set(owned.map((u) => u.txid)));
+        const txMap = new Map<string, BlockchainTransaction>();
+        const BATCH = 500;
+        for (let i = 0; i < txids.length; i += BATCH) {
+          const slice = txids.slice(i, i + BATCH);
+          const txs = await getTransactionsByTxids(slice);
+          if (cancelled || requestId !== engineLoadRequestId.current) return;
+          for (const tx of txs) txMap.set(tx.txid, tx);
+          if (i + BATCH < txids.length) await yieldToUI();
+        }
+
+        // Match the Dexie exact path exactly: outputs whose tx has no confirmed
+        // block time (blockTime <= 0) are excluded there, so drop them here too.
+        // The engine's own anti-join already filters blockTime > 0 against the
+        // mirror, but block time is re-read from live Dexie above, so we re-apply
+        // the filter on that authoritative value to stay self-consistent.
+        const enriched = owned
+          .map((u) => {
+            const tx = txMap.get(u.txid);
+            return {
+              ...u,
+              blockTime: tx?.blockTime ?? 0,
+              blockHeight: tx?.blockHeight ?? 0,
+            };
+          })
+          .filter((u) => u.blockTime > 0);
+        if (cancelled || requestId !== engineLoadRequestId.current) return;
+        setEngineRawUtxos(enriched);
+        setEngineUtxosLoading(false);
+      } catch {
+        if (cancelled || requestId !== engineLoadRequestId.current) return;
+        // On any engine failure, drop back to the Dexie computation.
+        setEngineRawUtxos(null);
+        setEngineUtxosLoading(false);
+        setEngineDecision('dexie');
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [engineDecision, txDbSignal]);
+
+  // Enrich the engine's owned UTXOs with record metadata and price-at-receipt.
+  // Kept separate from the fetch so changing price data or record labels does not
+  // re-run the engine query — only this cheap map re-runs.
+  const engineUtxos = useMemo<UTXO[] | null>(() => {
+    if (engineRawUtxos === null) return null;
+    return engineRawUtxos.map((u) => {
+      const record = addressToRecord.get(u.address);
+      const priceAtReceipt = getPriceForTimestamp(u.blockTime);
+      const btcAmount = u.amount / 100_000_000;
+      const valueAtReceipt =
+        priceAtReceipt !== undefined ? btcAmount * priceAtReceipt : undefined;
+      return {
+        id: `${u.txid}:${u.vout ?? 0}`,
+        txid: u.txid,
+        vout: u.vout ?? 0,
+        address: u.address,
+        amountSats: u.amount,
+        blockTime: u.blockTime,
+        blockHeight: u.blockHeight,
+        recordId: record?.id ?? u.recordId ?? undefined,
+        label: record?.label,
+        owner: record?.owner,
+        walletName: record?.walletName,
+        tags: record?.tags,
+        categories: record?.categories,
+        valueAtReceipt,
+        priceAtReceipt,
+      };
+    });
+  }, [engineRawUtxos, addressToRecord, getPriceForTimestamp]);
 
   const { value: outpointDataStatus, isComputing: outpointDataStatusComputing } = useAsyncMemo(async (signal) => {
     if (!participants) return { hasData: false, percentage: 0, total: 0, withData: 0 };
@@ -624,10 +843,13 @@ export default function UTXOs() {
     return result;
   }, [participants, transactions, txidToTx, addressToRecord, selectedDate, getPriceForTimestamp], [] as UTXO[]);
 
-  // Select which UTXO calculation to use based on mode
+  // Select which UTXO calculation to use. When the engine fast path is active we
+  // use its owned-UTXO set (always exact); otherwise fall back to the in-browser
+  // computation for the current mode.
   const utxos = useMemo(() => {
+    if (engineDecision === 'engine') return engineUtxos ?? [];
     return utxoMode === 'exact' ? utxosExact : utxosHeuristic;
-  }, [utxoMode, utxosExact, utxosHeuristic]);
+  }, [engineDecision, engineUtxos, utxoMode, utxosExact, utxosHeuristic]);
 
   const { value: addressGroups, isComputing: addressGroupsComputing } = useAsyncMemo(async (signal) => {
     const groups = new Map<string, AddressGroup>();
@@ -837,7 +1059,11 @@ export default function UTXOs() {
 
   const hasActiveFilters = search || ownerFilter !== "all" || walletFilter !== "all" || tagFilter !== "all" || categoryFilter !== "all" || selectedDate || hasActiveSearchFilters(searchFilters);
 
-  const isDataLoading = !transactions || !participants;
+  const isDataLoading = engineDecision === 'pending'
+    ? true
+    : engineDecision === 'engine'
+      ? engineUtxosLoading
+      : (!transactions || !participants);
   const isComputing = utxosHeuristicComputing || utxosExactComputing || addressGroupsComputing || outpointDataStatusComputing;
   const isLoading = isDataLoading || participantsLoading;
 
@@ -1265,7 +1491,7 @@ export default function UTXOs() {
               <div className="flex flex-col items-center justify-center h-32 gap-2" data-testid="status-loading">
                 <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary" />
                 <p className="text-sm text-muted-foreground">
-                  {!transactions ? "Loading transactions..." : participantsLoading ? "Loading participants..." : isComputing ? "Computing UTXOs..." : "Loading..."}
+                  {engineDecision === 'engine' ? "Loading UTXOs..." : !transactions ? "Loading transactions..." : participantsLoading ? "Loading participants..." : isComputing ? "Computing UTXOs..." : "Loading..."}
                 </p>
               </div>
             ) : sortedGroups.length === 0 ? (

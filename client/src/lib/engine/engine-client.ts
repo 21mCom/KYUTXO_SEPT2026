@@ -22,6 +22,8 @@ import type {
   RecordPageOptions,
   RecordQueryOptions,
   RecordsFingerprint,
+  TransactionsFingerprint,
+  ParticipantsFingerprint,
   AddressAggregate,
   OwnedUtxo,
   ParticipantRow,
@@ -39,6 +41,8 @@ export type {
   RecordPageOptions,
   RecordQueryOptions,
   RecordsFingerprint,
+  TransactionsFingerprint,
+  ParticipantsFingerprint,
   AddressAggregate,
   OwnedUtxo,
   ParticipantRow,
@@ -577,6 +581,26 @@ export async function engineCountRecords(opts: RecordQueryOptions = {}): Promise
 export async function engineGetRecordsFingerprint(): Promise<RecordsFingerprint> {
   await ensureEngineInit();
   return unwrap<RecordsFingerprint>(getEngine().query('getRecordsFingerprint', null));
+}
+
+/**
+ * Freshness fingerprint of the mirror's `blockchainTransactions` table (count +
+ * maxId + maxBlockTime). Compared against the live Dexie source alongside the
+ * records + participants fingerprints before serving an owned-UTXO read.
+ */
+export async function engineGetTransactionsFingerprint(): Promise<TransactionsFingerprint> {
+  await ensureEngineInit();
+  return unwrap<TransactionsFingerprint>(getEngine().query('getTransactionsFingerprint', null));
+}
+
+/**
+ * Freshness fingerprint of the mirror's `transactionParticipants` table (count +
+ * maxId + resolvedPrevoutCount). The resolved-prevout count catches in-place
+ * prevout backfill that inserts/deletes alone would miss.
+ */
+export async function engineGetParticipantsFingerprint(): Promise<ParticipantsFingerprint> {
+  await ensureEngineInit();
+  return unwrap<ParticipantsFingerprint>(getEngine().query('getParticipantsFingerprint', null));
 }
 
 export async function engineGetAddressAggregates(addresses: string[]): Promise<AddressAggregate[]> {

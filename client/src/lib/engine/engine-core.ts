@@ -451,6 +451,68 @@ export function getRecordsFingerprint(db: EngineDb): RecordsFingerprint {
   };
 }
 
+/**
+ * Freshness fingerprint for the `blockchainTransactions` table. Owned-UTXO reads
+ * JOIN this table (and filter `blockTime > 0`), so the mirror is only safe to
+ * read when it matches the live source. `count` + `maxId` detect inserts/deletes;
+ * `maxBlockTime` detects an unconfirmed tx confirming in place (blockTime 0 → a
+ * recent timestamp that becomes the new max), which inserts/deletes alone miss.
+ */
+export interface TransactionsFingerprint {
+  count: number;
+  maxId: number;
+  maxBlockTime: number;
+}
+
+export function getTransactionsFingerprint(db: EngineDb): TransactionsFingerprint {
+  const rows = selectRows<{ count: number; maxId: number; maxBlockTime: number }>(
+    db,
+    `SELECT COUNT(*) AS count,
+            COALESCE(MAX(id), 0) AS maxId,
+            COALESCE(MAX(blockTime), 0) AS maxBlockTime
+       FROM blockchainTransactions`,
+  );
+  const r = rows[0];
+  return {
+    count: Number(r?.count ?? 0),
+    maxId: Number(r?.maxId ?? 0),
+    maxBlockTime: Number(r?.maxBlockTime ?? 0),
+  };
+}
+
+/**
+ * Freshness fingerprint for the `transactionParticipants` table. The owned-UTXO
+ * anti-join detects spends via input rows' (prevTxid, prevVout), which prevout
+ * backfill fills IN PLACE on existing rows — so `count` + `maxId` alone cannot
+ * see it. `resolvedPrevoutCount` (rows with both prevTxid and prevVout set) moves
+ * whenever backfill resolves more inputs, catching that drift. It matches the
+ * Dexie `[prevTxid+prevVout]` compound-index count (only rows with both keys
+ * defined are indexed), keeping the gate index-only on both sides.
+ */
+export interface ParticipantsFingerprint {
+  count: number;
+  maxId: number;
+  resolvedPrevoutCount: number;
+}
+
+export function getParticipantsFingerprint(db: EngineDb): ParticipantsFingerprint {
+  const base = selectRows<{ count: number; maxId: number }>(
+    db,
+    `SELECT COUNT(*) AS count, COALESCE(MAX(id), 0) AS maxId FROM transactionParticipants`,
+  );
+  const resolved = selectScalar(
+    db,
+    `SELECT COUNT(*) AS v FROM transactionParticipants
+       WHERE prevTxid IS NOT NULL AND prevVout IS NOT NULL`,
+  );
+  const r = base[0];
+  return {
+    count: Number(r?.count ?? 0),
+    maxId: Number(r?.maxId ?? 0),
+    resolvedPrevoutCount: Number(resolved ?? 0),
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Idempotent batched inserts
 // ---------------------------------------------------------------------------

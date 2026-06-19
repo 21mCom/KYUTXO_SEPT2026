@@ -49,6 +49,8 @@ import {
   getRecordPage,
   countRecords,
   getRecordsFingerprint,
+  getTransactionsFingerprint,
+  getParticipantsFingerprint,
   getAddressAggregates,
   getOwnedUtxos,
   countOwnedUtxos,
@@ -344,6 +346,10 @@ function handleQuery(name: string, args: unknown): unknown {
       return countRecords(d, args as RecordQueryOptions);
     case 'getRecordsFingerprint':
       return getRecordsFingerprint(d);
+    case 'getTransactionsFingerprint':
+      return getTransactionsFingerprint(d);
+    case 'getParticipantsFingerprint':
+      return getParticipantsFingerprint(d);
     case 'getAddressAggregates':
       return Array.from(getAddressAggregates(d, args as string[]).values());
     case 'getOwnedUtxos':

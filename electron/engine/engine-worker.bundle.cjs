@@ -248,6 +248,8 @@ var MIRROR_TABLES = [
 ];
 var OWNED_TIERS = ["verified", "manual", "wallet-import", "xpub-derived"];
 var PARAM_BATCH_SIZE = 800;
+var OWNED_UTXOS_TIERS_KEY = "owned_utxos_tiers";
+var OWNED_UTXOS_COUNT_KEY = "owned_utxos_count";
 function selectRows(db2, sql, bind = []) {
   return db2.selectRows(sql, bind);
 }
@@ -318,6 +320,11 @@ function createTablesOnly(db2) {
       complete     INTEGER NOT NULL DEFAULT 0,
       updatedAt    INTEGER NOT NULL DEFAULT 0
     );
+
+    CREATE TABLE IF NOT EXISTS engineMeta (
+      key   TEXT PRIMARY KEY,
+      value TEXT
+    );
   `);
 }
 function createIndexes(db2) {
@@ -351,10 +358,23 @@ function dropMirrorTables(db2) {
     DROP TABLE IF EXISTS records;
     DROP TABLE IF EXISTS blockchainTransactions;
     DROP TABLE IF EXISTS transactionParticipants;
+    DROP TABLE IF EXISTS ownedUtxos;
   `);
+  db2.exec("CREATE TABLE IF NOT EXISTS engineMeta (key TEXT PRIMARY KEY, value TEXT);");
+  db2.run("DELETE FROM engineMeta WHERE key IN (?, ?)", [OWNED_UTXOS_TIERS_KEY, OWNED_UTXOS_COUNT_KEY]);
 }
 function resetSeedMeta(db2) {
   db2.exec("DELETE FROM seedMeta;");
+}
+function getEngineMeta(db2, key) {
+  const rows = selectRows(db2, "SELECT value FROM engineMeta WHERE key = ?", [key]);
+  return rows[0]?.value ?? null;
+}
+function setEngineMeta(db2, key, value) {
+  db2.run(
+    "INSERT INTO engineMeta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+    [key, value]
+  );
 }
 function getSeedMeta(db2, table) {
   const rows = selectRows(
@@ -418,6 +438,53 @@ function isEngineReady(db2) {
 }
 function countTable(db2, table) {
   return selectScalar(db2, `SELECT COUNT(*) AS v FROM ${table}`);
+}
+function getRecordsFingerprint(db2) {
+  const rows = selectRows(
+    db2,
+    `SELECT COUNT(*) AS count,
+            COALESCE(MAX(id), 0) AS maxId,
+            COALESCE(MAX(updatedAt), 0) AS maxUpdatedAt
+       FROM records`
+  );
+  const r = rows[0];
+  return {
+    count: Number(r?.count ?? 0),
+    maxId: Number(r?.maxId ?? 0),
+    maxUpdatedAt: Number(r?.maxUpdatedAt ?? 0)
+  };
+}
+function getTransactionsFingerprint(db2) {
+  const rows = selectRows(
+    db2,
+    `SELECT COUNT(*) AS count,
+            COALESCE(MAX(id), 0) AS maxId,
+            COALESCE(MAX(blockTime), 0) AS maxBlockTime
+       FROM blockchainTransactions`
+  );
+  const r = rows[0];
+  return {
+    count: Number(r?.count ?? 0),
+    maxId: Number(r?.maxId ?? 0),
+    maxBlockTime: Number(r?.maxBlockTime ?? 0)
+  };
+}
+function getParticipantsFingerprint(db2) {
+  const base = selectRows(
+    db2,
+    `SELECT COUNT(*) AS count, COALESCE(MAX(id), 0) AS maxId FROM transactionParticipants`
+  );
+  const resolved = selectScalar(
+    db2,
+    `SELECT COUNT(*) AS v FROM transactionParticipants
+       WHERE prevTxid IS NOT NULL AND prevVout IS NOT NULL`
+  );
+  const r = base[0];
+  return {
+    count: Number(r?.count ?? 0),
+    maxId: Number(r?.maxId ?? 0),
+    resolvedPrevoutCount: Number(resolved ?? 0)
+  };
 }
 function insertRecords(db2, rows) {
   if (rows.length === 0) return;
@@ -603,7 +670,65 @@ function ownedTierPlaceholders(tiers) {
   const t = tiers.length ? tiers : OWNED_TIERS;
   return { sql: t.map(() => "?").join(","), bind: t };
 }
+function tiersSignature(tiers) {
+  return JSON.stringify([...tiers.length ? tiers : OWNED_TIERS].sort());
+}
+function ownedUtxosTableExists(db2) {
+  return selectScalar(
+    db2,
+    "SELECT COUNT(*) AS v FROM sqlite_master WHERE type = 'table' AND name = 'ownedUtxos'"
+  ) > 0;
+}
+function ownedUtxosReady(db2, tiers = OWNED_TIERS) {
+  if (!ownedUtxosTableExists(db2)) return false;
+  const built = getEngineMeta(db2, OWNED_UTXOS_TIERS_KEY);
+  return built != null && built === tiersSignature(tiers);
+}
+function buildOwnedUtxos(db2, tiers = OWNED_TIERS) {
+  const { sql: tierSql, bind } = ownedTierPlaceholders(tiers);
+  db2.exec("DROP TABLE IF EXISTS ownedUtxos;");
+  db2.exec(`
+    CREATE TABLE ownedUtxos (
+      id       INTEGER PRIMARY KEY,
+      txid     TEXT NOT NULL,
+      vout     INTEGER,
+      address  TEXT NOT NULL,
+      amount   INTEGER NOT NULL,
+      recordId INTEGER
+    );
+  `);
+  db2.run(
+    `
+    INSERT INTO ownedUtxos (id, txid, vout, address, amount, recordId)
+    SELECT o.id, o.txid, o.vout, o.address, o.amount, o.recordId
+    FROM transactionParticipants o
+    JOIN blockchainTransactions t ON t.txid = o.txid
+    WHERE o.role = 'output'
+      AND o.vout IS NOT NULL
+      AND COALESCE(t.blockTime, 0) > 0
+      AND EXISTS (
+        SELECT 1 FROM records r
+        WHERE r.inputString = o.address AND r.type = 'address'
+          AND r.addressImportance IN (${tierSql})
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM transactionParticipants i
+        WHERE i.role = 'input' AND i.prevTxid = o.txid AND i.prevVout = o.vout
+      )
+    `,
+    bind
+  );
+  const count = selectScalar(db2, "SELECT COUNT(*) AS v FROM ownedUtxos");
+  setEngineMeta(db2, OWNED_UTXOS_COUNT_KEY, String(count));
+  setEngineMeta(db2, OWNED_UTXOS_TIERS_KEY, tiersSignature(tiers));
+  return count;
+}
 function countOwnedUtxos(db2, tiers = OWNED_TIERS) {
+  if (ownedUtxosReady(db2, tiers)) {
+    const cached = getEngineMeta(db2, OWNED_UTXOS_COUNT_KEY);
+    if (cached != null) return Number(cached);
+    return selectScalar(db2, "SELECT COUNT(*) AS v FROM ownedUtxos");
+  }
   const { sql: tierSql, bind } = ownedTierPlaceholders(tiers);
   return selectScalar(
     db2,
@@ -628,7 +753,22 @@ function countOwnedUtxos(db2, tiers = OWNED_TIERS) {
   );
 }
 function getOwnedUtxos(db2, opts) {
-  const { sql: tierSql, bind } = ownedTierPlaceholders(opts.tiers ?? OWNED_TIERS);
+  const tiers = opts.tiers ?? OWNED_TIERS;
+  if (ownedUtxosReady(db2, tiers)) {
+    const params2 = [];
+    let cursor2 = "";
+    if (opts.afterId != null) {
+      cursor2 = "WHERE id > ?";
+      params2.push(opts.afterId);
+    }
+    params2.push(opts.limit);
+    return selectRows(
+      db2,
+      `SELECT id, txid, vout, address, amount, recordId FROM ownedUtxos ${cursor2} ORDER BY id LIMIT ?`,
+      params2
+    );
+  }
+  const { sql: tierSql, bind } = ownedTierPlaceholders(tiers);
   const params = [...bind];
   let cursor = "";
   if (opts.afterId != null) {
@@ -945,6 +1085,7 @@ function handleSeedFinish(sourceCounts) {
   try {
     state = "INDEXING";
     createIndexes(d);
+    buildOwnedUtxos(d);
     applyReadPragmas(d);
     let allComplete = true;
     for (const t of MIRROR_TABLES) {
@@ -1004,6 +1145,7 @@ function handleGenerateSynthetic(spec) {
     const result = generateSyntheticData(d, spec);
     state = "INDEXING";
     createIndexes(d);
+    buildOwnedUtxos(d);
     applyReadPragmas(d);
     markSeedCompleteIfDone(d, "records", result.records);
     markSeedCompleteIfDone(d, "blockchainTransactions", result.transactions);
@@ -1032,6 +1174,12 @@ function handleQuery(name, args) {
       return getRecordPage(d, args);
     case "countRecords":
       return countRecords(d, args);
+    case "getRecordsFingerprint":
+      return getRecordsFingerprint(d);
+    case "getTransactionsFingerprint":
+      return getTransactionsFingerprint(d);
+    case "getParticipantsFingerprint":
+      return getParticipantsFingerprint(d);
     case "getAddressAggregates":
       return Array.from(getAddressAggregates(d, args).values());
     case "getOwnedUtxos":
