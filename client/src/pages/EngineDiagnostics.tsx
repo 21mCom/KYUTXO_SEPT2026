@@ -68,6 +68,17 @@ function fmtMs(ms: number): string {
   return `${(ms / 1000).toFixed(2)} s`;
 }
 
+function fmtDuration(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds < 0) return "—";
+  const total = Math.round(seconds);
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m ${s}s`;
+  return `${s}s`;
+}
+
 const STATE_VARIANT: Record<EngineState, "default" | "secondary" | "destructive" | "outline"> = {
   EMPTY: "outline",
   LOADING: "secondary",
@@ -377,9 +388,20 @@ export default function EngineDiagnostics() {
                       <span className="tabular-nums" data-testid="text-seed-progress">
                         {seedProgress.table}: {fmtNum(seedProgress.processed)} / {fmtNum(seedProgress.total)}
                       </span>
-                      <span className="tabular-nums" data-testid="text-throughput">
-                        {fmtNum(Math.round(throughput))} rows/sec
-                      </span>
+                      <div className="flex items-center gap-3">
+                        {(() => {
+                          const remaining = seedProgress.overallTotal - seedProgress.overallProcessed;
+                          if (busy !== "seed" || throughput <= 0 || remaining <= 0) return null;
+                          return (
+                            <span className="tabular-nums" data-testid="text-eta">
+                              ~{fmtDuration(remaining / throughput)} left
+                            </span>
+                          );
+                        })()}
+                        <span className="tabular-nums" data-testid="text-throughput">
+                          {fmtNum(Math.round(throughput))} rows/sec
+                        </span>
+                      </div>
                     </div>
                   </div>
                 )}
