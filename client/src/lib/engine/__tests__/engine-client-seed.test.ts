@@ -433,4 +433,65 @@ describe("seedAll orchestration", () => {
     expect(rec.cancelled).toBe(true);
     expect(rec.copied).toBe(0);
   });
+
+  it("propagates a seedBatch error envelope mid-stream and never finishes", async () => {
+    await seedSourceIdb({
+      // chunk size 3 over 7 rows => batches [3, 3, 1]; we fail the 2nd batch.
+      records: [1, 2, 3, 4, 5, 6, 7].map((id) => ({ id, inputString: `addr${id}` })),
+    });
+
+    let batchCalls = 0;
+    const engine = installMockEngine({
+      seedBatch: vi.fn(() => {
+        batchCalls += 1;
+        // The first batch lands; the engine bridge rejects the second with an
+        // { ok: false } envelope (e.g. a transient worker failure).
+        if (batchCalls === 2) {
+          return Promise.resolve({ ok: false, error: "seedBatch boom" } as EngineEnvelope);
+        }
+        return ok();
+      }),
+    });
+
+    // unwrap() turns the error envelope into a throw that propagates out of seedAll.
+    await expect(seedAll()).rejects.toThrow("seedBatch boom");
+
+    // One batch streamed before the rejection, then it stopped immediately.
+    expect(engine.seedBatch).toHaveBeenCalledTimes(2);
+    // The engine is NEVER marked READY with partial data...
+    expect(engine.seedFinish).not.toHaveBeenCalled();
+    // ...and a hard error is not the cancel path, so clear() is not invoked
+    // either: the seed simply aborts un-finished rather than silently completing.
+    expect(engine.clear).not.toHaveBeenCalled();
+  });
+
+  it("propagates an IndexedDB read failure mid-stream and never marks the mirror complete", async () => {
+    await seedSourceIdb({
+      records: [1, 2, 3, 4, 5, 6, 7].map((id) => ({ id, inputString: `addr${id}` })),
+    });
+    const engine = installMockEngine();
+
+    // Let the count + first batch read succeed, then throw on the next getAll so
+    // the failure happens MID-stream (after a batch has already been streamed).
+    const realGetAll = IDBObjectStore.prototype.getAll;
+    let getAllCalls = 0;
+    vi.spyOn(IDBObjectStore.prototype, "getAll").mockImplementation(function (
+      this: IDBObjectStore,
+      query?: IDBValidKey | IDBKeyRange | null,
+      count?: number,
+    ): IDBRequest<unknown[]> {
+      getAllCalls += 1;
+      if (getAllCalls === 2) throw new Error("IndexedDB read failed mid-stream");
+      return realGetAll.call(this, query, count);
+    });
+
+    await expect(seedAll()).rejects.toThrow("IndexedDB read failed mid-stream");
+
+    // The first batch was streamed before the read threw...
+    expect(engine.seedBatch).toHaveBeenCalledTimes(1);
+    // ...but the partial mirror is never finished (left un-complete), and the
+    // hard error does not trigger the cancel-style clear().
+    expect(engine.seedFinish).not.toHaveBeenCalled();
+    expect(engine.clear).not.toHaveBeenCalled();
+  });
 });
