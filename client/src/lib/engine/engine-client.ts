@@ -164,6 +164,77 @@ export async function engineReadyForReads(): Promise<boolean> {
 }
 
 // ---------------------------------------------------------------------------
+// Readiness change subscription
+// ---------------------------------------------------------------------------
+//
+// The engine worker owns the EMPTY→LOADING→INDEXING→READY state machine but has
+// no push channel back to the renderer, so a screen sitting idle while a
+// seed/mirror finishes in the background would otherwise never learn the faster
+// engine path became available. This is a tiny shared poll that watches
+// engineReadyForReads() and notifies listeners only on a *transition* (ready ↔
+// not-ready, in either direction). The poll exists only while there is at least
+// one listener AND the engine is available, so the browser preview (no engine)
+// pays nothing — subscribe() is a no-op there and starts no timer.
+
+type ReadinessListener = (ready: boolean) => void;
+const readinessListeners = new Set<ReadinessListener>();
+let readinessPollTimer: ReturnType<typeof setInterval> | null = null;
+let lastReadyState: boolean | null = null;
+let readinessPollInFlight = false;
+const READINESS_POLL_MS = 2000;
+
+async function pollReadinessOnce(): Promise<void> {
+  if (readinessPollInFlight) return; // never overlap a slow status() call
+  readinessPollInFlight = true;
+  try {
+    const ready = await engineReadyForReads();
+    if (lastReadyState === null) {
+      // First sample after subscribe: establish the baseline without firing, so
+      // we only ever notify on an actual change the screen hasn't seen yet.
+      lastReadyState = ready;
+      return;
+    }
+    if (ready !== lastReadyState) {
+      lastReadyState = ready;
+      readinessListeners.forEach((listener) => {
+        try {
+          listener(ready);
+        } catch {
+          // A misbehaving listener must not stop the others or the poll.
+        }
+      });
+    }
+  } finally {
+    readinessPollInFlight = false;
+  }
+}
+
+/**
+ * Subscribe to engine readiness transitions. The callback fires whenever the
+ * engine flips between ready and not-ready while you are subscribed (e.g. a
+ * background seed reaches READY). Returns an unsubscribe function; the shared
+ * poll stops once the last listener unsubscribes.
+ *
+ * In the browser preview (no engine) this is a no-op that starts no polling.
+ */
+export function subscribeEngineReadiness(listener: ReadinessListener): () => void {
+  if (!isEngineAvailable()) return () => {};
+  readinessListeners.add(listener);
+  if (!readinessPollTimer) {
+    void pollReadinessOnce(); // prime the baseline immediately
+    readinessPollTimer = setInterval(() => void pollReadinessOnce(), READINESS_POLL_MS);
+  }
+  return () => {
+    readinessListeners.delete(listener);
+    if (readinessListeners.size === 0 && readinessPollTimer) {
+      clearInterval(readinessPollTimer);
+      readinessPollTimer = null;
+      lastReadyState = null; // re-baseline on the next subscribe
+    }
+  };
+}
+
+// ---------------------------------------------------------------------------
 // IndexedDB keyset reader (source = the live Dexie vault)
 // ---------------------------------------------------------------------------
 

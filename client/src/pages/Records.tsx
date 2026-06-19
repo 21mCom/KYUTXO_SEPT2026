@@ -35,6 +35,7 @@ import {
   engineGetRecordPage,
   engineCountRecords,
   engineGetRecordsFingerprint,
+  subscribeEngineReadiness,
 } from "@/lib/engine/engine-client";
 import { getTransactionsByTxidStartsWith } from "@/lib/data/transaction-crud";
 import { recomputeAddressStats } from "@/lib/data/address-stats";
@@ -192,6 +193,10 @@ export default function Records() {
   const [includeBlockchainDiscovered, setIncludeBlockchainDiscovered] = useState(false);
   const [totalBlockchainDiscovered, setTotalBlockchainDiscovered] = useState(0);
   const [loadElapsedSec, setLoadElapsedSec] = useState(0);
+  // Bumped whenever the native engine flips between ready/not-ready in the
+  // background so the load effect re-runs and picks up the faster engine path
+  // (or falls back) without a manual refresh. No-op in the browser preview.
+  const [engineReadySignal, setEngineReadySignal] = useState(0);
   
   const [columnFilters, setColumnFilters] = useState<ColumnFilter[]>([]);
   
@@ -284,6 +289,13 @@ export default function Records() {
   const retryLoad = useCallback(() => {
     setLoadError(null);
     setRetrySig(s => s + 1);
+  }, []);
+
+  // Re-run the load when the native engine finishes mirroring in the background
+  // (or transitions back to not-ready). The subscription self-disables and starts
+  // no polling in the browser preview where the engine is unavailable.
+  useEffect(() => {
+    return subscribeEngineReadiness(() => setEngineReadySignal(s => s + 1));
   }, []);
 
   useEffect(() => {
@@ -745,7 +757,7 @@ export default function Records() {
     };
     
     loadRecords();
-  }, [includeBlockchainDiscovered, dbChangeSignal, currentPage, debouncedSearch, columnFilters, retrySig]);
+  }, [includeBlockchainDiscovered, dbChangeSignal, currentPage, debouncedSearch, columnFilters, retrySig, engineReadySignal]);
 
   // Watchdog: while a load is continuously in progress, tick an elapsed-seconds
   // counter. On very large vaults the first load after a big update can take a
