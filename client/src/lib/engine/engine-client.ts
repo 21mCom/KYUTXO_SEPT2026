@@ -88,8 +88,17 @@ export const ENGINE_UNAVAILABLE_MESSAGE =
 
 // Source IndexedDB (Dexie) database + the stores we mirror.
 const IDB_NAME = 'KYUTXODatabase';
-const SEED_CHUNK_SIZE = 10000;
+let seedChunkSize = 10000;
 const MIRROR_TABLES: MirrorTable[] = ['records', 'blockchainTransactions', 'transactionParticipants'];
+
+/**
+ * Test-only seam: override the keyset batch size so unit tests can exercise the
+ * multi-batch paging loop without inserting tens of thousands of rows. Pass no
+ * argument to restore the production default. Not used in production code.
+ */
+export function __setSeedChunkSizeForTests(size?: number): void {
+  seedChunkSize = size && size > 0 ? size : 10000;
+}
 
 // ---------------------------------------------------------------------------
 // IPC plumbing
@@ -188,7 +197,7 @@ function jsonArray(v: unknown): string {
   return '[]';
 }
 
-function mapRecord(o: Record<string, unknown>): RecordRow {
+export function mapRecord(o: Record<string, unknown>): RecordRow {
   const inputString = toText(o.inputString) ?? '';
   return {
     id: Number(o.id),
@@ -216,7 +225,7 @@ function mapRecord(o: Record<string, unknown>): RecordRow {
   };
 }
 
-function mapTransaction(o: Record<string, unknown>) {
+export function mapTransaction(o: Record<string, unknown>) {
   return {
     id: Number(o.id),
     txid: toText(o.txid) ?? '',
@@ -229,7 +238,7 @@ function mapTransaction(o: Record<string, unknown>) {
   };
 }
 
-function mapParticipant(o: Record<string, unknown>): ParticipantRow {
+export function mapParticipant(o: Record<string, unknown>): ParticipantRow {
   return {
     id: Number(o.id),
     txid: toText(o.txid) ?? '',
@@ -291,7 +300,7 @@ async function seedTableStream(
       cancelled = true;
       break;
     }
-    const batch = await idbGetBatch(idb, table, lastId, SEED_CHUNK_SIZE);
+    const batch = await idbGetBatch(idb, table, lastId, seedChunkSize);
     if (batch.length === 0) break;
 
     const mapped = batch.map((o) => map(o as Record<string, unknown>));
@@ -302,7 +311,7 @@ async function seedTableStream(
     copied += batch.length;
     onProgress?.({ table, processed: copied, total: Math.max(sourceCount, copied) });
 
-    if (batch.length < SEED_CHUNK_SIZE) break;
+    if (batch.length < seedChunkSize) break;
   }
 
   return {
