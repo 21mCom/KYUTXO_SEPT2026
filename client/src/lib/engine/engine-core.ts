@@ -422,6 +422,35 @@ export function maxId(db: EngineDb, table: MirrorTable): number {
   return selectScalar(db, `SELECT COALESCE(MAX(id), 0) AS v FROM ${table}`);
 }
 
+/**
+ * Freshness fingerprint for the `records` table: total row count, the max id,
+ * and the max updatedAt. Callers compare this against the live Dexie source to
+ * decide whether the mirror is current. Any create bumps count + maxId; any
+ * delete lowers count; any edit bumps updatedAt — so a mismatch in any of the
+ * three means the mirror is stale and the read must fall back to Dexie.
+ */
+export interface RecordsFingerprint {
+  count: number;
+  maxId: number;
+  maxUpdatedAt: number;
+}
+
+export function getRecordsFingerprint(db: EngineDb): RecordsFingerprint {
+  const rows = selectRows<{ count: number; maxId: number; maxUpdatedAt: number }>(
+    db,
+    `SELECT COUNT(*) AS count,
+            COALESCE(MAX(id), 0) AS maxId,
+            COALESCE(MAX(updatedAt), 0) AS maxUpdatedAt
+       FROM records`,
+  );
+  const r = rows[0];
+  return {
+    count: Number(r?.count ?? 0),
+    maxId: Number(r?.maxId ?? 0),
+    maxUpdatedAt: Number(r?.maxUpdatedAt ?? 0),
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Idempotent batched inserts
 // ---------------------------------------------------------------------------

@@ -21,6 +21,7 @@ import type {
   RecordRow,
   RecordPageOptions,
   RecordQueryOptions,
+  RecordsFingerprint,
   AddressAggregate,
   OwnedUtxo,
   ParticipantRow,
@@ -37,6 +38,7 @@ export type {
   RecordRow,
   RecordPageOptions,
   RecordQueryOptions,
+  RecordsFingerprint,
   AddressAggregate,
   OwnedUtxo,
   ParticipantRow,
@@ -142,6 +144,23 @@ export async function getEngineStatus(): Promise<EngineSnapshot> {
 
 export async function getDbInfo(): Promise<DbInfo> {
   return unwrap<DbInfo>(getEngine().dbInfo());
+}
+
+/**
+ * Cheap "can a live screen read from the engine right now?" probe. Returns false
+ * (never throws) in the browser preview or whenever the engine is not fully
+ * mirrored/indexed, so callers can transparently fall back to the Dexie path.
+ * The freshness matters: it re-queries status so a seed that finished after the
+ * cached init snapshot is reflected immediately.
+ */
+export async function engineReadyForReads(): Promise<boolean> {
+  if (!isEngineAvailable()) return false;
+  try {
+    const snap = await getEngineStatus();
+    return !!snap.ready;
+  } catch {
+    return false;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -409,6 +428,16 @@ export async function engineGetRecordPage(opts: RecordPageOptions): Promise<Reco
 export async function engineCountRecords(opts: RecordQueryOptions = {}): Promise<number> {
   await ensureEngineInit();
   return unwrap<number>(getEngine().query('countRecords', opts));
+}
+
+/**
+ * Freshness fingerprint of the mirror's `records` table (count + maxId +
+ * maxUpdatedAt). Callers compare this against the live Dexie source to confirm
+ * the mirror is current before serving a read from the engine.
+ */
+export async function engineGetRecordsFingerprint(): Promise<RecordsFingerprint> {
+  await ensureEngineInit();
+  return unwrap<RecordsFingerprint>(getEngine().query('getRecordsFingerprint', null));
 }
 
 export async function engineGetAddressAggregates(addresses: string[]): Promise<AddressAggregate[]> {

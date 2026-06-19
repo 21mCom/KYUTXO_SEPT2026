@@ -646,6 +646,31 @@ export async function getRecentRecordsByUpdatedAt(limit: number): Promise<Record
   return db.records.orderBy('updatedAt').reverse().limit(limit).toArray();
 }
 
+/**
+ * Freshness fingerprint for the live `records` table — total count, the max id,
+ * and the max updatedAt. Compared against the native engine mirror's fingerprint
+ * to decide whether the mirror is current enough to serve a read. Any create
+ * bumps count + maxId; any delete lowers count; any edit bumps updatedAt — so a
+ * mismatch in any field means the mirror is stale. Uses index-only reads (no
+ * full table scan): a count plus the first row of two ordered indexes.
+ */
+export async function getRecordsFingerprint(): Promise<{
+  count: number;
+  maxId: number;
+  maxUpdatedAt: number;
+}> {
+  const [count, newestById, newestByUpdatedAt] = await Promise.all([
+    db.records.count(),
+    db.records.orderBy('id').last(),
+    db.records.orderBy('updatedAt').last(),
+  ]);
+  return {
+    count,
+    maxId: newestById?.id ?? 0,
+    maxUpdatedAt: newestByUpdatedAt?.updatedAt ?? 0,
+  };
+}
+
 export async function getRecordsPageByUpdatedAt(
   offset: number,
   limit: number

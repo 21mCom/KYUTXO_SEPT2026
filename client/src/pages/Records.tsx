@@ -27,7 +27,15 @@ import {
   getAddressRecordsByImportanceTierPage,
   getRecordsPageByTypeIdReverseKeyset,
   getRecordsPageByTypeAndImportanceTiersKeyset,
+  bulkGetRecords,
+  getRecordsFingerprint,
 } from "@/lib/data/record-crud";
+import {
+  engineReadyForReads,
+  engineGetRecordPage,
+  engineCountRecords,
+  engineGetRecordsFingerprint,
+} from "@/lib/engine/engine-client";
 import { getTransactionsByTxidStartsWith } from "@/lib/data/transaction-crud";
 import { recomputeAddressStats } from "@/lib/data/address-stats";
 import { RecordTable } from "@/components/RecordTable";
@@ -384,6 +392,61 @@ export default function Records() {
           }
         };
 
+        // Native read-engine fast path (Task #274). When the desktop engine is
+        // fully mirrored + indexed (READY) and the current query is one the
+        // engine can express — no column filters, OR a single type-equals filter,
+        // with or without a cross-field substring search — we let SQLite do the
+        // heavy keyset paging / filtering / counting and only pull the matching
+        // page of FULL records back from Dexie by primary key (a trivial 50-row
+        // get). The mirror is a column subset, so hydrating from Dexie preserves
+        // display fidelity. Anything the engine can't express, or the browser
+        // preview, transparently falls back to the existing Dexie path below.
+        const engineReady = await engineReadyForReads();
+        if (loadVersionRef.current !== version) return;
+        const engineTypeFilter: string | null | undefined =
+          columnFilters.length === 0
+            ? null
+            : columnFilters.length === 1 &&
+                columnFilters[0].field === 'type' &&
+                columnFilters[0].operator === 'equals' &&
+                columnFilters[0].value.trim() !== ''
+              ? columnFilters[0].value.trim()
+              : undefined;
+        // Readiness alone is not enough: the engine mirror is a read replica that
+        // is only (re)seeded manually, so it can stay READY while drifting out of
+        // sync with the live Dexie vault after any create/edit/delete. Before
+        // trusting the engine for a read, confirm the mirror is CURRENT by
+        // comparing a cheap fingerprint (count + maxId + maxUpdatedAt) of the
+        // records table on both sides. Any mismatch — or any error reading the
+        // fingerprint — means we fall back to the always-correct Dexie path.
+        // Identifier searches (pasted full address/txid) have EXACT inputString
+        // semantics via buildIdentifierSearchCollection — the engine's `search` is
+        // a cross-field substring, so it must NOT handle identifier lookups. Leave
+        // those on the dedicated Dexie identifier branch below.
+        const engineExpressible =
+          engineReady && engineTypeFilter !== undefined && !identifierSearch;
+        let useEngine = false;
+        if (engineExpressible) {
+          try {
+            const [engineFp, dexieFp] = await Promise.all([
+              engineGetRecordsFingerprint(),
+              getRecordsFingerprint(),
+            ]);
+            if (loadVersionRef.current !== version) return;
+            useEngine =
+              engineFp.count === dexieFp.count &&
+              engineFp.maxId === dexieFp.maxId &&
+              engineFp.maxUpdatedAt === dexieFp.maxUpdatedAt;
+          } catch {
+            useEngine = false;
+          }
+        }
+        const engineOpts = {
+          includeBlockchainDiscovered,
+          type: engineTypeFilter ?? undefined,
+          search: search || undefined,
+        };
+
         // Counts run AFTER the first page is rendered for the winning version —
         // never before. Starting them earlier put expensive count queries on the
         // IndexedDB thread ahead of the critical row fetch, and any load that got
@@ -392,6 +455,25 @@ export default function Records() {
         // identifier/substring branches already derive their totals from the
         // awaited page fetch, so here they only refresh the hidden-records badge.
         const runDeferredCounts = () => {
+          // Engine path: exact counts come straight from SQLite. The visible total
+          // honors the active type/search/include; the hidden-records badge is the
+          // global discovered count (all rows minus non-discovered rows).
+          if (useEngine) {
+            setCountLoading(true);
+            Promise.all([
+              engineCountRecords(engineOpts),
+              engineCountRecords({ includeBlockchainDiscovered: true }),
+              engineCountRecords({ includeBlockchainDiscovered: false }),
+            ]).then(([visible, all, nonDiscovered]) => {
+              if (loadVersionRef.current !== version) return;
+              setTotalCount(visible);
+              setNavigableCount(visible);
+              setTotalBlockchainDiscovered(Math.max(0, all - nonDiscovered));
+            }).catch(e => { console.warn('[Records] Engine count failed:', e); })
+              .finally(() => { if (loadVersionRef.current === version) setCountLoading(false); });
+            return;
+          }
+
           // Count-only default view (no filters, blockchain hidden): one coalesced
           // pass yields both the visible total and the badge so the
           // blockchain-discovered count runs at most once.
@@ -446,7 +528,32 @@ export default function Records() {
           total: 3,
         });
 
-        if (!filtersActive && includeBlockchainDiscovered) {
+        if (useEngine) {
+          // SQLite does the ordered keyset page + filtering; we then hydrate the
+          // FULL records from Dexie by primary key (bulkGet preserves order). For
+          // an arbitrary page jump with no cached cursor we ask the engine for a
+          // wider id-descending window and slice — same shape as the tier
+          // branches' offset fallback.
+          let pageRows;
+          if (hasAnchor) {
+            pageRows = await engineGetRecordPage({ ...engineOpts, beforeId: beforeIdExclusive, limit: PAGE_SIZE });
+          } else {
+            const wide = await engineGetRecordPage({ ...engineOpts, limit: pgOffset + PAGE_SIZE });
+            pageRows = wide.slice(pgOffset, pgOffset + PAGE_SIZE);
+          }
+          if (loadVersionRef.current !== version) return;
+
+          const ids = pageRows.map(r => r.id);
+          const hydrated = (await bulkGetRecords(ids)).filter((r): r is DbRecord => !!r);
+          if (loadVersionRef.current !== version) return;
+
+          rawRecords = hydrated;
+          setResultsTruncated(false);
+          // Keyset boundary uses the engine page (authoritative id ordering) so a
+          // missing-from-Dexie row in `hydrated` can't break Next/Previous.
+          recordNextAnchor(pageRows as unknown as DbRecord[]);
+
+        } else if (!filtersActive && includeBlockchainDiscovered) {
           // Await only the lightweight page fetch (keyset when possible). Counts
           // deferred until after render (see runDeferredCounts).
           rawRecords = hasAnchor
