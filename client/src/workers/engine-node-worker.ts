@@ -33,7 +33,7 @@ import {
   applyIndexBuildPragmas,
   applyReadPragmas,
   createTablesOnly,
-  createIndexes,
+  createIndexesYielding,
   INDEX_BUILD_STEPS,
   buildOwnedUtxos,
   generateSyntheticData,
@@ -292,22 +292,45 @@ function postFinalizeProgress(progress: FinalizeProgress): void {
 }
 
 /**
+ * Return control to the worker's event loop for one tick. While the finalize is
+ * paused here, the single worker thread drains any queued `status`/`schemaVersion`
+ * requests (their handlers are read-only and fast) before resuming the next, still
+ * synchronous, finalize sub-step. setImmediate (not a Promise microtask) is used
+ * deliberately so MessagePort message callbacks — which run as macrotasks — get a
+ * chance to execute in the gap rather than being starved by a microtask loop.
+ */
+function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
+/**
  * Shared finalize sequence for BOTH the real seed and the synthetic load test:
  * build indexes (spilling the sort to fast local temp to bound memory),
  * materialize the owned-UTXO sets, restore read pragmas, then integrity_check.
- * Pushes a progress event before every sub-step. Returns the integrity result.
+ *
+ * Finalize used to run as ONE long synchronous block, so the single-threaded
+ * worker could not answer `status` polls while it rebuilt and the screen looked
+ * frozen on "pending". It now yields between every sub-step (each index build, and
+ * before each materialize/verify pass) so the worker keeps answering polls and the
+ * pushed progress reflects live state. The individual SQLite statements are still
+ * synchronous — SQLite cannot be interrupted mid-statement — but the inter-step
+ * gaps remove the cumulative whole-finalize stall. Returns the integrity result.
  */
-function runFinalize(d: BetterSqlite3EngineDb): string {
+async function runFinalize(d: BetterSqlite3EngineDb): Promise<string> {
   applyIndexBuildPragmas(d);
   try {
-    createIndexes(d, (step, index) => {
-      postFinalizeProgress({
-        phase: 'indexing',
-        label: `Building indexes — ${step.label}`,
-        step: index,
-        totalSteps: FINALIZE_TOTAL_STEPS,
-      });
-    });
+    await createIndexesYielding(
+      d,
+      (step, index) => {
+        postFinalizeProgress({
+          phase: 'indexing',
+          label: `Building indexes — ${step.label}`,
+          step: index,
+          totalSteps: FINALIZE_TOTAL_STEPS,
+        });
+      },
+      yieldToEventLoop,
+    );
     // Materialize the owned-UTXO set once so countOwnedUtxos / first-page reads are
     // sub-second on big vaults instead of a multi-second per-output anti-join.
     postFinalizeProgress({
@@ -316,6 +339,7 @@ function runFinalize(d: BetterSqlite3EngineDb): string {
       step: INDEX_BUILD_STEPS.length + 1,
       totalSteps: FINALIZE_TOTAL_STEPS,
     });
+    await yieldToEventLoop();
     buildOwnedUtxos(d);
     // Same for the heuristic (no-prevout) owned-UTXO set so its count/first-page
     // reads are sub-second instead of a full window-function pass.
@@ -325,6 +349,7 @@ function runFinalize(d: BetterSqlite3EngineDb): string {
       step: INDEX_BUILD_STEPS.length + 2,
       totalSteps: FINALIZE_TOTAL_STEPS,
     });
+    await yieldToEventLoop();
     buildHeuristicOwnedUtxos(d);
   } finally {
     // Always restore the read pragmas (temp_store=MEMORY) — even if index build or
@@ -338,14 +363,15 @@ function runFinalize(d: BetterSqlite3EngineDb): string {
     step: INDEX_BUILD_STEPS.length + 3,
     totalSteps: FINALIZE_TOTAL_STEPS,
   });
+  await yieldToEventLoop();
   return integrityCheck(d);
 }
 
-function handleSeedFinish(sourceCounts: Record<MirrorTable, number>): EngineSnapshot {
+async function handleSeedFinish(sourceCounts: Record<MirrorTable, number>): Promise<EngineSnapshot> {
   const d = requireDb();
   try {
     state = 'INDEXING';
-    const integrity = runFinalize(d);
+    const integrity = await runFinalize(d);
     let allComplete = true;
     for (const t of MIRROR_TABLES) {
       const ok = markSeedCompleteIfDone(d, t, sourceCounts[t] ?? countTable(d, t));
@@ -404,9 +430,9 @@ function handleClear(): EngineSnapshot {
  * so the user can stress their actual machine/USB at scale without a huge real
  * vault. Mirrors the bench flow: reset → generate → index → integrity → ready.
  */
-function handleGenerateSynthetic(
+async function handleGenerateSynthetic(
   spec: SyntheticSpec,
-): { records: number; transactions: number; participants: number } {
+): Promise<{ records: number; transactions: number; participants: number }> {
   const d = requireDb();
   seeding = true;
   errorMessage = null;
@@ -418,7 +444,7 @@ function handleGenerateSynthetic(
     resetSeedMeta(d);
     const result = generateSyntheticData(d, spec);
     state = 'INDEXING';
-    const integrity = runFinalize(d);
+    const integrity = await runFinalize(d);
     markSeedCompleteIfDone(d, 'records', result.records);
     markSeedCompleteIfDone(d, 'blockchainTransactions', result.transactions);
     markSeedCompleteIfDone(d, 'transactionParticipants', result.participants);
@@ -529,7 +555,7 @@ function handleBenchmark(): BenchmarkRow[] {
 // Request dispatch
 // ---------------------------------------------------------------------------
 
-function dispatch(req: EngineRequest): unknown {
+function dispatch(req: EngineRequest): unknown | Promise<unknown> {
   switch (req.type) {
     case 'init':
       return handleInit();
@@ -566,10 +592,15 @@ function runWorker(): void {
   dbPath = (workerData as EngineWorkerData)?.dbPath ?? '';
   if (!dbPath) throw new Error('engine-node-worker requires workerData.dbPath');
 
-  port.on('message', (req: EngineRequest) => {
+  port.on('message', async (req: EngineRequest) => {
     let res: EngineResponse;
     try {
-      res = { id: req.id, ok: true, result: dispatch(req) };
+      // `await` covers both sync handlers (await of a plain value is a no-op) and
+      // the async, cooperatively-yielding finalize handlers. Because the handler
+      // is async, while a long finalize is parked on a yield the event loop
+      // delivers queued `status`/`schemaVersion` messages and runs their (fast,
+      // read-only) handlers — so the worker stays responsive during a rebuild.
+      res = { id: req.id, ok: true, result: await dispatch(req) };
     } catch (err) {
       res = { id: req.id, ok: false, error: err instanceof Error ? err.message : String(err) };
     }

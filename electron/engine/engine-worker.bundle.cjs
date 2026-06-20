@@ -361,12 +361,14 @@ var INDEX_BUILD_STEPS = [
   { label: "owned-output scan", sql: "CREATE INDEX IF NOT EXISTS idx_tp_out ON transactionParticipants(role, address, txid, vout, id);" },
   { label: "optimizing query planner", sql: "ANALYZE;" }
 ];
-function createIndexes(db2, onStep) {
+async function createIndexesYielding(db2, onStep, yieldFn) {
   const total = INDEX_BUILD_STEPS.length;
-  INDEX_BUILD_STEPS.forEach((step, i) => {
+  for (let i = 0; i < total; i++) {
+    const step = INDEX_BUILD_STEPS[i];
     onStep?.(step, i + 1, total);
+    await yieldFn();
     db2.exec(step.sql);
-  });
+  }
 }
 function dropMirrorTables(db2) {
   db2.exec(`
@@ -1551,23 +1553,31 @@ function postFinalizeProgress(progress) {
   const msg = { kind: "finalizeProgress", progress };
   import_node_worker_threads2.parentPort?.postMessage(msg);
 }
-function runFinalize(d) {
+function yieldToEventLoop() {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+async function runFinalize(d) {
   applyIndexBuildPragmas(d);
   try {
-    createIndexes(d, (step, index) => {
-      postFinalizeProgress({
-        phase: "indexing",
-        label: `Building indexes \u2014 ${step.label}`,
-        step: index,
-        totalSteps: FINALIZE_TOTAL_STEPS
-      });
-    });
+    await createIndexesYielding(
+      d,
+      (step, index) => {
+        postFinalizeProgress({
+          phase: "indexing",
+          label: `Building indexes \u2014 ${step.label}`,
+          step: index,
+          totalSteps: FINALIZE_TOTAL_STEPS
+        });
+      },
+      yieldToEventLoop
+    );
     postFinalizeProgress({
       phase: "materializing-utxos",
       label: "Materializing owned UTXOs",
       step: INDEX_BUILD_STEPS.length + 1,
       totalSteps: FINALIZE_TOTAL_STEPS
     });
+    await yieldToEventLoop();
     buildOwnedUtxos(d);
     postFinalizeProgress({
       phase: "materializing-heuristic",
@@ -1575,6 +1585,7 @@ function runFinalize(d) {
       step: INDEX_BUILD_STEPS.length + 2,
       totalSteps: FINALIZE_TOTAL_STEPS
     });
+    await yieldToEventLoop();
     buildHeuristicOwnedUtxos(d);
   } finally {
     applyReadPragmas(d);
@@ -1585,13 +1596,14 @@ function runFinalize(d) {
     step: INDEX_BUILD_STEPS.length + 3,
     totalSteps: FINALIZE_TOTAL_STEPS
   });
+  await yieldToEventLoop();
   return integrityCheck(d);
 }
-function handleSeedFinish(sourceCounts) {
+async function handleSeedFinish(sourceCounts) {
   const d = requireDb();
   try {
     state = "INDEXING";
-    const integrity = runFinalize(d);
+    const integrity = await runFinalize(d);
     let allComplete = true;
     for (const t of MIRROR_TABLES) {
       const ok = markSeedCompleteIfDone(d, t, sourceCounts[t] ?? countTable(d, t));
@@ -1637,7 +1649,7 @@ function handleClear() {
   seeding = false;
   return snapshot();
 }
-function handleGenerateSynthetic(spec) {
+async function handleGenerateSynthetic(spec) {
   const d = requireDb();
   seeding = true;
   errorMessage = null;
@@ -1649,7 +1661,7 @@ function handleGenerateSynthetic(spec) {
     resetSeedMeta(d);
     const result = generateSyntheticData(d, spec);
     state = "INDEXING";
-    const integrity = runFinalize(d);
+    const integrity = await runFinalize(d);
     markSeedCompleteIfDone(d, "records", result.records);
     markSeedCompleteIfDone(d, "blockchainTransactions", result.transactions);
     markSeedCompleteIfDone(d, "transactionParticipants", result.participants);
@@ -1782,10 +1794,10 @@ function runWorker() {
   if (!port) throw new Error("engine-node-worker must run as a worker_thread");
   dbPath = import_node_worker_threads2.workerData?.dbPath ?? "";
   if (!dbPath) throw new Error("engine-node-worker requires workerData.dbPath");
-  port.on("message", (req) => {
+  port.on("message", async (req) => {
     let res;
     try {
-      res = { id: req.id, ok: true, result: dispatch(req) };
+      res = { id: req.id, ok: true, result: await dispatch(req) };
     } catch (err) {
       res = { id: req.id, ok: false, error: err instanceof Error ? err.message : String(err) };
     }

@@ -312,6 +312,31 @@ export function createIndexes(
 }
 
 /**
+ * Async, cooperatively-yielding variant of {@link createIndexes}. Same statements
+ * in the same order (it shares the single {@link INDEX_BUILD_STEPS} source), but
+ * it awaits `yieldFn` BEFORE each `db.exec` so the single-threaded worker drains
+ * any queued `status`/`schemaVersion` messages in the gap between index builds
+ * instead of blocking for the whole finalize. Each individual index build is still
+ * synchronous (SQLite can't be interrupted mid-statement), but the per-step gaps
+ * keep the worker answering polls so Engine Diagnostics shows live progress rather
+ * than appearing frozen. `onStep` fires before the yield so the pushed progress
+ * reflects the step that is about to run.
+ */
+export async function createIndexesYielding(
+  db: EngineDb,
+  onStep: ((step: IndexBuildStep, index: number, total: number) => void) | undefined,
+  yieldFn: () => Promise<void>,
+): Promise<void> {
+  const total = INDEX_BUILD_STEPS.length;
+  for (let i = 0; i < total; i++) {
+    const step = INDEX_BUILD_STEPS[i];
+    onStep?.(step, i + 1, total);
+    await yieldFn();
+    db.exec(step.sql);
+  }
+}
+
+/**
  * Convenience: tables + indexes in one call. Used by unit tests and any caller
  * that wants a query-ready database immediately (small data, no bulk-load phase).
  */

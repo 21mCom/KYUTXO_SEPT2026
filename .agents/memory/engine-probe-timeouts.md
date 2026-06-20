@@ -5,11 +5,16 @@ description: Why every renderer→engine-worker IPC probe must be bounded, the g
 
 # Engine probe timeouts & the readiness baseline trap
 
-The native read-engine runs in ONE single-threaded worker. While it runs a long
-SYNCHRONOUS job — notably the seed `finalize` step (build indexes → materialize
-UTXOs → integrity_check) — it cannot answer any `status`/`schemaVersion`/fingerprint
-IPC. Any renderer code that `await`s such a probe **without a bound** stalls until
-that job finishes.
+The native read-engine runs in ONE single-threaded worker. The seed `finalize` step
+(build indexes → materialize UTXOs → integrity_check) is now **cooperatively async**:
+its handler `await`s `setImmediate` between every sub-step (each index build, before
+each materialize/verify pass), so queued `status`/`schemaVersion` polls ARE answered
+in the gaps and the worker stays responsive during a rebuild. The worker message
+handler is `async` and `await`s `dispatch` for this to work. BUT a single SQLite
+statement still cannot be interrupted, so a heavy individual step (e.g. the owned-UTXO
+anti-join, or one big index) blocks for its own duration. The probe-timeout +
+short-circuit rules below remain the safety net — never assume finalize is fully
+non-blocking. Any OTHER long synchronous worker job (no yields) still blocks all IPC.
 
 ## Rules
 1. **Bound every worker probe.** Wrap status/schema/fingerprint calls in
