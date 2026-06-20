@@ -11,3 +11,4 @@
 - [Engine mirror freshness gate](engine-mirror-freshness.md) — engine is a manually-reseeded read replica; gate any live read on a count+maxId+maxUpdatedAt fingerprint match, not just READY; mismatch/error → Dexie.
 - [Records read-path equivalence](records-read-path-equivalence.md) — testing engine vs Dexie Records reads: every fixture row needs a known tier; compare by id windows (keyset vs offset differ); singleTypeFilter only when no search.
 - [UTXOs engine read path](utxos-engine-readpath.md) — engine fast path only for exact mode + curated tiers + no date; getAddressAggregates unused (need per-UTXO rows); enrich blockTime via txid lookup.
+- [Engine auto-maintenance policy](engine-auto-maintenance-policy.md) — launch bootstrap auto-seeds/refreshes mirror; refresh at launch only (never per write); rebuild READY only on stale, not transient error; cancelled seed → idle not ready.

@@ -28,15 +28,13 @@ import {
   getRecordsPageByTypeIdReverseKeyset,
   getRecordsPageByTypeAndImportanceTiersKeyset,
   bulkGetRecords,
-  getRecordsFingerprint,
 } from "@/lib/data/record-crud";
 import {
-  engineReadyForReads,
   engineGetRecordPage,
   engineCountRecords,
-  engineGetRecordsFingerprint,
   subscribeEngineReadiness,
 } from "@/lib/engine/engine-client";
+import { evaluateEngineFreshness } from "@/lib/engine/engine-freshness";
 import { getTransactionsByTxidStartsWith } from "@/lib/data/transaction-crud";
 import { recomputeAddressStats } from "@/lib/data/address-stats";
 import { RecordTable } from "@/components/RecordTable";
@@ -413,8 +411,6 @@ export default function Records() {
         // get). The mirror is a column subset, so hydrating from Dexie preserves
         // display fidelity. Anything the engine can't express, or the browser
         // preview, transparently falls back to the existing Dexie path below.
-        const engineReady = await engineReadyForReads();
-        if (loadVersionRef.current !== version) return;
         const engineTypeFilter: string | null | undefined =
           columnFilters.length === 0
             ? null
@@ -424,34 +420,23 @@ export default function Records() {
                 columnFilters[0].value.trim() !== ''
               ? columnFilters[0].value.trim()
               : undefined;
-        // Readiness alone is not enough: the engine mirror is a read replica that
-        // is only (re)seeded manually, so it can stay READY while drifting out of
-        // sync with the live Dexie vault after any create/edit/delete. Before
-        // trusting the engine for a read, confirm the mirror is CURRENT by
-        // comparing a cheap fingerprint (count + maxId + maxUpdatedAt) of the
-        // records table on both sides. Any mismatch — or any error reading the
-        // fingerprint — means we fall back to the always-correct Dexie path.
-        // Identifier searches (pasted full address/txid) have EXACT inputString
-        // semantics via buildIdentifierSearchCollection — the engine's `search` is
-        // a cross-field substring, so it must NOT handle identifier lookups. Leave
-        // those on the dedicated Dexie identifier branch below.
+        // Page-specific expressibility: the engine can serve no-filter or a single
+        // type-equals query, but never an identifier lookup. Identifier searches
+        // (pasted full address/txid) have EXACT inputString semantics via
+        // buildIdentifierSearchCollection — the engine's `search` is a cross-field
+        // substring — so they must stay on the dedicated Dexie identifier branch.
         const engineExpressible =
-          engineReady && engineTypeFilter !== undefined && !identifierSearch;
+          engineTypeFilter !== undefined && !identifierSearch;
+        // Readiness alone is not enough: the mirror is a manually (re)seeded read
+        // replica, so it can stay READY while drifting from the live vault after a
+        // create/edit/delete. evaluateEngineFreshness() confirms it is CURRENT
+        // (records fingerprint match) and falls back to Dexie on any mismatch or
+        // error — the one shared gate used across screens.
         let useEngine = false;
         if (engineExpressible) {
-          try {
-            const [engineFp, dexieFp] = await Promise.all([
-              engineGetRecordsFingerprint(),
-              getRecordsFingerprint(),
-            ]);
-            if (loadVersionRef.current !== version) return;
-            useEngine =
-              engineFp.count === dexieFp.count &&
-              engineFp.maxId === dexieFp.maxId &&
-              engineFp.maxUpdatedAt === dexieFp.maxUpdatedAt;
-          } catch {
-            useEngine = false;
-          }
+          const decision = await evaluateEngineFreshness('records');
+          if (loadVersionRef.current !== version) return;
+          useEngine = decision.useEngine;
         }
         const engineOpts = {
           includeBlockchainDiscovered,

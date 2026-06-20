@@ -12,18 +12,13 @@ import { BlockchainTransaction, TransactionParticipant, Record as DbRecord, Pric
 import { getAllAddressSyncState } from "@/lib/data/address-sync-crud";
 import { getPriceDataByAsset } from "@/lib/data/price-data-crud";
 import { countRecordsByTypeAndImportanceTiers, getTransactionsByTxids } from "@/lib/dataFacade";
-import { getRecordsFingerprint } from "@/lib/data/record-crud";
-import { getTransactionsFingerprint, getParticipantsFingerprint } from "@/lib/data/transaction-crud";
 import {
-  engineReadyForReads,
   engineGetOwnedUtxos,
   engineCountOwnedUtxos,
   engineGetHeuristicOwnedUtxos,
   engineCountHeuristicOwnedUtxos,
-  engineGetRecordsFingerprint,
-  engineGetTransactionsFingerprint,
-  engineGetParticipantsFingerprint,
 } from "@/lib/engine/engine-client";
+import { evaluateEngineFreshness } from "@/lib/engine/engine-freshness";
 import type { OwnedUtxo } from "@/lib/engine/engine-core";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -488,10 +483,13 @@ export default function UTXOs() {
     [selectedDate],
   );
 
-  // Decide whether to read from the engine. Like the Records screen, we require
-  // both engine readiness AND a matching records fingerprint (count + maxId +
-  // maxUpdatedAt) so a stale mirror is never trusted; any mismatch or error
-  // falls back to the in-browser Dexie computation.
+  // Decide whether to read from the engine. The owned-UTXO read depends on all
+  // three mirror tables (records for ownership, blockchainTransactions for the
+  // blockTime JOIN, and transactionParticipants for the spend anti-join), so the
+  // shared gate is asked for the 'allMirrors' scope — checking only records would
+  // serve stale UTXOs whenever a sync or prevout backfill changes the tx/
+  // participant tables without touching records. Any mismatch or error falls back
+  // to the in-browser Dexie computation.
   useEffect(() => {
     let cancelled = false;
     if (!engineEligible) {
@@ -500,46 +498,9 @@ export default function UTXOs() {
     }
     setEngineDecision('pending');
     (async () => {
-      try {
-        const ready = await engineReadyForReads();
-        if (cancelled) return;
-        if (!ready) {
-          setEngineDecision('dexie');
-          return;
-        }
-        // The owned-UTXO read depends on all three mirror tables (records for
-        // ownership, blockchainTransactions for the blockTime JOIN, and
-        // transactionParticipants for the spend anti-join), so every one must be
-        // proven fresh — checking only records would serve stale UTXOs whenever a
-        // sync or prevout backfill changes the tx/participant tables without
-        // touching records.
-        const [
-          engRecFp, dexRecFp,
-          engTxFp, dexTxFp,
-          engPartFp, dexPartFp,
-        ] = await Promise.all([
-          engineGetRecordsFingerprint(),
-          getRecordsFingerprint(),
-          engineGetTransactionsFingerprint(),
-          getTransactionsFingerprint(),
-          engineGetParticipantsFingerprint(),
-          getParticipantsFingerprint(),
-        ]);
-        if (cancelled) return;
-        const fresh =
-          engRecFp.count === dexRecFp.count &&
-          engRecFp.maxId === dexRecFp.maxId &&
-          engRecFp.maxUpdatedAt === dexRecFp.maxUpdatedAt &&
-          engTxFp.count === dexTxFp.count &&
-          engTxFp.maxId === dexTxFp.maxId &&
-          engTxFp.maxBlockTime === dexTxFp.maxBlockTime &&
-          engPartFp.count === dexPartFp.count &&
-          engPartFp.maxId === dexPartFp.maxId &&
-          engPartFp.resolvedPrevoutCount === dexPartFp.resolvedPrevoutCount;
-        setEngineDecision(fresh ? 'engine' : 'dexie');
-      } catch {
-        if (!cancelled) setEngineDecision('dexie');
-      }
+      const decision = await evaluateEngineFreshness('allMirrors');
+      if (cancelled) return;
+      setEngineDecision(decision.useEngine ? 'engine' : 'dexie');
     })();
     return () => {
       cancelled = true;

@@ -41,6 +41,7 @@ import QuickTagger from "@/pages/QuickTagger";
 import { lazy, Suspense, useState, useEffect } from "react";
 import { ActivityBusProvider } from "@/lib/activity-bus";
 import { ActivityPulseDot } from "@/components/ActivityPulseDot";
+import { EngineBootstrapper, EnginePreparingIndicator } from "@/components/EngineMaintenanceUI";
 
 const UIAssets = lazy(() => import("@/pages/UIAssets"));
 const IconsReference = lazy(() => import("@/pages/IconsReference"));
@@ -127,6 +128,7 @@ function AuthenticatedApp() {
     <Router hook={useAdaptiveLocation}>
       <RecordPreviewProvider>
         <SidebarProvider style={style as React.CSSProperties}>
+          <EngineBootstrapper />
           <div className="flex h-screen w-full">
             <AppSidebar />
             <div className="flex flex-col flex-1 overflow-hidden">
@@ -136,6 +138,7 @@ function AuthenticatedApp() {
                   <ActivityPulseDot />
                 </div>
                 <div className="flex items-center gap-2">
+                  <EnginePreparingIndicator />
                   <KeyboardShortcutsDialog />
                   <ThemeToggle />
                   <Button

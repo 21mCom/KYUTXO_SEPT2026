@@ -490,13 +490,42 @@ async function seedTableStream(
   };
 }
 
+// ---------------------------------------------------------------------------
+// Single renderer seed lock
+// ---------------------------------------------------------------------------
+//
+// Seeding is a full rebuild: seedBegin drops everything, then a single stream of
+// seedBatch calls repopulates each table. Two seed streams running at once (e.g.
+// the launch auto-seed and a manual Diagnostics seed) would interleave their
+// seedBatch writes after a shared seedBegin and corrupt the mirror. So only ONE
+// renderer seed may be in flight at a time: a second caller awaits the existing
+// run instead of starting a second rebuild. The first caller's onProgress wins;
+// later callers just resolve with the same results.
+
+let seedInFlight: Promise<SeedResult[]> | null = null;
+
+/** True while a renderer seed (auto or manual) is streaming into the engine. */
+export function engineSeedInFlight(): boolean {
+  return seedInFlight !== null;
+}
+
 /**
  * Full-rebuild seed of the whole vault into the engine. Drops + rebuilds via
  * seedBegin, streams every table, then seedFinish builds indexes, runs
  * integrity_check and marks the engine READY. On cancel it aborts via clear() so
  * the worker is never left in a half-seeded LOADING state.
+ *
+ * Guarded by the single-seed lock above: concurrent callers share one rebuild.
  */
-export async function seedAll(onProgress?: (p: SeedProgress) => void): Promise<SeedResult[]> {
+export function seedAll(onProgress?: (p: SeedProgress) => void): Promise<SeedResult[]> {
+  if (seedInFlight) return seedInFlight;
+  seedInFlight = seedAllInner(onProgress).finally(() => {
+    seedInFlight = null;
+  });
+  return seedInFlight;
+}
+
+async function seedAllInner(onProgress?: (p: SeedProgress) => void): Promise<SeedResult[]> {
   await ensureEngineInit();
   const engine = getEngine();
   cancelRequested = false;

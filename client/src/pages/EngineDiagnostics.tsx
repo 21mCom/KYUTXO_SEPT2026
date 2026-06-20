@@ -50,6 +50,11 @@ import {
   type BenchmarkRow,
   type FinalizeProgress,
 } from "@/lib/engine/engine-client";
+import {
+  subscribeEngineMaintenance,
+  getEngineMaintenanceState,
+  type EngineMaintenanceState,
+} from "@/lib/engine/engine-maintenance";
 
 function fmtBytes(n: number | null | undefined): string {
   if (n == null) return "—";
@@ -112,6 +117,10 @@ export default function EngineDiagnostics() {
   const [dbInfo, setDbInfo] = useState<DbInfo | null>(null);
   const [initError, setInitError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  // Mirror the launch bootstrap's state so the manual Seed button can't kick off a
+  // second concurrent rebuild while an automatic seed/refresh is already running.
+  const [maintenance, setMaintenance] = useState<EngineMaintenanceState>(getEngineMaintenanceState);
+  const autoSeeding = maintenance.phase === "seeding" || maintenance.phase === "refreshing";
 
   const [seedProgress, setSeedProgress] = useState<SeedProgress | null>(null);
   const [seedResults, setSeedResults] = useState<SeedResult[] | null>(null);
@@ -175,6 +184,12 @@ export default function EngineDiagnostics() {
     return subscribeFinalizeProgress((p) => {
       if (activeOpRef.current) setFinalizeProgress(p);
     });
+  }, [available]);
+
+  // Track the launch bootstrap so the manual controls can't race it.
+  useEffect(() => {
+    if (!available) return;
+    return subscribeEngineMaintenance(setMaintenance);
   }, [available]);
 
   const handleSeed = async () => {
@@ -391,7 +406,7 @@ export default function EngineDiagnostics() {
                       <Square className="h-4 w-4" /> Cancel
                     </Button>
                   ) : (
-                    <Button onClick={handleSeed} disabled={!!busy || !snapshot} data-testid="button-seed">
+                    <Button onClick={handleSeed} disabled={!!busy || !snapshot || autoSeeding} data-testid="button-seed">
                       <Play className="h-4 w-4" /> Seed from vault
                     </Button>
                   )}
