@@ -16,6 +16,7 @@
  */
 import {
   isEngineAvailable,
+  engineSeedInFlight,
   getEngineStatus,
   engineGetRecordsFingerprint,
   engineGetTransactionsFingerprint,
@@ -23,6 +24,7 @@ import {
   engineGetSchemaVersion,
 } from './engine-client';
 import { ENGINE_SCHEMA_VERSION } from './engine-core';
+import { withEngineTimeout, EngineProbeTimeoutError } from './engine-timeout';
 import { getRecordsFingerprint } from '@/lib/data/record-crud';
 import { getTransactionsFingerprint, getParticipantsFingerprint } from '@/lib/data/transaction-crud';
 
@@ -45,6 +47,10 @@ export type EngineGateReason =
   | 'not-ready'
   | 'schema-mismatch'
   | 'stale'
+  // A seed/refresh is streaming or finalizing in the single-threaded worker.
+  | 'seeding'
+  // A worker probe did not answer within the bounded budget (worker busy/stalled).
+  | 'timeout'
   | 'error';
 
 export interface EngineGateDecision {
@@ -63,8 +69,17 @@ export async function evaluateEngineFreshness(
   scope: EngineFreshnessScope,
 ): Promise<EngineGateDecision> {
   if (!isEngineAvailable()) return { useEngine: false, reason: 'unavailable' };
+
+  // A seed/refresh is streaming or finalizing. The mirror is mid-rebuild (never an
+  // exact match yet) AND the long synchronous finalize step blocks the worker from
+  // answering status/fingerprint IPC. Short-circuit to Dexie WITHOUT round-tripping
+  // to the (possibly blocked) worker, so a page's first paint is never gated on a
+  // rebuild. seedInFlight is set for the entire seedAll run — streaming through
+  // finalize — and cleared only once the worker reports done.
+  if (engineSeedInFlight()) return { useEngine: false, reason: 'seeding' };
+
   try {
-    const snap = await getEngineStatus();
+    const snap = await withEngineTimeout(getEngineStatus());
     if (!snap.ready) return { useEngine: false, reason: 'not-ready' };
 
     // Schema-shape gate (ALL scopes): the fingerprints below compare row counts +
@@ -72,15 +87,15 @@ export async function evaluateEngineFreshness(
     // seeded by an older build reads back NULL for any newly-added column yet still
     // matches those fingerprints. Refuse the engine on a version mismatch so the
     // launch bootstrap reseeds with the current shape.
-    if ((await engineGetSchemaVersion()) !== ENGINE_SCHEMA_VERSION) {
+    if ((await withEngineTimeout(engineGetSchemaVersion())) !== ENGINE_SCHEMA_VERSION) {
       return { useEngine: false, reason: 'schema-mismatch' };
     }
 
     if (scope === 'records') {
-      const [eng, dex] = await Promise.all([
+      const [eng, dex] = await withEngineTimeout(Promise.all([
         engineGetRecordsFingerprint(),
         getRecordsFingerprint(),
-      ]);
+      ]));
       const fresh =
         eng.count === dex.count &&
         eng.maxId === dex.maxId &&
@@ -93,12 +108,12 @@ export async function evaluateEngineFreshness(
     if (scope === 'transactions') {
       // tx + participants only (NOT records). Same fields the allMirrors compare
       // uses for these two tables, so a records drift can't disable the tx list.
-      const [engTx, dexTx, engPart, dexPart] = await Promise.all([
+      const [engTx, dexTx, engPart, dexPart] = await withEngineTimeout(Promise.all([
         engineGetTransactionsFingerprint(),
         getTransactionsFingerprint(),
         engineGetParticipantsFingerprint(),
         getParticipantsFingerprint(),
-      ]);
+      ]));
       const fresh =
         engTx.count === dexTx.count &&
         engTx.maxId === dexTx.maxId &&
@@ -117,14 +132,14 @@ export async function evaluateEngineFreshness(
       engRec, dexRec,
       engTx, dexTx,
       engPart, dexPart,
-    ] = await Promise.all([
+    ] = await withEngineTimeout(Promise.all([
       engineGetRecordsFingerprint(),
       getRecordsFingerprint(),
       engineGetTransactionsFingerprint(),
       getTransactionsFingerprint(),
       engineGetParticipantsFingerprint(),
       getParticipantsFingerprint(),
-    ]);
+    ]));
     const fresh =
       engRec.count === dexRec.count &&
       engRec.maxId === dexRec.maxId &&
@@ -138,7 +153,13 @@ export async function evaluateEngineFreshness(
     return fresh
       ? { useEngine: true, reason: 'ready-fresh' }
       : { useEngine: false, reason: 'stale' };
-  } catch {
-    return { useEngine: false, reason: 'error' };
+  } catch (err) {
+    // Any probe failure → Dexie. A timed-out probe (worker busy/stalled) is
+    // reported distinctly from a genuine read error for observability; both
+    // resolve to useEngine:false so a screen can never serve stale rows.
+    return {
+      useEngine: false,
+      reason: err instanceof EngineProbeTimeoutError ? 'timeout' : 'error',
+    };
   }
 }

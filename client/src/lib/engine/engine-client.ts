@@ -51,6 +51,7 @@ import type {
   BenchmarkRow,
   FinalizeProgress,
 } from '../../workers/engine-node-worker';
+import { withEngineTimeout } from './engine-timeout';
 
 export type {
   RecordRow,
@@ -203,7 +204,13 @@ export async function getDbInfo(): Promise<DbInfo> {
 export async function engineReadyForReads(): Promise<boolean> {
   if (!isEngineAvailable()) return false;
   try {
-    const snap = await getEngineStatus();
+    // Bounded like the read gate: the worker is single-threaded, so while it runs
+    // the long synchronous seed `finalize` step it cannot answer `status`. Without
+    // a timeout the readiness poll's first sample would block until finalize ended
+    // and then silently baseline as `ready` — missing the not-ready→ready
+    // transition, so pages that fell back to Dexie during the seed would never be
+    // told to re-query. Timing out keeps the baseline `false` until READY is real.
+    const snap = await withEngineTimeout(getEngineStatus());
     return !!snap.ready;
   } catch {
     return false;

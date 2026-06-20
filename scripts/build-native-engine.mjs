@@ -7,8 +7,10 @@
  * addon stays EXTERNAL — it is loaded at runtime from node_modules (dev) or the
  * asarUnpack'd location (packaged), never inlined.
  *
- * Wired into CI (before electron-builder) and scripts/electron-dev.sh so the
- * bundle is always fresh before main.cjs spawns the worker.
+ * Invoked by scripts/electron-dev.sh (before the dev server) and
+ * scripts/electron-build.sh (before electron-builder packages the app) so the
+ * bundle is always fresh before main.cjs spawns the worker. electron-builder
+ * itself does NOT run this, so the release script must call it explicitly.
  *
  * Usage: node scripts/build-native-engine.mjs
  */
