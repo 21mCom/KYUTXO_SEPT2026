@@ -223,3 +223,24 @@ async function runBootstrap(): Promise<void> {
     setState({ phase: 'error', message: 'Fast mode unavailable' });
   }
 }
+
+// ---------------------------------------------------------------------------
+// Test-only seams (not used in production)
+// ---------------------------------------------------------------------------
+
+/**
+ * Run the launch bootstrap once and return its promise so a test can await the
+ * whole stale-schema → reseed → ready path deterministically. Unlike
+ * startEngineBootstrapOnce this bypasses the per-session once-guard and is
+ * awaitable. Not used in production code.
+ */
+export function __runEngineBootstrapForTests(): Promise<void> {
+  return runBootstrap();
+}
+
+/** Reset the once-guard + maintenance state between tests. Not used in production. */
+export function __resetEngineMaintenanceForTests(): void {
+  bootstrapStarted = false;
+  state = { phase: 'idle' };
+  listeners.clear();
+}
