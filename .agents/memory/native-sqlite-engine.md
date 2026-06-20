@@ -21,7 +21,22 @@ native engine path — do not revive WASM/OPFS for large data.
 
 **How to apply / invariants:**
 - DB is a single file on removable media → `journal_mode=TRUNCATE` (NEVER WAL) +
-  `temp_store=MEMORY`. WAL leaves sidecar files that break on USB removal.
+  `temp_store=MEMORY` for the READ path. WAL leaves sidecar files that break on USB
+  removal. EXCEPTION: during the finalize index build, switch to
+  `temp_store=FILE` (the index-build pragmas) so the multi-index sort over millions
+  of rows spills to the OS temp dir instead of spiking worker RSS — then restore
+  `temp_store=MEMORY` on the read pragmas. The spill goes to OS temp, NOT the USB
+  db file, so it does not reintroduce sidecar-on-USB risk.
+- Finalize must PUSH progress, never rely on polling. `seedFinish` runs the whole
+  finalize (build all indexes → materialize owned/heuristic UTXO sets → ANALYZE →
+  `integrity_check`) as ONE synchronous worker call; while it runs the worker
+  cannot answer `status()` polls, so any poll-only UI looks frozen on "pending"
+  for minutes. Fix: emit `FinalizeProgress` messages from the worker via
+  `parentPort` between sub-steps; main forwards them immediately (its event loop is
+  free because the work is on a separate OS thread). Renderer subscribes via a
+  dedicated push channel (`engine.onFinalizeProgress`), distinct from readiness
+  polling. Keep the per-sub-step emit in the shared finalize routine so BOTH the
+  real seed and synthetic-data generation report identically.
 - Seed is FULL-REBUILD only (state machine EMPTY→LOADING→INDEXING→READY/ERROR);
   there is no partial-resume. Any interruption/cancel must drop the mirror and
   reset `seeding=false` so a fresh seed can always start (cancel path calls

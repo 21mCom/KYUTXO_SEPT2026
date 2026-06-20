@@ -235,35 +235,60 @@ export function createTablesOnly(db: EngineDb): void {
 }
 
 /**
- * Create every secondary index and run ANALYZE. Called once after a bulk load so
- * index maintenance does not slow the insert phase. Index definitions are the
- * single source of truth for the engine's read query plans.
+ * One CREATE INDEX (or ANALYZE) step in the finalize phase, paired with a short
+ * human-readable label so the UI can report which index is currently building.
  */
-export function createIndexes(db: EngineDb): void {
-  db.exec(`
-    CREATE INDEX IF NOT EXISTS idx_records_type_id          ON records(type, id);
-    CREATE INDEX IF NOT EXISTS idx_records_importance_id    ON records(addressImportance, id);
-    CREATE INDEX IF NOT EXISTS idx_records_inputlower       ON records(inputStringLower);
-    CREATE INDEX IF NOT EXISTS idx_records_owner            ON records(owner);
-    CREATE INDEX IF NOT EXISTS idx_records_walletName       ON records(walletName);
-    CREATE INDEX IF NOT EXISTS idx_records_addr_owned       ON records(inputString, type, addressImportance);
+export interface IndexBuildStep {
+  label: string;
+  sql: string;
+}
 
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_bt_txid     ON blockchainTransactions(txid);
-    CREATE INDEX IF NOT EXISTS idx_bt_blockTime       ON blockchainTransactions(blockTime);
+/**
+ * Ordered list of every secondary index plus the trailing ANALYZE. This is the
+ * single source of truth BOTH for the engine's read query plans AND for finalize
+ * progress reporting: `createIndexes` runs each entry in turn so the worker can
+ * push a "building index N of M (label)" update between statements (the index
+ * build is the longest, formerly-silent part of the seed).
+ */
+export const INDEX_BUILD_STEPS: readonly IndexBuildStep[] = [
+  { label: 'records by type', sql: 'CREATE INDEX IF NOT EXISTS idx_records_type_id ON records(type, id);' },
+  { label: 'records by importance', sql: 'CREATE INDEX IF NOT EXISTS idx_records_importance_id ON records(addressImportance, id);' },
+  { label: 'records by address', sql: 'CREATE INDEX IF NOT EXISTS idx_records_inputlower ON records(inputStringLower);' },
+  { label: 'records by owner', sql: 'CREATE INDEX IF NOT EXISTS idx_records_owner ON records(owner);' },
+  { label: 'records by wallet', sql: 'CREATE INDEX IF NOT EXISTS idx_records_walletName ON records(walletName);' },
+  { label: 'owned-address lookup', sql: 'CREATE INDEX IF NOT EXISTS idx_records_addr_owned ON records(inputString, type, addressImportance);' },
+  { label: 'transactions by txid', sql: 'CREATE UNIQUE INDEX IF NOT EXISTS idx_bt_txid ON blockchainTransactions(txid);' },
+  { label: 'transactions by time', sql: 'CREATE INDEX IF NOT EXISTS idx_bt_blockTime ON blockchainTransactions(blockTime);' },
+  { label: 'participants by txid + role', sql: 'CREATE INDEX IF NOT EXISTS idx_tp_txid_role ON transactionParticipants(txid, role);' },
+  { label: 'participants by txid', sql: 'CREATE INDEX IF NOT EXISTS idx_tp_txid ON transactionParticipants(txid);' },
+  { label: 'participants by address', sql: 'CREATE INDEX IF NOT EXISTS idx_tp_address ON transactionParticipants(address);' },
+  { label: 'participants by record', sql: 'CREATE INDEX IF NOT EXISTS idx_tp_recordId ON transactionParticipants(recordId);' },
+  // Spent-check correlation for the UTXO anti-join: probe by (prevTxid, prevVout)
+  // then confirm role='input'. Including role keeps the probe covering at scale.
+  { label: 'spent-output lookup', sql: 'CREATE INDEX IF NOT EXISTS idx_tp_prev ON transactionParticipants(prevTxid, prevVout, role);' },
+  // Owned-output scan + anti-join correlation (needs txid, vout) + keyset order (id).
+  // Covering index so the owned-UTXO sweep avoids row lookups at 20M scale.
+  { label: 'owned-output scan', sql: 'CREATE INDEX IF NOT EXISTS idx_tp_out ON transactionParticipants(role, address, txid, vout, id);' },
+  { label: 'optimizing query planner', sql: 'ANALYZE;' },
+];
 
-    CREATE INDEX IF NOT EXISTS idx_tp_txid_role ON transactionParticipants(txid, role);
-    CREATE INDEX IF NOT EXISTS idx_tp_txid      ON transactionParticipants(txid);
-    CREATE INDEX IF NOT EXISTS idx_tp_address   ON transactionParticipants(address);
-    CREATE INDEX IF NOT EXISTS idx_tp_recordId  ON transactionParticipants(recordId);
-    -- Spent-check correlation for the UTXO anti-join: probe by (prevTxid, prevVout)
-    -- then confirm role='input'. Including role keeps the probe covering at scale.
-    CREATE INDEX IF NOT EXISTS idx_tp_prev      ON transactionParticipants(prevTxid, prevVout, role);
-    -- Owned-output scan + anti-join correlation (needs txid, vout) + keyset order (id).
-    -- Covering index so the owned-UTXO sweep avoids row lookups at 20M scale.
-    CREATE INDEX IF NOT EXISTS idx_tp_out       ON transactionParticipants(role, address, txid, vout, id);
-
-    ANALYZE;
-  `);
+/**
+ * Create every secondary index and run ANALYZE. Called once after a bulk load so
+ * index maintenance does not slow the insert phase. Runs each entry in
+ * `INDEX_BUILD_STEPS` in turn; the optional `onStep` callback fires BEFORE each
+ * statement so the finalize UI can report the sub-step currently running. The
+ * statements are identical to the previous single-exec form — only split so each
+ * can be announced.
+ */
+export function createIndexes(
+  db: EngineDb,
+  onStep?: (step: IndexBuildStep, index: number, total: number) => void,
+): void {
+  const total = INDEX_BUILD_STEPS.length;
+  INDEX_BUILD_STEPS.forEach((step, i) => {
+    onStep?.(step, i + 1, total);
+    db.exec(step.sql);
+  });
 }
 
 /**
@@ -1518,9 +1543,27 @@ export function applyBulkLoadPragmas(db: EngineDb): void {
   db.exec('PRAGMA synchronous = OFF;');
 }
 
-/** Steady-state pragmas after seeding: restore NORMAL durability for reads. */
+/**
+ * Index-build pragmas: spill the large CREATE INDEX / materialize sort to the OS
+ * temporary directory (on the fast local/system drive) instead of holding the
+ * whole sort in RAM. This bounds peak memory on constrained machines and very
+ * large USB vaults, where an all-in-memory sort could exhaust RAM. SQLite's
+ * sorter temp files go to the OS temp dir — NOT next to the database on the slow
+ * USB — so this does not write to the stick. Pair with applyReadPragmas
+ * afterwards to restore the in-memory temp store for steady-state reads.
+ */
+export function applyIndexBuildPragmas(db: EngineDb): void {
+  db.exec('PRAGMA temp_store = FILE;');
+}
+
+/**
+ * Steady-state pragmas after seeding: restore NORMAL durability for reads and the
+ * in-memory temp store (query-time temp B-trees are small and stay off the slow
+ * USB), reverting the disk-spill temp store used during the index build.
+ */
 export function applyReadPragmas(db: EngineDb): void {
   db.exec('PRAGMA synchronous = NORMAL;');
+  db.exec('PRAGMA temp_store = MEMORY;');
 }
 
 /**

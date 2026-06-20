@@ -27,7 +27,7 @@ import { Separator } from "@/components/ui/separator";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
-import { CheckCircle2, XCircle, AlertTriangle, Database, HardDrive, Gauge, RefreshCw, Play, Square, Trash2, FlaskConical, ShieldCheck, MonitorSmartphone } from "lucide-react";
+import { CheckCircle2, XCircle, AlertTriangle, Database, HardDrive, Gauge, RefreshCw, Play, Square, Trash2, FlaskConical, ShieldCheck, MonitorSmartphone, Loader2 } from "lucide-react";
 import {
   isEngineAvailable,
   ensureEngineInit,
@@ -40,6 +40,7 @@ import {
   runQueryBenchmark,
   generateSynthetic,
   clearEngine,
+  subscribeFinalizeProgress,
   ENGINE_UNAVAILABLE_MESSAGE,
   type EngineSnapshot,
   type EngineState,
@@ -47,6 +48,7 @@ import {
   type SeedProgress,
   type SeedResult,
   type BenchmarkRow,
+  type FinalizeProgress,
 } from "@/lib/engine/engine-client";
 
 function fmtBytes(n: number | null | undefined): string {
@@ -114,7 +116,16 @@ export default function EngineDiagnostics() {
   const [seedProgress, setSeedProgress] = useState<SeedProgress | null>(null);
   const [seedResults, setSeedResults] = useState<SeedResult[] | null>(null);
   const seedStartRef = useRef<number>(0);
+  // Which finalize-bearing operation (if any) is currently running. Gates the
+  // pushed-progress listener so a late event delivered after the op resolves
+  // can never re-show a stale banner. A ref (not state) so the listener always
+  // reads the current value without re-subscribing.
+  const activeOpRef = useRef<"seed" | "synthetic" | null>(null);
   const [throughput, setThroughput] = useState<number>(0);
+  // Pushed finalize-phase progress (index build → materialize → verify). Flows
+  // even while the worker is busy in the synchronous finalize and can't answer
+  // status polls — exactly when the screen used to look frozen on "pending".
+  const [finalizeProgress, setFinalizeProgress] = useState<FinalizeProgress | null>(null);
 
   const [reopen, setReopen] = useState<{ before: number; after: number; ok: boolean } | null>(null);
   const [integrity, setIntegrity] = useState<string | null>(null);
@@ -154,10 +165,24 @@ export default function EngineDiagnostics() {
     };
   }, [available]);
 
+  // Pushed finalize progress — subscribe once while the engine bridge exists.
+  // Gate on the active-operation ref: progress and the call reply travel on
+  // separate IPC channels with no cross-channel ordering guarantee, so a final
+  // event can arrive after the handler's finally clears the banner. Ignoring
+  // events once the ref is cleared makes a stuck banner impossible.
+  useEffect(() => {
+    if (!available) return;
+    return subscribeFinalizeProgress((p) => {
+      if (activeOpRef.current) setFinalizeProgress(p);
+    });
+  }, [available]);
+
   const handleSeed = async () => {
     setBusy("seed");
+    activeOpRef.current = "seed";
     setSeedResults(null);
     setSeedProgress(null);
+    setFinalizeProgress(null);
     setThroughput(0);
     seedStartRef.current = performance.now();
     try {
@@ -179,6 +204,8 @@ export default function EngineDiagnostics() {
       await refreshStatus();
     } finally {
       setBusy(null);
+      activeOpRef.current = null;
+      setFinalizeProgress(null);
     }
   };
 
@@ -223,6 +250,8 @@ export default function EngineDiagnostics() {
 
   const handleSynthetic = async () => {
     setBusy("synthetic");
+    activeOpRef.current = "synthetic";
+    setFinalizeProgress(null);
     try {
       const addresses = Math.max(1, parseInt(synthAddresses, 10) || 0);
       const transactions = Math.max(1, parseInt(synthTx, 10) || 0);
@@ -237,6 +266,8 @@ export default function EngineDiagnostics() {
       await refreshStatus();
     } finally {
       setBusy(null);
+      activeOpRef.current = null;
+      setFinalizeProgress(null);
     }
   };
 
@@ -406,6 +437,31 @@ export default function EngineDiagnostics() {
                   </div>
                 )}
 
+                {finalizeProgress && (
+                  <div className="space-y-2" data-testid="finalize-progress">
+                    <div className="flex items-center justify-between gap-2 text-sm">
+                      <span className="flex items-center gap-2 text-muted-foreground">
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        Finalizing — {finalizeProgress.label}
+                      </span>
+                      <span className="tabular-nums" data-testid="text-finalize-step">
+                        step {finalizeProgress.step} / {finalizeProgress.totalSteps}
+                      </span>
+                    </div>
+                    <Progress
+                      value={
+                        finalizeProgress.totalSteps > 0
+                          ? Math.min(100, (finalizeProgress.step / finalizeProgress.totalSteps) * 100)
+                          : 0
+                      }
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Building indexes and verifying the database. On a large vault this can take a few minutes — the app is
+                      working, not frozen.
+                    </p>
+                  </div>
+                )}
+
                 {/* Per-table status */}
                 {snapshot && (
                   <div className="space-y-1">
@@ -423,6 +479,10 @@ export default function EngineDiagnostics() {
                             {m.complete ? (
                               <Badge variant="secondary" className="gap-1">
                                 <CheckCircle2 className="h-3 w-3" /> ready
+                              </Badge>
+                            ) : finalizeProgress ? (
+                              <Badge variant="secondary" className="gap-1">
+                                <Loader2 className="h-3 w-3 animate-spin" /> finalizing…
                               </Badge>
                             ) : (
                               <Badge variant="outline">pending</Badge>

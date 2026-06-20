@@ -164,7 +164,7 @@ function createWindow() {
 
 registerFileHandlers(ipcMain, { dataDir, attachmentsDir, portableMode });
 registerElectrumHandlers(ipcMain);
-registerEngineHandlers(ipcMain, { dataDir, portableMode });
+registerEngineHandlers(ipcMain, { dataDir, portableMode, getWindow: () => mainWindow });
 
 // ============================================================================
 // TOR PROXY IPC HANDLERS

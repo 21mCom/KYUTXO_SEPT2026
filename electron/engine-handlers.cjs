@@ -17,6 +17,7 @@ let worker = null;
 let dbPath = '';
 let nextId = 1;
 const pending = new Map();
+let getWindowRef = null;
 
 function workerScriptPath() {
   return path.join(__dirname, 'engine', 'engine-worker.bundle.cjs');
@@ -27,11 +28,29 @@ function rejectAllPending(err) {
   pending.clear();
 }
 
+// Forward a pushed finalize-progress event from the worker to the renderer.
+// Best-effort: the seed itself never depends on the UI receiving these.
+function forwardFinalizeProgress(progress) {
+  try {
+    const win = typeof getWindowRef === 'function' ? getWindowRef() : null;
+    if (win && !win.isDestroyed()) {
+      win.webContents.send('engine:finalizeProgress', progress);
+    }
+  } catch (err) {
+    console.error('[KYUTXO][engine] failed to forward finalize progress:', err);
+  }
+}
+
 function ensureWorker() {
   if (worker) return worker;
   worker = new Worker(workerScriptPath(), { workerData: { dbPath } });
 
   worker.on('message', (res) => {
+    // Un-correlated push events (e.g. finalize progress) carry a `kind` and no id.
+    if (res && res.kind === 'finalizeProgress') {
+      forwardFinalizeProgress(res.progress);
+      return;
+    }
     const p = pending.get(res.id);
     if (!p) return;
     pending.delete(res.id);
@@ -70,10 +89,13 @@ function call(type, extra) {
 /**
  * Register the fixed engine IPC surface.
  * @param ipcMain Electron ipcMain
- * @param {{ dataDir: string, portableMode?: boolean }} opts
+ * @param {{ dataDir: string, portableMode?: boolean, getWindow?: () => import('electron').BrowserWindow | null }} opts
+ *   `getWindow` returns the live main window so pushed worker events (finalize
+ *   progress) can be forwarded to the renderer.
  */
-function registerEngineHandlers(ipcMain, { dataDir, portableMode }) {
+function registerEngineHandlers(ipcMain, { dataDir, portableMode, getWindow }) {
   dbPath = path.join(dataDir, 'engine.sqlite');
+  getWindowRef = typeof getWindow === 'function' ? getWindow : null;
   console.log('[KYUTXO][engine] db path:', dbPath);
 
   // Every handler returns a uniform envelope so the renderer never has to catch

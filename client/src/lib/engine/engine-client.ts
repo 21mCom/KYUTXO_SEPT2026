@@ -34,7 +34,12 @@ import type {
 } from './engine-core';
 // Type-only — fully erased at build, so the Node worker module (which imports
 // better-sqlite3) is never pulled into the renderer bundle.
-import type { EngineState, EngineSnapshot, BenchmarkRow } from '../../workers/engine-node-worker';
+import type {
+  EngineState,
+  EngineSnapshot,
+  BenchmarkRow,
+  FinalizeProgress,
+} from '../../workers/engine-node-worker';
 
 export type {
   RecordRow,
@@ -53,6 +58,7 @@ export type {
   EngineState,
   EngineSnapshot,
   BenchmarkRow,
+  FinalizeProgress,
 };
 
 export interface ReopenResult {
@@ -251,6 +257,25 @@ export function subscribeEngineReadiness(listener: ReadinessListener): () => voi
       lastReadyState = null; // re-baseline on the next subscribe
     }
   };
+}
+
+/**
+ * Subscribe to PUSHED finalize-phase progress (build indexes → materialize
+ * owned-UTXO sets → integrity check). Unlike readiness, these events are pushed
+ * from the worker between sub-steps, so they keep flowing even while the worker
+ * is busy in the synchronous finalize and cannot answer `status` polls — which is
+ * exactly when the screen used to look frozen on "pending".
+ *
+ * Returns an unsubscribe function. No-op (returns a no-op unsubscribe) in the
+ * browser preview or if the desktop bridge predates this channel.
+ */
+export function subscribeFinalizeProgress(
+  listener: (progress: FinalizeProgress) => void,
+): () => void {
+  if (!isEngineAvailable()) return () => {};
+  const engine = getEngine();
+  if (typeof engine.onFinalizeProgress !== 'function') return () => {};
+  return engine.onFinalizeProgress((progress) => listener(progress as FinalizeProgress));
 }
 
 // ---------------------------------------------------------------------------

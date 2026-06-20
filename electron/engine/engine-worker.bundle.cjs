@@ -250,6 +250,8 @@ var OWNED_TIERS = ["verified", "manual", "wallet-import", "xpub-derived"];
 var PARAM_BATCH_SIZE = 800;
 var OWNED_UTXOS_TIERS_KEY = "owned_utxos_tiers";
 var OWNED_UTXOS_COUNT_KEY = "owned_utxos_count";
+var HEURISTIC_UTXOS_TIERS_KEY = "heuristic_utxos_tiers";
+var HEURISTIC_UTXOS_COUNT_KEY = "heuristic_utxos_count";
 function selectRows(db2, sql, bind = []) {
   return db2.selectRows(sql, bind);
 }
@@ -327,31 +329,33 @@ function createTablesOnly(db2) {
     );
   `);
 }
-function createIndexes(db2) {
-  db2.exec(`
-    CREATE INDEX IF NOT EXISTS idx_records_type_id          ON records(type, id);
-    CREATE INDEX IF NOT EXISTS idx_records_importance_id    ON records(addressImportance, id);
-    CREATE INDEX IF NOT EXISTS idx_records_inputlower       ON records(inputStringLower);
-    CREATE INDEX IF NOT EXISTS idx_records_owner            ON records(owner);
-    CREATE INDEX IF NOT EXISTS idx_records_walletName       ON records(walletName);
-    CREATE INDEX IF NOT EXISTS idx_records_addr_owned       ON records(inputString, type, addressImportance);
-
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_bt_txid     ON blockchainTransactions(txid);
-    CREATE INDEX IF NOT EXISTS idx_bt_blockTime       ON blockchainTransactions(blockTime);
-
-    CREATE INDEX IF NOT EXISTS idx_tp_txid_role ON transactionParticipants(txid, role);
-    CREATE INDEX IF NOT EXISTS idx_tp_txid      ON transactionParticipants(txid);
-    CREATE INDEX IF NOT EXISTS idx_tp_address   ON transactionParticipants(address);
-    CREATE INDEX IF NOT EXISTS idx_tp_recordId  ON transactionParticipants(recordId);
-    -- Spent-check correlation for the UTXO anti-join: probe by (prevTxid, prevVout)
-    -- then confirm role='input'. Including role keeps the probe covering at scale.
-    CREATE INDEX IF NOT EXISTS idx_tp_prev      ON transactionParticipants(prevTxid, prevVout, role);
-    -- Owned-output scan + anti-join correlation (needs txid, vout) + keyset order (id).
-    -- Covering index so the owned-UTXO sweep avoids row lookups at 20M scale.
-    CREATE INDEX IF NOT EXISTS idx_tp_out       ON transactionParticipants(role, address, txid, vout, id);
-
-    ANALYZE;
-  `);
+var INDEX_BUILD_STEPS = [
+  { label: "records by type", sql: "CREATE INDEX IF NOT EXISTS idx_records_type_id ON records(type, id);" },
+  { label: "records by importance", sql: "CREATE INDEX IF NOT EXISTS idx_records_importance_id ON records(addressImportance, id);" },
+  { label: "records by address", sql: "CREATE INDEX IF NOT EXISTS idx_records_inputlower ON records(inputStringLower);" },
+  { label: "records by owner", sql: "CREATE INDEX IF NOT EXISTS idx_records_owner ON records(owner);" },
+  { label: "records by wallet", sql: "CREATE INDEX IF NOT EXISTS idx_records_walletName ON records(walletName);" },
+  { label: "owned-address lookup", sql: "CREATE INDEX IF NOT EXISTS idx_records_addr_owned ON records(inputString, type, addressImportance);" },
+  { label: "transactions by txid", sql: "CREATE UNIQUE INDEX IF NOT EXISTS idx_bt_txid ON blockchainTransactions(txid);" },
+  { label: "transactions by time", sql: "CREATE INDEX IF NOT EXISTS idx_bt_blockTime ON blockchainTransactions(blockTime);" },
+  { label: "participants by txid + role", sql: "CREATE INDEX IF NOT EXISTS idx_tp_txid_role ON transactionParticipants(txid, role);" },
+  { label: "participants by txid", sql: "CREATE INDEX IF NOT EXISTS idx_tp_txid ON transactionParticipants(txid);" },
+  { label: "participants by address", sql: "CREATE INDEX IF NOT EXISTS idx_tp_address ON transactionParticipants(address);" },
+  { label: "participants by record", sql: "CREATE INDEX IF NOT EXISTS idx_tp_recordId ON transactionParticipants(recordId);" },
+  // Spent-check correlation for the UTXO anti-join: probe by (prevTxid, prevVout)
+  // then confirm role='input'. Including role keeps the probe covering at scale.
+  { label: "spent-output lookup", sql: "CREATE INDEX IF NOT EXISTS idx_tp_prev ON transactionParticipants(prevTxid, prevVout, role);" },
+  // Owned-output scan + anti-join correlation (needs txid, vout) + keyset order (id).
+  // Covering index so the owned-UTXO sweep avoids row lookups at 20M scale.
+  { label: "owned-output scan", sql: "CREATE INDEX IF NOT EXISTS idx_tp_out ON transactionParticipants(role, address, txid, vout, id);" },
+  { label: "optimizing query planner", sql: "ANALYZE;" }
+];
+function createIndexes(db2, onStep) {
+  const total = INDEX_BUILD_STEPS.length;
+  INDEX_BUILD_STEPS.forEach((step, i) => {
+    onStep?.(step, i + 1, total);
+    db2.exec(step.sql);
+  });
 }
 function dropMirrorTables(db2) {
   db2.exec(`
@@ -359,9 +363,15 @@ function dropMirrorTables(db2) {
     DROP TABLE IF EXISTS blockchainTransactions;
     DROP TABLE IF EXISTS transactionParticipants;
     DROP TABLE IF EXISTS ownedUtxos;
+    DROP TABLE IF EXISTS heuristicOwnedUtxos;
   `);
   db2.exec("CREATE TABLE IF NOT EXISTS engineMeta (key TEXT PRIMARY KEY, value TEXT);");
-  db2.run("DELETE FROM engineMeta WHERE key IN (?, ?)", [OWNED_UTXOS_TIERS_KEY, OWNED_UTXOS_COUNT_KEY]);
+  db2.run("DELETE FROM engineMeta WHERE key IN (?, ?, ?, ?)", [
+    OWNED_UTXOS_TIERS_KEY,
+    OWNED_UTXOS_COUNT_KEY,
+    HEURISTIC_UTXOS_TIERS_KEY,
+    HEURISTIC_UTXOS_COUNT_KEY
+  ]);
 }
 function resetSeedMeta(db2) {
   db2.exec("DELETE FROM seedMeta;");
@@ -673,6 +683,40 @@ function ownedTierPlaceholders(tiers) {
 function tiersSignature(tiers) {
   return JSON.stringify([...tiers.length ? tiers : OWNED_TIERS].sort());
 }
+function buildLiveOwnedUtxosClause(tiers, asOfBlockTime) {
+  const { sql: tierSql, bind: tierBind } = ownedTierPlaceholders(tiers);
+  const params = [];
+  let outTimeSql = "AND COALESCE(t.blockTime, 0) > 0";
+  if (asOfBlockTime != null) {
+    outTimeSql += " AND t.blockTime <= ?";
+    params.push(asOfBlockTime);
+  }
+  params.push(...tierBind);
+  let spendSql = `AND NOT EXISTS (
+        SELECT 1 FROM transactionParticipants i
+        WHERE i.role = 'input' AND i.prevTxid = o.txid AND i.prevVout = o.vout`;
+  if (asOfBlockTime != null) {
+    spendSql += `
+          AND EXISTS (
+            SELECT 1 FROM blockchainTransactions it
+            WHERE it.txid = i.txid AND COALESCE(it.blockTime, 0) > 0 AND it.blockTime <= ?
+          )`;
+    params.push(asOfBlockTime);
+  }
+  spendSql += `
+      )`;
+  const whereSql = `
+    WHERE o.role = 'output'
+      AND o.vout IS NOT NULL
+      ${outTimeSql}
+      AND EXISTS (
+        SELECT 1 FROM records r
+        WHERE r.inputString = o.address AND r.type = 'address'
+          AND r.addressImportance IN (${tierSql})
+      )
+      ${spendSql}`;
+  return { whereSql, params };
+}
 function ownedUtxosTableExists(db2) {
   return selectScalar(
     db2,
@@ -723,38 +767,28 @@ function buildOwnedUtxos(db2, tiers = OWNED_TIERS) {
   setEngineMeta(db2, OWNED_UTXOS_TIERS_KEY, tiersSignature(tiers));
   return count;
 }
-function countOwnedUtxos(db2, tiers = OWNED_TIERS) {
-  if (ownedUtxosReady(db2, tiers)) {
+function countOwnedUtxos(db2, opts = {}) {
+  const tiers = opts.tiers ?? OWNED_TIERS;
+  if (opts.asOfBlockTime == null && ownedUtxosReady(db2, tiers)) {
     const cached = getEngineMeta(db2, OWNED_UTXOS_COUNT_KEY);
     if (cached != null) return Number(cached);
     return selectScalar(db2, "SELECT COUNT(*) AS v FROM ownedUtxos");
   }
-  const { sql: tierSql, bind } = ownedTierPlaceholders(tiers);
+  const { whereSql, params } = buildLiveOwnedUtxosClause(tiers, opts.asOfBlockTime);
   return selectScalar(
     db2,
     `
     SELECT COUNT(*) AS v
     FROM transactionParticipants o
     JOIN blockchainTransactions t ON t.txid = o.txid
-    WHERE o.role = 'output'
-      AND o.vout IS NOT NULL
-      AND COALESCE(t.blockTime, 0) > 0
-      AND EXISTS (
-        SELECT 1 FROM records r
-        WHERE r.inputString = o.address AND r.type = 'address'
-          AND r.addressImportance IN (${tierSql})
-      )
-      AND NOT EXISTS (
-        SELECT 1 FROM transactionParticipants i
-        WHERE i.role = 'input' AND i.prevTxid = o.txid AND i.prevVout = o.vout
-      )
+    ${whereSql}
     `,
-    bind
+    params
   );
 }
 function getOwnedUtxos(db2, opts) {
   const tiers = opts.tiers ?? OWNED_TIERS;
-  if (ownedUtxosReady(db2, tiers)) {
+  if (opts.asOfBlockTime == null && ownedUtxosReady(db2, tiers)) {
     const params2 = [];
     let cursor2 = "";
     if (opts.afterId != null) {
@@ -768,8 +802,7 @@ function getOwnedUtxos(db2, opts) {
       params2
     );
   }
-  const { sql: tierSql, bind } = ownedTierPlaceholders(tiers);
-  const params = [...bind];
+  const { whereSql, params } = buildLiveOwnedUtxosClause(tiers, opts.asOfBlockTime);
   let cursor = "";
   if (opts.afterId != null) {
     cursor = "AND o.id > ?";
@@ -783,22 +816,171 @@ function getOwnedUtxos(db2, opts) {
            o.amount AS amount, o.recordId AS recordId
     FROM transactionParticipants o
     JOIN blockchainTransactions t ON t.txid = o.txid
-    WHERE o.role = 'output'
-      AND o.vout IS NOT NULL
-      AND COALESCE(t.blockTime, 0) > 0
-      AND EXISTS (
-        SELECT 1 FROM records r
-        WHERE r.inputString = o.address AND r.type = 'address'
-          AND r.addressImportance IN (${tierSql})
-      )
-      AND NOT EXISTS (
-        SELECT 1 FROM transactionParticipants i
-        WHERE i.role = 'input' AND i.prevTxid = o.txid AND i.prevVout = o.vout
-      )
+    ${whereSql}
       ${cursor}
     ORDER BY o.id
     LIMIT ?
     `,
+    params
+  );
+}
+function buildHeuristicCte(tiers, asOfBlockTime) {
+  const { sql: tierSql, bind: tierBind } = ownedTierPlaceholders(tiers);
+  const params = [];
+  let outTimeSql = "AND COALESCE(t.blockTime, 0) > 0";
+  if (asOfBlockTime != null) {
+    outTimeSql += " AND t.blockTime <= ?";
+    params.push(asOfBlockTime);
+  }
+  params.push(...tierBind);
+  let inTimeSql = "AND COALESCE(t.blockTime, 0) > 0";
+  if (asOfBlockTime != null) {
+    inTimeSql += " AND t.blockTime <= ?";
+    params.push(asOfBlockTime);
+  }
+  params.push(...tierBind);
+  const cteSql = `
+    WITH oo AS (
+      SELECT o.id AS id, o.txid AS txid, o.vout AS vout, o.address AS address,
+             o.amount AS amount, o.recordId AS recordId, t.blockTime AS bt
+      FROM transactionParticipants o
+      JOIN blockchainTransactions t ON t.txid = o.txid
+      WHERE o.role = 'output'
+        AND o.vout IS NOT NULL
+        ${outTimeSql}
+        AND EXISTS (
+          SELECT 1 FROM records r
+          WHERE r.inputString = o.address AND r.type = 'address'
+            AND r.addressImportance IN (${tierSql})
+        )
+    ),
+    ii AS (
+      SELECT i.address AS address, i.amount AS amount, t.blockTime AS bt
+      FROM transactionParticipants i
+      JOIN blockchainTransactions t ON t.txid = i.txid
+      WHERE i.role = 'input'
+        ${inTimeSql}
+        AND EXISTS (
+          SELECT 1 FROM records r
+          WHERE r.inputString = i.address AND r.type = 'address'
+            AND r.addressImportance IN (${tierSql})
+        )
+    ),
+    events AS (
+      SELECT address, amount, bt, 1 AS typeRank, 1 AS delta FROM oo
+      UNION ALL
+      SELECT address, amount, bt, 0 AS typeRank, -1 AS delta FROM ii
+    ),
+    running AS (
+      SELECT address, amount, delta,
+        SUM(delta) OVER (
+          PARTITION BY address, amount
+          ORDER BY bt, typeRank
+          ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+        ) AS prefix
+      FROM events
+    ),
+    grp AS (
+      SELECT address, amount,
+        SUM(CASE WHEN delta = -1 THEN 1 ELSE 0 END) AS nIn,
+        MIN(prefix) AS minRun
+      FROM running
+      GROUP BY address, amount
+    ),
+    ranked AS (
+      SELECT oo.id AS id, oo.txid AS txid, oo.vout AS vout, oo.address AS address,
+             oo.amount AS amount, oo.recordId AS recordId,
+        ROW_NUMBER() OVER (
+          PARTITION BY oo.address, oo.amount
+          ORDER BY oo.bt, oo.vout, oo.id
+        ) AS rn
+      FROM oo
+    ),
+    heuristic_utxos AS (
+      SELECT r.id AS id, r.txid AS txid, r.vout AS vout, r.address AS address,
+             r.amount AS amount, r.recordId AS recordId
+      FROM ranked r
+      JOIN grp g ON g.address = r.address AND g.amount = r.amount
+      WHERE r.rn > (g.nIn + MIN(0, g.minRun))
+    )`;
+  return { cteSql, params };
+}
+function heuristicOwnedUtxosTableExists(db2) {
+  return selectScalar(
+    db2,
+    "SELECT COUNT(*) AS v FROM sqlite_master WHERE type = 'table' AND name = 'heuristicOwnedUtxos'"
+  ) > 0;
+}
+function heuristicOwnedUtxosReady(db2, tiers = OWNED_TIERS) {
+  if (!heuristicOwnedUtxosTableExists(db2)) return false;
+  const built = getEngineMeta(db2, HEURISTIC_UTXOS_TIERS_KEY);
+  return built != null && built === tiersSignature(tiers);
+}
+function buildHeuristicOwnedUtxos(db2, tiers = OWNED_TIERS) {
+  const { cteSql, params } = buildHeuristicCte(tiers);
+  db2.exec("DROP TABLE IF EXISTS heuristicOwnedUtxos;");
+  db2.exec(`
+    CREATE TABLE heuristicOwnedUtxos (
+      id       INTEGER PRIMARY KEY,
+      txid     TEXT NOT NULL,
+      vout     INTEGER,
+      address  TEXT NOT NULL,
+      amount   INTEGER NOT NULL,
+      recordId INTEGER
+    );
+  `);
+  db2.run(
+    `${cteSql}
+    INSERT INTO heuristicOwnedUtxos (id, txid, vout, address, amount, recordId)
+    SELECT id, txid, vout, address, amount, recordId FROM heuristic_utxos`,
+    params
+  );
+  const count = selectScalar(db2, "SELECT COUNT(*) AS v FROM heuristicOwnedUtxos");
+  setEngineMeta(db2, HEURISTIC_UTXOS_COUNT_KEY, String(count));
+  setEngineMeta(db2, HEURISTIC_UTXOS_TIERS_KEY, tiersSignature(tiers));
+  return count;
+}
+function countHeuristicOwnedUtxos(db2, opts = {}) {
+  const tiers = opts.tiers ?? OWNED_TIERS;
+  if (opts.asOfBlockTime == null && heuristicOwnedUtxosReady(db2, tiers)) {
+    const cached = getEngineMeta(db2, HEURISTIC_UTXOS_COUNT_KEY);
+    if (cached != null) return Number(cached);
+    return selectScalar(db2, "SELECT COUNT(*) AS v FROM heuristicOwnedUtxos");
+  }
+  const { cteSql, params } = buildHeuristicCte(tiers, opts.asOfBlockTime);
+  return selectScalar(db2, `${cteSql} SELECT COUNT(*) AS v FROM heuristic_utxos`, params);
+}
+function getHeuristicOwnedUtxos(db2, opts) {
+  const tiers = opts.tiers ?? OWNED_TIERS;
+  if (opts.asOfBlockTime == null && heuristicOwnedUtxosReady(db2, tiers)) {
+    const params2 = [];
+    let cursor2 = "";
+    if (opts.afterId != null) {
+      cursor2 = "WHERE id > ?";
+      params2.push(opts.afterId);
+    }
+    params2.push(opts.limit);
+    return selectRows(
+      db2,
+      `SELECT id, txid, vout, address, amount, recordId FROM heuristicOwnedUtxos ${cursor2} ORDER BY id LIMIT ?`,
+      params2
+    );
+  }
+  const { cteSql, params } = buildHeuristicCte(tiers, opts.asOfBlockTime);
+  let cursor = "";
+  if (opts.afterId != null) {
+    cursor = "WHERE id > ?";
+    params.push(opts.afterId);
+  }
+  params.push(opts.limit);
+  return selectRows(
+    db2,
+    `${cteSql}
+    SELECT id, txid, vout, address, amount, recordId
+    FROM heuristic_utxos
+    ${cursor}
+    ORDER BY id
+    LIMIT ?`,
     params
   );
 }
@@ -978,8 +1160,12 @@ function applyConnectionPragmas(db2) {
 function applyBulkLoadPragmas(db2) {
   db2.exec("PRAGMA synchronous = OFF;");
 }
+function applyIndexBuildPragmas(db2) {
+  db2.exec("PRAGMA temp_store = FILE;");
+}
 function applyReadPragmas(db2) {
   db2.exec("PRAGMA synchronous = NORMAL;");
+  db2.exec("PRAGMA temp_store = MEMORY;");
 }
 function integrityCheck(db2) {
   const rows = db2.selectRows("PRAGMA integrity_check");
@@ -1080,19 +1266,57 @@ function handleSeedBatch(table, rows) {
   });
   return { table, copied: copied[table] };
 }
+var FINALIZE_TOTAL_STEPS = INDEX_BUILD_STEPS.length + 3;
+function postFinalizeProgress(progress) {
+  const msg = { kind: "finalizeProgress", progress };
+  import_node_worker_threads2.parentPort?.postMessage(msg);
+}
+function runFinalize(d) {
+  applyIndexBuildPragmas(d);
+  try {
+    createIndexes(d, (step, index) => {
+      postFinalizeProgress({
+        phase: "indexing",
+        label: `Building indexes \u2014 ${step.label}`,
+        step: index,
+        totalSteps: FINALIZE_TOTAL_STEPS
+      });
+    });
+    postFinalizeProgress({
+      phase: "materializing-utxos",
+      label: "Materializing owned UTXOs",
+      step: INDEX_BUILD_STEPS.length + 1,
+      totalSteps: FINALIZE_TOTAL_STEPS
+    });
+    buildOwnedUtxos(d);
+    postFinalizeProgress({
+      phase: "materializing-heuristic",
+      label: "Materializing heuristic UTXOs",
+      step: INDEX_BUILD_STEPS.length + 2,
+      totalSteps: FINALIZE_TOTAL_STEPS
+    });
+    buildHeuristicOwnedUtxos(d);
+  } finally {
+    applyReadPragmas(d);
+  }
+  postFinalizeProgress({
+    phase: "verifying",
+    label: "Verifying database integrity",
+    step: INDEX_BUILD_STEPS.length + 3,
+    totalSteps: FINALIZE_TOTAL_STEPS
+  });
+  return integrityCheck(d);
+}
 function handleSeedFinish(sourceCounts) {
   const d = requireDb();
   try {
     state = "INDEXING";
-    createIndexes(d);
-    buildOwnedUtxos(d);
-    applyReadPragmas(d);
+    const integrity = runFinalize(d);
     let allComplete = true;
     for (const t of MIRROR_TABLES) {
       const ok = markSeedCompleteIfDone(d, t, sourceCounts[t] ?? countTable(d, t));
       if (!ok) allComplete = false;
     }
-    const integrity = integrityCheck(d);
     if (integrity !== "ok") {
       state = "ERROR";
       errorMessage = `integrity_check failed: ${integrity}`;
@@ -1144,13 +1368,10 @@ function handleGenerateSynthetic(spec) {
     resetSeedMeta(d);
     const result = generateSyntheticData(d, spec);
     state = "INDEXING";
-    createIndexes(d);
-    buildOwnedUtxos(d);
-    applyReadPragmas(d);
+    const integrity = runFinalize(d);
     markSeedCompleteIfDone(d, "records", result.records);
     markSeedCompleteIfDone(d, "blockchainTransactions", result.transactions);
     markSeedCompleteIfDone(d, "transactionParticipants", result.participants);
-    const integrity = integrityCheck(d);
     if (integrity !== "ok") {
       state = "ERROR";
       errorMessage = `integrity_check failed: ${integrity}`;
@@ -1183,9 +1404,22 @@ function handleQuery(name, args) {
     case "getAddressAggregates":
       return Array.from(getAddressAggregates(d, args).values());
     case "getOwnedUtxos":
-      return getOwnedUtxos(d, args);
+      return getOwnedUtxos(
+        d,
+        args
+      );
     case "countOwnedUtxos":
       return countOwnedUtxos(d, args);
+    case "getHeuristicOwnedUtxos":
+      return getHeuristicOwnedUtxos(
+        d,
+        args
+      );
+    case "countHeuristicOwnedUtxos":
+      return countHeuristicOwnedUtxos(
+        d,
+        args
+      );
     case "getParticipantsByTxids":
       return getParticipantsByTxids(d, args);
     case "getParticipantsByAddresses":

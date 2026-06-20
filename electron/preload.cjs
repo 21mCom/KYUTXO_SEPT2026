@@ -71,6 +71,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
     clear: () => ipcRenderer.invoke('engine:clear'),
     generateSynthetic: (spec) => ipcRenderer.invoke('engine:generateSynthetic', { spec }),
     dbInfo: () => ipcRenderer.invoke('engine:dbInfo'),
+    // Pushed (main → renderer) finalize progress during the index/materialize/
+    // verify phase. Returns an unsubscribe fn.
+    onFinalizeProgress: (cb) => {
+      const listener = (_event, progress) => cb(progress);
+      ipcRenderer.on('engine:finalizeProgress', listener);
+      return () => ipcRenderer.removeListener('engine:finalizeProgress', listener);
+    },
   },
 
   // Platform information

@@ -166,6 +166,11 @@ export interface EngineBridge {
   clear: () => Promise<EngineEnvelope>;
   generateSynthetic: (spec: unknown) => Promise<EngineEnvelope>;
   dbInfo: () => Promise<EngineEnvelope>;
+  /**
+   * Subscribe to pushed finalize-phase progress (index build → materialize →
+   * verify). Present only in the desktop build; returns an unsubscribe fn.
+   */
+  onFinalizeProgress?: (cb: (progress: unknown) => void) => () => void;
 }
 
 // Type declarations for Electron API exposed via preload

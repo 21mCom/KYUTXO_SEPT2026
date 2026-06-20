@@ -30,9 +30,11 @@ import { openEngineDb, type BetterSqlite3EngineDb } from '../lib/engine/better-s
 import {
   applyConnectionPragmas,
   applyBulkLoadPragmas,
+  applyIndexBuildPragmas,
   applyReadPragmas,
   createTablesOnly,
   createIndexes,
+  INDEX_BUILD_STEPS,
   buildOwnedUtxos,
   generateSyntheticData,
   dropMirrorTables,
@@ -118,6 +120,29 @@ export interface BenchmarkRow {
   label: string;
   ms: number;
   rows: number;
+}
+
+/**
+ * Pushed (un-correlated) progress for the finalize phase — the long, formerly
+ * silent step that builds indexes, materializes the owned-UTXO sets and runs the
+ * integrity check. Emitted out-of-band between sub-steps so the UI is never blank
+ * while the worker is busy and cannot answer `status` polls.
+ */
+export interface FinalizeProgress {
+  /** Coarse phase the finalize is in. */
+  phase: 'indexing' | 'materializing-utxos' | 'materializing-heuristic' | 'verifying';
+  /** Human-readable description of the current sub-step. */
+  label: string;
+  /** 1-based position of the current sub-step. */
+  step: number;
+  /** Total number of finalize sub-steps. */
+  totalSteps: number;
+}
+
+/** Worker → main push envelope for finalize progress (no correlation id). */
+export interface FinalizeProgressMessage {
+  kind: 'finalizeProgress';
+  progress: FinalizeProgress;
 }
 
 // ---------------------------------------------------------------------------
@@ -233,24 +258,87 @@ function handleSeedBatch(table: MirrorTable, rows: unknown[]): { table: MirrorTa
   return { table, copied: copied[table] };
 }
 
+// ---------------------------------------------------------------------------
+// Finalize (build indexes → materialize UTXOs → verify) with PUSHED progress
+// ---------------------------------------------------------------------------
+//
+// Finalize is one long, synchronous, formerly-silent step. The worker is
+// single-threaded, so while it runs it cannot answer `status` polls — which is
+// exactly why the screen used to look frozen on "pending". We instead PUSH
+// progress out-of-band via `parentPort` between sub-steps. Those messages cross
+// to the main thread (a different OS thread, whose event loop is free) the moment
+// they are posted, even though this handler has not returned, so the UI updates
+// live. They carry a `kind` discriminator and NO correlation `id`, so the main
+// bridge tells them apart from request/response envelopes.
+
+// indexes + ANALYZE (INDEX_BUILD_STEPS) + owned-UTXOs + heuristic-UTXOs + verify
+const FINALIZE_TOTAL_STEPS = INDEX_BUILD_STEPS.length + 3;
+
+function postFinalizeProgress(progress: FinalizeProgress): void {
+  const msg: FinalizeProgressMessage = { kind: 'finalizeProgress', progress };
+  parentPort?.postMessage(msg);
+}
+
+/**
+ * Shared finalize sequence for BOTH the real seed and the synthetic load test:
+ * build indexes (spilling the sort to fast local temp to bound memory),
+ * materialize the owned-UTXO sets, restore read pragmas, then integrity_check.
+ * Pushes a progress event before every sub-step. Returns the integrity result.
+ */
+function runFinalize(d: BetterSqlite3EngineDb): string {
+  applyIndexBuildPragmas(d);
+  try {
+    createIndexes(d, (step, index) => {
+      postFinalizeProgress({
+        phase: 'indexing',
+        label: `Building indexes — ${step.label}`,
+        step: index,
+        totalSteps: FINALIZE_TOTAL_STEPS,
+      });
+    });
+    // Materialize the owned-UTXO set once so countOwnedUtxos / first-page reads are
+    // sub-second on big vaults instead of a multi-second per-output anti-join.
+    postFinalizeProgress({
+      phase: 'materializing-utxos',
+      label: 'Materializing owned UTXOs',
+      step: INDEX_BUILD_STEPS.length + 1,
+      totalSteps: FINALIZE_TOTAL_STEPS,
+    });
+    buildOwnedUtxos(d);
+    // Same for the heuristic (no-prevout) owned-UTXO set so its count/first-page
+    // reads are sub-second instead of a full window-function pass.
+    postFinalizeProgress({
+      phase: 'materializing-heuristic',
+      label: 'Materializing heuristic UTXOs',
+      step: INDEX_BUILD_STEPS.length + 2,
+      totalSteps: FINALIZE_TOTAL_STEPS,
+    });
+    buildHeuristicOwnedUtxos(d);
+  } finally {
+    // Always restore the read pragmas (temp_store=MEMORY) — even if index build or
+    // materialization throws — so a failed connection is never left stuck in the
+    // index-build configuration (temp_store=FILE) for any later reads/reopen.
+    applyReadPragmas(d);
+  }
+  postFinalizeProgress({
+    phase: 'verifying',
+    label: 'Verifying database integrity',
+    step: INDEX_BUILD_STEPS.length + 3,
+    totalSteps: FINALIZE_TOTAL_STEPS,
+  });
+  return integrityCheck(d);
+}
+
 function handleSeedFinish(sourceCounts: Record<MirrorTable, number>): EngineSnapshot {
   const d = requireDb();
   try {
     state = 'INDEXING';
-    createIndexes(d);
-    // Materialize the owned-UTXO set once so countOwnedUtxos / first-page reads
-    // are sub-second on big vaults instead of a multi-second per-output anti-join.
-    buildOwnedUtxos(d);
-    // Same for the heuristic (no-prevout) owned-UTXO set so its count/first-page
-    // reads are sub-second instead of a full window-function pass.
-    buildHeuristicOwnedUtxos(d);
-    applyReadPragmas(d);
+    const integrity = runFinalize(d);
     let allComplete = true;
     for (const t of MIRROR_TABLES) {
       const ok = markSeedCompleteIfDone(d, t, sourceCounts[t] ?? countTable(d, t));
       if (!ok) allComplete = false;
     }
-    const integrity = integrityCheck(d);
     if (integrity !== 'ok') {
       state = 'ERROR';
       errorMessage = `integrity_check failed: ${integrity}`;
@@ -315,14 +403,10 @@ function handleGenerateSynthetic(
     resetSeedMeta(d);
     const result = generateSyntheticData(d, spec);
     state = 'INDEXING';
-    createIndexes(d);
-    buildOwnedUtxos(d);
-    buildHeuristicOwnedUtxos(d);
-    applyReadPragmas(d);
+    const integrity = runFinalize(d);
     markSeedCompleteIfDone(d, 'records', result.records);
     markSeedCompleteIfDone(d, 'blockchainTransactions', result.transactions);
     markSeedCompleteIfDone(d, 'transactionParticipants', result.participants);
-    const integrity = integrityCheck(d);
     if (integrity !== 'ok') {
       state = 'ERROR';
       errorMessage = `integrity_check failed: ${integrity}`;
