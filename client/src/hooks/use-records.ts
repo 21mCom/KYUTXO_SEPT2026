@@ -12,6 +12,7 @@ import {
   getRecentRecordsByUpdatedAt,
   getRecordsPageByUpdatedAt,
   getRecordsPageByUpdatedAtFiltered,
+  bulkGetRecords,
   countRecords,
   countRecordsByImportanceTiers,
   countRecordsByTypeAndImportanceTiers,
@@ -22,6 +23,8 @@ import {
   getRecordsByTypeFiltered,
   getRecentRecordsFiltered,
 } from '@/lib/data/record-crud';
+import { evaluateEngineFreshness } from '@/lib/engine/engine-freshness';
+import { engineGetRecordPageByUpdatedAt } from '@/lib/engine/engine-client';
 import { useDbChangeSignal } from '@/hooks/use-db-change-signal';
 
 const RECORDS_TABLES = ['records'];
@@ -68,6 +71,45 @@ export function useRecords(options?: { limit?: number }) {
 
 const BLOCKCHAIN_DISCOVERED_TIERS: string[] = ['blockchain-discovered', 'pending-review'];
 
+/**
+ * Page read for the Dashboard's record list (updatedAt DESC). The native engine
+ * does the ordered page + blockchain-tier exclusion in SQLite, then we hydrate
+ * the full records from Dexie by primary key — so the returned objects are
+ * identical to the Dexie fallback. This replaces ONLY the page read: the slow
+ * path was Dexie's per-row JS `.filter()` cursor over the updatedAt index, which
+ * on a large vault can walk millions of blockchain-discovered rows to fill one
+ * page of non-blockchain rows. Counts stay on Dexie (indexed `.count()`, fast).
+ * Falls back to the exact Dexie page read when the engine is unavailable/stale.
+ */
+async function fetchFilteredRecordPage(
+  includeBD: boolean,
+  offset: number,
+  limit: number,
+): Promise<Record[]> {
+  try {
+    const decision = await evaluateEngineFreshness('records');
+    if (decision.useEngine) {
+      const rows = await engineGetRecordPageByUpdatedAt({
+        includeBlockchainDiscovered: includeBD,
+        offset,
+        limit,
+      });
+      const ids = rows.map((r) => r.id);
+      return (await bulkGetRecords(ids)).filter((r): r is Record => !!r);
+    }
+  } catch (error) {
+    console.warn('[useFilteredRecords] engine page read failed; falling back to Dexie', error);
+  }
+
+  if (includeBD) {
+    return getRecordsPageByUpdatedAt(offset, limit);
+  }
+  const excludeBlockchain = (r: Record) =>
+    r.addressImportance !== 'blockchain-discovered' &&
+    r.addressImportance !== 'pending-review';
+  return getRecordsPageByUpdatedAtFiltered(offset, limit, excludeBlockchain);
+}
+
 export function useFilteredRecords(
   includeBlockchainDiscovered: boolean,
   options?: { offset?: number; limit?: number }
@@ -94,27 +136,16 @@ export function useFilteredRecords(
 
       if (includeBD) {
         total = await countRecords();
-        if (loadVersionRef.current !== version) return;
-
-        rawRecords = await getRecordsPageByUpdatedAt(effectiveOffset, effectiveLimit);
       } else {
         const blockchainCount = await countRecordsByImportanceTiers([
           'blockchain-discovered',
           'pending-review',
         ]);
         total = (await countRecords()) - blockchainCount;
-        if (loadVersionRef.current !== version) return;
-
-        const excludeBlockchain = (r: Record) =>
-          r.addressImportance !== 'blockchain-discovered' &&
-          r.addressImportance !== 'pending-review';
-
-        rawRecords = await getRecordsPageByUpdatedAtFiltered(
-          effectiveOffset,
-          effectiveLimit,
-          excludeBlockchain,
-        );
       }
+      if (loadVersionRef.current !== version) return;
+
+      rawRecords = await fetchFilteredRecordPage(includeBD, effectiveOffset, effectiveLimit);
 
       if (loadVersionRef.current !== version) return;
       setTotalCount(total);

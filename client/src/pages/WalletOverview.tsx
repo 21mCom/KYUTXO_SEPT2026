@@ -33,6 +33,8 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import type { Record as DbRecord } from "@/lib/database";
 import { useDbChangeSignal } from "@/hooks/use-db-change-signal";
 import { countRecordsByType, getRecordsPageByTypeIdReverseKeyset } from "@/lib/data/record-crud";
+import { engineGetWalletUsageSummaries, subscribeEngineReadiness } from "@/lib/engine/engine-client";
+import { evaluateEngineFreshness } from "@/lib/engine/engine-freshness";
 import { searchPendingClass } from "@/lib/search-pending-class";
 
 interface WalletStats {
@@ -146,9 +148,14 @@ export default function WalletOverview() {
   const [expandedWallets, setExpandedWallets] = useState<Set<string>>(new Set());
   const [progress, setProgress] = useState({ processed: 0, total: 0 });
   const [refreshTick, setRefreshTick] = useState(0);
+  const [engineReadySignal, setEngineReadySignal] = useState(0);
 
   const dbSignal = useDbChangeSignal(["records"]);
   const computationId = useRef(0);
+
+  // Re-run aggregation when the native read-engine flips to ready so the fast
+  // path can take over from any Dexie fallback that ran first.
+  useEffect(() => subscribeEngineReadiness(() => setEngineReadySignal((s) => s + 1)), []);
 
   // Aggregate per-wallet stats by paging address records in id-keyset batches,
   // yielding between batches. We never load the whole table into memory at once.
@@ -162,6 +169,24 @@ export default function WalletOverview() {
     setProgress({ processed: 0, total: 0 });
 
     const run = async () => {
+      // Engine fast path: when the native read-engine mirror is fresh for the
+      // 'records' scope, compute the per-wallet usage summaries in SQL instead
+      // of paging the whole address table in the browser.
+      try {
+        const decision = await evaluateEngineFreshness("records");
+        if (thisId !== computationId.current || signal.aborted) return;
+        if (decision.useEngine) {
+          const summaries = await engineGetWalletUsageSummaries();
+          if (thisId !== computationId.current || signal.aborted) return;
+          setWalletStats(summaries);
+          setLoading(false);
+          return;
+        }
+      } catch (error) {
+        // Engine unavailable/transient — fall through to the Dexie scan.
+        console.warn("Wallet overview engine fast path failed; using Dexie:", error);
+      }
+
       const total = await countRecordsByType("address");
       if (thisId !== computationId.current) return;
       setProgress({ processed: 0, total });
@@ -235,7 +260,7 @@ export default function WalletOverview() {
     return () => {
       abort.abort();
     };
-  }, [dbSignal, refreshTick]);
+  }, [dbSignal, refreshTick, engineReadySignal]);
 
   const sortedAndFilteredStats = useMemo(() => {
     let filtered = walletStats;

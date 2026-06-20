@@ -7,6 +7,8 @@ import {
   getRecordsPageByTypeIdReverseKeyset,
   getAddressBalanceRowsForGroup,
 } from "@/lib/data/record-crud";
+import { engineGetBalanceGroupSummaries, subscribeEngineReadiness } from "@/lib/engine/engine-client";
+import { evaluateEngineFreshness } from "@/lib/engine/engine-freshness";
 import { recomputeAddressStats } from "@/lib/data/address-stats";
 import {
   type GroupBy,
@@ -211,6 +213,11 @@ export default function BalanceOverview() {
 
   const dbSignal = useDbChangeSignal(["records", "blockchainTransactions"]);
   const computationId = useRef(0);
+  const [engineReadySignal, setEngineReadySignal] = useState(0);
+
+  // Re-run aggregation when the native read-engine flips to ready so the fast
+  // path can take over from any Dexie fallback that ran first.
+  useEffect(() => subscribeEngineReadiness(() => setEngineReadySignal((s) => s + 1)), []);
 
   const [phase, setPhase] = useState<"loading" | "backfilling" | "ready">("loading");
   const [groupSummaries, setGroupSummaries] = useState<Map<string, GroupSummary>>(new Map());
@@ -260,6 +267,42 @@ export default function BalanceOverview() {
       setAddressRecordCount(total);
       setAggProgress({ processed: 0, total });
 
+      // Engine fast path: when the native read-engine mirror is fresh for the
+      // 'records' scope, compute group summaries + grand totals in SQL. We only
+      // trust it when the mirror reports no stale per-address stats; any stale
+      // rows mean the Dexie path's one-time backfill still needs to run, so we
+      // fall through to it to preserve that exact behaviour.
+      try {
+        const decision = await evaluateEngineFreshness("records");
+        if (thisId !== computationId.current || signal.aborted) return;
+        if (decision.useEngine) {
+          const eng = await engineGetBalanceGroupSummaries(groupBy);
+          if (thisId !== computationId.current || signal.aborted) return;
+          if (eng.staleAddressCount === 0) {
+            const map = new Map<string, GroupSummary>();
+            for (const s of eng.summaries) {
+              map.set(s.groupKey, {
+                name: s.groupKey,
+                totalSats: s.totalSats,
+                addressCount: s.addressCount,
+                utxoCount: s.utxoCount,
+              });
+            }
+            setGroupSummaries(map);
+            setTotals({
+              sats: eng.totals.totalSats,
+              addresses: eng.totals.totalAddresses,
+              utxos: eng.totals.totalUtxos,
+            });
+            setPhase("ready");
+            return;
+          }
+        }
+      } catch (error) {
+        // Engine unavailable/transient — fall through to the Dexie scan.
+        console.warn("Balance overview engine fast path failed; using Dexie:", error);
+      }
+
       let result = await aggregateGroups(groupBy, signal, (p) => {
         if (thisId === computationId.current) setAggProgress({ processed: p, total });
       });
@@ -297,7 +340,7 @@ export default function BalanceOverview() {
     return () => {
       abort.abort();
     };
-  }, [groupBy, dbSignal]);
+  }, [groupBy, dbSignal, engineReadySignal]);
 
   const ensureGroupRows = useCallback(async (name: string) => {
     if (groupRowsRef.current.has(name) || loadingGroupsRef.current.has(name)) return;

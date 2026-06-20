@@ -19,7 +19,6 @@ import {
   getOrderedTransactionPrimaryKeysByBlockTime,
   getOpReturnTransactionPrimaryKeys,
   getParticipantsByRecordIds,
-  countTransactionParticipants,
 } from "@/lib/data/transaction-crud";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -59,20 +58,13 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { getParticipantsByTxids } from "@/lib/participant-repo";
 import { ClickableAddress } from "@/components/ClickableAddress";
 import { searchPendingClass } from "@/lib/search-pending-class";
-import { Switch } from "@/components/ui/switch";
 import {
-  isSqlitePrototypeEnabled,
-  setSqlitePrototypeEnabled,
-  setActiveBackend,
-  ensureSqliteInit,
-  getSqliteStatus,
-  seedSqlite,
-  cancelSqliteSeeding,
-  sqliteCountParticipants,
-  type SeedProgress,
-  type StorageMode,
-} from "@/lib/sqlite-client";
-import { Database } from "lucide-react";
+  engineCountTransactions,
+  engineGetTransactionPage,
+  subscribeEngineReadiness,
+  type TransactionPageCursor,
+} from "@/lib/engine/engine-client";
+import { evaluateEngineFreshness } from "@/lib/engine/engine-freshness";
 
 const ITEMS_PER_PAGE = 25;
 const MAX_COLLECTED_MATCHES = 50_000;
@@ -332,14 +324,12 @@ function VirtualizedTransactionList({
   toggleExpanded,
   baseAddressToRecord,
   onStatsChange,
-  backendVersion = 0,
 }: {
   transactions: BlockchainTransaction[];
   expandedTxs: Set<string>;
   toggleExpanded: (txid: string) => void;
   baseAddressToRecord: Map<string, Record>;
   onStatsChange?: (stats: VirtualizedLoadedStats) => void;
-  backendVersion?: number;
 }) {
   const parentRef = useRef<HTMLDivElement>(null);
   const participantCacheRef = useRef(new Map<string, TransactionParticipant[]>());
@@ -364,7 +354,7 @@ function VirtualizedTransactionList({
     statsRef.current = { volume: 0, txCount: 0, linkedAddresses: new Set(), allAddresses: new Set() };
     setCacheVersion(0);
     onStatsChange?.({ loadedVolume: 0, loadedLinkedAddressCount: 0, loadedTxCount: 0 });
-  }, [txIdentity, backendVersion]);
+  }, [txIdentity]);
 
   const virtualizer = useVirtualizer({
     count: transactions.length,
@@ -558,83 +548,27 @@ export default function Transactions() {
     setVirtualizedStats(stats);
   }, []);
 
-  // --- SQLite-WASM prototype (Task #229) -----------------------------------
-  const [sqliteEnabled, setSqliteEnabled] = useState(() => isSqlitePrototypeEnabled());
-  const [sqliteReady, setSqliteReady] = useState(false);
-  const [sqliteStorageMode, setSqliteStorageMode] = useState<StorageMode | null>(null);
-  const [seedProgress, setSeedProgress] = useState<SeedProgress | null>(null);
-  const [backendVersion, setBackendVersion] = useState(0);
-
-  const activateSqlite = useCallback(async () => {
-    try {
-      const initResult = await ensureSqliteInit();
-      setSqliteStorageMode(initResult.storageMode);
-      console.log(
-        `[sqlite-proto] initialized — SQLite ${initResult.sqliteVersion}, storage: ${initResult.storageMode}`
-      );
-
-      const status = await getSqliteStatus();
-      if (status.rowCount === 0) {
-        const result = await seedSqlite((p) => setSeedProgress(p));
-        setSeedProgress(null);
-        if (result.cancelled) {
-          console.log('[sqlite-proto] seeding cancelled by user');
-          return false;
-        }
-        console.log(
-          `[sqlite-proto] seeded ${result.rowCount.toLocaleString()} participants in ${result.durationMs.toFixed(0)}ms`
-        );
-      } else {
-        console.log(`[sqlite-proto] reusing persisted data: ${status.rowCount.toLocaleString()} participants`);
-      }
-
-      // One-time count benchmark for direct comparison.
-      const dexieT0 = performance.now();
-      const dexieCount = await countTransactionParticipants();
-      const dexieT1 = performance.now();
-      const sqliteT0 = performance.now();
-      const sqliteCount = await sqliteCountParticipants();
-      const sqliteT1 = performance.now();
-      console.log(
-        `[bench] countParticipants  Dexie ${(dexieT1 - dexieT0).toFixed(1)}ms (${dexieCount})  |  ` +
-          `SQLite ${(sqliteT1 - sqliteT0).toFixed(1)}ms (${sqliteCount})`
-      );
-
-      setActiveBackend('sqlite');
-      setSqliteReady(true);
-      setBackendVersion((v) => v + 1);
-      return true;
-    } catch (err) {
-      console.error('[sqlite-proto] activation failed', err);
-      setSeedProgress(null);
-      return false;
-    }
-  }, []);
-
-  const handleSqliteToggle = useCallback((checked: boolean) => {
-    setSqliteEnabled(checked);
-    setSqlitePrototypeEnabled(checked);
-    if (checked) {
-      activateSqlite();
-    } else {
-      setActiveBackend('dexie');
-      setSqliteReady(false);
-      setSeedProgress(null);
-      setBackendVersion((v) => v + 1);
-    }
-  }, [activateSqlite]);
-
-  // Restore active backend on mount if the preference was previously enabled.
+  // --- Native read-engine browse fast path (Task #301) ---------------------
+  // Re-run the browse count/page loads when the native engine finishes mirroring
+  // in the background (or transitions back to not-ready). The subscription
+  // self-disables in the browser preview where the engine is unavailable.
+  const [engineReadySignal, setEngineReadySignal] = useState(0);
   useEffect(() => {
-    if (sqliteEnabled) {
-      activateSqlite();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    return subscribeEngineReadiness(() => setEngineReadySignal((s) => s + 1));
   }, []);
 
-  const handleCancelSeed = useCallback(() => {
-    cancelSqliteSeeding();
-  }, []);
+  // Keyset (cursor) pagination cache for the engine "Show all" browse path.
+  // Maps a page number to the exclusive {blockTime,id} boundary to start that
+  // page below (page 1 = undefined = start from the newest). Boundaries fill in
+  // as the user navigates Next/Previous; `signature` captures the query identity
+  // (opReturnOnly + db version) and resets the cache when it changes.
+  const txPageAnchorsRef = useRef<{
+    signature: string;
+    anchors: Map<number, TransactionPageCursor | undefined>;
+  }>({
+    signature: '',
+    anchors: new Map<number, TransactionPageCursor | undefined>([[1, undefined]]),
+  });
   // -------------------------------------------------------------------------
 
   const [debouncedSearch, isSearchPending] = useDebouncedValue(search, PAGE_DEBOUNCE.Transactions);
@@ -682,14 +616,26 @@ export default function Transactions() {
   }, [curatedRecords, includeBlockchainDiscovered], new Set<string>());
 
   const { value: txCounts } = useAsyncMemo(async (signal) => {
-    const totalDbCount = await countTransactions();
+    // Native engine fast path for the all-transactions counts (Task #301): when
+    // the mirror is proven CURRENT for the tx/participants scope, SQLite counts
+    // the whole table far faster than Dexie at scale. Any mismatch — or the
+    // browser preview — falls back to the Dexie counts below.
+    const countDecision = await evaluateEngineFreshness('transactions');
+    checkAbort(signal);
+    const useEngineCounts = countDecision.useEngine;
+
+    const totalDbCount = useEngineCounts
+      ? await engineCountTransactions({})
+      : await countTransactions();
     checkAbort(signal);
 
     let filteredCount: number;
     if (includeBlockchainDiscovered && !opReturnOnly) {
       filteredCount = totalDbCount;
     } else if (includeBlockchainDiscovered && opReturnOnly) {
-      filteredCount = await countTransactionsWithOpReturn();
+      filteredCount = useEngineCounts
+        ? await engineCountTransactions({ opReturnOnly: true })
+        : await countTransactionsWithOpReturn();
       checkAbort(signal);
     } else if (!includeBlockchainDiscovered && opReturnOnly) {
       let count = 0;
@@ -723,6 +669,50 @@ export default function Transactions() {
   const { value: loadedTransactions, isComputing: txLoading } = useAsyncMemo(async (signal) => {
     if (needsClientSideFiltering) return [] as BlockchainTransaction[];
 
+    // Native engine keyset fast path (Task #301) for the "Show all" browse view.
+    // The engine expresses the full ordered tx list (optionally OP_RETURN-only);
+    // it cannot express the curated-only default or text/date/amount search, which
+    // stay on Dexie below. We page by a {blockTime,id} cursor anchor (O(page) not
+    // O(offset)) and hydrate the page's FULL transactions back from Dexie by txid
+    // so TransactionCard keeps opReturnData and exact field fidelity.
+    if (includeBlockchainDiscovered) {
+      const anchorState = txPageAnchorsRef.current;
+      const querySignature = JSON.stringify({ op: opReturnOnly, db: txDbSignal });
+      if (anchorState.signature !== querySignature) {
+        anchorState.signature = querySignature;
+        anchorState.anchors = new Map<number, TransactionPageCursor | undefined>([[1, undefined]]);
+      }
+      const decision = await evaluateEngineFreshness('transactions');
+      checkAbort(signal);
+      if (decision.useEngine && anchorState.anchors.has(safePageForOffset)) {
+        const cursor = anchorState.anchors.get(safePageForOffset);
+        const rows = await engineGetTransactionPage({
+          limit: ITEMS_PER_PAGE,
+          cursor,
+          opReturnOnly,
+        });
+        checkAbort(signal);
+        // Record the boundary for the next page once a full page is loaded; a
+        // short page means there is no next page, so we leave it unset.
+        if (rows.length === ITEMS_PER_PAGE) {
+          const last = rows[rows.length - 1];
+          anchorState.anchors.set(safePageForOffset + 1, {
+            blockTime: last.blockTime ?? 0,
+            id: last.id,
+          });
+        }
+        const orderedTxids = rows.map((r) => r.txid);
+        const fullTxs = await getTransactionsByTxids(orderedTxids);
+        checkAbort(signal);
+        const byTxid = new Map(fullTxs.map((t) => [t.txid, t]));
+        return orderedTxids
+          .map((txid) => byTxid.get(txid))
+          .filter((t): t is BlockchainTransaction => t !== undefined);
+      }
+      // Not fresh / unavailable / no cached anchor (clamp jump): fall through to
+      // the Dexie offset path below for this one load.
+    }
+
     const needsFilter = !includeBlockchainDiscovered || opReturnOnly;
 
     if (!needsFilter) {
@@ -748,7 +738,7 @@ export default function Transactions() {
     filtered.sort((a, b) => (b.blockTime ?? 0) - (a.blockTime ?? 0));
     return filtered.slice(dbOffset, dbOffset + ITEMS_PER_PAGE);
   }, [needsClientSideFiltering, includeBlockchainDiscovered, userCuratedTxidSet, opReturnOnly,
-      dbOffset, txDbSignal],
+      dbOffset, safePageForOffset, txDbSignal, engineReadySignal],
      [] as BlockchainTransaction[]);
 
   const { value: scanResult, isComputing: scanLoading } = useAsyncMemo(async (signal) => {
@@ -988,7 +978,7 @@ export default function Transactions() {
       map.set(p.txid, existing);
     }
     return map;
-  }, [needsBroadParticipants, preFilteredTransactions, backendVersion], new Map<string, TransactionParticipant[]>());
+  }, [needsBroadParticipants, preFilteredTransactions], new Map<string, TransactionParticipant[]>());
 
   const { value: broadRecords } = useAsyncMemo(async (signal) => {
     const recordIds = new Set<number>();
@@ -1071,7 +1061,7 @@ export default function Transactions() {
       map.set(p.txid, existing);
     }
     return map;
-  }, [needsClientSideFiltering, paginatedTransactionSlice, needsBroadParticipants, broadParticipantMap, backendVersion], new Map<string, TransactionParticipant[]>());
+  }, [needsClientSideFiltering, paginatedTransactionSlice, needsBroadParticipants, broadParticipantMap], new Map<string, TransactionParticipant[]>());
 
   const { value: pageRecords } = useAsyncMemo(async (signal) => {
     const recordIds = new Set<number>();
@@ -1249,47 +1239,6 @@ export default function Transactions() {
             }}
             hiddenCount={blockchainOnlyTxCount}
           />
-          <div className="flex flex-col items-end gap-1.5" data-testid="sqlite-prototype-toggle">
-            <div className="flex items-center gap-2">
-              <Database className="h-4 w-4 text-muted-foreground" />
-              <span className="text-sm">
-                SQLite-WASM prototype{" "}
-                <span className="text-xs text-muted-foreground">(experimental)</span>
-              </span>
-              <Switch
-                checked={sqliteEnabled}
-                onCheckedChange={handleSqliteToggle}
-                disabled={!!seedProgress}
-                data-testid="switch-sqlite-backend"
-              />
-            </div>
-            {seedProgress ? (
-              <div className="flex items-center gap-2" data-testid="text-seed-progress">
-                <div className="w-40 h-1.5 bg-muted rounded-full overflow-hidden">
-                  <div
-                    className="h-full bg-primary rounded-full transition-all duration-300"
-                    style={{
-                      width: `${seedProgress.overallTotal > 0 ? Math.min(100, (seedProgress.overallProcessed / seedProgress.overallTotal) * 100) : 0}%`,
-                    }}
-                  />
-                </div>
-                <span className="text-xs text-muted-foreground tabular-nums">
-                  Seeding {seedProgress.overallProcessed.toLocaleString()}/{seedProgress.overallTotal.toLocaleString()}
-                </span>
-                <button
-                  className="text-xs text-muted-foreground underline hover-elevate rounded-md px-1"
-                  onClick={handleCancelSeed}
-                  data-testid="button-cancel-seed"
-                >
-                  Cancel
-                </button>
-              </div>
-            ) : sqliteEnabled && sqliteReady ? (
-              <span className="text-xs text-muted-foreground" data-testid="text-sqlite-status">
-                Active{sqliteStorageMode ? ` · ${sqliteStorageMode === 'opfs-sahpool' ? 'OPFS (persistent)' : 'in-memory (fallback)'}` : ''} · benchmarks in console
-              </span>
-            ) : null}
-          </div>
         </div>
       </div>
 
@@ -1556,7 +1505,6 @@ export default function Transactions() {
           toggleExpanded={toggleExpanded}
           baseAddressToRecord={addressToRecord}
           onStatsChange={handleVirtualizedStatsChange}
-          backendVersion={backendVersion}
         />
       ) : (
         <div className="flex-1 overflow-y-auto space-y-3">

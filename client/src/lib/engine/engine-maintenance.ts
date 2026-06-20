@@ -203,7 +203,10 @@ async function runBootstrap(): Promise<void> {
         setState({ phase: 'ready', message: undefined });
         return;
       }
-      if (decision.reason === 'stale') {
+      if (decision.reason === 'stale' || decision.reason === 'schema-mismatch') {
+        // 'stale' = data drift; 'schema-mismatch' = mirror built by an older engine
+        // schema version. Both need a full reseed — seedBegin drops + recreates the
+        // mirror tables, so the recreated tables get the current column shape.
         await runSeed('refreshing');
         return;
       }

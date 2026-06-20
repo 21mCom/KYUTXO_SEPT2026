@@ -109,6 +109,15 @@ export interface RecordRow {
   updatedAt: number | null;
   tags: string | null; // JSON array text
   categories: string | null; // JSON array text
+  // v2 columns — needed by Vaults + Wallet Overview engine aggregates. Optional so
+  // the synthetic generator and existing fixtures stay valid; insertRecords binds null.
+  derivationPath?: string | null;
+  discoveredInTxid?: string | null;
+  vaultIsVaultXpub?: number | null; // 0/1
+  vaultM?: number | null;
+  vaultN?: number | null;
+  vaultName?: string | null;
+  vaultNotes?: string | null;
 }
 
 export interface TransactionRow {
@@ -191,7 +200,14 @@ export function createTablesOnly(db: EngineDb): void {
       createdAt          INTEGER,
       updatedAt          INTEGER,
       tags               TEXT,
-      categories         TEXT
+      categories         TEXT,
+      derivationPath     TEXT,
+      discoveredInTxid   TEXT,
+      vaultIsVaultXpub   INTEGER,
+      vaultM             INTEGER,
+      vaultN             INTEGER,
+      vaultName          TEXT,
+      vaultNotes         TEXT
     );
 
     CREATE TABLE IF NOT EXISTS blockchainTransactions (
@@ -259,6 +275,10 @@ export const INDEX_BUILD_STEPS: readonly IndexBuildStep[] = [
   { label: 'owned-address lookup', sql: 'CREATE INDEX IF NOT EXISTS idx_records_addr_owned ON records(inputString, type, addressImportance);' },
   { label: 'transactions by txid', sql: 'CREATE UNIQUE INDEX IF NOT EXISTS idx_bt_txid ON blockchainTransactions(txid);' },
   { label: 'transactions by time', sql: 'CREATE INDEX IF NOT EXISTS idx_bt_blockTime ON blockchainTransactions(blockTime);' },
+  // Keyset order for the Transactions page: COALESCE(blockTime,0) DESC, id DESC.
+  // An EXPRESSION index on the exact ORDER BY key lets the page scan newest-first
+  // and seek past prior pages by (blockTime,id) instead of re-sorting every page.
+  { label: 'transactions by time + id (keyset)', sql: 'CREATE INDEX IF NOT EXISTS idx_bt_time_id ON blockchainTransactions(COALESCE(blockTime,0), id);' },
   { label: 'participants by txid + role', sql: 'CREATE INDEX IF NOT EXISTS idx_tp_txid_role ON transactionParticipants(txid, role);' },
   { label: 'participants by txid', sql: 'CREATE INDEX IF NOT EXISTS idx_tp_txid ON transactionParticipants(txid);' },
   { label: 'participants by address', sql: 'CREATE INDEX IF NOT EXISTS idx_tp_address ON transactionParticipants(address);' },
@@ -345,6 +365,38 @@ function setEngineMeta(db: EngineDb, key: string, value: string): void {
     'INSERT INTO engineMeta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',
     [key, value],
   );
+}
+
+// ---------------------------------------------------------------------------
+// Engine schema version
+//
+// The freshness gate compares count + maxId + maxUpdatedAt, which says nothing
+// about the mirror's column SHAPE. A mirror seeded by an OLDER build would pass
+// that fingerprint yet read back NULL for any column added later (and
+// createTablesOnly's CREATE TABLE IF NOT EXISTS never adds columns to an
+// existing table). So bump ENGINE_SCHEMA_VERSION whenever the mirror table shape
+// changes: getEngineSchemaVersion(db) returns 0 for any pre-versioning mirror,
+// and the gate refuses the engine on a mismatch so the launch bootstrap reseeds.
+// The version is stamped ONLY at a successful finalize (writeEngineSchemaVersion),
+// so a half-built/interrupted mirror never advertises the new shape.
+//   v2: added records.{derivationPath, discoveredInTxid, vaultIsVaultXpub, vaultM,
+//       vaultN, vaultName, vaultNotes} for Vaults + Wallet Overview aggregates.
+// ---------------------------------------------------------------------------
+
+export const ENGINE_SCHEMA_VERSION = 2;
+const SCHEMA_VERSION_KEY = 'schemaVersion';
+
+/** Schema version stamped by the last successful finalize; 0 if never written. */
+export function getEngineSchemaVersion(db: EngineDb): number {
+  const v = getEngineMeta(db, SCHEMA_VERSION_KEY);
+  if (v == null) return 0;
+  const n = parseInt(v, 10);
+  return Number.isFinite(n) ? n : 0;
+}
+
+/** Stamp the current schema version. Call ONLY after a successful seed finalize. */
+export function writeEngineSchemaVersion(db: EngineDb): void {
+  setEngineMeta(db, SCHEMA_VERSION_KEY, String(ENGINE_SCHEMA_VERSION));
 }
 
 // ---------------------------------------------------------------------------
@@ -562,8 +614,10 @@ export function insertRecords(db: EngineDb, rows: RecordRow[]): void {
         (id, type, inputString, inputStringLower, label, notes, owner, walletName,
          seedName, walletSoftware, addressImportance, chainType, syncDepth,
          firstSeenBlockTime, cachedBalanceSats, cachedTxCount, cachedUtxoCount,
-         statsComputedAt, createdAt, updatedAt, tags, categories)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+         statsComputedAt, createdAt, updatedAt, tags, categories,
+         derivationPath, discoveredInTxid, vaultIsVaultXpub, vaultM, vaultN,
+         vaultName, vaultNotes)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     rows.map((r) => [
       r.id,
       r.type ?? null,
@@ -587,6 +641,13 @@ export function insertRecords(db: EngineDb, rows: RecordRow[]): void {
       r.updatedAt ?? null,
       r.tags ?? null,
       r.categories ?? null,
+      r.derivationPath ?? null,
+      r.discoveredInTxid ?? null,
+      r.vaultIsVaultXpub ?? null,
+      r.vaultM ?? null,
+      r.vaultN ?? null,
+      r.vaultName ?? null,
+      r.vaultNotes ?? null,
     ]),
   );
 }
@@ -703,6 +764,41 @@ export function getRecordPage(db: EngineDb, opts: RecordPageOptions): RecordRow[
   );
 }
 
+export interface RecordPageByUpdatedAtOptions extends RecordQueryOptions {
+  /** Rows to skip (offset pagination, matching the Dashboard read). */
+  offset?: number;
+  limit: number;
+}
+
+/**
+ * Offset-paginated records ordered by updatedAt DESC, id DESC — the order the
+ * Dashboard presents (most-recently-edited first). Mirrors Dexie's
+ * `orderBy('updatedAt').reverse()`, which breaks updatedAt ties by id DESC and
+ * EXCLUDES rows with no updatedAt key (IndexedDB never indexes null/undefined),
+ * hence the `updatedAt IS NOT NULL` clause. There is no updatedAt index, so this
+ * is a native full scan + sort; still orders of magnitude faster than Dexie's
+ * per-row JS `.filter()` cursor walk, which can visit millions of
+ * blockchain-discovered rows just to fill one page of non-blockchain rows.
+ */
+export function getRecordPageByUpdatedAt(
+  db: EngineDb,
+  opts: RecordPageByUpdatedAtOptions,
+): RecordRow[] {
+  const where = buildRecordWhere(opts);
+  const clauses: string[] = ['updatedAt IS NOT NULL'];
+  const bind: unknown[] = [];
+  if (where.sql) {
+    clauses.push(where.sql.replace(/^WHERE /, ''));
+    bind.push(...where.bind);
+  }
+  bind.push(opts.limit, opts.offset ?? 0);
+  return selectRows<RecordRow>(
+    db,
+    `SELECT * FROM records WHERE ${clauses.join(' AND ')} ORDER BY updatedAt DESC, id DESC LIMIT ? OFFSET ?`,
+    bind,
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Query: per-address aggregates
 // ---------------------------------------------------------------------------
@@ -796,6 +892,406 @@ export function getAddressAggregates(db: EngineDb, addresses: string[]): Map<str
   }
 
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// Query: transactions page / count (Transactions screen)
+// ---------------------------------------------------------------------------
+
+export interface TransactionQueryOptions {
+  /** Restrict to transactions carrying an OP_RETURN output. */
+  opReturnOnly?: boolean;
+}
+
+/** Keyset cursor for the Transactions page; `blockTime` is the COALESCE(.,0) key. */
+export interface TransactionPageCursor {
+  blockTime: number;
+  id: number;
+}
+
+export interface TransactionPageOptions extends TransactionQueryOptions {
+  /** Return rows AFTER this cursor in (blockTime DESC, id DESC) order. */
+  cursor?: TransactionPageCursor;
+  limit: number;
+}
+
+/** A transaction row enriched with the per-tx aggregates the page renders. */
+export interface TransactionPageRow extends TransactionRow {
+  totalOutputValue: number;
+  inputCount: number;
+  outputCount: number;
+}
+
+export interface TransactionAggregate {
+  totalOutputValue: number;
+  inputCount: number;
+  outputCount: number;
+}
+
+function buildTransactionWhere(opts: TransactionQueryOptions): { sql: string; bind: unknown[] } {
+  const clauses: string[] = [];
+  const bind: unknown[] = [];
+  // hasOpReturn is mirrored as 0/1; Dexie filters on hasOpReturn === true.
+  if (opts.opReturnOnly) clauses.push('hasOpReturn = 1');
+  return { sql: clauses.length ? clauses.join(' AND ') : '', bind };
+}
+
+export function countTransactions(db: EngineDb, opts: TransactionQueryOptions = {}): number {
+  const where = buildTransactionWhere(opts);
+  const whereSql = where.sql ? `WHERE ${where.sql}` : '';
+  return selectScalar(db, `SELECT COUNT(*) AS v FROM blockchainTransactions ${whereSql}`, where.bind);
+}
+
+/**
+ * Per-transaction output total + input/output participant counts, keyed by txid.
+ * Used as the companion aggregate for a single page of transactions (an indexed
+ * IN() probe over `idx_tp_txid`), so the page never JOIN-then-GROUPs the whole
+ * 10M-row participants table just to LIMIT a handful of rows.
+ */
+export function getTransactionAggregates(
+  db: EngineDb,
+  txids: string[],
+): Map<string, TransactionAggregate> {
+  const out = new Map<string, TransactionAggregate>();
+  if (txids.length === 0) return out;
+  for (const batch of chunk(txids, PARAM_BATCH_SIZE)) {
+    const placeholders = batch.map(() => '?').join(',');
+    const rows = selectRows<{
+      txid: string;
+      totalOutputValue: number;
+      inputCount: number;
+      outputCount: number;
+    }>(
+      db,
+      `SELECT txid,
+              COALESCE(SUM(CASE WHEN role='output' THEN amount ELSE 0 END), 0) AS totalOutputValue,
+              SUM(CASE WHEN role='input'  THEN 1 ELSE 0 END) AS inputCount,
+              SUM(CASE WHEN role='output' THEN 1 ELSE 0 END) AS outputCount
+         FROM transactionParticipants
+        WHERE txid IN (${placeholders})
+        GROUP BY txid`,
+      batch,
+    );
+    for (const r of rows) {
+      out.set(r.txid, {
+        totalOutputValue: r.totalOutputValue ?? 0,
+        inputCount: r.inputCount ?? 0,
+        outputCount: r.outputCount ?? 0,
+      });
+    }
+  }
+  return out;
+}
+
+/**
+ * One keyset page of transactions in (COALESCE(blockTime,0) DESC, id DESC) order
+ * — newest first, matching the Dexie read path. The page of tx rows is selected
+ * first (indexed, bounded by LIMIT) and only THEN are participant aggregates
+ * attached for exactly those txids, so cost is O(page) not O(all participants).
+ */
+export function getTransactionPage(db: EngineDb, opts: TransactionPageOptions): TransactionPageRow[] {
+  const clauses: string[] = [];
+  const bind: unknown[] = [];
+  const where = buildTransactionWhere(opts);
+  if (where.sql) {
+    clauses.push(where.sql);
+    bind.push(...where.bind);
+  }
+  if (opts.cursor) {
+    clauses.push('(COALESCE(blockTime, 0) < ? OR (COALESCE(blockTime, 0) = ? AND id < ?))');
+    bind.push(opts.cursor.blockTime, opts.cursor.blockTime, opts.cursor.id);
+  }
+  const whereSql = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+  bind.push(opts.limit);
+  const txRows = selectRows<TransactionRow>(
+    db,
+    `SELECT id, txid, blockHeight, blockTime, fee, feeRate, vsize, hasOpReturn
+       FROM blockchainTransactions
+       ${whereSql}
+       ORDER BY COALESCE(blockTime, 0) DESC, id DESC
+       LIMIT ?`,
+    bind,
+  );
+  if (txRows.length === 0) return [];
+  const aggs = getTransactionAggregates(db, txRows.map((r) => r.txid));
+  return txRows.map((r) => {
+    const a = aggs.get(r.txid);
+    return {
+      ...r,
+      totalOutputValue: a?.totalOutputValue ?? 0,
+      inputCount: a?.inputCount ?? 0,
+      outputCount: a?.outputCount ?? 0,
+    };
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Query: balance / wallet / vault summaries (overview screens)
+// ---------------------------------------------------------------------------
+
+export type BalanceGroupBy = 'wallet' | 'seed' | 'owner' | 'tag' | 'category';
+
+export interface BalanceGroupSummary {
+  groupKey: string;
+  totalSats: number;
+  addressCount: number;
+  utxoCount: number;
+}
+
+export interface BalanceSummariesResult {
+  summaries: BalanceGroupSummary[];
+  /** Grand totals are DEDUPED — each address counted once even when tag/category
+   *  grouping expands it into several buckets. */
+  totals: { totalSats: number; totalAddresses: number; totalUtxos: number };
+  /** Count of address rows whose stats predate the `cachedUtxoCount` field
+   *  (statsComputedAt set but cachedUtxoCount NULL). Mirrors BalanceOverview's
+   *  `needsBackfill` probe. When > 0 the mirror cannot serve correct balances
+   *  (those rows are silently excluded by `cachedUtxoCount > 0`), so the page
+   *  must fall back to the Dexie path which triggers the one-time backfill. */
+  staleAddressCount: number;
+}
+
+// Fixed column + empty-bucket per grouping dimension. Never interpolate caller
+// input into SQL — groupBy is mapped to these literals.
+const BALANCE_GROUP_COLUMN: Record<BalanceGroupBy, string> = {
+  wallet: 'walletName',
+  seed: 'seedName',
+  owner: 'owner',
+  tag: 'tags',
+  category: 'categories',
+};
+const BALANCE_GROUP_EMPTY: Record<BalanceGroupBy, string> = {
+  wallet: 'Unassigned',
+  seed: 'Unassigned',
+  owner: 'Unassigned',
+  tag: 'Untagged',
+  category: 'Uncategorized',
+};
+
+/**
+ * Balance overview group summaries, computed in SQL. Mirrors getGroupKeys +
+ * the page's aggregation pass exactly:
+ *   - only type='address' rows with cachedUtxoCount > 0,
+ *   - wallet/seed/owner: empty (NULL or '') maps to the dimension's empty bucket,
+ *   - tag/category: JSON arrays are expanded via json_each (an address with two
+ *     tags adds its full balance to BOTH buckets); rows with an empty/NULL/invalid
+ *     array fall into the empty bucket, merged with any literal same-named tag,
+ *   - grand totals are deduped (computed once over the filtered set).
+ */
+export function getBalanceGroupSummaries(
+  db: EngineDb,
+  opts: { groupBy: BalanceGroupBy },
+): BalanceSummariesResult {
+  const col = BALANCE_GROUP_COLUMN[opts.groupBy];
+  const empty = BALANCE_GROUP_EMPTY[opts.groupBy];
+  const baseFilter = "type = 'address' AND cachedUtxoCount > 0";
+
+  let summaries: BalanceGroupSummary[];
+  if (opts.groupBy === 'tag' || opts.groupBy === 'category') {
+    summaries = selectRows<BalanceGroupSummary>(
+      db,
+      `SELECT groupKey,
+              COALESCE(SUM(totalSats), 0) AS totalSats,
+              SUM(addressCount) AS addressCount,
+              COALESCE(SUM(utxoCount), 0) AS utxoCount
+         FROM (
+           SELECT je.value AS groupKey,
+                  r.cachedBalanceSats AS totalSats,
+                  1 AS addressCount,
+                  r.cachedUtxoCount AS utxoCount
+             FROM records r, json_each(r.${col}) je
+            WHERE r.${baseFilter}
+              AND r.${col} IS NOT NULL AND json_valid(r.${col}) AND json_array_length(r.${col}) > 0
+           UNION ALL
+           SELECT ? AS groupKey,
+                  r.cachedBalanceSats,
+                  1,
+                  r.cachedUtxoCount
+             FROM records r
+            WHERE r.${baseFilter}
+              AND (r.${col} IS NULL OR NOT json_valid(r.${col}) OR json_array_length(r.${col}) = 0)
+         )
+        GROUP BY groupKey
+        ORDER BY totalSats DESC, groupKey`,
+      [empty],
+    );
+  } else {
+    summaries = selectRows<BalanceGroupSummary>(
+      db,
+      `SELECT COALESCE(NULLIF(${col}, ''), ?) AS groupKey,
+              COALESCE(SUM(cachedBalanceSats), 0) AS totalSats,
+              COUNT(*) AS addressCount,
+              COALESCE(SUM(cachedUtxoCount), 0) AS utxoCount
+         FROM records
+        WHERE ${baseFilter}
+        GROUP BY groupKey
+        ORDER BY totalSats DESC, groupKey`,
+      [empty],
+    );
+  }
+
+  const totalsRow = selectRows<{ totalSats: number; totalAddresses: number; totalUtxos: number }>(
+    db,
+    `SELECT COALESCE(SUM(cachedBalanceSats), 0) AS totalSats,
+            COUNT(*) AS totalAddresses,
+            COALESCE(SUM(cachedUtxoCount), 0) AS totalUtxos
+       FROM records
+      WHERE ${baseFilter}`,
+  )[0];
+
+  // Detect rows the page would treat as "needs backfill": stats were computed
+  // before cachedUtxoCount existed (statsComputedAt set, cachedUtxoCount NULL).
+  // These are silently dropped by `cachedUtxoCount > 0`, so the page must fall
+  // back to Dexie (which backfills) whenever any such row exists.
+  const staleRow = selectRows<{ n: number }>(
+    db,
+    `SELECT COUNT(*) AS n
+       FROM records
+      WHERE type = 'address' AND statsComputedAt IS NOT NULL AND cachedUtxoCount IS NULL`,
+  )[0];
+
+  return {
+    summaries: summaries.map((s) => ({
+      groupKey: s.groupKey,
+      totalSats: s.totalSats ?? 0,
+      addressCount: s.addressCount ?? 0,
+      utxoCount: s.utxoCount ?? 0,
+    })),
+    totals: {
+      totalSats: Number(totalsRow?.totalSats ?? 0),
+      totalAddresses: Number(totalsRow?.totalAddresses ?? 0),
+      totalUtxos: Number(totalsRow?.totalUtxos ?? 0),
+    },
+    staleAddressCount: Number(staleRow?.n ?? 0),
+  };
+}
+
+export interface WalletUsageSummary {
+  walletName: string;
+  receiveTotal: number;
+  receiveUsed: number;
+  changeTotal: number;
+  changeUsed: number;
+  unknownTotal: number;
+  unknownUsed: number;
+}
+
+/**
+ * Wallet overview usage summaries grouped by walletName, computed in SQL.
+ * Replicates parseChainType + the page's "used" rule exactly:
+ *   - only type='address' rows with a non-empty walletName,
+ *   - chainType 'receive'/'change' wins; else the SECOND-TO-LAST derivation-path
+ *     component decides ('1' => change) when the path has >= 5 components; every
+ *     other case falls back to 'receive' (so 'unknown' is never produced — the
+ *     page's unknown buckets are always 0, kept here for shape compatibility),
+ *   - "used" = a non-zero firstSeenBlockTime OR a non-empty discoveredInTxid.
+ *
+ * The derivation path is split in pure SQL by turning "a/b/c" into the JSON array
+ * ["a","b","c"] (replace '/' with '","'), then reading element [length-2] — no
+ * REVERSE()/UDF needed. Backslashes and double-quotes are JSON-escaped first (\\
+ * then \") so a path containing those characters still produces valid JSON and is
+ * parsed faithfully — exactly matching the JS split('/'). The json_valid guard is
+ * kept as a belt-and-suspenders fall back to 'receive'.
+ */
+export function getWalletUsageSummaries(db: EngineDb): WalletUsageSummary[] {
+  const rows = selectRows<{
+    walletName: string;
+    receiveTotal: number;
+    receiveUsed: number;
+    changeTotal: number;
+    changeUsed: number;
+  }>(
+    db,
+    `SELECT walletName,
+            SUM(CASE WHEN kind = 'receive' THEN 1 ELSE 0 END) AS receiveTotal,
+            SUM(CASE WHEN kind = 'receive' AND isUsed = 1 THEN 1 ELSE 0 END) AS receiveUsed,
+            SUM(CASE WHEN kind = 'change' THEN 1 ELSE 0 END) AS changeTotal,
+            SUM(CASE WHEN kind = 'change' AND isUsed = 1 THEN 1 ELSE 0 END) AS changeUsed
+       FROM (
+         SELECT walletName,
+                CASE
+                  WHEN chainType = 'receive' THEN 'receive'
+                  WHEN chainType = 'change' THEN 'change'
+                  WHEN n >= 5 AND json_extract(jp, '$[' || (n - 2) || ']') = '1' THEN 'change'
+                  ELSE 'receive'
+                END AS kind,
+                CASE
+                  WHEN (firstSeenBlockTime IS NOT NULL AND firstSeenBlockTime <> 0)
+                    OR (discoveredInTxid IS NOT NULL AND discoveredInTxid <> '')
+                  THEN 1 ELSE 0
+                END AS isUsed
+           FROM (
+             SELECT walletName, chainType, firstSeenBlockTime, discoveredInTxid, jp,
+                    CASE WHEN jp IS NOT NULL AND json_valid(jp) THEN json_array_length(jp) ELSE 0 END AS n
+               FROM (
+                 SELECT walletName, chainType, firstSeenBlockTime, discoveredInTxid,
+                        ('["' || replace(replace(replace(derivationPath, '\\', '\\\\'), '"', '\\"'), '/', '","') || '"]') AS jp
+                   FROM records
+                  WHERE type = 'address' AND walletName IS NOT NULL AND walletName <> ''
+               )
+           )
+       )
+      GROUP BY walletName
+      ORDER BY walletName`,
+  );
+  return rows.map((r) => ({
+    walletName: r.walletName,
+    receiveTotal: r.receiveTotal ?? 0,
+    receiveUsed: r.receiveUsed ?? 0,
+    changeTotal: r.changeTotal ?? 0,
+    changeUsed: r.changeUsed ?? 0,
+    unknownTotal: 0,
+    unknownUsed: 0,
+  }));
+}
+
+export interface VaultSummaryRow {
+  vaultName: string | null;
+  vaultM: number | null;
+  vaultN: number | null;
+  vaultNotes: string | null;
+  addressCount: number;
+  /** MIN(id) of the group — a stable representative record for the vault. */
+  representativeId: number;
+}
+
+/**
+ * Vault summaries grouped by flattened vault metadata. Mirrors the Dexie filter
+ * (type='address', importance in xpub-derived/verified, isVaultXpub with truthy
+ * m AND n) and groups by (vaultName, vaultM, vaultN, vaultNotes). Because the
+ * vaultNotes JSON carries scriptType + cosigners, identical vaultNotes within a
+ * real vault produces the SAME grouping as the page's generateVaultKey; the page
+ * re-parses the representative's vaultNotes for display, so the rendered result
+ * matches. The optional `search` is a coarse case-insensitive prefilter over
+ * vaultName + the raw vaultNotes text (which contains cosigner names/scriptType/
+ * userNotes); the page applies its exact parsed-field filter over the few groups.
+ */
+export function getVaultSummaries(db: EngineDb, opts: { search?: string } = {}): VaultSummaryRow[] {
+  const clauses = [
+    "type = 'address'",
+    "addressImportance IN ('xpub-derived', 'verified')",
+    'vaultIsVaultXpub = 1',
+    'vaultM IS NOT NULL AND vaultM <> 0',
+    'vaultN IS NOT NULL AND vaultN <> 0',
+  ];
+  const bind: unknown[] = [];
+  const search = opts.search?.trim().toLowerCase();
+  if (search) {
+    const like = `%${search}%`;
+    clauses.push("(lower(COALESCE(vaultName, '')) LIKE ? OR lower(COALESCE(vaultNotes, '')) LIKE ?)");
+    bind.push(like, like);
+  }
+  return selectRows<VaultSummaryRow>(
+    db,
+    `SELECT vaultName, vaultM, vaultN, vaultNotes,
+            COUNT(*) AS addressCount,
+            MIN(id) AS representativeId
+       FROM records
+      WHERE ${clauses.join(' AND ')}
+      GROUP BY vaultName, vaultM, vaultN, vaultNotes
+      ORDER BY addressCount DESC, vaultName`,
+    bind,
+  );
 }
 
 // ---------------------------------------------------------------------------

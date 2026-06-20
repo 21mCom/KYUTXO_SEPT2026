@@ -45,10 +45,13 @@ import {
   upsertSeedProgress,
   getAllSeedMeta,
   markSeedCompleteIfDone,
+  getEngineSchemaVersion,
+  writeEngineSchemaVersion,
   isEngineReady,
   integrityCheck,
   countTable,
   getRecordPage,
+  getRecordPageByUpdatedAt,
   countRecords,
   getRecordsFingerprint,
   getTransactionsFingerprint,
@@ -61,6 +64,11 @@ import {
   buildHeuristicOwnedUtxos,
   getParticipantsByTxids,
   getParticipantsByAddresses,
+  countTransactions,
+  getTransactionPage,
+  getBalanceGroupSummaries,
+  getWalletUsageSummaries,
+  getVaultSummaries,
   getDbFileStats,
   MIRROR_TABLES,
   type MirrorTable,
@@ -69,7 +77,11 @@ import {
   type TransactionRow,
   type ParticipantRow,
   type RecordPageOptions,
+  type RecordPageByUpdatedAtOptions,
   type RecordQueryOptions,
+  type TransactionQueryOptions,
+  type TransactionPageOptions,
+  type BalanceGroupBy,
   type DbFileStats,
   type SyntheticSpec,
 } from '../lib/engine/engine-core';
@@ -343,6 +355,9 @@ function handleSeedFinish(sourceCounts: Record<MirrorTable, number>): EngineSnap
       state = 'ERROR';
       errorMessage = `integrity_check failed: ${integrity}`;
     } else if (allComplete && isEngineReady(d)) {
+      // Stamp the schema version ONLY now that the mirror is fully built + verified,
+      // so a half-built/interrupted mirror never advertises the current shape.
+      writeEngineSchemaVersion(d);
       state = 'READY';
     } else {
       state = 'ERROR';
@@ -410,9 +425,14 @@ function handleGenerateSynthetic(
     if (integrity !== 'ok') {
       state = 'ERROR';
       errorMessage = `integrity_check failed: ${integrity}`;
+    } else if (isEngineReady(d)) {
+      // Stamp the schema version only on a fully-built, verified mirror (same rule
+      // as the real seed finalize) so the freshness gate accepts the synthetic load.
+      writeEngineSchemaVersion(d);
+      state = 'READY';
     } else {
-      state = isEngineReady(d) ? 'READY' : 'ERROR';
-      if (state === 'ERROR') errorMessage = 'Synthetic generation finished but counts did not match';
+      state = 'ERROR';
+      errorMessage = 'Synthetic generation finished but counts did not match';
     }
     return result;
   } catch (err) {
@@ -433,8 +453,12 @@ function handleQuery(name: string, args: unknown): unknown {
   switch (name) {
     case 'getRecordPage':
       return getRecordPage(d, args as RecordPageOptions);
+    case 'getRecordPageByUpdatedAt':
+      return getRecordPageByUpdatedAt(d, args as RecordPageByUpdatedAtOptions);
     case 'countRecords':
       return countRecords(d, args as RecordQueryOptions);
+    case 'getEngineSchemaVersion':
+      return getEngineSchemaVersion(d);
     case 'getRecordsFingerprint':
       return getRecordsFingerprint(d);
     case 'getTransactionsFingerprint':
@@ -464,6 +488,16 @@ function handleQuery(name: string, args: unknown): unknown {
       return getParticipantsByTxids(d, args as string[]);
     case 'getParticipantsByAddresses':
       return getParticipantsByAddresses(d, args as string[]);
+    case 'countTransactions':
+      return countTransactions(d, (args as TransactionQueryOptions | undefined) ?? {});
+    case 'getTransactionPage':
+      return getTransactionPage(d, args as TransactionPageOptions);
+    case 'getBalanceGroupSummaries':
+      return getBalanceGroupSummaries(d, args as { groupBy: BalanceGroupBy });
+    case 'getWalletUsageSummaries':
+      return getWalletUsageSummaries(d);
+    case 'getVaultSummaries':
+      return getVaultSummaries(d, (args as { search?: string } | undefined) ?? {});
     default:
       throw new Error(`Unknown query: ${name}`);
   }

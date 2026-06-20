@@ -20,24 +20,30 @@ import {
   engineGetRecordsFingerprint,
   engineGetTransactionsFingerprint,
   engineGetParticipantsFingerprint,
+  engineGetSchemaVersion,
 } from './engine-client';
+import { ENGINE_SCHEMA_VERSION } from './engine-core';
 import { getRecordsFingerprint } from '@/lib/data/record-crud';
 import { getTransactionsFingerprint, getParticipantsFingerprint } from '@/lib/data/transaction-crud';
 
 /**
  * Which mirror tables a read depends on:
- * - `records`     — Records list (the records table only).
- * - `allMirrors`  — owned-UTXO reads + the launch bootstrap freshness check; needs
- *                   records + blockchainTransactions + transactionParticipants all
- *                   current, since a sync/prevout backfill can change tx/participants
- *                   without touching records.
+ * - `records`      — Records list (the records table only).
+ * - `transactions` — Transactions list: blockchainTransactions + transactionParticipants
+ *                    ONLY. Deliberately ignores records so a records-table drift during a
+ *                    sync/import never disables the tx list.
+ * - `allMirrors`   — owned-UTXO reads + the launch bootstrap freshness check; needs
+ *                    records + blockchainTransactions + transactionParticipants all
+ *                    current, since a sync/prevout backfill can change tx/participants
+ *                    without touching records.
  */
-export type EngineFreshnessScope = 'records' | 'allMirrors';
+export type EngineFreshnessScope = 'records' | 'transactions' | 'allMirrors';
 
 export type EngineGateReason =
   | 'ready-fresh'
   | 'unavailable'
   | 'not-ready'
+  | 'schema-mismatch'
   | 'stale'
   | 'error';
 
@@ -61,6 +67,15 @@ export async function evaluateEngineFreshness(
     const snap = await getEngineStatus();
     if (!snap.ready) return { useEngine: false, reason: 'not-ready' };
 
+    // Schema-shape gate (ALL scopes): the fingerprints below compare row counts +
+    // a freshness column but say NOTHING about the mirror's COLUMNS. A mirror
+    // seeded by an older build reads back NULL for any newly-added column yet still
+    // matches those fingerprints. Refuse the engine on a version mismatch so the
+    // launch bootstrap reseeds with the current shape.
+    if ((await engineGetSchemaVersion()) !== ENGINE_SCHEMA_VERSION) {
+      return { useEngine: false, reason: 'schema-mismatch' };
+    }
+
     if (scope === 'records') {
       const [eng, dex] = await Promise.all([
         engineGetRecordsFingerprint(),
@@ -70,6 +85,27 @@ export async function evaluateEngineFreshness(
         eng.count === dex.count &&
         eng.maxId === dex.maxId &&
         eng.maxUpdatedAt === dex.maxUpdatedAt;
+      return fresh
+        ? { useEngine: true, reason: 'ready-fresh' }
+        : { useEngine: false, reason: 'stale' };
+    }
+
+    if (scope === 'transactions') {
+      // tx + participants only (NOT records). Same fields the allMirrors compare
+      // uses for these two tables, so a records drift can't disable the tx list.
+      const [engTx, dexTx, engPart, dexPart] = await Promise.all([
+        engineGetTransactionsFingerprint(),
+        getTransactionsFingerprint(),
+        engineGetParticipantsFingerprint(),
+        getParticipantsFingerprint(),
+      ]);
+      const fresh =
+        engTx.count === dexTx.count &&
+        engTx.maxId === dexTx.maxId &&
+        engTx.maxBlockTime === dexTx.maxBlockTime &&
+        engPart.count === dexPart.count &&
+        engPart.maxId === dexPart.maxId &&
+        engPart.resolvedPrevoutCount === dexPart.resolvedPrevoutCount;
       return fresh
         ? { useEngine: true, reason: 'ready-fresh' }
         : { useEngine: false, reason: 'stale' };

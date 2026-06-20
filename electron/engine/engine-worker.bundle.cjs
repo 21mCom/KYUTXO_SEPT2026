@@ -287,7 +287,14 @@ function createTablesOnly(db2) {
       createdAt          INTEGER,
       updatedAt          INTEGER,
       tags               TEXT,
-      categories         TEXT
+      categories         TEXT,
+      derivationPath     TEXT,
+      discoveredInTxid   TEXT,
+      vaultIsVaultXpub   INTEGER,
+      vaultM             INTEGER,
+      vaultN             INTEGER,
+      vaultName          TEXT,
+      vaultNotes         TEXT
     );
 
     CREATE TABLE IF NOT EXISTS blockchainTransactions (
@@ -338,6 +345,10 @@ var INDEX_BUILD_STEPS = [
   { label: "owned-address lookup", sql: "CREATE INDEX IF NOT EXISTS idx_records_addr_owned ON records(inputString, type, addressImportance);" },
   { label: "transactions by txid", sql: "CREATE UNIQUE INDEX IF NOT EXISTS idx_bt_txid ON blockchainTransactions(txid);" },
   { label: "transactions by time", sql: "CREATE INDEX IF NOT EXISTS idx_bt_blockTime ON blockchainTransactions(blockTime);" },
+  // Keyset order for the Transactions page: COALESCE(blockTime,0) DESC, id DESC.
+  // An EXPRESSION index on the exact ORDER BY key lets the page scan newest-first
+  // and seek past prior pages by (blockTime,id) instead of re-sorting every page.
+  { label: "transactions by time + id (keyset)", sql: "CREATE INDEX IF NOT EXISTS idx_bt_time_id ON blockchainTransactions(COALESCE(blockTime,0), id);" },
   { label: "participants by txid + role", sql: "CREATE INDEX IF NOT EXISTS idx_tp_txid_role ON transactionParticipants(txid, role);" },
   { label: "participants by txid", sql: "CREATE INDEX IF NOT EXISTS idx_tp_txid ON transactionParticipants(txid);" },
   { label: "participants by address", sql: "CREATE INDEX IF NOT EXISTS idx_tp_address ON transactionParticipants(address);" },
@@ -385,6 +396,17 @@ function setEngineMeta(db2, key, value) {
     "INSERT INTO engineMeta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
     [key, value]
   );
+}
+var ENGINE_SCHEMA_VERSION = 2;
+var SCHEMA_VERSION_KEY = "schemaVersion";
+function getEngineSchemaVersion(db2) {
+  const v = getEngineMeta(db2, SCHEMA_VERSION_KEY);
+  if (v == null) return 0;
+  const n = parseInt(v, 10);
+  return Number.isFinite(n) ? n : 0;
+}
+function writeEngineSchemaVersion(db2) {
+  setEngineMeta(db2, SCHEMA_VERSION_KEY, String(ENGINE_SCHEMA_VERSION));
 }
 function getSeedMeta(db2, table) {
   const rows = selectRows(
@@ -503,8 +525,10 @@ function insertRecords(db2, rows) {
         (id, type, inputString, inputStringLower, label, notes, owner, walletName,
          seedName, walletSoftware, addressImportance, chainType, syncDepth,
          firstSeenBlockTime, cachedBalanceSats, cachedTxCount, cachedUtxoCount,
-         statsComputedAt, createdAt, updatedAt, tags, categories)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+         statsComputedAt, createdAt, updatedAt, tags, categories,
+         derivationPath, discoveredInTxid, vaultIsVaultXpub, vaultM, vaultN,
+         vaultName, vaultNotes)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     rows.map((r) => [
       r.id,
       r.type ?? null,
@@ -527,7 +551,14 @@ function insertRecords(db2, rows) {
       r.createdAt ?? null,
       r.updatedAt ?? null,
       r.tags ?? null,
-      r.categories ?? null
+      r.categories ?? null,
+      r.derivationPath ?? null,
+      r.discoveredInTxid ?? null,
+      r.vaultIsVaultXpub ?? null,
+      r.vaultM ?? null,
+      r.vaultN ?? null,
+      r.vaultName ?? null,
+      r.vaultNotes ?? null
     ])
   );
 }
@@ -614,6 +645,21 @@ function getRecordPage(db2, opts) {
     bind
   );
 }
+function getRecordPageByUpdatedAt(db2, opts) {
+  const where = buildRecordWhere(opts);
+  const clauses = ["updatedAt IS NOT NULL"];
+  const bind = [];
+  if (where.sql) {
+    clauses.push(where.sql.replace(/^WHERE /, ""));
+    bind.push(...where.bind);
+  }
+  bind.push(opts.limit, opts.offset ?? 0);
+  return selectRows(
+    db2,
+    `SELECT * FROM records WHERE ${clauses.join(" AND ")} ORDER BY updatedAt DESC, id DESC LIMIT ? OFFSET ?`,
+    bind
+  );
+}
 function getAddressAggregates(db2, addresses) {
   const out2 = /* @__PURE__ */ new Map();
   if (addresses.length === 0) return out2;
@@ -675,6 +721,240 @@ function getAddressAggregates(db2, addresses) {
     }
   }
   return out2;
+}
+function buildTransactionWhere(opts) {
+  const clauses = [];
+  const bind = [];
+  if (opts.opReturnOnly) clauses.push("hasOpReturn = 1");
+  return { sql: clauses.length ? clauses.join(" AND ") : "", bind };
+}
+function countTransactions(db2, opts = {}) {
+  const where = buildTransactionWhere(opts);
+  const whereSql = where.sql ? `WHERE ${where.sql}` : "";
+  return selectScalar(db2, `SELECT COUNT(*) AS v FROM blockchainTransactions ${whereSql}`, where.bind);
+}
+function getTransactionAggregates(db2, txids) {
+  const out2 = /* @__PURE__ */ new Map();
+  if (txids.length === 0) return out2;
+  for (const batch of chunk(txids, PARAM_BATCH_SIZE)) {
+    const placeholders = batch.map(() => "?").join(",");
+    const rows = selectRows(
+      db2,
+      `SELECT txid,
+              COALESCE(SUM(CASE WHEN role='output' THEN amount ELSE 0 END), 0) AS totalOutputValue,
+              SUM(CASE WHEN role='input'  THEN 1 ELSE 0 END) AS inputCount,
+              SUM(CASE WHEN role='output' THEN 1 ELSE 0 END) AS outputCount
+         FROM transactionParticipants
+        WHERE txid IN (${placeholders})
+        GROUP BY txid`,
+      batch
+    );
+    for (const r of rows) {
+      out2.set(r.txid, {
+        totalOutputValue: r.totalOutputValue ?? 0,
+        inputCount: r.inputCount ?? 0,
+        outputCount: r.outputCount ?? 0
+      });
+    }
+  }
+  return out2;
+}
+function getTransactionPage(db2, opts) {
+  const clauses = [];
+  const bind = [];
+  const where = buildTransactionWhere(opts);
+  if (where.sql) {
+    clauses.push(where.sql);
+    bind.push(...where.bind);
+  }
+  if (opts.cursor) {
+    clauses.push("(COALESCE(blockTime, 0) < ? OR (COALESCE(blockTime, 0) = ? AND id < ?))");
+    bind.push(opts.cursor.blockTime, opts.cursor.blockTime, opts.cursor.id);
+  }
+  const whereSql = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+  bind.push(opts.limit);
+  const txRows = selectRows(
+    db2,
+    `SELECT id, txid, blockHeight, blockTime, fee, feeRate, vsize, hasOpReturn
+       FROM blockchainTransactions
+       ${whereSql}
+       ORDER BY COALESCE(blockTime, 0) DESC, id DESC
+       LIMIT ?`,
+    bind
+  );
+  if (txRows.length === 0) return [];
+  const aggs = getTransactionAggregates(db2, txRows.map((r) => r.txid));
+  return txRows.map((r) => {
+    const a = aggs.get(r.txid);
+    return {
+      ...r,
+      totalOutputValue: a?.totalOutputValue ?? 0,
+      inputCount: a?.inputCount ?? 0,
+      outputCount: a?.outputCount ?? 0
+    };
+  });
+}
+var BALANCE_GROUP_COLUMN = {
+  wallet: "walletName",
+  seed: "seedName",
+  owner: "owner",
+  tag: "tags",
+  category: "categories"
+};
+var BALANCE_GROUP_EMPTY = {
+  wallet: "Unassigned",
+  seed: "Unassigned",
+  owner: "Unassigned",
+  tag: "Untagged",
+  category: "Uncategorized"
+};
+function getBalanceGroupSummaries(db2, opts) {
+  const col = BALANCE_GROUP_COLUMN[opts.groupBy];
+  const empty = BALANCE_GROUP_EMPTY[opts.groupBy];
+  const baseFilter = "type = 'address' AND cachedUtxoCount > 0";
+  let summaries;
+  if (opts.groupBy === "tag" || opts.groupBy === "category") {
+    summaries = selectRows(
+      db2,
+      `SELECT groupKey,
+              COALESCE(SUM(totalSats), 0) AS totalSats,
+              SUM(addressCount) AS addressCount,
+              COALESCE(SUM(utxoCount), 0) AS utxoCount
+         FROM (
+           SELECT je.value AS groupKey,
+                  r.cachedBalanceSats AS totalSats,
+                  1 AS addressCount,
+                  r.cachedUtxoCount AS utxoCount
+             FROM records r, json_each(r.${col}) je
+            WHERE r.${baseFilter}
+              AND r.${col} IS NOT NULL AND json_valid(r.${col}) AND json_array_length(r.${col}) > 0
+           UNION ALL
+           SELECT ? AS groupKey,
+                  r.cachedBalanceSats,
+                  1,
+                  r.cachedUtxoCount
+             FROM records r
+            WHERE r.${baseFilter}
+              AND (r.${col} IS NULL OR NOT json_valid(r.${col}) OR json_array_length(r.${col}) = 0)
+         )
+        GROUP BY groupKey
+        ORDER BY totalSats DESC, groupKey`,
+      [empty]
+    );
+  } else {
+    summaries = selectRows(
+      db2,
+      `SELECT COALESCE(NULLIF(${col}, ''), ?) AS groupKey,
+              COALESCE(SUM(cachedBalanceSats), 0) AS totalSats,
+              COUNT(*) AS addressCount,
+              COALESCE(SUM(cachedUtxoCount), 0) AS utxoCount
+         FROM records
+        WHERE ${baseFilter}
+        GROUP BY groupKey
+        ORDER BY totalSats DESC, groupKey`,
+      [empty]
+    );
+  }
+  const totalsRow = selectRows(
+    db2,
+    `SELECT COALESCE(SUM(cachedBalanceSats), 0) AS totalSats,
+            COUNT(*) AS totalAddresses,
+            COALESCE(SUM(cachedUtxoCount), 0) AS totalUtxos
+       FROM records
+      WHERE ${baseFilter}`
+  )[0];
+  const staleRow = selectRows(
+    db2,
+    `SELECT COUNT(*) AS n
+       FROM records
+      WHERE type = 'address' AND statsComputedAt IS NOT NULL AND cachedUtxoCount IS NULL`
+  )[0];
+  return {
+    summaries: summaries.map((s) => ({
+      groupKey: s.groupKey,
+      totalSats: s.totalSats ?? 0,
+      addressCount: s.addressCount ?? 0,
+      utxoCount: s.utxoCount ?? 0
+    })),
+    totals: {
+      totalSats: Number(totalsRow?.totalSats ?? 0),
+      totalAddresses: Number(totalsRow?.totalAddresses ?? 0),
+      totalUtxos: Number(totalsRow?.totalUtxos ?? 0)
+    },
+    staleAddressCount: Number(staleRow?.n ?? 0)
+  };
+}
+function getWalletUsageSummaries(db2) {
+  const rows = selectRows(
+    db2,
+    `SELECT walletName,
+            SUM(CASE WHEN kind = 'receive' THEN 1 ELSE 0 END) AS receiveTotal,
+            SUM(CASE WHEN kind = 'receive' AND isUsed = 1 THEN 1 ELSE 0 END) AS receiveUsed,
+            SUM(CASE WHEN kind = 'change' THEN 1 ELSE 0 END) AS changeTotal,
+            SUM(CASE WHEN kind = 'change' AND isUsed = 1 THEN 1 ELSE 0 END) AS changeUsed
+       FROM (
+         SELECT walletName,
+                CASE
+                  WHEN chainType = 'receive' THEN 'receive'
+                  WHEN chainType = 'change' THEN 'change'
+                  WHEN n >= 5 AND json_extract(jp, '$[' || (n - 2) || ']') = '1' THEN 'change'
+                  ELSE 'receive'
+                END AS kind,
+                CASE
+                  WHEN (firstSeenBlockTime IS NOT NULL AND firstSeenBlockTime <> 0)
+                    OR (discoveredInTxid IS NOT NULL AND discoveredInTxid <> '')
+                  THEN 1 ELSE 0
+                END AS isUsed
+           FROM (
+             SELECT walletName, chainType, firstSeenBlockTime, discoveredInTxid, jp,
+                    CASE WHEN jp IS NOT NULL AND json_valid(jp) THEN json_array_length(jp) ELSE 0 END AS n
+               FROM (
+                 SELECT walletName, chainType, firstSeenBlockTime, discoveredInTxid,
+                        ('["' || replace(replace(replace(derivationPath, '\\', '\\\\'), '"', '\\"'), '/', '","') || '"]') AS jp
+                   FROM records
+                  WHERE type = 'address' AND walletName IS NOT NULL AND walletName <> ''
+               )
+           )
+       )
+      GROUP BY walletName
+      ORDER BY walletName`
+  );
+  return rows.map((r) => ({
+    walletName: r.walletName,
+    receiveTotal: r.receiveTotal ?? 0,
+    receiveUsed: r.receiveUsed ?? 0,
+    changeTotal: r.changeTotal ?? 0,
+    changeUsed: r.changeUsed ?? 0,
+    unknownTotal: 0,
+    unknownUsed: 0
+  }));
+}
+function getVaultSummaries(db2, opts = {}) {
+  const clauses = [
+    "type = 'address'",
+    "addressImportance IN ('xpub-derived', 'verified')",
+    "vaultIsVaultXpub = 1",
+    "vaultM IS NOT NULL AND vaultM <> 0",
+    "vaultN IS NOT NULL AND vaultN <> 0"
+  ];
+  const bind = [];
+  const search = opts.search?.trim().toLowerCase();
+  if (search) {
+    const like = `%${search}%`;
+    clauses.push("(lower(COALESCE(vaultName, '')) LIKE ? OR lower(COALESCE(vaultNotes, '')) LIKE ?)");
+    bind.push(like, like);
+  }
+  return selectRows(
+    db2,
+    `SELECT vaultName, vaultM, vaultN, vaultNotes,
+            COUNT(*) AS addressCount,
+            MIN(id) AS representativeId
+       FROM records
+      WHERE ${clauses.join(" AND ")}
+      GROUP BY vaultName, vaultM, vaultN, vaultNotes
+      ORDER BY addressCount DESC, vaultName`,
+    bind
+  );
 }
 function ownedTierPlaceholders(tiers) {
   const t = tiers.length ? tiers : OWNED_TIERS;
@@ -1321,6 +1601,7 @@ function handleSeedFinish(sourceCounts) {
       state = "ERROR";
       errorMessage = `integrity_check failed: ${integrity}`;
     } else if (allComplete && isEngineReady(d)) {
+      writeEngineSchemaVersion(d);
       state = "READY";
     } else {
       state = "ERROR";
@@ -1375,9 +1656,12 @@ function handleGenerateSynthetic(spec) {
     if (integrity !== "ok") {
       state = "ERROR";
       errorMessage = `integrity_check failed: ${integrity}`;
+    } else if (isEngineReady(d)) {
+      writeEngineSchemaVersion(d);
+      state = "READY";
     } else {
-      state = isEngineReady(d) ? "READY" : "ERROR";
-      if (state === "ERROR") errorMessage = "Synthetic generation finished but counts did not match";
+      state = "ERROR";
+      errorMessage = "Synthetic generation finished but counts did not match";
     }
     return result;
   } catch (err) {
@@ -1393,8 +1677,12 @@ function handleQuery(name, args) {
   switch (name) {
     case "getRecordPage":
       return getRecordPage(d, args);
+    case "getRecordPageByUpdatedAt":
+      return getRecordPageByUpdatedAt(d, args);
     case "countRecords":
       return countRecords(d, args);
+    case "getEngineSchemaVersion":
+      return getEngineSchemaVersion(d);
     case "getRecordsFingerprint":
       return getRecordsFingerprint(d);
     case "getTransactionsFingerprint":
@@ -1424,6 +1712,16 @@ function handleQuery(name, args) {
       return getParticipantsByTxids(d, args);
     case "getParticipantsByAddresses":
       return getParticipantsByAddresses(d, args);
+    case "countTransactions":
+      return countTransactions(d, args ?? {});
+    case "getTransactionPage":
+      return getTransactionPage(d, args);
+    case "getBalanceGroupSummaries":
+      return getBalanceGroupSummaries(d, args);
+    case "getWalletUsageSummaries":
+      return getWalletUsageSummaries(d);
+    case "getVaultSummaries":
+      return getVaultSummaries(d, args ?? {});
     default:
       throw new Error(`Unknown query: ${name}`);
   }

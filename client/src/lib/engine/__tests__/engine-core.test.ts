@@ -24,6 +24,7 @@ import {
   isEngineReady,
   countTable,
   getRecordPage,
+  getRecordPageByUpdatedAt,
   countRecords,
   getAddressAggregates,
   getOwnedUtxos,
@@ -36,7 +37,16 @@ import {
   heuristicOwnedUtxosReady,
   getParticipantsByTxids,
   getParticipantsByAddresses,
+  countTransactions,
+  getTransactionPage,
+  getTransactionAggregates,
+  getBalanceGroupSummaries,
+  getWalletUsageSummaries,
+  getVaultSummaries,
   generateSyntheticData,
+  getEngineSchemaVersion,
+  writeEngineSchemaVersion,
+  ENGINE_SCHEMA_VERSION,
   type RecordRow,
   type TransactionRow,
   type ParticipantRow,
@@ -66,17 +76,24 @@ function rec(over: Partial<RecordRow> & { id: number }): RecordRow {
     seedName: null,
     walletSoftware: null,
     addressImportance: over.addressImportance ?? "manual",
-    chainType: null,
+    chainType: over.chainType ?? null,
     syncDepth: null,
-    firstSeenBlockTime: null,
-    cachedBalanceSats: null,
-    cachedTxCount: null,
-    cachedUtxoCount: null,
-    statsComputedAt: null,
+    firstSeenBlockTime: over.firstSeenBlockTime ?? null,
+    cachedBalanceSats: over.cachedBalanceSats ?? null,
+    cachedTxCount: over.cachedTxCount ?? null,
+    cachedUtxoCount: over.cachedUtxoCount ?? null,
+    statsComputedAt: over.statsComputedAt ?? null,
     createdAt: over.createdAt ?? over.id,
     updatedAt: over.updatedAt ?? over.id,
     tags: over.tags ?? "[]",
     categories: over.categories ?? "[]",
+    derivationPath: over.derivationPath ?? null,
+    discoveredInTxid: over.discoveredInTxid ?? null,
+    vaultIsVaultXpub: over.vaultIsVaultXpub ?? null,
+    vaultM: over.vaultM ?? null,
+    vaultN: over.vaultN ?? null,
+    vaultName: over.vaultName ?? null,
+    vaultNotes: over.vaultNotes ?? null,
   };
 }
 
@@ -130,6 +147,71 @@ describe("engine-core: schema + idempotent inserts", () => {
     expect(countTable(db, "records")).toBe(3);
     const page = getRecordPage(db, { limit: 10, includeBlockchainDiscovered: true });
     expect(page.find((r) => r.id === 2)?.label).toBe("updated");
+  });
+});
+
+describe("engine-core: schema version gate", () => {
+  it("reports 0 for a freshly-created (un-stamped) mirror so the gate refuses it", async () => {
+    const db = await freshDb();
+    // A brand-new mirror has never finalized, so it must NOT advertise the current
+    // shape — getEngineSchemaVersion returns 0 (!= ENGINE_SCHEMA_VERSION), which is
+    // what makes evaluateEngineFreshness return reason:'schema-mismatch'.
+    expect(getEngineSchemaVersion(db)).toBe(0);
+    expect(getEngineSchemaVersion(db)).not.toBe(ENGINE_SCHEMA_VERSION);
+  });
+
+  it("reports ENGINE_SCHEMA_VERSION only after a finalize stamp", async () => {
+    const db = await freshDb();
+    writeEngineSchemaVersion(db);
+    expect(getEngineSchemaVersion(db)).toBe(ENGINE_SCHEMA_VERSION);
+  });
+
+  it("simulates an OLDER on-disk mirror (stamped v1) being refused as a mismatch", async () => {
+    const db = await freshDb();
+    // Older builds stamped a lower number; emulate one directly in engineMeta.
+    db.run(
+      "INSERT INTO engineMeta (key, value) VALUES ('schemaVersion', '1') " +
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+    );
+    expect(getEngineSchemaVersion(db)).toBe(1);
+    expect(getEngineSchemaVersion(db)).not.toBe(ENGINE_SCHEMA_VERSION);
+  });
+
+  it("round-trips the v2 record columns (derivationPath, discoveredInTxid, vault*)", async () => {
+    const db = await freshDb();
+    insertRecords(db, [
+      rec({
+        id: 1,
+        derivationPath: "m/84'/0'/0'/0/5",
+        discoveredInTxid: "txid-abc",
+        vaultIsVaultXpub: 1,
+        vaultM: 2,
+        vaultN: 3,
+        vaultName: "Cold Vault",
+        vaultNotes: "multisig",
+      }),
+    ]);
+    const [row] = db.selectRows<{
+      derivationPath: string | null;
+      discoveredInTxid: string | null;
+      vaultIsVaultXpub: number | null;
+      vaultM: number | null;
+      vaultN: number | null;
+      vaultName: string | null;
+      vaultNotes: string | null;
+    }>(
+      "SELECT derivationPath, discoveredInTxid, vaultIsVaultXpub, vaultM, vaultN, " +
+        "vaultName, vaultNotes FROM records WHERE id = 1",
+    );
+    expect(row).toEqual({
+      derivationPath: "m/84'/0'/0'/0/5",
+      discoveredInTxid: "txid-abc",
+      vaultIsVaultXpub: 1,
+      vaultM: 2,
+      vaultN: 3,
+      vaultName: "Cold Vault",
+      vaultNotes: "multisig",
+    });
   });
 });
 
@@ -229,6 +311,39 @@ describe("engine-core: record page / count / search", () => {
     expect(countRecords(db, { search: "cold", includeBlockchainDiscovered: true })).toBe(1);
     // no match
     expect(countRecords(db, { search: "zzzzz", includeBlockchainDiscovered: true })).toBe(0);
+  });
+});
+
+describe("engine-core: record page by updatedAt (Dashboard order)", () => {
+  let db: BetterSqlite3EngineDb;
+  beforeAll(async () => {
+    db = await freshDb();
+    insertRecords(db, [
+      rec({ id: 1, updatedAt: 100, addressImportance: "manual" }),
+      rec({ id: 2, updatedAt: 300, addressImportance: "verified" }),
+      rec({ id: 3, updatedAt: 200, addressImportance: "manual" }),
+      // id 4 ties id 2 at updatedAt 300 → id DESC breaks the tie (4 before 2).
+      rec({ id: 4, updatedAt: 300, addressImportance: "manual" }),
+      rec({ id: 5, updatedAt: 500, addressImportance: "blockchain-discovered" }),
+      rec({ id: 6, updatedAt: 400, addressImportance: "pending-review" }),
+      // No updatedAt key — Dexie's updatedAt index excludes these, so must we.
+      { ...rec({ id: 7, addressImportance: "manual" }), updatedAt: null },
+    ]);
+  });
+
+  it("orders updatedAt DESC then id DESC, excludes blockchain tiers + null updatedAt", () => {
+    const page = getRecordPageByUpdatedAt(db, { limit: 50, includeBlockchainDiscovered: false });
+    expect(page.map((r) => r.id)).toEqual([4, 2, 3, 1]);
+  });
+
+  it("includes blockchain tiers when requested, still excludes null updatedAt", () => {
+    const page = getRecordPageByUpdatedAt(db, { limit: 50, includeBlockchainDiscovered: true });
+    expect(page.map((r) => r.id)).toEqual([5, 6, 4, 2, 3, 1]);
+  });
+
+  it("paginates by offset", () => {
+    const page = getRecordPageByUpdatedAt(db, { limit: 2, offset: 2, includeBlockchainDiscovered: true });
+    expect(page.map((r) => r.id)).toEqual([4, 2]);
   });
 });
 
@@ -799,5 +914,238 @@ describe("engine-core: synthetic generator sanity", () => {
     // Owned UTXO count should be > 0 and <= total outputs.
     const owned = countOwnedUtxos(db);
     expect(owned).toBeGreaterThan(0);
+  });
+});
+
+describe("engine-core: transactions page / count / aggregates", () => {
+  let db: BetterSqlite3EngineDb;
+
+  beforeEach(() => {
+    db = createInMemoryEngineDb();
+    createSchema(db);
+    // blockTime: a/c=300, b=100, d=0 (null-equivalent). b carries OP_RETURN.
+    insertTransactions(db, [
+      { id: 1, txid: "a", blockHeight: 1, blockTime: 300, fee: 1, feeRate: 1, vsize: 1, hasOpReturn: 0 },
+      { id: 2, txid: "b", blockHeight: 2, blockTime: 100, fee: 1, feeRate: 1, vsize: 1, hasOpReturn: 1 },
+      { id: 3, txid: "c", blockHeight: 3, blockTime: 300, fee: 1, feeRate: 1, vsize: 1, hasOpReturn: 0 },
+      { id: 4, txid: "d", blockHeight: 4, blockTime: 0, fee: 1, feeRate: 1, vsize: 1, hasOpReturn: 0 },
+    ]);
+    // a: 2 outputs (100,50) + 1 input (30). b: 1 output (200). c,d: none.
+    insertParticipants(db, [
+      out("a", "x", 0, 100),
+      out("a", "y", 1, 50),
+      inp("a", "z", 30, "prev", 0),
+      out("b", "x", 0, 200),
+    ]);
+  });
+
+  it("counts all transactions and OP_RETURN-only", () => {
+    expect(countTransactions(db)).toBe(4);
+    expect(countTransactions(db, { opReturnOnly: true })).toBe(1);
+  });
+
+  it("getTransactionAggregates returns output total + role counts, omits no-participant txids", () => {
+    const aggs = getTransactionAggregates(db, ["a", "b", "c"]);
+    expect(aggs.get("a")).toEqual({ totalOutputValue: 150, inputCount: 1, outputCount: 2 });
+    expect(aggs.get("b")).toEqual({ totalOutputValue: 200, inputCount: 0, outputCount: 1 });
+    expect(aggs.has("c")).toBe(false);
+  });
+
+  it("orders newest-first (blockTime DESC, id DESC) and attaches aggregates", () => {
+    const page = getTransactionPage(db, { limit: 10 });
+    expect(page.map((r) => r.txid)).toEqual(["c", "a", "b", "d"]);
+    const a = page.find((r) => r.txid === "a")!;
+    expect(a.totalOutputValue).toBe(150);
+    expect(a.inputCount).toBe(1);
+    expect(a.outputCount).toBe(2);
+    const d = page.find((r) => r.txid === "d")!;
+    expect(d).toMatchObject({ totalOutputValue: 0, inputCount: 0, outputCount: 0 });
+  });
+
+  it("keyset cursor pages without gaps or overlaps", () => {
+    const first = getTransactionPage(db, { limit: 2 });
+    expect(first.map((r) => r.txid)).toEqual(["c", "a"]);
+    const last = first[first.length - 1];
+    const second = getTransactionPage(db, {
+      limit: 2,
+      cursor: { blockTime: last.blockTime ?? 0, id: last.id },
+    });
+    expect(second.map((r) => r.txid)).toEqual(["b", "d"]);
+  });
+
+  it("opReturnOnly filters the page", () => {
+    const page = getTransactionPage(db, { limit: 10, opReturnOnly: true });
+    expect(page.map((r) => r.txid)).toEqual(["b"]);
+  });
+});
+
+describe("engine-core: balance group summaries", () => {
+  let db: BetterSqlite3EngineDb;
+
+  beforeEach(() => {
+    db = createInMemoryEngineDb();
+    createSchema(db);
+    insertRecords(db, [
+      rec({ id: 1, walletName: "W1", owner: "O1", tags: '["red","blue"]', cachedBalanceSats: 1000, cachedUtxoCount: 2 }),
+      rec({ id: 2, walletName: "W1", owner: null, tags: '["red"]', cachedBalanceSats: 500, cachedUtxoCount: 1 }),
+      rec({ id: 3, walletName: null, owner: "O2", tags: "[]", cachedBalanceSats: 200, cachedUtxoCount: 3 }),
+      // Excluded: cachedUtxoCount 0.
+      rec({ id: 4, walletName: "W1", owner: "O1", cachedBalanceSats: 9999, cachedUtxoCount: 0 }),
+      // Excluded: not an address.
+      rec({ id: 5, type: "descriptor", walletName: "W1", cachedBalanceSats: 7777, cachedUtxoCount: 5 }),
+    ]);
+  });
+
+  it("groups by wallet with empty bucket + deduped grand totals", () => {
+    const res = getBalanceGroupSummaries(db, { groupBy: "wallet" });
+    const byKey = Object.fromEntries(res.summaries.map((s) => [s.groupKey, s]));
+    expect(byKey["W1"]).toEqual({ groupKey: "W1", totalSats: 1500, addressCount: 2, utxoCount: 3 });
+    expect(byKey["Unassigned"]).toEqual({ groupKey: "Unassigned", totalSats: 200, addressCount: 1, utxoCount: 3 });
+    expect(res.totals).toEqual({ totalSats: 1700, totalAddresses: 3, totalUtxos: 6 });
+  });
+
+  it("groups by owner mapping NULL owner to Unassigned", () => {
+    const byKey = Object.fromEntries(
+      getBalanceGroupSummaries(db, { groupBy: "owner" }).summaries.map((s) => [s.groupKey, s]),
+    );
+    expect(byKey["O1"]).toMatchObject({ totalSats: 1000, addressCount: 1, utxoCount: 2 });
+    expect(byKey["O2"]).toMatchObject({ totalSats: 200, addressCount: 1, utxoCount: 3 });
+    expect(byKey["Unassigned"]).toMatchObject({ totalSats: 500, addressCount: 1, utxoCount: 1 });
+  });
+
+  it("expands tag arrays into multiple buckets; empty array -> Untagged; totals stay deduped", () => {
+    const res = getBalanceGroupSummaries(db, { groupBy: "tag" });
+    const byKey = Object.fromEntries(res.summaries.map((s) => [s.groupKey, s]));
+    expect(byKey["red"]).toEqual({ groupKey: "red", totalSats: 1500, addressCount: 2, utxoCount: 3 });
+    expect(byKey["blue"]).toEqual({ groupKey: "blue", totalSats: 1000, addressCount: 1, utxoCount: 2 });
+    expect(byKey["Untagged"]).toEqual({ groupKey: "Untagged", totalSats: 200, addressCount: 1, utxoCount: 3 });
+    expect(res.totals).toEqual({ totalSats: 1700, totalAddresses: 3, totalUtxos: 6 });
+  });
+
+  it("merges a literal 'Untagged' tag with the empty-array bucket", () => {
+    insertRecords(db, [
+      rec({ id: 6, tags: '["Untagged"]', cachedBalanceSats: 50, cachedUtxoCount: 1 }),
+    ]);
+    const byKey = Object.fromEntries(
+      getBalanceGroupSummaries(db, { groupBy: "tag" }).summaries.map((s) => [s.groupKey, s]),
+    );
+    // rec3 (empty array) + rec6 (literal "Untagged") collapse into one bucket.
+    expect(byKey["Untagged"]).toEqual({ groupKey: "Untagged", totalSats: 250, addressCount: 2, utxoCount: 4 });
+  });
+
+  it("reports staleAddressCount for address rows with stats but no cachedUtxoCount", () => {
+    // The seeded fixtures are all fresh (cachedUtxoCount set or NULL without
+    // statsComputedAt), so the baseline is 0.
+    expect(getBalanceGroupSummaries(db, { groupBy: "wallet" }).staleAddressCount).toBe(0);
+    insertRecords(db, [
+      // statsComputedAt set but cachedUtxoCount NULL -> needs backfill.
+      rec({ id: 7, walletName: "W1", statsComputedAt: 1234, cachedUtxoCount: null }),
+      rec({ id: 8, walletName: "W2", statsComputedAt: 5678, cachedUtxoCount: null }),
+      // Has both -> not stale.
+      rec({ id: 9, walletName: "W1", statsComputedAt: 9999, cachedBalanceSats: 1, cachedUtxoCount: 1 }),
+    ]);
+    const res = getBalanceGroupSummaries(db, { groupBy: "wallet" });
+    expect(res.staleAddressCount).toBe(2);
+    // The stale rows (NULL cachedUtxoCount) are still excluded from summaries.
+    const byKey = Object.fromEntries(res.summaries.map((s) => [s.groupKey, s]));
+    expect(byKey["W2"]).toBeUndefined();
+  });
+});
+
+describe("engine-core: wallet usage summaries", () => {
+  let db: BetterSqlite3EngineDb;
+
+  beforeEach(() => {
+    db = createInMemoryEngineDb();
+    createSchema(db);
+    insertRecords(db, [
+      // explicit chainType wins
+      rec({ id: 1, walletName: "W", chainType: "receive", firstSeenBlockTime: 100 }), // receive, used
+      rec({ id: 2, walletName: "W", chainType: "change" }), // change, not used
+      // derivation-path classification (no chainType)
+      rec({ id: 3, walletName: "W", derivationPath: "m/84'/0'/0'/0/5", discoveredInTxid: "tx" }), // receive, used
+      rec({ id: 4, walletName: "W", derivationPath: "m/84'/0'/0'/1/7", firstSeenBlockTime: 0, discoveredInTxid: "" }), // change, NOT used (0 / "")
+      rec({ id: 5, walletName: "W", derivationPath: "m/0", firstSeenBlockTime: 5 }), // <5 parts -> fallback receive, used
+      // second wallet + excluded (no walletName)
+      rec({ id: 6, walletName: "W2", chainType: "receive" }), // receive, not used
+      rec({ id: 7, walletName: null, chainType: "change" }), // excluded
+      rec({ id: 8, walletName: "", chainType: "change" }), // excluded
+    ]);
+  });
+
+  it("classifies receive/change via chainType then derivation path; honours used rule", () => {
+    const byWallet = Object.fromEntries(getWalletUsageSummaries(db).map((w) => [w.walletName, w]));
+    expect(byWallet["W"]).toEqual({
+      walletName: "W",
+      receiveTotal: 3, // rec1 (chainType), rec3 (path 0), rec5 (fallback)
+      receiveUsed: 3, // all three used (100, "tx", 5)
+      changeTotal: 2, // rec2 (chainType), rec4 (path 1)
+      changeUsed: 0, // rec2 not used, rec4 not used (0 / "")
+      unknownTotal: 0,
+      unknownUsed: 0,
+    });
+    expect(byWallet["W2"]).toEqual({
+      walletName: "W2",
+      receiveTotal: 1,
+      receiveUsed: 0,
+      changeTotal: 0,
+      changeUsed: 0,
+      unknownTotal: 0,
+      unknownUsed: 0,
+    });
+    expect(Object.keys(byWallet)).toHaveLength(2);
+  });
+
+  it("JSON-escapes quotes/backslashes in derivation paths to match JS split('/')", () => {
+    const edb = createInMemoryEngineDb();
+    createSchema(edb);
+    insertRecords(edb, [
+      // Second-to-last path component is '1' (=> change) but the path contains a
+      // double-quote / backslash that naive JSON construction would choke on,
+      // making it wrongly fall back to 'receive'. JS split('/') still sees '1'.
+      rec({ id: 1, walletName: "Q", derivationPath: `m/84"/0'/0'/1/5`, firstSeenBlockTime: 10 }),
+      rec({ id: 2, walletName: "Q", derivationPath: `m/8\\4/0'/0'/1/7` }),
+      // Control: a clean change path.
+      rec({ id: 3, walletName: "Q", derivationPath: "m/84'/0'/0'/1/9" }),
+    ]);
+    const w = getWalletUsageSummaries(edb).find((x) => x.walletName === "Q")!;
+    expect(w.changeTotal).toBe(3);
+    expect(w.receiveTotal).toBe(0);
+    expect(w.changeUsed).toBe(1); // only id 1 is "used" (firstSeenBlockTime 10)
+  });
+});
+
+describe("engine-core: vault summaries", () => {
+  let db: BetterSqlite3EngineDb;
+
+  beforeEach(() => {
+    db = createInMemoryEngineDb();
+    createSchema(db);
+    insertRecords(db, [
+      rec({ id: 1, addressImportance: "xpub-derived", vaultIsVaultXpub: 1, vaultM: 2, vaultN: 3, vaultName: "Treasury", vaultNotes: '{"scriptType":"p2wsh"}' }),
+      rec({ id: 2, addressImportance: "verified", vaultIsVaultXpub: 1, vaultM: 2, vaultN: 3, vaultName: "Treasury", vaultNotes: '{"scriptType":"p2wsh"}' }),
+      rec({ id: 3, addressImportance: "xpub-derived", vaultIsVaultXpub: 1, vaultM: 2, vaultN: 2, vaultName: "Cold", vaultNotes: '{"scriptType":"p2sh"}' }),
+      // Excluded: wrong importance tier.
+      rec({ id: 4, addressImportance: "manual", vaultIsVaultXpub: 1, vaultM: 2, vaultN: 3, vaultName: "Nope" }),
+      // Excluded: not a vault xpub.
+      rec({ id: 5, addressImportance: "xpub-derived", vaultIsVaultXpub: null, vaultM: 2, vaultN: 3, vaultName: "Nope2" }),
+      // Excluded: m is 0 (falsy).
+      rec({ id: 6, addressImportance: "xpub-derived", vaultIsVaultXpub: 1, vaultM: 0, vaultN: 3, vaultName: "Nope3" }),
+    ]);
+  });
+
+  it("groups vault addresses by flattened metadata with count + representative", () => {
+    const vaults = getVaultSummaries(db);
+    expect(vaults).toHaveLength(2);
+    // Ordered by addressCount DESC -> Treasury (2) first.
+    expect(vaults[0]).toMatchObject({ vaultName: "Treasury", vaultM: 2, vaultN: 3, addressCount: 2, representativeId: 1 });
+    expect(vaults[1]).toMatchObject({ vaultName: "Cold", vaultM: 2, vaultN: 2, addressCount: 1, representativeId: 3 });
+  });
+
+  it("search prefilters over vaultName and raw vaultNotes (case-insensitive)", () => {
+    expect(getVaultSummaries(db, { search: "cold" }).map((v) => v.vaultName)).toEqual(["Cold"]);
+    expect(getVaultSummaries(db, { search: "p2wsh" }).map((v) => v.vaultName)).toEqual(["Treasury"]);
+    expect(getVaultSummaries(db, { search: "treasury" }).map((v) => v.vaultName)).toEqual(["Treasury"]);
+    expect(getVaultSummaries(db, { search: "nomatch" })).toHaveLength(0);
   });
 });

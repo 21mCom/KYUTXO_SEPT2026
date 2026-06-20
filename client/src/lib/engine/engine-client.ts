@@ -20,6 +20,7 @@ import type { EngineBridge, EngineEnvelope } from '../electron';
 import type {
   RecordRow,
   RecordPageOptions,
+  RecordPageByUpdatedAtOptions,
   RecordQueryOptions,
   RecordsFingerprint,
   TransactionsFingerprint,
@@ -27,6 +28,16 @@ import type {
   AddressAggregate,
   OwnedUtxo,
   ParticipantRow,
+  TransactionQueryOptions,
+  TransactionPageOptions,
+  TransactionPageRow,
+  TransactionPageCursor,
+  TransactionAggregate,
+  BalanceGroupBy,
+  BalanceGroupSummary,
+  BalanceSummariesResult,
+  WalletUsageSummary,
+  VaultSummaryRow,
   SeedMeta,
   MirrorTable,
   DbFileStats,
@@ -44,6 +55,7 @@ import type {
 export type {
   RecordRow,
   RecordPageOptions,
+  RecordPageByUpdatedAtOptions,
   RecordQueryOptions,
   RecordsFingerprint,
   TransactionsFingerprint,
@@ -51,6 +63,16 @@ export type {
   AddressAggregate,
   OwnedUtxo,
   ParticipantRow,
+  TransactionQueryOptions,
+  TransactionPageOptions,
+  TransactionPageRow,
+  TransactionPageCursor,
+  TransactionAggregate,
+  BalanceGroupBy,
+  BalanceGroupSummary,
+  BalanceSummariesResult,
+  WalletUsageSummary,
+  VaultSummaryRow,
   SeedMeta,
   MirrorTable,
   DbFileStats,
@@ -333,6 +355,10 @@ function jsonArray(v: unknown): string {
 
 export function mapRecord(o: Record<string, unknown>): RecordRow {
   const inputString = toText(o.inputString) ?? '';
+  // Dexie stores vault metadata as a NESTED object (record.vault.*); flatten it
+  // into the mirror's v2 columns so Vaults can group by it without a join.
+  const vault =
+    o.vault && typeof o.vault === 'object' ? (o.vault as Record<string, unknown>) : null;
   return {
     id: Number(o.id),
     type: toText(o.type) ?? 'other',
@@ -356,6 +382,13 @@ export function mapRecord(o: Record<string, unknown>): RecordRow {
     updatedAt: toInt(o.updatedAt),
     tags: jsonArray(o.tags),
     categories: jsonArray(o.categories),
+    derivationPath: toText(o.derivationPath),
+    discoveredInTxid: toText(o.discoveredInTxid),
+    vaultIsVaultXpub: vault?.isVaultXpub ? 1 : 0,
+    vaultM: toInt(vault?.m),
+    vaultN: toInt(vault?.n),
+    vaultName: toText(vault?.vaultName),
+    vaultNotes: toText(vault?.vaultNotes),
   };
 }
 
@@ -622,6 +655,28 @@ export async function engineGetRecordPage(opts: RecordPageOptions): Promise<Reco
   return unwrap<RecordRow[]>(getEngine().query('getRecordPage', opts));
 }
 
+/**
+ * Records page ordered by updatedAt DESC, id DESC (the Dashboard's order). Used
+ * to pick the ordered ids for a page; full records are then hydrated from Dexie
+ * by primary key so the returned objects stay identical to the Dexie fallback.
+ */
+export async function engineGetRecordPageByUpdatedAt(
+  opts: RecordPageByUpdatedAtOptions,
+): Promise<RecordRow[]> {
+  await ensureEngineInit();
+  return unwrap<RecordRow[]>(getEngine().query('getRecordPageByUpdatedAt', opts));
+}
+
+/**
+ * Schema version stamped into the mirror at its last successful finalize (0 for a
+ * pre-versioning mirror). The freshness gate refuses the engine when this differs
+ * from ENGINE_SCHEMA_VERSION so a stale-shape mirror can never serve NULL columns.
+ */
+export async function engineGetSchemaVersion(): Promise<number> {
+  await ensureEngineInit();
+  return unwrap<number>(getEngine().query('getEngineSchemaVersion', null));
+}
+
 export async function engineCountRecords(opts: RecordQueryOptions = {}): Promise<number> {
   await ensureEngineInit();
   return unwrap<number>(getEngine().query('countRecords', opts));
@@ -706,4 +761,52 @@ export async function engineGetParticipantsByTxids(txids: string[]): Promise<Par
 export async function engineGetParticipantsByAddresses(addresses: string[]): Promise<ParticipantRow[]> {
   await ensureEngineInit();
   return unwrap<ParticipantRow[]>(getEngine().query('getParticipantsByAddresses', addresses));
+}
+
+// ---------------------------------------------------------------------------
+// Transactions screen
+// ---------------------------------------------------------------------------
+
+/** Total transactions (optionally OP_RETURN-only), for the Transactions header count. */
+export async function engineCountTransactions(opts: TransactionQueryOptions = {}): Promise<number> {
+  await ensureEngineInit();
+  return unwrap<number>(getEngine().query('countTransactions', opts));
+}
+
+/**
+ * One keyset page of transactions (newest first), each enriched with
+ * totalOutputValue + input/output participant counts. Pass the previous page's
+ * last-row cursor to fetch the next page for virtual scrolling.
+ */
+export async function engineGetTransactionPage(
+  opts: TransactionPageOptions,
+): Promise<TransactionPageRow[]> {
+  await ensureEngineInit();
+  return unwrap<TransactionPageRow[]>(getEngine().query('getTransactionPage', opts));
+}
+
+// ---------------------------------------------------------------------------
+// Overview screens (balance / wallet / vaults)
+// ---------------------------------------------------------------------------
+
+/** Balance overview group summaries + deduped grand totals for one grouping dimension. */
+export async function engineGetBalanceGroupSummaries(
+  groupBy: BalanceGroupBy,
+): Promise<BalanceSummariesResult> {
+  await ensureEngineInit();
+  return unwrap<BalanceSummariesResult>(getEngine().query('getBalanceGroupSummaries', { groupBy }));
+}
+
+/** Wallet overview receive/change usage summaries grouped by walletName. */
+export async function engineGetWalletUsageSummaries(): Promise<WalletUsageSummary[]> {
+  await ensureEngineInit();
+  return unwrap<WalletUsageSummary[]>(getEngine().query('getWalletUsageSummaries', null));
+}
+
+/** Vault summaries grouped by flattened vault metadata, with an optional coarse search prefilter. */
+export async function engineGetVaultSummaries(
+  opts: { search?: string } = {},
+): Promise<VaultSummaryRow[]> {
+  await ensureEngineInit();
+  return unwrap<VaultSummaryRow[]>(getEngine().query('getVaultSummaries', opts));
 }

@@ -69,7 +69,9 @@ vi.mock("@/lib/dataFacade", () => ({
 
 vi.mock("@/lib/records-query", () => ({
   buildRecordsCollection: vi.fn(() => ({})),
-  fetchRecordsPage: vi.fn(() => Promise.resolve({ records: [], total: 0, effectiveTotal: 0, truncated: false })),
+  buildIdentifierSearchCollection: vi.fn(() => ({})),
+  looksLikeBitcoinIdentifier: vi.fn(() => null),
+  fetchRecordsPage: (...args: unknown[]) => mockDb.fetchRecordsPage(...args),
 }));
 
 // Stub heavy child components so we don't render their entire trees.
@@ -99,12 +101,14 @@ interface MockDb {
   recordsAnyOfCount: ReturnType<typeof vi.fn>;
   recordsCount: ReturnType<typeof vi.fn>;
   pageFetch: ReturnType<typeof vi.fn>;
+  fetchRecordsPage: ReturnType<typeof vi.fn>;
 }
 const mockDb: MockDb = {
   customFieldsToArray: vi.fn(() => Promise.resolve([])),
   recordsAnyOfCount: vi.fn(() => Promise.resolve(0)),
   recordsCount: vi.fn(() => Promise.resolve(0)),
   pageFetch: vi.fn(() => Promise.resolve([])),
+  fetchRecordsPage: vi.fn(() => Promise.resolve({ records: [], total: 0, effectiveTotal: 0, truncated: false })),
 };
 
 vi.mock("dexie", () => {
@@ -140,6 +144,7 @@ vi.mock("@/lib/database", () => {
   };
 
   return {
+    USER_CURATED_TIERS: ['verified', 'manual', 'wallet-import', 'xpub-derived'],
     db: {
       records,
       blockchainTransactions: { where: () => ({ startsWithIgnoreCase: () => ({ limit: () => ({ toArray: () => Promise.resolve([]) }) }) }) },
@@ -161,6 +166,7 @@ beforeEach(() => {
   mockDb.recordsAnyOfCount.mockReset().mockResolvedValue(0);
   mockDb.recordsCount.mockReset().mockResolvedValue(0);
   mockDb.pageFetch.mockReset().mockResolvedValue([]);
+  mockDb.fetchRecordsPage.mockReset().mockResolvedValue({ records: [], total: 0, effectiveTotal: 0, truncated: false });
 });
 
 afterEach(() => {
@@ -189,7 +195,7 @@ describe("Records page loading lifecycle", () => {
   });
 
   it("shows the error state with a Retry button when the DB query fails", async () => {
-    mockDb.recordsAnyOfCount.mockRejectedValueOnce(new Error("Simulated DB failure"));
+    mockDb.pageFetch.mockRejectedValueOnce(new Error("Simulated DB failure"));
 
     renderRecordsPage();
 
@@ -207,7 +213,7 @@ describe("Records page loading lifecycle", () => {
     expect(retryBtn).toBeTruthy();
 
     // Clicking retry, with the next call configured to succeed, clears the error.
-    mockDb.recordsAnyOfCount.mockResolvedValueOnce(0);
+    mockDb.pageFetch.mockResolvedValueOnce([]);
     await act(async () => {
       retryBtn.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
@@ -270,7 +276,7 @@ describe("Records page loading lifecycle", () => {
   });
 
   it("clears the activity task even when the load fails", async () => {
-    mockDb.recordsAnyOfCount.mockRejectedValueOnce(new Error("Boom"));
+    mockDb.pageFetch.mockRejectedValueOnce(new Error("Boom"));
 
     renderRecordsPage();
 

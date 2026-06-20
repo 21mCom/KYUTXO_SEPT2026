@@ -13,9 +13,18 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { useToast } from "@/hooks/use-toast";
 import StripMarkersPanel from "@/components/StripMarkersPanel";
 import { updateRecord } from "@/lib/dataFacade";
-import { db } from "@/lib/database";
-import type { VaultMetadata, Record as DbRecord } from "@/lib/database";
+import type { VaultMetadata, AddressImportance } from "@/lib/database";
+import { getAddressRecordsByImportanceTiersFiltered } from "@/lib/data/record-crud";
+import { engineGetVaultSummaries, subscribeEngineReadiness } from "@/lib/engine/engine-client";
+import { evaluateEngineFreshness } from "@/lib/engine/engine-freshness";
 import { searchPendingClass } from "@/lib/search-pending-class";
+
+const VAULT_TIERS: AddressImportance[] = ['xpub-derived', 'verified'];
+
+/** Shared predicate for "is a real vault address record" (truthy isVaultXpub + m + n). */
+function isVaultRecord(vault?: VaultMetadata | null): vault is VaultMetadata {
+  return !!(vault?.isVaultXpub && vault.m && vault.n);
+}
 
 interface CosignerDetail {
   index: number;
@@ -39,7 +48,6 @@ interface VaultSummary {
   cosigners: CosignerDetail[];
   userNotes?: string;
   addressCount: number;
-  addressIds: number[];
 }
 
 function parseVaultNotes(vaultNotes?: string | null): ParsedVaultNotes | null {
@@ -86,59 +94,111 @@ export default function VaultManagement() {
   const [editNotesText, setEditNotesText] = useState("");
   const [savingNotes, setSavingNotes] = useState(false);
   const [, setIsStripRunning] = useState(false);
+  const [engineReadySignal, setEngineReadySignal] = useState(0);
   const { toast } = useToast();
 
+  // Re-load when the native read-engine flips to ready so the SQL fast path can
+  // take over from any Dexie fallback that ran first.
+  useEffect(() => subscribeEngineReadiness(() => setEngineReadySignal((s) => s + 1)), []);
+
   useEffect(() => {
+    let cancelled = false;
+
     async function loadVaults() {
       setLoading(true);
       try {
-        const VAULT_TIERS = ['xpub-derived', 'verified'];
-        const rawRecords = await db.records
-          .where('[type+addressImportance]')
-          .anyOf(VAULT_TIERS.map(tier => ['address', tier]))
-          .toArray();
-
-        const vaultMap = new Map<string, VaultSummary>();
-
-        for (const record of rawRecords) {
-          if (record.vault?.isVaultXpub && record.vault.m && record.vault.n) {
-            const key = generateVaultKey(record.vault);
-            const parsed = parseVaultNotes(record.vault.vaultNotes);
-            
-            if (!vaultMap.has(key)) {
-              vaultMap.set(key, {
+        // Engine fast path: when the native read-engine mirror is fresh for the
+        // 'records' scope, group vault addresses in SQL. Engine rows carry the
+        // flattened vault metadata; we re-derive the page's vaultKey from it (and
+        // merge rows that collapse to the same key) so the result is identical to
+        // the Dexie grouping.
+        try {
+          const decision = await evaluateEngineFreshness("records");
+          if (cancelled) return;
+          if (decision.useEngine) {
+            const rows = await engineGetVaultSummaries({});
+            if (cancelled) return;
+            const merged = new Map<string, VaultSummary>();
+            for (const row of rows) {
+              const meta: VaultMetadata = {
+                isVaultXpub: true,
+                vaultName: row.vaultName,
+                m: row.vaultM,
+                n: row.vaultN,
+                vaultNotes: row.vaultNotes,
+              };
+              const key = generateVaultKey(meta);
+              const existing = merged.get(key);
+              if (existing) {
+                existing.addressCount += row.addressCount;
+                continue;
+              }
+              const parsed = parseVaultNotes(row.vaultNotes);
+              merged.set(key, {
                 vaultKey: key,
-                vaultName: record.vault.vaultName || 'Unnamed Vault',
-                m: record.vault.m,
-                n: record.vault.n,
+                vaultName: row.vaultName || 'Unnamed Vault',
+                m: row.vaultM ?? 0,
+                n: row.vaultN ?? 0,
                 scriptType: parsed?.scriptType,
                 cosigners: parsed?.cosigners || [],
                 userNotes: parsed?.userNotes,
-                addressCount: 0,
-                addressIds: [],
+                addressCount: row.addressCount,
               });
             }
-            
-            const vault = vaultMap.get(key)!;
-            vault.addressCount++;
-            if (record.id) {
-              vault.addressIds.push(record.id);
-            }
+            setVaults(Array.from(merged.values()).sort((a, b) =>
+              a.vaultName.localeCompare(b.vaultName)
+            ));
+            return;
           }
+        } catch (error) {
+          // Engine unavailable/transient — fall through to the Dexie scan.
+          console.warn("Vault management engine fast path failed; using Dexie:", error);
         }
 
-        setVaults(Array.from(vaultMap.values()).sort((a, b) => 
+        const rawRecords = await getAddressRecordsByImportanceTiersFiltered(
+          VAULT_TIERS,
+          (r) => isVaultRecord(r.vault),
+        );
+        if (cancelled) return;
+
+        const vaultMap = new Map<string, VaultSummary>();
+        for (const record of rawRecords) {
+          const vaultMeta = record.vault!;
+          const key = generateVaultKey(vaultMeta);
+          const parsed = parseVaultNotes(vaultMeta.vaultNotes);
+
+          if (!vaultMap.has(key)) {
+            vaultMap.set(key, {
+              vaultKey: key,
+              vaultName: vaultMeta.vaultName || 'Unnamed Vault',
+              m: vaultMeta.m!,
+              n: vaultMeta.n!,
+              scriptType: parsed?.scriptType,
+              cosigners: parsed?.cosigners || [],
+              userNotes: parsed?.userNotes,
+              addressCount: 0,
+            });
+          }
+
+          const vault = vaultMap.get(key)!;
+          vault.addressCount++;
+        }
+
+        setVaults(Array.from(vaultMap.values()).sort((a, b) =>
           a.vaultName.localeCompare(b.vaultName)
         ));
       } catch (error) {
         console.error("Failed to load vaults:", error);
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     }
 
     loadVaults();
-  }, []);
+    return () => {
+      cancelled = true;
+    };
+  }, [engineReadySignal]);
 
   const filteredVaults = useMemo(() => {
     if (!debouncedSearchQuery.trim()) return vaults;
@@ -180,15 +240,13 @@ export default function VaultManagement() {
   const saveVaultNotes = useCallback(async (vault: VaultSummary) => {
     setSavingNotes(true);
     try {
-      const rawRecords = await db.records
-        .where('id')
-        .anyOf(vault.addressIds)
-        .toArray();
-
-      const vaultRecords = rawRecords.filter(r => {
-        if (!r.vault?.isVaultXpub || !r.vault.m || !r.vault.n) return false;
-        return generateVaultKey(r.vault) === vault.vaultKey;
-      });
+      // Resolve the vault's address records by re-deriving the vaultKey (works
+      // regardless of whether the list came from the engine or Dexie path, since
+      // neither needs to carry the individual address ids).
+      const vaultRecords = await getAddressRecordsByImportanceTiersFiltered(
+        VAULT_TIERS,
+        (r) => isVaultRecord(r.vault) && generateVaultKey(r.vault) === vault.vaultKey,
+      );
 
       const trimmedNotes = editNotesText.trim();
 
