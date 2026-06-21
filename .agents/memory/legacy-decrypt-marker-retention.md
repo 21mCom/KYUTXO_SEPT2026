@@ -16,8 +16,11 @@ permanent data loss. Retaining them makes recovery re-runnable.
 
 **How to apply:** any health-check / diagnostic / "is this row still locked?"
 logic must NOT treat marker-presence alone as "locked" — a fully readable,
-recovered row legitimately still carries the markers. The genuine "still locked /
-unreadable" signature is: `_legacyEncryptedPayload` present **AND** the real field
-(`inputString`) is blank. A marker on a row whose `inputString` is populated is
-harmless leftover cleanup state, not a problem. Likewise, a blank `inputString`
-with *no* payload is "blank/corrupt", not "locked" — don't conflate the three.
+recovered row legitimately still carries the markers. Check ALL three markers,
+not just `_legacyEncryptedPayload`: an *active* marker = non-empty
+`_legacyEncryptedPayload` OR non-empty `encryptedPayload` OR `isEncrypted === true`.
+The genuine "still locked / unreadable" signature is: an active marker present
+**AND** the real field (`inputString`) is blank. A marker on a row whose
+`inputString` is populated is harmless leftover cleanup state (a separate
+"readable but uncleaned" bucket), not a problem. A blank `inputString` with *no*
+marker is "blank/corrupt", not "locked" — keep the three buckets distinct.

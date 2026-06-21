@@ -40,14 +40,15 @@ import {
   isInputStringLowerRepaired,
 } from "@/lib/vault";
 
-// The markers the v27 migration left on rows whose ciphertext was preserved but
-// never decrypted. Presence of `_legacyEncryptedPayload` means the row's real
-// fields are still locked away and the visible fields are blank.
+// The markers the v27 migration left on rows whose ciphertext was preserved.
+// These are kept on a row even AFTER a successful decrypt (the strip/cleanup step
+// removes them later), so presence alone does not mean the row is unreadable —
+// it only means cleanup is still pending. The "still locked" case is a marker
+// present together with a blank real field (see isLockedUnreadable).
 const LEGACY_MARKER_KEYS = ["_legacyEncryptedPayload", "isEncrypted", "encryptedPayload"] as const;
 
 const BATCH_SIZE = 1000;
 const SAMPLE_SIZE = 20;
-const MAX_PREVIEW_CHARS = 64;
 
 type Phase = "idle" | "scanning" | "done" | "error";
 
@@ -70,13 +71,10 @@ interface RecordStats {
 interface SampleRow {
   id: number | string;
   type: string;
-  inputStringPreview: string;
   inputStringBlank: boolean;
-  inputStringLowerBlank: boolean;
-  labelPreview: string;
-  labelBlank: boolean;
   lockedUnreadable: boolean;
   hasMarker: boolean;
+  raw: RawRow;
 }
 
 interface MigrationFlags {
@@ -98,27 +96,35 @@ function isBlank(value: unknown): boolean {
   return value === undefined || value === null || (typeof value === "string" && value.trim() === "");
 }
 
-function preview(value: unknown): string {
-  if (isBlank(value)) return "";
-  const str = String(value);
-  return str.length > MAX_PREVIEW_CHARS ? `${str.slice(0, MAX_PREVIEW_CHARS)}…` : str;
+// Dump a raw record exactly as it is stored, untruncated, for forensic viewing.
+function formatRaw(row: RawRow): string {
+  try {
+    return JSON.stringify(row, (_key, value) => (typeof value === "bigint" ? value.toString() : value), 2);
+  } catch {
+    return String(row);
+  }
 }
 
-// True when the row still carries its encrypted payload. IMPORTANT: the decrypt
-// flow deliberately KEEPS this marker after successfully restoring the plaintext
-// fields — it is the only recoverable copy until the separate strip/cleanup step
-// removes it. So a payload alone does NOT mean the row is unreadable. The real
-// "still locked" signature is the payload present AND a blank inputString.
-function hasEncryptedPayload(row: RawRow): boolean {
-  const payload = row["_legacyEncryptedPayload"];
-  return typeof payload === "string" && payload.length > 0;
+// True when the row still carries ANY active encryption marker. IMPORTANT: the
+// decrypt flow deliberately KEEPS these markers after successfully restoring the
+// plaintext fields — they are the only recoverable copy until the separate
+// strip/cleanup step removes them. So a marker alone does NOT mean the row is
+// unreadable. The real "still locked" signature is a marker present AND a blank
+// inputString (see isLockedUnreadable).
+function hasActiveEncryptionMarker(row: RawRow): boolean {
+  const legacy = row["_legacyEncryptedPayload"];
+  if (typeof legacy === "string" && legacy.length > 0) return true;
+  const payload = row["encryptedPayload"];
+  if (typeof payload === "string" && payload.length > 0) return true;
+  if (row["isEncrypted"] === true) return true;
+  return false;
 }
 
-// The genuine "still locked" case: encrypted data is present but the real value
-// was never restored (inputString blank). These are the records that make every
-// screen look empty.
+// The genuine "still locked" case: an encryption marker is present but the real
+// value was never restored (inputString blank). These are the records that make
+// every screen look empty.
 function isLockedUnreadable(row: RawRow): boolean {
-  return hasEncryptedPayload(row) && isBlank(row["inputString"]);
+  return hasActiveEncryptionMarker(row) && isBlank(row["inputString"]);
 }
 
 function hasAnyMarker(row: RawRow): boolean {
@@ -212,19 +218,19 @@ export default function DatabaseDoctor() {
           const lockedUnreadable = isLockedUnreadable(row);
           const marker = hasAnyMarker(row);
           if (lockedUnreadable) recordStats.lockedUnreadable += 1;
-          if (marker) recordStats.markersRemaining += 1;
+          // "Markers remaining" is the harmless, readable bucket: a marker is
+          // still present but the real field was restored (inputString populated).
+          // Locked-unreadable rows are tracked separately above.
+          else if (marker && !inputBlank) recordStats.markersRemaining += 1;
 
           if (samples.length < SAMPLE_SIZE) {
             samples.push({
               id: (row["id"] as number | undefined) ?? "—",
               type: typeof row["type"] === "string" ? (row["type"] as string) : "—",
-              inputStringPreview: preview(row["inputString"]),
               inputStringBlank: inputBlank,
-              inputStringLowerBlank: isBlank(row["inputStringLower"]),
-              labelPreview: preview(row["label"]),
-              labelBlank: isBlank(row["label"]),
               lockedUnreadable,
               hasMarker: marker,
+              raw: row,
             });
           }
         }
@@ -509,9 +515,9 @@ function SamplesCard({ samples }: { samples: SampleRow[] }) {
       <CardHeader>
         <CardTitle>First {samples.length} records (raw)</CardTitle>
         <CardDescription>
-          Exactly what is stored for your first records. A "Locked" tag means the real values are
-          still encrypted and the visible fields below are blank. A "Recovered · marker" tag means
-          the data was unlocked but a harmless leftover marker remains.
+          The complete raw record exactly as stored in the database, untruncated. A "Locked" tag
+          means the real values are still encrypted and the fields are blank. A "Recovered · marker"
+          tag means the data was unlocked but a harmless leftover marker remains.
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -536,35 +542,18 @@ function SamplesCard({ samples }: { samples: SampleRow[] }) {
                       <Lock className="h-3 w-3" />
                       Locked
                     </Badge>
-                  ) : s.hasMarker ? (
+                  ) : s.hasMarker && !s.inputStringBlank ? (
                     <Badge variant="outline" className="gap-1" data-testid={`badge-recovered-${s.id}`}>
                       Recovered · marker
                     </Badge>
                   ) : null}
                 </div>
-                <div className="text-sm">
-                  <span className="text-muted-foreground">Address/Tx: </span>
-                  {s.inputStringBlank ? (
-                    <span className="italic text-destructive" data-testid={`sample-input-blank-${s.id}`}>
-                      (blank)
-                    </span>
-                  ) : (
-                    <span className="font-mono break-all">{s.inputStringPreview}</span>
-                  )}
-                </div>
-                <div className="text-sm">
-                  <span className="text-muted-foreground">Label: </span>
-                  {s.labelBlank ? (
-                    <span className="italic text-muted-foreground">(blank)</span>
-                  ) : (
-                    <span className="break-all">{s.labelPreview}</span>
-                  )}
-                </div>
-                {!s.inputStringBlank && s.inputStringLowerBlank && (
-                  <div className="text-xs text-yellow-600 dark:text-yellow-400">
-                    Missing lowercase search key — search may not find this record.
-                  </div>
-                )}
+                <pre
+                  className="mt-1 max-h-72 overflow-auto rounded-md bg-muted/50 p-2 text-xs font-mono whitespace-pre-wrap break-all"
+                  data-testid={`sample-raw-${s.id}`}
+                >
+                  {formatRaw(s.raw)}
+                </pre>
               </div>
             ))}
           </div>
