@@ -39,6 +39,7 @@ import {
   getLegacyDecryptCompletedTables,
   isInputStringLowerRepaired,
 } from "@/lib/vault";
+import { isEncryptedPlaceholder } from "@/lib/legacy-decrypt";
 
 // The markers the v27 migration left on rows whose ciphertext was preserved.
 // These are kept on a row even AFTER a successful decrypt (the strip/cleanup step
@@ -61,10 +62,11 @@ interface TableCount {
 interface RecordStats {
   total: number;
   blankInputString: number;
+  placeholderInputString: number; // inputString === "[encrypted]" — value never restored
   populatedInputString: number;
   blankInputStringLower: number;
   blankLabel: number;
-  lockedUnreadable: number; // payload present AND inputString blank — the true "locked" signature
+  lockedUnreadable: number; // payload present AND inputString blank/placeholder — the true "locked" signature
   markersRemaining: number; // rows carrying any leftover marker key (harmless cleanup candidates)
 }
 
@@ -120,11 +122,20 @@ function hasActiveEncryptionMarker(row: RawRow): boolean {
   return false;
 }
 
+// The real value is unreadable when inputString is blank OR still holds the
+// literal "[encrypted]" placeholder. A past migration blanked most fields but
+// left inputString set to "[encrypted]", so treating placeholder as readable is
+// exactly what made locked vaults look falsely healthy.
+function isInputUnreadable(row: RawRow): boolean {
+  const value = row["inputString"];
+  return isBlank(value) || isEncryptedPlaceholder(value);
+}
+
 // The genuine "still locked" case: an encryption marker is present but the real
-// value was never restored (inputString blank). These are the records that make
-// every screen look empty.
+// value was never restored (inputString blank or "[encrypted]"). These are the
+// records that make every screen look empty.
 function isLockedUnreadable(row: RawRow): boolean {
-  return hasActiveEncryptionMarker(row) && isBlank(row["inputString"]);
+  return hasActiveEncryptionMarker(row) && isInputUnreadable(row);
 }
 
 function hasAnyMarker(row: RawRow): boolean {
@@ -178,6 +189,7 @@ export default function DatabaseDoctor() {
       const recordStats: RecordStats = {
         total: 0,
         blankInputString: 0,
+        placeholderInputString: 0,
         populatedInputString: 0,
         blankInputStringLower: 0,
         blankLabel: 0,
@@ -209,7 +221,10 @@ export default function DatabaseDoctor() {
           recordStats.total += 1;
 
           const inputBlank = isBlank(row["inputString"]);
+          const inputPlaceholder = isEncryptedPlaceholder(row["inputString"]);
+          const inputUnreadable = inputBlank || inputPlaceholder;
           if (inputBlank) recordStats.blankInputString += 1;
+          else if (inputPlaceholder) recordStats.placeholderInputString += 1;
           else recordStats.populatedInputString += 1;
 
           if (isBlank(row["inputStringLower"])) recordStats.blankInputStringLower += 1;
@@ -219,9 +234,10 @@ export default function DatabaseDoctor() {
           const marker = hasAnyMarker(row);
           if (lockedUnreadable) recordStats.lockedUnreadable += 1;
           // "Markers remaining" is the harmless, readable bucket: a marker is
-          // still present but the real field was restored (inputString populated).
+          // still present but the real field was restored (inputString holds a
+          // genuine value — not blank and not the "[encrypted]" placeholder).
           // Locked-unreadable rows are tracked separately above.
-          else if (marker && !inputBlank) recordStats.markersRemaining += 1;
+          else if (marker && !inputUnreadable) recordStats.markersRemaining += 1;
 
           if (samples.length < SAMPLE_SIZE) {
             samples.push({
@@ -347,23 +363,28 @@ function Verdict({ result }: { result: DoctorResult }) {
     lines.push(
       "The records table is empty. If you expected data here, it may be stored in a different vault file, or it was never imported.",
     );
-  } else if (recordStats.lockedUnreadable > 0 || recordStats.blankInputString > 0) {
+  } else if (
+    recordStats.lockedUnreadable > 0 ||
+    recordStats.blankInputString > 0 ||
+    recordStats.placeholderInputString > 0
+  ) {
     tone = "bad";
     title = "Some records are present but their contents are missing.";
     if (recordStats.lockedUnreadable > 0) {
       lines.push(
-        `${recordStats.lockedUnreadable.toLocaleString()} of ${recordStats.total.toLocaleString()} records still hold locked (encrypted) data that was never unlocked — their visible fields are blank, which is why those records show as empty everywhere.`,
+        `${recordStats.lockedUnreadable.toLocaleString()} of ${recordStats.total.toLocaleString()} records still hold locked (encrypted) data that was never unlocked — their visible fields are blank or show "[encrypted]", which is why those records appear empty everywhere.`,
+      );
+      lines.push(
+        'Good news: this locked data is recoverable. Open Settings → "Restore Locked Data", enter your vault password, and let it finish to unlock these records. (Just logging out and back in may not be enough — a past migration can be wrongly marked finished, which is exactly this situation.)',
       );
     }
-    const blankNoPayload = recordStats.blankInputString - recordStats.lockedUnreadable;
-    if (blankNoPayload > 0) {
+    const unreadableNoPayload =
+      recordStats.blankInputString +
+      recordStats.placeholderInputString -
+      recordStats.lockedUnreadable;
+    if (unreadableNoPayload > 0) {
       lines.push(
-        `${blankNoPayload.toLocaleString()} records have a blank address/transaction with no recoverable encrypted data (blank or incomplete).`,
-      );
-    }
-    if (recordStats.lockedUnreadable > 0 && !flags.legacyDecryptComplete) {
-      lines.push(
-        "The one-time unlock that runs when you log in has not finished. Logging out and back in with your correct vault password lets it try again.",
+        `${unreadableNoPayload.toLocaleString()} records have a blank or "[encrypted]" address/transaction with no recoverable encrypted data (blank or incomplete).`,
       );
     }
   } else if (recordStats.blankInputStringLower > 0) {
@@ -391,7 +412,8 @@ function Verdict({ result }: { result: DoctorResult }) {
   if (
     recordStats.markersRemaining > 0 &&
     recordStats.lockedUnreadable === 0 &&
-    recordStats.blankInputString === 0
+    recordStats.blankInputString === 0 &&
+    recordStats.placeholderInputString === 0
   ) {
     lines.push(
       `${recordStats.markersRemaining.toLocaleString()} records still carry leftover migration markers. This is harmless — your data is readable — but you can tidy them up with the cleanup tool in Settings.`,
@@ -476,6 +498,12 @@ function RecordHealthCard({ stats, flags }: { stats: RecordStats; flags: Migrati
           highlight={stats.blankInputString > 0}
         />
         <StatLine
+          label={'Showing "[encrypted]" placeholder'}
+          value={stats.placeholderInputString.toLocaleString()}
+          testid="stat-placeholder-input"
+          highlight={stats.placeholderInputString > 0}
+        />
+        <StatLine
           label="Missing lowercase search key"
           value={stats.blankInputStringLower.toLocaleString()}
           testid="stat-blank-input-lower"
@@ -498,10 +526,11 @@ function RecordHealthCard({ stats, flags }: { stats: RecordStats; flags: Migrati
           value={stats.markersRemaining.toLocaleString()}
           testid="stat-markers-remaining"
         />
-        {stats.lockedUnreadable > 0 && !flags.legacyDecryptComplete && (
+        {stats.lockedUnreadable > 0 && (
           <p className="text-xs text-muted-foreground mt-2">
-            The login-time unlock is not marked complete, so the locked records above have not been
-            recovered yet.
+            {flags.legacyDecryptComplete
+              ? 'The migration is marked complete, but these records are still locked — a past run finished early. Use Settings → "Restore Locked Data" to unlock them.'
+              : 'The login-time unlock has not finished, so the locked records above are not recovered yet. Use Settings → "Restore Locked Data" to unlock them.'}
           </p>
         )}
       </CardContent>

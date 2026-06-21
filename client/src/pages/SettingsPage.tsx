@@ -86,6 +86,8 @@ import { isV3Manifest } from "@/lib/backup/format";
 import VocabularyManager from "@/components/VocabularyManager";
 import StripMarkersPanel from "@/components/StripMarkersPanel";
 import MigrationAuditPanel from "@/components/MigrationAuditPanel";
+import LegacyRecoveryPanel from "@/components/LegacyRecoveryPanel";
+import { hasUnrecoveredLegacyData } from "@/lib/legacy-decrypt";
 import {
   getSearchFadePreference,
   setSearchFadePreference,
@@ -403,6 +405,22 @@ export default function SettingsPage() {
           variant: "destructive",
           title: "Invalid Password",
           description: "Current password is incorrect.",
+        });
+        setIsChangingPassword(false);
+        return;
+      }
+
+      // Guard: some records may still hold legacy encrypted payloads that were
+      // locked with the CURRENT password's key. Changing the password regenerates
+      // the salt/hash, so those payloads could never be unlocked again. Block the
+      // change until the user runs "Restore Locked Data" first.
+      const hasLocked = await hasUnrecoveredLegacyData();
+      if (hasLocked) {
+        toast({
+          variant: "destructive",
+          title: "Unlock Your Data First",
+          description:
+            'Some records are still locked. Run "Restore Locked Data" in Settings before changing your password, otherwise that locked data would become permanently unreadable.',
         });
         setIsChangingPassword(false);
         return;
@@ -1899,6 +1917,8 @@ export default function SettingsPage() {
             </Link>
           </CardContent>
         </Card>
+
+        <LegacyRecoveryPanel />
 
         <StripMarkersPanel
           onRunningChange={setIsStripRunning}

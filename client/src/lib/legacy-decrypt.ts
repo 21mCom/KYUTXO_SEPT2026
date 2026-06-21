@@ -143,6 +143,51 @@ export function getTotalTableCount(): number {
   return getTableConfigs().length;
 }
 
+// ---------------------------------------------------------------------------
+// Recovery-state helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * The literal string that a record's plaintext field holds while its real value
+ * is still locked inside `_legacyEncryptedPayload`. The v29 DB migration blanked
+ * this out of most record metadata fields but NOT `inputString`, so affected
+ * rows keep `inputString === '[encrypted]'`.
+ */
+export const ENCRYPTED_PLACEHOLDER = '[encrypted]';
+
+export function isEncryptedPlaceholder(value: unknown): boolean {
+  return (
+    typeof value === 'string' &&
+    value.trim().toLowerCase() === ENCRYPTED_PLACEHOLDER
+  );
+}
+
+function isBlankValue(value: unknown): boolean {
+  return (
+    value === undefined ||
+    value === null ||
+    (typeof value === 'string' && value.trim() === '')
+  );
+}
+
+/**
+ * A row is "unrecovered" when it still carries an encrypted payload but its
+ * primary plaintext field (the first of the table's historical sensitiveFields)
+ * is still blank or holds the literal "[encrypted]" placeholder. For such a row
+ * the encrypted payload is the ONLY copy of the data, so stripping its markers
+ * would destroy it permanently. When the sentinel field is unknown we err on the
+ * side of treating the row as unrecovered — a leftover marker is harmless, lost
+ * data is not.
+ */
+function isRowUnrecovered(
+  row: globalThis.Record<string, unknown>,
+  sentinelField: string | undefined,
+): boolean {
+  if (!sentinelField) return true;
+  const value = row[sentinelField];
+  return isBlankValue(value) || isEncryptedPlaceholder(value);
+}
+
 const ABORT_RETRY_ATTEMPTS = 5;
 
 /**
@@ -201,6 +246,116 @@ export async function hasLegacyEncryptedRecords(alreadyCompletedTables?: string[
       `Probe ${config.name}`,
     );
     if (firstLegacy.length > 0) return true;
+  }
+  return false;
+}
+
+export interface UnrecoveredScanProgress {
+  tableName: string;
+  tableIndex: number;
+  tableCount: number;
+}
+
+export interface UnrecoveredScanResult {
+  totalUnrecovered: number;
+  perTable: { tableName: string; unrecovered: number }[];
+}
+
+/**
+ * Full scan that counts rows which still carry an encrypted payload AND whose
+ * primary plaintext field is still locked (blank or "[encrypted]"). These are
+ * the rows whose only copy of the data lives in the payload — exactly what a
+ * restore needs to recover and what marker-stripping must never touch.
+ */
+export async function countUnrecoveredLegacyRows(
+  onProgress?: (progress: UnrecoveredScanProgress) => void,
+  signal?: AbortSignal,
+): Promise<UnrecoveredScanResult> {
+  const configs = getTableConfigs();
+  const perTable: { tableName: string; unrecovered: number }[] = [];
+  let totalUnrecovered = 0;
+
+  for (let i = 0; i < configs.length; i++) {
+    if (signal?.aborted) break;
+    const config = configs[i];
+    const sentinelField = config.sensitiveFields[0] as string | undefined;
+    onProgress?.({ tableName: config.name, tableIndex: i, tableCount: configs.length });
+
+    let unrecovered = 0;
+    let lastProcessedId = 0;
+    let hasMore = true;
+
+    while (hasMore) {
+      if (signal?.aborted) break;
+      const chunk = await withDbRetry(
+        () =>
+          config.table
+            .where('id')
+            .above(lastProcessedId)
+            .limit(BATCH_SIZE)
+            .toArray(),
+        `Scan ${config.name}`,
+      );
+
+      if (chunk.length === 0) break;
+      lastProcessedId = (chunk[chunk.length - 1] as { id: number }).id;
+
+      for (const item of chunk) {
+        const row = item as unknown as globalThis.Record<string, unknown>;
+        if (hasAnyLegacyMarker(row) && isRowUnrecovered(row, sentinelField)) {
+          unrecovered++;
+        }
+      }
+
+      if (chunk.length < BATCH_SIZE) hasMore = false;
+      await new Promise(r => setTimeout(r, 0));
+    }
+
+    perTable.push({ tableName: config.name, unrecovered });
+    totalUnrecovered += unrecovered;
+  }
+
+  return { totalUnrecovered, perTable };
+}
+
+/**
+ * Early-exit probe: returns true as soon as a single unrecovered legacy row is
+ * found. Used to gate destructive actions (e.g. password change) without paying
+ * for a full count.
+ */
+export async function hasUnrecoveredLegacyData(signal?: AbortSignal): Promise<boolean> {
+  const configs = getTableConfigs();
+  for (const config of configs) {
+    if (signal?.aborted) break;
+    const sentinelField = config.sensitiveFields[0] as string | undefined;
+    let lastProcessedId = 0;
+    let hasMore = true;
+
+    while (hasMore) {
+      if (signal?.aborted) break;
+      const chunk = await withDbRetry(
+        () =>
+          config.table
+            .where('id')
+            .above(lastProcessedId)
+            .limit(BATCH_SIZE)
+            .toArray(),
+        `Probe ${config.name}`,
+      );
+
+      if (chunk.length === 0) break;
+      lastProcessedId = (chunk[chunk.length - 1] as { id: number }).id;
+
+      for (const item of chunk) {
+        const row = item as unknown as globalThis.Record<string, unknown>;
+        if (hasAnyLegacyMarker(row) && isRowUnrecovered(row, sentinelField)) {
+          return true;
+        }
+      }
+
+      if (chunk.length < BATCH_SIZE) hasMore = false;
+      await new Promise(r => setTimeout(r, 0));
+    }
   }
   return false;
 }
@@ -331,6 +486,7 @@ export async function decryptLegacyRecords(
 
   for (let i = 0; i < remainingConfigs.length; i++) {
     const config = remainingConfigs[i];
+    const sentinelField = config.sensitiveFields[0] as string | undefined;
 
     // Fast, indexed row count for the progress denominator. The old code used
     // `.filter(...).count()`, which forces a full-table scan and aborts on very
@@ -382,7 +538,21 @@ export async function decryptLegacyRecords(
       lastProcessedId = (chunk[chunk.length - 1] as { id: number }).id;
       tableProcessed += chunk.length;
 
-      const legacyItems = chunk.filter(item => !!item._legacyEncryptedPayload);
+      // Only restore rows that are STILL locked (have a payload AND a blank /
+      // "[encrypted]" sentinel). Decrypt intentionally keeps the marker after a
+      // successful recovery, so a recovered row carries its payload forever. If
+      // we blindly re-applied that payload on a later run (login resume or the
+      // manual "Restore Locked Data" action) we would silently roll back any
+      // edits the user made to an already-recovered row. Skipping recovered rows
+      // makes restore idempotent and edit-safe; on a first-ever migration every
+      // row is still locked, so behaviour there is unchanged.
+      const legacyItems = chunk.filter(item => {
+        if (!item._legacyEncryptedPayload) return false;
+        return isRowUnrecovered(
+          item as unknown as globalThis.Record<string, unknown>,
+          sentinelField,
+        );
+      });
 
       if (legacyItems.length > 0) {
         const updatedBatch: LegacyRecord<{ id?: number }>[] = [];
@@ -487,12 +657,17 @@ export interface StripMarkersTableResult {
   rowsBefore: number;
   rowsCleaned: number;
   rowsRemaining: number;
+  // Marker rows that were intentionally KEPT because the row is still
+  // unrecovered (its payload is the only copy of the data). Stripping these
+  // would cause permanent data loss, so they are skipped.
+  rowsSkippedUnsafe: number;
 }
 
 export interface StripMarkersResult {
   totalCleaned: number;
   totalBefore: number;
   totalRemaining: number;
+  totalSkippedUnsafe: number;
   tableResults: StripMarkersTableResult[];
   tableErrors: string[];
   verificationErrors: string[];
@@ -550,6 +725,7 @@ export async function stripLegacyMarkers(
   let totalCleaned = 0;
   let totalBefore = 0;
   let totalRemaining = 0;
+  let totalSkippedUnsafe = 0;
   const tableResults: StripMarkersTableResult[] = [];
   const tableErrors: string[] = [];
   const verificationErrors: string[] = [];
@@ -558,8 +734,10 @@ export async function stripLegacyMarkers(
   for (let i = 0; i < configs.length; i++) {
     if (signal?.aborted) break;
     const config = configs[i];
+    const sentinelField = config.sensitiveFields[0] as string | undefined;
     let rowsBefore = 0;
     let rowsCleaned = 0;
+    let rowsSkippedUnsafe = 0;
     let lastProcessedId = 0;
     let hasMore = true;
 
@@ -588,14 +766,26 @@ export async function stripLegacyMarkers(
       lastProcessedId = (chunk[chunk.length - 1] as { id: number }).id;
 
       const markerItems = chunk.filter(item =>
-        hasAnyLegacyMarker(item as unknown as Record<string, unknown>),
+        hasAnyLegacyMarker(item as unknown as globalThis.Record<string, unknown>),
       );
 
       rowsBefore += markerItems.length;
 
-      if (markerItems.length > 0) {
-        const cleanedBatch = markerItems.map(item => {
-          const cleaned = { ...item } as Record<string, unknown>;
+      // Safety: never strip a marker from a row whose data is still locked
+      // (blank or "[encrypted]" sentinel) — that payload is the only copy. Keep
+      // those markers and report them so the user can run a restore first.
+      const safeItems = markerItems.filter(
+        item =>
+          !isRowUnrecovered(
+            item as unknown as globalThis.Record<string, unknown>,
+            sentinelField,
+          ),
+      );
+      rowsSkippedUnsafe += markerItems.length - safeItems.length;
+
+      if (safeItems.length > 0) {
+        const cleanedBatch = safeItems.map(item => {
+          const cleaned = { ...item } as globalThis.Record<string, unknown>;
           for (const key of LEGACY_MARKER_KEYS_TO_STRIP) {
             delete cleaned[key];
           }
@@ -627,9 +817,10 @@ export async function stripLegacyMarkers(
       await new Promise(r => setTimeout(r, 0));
     }
 
-    tableResults.push({ tableName: config.name, rowsBefore, rowsCleaned, rowsRemaining: 0 });
+    tableResults.push({ tableName: config.name, rowsBefore, rowsCleaned, rowsRemaining: 0, rowsSkippedUnsafe });
     totalCleaned += rowsCleaned;
     totalBefore += rowsBefore;
+    totalSkippedUnsafe += rowsSkippedUnsafe;
   }
 
   // Phase 2: verification — count any remaining marker rows
@@ -662,5 +853,5 @@ export async function stripLegacyMarkers(
     await new Promise(r => setTimeout(r, 0));
   }
 
-  return { totalCleaned, totalBefore, totalRemaining, tableResults, tableErrors, verificationErrors };
+  return { totalCleaned, totalBefore, totalRemaining, totalSkippedUnsafe, tableResults, tableErrors, verificationErrors };
 }

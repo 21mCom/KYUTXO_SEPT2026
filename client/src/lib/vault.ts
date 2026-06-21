@@ -104,6 +104,24 @@ export async function addLegacyDecryptCompletedTable(tableName: string): Promise
   });
 }
 
+/**
+ * Reset legacy-decrypt progress so a fresh restore pass scans EVERY table from
+ * scratch. A past bug could set legacyDecryptComplete=true after a mid-table
+ * abort, which permanently short-circuits login decryption and leaves rows
+ * locked. Clearing both the flag and the per-table checkpoint list forces
+ * decryptLegacyRecords to revisit all tables. No-ops safely when no vault row
+ * exists (e.g. unit tests that seed data without a vault).
+ */
+export async function resetLegacyDecryptProgress(): Promise<void> {
+  const settings = await vaultDb.vault.get('main');
+  if (settings) {
+    await vaultDb.vault.update('main', {
+      legacyDecryptComplete: false,
+      legacyDecryptCompletedTables: [],
+    });
+  }
+}
+
 export async function isInputStringLowerRepaired(): Promise<boolean> {
   const settings = await vaultDb.vault.get('main');
   return settings?.inputStringLowerRepaired ?? false;

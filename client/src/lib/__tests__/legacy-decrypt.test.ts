@@ -70,7 +70,12 @@ vi.mock('../crypto', () => ({
   decrypt: vi.fn(),
 }));
 
-import { stripLegacyMarkers } from '../legacy-decrypt';
+import {
+  stripLegacyMarkers,
+  countUnrecoveredLegacyRows,
+  hasUnrecoveredLegacyData,
+  isEncryptedPlaceholder,
+} from '../legacy-decrypt';
 
 const TABLE_KEYS = [
   'records', 'attachments', 'tags', 'categories', 'owners',
@@ -85,6 +90,37 @@ function setupAllEmpty() {
   }
 }
 
+// Each table's "sentinel" is the first of its historical sensitiveFields. A
+// marker row is only safe to strip once that field holds real plaintext again.
+// Records → inputString, Tags/Owners → name. These helpers keep the test rows
+// readable about which rows are "recovered" vs still "locked".
+function recoveredRecord(id: number, extra: Partial<Row> = {}): Row {
+  return { id, _legacyEncryptedPayload: `payload-${id}`, inputString: `addr-${id}`, ...extra };
+}
+
+describe('isEncryptedPlaceholder', () => {
+  it('matches the literal placeholder regardless of case or surrounding space', () => {
+    expect(isEncryptedPlaceholder('[encrypted]')).toBe(true);
+    expect(isEncryptedPlaceholder('[ENCRYPTED]')).toBe(true);
+    expect(isEncryptedPlaceholder('[Encrypted]')).toBe(true);
+    expect(isEncryptedPlaceholder('   [encrypted]   ')).toBe(true);
+  });
+
+  it('does not match real values or blanks', () => {
+    expect(isEncryptedPlaceholder('bc1qrealaddress')).toBe(false);
+    expect(isEncryptedPlaceholder('encrypted')).toBe(false);
+    expect(isEncryptedPlaceholder('[encrypted] tail')).toBe(false);
+    expect(isEncryptedPlaceholder('')).toBe(false);
+  });
+
+  it('returns false for non-string values', () => {
+    expect(isEncryptedPlaceholder(undefined)).toBe(false);
+    expect(isEncryptedPlaceholder(null)).toBe(false);
+    expect(isEncryptedPlaceholder(123)).toBe(false);
+    expect(isEncryptedPlaceholder({})).toBe(false);
+  });
+});
+
 describe('stripLegacyMarkers', () => {
   beforeEach(() => {
     setupAllEmpty();
@@ -92,11 +128,11 @@ describe('stripLegacyMarkers', () => {
 
   it('counts rowsBefore as the number of rows carrying any legacy marker key', async () => {
     mockTables.records = createMockTable([
-      { id: 1, _legacyEncryptedPayload: 'x' },
-      { id: 2, isEncrypted: true },
-      { id: 3, encryptedPayload: 'y' },
-      { id: 4, label: 'no markers' },
-      { id: 5, _legacyEncryptedPayload: 'z', isEncrypted: true },
+      { id: 1, _legacyEncryptedPayload: 'x', inputString: 'addr1' },
+      { id: 2, isEncrypted: true, inputString: 'addr2' },
+      { id: 3, encryptedPayload: 'y', inputString: 'addr3' },
+      { id: 4, label: 'no markers', inputString: 'addr4' },
+      { id: 5, _legacyEncryptedPayload: 'z', isEncrypted: true, inputString: 'addr5' },
     ]);
 
     const result = await stripLegacyMarkers();
@@ -107,8 +143,8 @@ describe('stripLegacyMarkers', () => {
 
   it('rowsRemaining is 0 after a clean strip', async () => {
     mockTables.records = createMockTable([
-      { id: 1, _legacyEncryptedPayload: 'a' },
-      { id: 2, isEncrypted: true, label: 'foo' },
+      { id: 1, _legacyEncryptedPayload: 'a', inputString: 'addr1' },
+      { id: 2, isEncrypted: true, label: 'foo', inputString: 'addr2' },
     ]);
     mockTables.tags = createMockTable([
       { id: 1, name: 'tag1', encryptedPayload: 'b' },
@@ -117,6 +153,7 @@ describe('stripLegacyMarkers', () => {
     const result = await stripLegacyMarkers();
 
     expect(result.totalRemaining).toBe(0);
+    expect(result.totalSkippedUnsafe).toBe(0);
     expect(result.verificationErrors).toEqual([]);
     for (const tr of result.tableResults) {
       expect(tr.rowsRemaining).toBe(0);
@@ -133,8 +170,8 @@ describe('stripLegacyMarkers', () => {
 
   it('handles partial marker sets — counted once even with multiple markers', async () => {
     mockTables.records = createMockTable([
-      { id: 1, _legacyEncryptedPayload: 'a', isEncrypted: true, encryptedPayload: 'b' },
-      { id: 2, _legacyEncryptedPayload: 'c' },
+      { id: 1, _legacyEncryptedPayload: 'a', isEncrypted: true, encryptedPayload: 'b', inputString: 'addr1' },
+      { id: 2, _legacyEncryptedPayload: 'c', inputString: 'addr2' },
     ]);
 
     const result = await stripLegacyMarkers();
@@ -146,11 +183,11 @@ describe('stripLegacyMarkers', () => {
 
   it('captures table read errors in tableErrors without aborting other tables', async () => {
     mockTables.records = createMockTable(
-      [{ id: 1, _legacyEncryptedPayload: 'a' }],
+      [{ id: 1, _legacyEncryptedPayload: 'a', inputString: 'addr1' }],
       { readError: () => new Error('boom-read') },
     );
     mockTables.tags = createMockTable([
-      { id: 1, _legacyEncryptedPayload: 'b' },
+      { id: 1, _legacyEncryptedPayload: 'b', name: 'tag1' },
     ]);
 
     const result = await stripLegacyMarkers();
@@ -164,11 +201,11 @@ describe('stripLegacyMarkers', () => {
 
   it('captures table write errors in tableErrors without aborting other tables', async () => {
     mockTables.records = createMockTable(
-      [{ id: 1, _legacyEncryptedPayload: 'a' }],
+      [{ id: 1, _legacyEncryptedPayload: 'a', inputString: 'addr1' }],
       { writeError: () => new Error('boom-write') },
     );
     mockTables.tags = createMockTable([
-      { id: 1, _legacyEncryptedPayload: 'b' },
+      { id: 1, _legacyEncryptedPayload: 'b', name: 'tag1' },
     ]);
 
     const result = await stripLegacyMarkers();
@@ -188,7 +225,7 @@ describe('stripLegacyMarkers', () => {
     let phase = 0;
     // Allow first reads (strip phase) to succeed, then throw on subsequent reads (verify phase)
     mockTables.records = createMockTable(
-      [{ id: 1, _legacyEncryptedPayload: 'a' }],
+      [{ id: 1, _legacyEncryptedPayload: 'a', inputString: 'addr1' }],
       {
         readError: () => {
           phase++;
@@ -211,11 +248,11 @@ describe('stripLegacyMarkers', () => {
 
   it('aggregates totals across multiple tables', async () => {
     mockTables.records = createMockTable([
-      { id: 1, _legacyEncryptedPayload: 'a' },
-      { id: 2, isEncrypted: true },
+      { id: 1, _legacyEncryptedPayload: 'a', inputString: 'addr1' },
+      { id: 2, isEncrypted: true, inputString: 'addr2' },
     ]);
     mockTables.tags = createMockTable([
-      { id: 1, encryptedPayload: 'b' },
+      { id: 1, encryptedPayload: 'b', name: 'tag1' },
     ]);
     mockTables.owners = createMockTable([
       { id: 1, name: 'no-marker' },
@@ -230,10 +267,7 @@ describe('stripLegacyMarkers', () => {
 
   it('captures mid-batch read failures while preserving progress on other tables', async () => {
     // 600 rows → 2 strip chunks of 500 + 100. Fail on the 2nd strip read.
-    const rows = Array.from({ length: 600 }, (_, idx) => ({
-      id: idx + 1,
-      _legacyEncryptedPayload: `payload-${idx + 1}`,
-    }));
+    const rows = Array.from({ length: 600 }, (_, idx) => recoveredRecord(idx + 1));
 
     let stripReadCount = 0;
     mockTables.records = createMockTable(rows, {
@@ -244,7 +278,7 @@ describe('stripLegacyMarkers', () => {
       },
     });
     mockTables.tags = createMockTable([
-      { id: 1, _legacyEncryptedPayload: 'tag-payload' },
+      { id: 1, _legacyEncryptedPayload: 'tag-payload', name: 'tag1' },
     ]);
 
     const result = await stripLegacyMarkers();
@@ -265,7 +299,7 @@ describe('stripLegacyMarkers', () => {
 
   it('reports progress for both strip and verify phases', async () => {
     mockTables.records = createMockTable([
-      { id: 1, _legacyEncryptedPayload: 'a' },
+      { id: 1, _legacyEncryptedPayload: 'a', inputString: 'addr1' },
     ]);
 
     const phases: string[] = [];
@@ -275,5 +309,190 @@ describe('stripLegacyMarkers', () => {
 
     expect(phases).toContain('strip');
     expect(phases).toContain('verify');
+  });
+});
+
+describe('stripLegacyMarkers — safe-strip of still-locked rows', () => {
+  beforeEach(() => {
+    setupAllEmpty();
+  });
+
+  it('never strips a marker from a row whose sentinel is still blank', async () => {
+    mockTables.records = createMockTable([
+      { id: 1, _legacyEncryptedPayload: 'still-locked', inputString: '' },
+    ]);
+
+    const result = await stripLegacyMarkers();
+    const records = result.tableResults.find(t => t.tableName === 'Records')!;
+
+    expect(records.rowsBefore).toBe(1);
+    expect(records.rowsCleaned).toBe(0);
+    expect(records.rowsSkippedUnsafe).toBe(1);
+    // The marker is intentionally kept, so verification still sees it.
+    expect(records.rowsRemaining).toBe(1);
+    expect(result.totalSkippedUnsafe).toBe(1);
+
+    // The only copy of the data — the encrypted payload — must survive.
+    const row = mockTables.records._rows.get(1)!;
+    expect(row._legacyEncryptedPayload).toBe('still-locked');
+  });
+
+  it('never strips a marker from a row whose sentinel is the [encrypted] placeholder', async () => {
+    mockTables.records = createMockTable([
+      { id: 1, _legacyEncryptedPayload: 'still-locked', inputString: '[encrypted]' },
+    ]);
+
+    const result = await stripLegacyMarkers();
+    const records = result.tableResults.find(t => t.tableName === 'Records')!;
+
+    expect(records.rowsCleaned).toBe(0);
+    expect(records.rowsSkippedUnsafe).toBe(1);
+    expect(mockTables.records._rows.get(1)!._legacyEncryptedPayload).toBe('still-locked');
+  });
+
+  it('strips a marker once the sentinel holds a real plaintext value again', async () => {
+    mockTables.records = createMockTable([
+      { id: 1, _legacyEncryptedPayload: 'x', inputString: 'bc1qrealaddress' },
+    ]);
+
+    const result = await stripLegacyMarkers();
+    const records = result.tableResults.find(t => t.tableName === 'Records')!;
+
+    expect(records.rowsCleaned).toBe(1);
+    expect(records.rowsSkippedUnsafe).toBe(0);
+    expect(records.rowsRemaining).toBe(0);
+    expect(mockTables.records._rows.get(1)!._legacyEncryptedPayload).toBeUndefined();
+  });
+
+  it('strips recovered rows but keeps locked rows within the same table', async () => {
+    mockTables.records = createMockTable([
+      { id: 1, _legacyEncryptedPayload: 'a', inputString: 'recovered1' },
+      { id: 2, _legacyEncryptedPayload: 'b', inputString: '' },
+      { id: 3, _legacyEncryptedPayload: 'c', inputString: '[encrypted]' },
+      { id: 4, _legacyEncryptedPayload: 'd', inputString: 'recovered4' },
+    ]);
+
+    const result = await stripLegacyMarkers();
+    const records = result.tableResults.find(t => t.tableName === 'Records')!;
+
+    expect(records.rowsBefore).toBe(4);
+    expect(records.rowsCleaned).toBe(2);
+    expect(records.rowsSkippedUnsafe).toBe(2);
+    expect(records.rowsRemaining).toBe(2);
+
+    expect(mockTables.records._rows.get(1)!._legacyEncryptedPayload).toBeUndefined();
+    expect(mockTables.records._rows.get(4)!._legacyEncryptedPayload).toBeUndefined();
+    expect(mockTables.records._rows.get(2)!._legacyEncryptedPayload).toBe('b');
+    expect(mockTables.records._rows.get(3)!._legacyEncryptedPayload).toBe('c');
+  });
+
+  it('aggregates totalSkippedUnsafe across tables', async () => {
+    mockTables.records = createMockTable([
+      { id: 1, _legacyEncryptedPayload: 'a', inputString: '' },
+    ]);
+    mockTables.tags = createMockTable([
+      { id: 1, _legacyEncryptedPayload: 'b', name: '' },
+    ]);
+
+    const result = await stripLegacyMarkers();
+
+    expect(result.totalSkippedUnsafe).toBe(2);
+    expect(result.totalCleaned).toBe(0);
+  });
+});
+
+describe('countUnrecoveredLegacyRows', () => {
+  beforeEach(() => {
+    setupAllEmpty();
+  });
+
+  it('counts only rows that have a marker AND a still-locked sentinel', async () => {
+    mockTables.records = createMockTable([
+      { id: 1, _legacyEncryptedPayload: 'a', inputString: '' },
+      { id: 2, _legacyEncryptedPayload: 'b', inputString: '[encrypted]' },
+      { id: 3, _legacyEncryptedPayload: 'c', inputString: 'recovered' },
+      { id: 4, inputString: '' },
+    ]);
+
+    const result = await countUnrecoveredLegacyRows();
+
+    expect(result.totalUnrecovered).toBe(2);
+    const records = result.perTable.find(t => t.tableName === 'Records')!;
+    expect(records.unrecovered).toBe(2);
+  });
+
+  it('aggregates unrecovered counts across tables', async () => {
+    mockTables.records = createMockTable([
+      { id: 1, _legacyEncryptedPayload: 'a', inputString: '' },
+    ]);
+    mockTables.tags = createMockTable([
+      { id: 1, _legacyEncryptedPayload: 'b', name: '[encrypted]' },
+    ]);
+
+    const result = await countUnrecoveredLegacyRows();
+
+    expect(result.totalUnrecovered).toBe(2);
+  });
+
+  it('returns 0 when every marker row is already recovered', async () => {
+    mockTables.records = createMockTable([
+      { id: 1, _legacyEncryptedPayload: 'a', inputString: 'recovered1' },
+      { id: 2, _legacyEncryptedPayload: 'b', inputString: 'recovered2' },
+    ]);
+
+    const result = await countUnrecoveredLegacyRows();
+
+    expect(result.totalUnrecovered).toBe(0);
+  });
+
+  it('stops early when the signal is already aborted', async () => {
+    mockTables.records = createMockTable([
+      { id: 1, _legacyEncryptedPayload: 'a', inputString: '' },
+    ]);
+    const controller = new AbortController();
+    controller.abort();
+
+    const result = await countUnrecoveredLegacyRows(undefined, controller.signal);
+
+    expect(result.totalUnrecovered).toBe(0);
+    expect(result.perTable).toEqual([]);
+  });
+});
+
+describe('hasUnrecoveredLegacyData', () => {
+  beforeEach(() => {
+    setupAllEmpty();
+  });
+
+  it('returns true as soon as one unrecovered row exists', async () => {
+    mockTables.owners = createMockTable([
+      { id: 1, _legacyEncryptedPayload: 'a', name: '' },
+    ]);
+
+    expect(await hasUnrecoveredLegacyData()).toBe(true);
+  });
+
+  it('treats an [encrypted] sentinel as unrecovered', async () => {
+    mockTables.records = createMockTable([
+      { id: 1, _legacyEncryptedPayload: 'a', inputString: '[encrypted]' },
+    ]);
+
+    expect(await hasUnrecoveredLegacyData()).toBe(true);
+  });
+
+  it('returns false when every marker row is recovered', async () => {
+    mockTables.records = createMockTable([
+      { id: 1, _legacyEncryptedPayload: 'a', inputString: 'recovered' },
+    ]);
+
+    expect(await hasUnrecoveredLegacyData()).toBe(false);
+  });
+
+  it('returns false when there are no markers at all', async () => {
+    mockTables.records = createMockTable([
+      { id: 1, inputString: 'plain' },
+    ]);
+
+    expect(await hasUnrecoveredLegacyData()).toBe(false);
   });
 });
