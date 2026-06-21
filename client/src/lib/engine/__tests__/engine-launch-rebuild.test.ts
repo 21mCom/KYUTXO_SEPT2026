@@ -481,3 +481,85 @@ describe("launch with a stale-schema mirror (end-to-end)", () => {
     }
   });
 });
+
+describe("launch with a never-seeded (EMPTY) vault (end-to-end)", () => {
+  beforeEach(async () => {
+    await deleteIdb();
+    cancelSeeding();
+    __resetEngineMaintenanceForTests();
+    __setSeedChunkSizeForTests(2); // small batches so the seed actually streams
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+
+    // The live Dexie vault side of the freshness compare.
+    vi.mocked(getRecordsFingerprint).mockResolvedValue({ ...RECORDS_FP });
+    vi.mocked(getTransactionsFingerprint).mockResolvedValue({ ...TX_FP });
+    vi.mocked(getParticipantsFingerprint).mockResolvedValue({ ...PART_FP });
+  });
+
+  afterEach(async () => {
+    vi.useRealTimers();
+    __setSeedChunkSizeForTests();
+    __resetEngineMaintenanceForTests();
+    delete (window as unknown as { electronAPI?: unknown }).electronAPI;
+    await deleteIdb();
+    vi.restoreAllMocks();
+  });
+
+  it("when the FIRST seed of an empty vault errors mid-build the build fails closed: maintenance phase is 'error', seedFinish/clear are NOT called, and every scope stays on Dexie", async () => {
+    // A brand-new vault that has NEVER been seeded: the worker starts EMPTY with no
+    // stamped schema version. This is a DIFFERENT bootstrap entry point from the
+    // stale-schema reseed — runBootstrap takes the `snap.state === 'EMPTY'` branch
+    // and calls runSeed('seeding'), not runSeed('refreshing') — but the fail-closed
+    // contract on a mid-build error must be identical.
+    const worker = installMockWorker({ state: "EMPTY", schemaVersion: 0 });
+    await seedSourceIdb({
+      records: [1, 2, 3].map((id) => ({ id, inputString: `addr${id}` })),
+      blockchainTransactions: [1, 2].map((id) => ({ id, txid: `tx${id}` })),
+      transactionParticipants: [1, 2, 3, 4].map((id) => ({
+        id,
+        txid: "tx1",
+        role: "output",
+        address: "a",
+        amount: id,
+      })),
+    });
+
+    // With chunk size 2 and 3 records, the records table streams in two batches.
+    // Fail the SECOND seedBatch so the first batch has already been written — the
+    // failure is genuinely mid-build, not a refusal to start.
+    worker.seedBatchFailAtCall = 2;
+
+    // --- Launch: bootstrap sees an EMPTY vault and starts the FIRST build ------
+    // The hard error rejects seedAll, runSeed catches it and sets phase 'error',
+    // and runBootstrap resolves — so awaiting the bootstrap settles everything.
+    await __runEngineBootstrapForTests();
+
+    // --- Hard-error contract: fail closed, NOT a cancel -----------------------
+    // The empty-vault branch ran a 'seeding' build (not a 'refreshing' reseed). The
+    // throw propagated out of seedAllInner BEFORE the finish/abort decision, so
+    // neither the success path (seedFinish) nor the cancel path (clear) ran.
+    expect(worker.bridge.seedBegin).toHaveBeenCalledTimes(1);
+    expect(worker.bridge.seedBatch.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(worker.bridge.seedFinish).not.toHaveBeenCalled();
+    expect(worker.bridge.clear).not.toHaveBeenCalled(); // error != cancel
+    // The mirror was never finalized: it is left in the LOADING state seedBegin put
+    // it in (not EMPTY/READY) and no schema version was ever stamped.
+    expect(worker.schemaVersion).toBe(0);
+    expect(worker.state).toBe("LOADING");
+
+    // A failed first build must NOT claim 'ready' — it surfaces 'error' so the
+    // header shows fast mode unavailable and screens keep reading from Dexie.
+    expect(getEngineMaintenanceState().phase).toBe("error");
+    expect(engineSeedInFlight()).toBe(false);
+
+    // --- Every read gate scope stays on Dexie ---------------------------------
+    // The seed lock is released (engineSeedInFlight is false), so the gate probes
+    // the worker — which is still LOADING (never finalized) — and falls back.
+    for (const scope of ["records", "transactions", "allMirrors"] as const) {
+      await expect(evaluateEngineFreshness(scope)).resolves.toEqual({
+        useEngine: false,
+        reason: "not-ready",
+      });
+    }
+  });
+});
