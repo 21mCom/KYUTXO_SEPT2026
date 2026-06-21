@@ -40,6 +40,7 @@ vi.mock("@/lib/data/transaction-crud", () => ({
 import {
   cancelSeeding,
   engineSeedInFlight,
+  seedAll,
   subscribeEngineReadiness,
   __setSeedChunkSizeForTests,
 } from "../engine-client";
@@ -914,6 +915,168 @@ describe("launch with a never-seeded (EMPTY) vault (end-to-end)", () => {
       await expect(evaluateEngineFreshness(scope)).resolves.toEqual({
         useEngine: true,
         reason: "ready-fresh",
+      });
+    }
+  });
+});
+
+describe("launch while a seed is already streaming (end-to-end)", () => {
+  beforeEach(async () => {
+    await deleteIdb();
+    cancelSeeding();
+    __resetEngineMaintenanceForTests();
+    __setSeedChunkSizeForTests(2); // small batches so the seed actually streams
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+
+    // The live Dexie vault side of the freshness compare.
+    vi.mocked(getRecordsFingerprint).mockResolvedValue({ ...RECORDS_FP });
+    vi.mocked(getTransactionsFingerprint).mockResolvedValue({ ...TX_FP });
+    vi.mocked(getParticipantsFingerprint).mockResolvedValue({ ...PART_FP });
+  });
+
+  afterEach(async () => {
+    vi.useRealTimers();
+    __setSeedChunkSizeForTests();
+    __resetEngineMaintenanceForTests();
+    delete (window as unknown as { electronAPI?: unknown }).electronAPI;
+    await deleteIdb();
+    vi.restoreAllMocks();
+  });
+
+  it("attaches to an in-flight seed instead of re-probing status, then settles 'ready' when it finishes", async () => {
+    // A manual Diagnostics seed was kicked off just before launch and is still
+    // streaming. runBootstrap must take its EARLY in-flight branch: because
+    // engineSeedInFlight() is true it simply attaches to the running seed via
+    // runSeed('seeding') — it must NOT probe getEngineStatus and run the
+    // seed/refresh decision a second time, and it must NOT start a competing
+    // rebuild (which would corrupt the mirror behind the single seed lock).
+    const worker = installMockWorker({ state: "EMPTY", schemaVersion: 0 });
+    await seedSourceIdb({
+      records: [1, 2, 3].map((id) => ({ id, inputString: `addr${id}` })),
+      blockchainTransactions: [1, 2].map((id) => ({ id, txid: `tx${id}` })),
+      transactionParticipants: [1, 2, 3, 4].map((id) => ({
+        id,
+        txid: "tx1",
+        role: "output",
+        address: "a",
+        amount: id,
+      })),
+    });
+
+    // Kick off the manual seed via the engine-client seed path and hold it mid-
+    // stream so it is genuinely in flight when bootstrap runs.
+    worker.hold = deferred();
+    const manualSeed = seedAll();
+    await waitFor(() => worker.bridge.seedBatch.mock.calls.length >= 1, "manual seed first batch");
+    expect(engineSeedInFlight()).toBe(true);
+    expect(worker.bridge.seedBegin).toHaveBeenCalledTimes(1);
+
+    // Ignore any status() the manual seed path made; we only want to prove the
+    // BOOTSTRAP never touches status (it short-circuits on the in-flight seed).
+    worker.bridge.status.mockClear();
+
+    // --- Launch while the seed streams: bootstrap attaches to it ---------------
+    const bootstrap = __runEngineBootstrapForTests();
+
+    // It takes the in-flight branch (runSeed('seeding') → phase 'seeding'),
+    // attaching to the running seed rather than re-deciding from status.
+    await waitFor(
+      () => getEngineMaintenanceState().phase === "seeding",
+      "bootstrap to attach to the in-flight seed",
+    );
+    // The status-driven seed/refresh decision was skipped entirely...
+    expect(worker.bridge.status).not.toHaveBeenCalled();
+    // ...and no second rebuild was started: still the manual seed's single
+    // seedBegin, and the finish has not run yet (the seed is still held).
+    expect(worker.bridge.seedBegin).toHaveBeenCalledTimes(1);
+    expect(worker.bridge.seedFinish).not.toHaveBeenCalled();
+
+    // --- The held seed completes ----------------------------------------------
+    worker.hold.resolve();
+    await Promise.all([manualSeed, bootstrap]);
+
+    // Bootstrap settled to 'ready' off the attached seed's result. Exactly one
+    // rebuild ran (the manual seed's), finalized once, never cleared, and the
+    // bootstrap still never probed status to get there.
+    expect(getEngineMaintenanceState().phase).toBe("ready");
+    expect(worker.bridge.seedBegin).toHaveBeenCalledTimes(1);
+    expect(worker.bridge.seedFinish).toHaveBeenCalledTimes(1);
+    expect(worker.bridge.clear).not.toHaveBeenCalled();
+    expect(worker.bridge.status).not.toHaveBeenCalled();
+    // seedFinish marked the mirror READY and stamped the CURRENT schema version.
+    expect(worker.state).toBe("READY");
+    expect(worker.schemaVersion).toBe(CURRENT_SCHEMA);
+    expect(engineSeedInFlight()).toBe(false);
+
+    // --- The gate now switches every scope to the engine ----------------------
+    // The mirror is READY, current-schema, and its fingerprints match the live
+    // Dexie vault, so the freshness gate flips to the fast path for all scopes.
+    for (const scope of ["records", "transactions", "allMirrors"] as const) {
+      await expect(evaluateEngineFreshness(scope)).resolves.toEqual({
+        useEngine: true,
+        reason: "ready-fresh",
+      });
+    }
+  });
+
+  it("attaches to an in-flight seed that is then cancelled, settles 'idle', and keeps every scope on Dexie", async () => {
+    // Same attach branch as above, but the in-flight seed bootstrap attaches to
+    // is cancelled before it finishes. Because bootstrap shares that one seed
+    // run, it must settle to 'idle' (never 'ready') off the cancelled result —
+    // again without ever probing status to decide.
+    const worker = installMockWorker({ state: "EMPTY", schemaVersion: 0 });
+    await seedSourceIdb({
+      records: [1, 2, 3].map((id) => ({ id, inputString: `addr${id}` })),
+      blockchainTransactions: [1, 2].map((id) => ({ id, txid: `tx${id}` })),
+      transactionParticipants: [1, 2, 3, 4].map((id) => ({
+        id,
+        txid: "tx1",
+        role: "output",
+        address: "a",
+        amount: id,
+      })),
+    });
+
+    // Manual seed in flight, held mid-stream.
+    worker.hold = deferred();
+    const manualSeed = seedAll();
+    await waitFor(() => worker.bridge.seedBatch.mock.calls.length >= 1, "manual seed first batch");
+    expect(engineSeedInFlight()).toBe(true);
+
+    worker.bridge.status.mockClear();
+
+    // --- Launch attaches to the in-flight seed --------------------------------
+    const bootstrap = __runEngineBootstrapForTests();
+    await waitFor(
+      () => getEngineMaintenanceState().phase === "seeding",
+      "bootstrap to attach to the in-flight seed",
+    );
+    expect(worker.bridge.status).not.toHaveBeenCalled();
+
+    // --- Cancel mid-stream, then release the held batch -----------------------
+    cancelSeeding();
+    worker.hold.resolve();
+    await Promise.all([manualSeed, bootstrap]);
+
+    // Cancel contract: the partial mirror was dropped, never finished, and the
+    // attached bootstrap settled to 'idle' rather than claiming 'ready'.
+    expect(worker.bridge.clear).toHaveBeenCalledTimes(1);
+    expect(worker.bridge.seedFinish).not.toHaveBeenCalled();
+    expect(worker.bridge.seedBegin).toHaveBeenCalledTimes(1);
+    expect(worker.state).toBe("EMPTY");
+    expect(worker.schemaVersion).toBe(0);
+    expect(getEngineMaintenanceState().phase).toBe("idle");
+    expect(engineSeedInFlight()).toBe(false);
+    // Still never probed status to reach the idle settle.
+    expect(worker.bridge.status).not.toHaveBeenCalled();
+
+    // --- Every read gate scope stays on Dexie ---------------------------------
+    // The mirror is EMPTY (cleared), so the readiness probe fails before any
+    // fingerprint compare — useEngine:false for all three scopes.
+    for (const scope of ["records", "transactions", "allMirrors"] as const) {
+      await expect(evaluateEngineFreshness(scope)).resolves.toEqual({
+        useEngine: false,
+        reason: "not-ready",
       });
     }
   });
