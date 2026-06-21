@@ -145,6 +145,11 @@ interface MockWorker {
   schemaVersion: number;
   /** When set, the first seedBatch awaits this gate — holding the seed mid-flight. */
   hold: Deferred | null;
+  /**
+   * 1-indexed seedBatch call number at which the worker returns an ERROR envelope
+   * (simulating a hard rebuild failure mid-stream). null = never fail.
+   */
+  seedBatchFailAtCall: number | null;
   bridge: {
     init: ReturnType<typeof vi.fn>;
     status: ReturnType<typeof vi.fn>;
@@ -166,6 +171,7 @@ function installMockWorker(initial: { state: EngineState; schemaVersion: number 
     state: initial.state,
     schemaVersion: initial.schemaVersion,
     hold: null,
+    seedBatchFailAtCall: null,
     // assigned below
     bridge: undefined as unknown as MockWorker["bridge"],
   };
@@ -184,6 +190,17 @@ function installMockWorker(initial: { state: EngineState; schemaVersion: number 
     }),
     seedBatch: vi.fn(async () => {
       if (worker.hold) await worker.hold.promise; // hold the seed mid-flight
+      if (
+        worker.seedBatchFailAtCall !== null &&
+        worker.bridge.seedBatch.mock.calls.length >= worker.seedBatchFailAtCall
+      ) {
+        // Hard rebuild failure mid-stream: the worker rejects this batch. This is
+        // NOT a cancel — seedAllInner must propagate the throw without clear().
+        return {
+          ok: false,
+          error: "seedBatch failed (simulated mid-rebuild error)",
+        } as EngineEnvelope;
+      }
       return { ok: true } as EngineEnvelope;
     }),
     // Finalize marks the rebuilt mirror READY and stamps the CURRENT schema.
@@ -402,6 +419,60 @@ describe("launch with a stale-schema mirror (end-to-end)", () => {
     // --- Every read gate scope stays on Dexie ---------------------------------
     // The mirror is EMPTY (cleared), so the gate's readiness probe fails before it
     // ever compares fingerprints — useEngine:false for all three scopes.
+    for (const scope of ["records", "transactions", "allMirrors"] as const) {
+      await expect(evaluateEngineFreshness(scope)).resolves.toEqual({
+        useEngine: false,
+        reason: "not-ready",
+      });
+    }
+  });
+
+  it("when a seedBatch errors mid-rebuild the reseed fails closed: maintenance phase is 'error', seedFinish/clear are NOT called, and every scope stays on Dexie", async () => {
+    // Same stale-schema launch as above: a valid, indexed mirror built by the
+    // PREVIOUS schema version. Bootstrap detects the mismatch and starts a reseed
+    // — but this time the worker throws a HARD ERROR partway through the stream.
+    const worker = installMockWorker({ state: "READY", schemaVersion: OLD_SCHEMA });
+    await seedSourceIdb({
+      records: [1, 2, 3].map((id) => ({ id, inputString: `addr${id}` })),
+      blockchainTransactions: [1, 2].map((id) => ({ id, txid: `tx${id}` })),
+      transactionParticipants: [1, 2, 3, 4].map((id) => ({
+        id,
+        txid: "tx1",
+        role: "output",
+        address: "a",
+        amount: id,
+      })),
+    });
+
+    // With chunk size 2 and 3 records, the records table streams in two batches.
+    // Fail the SECOND seedBatch so the first batch has already been written — the
+    // failure is genuinely mid-stream, not a refusal to start.
+    worker.seedBatchFailAtCall = 2;
+
+    // --- Launch: bootstrap detects the schema mismatch and starts a reseed -----
+    // The hard error rejects seedAll, runSeed catches it and sets phase 'error',
+    // and runBootstrap resolves — so awaiting the bootstrap settles everything.
+    await __runEngineBootstrapForTests();
+
+    // --- Hard-error contract: fail closed, NOT a cancel -----------------------
+    // The throw propagated out of seedAllInner BEFORE the finish/abort decision, so
+    // neither the success path (seedFinish) nor the cancel path (clear) ran.
+    expect(worker.bridge.seedBatch.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(worker.bridge.seedFinish).not.toHaveBeenCalled();
+    expect(worker.bridge.clear).not.toHaveBeenCalled(); // error != cancel
+    // The mirror was never finalized: schema stays at the old version, and the
+    // worker is left in the LOADING state seedBegin put it in (not EMPTY/READY).
+    expect(worker.schemaVersion).toBe(OLD_SCHEMA);
+    expect(worker.state).toBe("LOADING");
+
+    // A failed reseed must NOT claim 'ready' — it surfaces 'error' so the header
+    // shows fast mode unavailable and screens keep reading from Dexie.
+    expect(getEngineMaintenanceState().phase).toBe("error");
+    expect(engineSeedInFlight()).toBe(false);
+
+    // --- Every read gate scope stays on Dexie ---------------------------------
+    // The seed lock is released (engineSeedInFlight is false), so the gate probes
+    // the worker — which is still LOADING (never finalized) — and falls back.
     for (const scope of ["records", "transactions", "allMirrors"] as const) {
       await expect(evaluateEngineFreshness(scope)).resolves.toEqual({
         useEngine: false,
