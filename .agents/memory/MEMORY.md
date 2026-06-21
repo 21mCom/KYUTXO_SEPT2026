@@ -14,3 +14,4 @@
 - [Engine probe timeouts](engine-probe-timeouts.md) — single-threaded worker blocks on seed finalize; bound EVERY probe + short-circuit gate during seed; readiness poll must time out or it silently baselines ready→never re-queries.
 - [Engine SQL in JS templates](engine-sql-in-js-templates.md) — JS template literals eat backslashes before SQLite; double them, escape `\` before `"`, verify EMITTED SQL; prefer json_quote.
 - [Engine auto-maintenance policy](engine-auto-maintenance-policy.md) — launch bootstrap auto-seeds/refreshes mirror; refresh at launch only (never per write); rebuild READY only on stale, not transient error; cancelled seed → idle not ready.
+- [legacy-decrypt marker retention](legacy-decrypt-marker-retention.md) — decrypt KEEPS _legacyEncryptedPayload after restoring plaintext (strip step removes later); "locked" = payload AND blank inputString, never marker alone.

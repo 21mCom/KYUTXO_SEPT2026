@@ -60,6 +60,7 @@ import PrivacyAudit from "@/pages/PrivacyAudit";
 import BalanceOverview from "@/pages/BalanceOverview";
 import NetworkAnalysis from "@/pages/NetworkAnalysis";
 import EngineDiagnostics from "@/pages/EngineDiagnostics";
+import DatabaseDoctor from "@/pages/DatabaseDoctor";
 import NotFound from "@/pages/not-found";
 
 function AppRoutes() {
@@ -111,6 +112,7 @@ function AppRoutes() {
       <Route path="/balance" component={BalanceOverview} />
       <Route path="/network-analysis" component={NetworkAnalysis} />
       <Route path="/engine-diagnostics" component={EngineDiagnostics} />
+      <Route path="/database-doctor" component={DatabaseDoctor} />
       <Route component={NotFound} />
     </Switch>
   );

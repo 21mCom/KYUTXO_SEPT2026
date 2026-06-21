@@ -1,5 +1,6 @@
 import { useState, useRef } from "react";
-import { Moon, Eye, Database, Plus, Trash2, Pencil, AlertTriangle, Upload, RefreshCw, Loader2, Paperclip, KeyRound, Shield, Download } from "lucide-react";
+import { Link } from "wouter";
+import { Moon, Eye, Database, Plus, Trash2, Pencil, AlertTriangle, Upload, RefreshCw, Loader2, Paperclip, KeyRound, Shield, Download, Stethoscope, ChevronRight } from "lucide-react";
 import { isElectron, getElectronAPI } from "@/lib/electron";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
@@ -1875,6 +1876,27 @@ export default function SettingsPage() {
               <span className="text-sm text-muted-foreground">Storage Used</span>
               <span className="text-sm font-medium" data-testid="text-storage">2.1 MB</span>
             </div>
+          </CardContent>
+        </Card>
+
+        <Card data-testid="card-database-doctor-link">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Stethoscope className="h-5 w-5" />
+              Database Doctor
+            </CardTitle>
+            <CardDescription>
+              A safe, read-only health check that tells you in plain language whether your records
+              are actually there and readable — or still locked from an unfinished migration.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Link href="/database-doctor">
+              <Button variant="outline" data-testid="button-open-database-doctor">
+                Open Database Doctor
+                <ChevronRight className="h-4 w-4" />
+              </Button>
+            </Link>
           </CardContent>
         </Card>
 
