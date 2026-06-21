@@ -628,4 +628,72 @@ describe("launch with a never-seeded (EMPTY) vault (end-to-end)", () => {
       });
     }
   });
+
+  it("after a cancelled first build the next launch sees the still-EMPTY vault, completes the build, and flips every scope to the engine", async () => {
+    // Continuation of the cancel scenario above: cancelling the FIRST build drops
+    // the partial mirror (clear() → worker EMPTY) and settles maintenance to 'idle'.
+    // The vault was never persisted, so it is STILL empty on the next launch. This
+    // test proves the subsequent bootstrap recovers cleanly: it takes the
+    // `snap.state === 'EMPTY'` branch AGAIN and this time runs the first build to
+    // completion (seedBegin + seedFinish, worker READY, schema stamped), flipping
+    // every read-gate scope to the fast path.
+    const worker = installMockWorker({ state: "EMPTY", schemaVersion: 0 });
+    await seedSourceIdb({
+      records: [1, 2, 3].map((id) => ({ id, inputString: `addr${id}` })),
+      blockchainTransactions: [1, 2].map((id) => ({ id, txid: `tx${id}` })),
+      transactionParticipants: [1, 2, 3, 4].map((id) => ({
+        id,
+        txid: "tx1",
+        role: "output",
+        address: "a",
+        amount: id,
+      })),
+    });
+
+    // --- First launch: start the build, then cancel it mid-stream -------------
+    worker.hold = deferred();
+    const firstBootstrap = __runEngineBootstrapForTests();
+    await waitFor(() => worker.bridge.seedBatch.mock.calls.length >= 1, "first seed batch");
+    expect(getEngineMaintenanceState().phase).toBe("seeding");
+
+    cancelSeeding();
+    worker.hold.resolve();
+    await firstBootstrap;
+
+    // Sanity: the cancel dropped the partial mirror and settled to 'idle'. The
+    // vault is still EMPTY (clear() left it so) with no stamped schema version.
+    expect(worker.bridge.clear).toHaveBeenCalledTimes(1);
+    expect(worker.bridge.seedFinish).not.toHaveBeenCalled();
+    expect(worker.state).toBe("EMPTY");
+    expect(worker.schemaVersion).toBe(0);
+    expect(getEngineMaintenanceState().phase).toBe("idle");
+
+    // --- Second launch: still EMPTY, build to completion (no hold/cancel) ------
+    // Reset maintenance like a fresh app session. The worker is reused so its EMPTY
+    // state carries over — exactly what a real next launch would observe.
+    __resetEngineMaintenanceForTests();
+    worker.hold = null; // let the build stream straight through this time
+    await __runEngineBootstrapForTests();
+
+    // The EMPTY branch ran the first build through to the finish this time: a single
+    // seedBegin/seedFinish pair (clear is still at its one cancel-time call).
+    expect(worker.bridge.seedBegin).toHaveBeenCalledTimes(2);
+    expect(worker.bridge.seedFinish).toHaveBeenCalledTimes(1);
+    expect(worker.bridge.clear).toHaveBeenCalledTimes(1);
+    // seedFinish marked the mirror READY and stamped the CURRENT schema version.
+    expect(worker.state).toBe("READY");
+    expect(worker.schemaVersion).toBe(CURRENT_SCHEMA);
+    expect(getEngineMaintenanceState().phase).toBe("ready");
+    expect(engineSeedInFlight()).toBe(false);
+
+    // --- The gate now switches every scope to the engine ----------------------
+    // The mirror is READY and its fingerprints match the live Dexie vault, so the
+    // freshness gate flips to the fast path for all three scopes.
+    for (const scope of ["records", "transactions", "allMirrors"] as const) {
+      await expect(evaluateEngineFreshness(scope)).resolves.toEqual({
+        useEngine: true,
+        reason: "ready-fresh",
+      });
+    }
+  });
 });
