@@ -840,4 +840,81 @@ describe("launch with a never-seeded (EMPTY) vault (end-to-end)", () => {
       });
     }
   });
+
+  it("after a hard-error first build the next launch sees the still-EMPTY vault, completes the build, and flips every scope to the engine", async () => {
+    // Continuation of the hard-error scenario above: an empty-vault FIRST build threw
+    // mid-stream, so maintenance settled to 'error' and — unlike the cancel path,
+    // which clear()s the worker to EMPTY explicitly — the worker was left LOADING
+    // (never finalized, never cleared) and no schema version was ever stamped. The
+    // next launch must still recover.
+    const worker = installMockWorker({ state: "EMPTY", schemaVersion: 0 });
+    await seedSourceIdb({
+      records: [1, 2, 3].map((id) => ({ id, inputString: `addr${id}` })),
+      blockchainTransactions: [1, 2].map((id) => ({ id, txid: `tx${id}` })),
+      transactionParticipants: [1, 2, 3, 4].map((id) => ({
+        id,
+        txid: "tx1",
+        role: "output",
+        address: "a",
+        amount: id,
+      })),
+    });
+
+    // --- First launch: empty-vault first build throws mid-stream ---------------
+    // Same hard-error flow as the previous test: with chunk size 2 and 3 records,
+    // failing the SECOND seedBatch means the first batch was already written — a
+    // genuine mid-build failure, not a refusal to start.
+    worker.seedBatchFailAtCall = 2;
+    await __runEngineBootstrapForTests();
+
+    // Sanity: failed closed. The mirror was never finalized (no seedFinish), never
+    // dropped (no clear), and the worker is left LOADING with no stamped schema.
+    expect(worker.bridge.seedFinish).not.toHaveBeenCalled();
+    expect(worker.bridge.clear).not.toHaveBeenCalled();
+    expect(worker.state).toBe("LOADING");
+    expect(worker.schemaVersion).toBe(0);
+    expect(getEngineMaintenanceState().phase).toBe("error");
+
+    // --- Second launch: a fresh process reopens the unfinalized empty mirror -----
+    // In production the next launch is a brand-new worker PROCESS, so the in-memory
+    // LOADING state of the crashed worker is gone — the comment in runBootstrap is
+    // explicit that LOADING-without-our-lock is unreachable at launch. Unlike the
+    // stale-schema hard-error case (where the surviving on-disk mirror reopens as a
+    // valid, indexed READY mirror still stamped with the OLD schema), a first build
+    // that never reached seedFinish leaves NOTHING durable: there are no committed,
+    // indexed mirror tables and no schema stamp, so a fresh worker reopens it as an
+    // EMPTY vault (schemaVersion 0). We model that restart by putting the reused mock
+    // back to EMPTY/schemaVersion 0 (it already is, after the failed build left it
+    // LOADING in-memory only) and clearing the fail flag so the build streams through.
+    worker.seedBatchFailAtCall = null;
+    worker.hold = null;
+    worker.state = "EMPTY";
+    worker.schemaVersion = 0;
+
+    __resetEngineMaintenanceForTests();
+    await __runEngineBootstrapForTests();
+
+    // The second launch takes the `snap.state === 'EMPTY'` branch (runSeed('seeding'),
+    // NOT the 'refreshing' reseed branch the stale-schema case takes, and NOT the idle
+    // LOADING branch — a fresh process never sees LOADING at launch) and runs the
+    // first build to completion.
+    expect(worker.bridge.seedBegin).toHaveBeenCalledTimes(2); // first (failed) + this one
+    expect(worker.bridge.seedFinish).toHaveBeenCalledTimes(1); // first build never finished
+    expect(worker.bridge.clear).not.toHaveBeenCalled(); // error path never clears
+    // seedFinish marked the mirror READY and stamped the CURRENT schema version.
+    expect(worker.state).toBe("READY");
+    expect(worker.schemaVersion).toBe(CURRENT_SCHEMA);
+    expect(getEngineMaintenanceState().phase).toBe("ready");
+    expect(engineSeedInFlight()).toBe(false);
+
+    // --- The gate now switches every scope to the engine ----------------------
+    // The mirror is READY, current-schema, and its fingerprints match the live Dexie
+    // vault, so the freshness gate flips to the fast path for all three scopes.
+    for (const scope of ["records", "transactions", "allMirrors"] as const) {
+      await expect(evaluateEngineFreshness(scope)).resolves.toEqual({
+        useEngine: true,
+        reason: "ready-fresh",
+      });
+    }
+  });
 });
