@@ -348,4 +348,65 @@ describe("launch with a stale-schema mirror (end-to-end)", () => {
     expect(worker.bridge.seedBegin).toHaveBeenCalledTimes(1);
     expect(worker.bridge.seedFinish).toHaveBeenCalledTimes(1);
   });
+
+  it("when the launch reseed is cancelled mid-stream the mirror is dropped, maintenance settles to 'idle', and every scope stays on Dexie", async () => {
+    // Same stale-schema launch as above: a valid, indexed mirror built by the
+    // PREVIOUS schema version. Bootstrap detects the mismatch and starts a reseed
+    // — but this time the user cancels before it finishes.
+    const worker = installMockWorker({ state: "READY", schemaVersion: OLD_SCHEMA });
+    await seedSourceIdb({
+      records: [1, 2, 3].map((id) => ({ id, inputString: `addr${id}` })),
+      blockchainTransactions: [1, 2].map((id) => ({ id, txid: `tx${id}` })),
+      transactionParticipants: [1, 2, 3, 4].map((id) => ({
+        id,
+        txid: "tx1",
+        role: "output",
+        address: "a",
+        amount: id,
+      })),
+    });
+
+    // Hold the first seedBatch so we can flip the cancel flag while the seed is
+    // genuinely mid-stream (exactly like the engine-client-seed cancel test).
+    worker.hold = deferred();
+
+    // --- Launch: bootstrap detects the schema mismatch and starts a reseed -----
+    const bootstrap = __runEngineBootstrapForTests();
+
+    // Wait until the seed has actually streamed its first batch to the worker —
+    // that batch is now parked on worker.hold, so the seed is mid-rebuild.
+    await waitFor(() => worker.bridge.seedBatch.mock.calls.length >= 1, "first seed batch");
+    expect(engineSeedInFlight()).toBe(true);
+    expect(getEngineMaintenanceState().phase).toBe("refreshing");
+
+    // --- User cancels mid-stream ----------------------------------------------
+    // The cancel flag is read at the TOP of the seed loop, BEFORE the next batch,
+    // so releasing the held batch lets the loop come back around, observe the
+    // cancel, and abort via clear() instead of finishing.
+    cancelSeeding();
+    worker.hold.resolve();
+    await bootstrap;
+
+    // --- Cancel contract: partial mirror dropped, NEVER finished --------------
+    expect(worker.bridge.clear).toHaveBeenCalledTimes(1);
+    expect(worker.bridge.seedFinish).not.toHaveBeenCalled();
+    // clear() left the worker EMPTY and the schema was never re-stamped.
+    expect(worker.state).toBe("EMPTY");
+    expect(worker.schemaVersion).toBe(OLD_SCHEMA);
+
+    // A cancelled reseed must NOT claim 'ready' — it settles to 'idle' so screens
+    // keep falling back to Dexie rather than reading a half-built/empty mirror.
+    expect(getEngineMaintenanceState().phase).toBe("idle");
+    expect(engineSeedInFlight()).toBe(false);
+
+    // --- Every read gate scope stays on Dexie ---------------------------------
+    // The mirror is EMPTY (cleared), so the gate's readiness probe fails before it
+    // ever compares fingerprints — useEngine:false for all three scopes.
+    for (const scope of ["records", "transactions", "allMirrors"] as const) {
+      await expect(evaluateEngineFreshness(scope)).resolves.toEqual({
+        useEngine: false,
+        reason: "not-ready",
+      });
+    }
+  });
 });
