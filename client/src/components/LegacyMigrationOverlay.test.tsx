@@ -173,6 +173,27 @@ describe("LegacyMigrationOverlay still-locked warning", () => {
   });
 });
 
+describe("LegacyMigrationOverlay empty state", () => {
+  it("renders nothing when no progress, result or file-decrypt state is present", () => {
+    const { container } = render(<LegacyMigrationOverlay />);
+
+    expect(container.firstChild).toBeNull();
+    expect(screen.queryByTestId("legacy-migration-overlay")).toBeNull();
+    expect(screen.queryByTestId("file-decrypt-overlay")).toBeNull();
+  });
+
+  it("renders nothing after the result overlay is dismissed even while state persists", () => {
+    renderWithResult({ totalDecrypted: 12, totalFailed: 0, stillLocked: 0, verificationFailed: false });
+
+    expect(screen.getByTestId("legacy-migration-overlay")).toBeTruthy();
+
+    fireEvent.click(screen.getByTestId("button-dismiss-migration"));
+
+    expect(screen.queryByTestId("legacy-migration-overlay")).toBeNull();
+    expect(screen.queryByTestId("file-decrypt-overlay")).toBeNull();
+  });
+});
+
 describe("LegacyMigrationOverlay migration-progress screen", () => {
   it("shows percent, record counts and table count for a determinate migration", () => {
     renderWithProgress({
