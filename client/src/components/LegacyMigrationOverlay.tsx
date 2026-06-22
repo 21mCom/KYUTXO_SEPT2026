@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Unlock, Download, ListTree, Loader2 } from "lucide-react";
 import { useAdaptiveLocation } from "@/lib/hashLocation";
 import { countUnrecoveredLegacyRows, type LockedRecordRef } from "@/lib/legacy-decrypt";
+import { LockedRecordsList } from "@/components/LockedRecordsList";
 
 export function LegacyMigrationOverlay() {
   const { legacyMigrationProgress, legacyMigrationResult, fileDecryptProgress } = useAuth();
@@ -89,15 +90,6 @@ export function LegacyMigrationOverlay() {
         : scannedTruncated;
     const hasInlineList = lockedList.length > 0;
     const hasScannedEmpty = presetLocked.length === 0 && scannedLocked !== null && scannedLocked.length === 0;
-
-    const groupedLocked = Array.from(
-      lockedList.reduce((map, ref) => {
-        const ids = map.get(ref.tableName) ?? [];
-        ids.push(ref.id);
-        map.set(ref.tableName, ids);
-        return map;
-      }, new Map<string, number[]>()),
-    );
 
     const runOnDemandScan = async () => {
       setIsScanning(true);
@@ -211,29 +203,11 @@ export function LegacyMigrationOverlay() {
                     </Button>
                   </div>
                   {showLockedList && (
-                    <div
-                      className="max-h-48 overflow-y-auto rounded-md border border-border bg-background p-3 text-left"
-                      data-testid="list-locked-records"
-                    >
-                      <div className="space-y-2">
-                        {groupedLocked.map(([tableName, ids]) => (
-                          <div key={tableName} data-testid={`group-locked-${tableName}`}>
-                            <p className="text-xs font-medium text-foreground">
-                              {tableName} ({ids.length})
-                            </p>
-                            <p className="text-xs text-muted-foreground break-words">
-                              {ids.map((id) => `#${id}`).join(", ")}
-                            </p>
-                          </div>
-                        ))}
-                      </div>
-                      {lockedTruncated && (
-                        <p className="mt-2 text-xs text-muted-foreground" data-testid="text-locked-truncated">
-                          Showing the first {lockedList.length} locked records — more remain. Download
-                          the list or open Restore Locked Data to recover them all.
-                        </p>
-                      )}
-                    </div>
+                    <LockedRecordsList
+                      lockedRecords={lockedList}
+                      truncated={lockedTruncated}
+                      beforeNavigate={() => setDismissedMigrationResult(true)}
+                    />
                   )}
                 </div>
               ) : (

@@ -25,7 +25,9 @@ import {
   type LegacyDecryptProgress,
   type LegacyDecryptResult,
   type UnrecoveredScanProgress,
+  type LockedRecordRef,
 } from "@/lib/legacy-decrypt";
+import { LockedRecordsList } from "@/components/LockedRecordsList";
 import {
   isEngineAvailable,
   engineSeedInFlight,
@@ -39,6 +41,8 @@ interface RecoverySummary {
   decrypt: LegacyDecryptResult;
   fullSuccess: boolean;
   remainingUnrecovered: number;
+  lockedRecords: LockedRecordRef[];
+  lockedRecordsTruncated: boolean;
   engineReseeded: boolean;
   engineReseedError: string | null;
 }
@@ -141,6 +145,8 @@ export default function LegacyRecoveryPanel() {
         decrypt,
         fullSuccess,
         remainingUnrecovered: scan.totalUnrecovered,
+        lockedRecords: scan.lockedRecords,
+        lockedRecordsTruncated: scan.lockedRecordsTruncated,
         engineReseeded,
         engineReseedError,
       });
@@ -333,6 +339,21 @@ export default function LegacyRecoveryPanel() {
                 )}
               </div>
             </div>
+            {summary.lockedRecords.length > 0 && (
+              <div className="space-y-2">
+                <p className="text-sm font-medium text-foreground">
+                  Records still locked
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  Open a record below to confirm it unlocked, or run "Restore
+                  locked data" again to retry the rest.
+                </p>
+                <LockedRecordsList
+                  lockedRecords={summary.lockedRecords}
+                  truncated={summary.lockedRecordsTruncated}
+                />
+              </div>
+            )}
           </div>
         )}
       </CardContent>
