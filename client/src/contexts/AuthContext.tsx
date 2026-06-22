@@ -29,7 +29,7 @@ import { repairInputStringLower, countRecords } from '@/lib/data/record-crud';
 import { countAttachments } from '@/lib/data/attachments-crud';
 import { countEvidenceAttachments } from '@/lib/data/evidence-crud';
 import { migrateAttachmentPaths } from '@/lib/attachments';
-import { decryptLegacyRecords, getTotalTableCount, countUnrecoveredLegacyRows, type LegacyDecryptProgress } from '@/lib/legacy-decrypt';
+import { decryptLegacyRecords, getTotalTableCount, countUnrecoveredLegacyRows, type LegacyDecryptProgress, type LockedRecordRef } from '@/lib/legacy-decrypt';
 import { decryptLegacyAttachmentFiles, type FileDecryptProgress } from '@/lib/legacy-decrypt-files';
 import { getActivityBus } from '@/lib/activity-bus';
 
@@ -42,7 +42,7 @@ interface AuthContextType {
   isLoading: boolean;
   isMigrating: boolean;
   legacyMigrationProgress: LegacyDecryptProgress | null;
-  legacyMigrationResult: { totalDecrypted: number; totalFailed: number; unexpectedError?: boolean; stillLocked?: number; verificationFailed?: boolean } | null;
+  legacyMigrationResult: { totalDecrypted: number; totalFailed: number; unexpectedError?: boolean; stillLocked?: number; verificationFailed?: boolean; lockedRecords?: LockedRecordRef[]; lockedRecordsTruncated?: boolean } | null;
   fileDecryptProgress: FileDecryptProgress | null;
 }
 
@@ -58,7 +58,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // and reintroduce the IndexedDB contention this migration hardening avoids.
   const migrationInFlightRef = useRef(false);
   const [legacyMigrationProgress, setLegacyMigrationProgress] = useState<LegacyDecryptProgress | null>(null);
-  const [legacyMigrationResult, setLegacyMigrationResult] = useState<{ totalDecrypted: number; totalFailed: number; unexpectedError?: boolean; stillLocked?: number; verificationFailed?: boolean } | null>(null);
+  const [legacyMigrationResult, setLegacyMigrationResult] = useState<{ totalDecrypted: number; totalFailed: number; unexpectedError?: boolean; stillLocked?: number; verificationFailed?: boolean; lockedRecords?: LockedRecordRef[]; lockedRecordsTruncated?: boolean } | null>(null);
   const [fileDecryptProgress, setFileDecryptProgress] = useState<FileDecryptProgress | null>(null);
 
   useEffect(() => {
@@ -207,12 +207,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // panel. A console.warn alone is invisible to the user.
       let stillLocked = 0;
       let verificationFailed = false;
+      let lockedRecords: LockedRecordRef[] = [];
+      let lockedRecordsTruncated = false;
       if (decryptSucceeded) {
         try {
           const scan = await countUnrecoveredLegacyRows();
           if (scan.totalUnrecovered > 0) {
             metadataFullyComplete = false;
             stillLocked = scan.totalUnrecovered;
+            lockedRecords = scan.lockedRecords;
+            lockedRecordsTruncated = scan.lockedRecordsTruncated;
             console.warn(
               `[LegacyDecrypt] Verification found ${scan.totalUnrecovered} still-locked record(s) after decrypt — not marking complete, will retry next login`,
             );
@@ -232,6 +236,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         totalFailed: result.totalFailed + result.tableErrors.length,
         stillLocked,
         verificationFailed,
+        lockedRecords,
+        lockedRecordsTruncated,
       });
 
       if (metadataFullyComplete) {

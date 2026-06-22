@@ -1,13 +1,19 @@
 import { useState } from "react";
 import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
-import { Unlock } from "lucide-react";
+import { Unlock, Download, ListTree, Loader2 } from "lucide-react";
 import { useAdaptiveLocation } from "@/lib/hashLocation";
+import { countUnrecoveredLegacyRows, type LockedRecordRef } from "@/lib/legacy-decrypt";
 
 export function LegacyMigrationOverlay() {
   const { legacyMigrationProgress, legacyMigrationResult, fileDecryptProgress } = useAuth();
   const [, setLocation] = useAdaptiveLocation();
   const [dismissedMigrationResult, setDismissedMigrationResult] = useState(false);
+  const [showLockedList, setShowLockedList] = useState(false);
+  const [scannedLocked, setScannedLocked] = useState<LockedRecordRef[] | null>(null);
+  const [scannedTruncated, setScannedTruncated] = useState(false);
+  const [isScanning, setIsScanning] = useState(false);
+  const [scanFailed, setScanFailed] = useState(false);
 
   if (dismissedMigrationResult) {
     return null;
@@ -72,6 +78,64 @@ export function LegacyMigrationOverlay() {
       setLocation("/settings");
     };
 
+    // The login verification scan already enumerated the locked rows (capped),
+    // so prefer that list. When the scan itself failed (verificationFailed) we
+    // have nothing, so offer an on-demand re-scan that runs entirely locally.
+    const presetLocked = legacyMigrationResult.lockedRecords ?? [];
+    const lockedList = presetLocked.length > 0 ? presetLocked : (scannedLocked ?? []);
+    const lockedTruncated =
+      presetLocked.length > 0
+        ? !!legacyMigrationResult.lockedRecordsTruncated
+        : scannedTruncated;
+    const hasInlineList = lockedList.length > 0;
+    const hasScannedEmpty = presetLocked.length === 0 && scannedLocked !== null && scannedLocked.length === 0;
+
+    const groupedLocked = Array.from(
+      lockedList.reduce((map, ref) => {
+        const ids = map.get(ref.tableName) ?? [];
+        ids.push(ref.id);
+        map.set(ref.tableName, ids);
+        return map;
+      }, new Map<string, number[]>()),
+    );
+
+    const runOnDemandScan = async () => {
+      setIsScanning(true);
+      setScanFailed(false);
+      try {
+        const scan = await countUnrecoveredLegacyRows();
+        setScannedLocked(scan.lockedRecords);
+        setScannedTruncated(scan.lockedRecordsTruncated);
+        setShowLockedList(true);
+      } catch {
+        setScanFailed(true);
+      } finally {
+        setIsScanning(false);
+      }
+    };
+
+    const downloadLockedList = () => {
+      const lines = [
+        "KYUTXO — Records still locked after migration",
+        `Generated: ${new Date().toISOString()}`,
+        `Total listed: ${lockedList.length}${
+          lockedTruncated ? " (list truncated; more records are locked than shown)" : ""
+        }`,
+        "",
+        "Table\tRecord ID",
+        ...lockedList.map((ref) => `${ref.tableName}\t${ref.id}`),
+      ];
+      const blob = new Blob([lines.join("\n")], { type: "text/plain" });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `kyutxo-locked-records-${new Date().toISOString().slice(0, 10)}.txt`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      document.body.removeChild(anchor);
+      URL.revokeObjectURL(url);
+    };
+
     return (
       <div className="fixed inset-0 z-[9999] bg-background/95 flex items-center justify-center" data-testid="legacy-migration-overlay">
         <div className="text-center max-w-md space-y-4 p-6">
@@ -119,6 +183,88 @@ export function LegacyMigrationOverlay() {
                 Open <span className="font-medium">Settings → "Restore Locked Data"</span> and enter
                 your vault password to recover the rest. Your data is safe in the meantime.
               </p>
+
+              {/* Tell the user exactly which records stayed locked. The locked
+                  values can never be shown (they are the data we failed to
+                  decrypt), so we surface each row's table + id — enough to find
+                  and verify it after recovery. Everything here runs locally. */}
+              {hasInlineList ? (
+                <div className="space-y-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => setShowLockedList((v) => !v)}
+                      data-testid="button-toggle-locked-list"
+                    >
+                      <ListTree className="h-4 w-4" />
+                      {showLockedList ? "Hide locked records" : "Show which records are locked"}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={downloadLockedList}
+                      data-testid="button-download-locked-list"
+                    >
+                      <Download className="h-4 w-4" />
+                      Download list
+                    </Button>
+                  </div>
+                  {showLockedList && (
+                    <div
+                      className="max-h-48 overflow-y-auto rounded-md border border-border bg-background p-3 text-left"
+                      data-testid="list-locked-records"
+                    >
+                      <div className="space-y-2">
+                        {groupedLocked.map(([tableName, ids]) => (
+                          <div key={tableName} data-testid={`group-locked-${tableName}`}>
+                            <p className="text-xs font-medium text-foreground">
+                              {tableName} ({ids.length})
+                            </p>
+                            <p className="text-xs text-muted-foreground break-words">
+                              {ids.map((id) => `#${id}`).join(", ")}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+                      {lockedTruncated && (
+                        <p className="mt-2 text-xs text-muted-foreground" data-testid="text-locked-truncated">
+                          Showing the first {lockedList.length} locked records — more remain. Download
+                          the list or open Restore Locked Data to recover them all.
+                        </p>
+                      )}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={runOnDemandScan}
+                    disabled={isScanning}
+                    data-testid="button-scan-locked-list"
+                  >
+                    {isScanning ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <ListTree className="h-4 w-4" />
+                    )}
+                    {isScanning ? "Scanning…" : "List locked records"}
+                  </Button>
+                  {scanFailed && (
+                    <p className="text-xs text-destructive" data-testid="text-scan-failed">
+                      We couldn't scan for locked records right now. Try again, or open Restore Locked Data.
+                    </p>
+                  )}
+                  {hasScannedEmpty && !scanFailed && (
+                    <p className="text-xs text-muted-foreground" data-testid="text-scan-empty">
+                      A fresh scan found no still-locked records.
+                    </p>
+                  )}
+                </div>
+              )}
+
               <Button
                 size="sm"
                 onClick={goToRecovery}

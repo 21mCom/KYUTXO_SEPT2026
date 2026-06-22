@@ -256,9 +256,31 @@ export interface UnrecoveredScanProgress {
   tableCount: number;
 }
 
+/**
+ * A pointer to a single row that is still locked: the table it lives in and its
+ * primary key. The locked value itself can never be surfaced (it is exactly the
+ * data we failed to decrypt), so the table name + id are the only stable,
+ * offline identifiers we can show the user to confirm which records to recover.
+ */
+export interface LockedRecordRef {
+  tableName: string;
+  id: number;
+}
+
+/**
+ * Cap on how many individual locked-record identifiers we collect during a scan.
+ * The count is always exact; only the enumerated list is bounded so a vault with
+ * tens of thousands of locked rows can't blow up memory or the download size.
+ */
+export const MAX_LOCKED_RECORD_REFS = 10000;
+
 export interface UnrecoveredScanResult {
   totalUnrecovered: number;
   perTable: { tableName: string; unrecovered: number }[];
+  /** Identifiers of the still-locked rows, capped at MAX_LOCKED_RECORD_REFS. */
+  lockedRecords: LockedRecordRef[];
+  /** True when more locked rows exist than were collected into lockedRecords. */
+  lockedRecordsTruncated: boolean;
 }
 
 /**
@@ -266,6 +288,10 @@ export interface UnrecoveredScanResult {
  * primary plaintext field is still locked (blank or "[encrypted]"). These are
  * the rows whose only copy of the data lives in the payload — exactly what a
  * restore needs to recover and what marker-stripping must never touch.
+ *
+ * Alongside the count it collects identifiers (table name + id) for the locked
+ * rows, up to MAX_LOCKED_RECORD_REFS, so callers can tell the user exactly which
+ * records stayed locked rather than just how many.
  */
 export async function countUnrecoveredLegacyRows(
   onProgress?: (progress: UnrecoveredScanProgress) => void,
@@ -273,6 +299,8 @@ export async function countUnrecoveredLegacyRows(
 ): Promise<UnrecoveredScanResult> {
   const configs = getTableConfigs();
   const perTable: { tableName: string; unrecovered: number }[] = [];
+  const lockedRecords: LockedRecordRef[] = [];
+  let lockedRecordsTruncated = false;
   let totalUnrecovered = 0;
 
   for (let i = 0; i < configs.length; i++) {
@@ -304,6 +332,11 @@ export async function countUnrecoveredLegacyRows(
         const row = item as unknown as globalThis.Record<string, unknown>;
         if (hasAnyLegacyMarker(row) && isRowUnrecovered(row, sentinelField)) {
           unrecovered++;
+          if (lockedRecords.length < MAX_LOCKED_RECORD_REFS) {
+            lockedRecords.push({ tableName: config.name, id: (row as { id: number }).id });
+          } else {
+            lockedRecordsTruncated = true;
+          }
         }
       }
 
@@ -315,7 +348,7 @@ export async function countUnrecoveredLegacyRows(
     totalUnrecovered += unrecovered;
   }
 
-  return { totalUnrecovered, perTable };
+  return { totalUnrecovered, perTable, lockedRecords, lockedRecordsTruncated };
 }
 
 /**
