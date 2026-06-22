@@ -19,12 +19,47 @@ logic must NOT treat marker-presence alone as "locked" — a fully readable,
 recovered row legitimately still carries the markers. Check ALL three markers,
 not just `_legacyEncryptedPayload`: an *active* marker = non-empty
 `_legacyEncryptedPayload` OR non-empty `encryptedPayload` OR `isEncrypted === true`.
-The genuine "still locked / unreadable" signature is: an active marker present
-**AND** the real field (`inputString`) is blank **or the `[encrypted]`
-placeholder**. A marker on a row whose `inputString` is populated is harmless
-leftover cleanup state (a separate "readable but uncleaned" bucket), not a
-problem. A blank `inputString` with *no* marker is "blank/corrupt", not "locked"
-— keep the three buckets distinct.
+A marker on a fully-readable row is harmless leftover cleanup state (a "readable
+but uncleaned" bucket), not a problem.
+
+# "Locked" is PER-FIELD, never sentinel-only
+
+`isRowUnrecovered(row, sensitiveFields)` is the single source of truth and is
+**per-field**: a row is locked when the *sentinel* (`sensitiveFields[0]`) is blank
+**or** `[encrypted]`, **OR ANY other** sensitive field equals the `[encrypted]`
+placeholder. The literal `[encrypted]` is the only cross-field "still locked"
+signal; a *blank* value only signals locked for the sentinel, because non-sentinel
+fields can be legitimately empty.
+
+**Why:** an older recovery pass restored only each row's first sensitive field, so
+every other field kept the literal `[encrypted]`. A sentinel-only check
+(`inputString` blank/placeholder) treated those half-restored rows as done — the
+recovery filter skipped them, the locked-count reported 0, and (worst) the marker
+strip would delete the payload that was the *only* copy able to restore them.
+
+**How to apply:** reuse this one broadened check EVERYWHERE the old one-field test
+lived — recovery filter, locked-count scan, fast early-exit probe, AND the
+strip-safety check. Strip must refuse any row that still has ANY `[encrypted]`
+field. A blank sentinel with *no* marker is "blank/corrupt", not "locked".
+
+# Recoverable vs unrecoverable split (honest reporting)
+
+Among locked rows, those still carrying `_legacyEncryptedPayload` are
+**recoverable** (re-running restore repairs them — this gates "is recovery
+complete?"); those whose payload is **missing** are **unrecoverable** (the
+original values are genuinely gone). Report unrecoverable rows honestly instead of
+silently treating them as fine, and do NOT enumerate them in the locked-records
+list (retry cannot help them). The completion gate stays on
+`totalUnrecovered===0` only; it must NOT block on unrecoverable rows.
+
+# Dual restore strategy (full vs surgical)
+
+When restoring a locked row, branch on whether the sentinel is still locked:
+fully-locked row (sentinel blank/`[encrypted]`) → restore EVERY payload field
+(skip `id` + marker keys) — covers fields outside any historical whitelist;
+partially-recovered row (sentinel already plaintext) → refill ONLY the fields
+currently equal to `[encrypted]`, so user edits and legitimately-empty optionals
+are never rolled back.
 
 # Never claim decrypt success on decrypt counts alone (verify-then-flag)
 

@@ -40,7 +40,10 @@ type RecoveryPhase = "idle" | "decrypting" | "verifying" | "seeding" | "done" | 
 interface RecoverySummary {
   decrypt: LegacyDecryptResult;
   fullSuccess: boolean;
+  /** Still-locked rows that CAN be retried (their encrypted payload survives). */
   remainingUnrecovered: number;
+  /** Still-locked rows whose encrypted payload is gone — a retry cannot help. */
+  remainingUnrecoverable: number;
   lockedRecords: LockedRecordRef[];
   lockedRecordsTruncated: boolean;
   engineReseeded: boolean;
@@ -145,6 +148,7 @@ export default function LegacyRecoveryPanel() {
         decrypt,
         fullSuccess,
         remainingUnrecovered: scan.totalUnrecovered,
+        remainingUnrecoverable: scan.totalUnrecoverable,
         lockedRecords: scan.lockedRecords,
         lockedRecordsTruncated: scan.lockedRecordsTruncated,
         engineReseeded,
@@ -286,31 +290,48 @@ export default function LegacyRecoveryPanel() {
           </div>
         )}
 
-        {phase === "done" && summary && (
+        {phase === "done" && summary && (() => {
+          // "All clear" requires BOTH that nothing retryable is left (fullSuccess)
+          // AND that no rows are permanently unrecoverable. A row whose encrypted
+          // payload is gone can never be restored, so we must never paint the
+          // result green and claim "everything is unlocked" while such rows exist.
+          const allClear = summary.fullSuccess && summary.remainingUnrecoverable === 0;
+          const headline = allClear
+            ? `Restored ${summary.decrypt.totalDecrypted.toLocaleString()} records. Everything is unlocked.`
+            : !summary.fullSuccess
+              ? `Restored ${summary.decrypt.totalDecrypted.toLocaleString()} records, but some data is still locked.`
+              : `Restored ${summary.decrypt.totalDecrypted.toLocaleString()} records. Some data could not be recovered.`;
+          return (
           <div className="space-y-3" data-testid="section-recovery-results">
             <div
               className={`rounded-md border p-3 flex items-start gap-2 ${
-                summary.fullSuccess
+                allClear
                   ? "border-green-600/40 bg-green-600/10 dark:border-green-400/40"
                   : "border-yellow-600/40 bg-yellow-600/10 dark:border-yellow-400/40"
               }`}
             >
-              {summary.fullSuccess ? (
+              {allClear ? (
                 <CheckCircle2 className="h-4 w-4 text-green-600 dark:text-green-400 mt-0.5 shrink-0" />
               ) : (
                 <AlertTriangle className="h-4 w-4 text-yellow-600 dark:text-yellow-400 mt-0.5 shrink-0" />
               )}
               <div className="text-sm space-y-1">
                 <div className="font-medium" data-testid="text-recovery-headline">
-                  {summary.fullSuccess
-                    ? `Restored ${summary.decrypt.totalDecrypted.toLocaleString()} records. Everything is unlocked.`
-                    : `Restored ${summary.decrypt.totalDecrypted.toLocaleString()} records, but some data is still locked.`}
+                  {headline}
                 </div>
                 {summary.remainingUnrecovered > 0 && (
                   <div className="text-muted-foreground" data-testid="text-recovery-remaining">
                     {summary.remainingUnrecovered.toLocaleString()} records are still locked after
                     this pass. You can safely run "Restore locked data" again with the correct
                     password. Nothing was deleted, and the still-locked data is untouched.
+                  </div>
+                )}
+                {summary.remainingUnrecoverable > 0 && (
+                  <div className="text-muted-foreground" data-testid="text-recovery-unrecoverable">
+                    {summary.remainingUnrecoverable.toLocaleString()} records are missing their
+                    original encrypted data, so their locked fields can't be restored — a retry
+                    won't help these. Nothing was deleted; they were already in this state before
+                    recovery ran.
                   </div>
                 )}
                 {summary.decrypt.totalFailed > 0 && (
@@ -355,7 +376,8 @@ export default function LegacyRecoveryPanel() {
               </div>
             )}
           </div>
-        )}
+          );
+        })()}
       </CardContent>
     </Card>
   );

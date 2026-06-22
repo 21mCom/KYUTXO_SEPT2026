@@ -74,9 +74,11 @@ import {
   stripLegacyMarkers,
   countUnrecoveredLegacyRows,
   hasUnrecoveredLegacyData,
+  decryptLegacyRecords,
   isEncryptedPlaceholder,
   MAX_LOCKED_RECORD_REFS,
 } from '../legacy-decrypt';
+import { decrypt } from '../crypto';
 
 const TABLE_KEYS = [
   'records', 'attachments', 'tags', 'categories', 'owners',
@@ -561,5 +563,182 @@ describe('hasUnrecoveredLegacyData', () => {
     ]);
 
     expect(await hasUnrecoveredLegacyData()).toBe(false);
+  });
+
+  it('treats a recovered sentinel with a secondary [encrypted] field as unrecovered', async () => {
+    // The sentinel (inputString) reads fine, but a non-sentinel sensitive field
+    // is still the placeholder — the older one-field recovery left it half-done.
+    mockTables.records = createMockTable([
+      { id: 1, _legacyEncryptedPayload: 'a', inputString: 'recovered-addr', label: '[encrypted]' },
+    ]);
+
+    expect(await hasUnrecoveredLegacyData()).toBe(true);
+  });
+});
+
+describe('countUnrecoveredLegacyRows — secondary fields & recoverability split', () => {
+  beforeEach(() => {
+    setupAllEmpty();
+  });
+
+  it('counts a row whose sentinel is recovered but a secondary field is still [encrypted]', async () => {
+    mockTables.records = createMockTable([
+      // sentinel OK, secondary still locked → unrecovered (payload present)
+      { id: 1, _legacyEncryptedPayload: 'p1', inputString: 'addr1', label: '[encrypted]' },
+      // fully recovered → ignored
+      { id: 2, _legacyEncryptedPayload: 'p2', inputString: 'addr2', label: 'real-label' },
+    ]);
+
+    const result = await countUnrecoveredLegacyRows();
+
+    expect(result.totalUnrecovered).toBe(1);
+    expect(result.totalUnrecoverable).toBe(0);
+    const records = result.perTable.find(t => t.tableName === 'Records')!;
+    expect(records.unrecovered).toBe(1);
+    expect(records.unrecoverable).toBe(0);
+    expect(result.lockedRecords).toEqual([{ tableName: 'Records', id: 1 }]);
+  });
+
+  it('splits locked rows into recoverable (has payload) and unrecoverable (no payload)', async () => {
+    mockTables.records = createMockTable([
+      // locked, payload present → recoverable
+      { id: 1, _legacyEncryptedPayload: 'p1', inputString: '' },
+      // locked, no payload → unrecoverable (original value is genuinely gone)
+      { id: 2, isEncrypted: true, inputString: '' },
+      // secondary field locked, no payload → unrecoverable
+      { id: 3, inputString: 'addr3', label: '[encrypted]' },
+      // fully recovered → ignored
+      { id: 4, _legacyEncryptedPayload: 'p4', inputString: 'addr4' },
+    ]);
+
+    const result = await countUnrecoveredLegacyRows();
+
+    expect(result.totalUnrecovered).toBe(1);
+    expect(result.totalUnrecoverable).toBe(2);
+    const records = result.perTable.find(t => t.tableName === 'Records')!;
+    expect(records.unrecovered).toBe(1);
+    expect(records.unrecoverable).toBe(2);
+    // Only the recoverable row is enumerated; unrecoverable rows are not, since
+    // re-running restore cannot help them.
+    expect(result.lockedRecords).toEqual([{ tableName: 'Records', id: 1 }]);
+  });
+});
+
+describe('decryptLegacyRecords — field-level restore', () => {
+  beforeEach(() => {
+    setupAllEmpty();
+    vi.mocked(decrypt).mockReset();
+  });
+
+  it('restores EVERY payload field for a fully-locked row (sentinel blank)', async () => {
+    vi.mocked(decrypt).mockResolvedValue(
+      JSON.stringify({
+        inputString: 'restored-addr',
+        label: 'restored-label',
+        notes: 'restored-notes',
+        // a field outside the sensitiveFields whitelist must still be restored
+        // on a never-recovered row (the old whitelist silently dropped these).
+        amount: 12345,
+      }),
+    );
+    mockTables.records = createMockTable([
+      { id: 1, _legacyEncryptedPayload: 'p1', inputString: '', label: '[encrypted]' },
+    ]);
+
+    const result = await decryptLegacyRecords({} as unknown as CryptoKey);
+
+    const row = mockTables.records._rows.get(1)!;
+    expect(row.inputString).toBe('restored-addr');
+    expect(row.label).toBe('restored-label');
+    expect(row.notes).toBe('restored-notes');
+    expect(row.amount).toBe(12345);
+    // postProcess re-derives the case-insensitive index from restored plaintext
+    expect(row.inputStringLower).toBe('restored-addr');
+    // the marker is intentionally KEPT — strip removes it later, once verified
+    expect(row._legacyEncryptedPayload).toBe('p1');
+    expect(result.totalDecrypted).toBe(1);
+    expect(result.totalFailed).toBe(0);
+  });
+
+  it('surgically refills only the [encrypted] fields of a partially-recovered row', async () => {
+    vi.mocked(decrypt).mockResolvedValue(
+      JSON.stringify({
+        inputString: 'payload-addr',
+        label: 'payload-label',
+        notes: 'payload-notes',
+      }),
+    );
+    mockTables.records = createMockTable([
+      {
+        id: 1,
+        _legacyEncryptedPayload: 'p1',
+        inputString: 'user-edited-addr', // sentinel already recovered (+ edited)
+        label: '[encrypted]', // still locked → should be refilled
+        notes: 'user-edited-notes', // good value → must be preserved
+      },
+    ]);
+
+    await decryptLegacyRecords({} as unknown as CryptoKey);
+
+    const row = mockTables.records._rows.get(1)!;
+    // sentinel recovered → payload must NOT roll back the user's edit
+    expect(row.inputString).toBe('user-edited-addr');
+    // only the field still showing the placeholder is refilled from the payload
+    expect(row.label).toBe('payload-label');
+    // a legitimate (non-placeholder) value is left exactly as-is
+    expect(row.notes).toBe('user-edited-notes');
+  });
+
+  it('picks up a secondary-[encrypted] row that an older one-field recovery skipped', async () => {
+    vi.mocked(decrypt).mockResolvedValue(
+      JSON.stringify({ inputString: 'addr1', label: 'payload-label' }),
+    );
+    mockTables.records = createMockTable([
+      { id: 1, _legacyEncryptedPayload: 'p1', inputString: 'addr1', label: '[encrypted]' },
+    ]);
+
+    const result = await decryptLegacyRecords({} as unknown as CryptoKey);
+
+    expect(decrypt).toHaveBeenCalledTimes(1);
+    expect(mockTables.records._rows.get(1)!.label).toBe('payload-label');
+    expect(result.totalDecrypted).toBe(1);
+  });
+
+  it('never re-applies the payload to a fully-recovered row', async () => {
+    mockTables.records = createMockTable([
+      { id: 1, _legacyEncryptedPayload: 'p1', inputString: 'good-addr', label: 'good-label' },
+    ]);
+
+    const result = await decryptLegacyRecords({} as unknown as CryptoKey);
+
+    expect(decrypt).not.toHaveBeenCalled();
+    expect(result.totalDecrypted).toBe(0);
+    const row = mockTables.records._rows.get(1)!;
+    expect(row.inputString).toBe('good-addr');
+    expect(row.label).toBe('good-label');
+  });
+});
+
+describe('stripLegacyMarkers — secondary-field safety', () => {
+  beforeEach(() => {
+    setupAllEmpty();
+  });
+
+  it('refuses to strip a row whose sentinel is recovered but a secondary field is [encrypted]', async () => {
+    // Before the fix, strip only checked the sentinel: it read inputString as
+    // recovered and removed the marker, destroying the only source able to
+    // recover the still-[encrypted] secondary field.
+    mockTables.records = createMockTable([
+      { id: 1, _legacyEncryptedPayload: 'p1', inputString: 'addr1', label: '[encrypted]' },
+    ]);
+
+    const result = await stripLegacyMarkers();
+    const records = result.tableResults.find(t => t.tableName === 'Records')!;
+
+    expect(records.rowsCleaned).toBe(0);
+    expect(records.rowsSkippedUnsafe).toBe(1);
+    expect(records.rowsRemaining).toBe(1);
+    // the payload — the only copy of the locked field — must survive
+    expect(mockTables.records._rows.get(1)!._legacyEncryptedPayload).toBe('p1');
   });
 });

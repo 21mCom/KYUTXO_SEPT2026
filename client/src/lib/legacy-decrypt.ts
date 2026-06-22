@@ -171,21 +171,39 @@ function isBlankValue(value: unknown): boolean {
 }
 
 /**
- * A row is "unrecovered" when it still carries an encrypted payload but its
- * primary plaintext field (the first of the table's historical sensitiveFields)
- * is still blank or holds the literal "[encrypted]" placeholder. For such a row
- * the encrypted payload is the ONLY copy of the data, so stripping its markers
- * would destroy it permanently. When the sentinel field is unknown we err on the
- * side of treating the row as unrecovered — a leftover marker is harmless, lost
- * data is not.
+ * A row is "unrecovered" when ANY of its historical sensitive fields is still
+ * locked. There are two different "locked" signals, because the v29 migration
+ * left fields in two different states:
+ *
+ *  - The SENTINEL field (the first of the table's sensitiveFields) is locked
+ *    when it is blank OR holds the literal "[encrypted]" placeholder. The
+ *    migration guaranteed this field always carried a value, so a blank here is
+ *    a reliable "never recovered" marker.
+ *  - Any OTHER sensitive field is locked only when it holds the literal
+ *    "[encrypted]" placeholder. A blank in these fields is NOT a locked signal —
+ *    they are optional and legitimately empty on many records.
+ *
+ * Checking every field (not just the sentinel) is what catches rows that an
+ * older one-field recovery left half-restored: the sentinel was repopulated, but
+ * other fields like owner / walletName / label still show "[encrypted]". When
+ * the field list is unknown we err on the side of treating the row as
+ * unrecovered — a leftover marker is harmless, lost data is not.
  */
 function isRowUnrecovered(
   row: globalThis.Record<string, unknown>,
-  sentinelField: string | undefined,
+  sensitiveFields: readonly string[] | undefined,
 ): boolean {
-  if (!sentinelField) return true;
-  const value = row[sentinelField];
-  return isBlankValue(value) || isEncryptedPlaceholder(value);
+  if (!sensitiveFields || sensitiveFields.length === 0) return true;
+  const sentinelValue = row[sensitiveFields[0]];
+  if (isBlankValue(sentinelValue) || isEncryptedPlaceholder(sentinelValue)) {
+    return true;
+  }
+  for (let i = 1; i < sensitiveFields.length; i++) {
+    if (isEncryptedPlaceholder(row[sensitiveFields[i]])) {
+      return true;
+    }
+  }
+  return false;
 }
 
 const ABORT_RETRY_ATTEMPTS = 5;
@@ -275,8 +293,19 @@ export interface LockedRecordRef {
 export const MAX_LOCKED_RECORD_REFS = 10000;
 
 export interface UnrecoveredScanResult {
+  /**
+   * Rows still locked that CAN be recovered: they still carry an encrypted
+   * payload, so re-running restore will repair them. This is the number that
+   * gates "is recovery complete?".
+   */
   totalUnrecovered: number;
-  perTable: { tableName: string; unrecovered: number }[];
+  /**
+   * Rows still locked whose encrypted payload is MISSING. Their original values
+   * are genuinely unrecoverable — a restore cannot help them. Surfaced so the
+   * user is told the truth instead of these rows being silently treated as fine.
+   */
+  totalUnrecoverable: number;
+  perTable: { tableName: string; unrecovered: number; unrecoverable: number }[];
   /** Identifiers of the still-locked rows, capped at MAX_LOCKED_RECORD_REFS. */
   lockedRecords: LockedRecordRef[];
   /** True when more locked rows exist than were collected into lockedRecords. */
@@ -284,32 +313,40 @@ export interface UnrecoveredScanResult {
 }
 
 /**
- * Full scan that counts rows which still carry an encrypted payload AND whose
- * primary plaintext field is still locked (blank or "[encrypted]"). These are
- * the rows whose only copy of the data lives in the payload — exactly what a
- * restore needs to recover and what marker-stripping must never touch.
+ * Full scan that counts rows still holding locked plaintext: a row is locked
+ * when its sentinel field is blank/"[encrypted]" OR ANY other sensitive field
+ * still shows the "[encrypted]" placeholder (an older one-field recovery left
+ * it half-restored). Locked rows are split two ways:
+ *   - recoverable (totalUnrecovered): still carry an encrypted payload, so a
+ *     re-run of restore can repair them. This is what gates "is recovery
+ *     complete?" and what marker-stripping must never touch.
+ *   - unrecoverable (totalUnrecoverable): the payload is missing, so the
+ *     original values are genuinely gone — surfaced honestly rather than
+ *     silently treated as fine.
  *
- * Alongside the count it collects identifiers (table name + id) for the locked
- * rows, up to MAX_LOCKED_RECORD_REFS, so callers can tell the user exactly which
- * records stayed locked rather than just how many.
+ * Alongside the count it collects identifiers (table name + id) for the
+ * recoverable locked rows, up to MAX_LOCKED_RECORD_REFS, so callers can tell
+ * the user exactly which records stayed locked rather than just how many.
  */
 export async function countUnrecoveredLegacyRows(
   onProgress?: (progress: UnrecoveredScanProgress) => void,
   signal?: AbortSignal,
 ): Promise<UnrecoveredScanResult> {
   const configs = getTableConfigs();
-  const perTable: { tableName: string; unrecovered: number }[] = [];
+  const perTable: { tableName: string; unrecovered: number; unrecoverable: number }[] = [];
   const lockedRecords: LockedRecordRef[] = [];
   let lockedRecordsTruncated = false;
   let totalUnrecovered = 0;
+  let totalUnrecoverable = 0;
 
   for (let i = 0; i < configs.length; i++) {
     if (signal?.aborted) break;
     const config = configs[i];
-    const sentinelField = config.sensitiveFields[0] as string | undefined;
+    const sensitiveFields = config.sensitiveFields as readonly string[];
     onProgress?.({ tableName: config.name, tableIndex: i, tableCount: configs.length });
 
     let unrecovered = 0;
+    let unrecoverable = 0;
     let lastProcessedId = 0;
     let hasMore = true;
 
@@ -330,13 +367,22 @@ export async function countUnrecoveredLegacyRows(
 
       for (const item of chunk) {
         const row = item as unknown as globalThis.Record<string, unknown>;
-        if (hasAnyLegacyMarker(row) && isRowUnrecovered(row, sentinelField)) {
+        // A row counts as locked if ANY sensitive field is still locked,
+        // regardless of which marker keys it carries.
+        if (!isRowUnrecovered(row, sensitiveFields)) continue;
+        // Whether it can be repaired depends on the encrypted payload still
+        // being present — that is the only source the restore reads from.
+        if (row._legacyEncryptedPayload) {
           unrecovered++;
           if (lockedRecords.length < MAX_LOCKED_RECORD_REFS) {
             lockedRecords.push({ tableName: config.name, id: (row as { id: number }).id });
           } else {
             lockedRecordsTruncated = true;
           }
+        } else {
+          // Locked but no payload: the original values are genuinely gone. Report
+          // honestly instead of treating the row as fine.
+          unrecoverable++;
         }
       }
 
@@ -344,11 +390,12 @@ export async function countUnrecoveredLegacyRows(
       await new Promise(r => setTimeout(r, 0));
     }
 
-    perTable.push({ tableName: config.name, unrecovered });
+    perTable.push({ tableName: config.name, unrecovered, unrecoverable });
     totalUnrecovered += unrecovered;
+    totalUnrecoverable += unrecoverable;
   }
 
-  return { totalUnrecovered, perTable, lockedRecords, lockedRecordsTruncated };
+  return { totalUnrecovered, totalUnrecoverable, perTable, lockedRecords, lockedRecordsTruncated };
 }
 
 /**
@@ -360,7 +407,7 @@ export async function hasUnrecoveredLegacyData(signal?: AbortSignal): Promise<bo
   const configs = getTableConfigs();
   for (const config of configs) {
     if (signal?.aborted) break;
-    const sentinelField = config.sensitiveFields[0] as string | undefined;
+    const sensitiveFields = config.sensitiveFields as readonly string[];
     let lastProcessedId = 0;
     let hasMore = true;
 
@@ -381,7 +428,7 @@ export async function hasUnrecoveredLegacyData(signal?: AbortSignal): Promise<bo
 
       for (const item of chunk) {
         const row = item as unknown as globalThis.Record<string, unknown>;
-        if (hasAnyLegacyMarker(row) && isRowUnrecovered(row, sentinelField)) {
+        if (hasAnyLegacyMarker(row) && isRowUnrecovered(row, sensitiveFields)) {
           return true;
         }
       }
@@ -519,7 +566,7 @@ export async function decryptLegacyRecords(
 
   for (let i = 0; i < remainingConfigs.length; i++) {
     const config = remainingConfigs[i];
-    const sentinelField = config.sensitiveFields[0] as string | undefined;
+    const sensitiveFields = config.sensitiveFields as readonly string[];
 
     // Fast, indexed row count for the progress denominator. The old code used
     // `.filter(...).count()`, which forces a full-table scan and aborts on very
@@ -571,19 +618,20 @@ export async function decryptLegacyRecords(
       lastProcessedId = (chunk[chunk.length - 1] as { id: number }).id;
       tableProcessed += chunk.length;
 
-      // Only restore rows that are STILL locked (have a payload AND a blank /
-      // "[encrypted]" sentinel). Decrypt intentionally keeps the marker after a
+      // Only restore rows that are STILL locked: they have a payload AND at
+      // least one sensitive field still showing the "[encrypted]" placeholder
+      // (or a blank sentinel). Decrypt intentionally keeps the marker after a
       // successful recovery, so a recovered row carries its payload forever. If
       // we blindly re-applied that payload on a later run (login resume or the
       // manual "Restore Locked Data" action) we would silently roll back any
-      // edits the user made to an already-recovered row. Skipping recovered rows
-      // makes restore idempotent and edit-safe; on a first-ever migration every
-      // row is still locked, so behaviour there is unchanged.
+      // edits the user made to an already-recovered row. Checking every field
+      // (not just the sentinel) is what lets a row that an older one-field
+      // recovery left half-restored get picked up here instead of skipped.
       const legacyItems = chunk.filter(item => {
         if (!item._legacyEncryptedPayload) return false;
         return isRowUnrecovered(
           item as unknown as globalThis.Record<string, unknown>,
-          sentinelField,
+          sensitiveFields,
         );
       });
 
@@ -595,17 +643,38 @@ export async function decryptLegacyRecords(
             const decryptedJson = await decrypt(item._legacyEncryptedPayload!, key);
             const sensitiveData = JSON.parse(decryptedJson) as globalThis.Record<string, unknown>;
 
-            // Restore EVERY field present in the decrypted payload, not just a
-            // fixed whitelist. The old whitelist silently dropped any encrypted
-            // field that was not listed (e.g. amount, date, addressImportance,
-            // cachedBalanceSats), leaving those columns permanently at their
-            // defaults. We skip only the row id (the primary key must never
-            // change) and the legacy marker keys (housekeeping, not real schema).
+            // How many fields we overwrite from the payload depends on whether
+            // this row was ever recovered before:
+            //
+            //  - Fully-locked row (sentinel still blank/"[encrypted]"): never
+            //    recovered, so restore EVERY field in the payload. This is the
+            //    original first-migration behaviour and is safe — a row that has
+            //    never been unlocked carries no user edits to roll back. (The old
+            //    whitelist silently dropped fields it didn't list, e.g. amount,
+            //    date, cachedBalanceSats; restoring all keys fixed that.)
+            //  - Partially-recovered row (sentinel already holds plaintext but
+            //    some other field is still "[encrypted]"): an older one-field
+            //    recovery left it half-restored. Refill ONLY the fields currently
+            //    at the "[encrypted]" placeholder, so we never roll back a user's
+            //    edit or overwrite a legitimately-empty optional field.
+            //
+            // Either way we skip the row id (the primary key must never change)
+            // and the legacy marker keys (housekeeping, not real schema).
+            const itemRow = item as unknown as globalThis.Record<string, unknown>;
+            const sentinelField = sensitiveFields[0];
+            const sentinelLocked =
+              !sentinelField ||
+              isBlankValue(itemRow[sentinelField]) ||
+              isEncryptedPlaceholder(itemRow[sentinelField]);
             const restored = { ...item };
 
             for (const fieldKey of Object.keys(sensitiveData)) {
               if (fieldKey === 'id') continue;
               if ((LEGACY_MARKER_KEYS_TO_STRIP as readonly string[]).includes(fieldKey)) continue;
+              // On a partially-recovered row, only the literal "[encrypted]"
+              // placeholder marks a field as still locked; leave everything else
+              // (good values, legitimately-empty optionals) exactly as it is.
+              if (!sentinelLocked && !isEncryptedPlaceholder(itemRow[fieldKey])) continue;
               (restored as globalThis.Record<string, unknown>)[fieldKey] = sensitiveData[fieldKey];
             }
 
@@ -767,7 +836,7 @@ export async function stripLegacyMarkers(
   for (let i = 0; i < configs.length; i++) {
     if (signal?.aborted) break;
     const config = configs[i];
-    const sentinelField = config.sensitiveFields[0] as string | undefined;
+    const sensitiveFields = config.sensitiveFields as readonly string[];
     let rowsBefore = 0;
     let rowsCleaned = 0;
     let rowsSkippedUnsafe = 0;
@@ -804,14 +873,18 @@ export async function stripLegacyMarkers(
 
       rowsBefore += markerItems.length;
 
-      // Safety: never strip a marker from a row whose data is still locked
-      // (blank or "[encrypted]" sentinel) — that payload is the only copy. Keep
-      // those markers and report them so the user can run a restore first.
+      // Safety: never strip a marker from a row whose data is still locked —
+      // that means a blank/"[encrypted]" sentinel OR any other sensitive field
+      // still at the "[encrypted]" placeholder. The encrypted payload is the
+      // only copy of those values, so we keep the markers and report the row so
+      // the user can run a restore first. Checking every field (not just the
+      // sentinel) is what stops a half-restored row from having its only copy
+      // silently deleted.
       const safeItems = markerItems.filter(
         item =>
           !isRowUnrecovered(
             item as unknown as globalThis.Record<string, unknown>,
-            sentinelField,
+            sensitiveFields,
           ),
       );
       rowsSkippedUnsafe += markerItems.length - safeItems.length;
