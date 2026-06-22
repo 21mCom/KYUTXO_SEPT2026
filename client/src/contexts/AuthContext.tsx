@@ -42,7 +42,7 @@ interface AuthContextType {
   isLoading: boolean;
   isMigrating: boolean;
   legacyMigrationProgress: LegacyDecryptProgress | null;
-  legacyMigrationResult: { totalDecrypted: number; totalFailed: number; unexpectedError?: boolean } | null;
+  legacyMigrationResult: { totalDecrypted: number; totalFailed: number; unexpectedError?: boolean; stillLocked?: number; verificationFailed?: boolean } | null;
   fileDecryptProgress: FileDecryptProgress | null;
 }
 
@@ -58,7 +58,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // and reintroduce the IndexedDB contention this migration hardening avoids.
   const migrationInFlightRef = useRef(false);
   const [legacyMigrationProgress, setLegacyMigrationProgress] = useState<LegacyDecryptProgress | null>(null);
-  const [legacyMigrationResult, setLegacyMigrationResult] = useState<{ totalDecrypted: number; totalFailed: number; unexpectedError?: boolean } | null>(null);
+  const [legacyMigrationResult, setLegacyMigrationResult] = useState<{ totalDecrypted: number; totalFailed: number; unexpectedError?: boolean; stillLocked?: number; verificationFailed?: boolean } | null>(null);
   const [fileDecryptProgress, setFileDecryptProgress] = useState<FileDecryptProgress | null>(null);
 
   useEffect(() => {
@@ -202,17 +202,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // still false here), not on every normal login.
       const decryptSucceeded = result.totalFailed === 0 && result.tableErrors.length === 0;
       let metadataFullyComplete = decryptSucceeded;
+      // Track what the verification scan found so the UI can tell the user when
+      // some records are still locked and point them to the manual recovery
+      // panel. A console.warn alone is invisible to the user.
+      let stillLocked = 0;
+      let verificationFailed = false;
       if (decryptSucceeded) {
         try {
           const scan = await countUnrecoveredLegacyRows();
           if (scan.totalUnrecovered > 0) {
             metadataFullyComplete = false;
+            stillLocked = scan.totalUnrecovered;
             console.warn(
               `[LegacyDecrypt] Verification found ${scan.totalUnrecovered} still-locked record(s) after decrypt — not marking complete, will retry next login`,
             );
           }
         } catch (err) {
           metadataFullyComplete = false;
+          verificationFailed = true;
           console.error('[LegacyDecrypt] Post-decrypt verification scan failed — not marking complete:', err);
         }
       }
@@ -223,6 +230,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setLegacyMigrationResult({
         totalDecrypted: result.totalDecrypted,
         totalFailed: result.totalFailed + result.tableErrors.length,
+        stillLocked,
+        verificationFailed,
       });
 
       if (metadataFullyComplete) {

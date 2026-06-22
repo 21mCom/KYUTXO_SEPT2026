@@ -10,7 +10,7 @@ import { AuthProvider, useAuth } from "@/contexts/AuthContext";
 import { RecordPreviewProvider } from "@/contexts/RecordPreviewContext";
 import { LoginScreen } from "@/components/LoginScreen";
 import { Button } from "@/components/ui/button";
-import { LogOut } from "lucide-react";
+import { LogOut, Unlock } from "lucide-react";
 import { KeyboardShortcutsDialog } from "@/components/KeyboardShortcutsDialog";
 import { useAdaptiveLocation } from "@/lib/hashLocation";
 import Dashboard from "@/pages/Dashboard";
@@ -167,6 +167,7 @@ function AuthenticatedApp() {
 
 function LegacyMigrationOverlay() {
   const { legacyMigrationProgress, legacyMigrationResult, fileDecryptProgress } = useAuth();
+  const [, setLocation] = useAdaptiveLocation();
   const [dismissedMigrationResult, setDismissedMigrationResult] = useState(false);
 
   if (dismissedMigrationResult) {
@@ -217,6 +218,21 @@ function LegacyMigrationOverlay() {
   }
 
   if (legacyMigrationResult) {
+    // The post-decrypt verification scan can find records that are still locked
+    // even when the decrypt pass itself reported no errors (a garbage payload
+    // can "decrypt" without throwing yet leave the row blank). Surface that to
+    // the user so they know their data is not fully unlocked and can run the
+    // manual "Restore Locked Data" panel — otherwise the only signal is a
+    // console.warn they never see.
+    const hasLockedRemaining =
+      !legacyMigrationResult.unexpectedError &&
+      ((legacyMigrationResult.stillLocked ?? 0) > 0 || !!legacyMigrationResult.verificationFailed);
+
+    const goToRecovery = () => {
+      setDismissedMigrationResult(true);
+      setLocation("/settings");
+    };
+
     return (
       <div className="fixed inset-0 z-[9999] bg-background/95 flex items-center justify-center" data-testid="legacy-migration-overlay">
         <div className="text-center max-w-md space-y-4 p-6">
@@ -238,12 +254,41 @@ function LegacyMigrationOverlay() {
                   They will be retried on your next login.
                 </p>
               )}
-              {legacyMigrationResult.totalFailed === 0 && legacyMigrationResult.totalDecrypted > 0 && (
-                <p className="text-muted-foreground">
-                  All records were successfully migrated.
-                </p>
-              )}
+              {legacyMigrationResult.totalFailed === 0 &&
+                legacyMigrationResult.totalDecrypted > 0 &&
+                !hasLockedRemaining && (
+                  <p className="text-muted-foreground">
+                    All records were successfully migrated.
+                  </p>
+                )}
             </>
+          )}
+          {hasLockedRemaining && (
+            <div
+              className="rounded-md border border-destructive/40 bg-destructive/10 p-4 text-left space-y-2"
+              data-testid="notice-still-locked"
+            >
+              <p className="text-sm font-medium text-foreground">
+                Some data is still locked
+              </p>
+              <p className="text-sm text-muted-foreground">
+                {legacyMigrationResult.verificationFailed
+                  ? "We couldn't confirm that every record was unlocked. Some records may still be locked."
+                  : `${legacyMigrationResult.stillLocked} record${
+                      legacyMigrationResult.stillLocked === 1 ? "" : "s"
+                    } could not be unlocked during login.`}{" "}
+                Open <span className="font-medium">Settings → "Restore Locked Data"</span> and enter
+                your vault password to recover the rest. Your data is safe in the meantime.
+              </p>
+              <Button
+                size="sm"
+                onClick={goToRecovery}
+                data-testid="button-open-restore-locked-data"
+              >
+                <Unlock className="h-4 w-4" />
+                Open Restore Locked Data
+              </Button>
+            </div>
           )}
           <button
             onClick={() => setDismissedMigrationResult(true)}
