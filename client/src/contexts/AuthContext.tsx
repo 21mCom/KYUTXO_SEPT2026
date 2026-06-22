@@ -29,7 +29,7 @@ import { repairInputStringLower, countRecords } from '@/lib/data/record-crud';
 import { countAttachments } from '@/lib/data/attachments-crud';
 import { countEvidenceAttachments } from '@/lib/data/evidence-crud';
 import { migrateAttachmentPaths } from '@/lib/attachments';
-import { decryptLegacyRecords, getTotalTableCount, type LegacyDecryptProgress } from '@/lib/legacy-decrypt';
+import { decryptLegacyRecords, getTotalTableCount, countUnrecoveredLegacyRows, type LegacyDecryptProgress } from '@/lib/legacy-decrypt';
 import { decryptLegacyAttachmentFiles, type FileDecryptProgress } from '@/lib/legacy-decrypt-files';
 import { getActivityBus } from '@/lib/activity-bus';
 
@@ -193,7 +193,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       console.log(`[LegacyDecrypt] Complete: ${result.totalDecrypted} decrypted, ${result.totalFailed} failed, ${result.tableErrors.length} table errors`);
 
-      const metadataFullyComplete = result.totalFailed === 0 && result.tableErrors.length === 0;
+      // Decrypt counts alone are not proof of success: a malformed/garbage
+      // encrypted payload can decrypt without raising an error yet leave the
+      // record blank or showing "[encrypted]". Mirror the manual "Restore
+      // Locked Data" panel and run an independent re-scan before declaring the
+      // vault fully unlocked, so login can never wrongly mark a still-locked
+      // vault complete. This scan only runs on migration logins (the flag is
+      // still false here), not on every normal login.
+      const decryptSucceeded = result.totalFailed === 0 && result.tableErrors.length === 0;
+      let metadataFullyComplete = decryptSucceeded;
+      if (decryptSucceeded) {
+        try {
+          const scan = await countUnrecoveredLegacyRows();
+          if (scan.totalUnrecovered > 0) {
+            metadataFullyComplete = false;
+            console.warn(
+              `[LegacyDecrypt] Verification found ${scan.totalUnrecovered} still-locked record(s) after decrypt — not marking complete, will retry next login`,
+            );
+          }
+        } catch (err) {
+          metadataFullyComplete = false;
+          console.error('[LegacyDecrypt] Post-decrypt verification scan failed — not marking complete:', err);
+        }
+      }
       if (metadataFullyComplete) {
         await setLegacyDecryptComplete(true);
       }
