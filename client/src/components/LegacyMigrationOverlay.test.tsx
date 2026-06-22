@@ -221,6 +221,33 @@ describe("LegacyMigrationOverlay summary counts", () => {
     expect(screen.queryByText(/could not be decrypted and were left unchanged/i)).toBeNull();
   });
 
+  it("shows a 'nothing to restore' fallback when nothing was decrypted or failed", () => {
+    renderWithResult({ totalDecrypted: 0, totalFailed: 0, stillLocked: 0, verificationFailed: false });
+
+    // None of the count-gated summary lines apply in this edge case...
+    expect(screen.queryByText(/Successfully restored/i)).toBeNull();
+    expect(screen.queryByText(/could not be decrypted and were left unchanged/i)).toBeNull();
+    expect(screen.queryByText(/All records were successfully migrated\./i)).toBeNull();
+    // ...so the fallback message must keep the result screen from being empty.
+    expect(screen.getByTestId("text-nothing-to-restore")).toBeTruthy();
+    expect(
+      screen.getByText(/No records needed restoring — your data is already up to date\./i),
+    ).toBeTruthy();
+  });
+
+  it("hides the 'nothing to restore' fallback when records still remain locked", () => {
+    renderWithResult({ totalDecrypted: 0, totalFailed: 0, stillLocked: 2 });
+
+    expect(screen.queryByTestId("text-nothing-to-restore")).toBeNull();
+    expect(screen.getByTestId("notice-still-locked")).toBeTruthy();
+  });
+
+  it("hides the 'nothing to restore' fallback once any records were restored", () => {
+    renderWithResult({ totalDecrypted: 5, totalFailed: 0, stillLocked: 0, verificationFailed: false });
+
+    expect(screen.queryByTestId("text-nothing-to-restore")).toBeNull();
+  });
+
   it("shows both the restored and failed lines together on a partial success", () => {
     renderWithResult({ totalDecrypted: 15, totalFailed: 4, stillLocked: 0, verificationFailed: false });
 

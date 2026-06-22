@@ -156,6 +156,13 @@ export function LegacyMigrationOverlay() {
                     All records were successfully migrated.
                   </p>
                 )}
+              {legacyMigrationResult.totalDecrypted === 0 &&
+                legacyMigrationResult.totalFailed === 0 &&
+                !hasLockedRemaining && (
+                  <p className="text-muted-foreground" data-testid="text-nothing-to-restore">
+                    No records needed restoring — your data is already up to date.
+                  </p>
+                )}
             </>
           )}
           {hasLockedRemaining && (
