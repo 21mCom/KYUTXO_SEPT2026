@@ -1,15 +1,19 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, cleanup, fireEvent } from "@testing-library/react";
+import { render, screen, cleanup, waitFor, fireEvent } from "@testing-library/react";
 import { LegacyMigrationOverlay } from "./LegacyMigrationOverlay";
 
 // ---------------------------------------------------------------------------
 // LegacyMigrationOverlay only depends on the auth context (for the migration
 // result/progress) and the router hook (for navigating to the recovery panel).
 // We mock both so we can drive the overlay purely from synthetic auth state and
-// assert on the "still locked" warning UI, the live migration-progress screen,
-// and the file-decryption screen.
+// assert on the "still locked" warning UI, the locked-records list/download,
+// the live migration-progress screen, and the file-decryption screen. The
+// on-demand re-scan path also calls countUnrecoveredLegacyRows, so we mock that
+// too and drive its return value per-test.
 // ---------------------------------------------------------------------------
+
+type LockedRecordRef = { tableName: string; id: number };
 
 type LegacyMigrationResult = {
   totalDecrypted: number;
@@ -17,6 +21,8 @@ type LegacyMigrationResult = {
   unexpectedError?: boolean;
   stillLocked?: number;
   verificationFailed?: boolean;
+  lockedRecords?: LockedRecordRef[];
+  lockedRecordsTruncated?: boolean;
 } | null;
 
 type LegacyMigrationProgress = {
@@ -52,6 +58,11 @@ vi.mock("@/lib/hashLocation", () => ({
   useAdaptiveLocation: () => ["/", setLocationSpy] as [string, (to: string) => void],
 }));
 
+const countUnrecoveredLegacyRowsSpy = vi.fn();
+vi.mock("@/lib/legacy-decrypt", () => ({
+  countUnrecoveredLegacyRows: () => countUnrecoveredLegacyRowsSpy(),
+}));
+
 function renderWithResult(result: LegacyMigrationResult) {
   mockAuthValue = {
     legacyMigrationProgress: null,
@@ -81,6 +92,7 @@ function renderWithFileDecrypt(fileDecryptProgress: FileDecryptProgress) {
 
 beforeEach(() => {
   setLocationSpy.mockClear();
+  countUnrecoveredLegacyRowsSpy.mockReset();
   mockAuthValue = {
     legacyMigrationProgress: null,
     legacyMigrationResult: null,
@@ -308,5 +320,242 @@ describe("LegacyMigrationOverlay file-decrypt screen", () => {
     });
 
     expect(screen.getByText(/Preparing/i)).toBeTruthy();
+  });
+});
+
+describe("LegacyMigrationOverlay preset locked list (stillLocked path)", () => {
+  const presetLocked: LockedRecordRef[] = [
+    { tableName: "Records", id: 1 },
+    { tableName: "Records", id: 5 },
+    { tableName: "Tags", id: 3 },
+  ];
+
+  it("offers inline list/download controls when lockedRecords are preset", () => {
+    renderWithResult({
+      totalDecrypted: 10,
+      totalFailed: 0,
+      stillLocked: 3,
+      lockedRecords: presetLocked,
+    });
+
+    expect(screen.getByTestId("button-toggle-locked-list")).toBeTruthy();
+    expect(screen.getByTestId("button-download-locked-list")).toBeTruthy();
+    // The on-demand scan button only appears when there is no preset list.
+    expect(screen.queryByTestId("button-scan-locked-list")).toBeNull();
+    // The list itself is collapsed until toggled.
+    expect(screen.queryByTestId("list-locked-records")).toBeNull();
+  });
+
+  it("renders the grouped list (per table, with ids) after toggling it open", async () => {
+    renderWithResult({
+      totalDecrypted: 10,
+      totalFailed: 0,
+      stillLocked: 3,
+      lockedRecords: presetLocked,
+    });
+
+    fireEvent.click(screen.getByTestId("button-toggle-locked-list"));
+
+    expect(screen.getByTestId("list-locked-records")).toBeTruthy();
+
+    const recordsGroup = screen.getByTestId("group-locked-Records");
+    expect(recordsGroup.textContent).toContain("Records (2)");
+    expect(recordsGroup.textContent).toContain("#1, #5");
+
+    const tagsGroup = screen.getByTestId("group-locked-Tags");
+    expect(tagsGroup.textContent).toContain("Tags (1)");
+    expect(tagsGroup.textContent).toContain("#3");
+  });
+
+  it("shows the truncation note only when the preset list is flagged truncated", async () => {
+    renderWithResult({
+      totalDecrypted: 10,
+      totalFailed: 0,
+      stillLocked: 3,
+      lockedRecords: presetLocked,
+      lockedRecordsTruncated: true,
+    });
+
+    fireEvent.click(screen.getByTestId("button-toggle-locked-list"));
+
+    expect(screen.getByTestId("text-locked-truncated")).toBeTruthy();
+  });
+
+  it("omits the truncation note when the preset list is complete", async () => {
+    renderWithResult({
+      totalDecrypted: 10,
+      totalFailed: 0,
+      stillLocked: 3,
+      lockedRecords: presetLocked,
+      lockedRecordsTruncated: false,
+    });
+
+    fireEvent.click(screen.getByTestId("button-toggle-locked-list"));
+
+    expect(screen.queryByTestId("text-locked-truncated")).toBeNull();
+  });
+});
+
+describe("LegacyMigrationOverlay on-demand scan (verificationFailed path)", () => {
+  it("offers the scan button (not inline controls) when no list was preset", () => {
+    renderWithResult({ totalDecrypted: 8, totalFailed: 0, verificationFailed: true });
+
+    expect(screen.getByTestId("button-scan-locked-list")).toBeTruthy();
+    expect(screen.queryByTestId("button-toggle-locked-list")).toBeNull();
+    expect(screen.queryByTestId("button-download-locked-list")).toBeNull();
+  });
+
+  it("runs the scan, then renders the grouped list it returns", async () => {
+    countUnrecoveredLegacyRowsSpy.mockResolvedValue({
+      totalUnrecovered: 2,
+      perTable: [],
+      lockedRecords: [
+        { tableName: "Owners", id: 4 },
+        { tableName: "Owners", id: 9 },
+      ],
+      lockedRecordsTruncated: false,
+    });
+
+    renderWithResult({ totalDecrypted: 8, totalFailed: 0, verificationFailed: true });
+
+    fireEvent.click(screen.getByTestId("button-scan-locked-list"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("list-locked-records")).toBeTruthy();
+    });
+    expect(countUnrecoveredLegacyRowsSpy).toHaveBeenCalledTimes(1);
+
+    const ownersGroup = screen.getByTestId("group-locked-Owners");
+    expect(ownersGroup.textContent).toContain("Owners (2)");
+    expect(ownersGroup.textContent).toContain("#4, #9");
+
+    // After a successful scan, download becomes available.
+    expect(screen.getByTestId("button-download-locked-list")).toBeTruthy();
+  });
+
+  it("surfaces the empty-scan message when the re-scan finds nothing", async () => {
+    countUnrecoveredLegacyRowsSpy.mockResolvedValue({
+      totalUnrecovered: 0,
+      perTable: [],
+      lockedRecords: [],
+      lockedRecordsTruncated: false,
+    });
+
+    renderWithResult({ totalDecrypted: 8, totalFailed: 0, verificationFailed: true });
+
+    fireEvent.click(screen.getByTestId("button-scan-locked-list"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("text-scan-empty")).toBeTruthy();
+    });
+    expect(screen.queryByTestId("list-locked-records")).toBeNull();
+  });
+
+  it("surfaces the scan-failed message when the re-scan throws", async () => {
+    countUnrecoveredLegacyRowsSpy.mockRejectedValue(new Error("scan-boom"));
+
+    renderWithResult({ totalDecrypted: 8, totalFailed: 0, verificationFailed: true });
+
+    fireEvent.click(screen.getByTestId("button-scan-locked-list"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("text-scan-failed")).toBeTruthy();
+    });
+    expect(screen.queryByTestId("list-locked-records")).toBeNull();
+  });
+});
+
+describe("LegacyMigrationOverlay download", () => {
+  it("builds the expected tab-separated text content and triggers a download", async () => {
+
+    // Capture the Blob handed to URL.createObjectURL so we can read its text.
+    let capturedBlob: Blob | null = null;
+    const createObjectURL = vi.fn((blob: Blob) => {
+      capturedBlob = blob;
+      return "blob:mock-url";
+    });
+    const revokeObjectURL = vi.fn();
+    const originalCreate = URL.createObjectURL;
+    const originalRevoke = URL.revokeObjectURL;
+    URL.createObjectURL = createObjectURL as unknown as typeof URL.createObjectURL;
+    URL.revokeObjectURL = revokeObjectURL as unknown as typeof URL.revokeObjectURL;
+    const clickSpy = vi
+      .spyOn(HTMLAnchorElement.prototype, "click")
+      .mockImplementation(() => {});
+
+    try {
+      renderWithResult({
+        totalDecrypted: 10,
+        totalFailed: 0,
+        stillLocked: 3,
+        lockedRecords: [
+          { tableName: "Records", id: 1 },
+          { tableName: "Records", id: 5 },
+          { tableName: "Tags", id: 3 },
+        ],
+      });
+
+      fireEvent.click(screen.getByTestId("button-download-locked-list"));
+
+      expect(createObjectURL).toHaveBeenCalledTimes(1);
+      expect(clickSpy).toHaveBeenCalledTimes(1);
+      expect(revokeObjectURL).toHaveBeenCalledWith("blob:mock-url");
+      expect(capturedBlob).not.toBeNull();
+      expect(capturedBlob!.type).toBe("text/plain");
+
+      const text = await capturedBlob!.text();
+      const lines = text.split("\n");
+      expect(lines[0]).toBe("KYUTXO — Records still locked after migration");
+      expect(lines[1]).toMatch(/^Generated: /);
+      expect(lines[2]).toBe("Total listed: 3");
+      expect(lines[3]).toBe("");
+      expect(lines[4]).toBe("Table\tRecord ID");
+      expect(lines.slice(5)).toEqual([
+        "Records\t1",
+        "Records\t5",
+        "Tags\t3",
+      ]);
+    } finally {
+      clickSpy.mockRestore();
+      URL.createObjectURL = originalCreate;
+      URL.revokeObjectURL = originalRevoke;
+    }
+  });
+
+  it("notes truncation in the download header when the list is truncated", async () => {
+
+    let capturedBlob: Blob | null = null;
+    const createObjectURL = vi.fn((blob: Blob) => {
+      capturedBlob = blob;
+      return "blob:mock-url";
+    });
+    const originalCreate = URL.createObjectURL;
+    const originalRevoke = URL.revokeObjectURL;
+    URL.createObjectURL = createObjectURL as unknown as typeof URL.createObjectURL;
+    URL.revokeObjectURL = vi.fn() as unknown as typeof URL.revokeObjectURL;
+    const clickSpy = vi
+      .spyOn(HTMLAnchorElement.prototype, "click")
+      .mockImplementation(() => {});
+
+    try {
+      renderWithResult({
+        totalDecrypted: 10,
+        totalFailed: 0,
+        stillLocked: 3,
+        lockedRecords: [{ tableName: "Records", id: 1 }],
+        lockedRecordsTruncated: true,
+      });
+
+      fireEvent.click(screen.getByTestId("button-download-locked-list"));
+
+      const text = await capturedBlob!.text();
+      expect(text.split("\n")[2]).toBe(
+        "Total listed: 1 (list truncated; more records are locked than shown)",
+      );
+    } finally {
+      clickSpy.mockRestore();
+      URL.createObjectURL = originalCreate;
+      URL.revokeObjectURL = originalRevoke;
+    }
   });
 });

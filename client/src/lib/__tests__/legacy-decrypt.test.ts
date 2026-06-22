@@ -75,6 +75,7 @@ import {
   countUnrecoveredLegacyRows,
   hasUnrecoveredLegacyData,
   isEncryptedPlaceholder,
+  MAX_LOCKED_RECORD_REFS,
 } from '../legacy-decrypt';
 
 const TABLE_KEYS = [
@@ -456,6 +457,72 @@ describe('countUnrecoveredLegacyRows', () => {
 
     expect(result.totalUnrecovered).toBe(0);
     expect(result.perTable).toEqual([]);
+  });
+
+  it('collects locked-record identifiers (table name + id) for each locked row', async () => {
+    mockTables.records = createMockTable([
+      { id: 1, _legacyEncryptedPayload: 'a', inputString: '' },
+      { id: 2, _legacyEncryptedPayload: 'b', inputString: '[encrypted]' },
+      { id: 3, _legacyEncryptedPayload: 'c', inputString: 'recovered' },
+    ]);
+    mockTables.tags = createMockTable([
+      { id: 7, _legacyEncryptedPayload: 'd', name: '' },
+    ]);
+
+    const result = await countUnrecoveredLegacyRows();
+
+    expect(result.lockedRecordsTruncated).toBe(false);
+    expect(result.lockedRecords).toEqual([
+      { tableName: 'Records', id: 1 },
+      { tableName: 'Records', id: 2 },
+      { tableName: 'Tags', id: 7 },
+    ]);
+  });
+
+  it('does not list recovered rows even when other rows are locked', async () => {
+    mockTables.records = createMockTable([
+      { id: 1, _legacyEncryptedPayload: 'a', inputString: 'recovered' },
+      { id: 2, _legacyEncryptedPayload: 'b', inputString: '' },
+    ]);
+
+    const result = await countUnrecoveredLegacyRows();
+
+    expect(result.lockedRecords).toEqual([{ tableName: 'Records', id: 2 }]);
+    expect(result.lockedRecordsTruncated).toBe(false);
+  });
+
+  it('returns an empty list and no truncation when nothing is locked', async () => {
+    mockTables.records = createMockTable([
+      { id: 1, _legacyEncryptedPayload: 'a', inputString: 'recovered' },
+    ]);
+
+    const result = await countUnrecoveredLegacyRows();
+
+    expect(result.lockedRecords).toEqual([]);
+    expect(result.lockedRecordsTruncated).toBe(false);
+  });
+
+  it('caps the enumerated list at MAX_LOCKED_RECORD_REFS while the count stays exact', async () => {
+    const overCap = MAX_LOCKED_RECORD_REFS + 25;
+    const rows = Array.from({ length: overCap }, (_, idx) => ({
+      id: idx + 1,
+      _legacyEncryptedPayload: `p-${idx + 1}`,
+      inputString: '',
+    }));
+    mockTables.records = createMockTable(rows);
+
+    const result = await countUnrecoveredLegacyRows();
+
+    // Count is always exact; only the enumerated list is bounded.
+    expect(result.totalUnrecovered).toBe(overCap);
+    expect(result.lockedRecords).toHaveLength(MAX_LOCKED_RECORD_REFS);
+    expect(result.lockedRecordsTruncated).toBe(true);
+    // The cap keeps the lowest ids (scan walks the id index ascending).
+    expect(result.lockedRecords[0]).toEqual({ tableName: 'Records', id: 1 });
+    expect(result.lockedRecords[MAX_LOCKED_RECORD_REFS - 1]).toEqual({
+      tableName: 'Records',
+      id: MAX_LOCKED_RECORD_REFS,
+    });
   });
 });
 
