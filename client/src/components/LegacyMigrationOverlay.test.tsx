@@ -194,6 +194,45 @@ describe("LegacyMigrationOverlay empty state", () => {
   });
 });
 
+describe("LegacyMigrationOverlay summary counts", () => {
+  it("shows the restored-count line when totalDecrypted > 0", () => {
+    renderWithResult({ totalDecrypted: 42, totalFailed: 0, stillLocked: 0, verificationFailed: false });
+
+    expect(screen.getByText(/Successfully restored 42 records\./i)).toBeTruthy();
+  });
+
+  it("omits the restored-count line when totalDecrypted === 0", () => {
+    renderWithResult({ totalDecrypted: 0, totalFailed: 0, stillLocked: 0, verificationFailed: false });
+
+    expect(screen.queryByText(/Successfully restored/i)).toBeNull();
+  });
+
+  it("shows the failed-count line when totalFailed > 0", () => {
+    renderWithResult({ totalDecrypted: 0, totalFailed: 7, stillLocked: 0, verificationFailed: false });
+
+    expect(
+      screen.getByText(/7 records could not be decrypted and were left unchanged\./i),
+    ).toBeTruthy();
+  });
+
+  it("omits the failed-count line when totalFailed === 0", () => {
+    renderWithResult({ totalDecrypted: 10, totalFailed: 0, stillLocked: 0, verificationFailed: false });
+
+    expect(screen.queryByText(/could not be decrypted and were left unchanged/i)).toBeNull();
+  });
+
+  it("shows both the restored and failed lines together on a partial success", () => {
+    renderWithResult({ totalDecrypted: 15, totalFailed: 4, stillLocked: 0, verificationFailed: false });
+
+    expect(screen.getByText(/Successfully restored 15 records\./i)).toBeTruthy();
+    expect(
+      screen.getByText(/4 records could not be decrypted and were left unchanged\./i),
+    ).toBeTruthy();
+    // The "all records migrated" line must not appear when some failed.
+    expect(screen.queryByText(/All records were successfully migrated\./i)).toBeNull();
+  });
+});
+
 describe("LegacyMigrationOverlay migration-progress screen", () => {
   it("shows percent, record counts and table count for a determinate migration", () => {
     renderWithProgress({
