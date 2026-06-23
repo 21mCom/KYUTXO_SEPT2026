@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { Edit, Tag, FolderOpen, Wallet, Sprout, Users, Plus, Trash2, RefreshCw, KeySquare, ArrowLeftRight, TrendingUp, TrendingDown, UserCheck } from "lucide-react";
+import { Edit, Tag, FolderOpen, Wallet, Sprout, Users, Plus, Trash2, RefreshCw, KeySquare, ArrowLeftRight, TrendingUp, TrendingDown, UserCheck, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -210,8 +210,16 @@ export default function ValueUpdaterPage() {
     return result;
   }, []);
 
+  // Hard ceiling for the whole-table walk on large vaults. Beyond this the loop
+  // never finishes on multi-million-row databases, leaving the page stuck on
+  // "Loading…". We show an honest warning when the cap is reached so the user
+  // knows the value counts are partial and should use the engine-backed paths.
+  const VALUE_SCAN_ROW_CAP = 50_000;
+  const [valuesScanCapped, setValuesScanCapped] = useState(false);
+
   const loadAllValues = useCallback(async () => {
     setValuesLoading(true);
+    setValuesScanCapped(false);
     try {
       const BATCH_SIZE = 2000;
       const fieldCounters = new Map<string, Map<string, number>>();
@@ -221,6 +229,7 @@ export default function ValueUpdaterPage() {
 
       let offset = 0;
       let hasMore = true;
+      let rowsScanned = 0;
 
       while (hasMore) {
         const batch = await getRecordsByOffsetLimit(offset, BATCH_SIZE);
@@ -231,7 +240,13 @@ export default function ValueUpdaterPage() {
             counter.set(value, (counter.get(value) || 0) + count);
           }
         }
+        rowsScanned += batch.length;
         hasMore = batch.length === BATCH_SIZE;
+        if (hasMore && rowsScanned >= VALUE_SCAN_ROW_CAP) {
+          setValuesScanCapped(true);
+          console.warn(`[ValueUpdater] Scan stopped at ${rowsScanned} rows to keep the UI responsive. Value counts are partial.`);
+          break;
+        }
         offset += BATCH_SIZE;
         if (hasMore) await new Promise(r => setTimeout(r, 0));
       }
@@ -1067,6 +1082,22 @@ export default function ValueUpdaterPage() {
             Edit values across all records at once. Changes apply everywhere that value is used.
           </p>
         </div>
+
+        {valuesScanCapped && (
+          <div
+            className="flex items-start gap-2 rounded-md border border-yellow-600/40 bg-yellow-600/10 dark:border-yellow-400/40 p-3 text-sm"
+            data-testid="alert-values-scan-capped"
+          >
+            <AlertTriangle className="h-4 w-4 text-yellow-600 dark:text-yellow-400 mt-0.5 shrink-0" />
+            <div>
+              <span className="font-medium text-yellow-900 dark:text-yellow-200">Large database — value counts are partial.</span>
+              <span className="text-yellow-800 dark:text-yellow-300 ml-1">
+                The scan stopped after {(50_000).toLocaleString()} records to keep the app responsive.
+                Rename and delete operations still apply across all records; only the usage counts shown here may be understated.
+              </span>
+            </div>
+          </div>
+        )}
 
         <Tabs value={activeTab} onValueChange={(val) => setActiveTab(val as FieldType)}>
           <TabsList className="flex-wrap h-auto gap-1">

@@ -297,7 +297,7 @@ export function LegacyMigrationOverlay() {
           {progress.failed > 0 && ` — ${progress.failed} failed`}
         </p>
         <p className="text-xs text-muted-foreground">
-          Table {progress.tableIndex + 1} of {progress.tableCount}
+          Table {Math.min(progress.tableIndex + 1, progress.tableCount)} of {progress.tableCount}
         </p>
         <p className="text-xs text-muted-foreground">
           Please do not close the application.

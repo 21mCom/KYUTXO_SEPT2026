@@ -12,7 +12,9 @@ import {
 import {
   countTransactions,
   countTransactionParticipants,
+  countAddresslessParticipants,
 } from '@/lib/data/transaction-crud';
+import { hasLegacyEncryptedRecords } from '@/lib/legacy-decrypt';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -32,7 +34,9 @@ import {
   ArrowRightLeft,
   DollarSign,
   BarChart3,
-  RefreshCw
+  RefreshCw,
+  ShieldCheck,
+  AlertTriangle,
 } from 'lucide-react';
 
 interface StatCardProps {
@@ -100,6 +104,8 @@ interface StatsData {
   transactionParticipants: number;
   addressSyncState: number;
   priceData: number;
+  addresslessParticipants: number;
+  hasLegacyEncryptedData: boolean;
 }
 
 async function loadAllStats(): Promise<StatsData> {
@@ -115,6 +121,8 @@ async function loadAllStats(): Promise<StatsData> {
     transactionParticipants,
     addressSyncState,
     priceData,
+    addresslessParticipants,
+    hasLegacyEncryptedData,
     ...importanceCounts
   ] = await Promise.all([
     countRecords(),
@@ -128,6 +136,8 @@ async function loadAllStats(): Promise<StatsData> {
     countTransactionParticipants(),
     countAddressSyncState(),
     countPriceData(),
+    countAddresslessParticipants(),
+    hasLegacyEncryptedRecords(),
     ...ALL_IMPORTANCE_TIERS.map(tier =>
       countRecordsByImportance(tier as Parameters<typeof countRecordsByImportance>[0])
     ),
@@ -173,6 +183,8 @@ async function loadAllStats(): Promise<StatsData> {
     transactionParticipants,
     addressSyncState,
     priceData,
+    addresslessParticipants,
+    hasLegacyEncryptedData,
   };
 }
 
@@ -426,6 +438,81 @@ export default function DataStats() {
                   {stats.importanceBreakdown['pending-review']}
                 </div>
                 <p className="text-sm text-muted-foreground">Pending Review</p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card data-testid="card-data-audit">
+          <CardHeader>
+            <CardTitle className="text-base flex items-center gap-2">
+              <ShieldCheck className="h-4 w-4" />
+              Data Audit
+            </CardTitle>
+            <CardDescription>
+              Read-only breakdown of your database contents to help you understand what the millions
+              of rows actually are before taking any action.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="rounded-md border p-3 space-y-1">
+                <p className="text-sm font-medium">Blockchain-discovered records</p>
+                <p className="text-2xl font-bold" data-testid="stat-blockchain-discovered">
+                  {((stats.importanceBreakdown['blockchain-discovered'] ?? 0) + (stats.importanceBreakdown['pending-review'] ?? 0)).toLocaleString()}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  Address and transaction records auto-created by sync. These can be reviewed and
+                  removed via the Cleanup page.
+                </p>
+              </div>
+
+              <div className="rounded-md border p-3 space-y-1">
+                <p className="text-sm font-medium">Address-less transaction participants</p>
+                <p className="text-2xl font-bold" data-testid="stat-addressless-participants">
+                  {stats.addresslessParticipants.toLocaleString()}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  Input/output rows without an address (OP_RETURN, coinbase, etc.). These are
+                  normal and cannot be linked to any address record.
+                </p>
+              </div>
+
+              <div className="rounded-md border p-3 space-y-1">
+                <p className="text-sm font-medium">Transaction sync participants</p>
+                <p className="text-2xl font-bold" data-testid="stat-total-participants">
+                  {stats.transactionParticipants.toLocaleString()}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  Total input + output rows created by blockchain sync. Deep multi-hop syncs grow
+                  this count quickly.
+                </p>
+              </div>
+
+              <div className="rounded-md border p-3 space-y-1">
+                <p className="text-sm font-medium">Legacy encrypted data</p>
+                <div className="flex items-center gap-2 mt-1" data-testid="stat-legacy-encrypted">
+                  {stats.hasLegacyEncryptedData ? (
+                    <>
+                      <AlertTriangle className="h-4 w-4 text-yellow-600 dark:text-yellow-400 shrink-0" />
+                      <span className="text-sm font-semibold text-yellow-700 dark:text-yellow-300">
+                        Encrypted payloads present
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      <CheckCircle2 className="h-4 w-4 text-green-600 dark:text-green-400 shrink-0" />
+                      <span className="text-sm font-semibold text-green-700 dark:text-green-300">
+                        Vault fully unlocked
+                      </span>
+                    </>
+                  )}
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  {stats.hasLegacyEncryptedData
+                    ? 'Some records still hold encrypted payloads. Use "Restore Locked Data" in Settings to recover them.'
+                    : 'No legacy encrypted payloads found. All records are in plaintext.'}
+                </p>
               </div>
             </div>
           </CardContent>

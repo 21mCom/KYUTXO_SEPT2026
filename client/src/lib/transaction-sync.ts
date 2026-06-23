@@ -151,6 +151,13 @@ export class TransactionSyncService {
   private knownAddressSet: Set<string> | null = null;
   private connectedOnlyMode: boolean = false;
   private addressesFilteredCount: number = 0;
+  // Hard ceiling on new address records created per sync run. Multi-hop
+  // "Sync Deeper" can silently create millions of blockchain-discovered records
+  // through the depth loop; this cap stops the explosion without deleting data.
+  // The default (10,000 new addresses per run) is generous for a legitimate deep
+  // sync on a normal wallet. Users can always run sync again to fetch more.
+  private newAddressRecordsThisRun: number = 0;
+  static readonly NEW_ADDRESS_RECORDS_CAP = 10_000;
   private currentProgress: SyncProgress = {
     phase: 'idle',
     addressesTotal: 0,
@@ -416,6 +423,7 @@ export class TransactionSyncService {
     this.resetProgress();
     this.cancelled = false;
     this.pauseRequested = false;
+    this.newAddressRecordsThisRun = 0;
 
     try {
       this.updateProgress({
@@ -723,6 +731,7 @@ export class TransactionSyncService {
     this.resetProgress();
     this.cancelled = false;
     this.pauseRequested = false;
+    this.newAddressRecordsThisRun = 0;
     
     // Initialize result with previous values if resuming
     const result: SyncResult = {
@@ -1692,6 +1701,22 @@ export class TransactionSyncService {
       return null;
     }
 
+    // Hard ceiling: stop creating new blockchain-discovered records once the
+    // per-run limit is reached. The address still appears as a participant (the
+    // participant row is written regardless), but no Records entry is created.
+    // This prevents multi-hop "Sync Deeper" from silently exploding the database
+    // across many recursion levels. Sync again to continue from where it left off.
+    if (this.newAddressRecordsThisRun >= TransactionSyncService.NEW_ADDRESS_RECORDS_CAP) {
+      if (this.newAddressRecordsThisRun === TransactionSyncService.NEW_ADDRESS_RECORDS_CAP) {
+        console.warn(
+          `[TransactionSync] New-address cap reached (${TransactionSyncService.NEW_ADDRESS_RECORDS_CAP}). ` +
+          'No more address records will be created this run. Run sync again to continue.',
+        );
+      }
+      this.addressesFilteredCount++;
+      return null;
+    }
+
     // Look up parent record to inherit context (but NOT owner - discovered addresses need review)
     let parentWalletName: string | undefined;
     let parentSeedName: string | undefined;
@@ -1724,6 +1749,7 @@ export class TransactionSyncService {
       walletSoftware: parentWalletSoftware,
     }, { skipNotification: true, skipVocabularySync: true });
 
+    this.newAddressRecordsThisRun++;
     this.deferNotification('records');
 
     try {

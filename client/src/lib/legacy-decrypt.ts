@@ -367,8 +367,13 @@ export async function countUnrecoveredLegacyRows(
 
       for (const item of chunk) {
         const row = item as unknown as globalThis.Record<string, unknown>;
-        // A row counts as locked if ANY sensitive field is still locked,
-        // regardless of which marker keys it carries.
+        // Only count a row as locked when it actually carries a legacy
+        // encryption marker. Modern, never-encrypted rows legitimately have
+        // blank sentinel fields (e.g. address-less transactionParticipants,
+        // blank-inputString records from blockchain sync), and must never be
+        // reported as "missing original encrypted data." This check mirrors
+        // the one in hasUnrecoveredLegacyData and the recovery filter path.
+        if (!hasAnyLegacyMarker(row)) continue;
         if (!isRowUnrecovered(row, sensitiveFields)) continue;
         // Whether it can be repaired depends on the encrypted payload still
         // being present — that is the only source the restore reads from.

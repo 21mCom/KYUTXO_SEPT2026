@@ -258,6 +258,20 @@ export async function getParticipantsByRecordIds(
   return db.transactionParticipants.where('recordId').anyOf(recordIds).toArray();
 }
 
+/**
+ * Count transactionParticipants that have no address (blank, null, or
+ * undefined). These rows are created by blockchain sync when it encounters
+ * inputs that resolve to an OP_RETURN output or other non-standard scripts.
+ * On vaults that ran deep multi-hop sync this count can be very large; it is
+ * surfaced in the Data Stats audit so users can see the true nature of the
+ * millions of rows rather than assuming data loss.
+ */
+export async function countAddresslessParticipants(): Promise<number> {
+  return db.transactionParticipants
+    .filter(p => !p.address || p.address.trim() === '')
+    .count();
+}
+
 // =============================================================================
 // FRESHNESS FINGERPRINTS — compared against the native engine mirror before a
 // read is served from the engine. All reads below are index-only (count + the
