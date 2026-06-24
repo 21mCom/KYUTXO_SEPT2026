@@ -1,4 +1,4 @@
-import { Switch, Route, Router } from "wouter";
+import { Switch, Route, Router, useLocation } from "wouter";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
@@ -40,6 +40,9 @@ import BitcoinFlowVisualizer from "@/pages/BitcoinFlowVisualizer";
 import BulkEditor from "@/pages/BulkEditor";
 import QuickTagger from "@/pages/QuickTagger";
 import { lazy, Suspense, useState, useEffect } from "react";
+import { useToast } from "@/hooks/use-toast";
+import { ToastAction } from "@/components/ui/toast";
+import { detectOrphanedTxRecords } from "@/lib/txid-backfill";
 import { ActivityBusProvider } from "@/lib/activity-bus";
 import { ActivityPulseDot } from "@/components/ActivityPulseDot";
 import { EngineBootstrapper, EnginePreparingIndicator } from "@/components/EngineMaintenanceUI";
@@ -119,6 +122,56 @@ function AppRoutes() {
   );
 }
 
+// Once per browser session, silently scan for transaction records that are
+// missing their on-chain data ("orphaned" txids) and, if any are found, show a
+// non-intrusive toast that lets the user jump to Settings and rebuild them.
+function OrphanedTxNotifier() {
+  const { toast } = useToast();
+  const [, setLocation] = useLocation();
+
+  useEffect(() => {
+    const SESSION_KEY = "kyutxo:orphanCheckDone";
+    if (sessionStorage.getItem(SESSION_KEY)) return;
+    sessionStorage.setItem(SESSION_KEY, "1");
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const { txids } = await detectOrphanedTxRecords();
+        if (cancelled || txids.length === 0) return;
+
+        const count = txids.length;
+        const plural = count !== 1;
+        toast({
+          title: "Missing transaction data",
+          description: `${count.toLocaleString()} transaction${plural ? "s" : ""} ${plural ? "are" : "is"} missing on-chain data. Rebuild ${plural ? "them" : "it"} from Settings.`,
+          duration: 15000,
+          action: (
+            <ToastAction
+              altText="Open Settings to rebuild missing transactions"
+              onClick={() => {
+                sessionStorage.setItem("kyutxo:autoBackfill", "1");
+                setLocation("/settings");
+              }}
+              data-testid="button-rebuild-missing-transactions"
+            >
+              Fix now
+            </ToastAction>
+          ),
+        });
+      } catch {
+        // Silent: detection failures must never disrupt app startup.
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [toast, setLocation]);
+
+  return null;
+}
+
 function AuthenticatedApp() {
   const { logout } = useAuth();
   
@@ -132,6 +185,7 @@ function AuthenticatedApp() {
       <RecordPreviewProvider>
         <SidebarProvider style={style as React.CSSProperties}>
           <EngineBootstrapper />
+          <OrphanedTxNotifier />
           <div className="flex h-screen w-full">
             <AppSidebar />
             <div className="flex flex-col flex-1 overflow-hidden">

@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { Link } from "wouter";
 import { Moon, Eye, Database, Plus, Trash2, Pencil, AlertTriangle, Upload, RefreshCw, Loader2, Paperclip, KeyRound, Shield, Download, Stethoscope, ChevronRight, Wrench } from "lucide-react";
 import { isElectron, getElectronAPI } from "@/lib/electron";
@@ -166,6 +166,7 @@ export default function SettingsPage() {
   const [backfillMessage, setBackfillMessage] = useState("");
   const [backfillResult, setBackfillResult] = useState<BackfillResult | null>(null);
   const backfillAbortRef = useRef<AbortController | null>(null);
+  const rebuildSectionRef = useRef<HTMLDivElement | null>(null);
 
   const handleToggleBuiltInField = async (field: keyof typeof fieldVisibility) => {
     try {
@@ -768,6 +769,19 @@ export default function SettingsPage() {
     backfillAbortRef.current?.abort();
     setBackfillMessage("Cancelling...");
   };
+
+  // When the user opens Settings via the startup "missing transaction data"
+  // notification, a one-shot sessionStorage flag is set. Consume it here to
+  // scroll to and automatically start the rebuild.
+  useEffect(() => {
+    if (sessionStorage.getItem("kyutxo:autoBackfill") !== "1") return;
+    sessionStorage.removeItem("kyutxo:autoBackfill");
+    rebuildSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    if (!isBackfilling) {
+      handleManualBackfill();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Handle file selection for restore
   const handleFileSelect = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -2465,7 +2479,7 @@ export default function SettingsPage() {
 
             <Separator />
 
-            <div className="flex items-center justify-between gap-2 flex-wrap">
+            <div ref={rebuildSectionRef} className="flex items-center justify-between gap-2 flex-wrap">
               <div>
                 <Label className="text-base">Rebuild Missing Transactions</Label>
                 <p className="text-sm text-muted-foreground">
