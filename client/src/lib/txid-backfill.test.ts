@@ -445,6 +445,95 @@ describe("runTxidBackfill", () => {
   });
 });
 
+// ---- runTxidBackfill (concurrent races) ------------------------------------
+//
+// runTxidBackfill carries an in-flight idempotency guard: each chunk item
+// re-checks getTransactionByTxid before fetching, and writeOnChainData
+// re-checks again right before the insert. The actual reason that guard exists
+// is two backfills racing on the same txids at once — e.g. an auto-backfill on
+// startup overlapping a user-triggered "rebuild" from Settings. These tests
+// launch two runs in parallel and assert no duplicate blockchainTransactions
+// row is ever created, and that the combined rebuilt tally never overcounts the
+// orphans.
+
+describe("runTxidBackfill (concurrent races)", () => {
+  it("two parallel runs for the same txid create exactly one blockchain row", async () => {
+    const txs = new Map<string, ApiTransaction | null>([
+      [TXID_A, makeApiTx(TXID_A)],
+    ]);
+    // Each run gets its own provider instance so a slow getTransaction in one
+    // does not serialise the other; both back the same fixture data.
+    const providerA = makeProvider({ txs });
+    const providerB = makeProvider({ txs });
+
+    const [resultA, resultB] = await Promise.all([
+      runTxidBackfill(providerA, [TXID_A], { concurrency: 1 }),
+      runTxidBackfill(providerB, [TXID_A], { concurrency: 1 }),
+    ]);
+
+    // Exactly one blockchain row for the txid, regardless of who won the race.
+    const rows = await testDb.blockchainTransactions
+      .where("txid")
+      .equals(TXID_A)
+      .toArray();
+    expect(rows).toHaveLength(1);
+
+    // The losing run never wrote a duplicate, so participants come from the one
+    // winning writeOnChainData call (1 input + 1 output).
+    const participants = await testDb.transactionParticipants
+      .where("txid")
+      .equals(TXID_A)
+      .toArray();
+    expect(participants).toHaveLength(2);
+
+    // The orphan was rebuilt exactly once across both runs — never twice.
+    expect(resultA.rebuilt + resultB.rebuilt).toBe(1);
+    expect(resultA.rebuilt + resultB.rebuilt).toBeLessThanOrEqual(1);
+    // The loser counts the txid as skipped (saw the row) or failed (lost the
+    // unique-index insert race), but never as a second rebuild.
+    expect(resultA.rebuilt + resultA.skipped + resultA.failed).toBe(1);
+    expect(resultB.rebuilt + resultB.skipped + resultB.failed).toBe(1);
+  });
+
+  it("two parallel runs over a shared txid set never duplicate or overcount", async () => {
+    const orphanTxids = [TXID_A, TXID_B, TXID_C, TXID_D];
+    const txs = new Map<string, ApiTransaction | null>(
+      orphanTxids.map((t) => [t, makeApiTx(t)]),
+    );
+    const providerA = makeProvider({ txs });
+    const providerB = makeProvider({ txs });
+
+    const [resultA, resultB] = await Promise.all([
+      runTxidBackfill(providerA, orphanTxids, { concurrency: 2 }),
+      runTxidBackfill(providerB, orphanTxids, { concurrency: 2 }),
+    ]);
+
+    // One blockchain row per txid — no duplicates anywhere.
+    for (const txid of orphanTxids) {
+      const rows = await testDb.blockchainTransactions
+        .where("txid")
+        .equals(txid)
+        .toArray();
+      expect(rows).toHaveLength(1);
+    }
+    expect(await testDb.blockchainTransactions.count()).toBe(orphanTxids.length);
+
+    // No txid was rebuilt by both runs: the combined rebuilt tally must not
+    // exceed the number of orphans.
+    expect(resultA.rebuilt + resultB.rebuilt).toBeLessThanOrEqual(
+      orphanTxids.length,
+    );
+    // Every orphan ended up rebuilt exactly once (by whichever run won it).
+    expect(resultA.rebuilt + resultB.rebuilt).toBe(orphanTxids.length);
+
+    // Participants are written only by the winning writeOnChainData, so each
+    // txid has exactly its 1 input + 1 output — no doubled-up rows.
+    expect(await testDb.transactionParticipants.count()).toBe(
+      orphanTxids.length * 2,
+    );
+  });
+});
+
 // ---- detectAndBackfill (offline / deferral) --------------------------------
 
 describe("detectAndBackfill", () => {
