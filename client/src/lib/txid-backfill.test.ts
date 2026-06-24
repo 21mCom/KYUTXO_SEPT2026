@@ -958,6 +958,72 @@ describe("resolveBackfillPrevouts (input address resolution)", () => {
   });
 });
 
+// ---- runTxidBackfill (prevout resolution error isolation) ------------------
+//
+// runTxidBackfill wraps the entire prevout-resolution pass in a try/catch so a
+// failure while chasing previous transactions records an error message but
+// never fails the overall rebuild — the transactions already rebuilt stay
+// intact and the run still completes. A provider error that propagates out of
+// the resolution pass (e.g. getTransaction throwing rather than rejecting an
+// awaited promise inside the settled fetch loop) is the regression this guards.
+
+describe("runTxidBackfill (prevout resolution error isolation)", () => {
+  it("a provider error thrown while fetching a previous transaction never fails the rebuild", async () => {
+    // The orphan has a blank-address input whose prevout must be fetched to be
+    // resolved. The provider serves the orphan fine but throws when asked for
+    // the previous transaction, simulating a network hiccup mid-resolution.
+    const provider: BlockchainProvider = {
+      name: "fake",
+      async getBlockHeight() {
+        return 800010;
+      },
+      async getAddressTransactions() {
+        return [];
+      },
+      getTransaction(txid: string) {
+        if (txid === PREV_TXID) {
+          // Throw (not reject) so the failure escapes the resolution pass and
+          // lands in runTxidBackfill's try/catch, exercising the isolation path.
+          throw new Error("network hiccup");
+        }
+        return Promise.resolve(makeApiTxBlankInput(TXID_A, PREV_TXID, 0));
+      },
+      async testConnection() {
+        return { success: true };
+      },
+    };
+
+    const phases: string[] = [];
+    const result = await runTxidBackfill(provider, [TXID_A], {
+      onProgress: (p) => phases.push(p.phase),
+    });
+
+    // The rebuild that happened before resolution stands — count is unaffected.
+    expect(result.rebuilt).toBe(1);
+    expect(result.failed).toBe(0);
+    expect(
+      await testDb.blockchainTransactions.where("txid").equals(TXID_A).count(),
+    ).toBe(1);
+
+    // The run still completed cleanly despite the resolution failure.
+    expect(phases[phases.length - 1]).toBe("complete");
+
+    // Resolution blew up before filling anything in, but the error was caught
+    // and recorded rather than thrown out of runTxidBackfill.
+    expect(result.prevoutsResolved).toBe(0);
+    expect(result.errors.some((e) => e.includes("prevout resolution"))).toBe(true);
+    expect(result.errors.some((e) => e.includes("network hiccup"))).toBe(true);
+
+    // The blank input is exactly as first written — no partial update.
+    const input = await testDb.transactionParticipants
+      .where("txid")
+      .equals(TXID_A)
+      .and((p) => p.role === "input")
+      .first();
+    expect(input?.address ?? "").toBe("");
+  });
+});
+
 // ---- detectAndBackfill (offline / deferral) --------------------------------
 
 describe("detectAndBackfill", () => {
