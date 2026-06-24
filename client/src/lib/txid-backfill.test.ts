@@ -92,6 +92,7 @@ const ADDR_IN = "bc1qinputaddrxxxxxxxxxxxxxxxxxxxxxxxxxxx0";
 const ADDR_OUT = "bc1qoutputaddrxxxxxxxxxxxxxxxxxxxxxxxxxxx1";
 const ADDR_PREV1 = "bc1qprevoneaddrxxxxxxxxxxxxxxxxxxxxxxxxxx2";
 const ADDR_PREV2 = "bc1qprevtwoaddrxxxxxxxxxxxxxxxxxxxxxxxxxx3";
+const PREV_ADDR = "bc1qprevoutaddrxxxxxxxxxxxxxxxxxxxxxxxxx2";
 
 function makeTxRecord(inputString: string): DbRecord {
   const now = Date.now();
@@ -177,6 +178,35 @@ function makeApiTx(txid: string, shape: TxShape = {}): ApiTransaction {
       value: o.amount ?? 99000,
       n: o.n ?? idx,
     })),
+  };
+}
+
+/**
+ * Builds an orphan ApiTransaction whose single input carries NO prevout data, so
+ * parseTransaction yields an input with a blank address but a chaseable
+ * prevTxid/prevVout reference — exactly the gap resolveBackfillPrevouts closes.
+ */
+function makeApiTxBlankInput(
+  txid: string,
+  prevTxid = PREV_TXID,
+  prevVout = 0,
+): ApiTransaction {
+  return {
+    txid,
+    status: { confirmed: true, block_height: 800000, block_time: 1700000000 },
+    fee: 1000,
+    size: 200,
+    weight: 800,
+    // No `prevout` field → scriptpubkey_address is absent → blank input address.
+    vin: [{ txid: prevTxid, vout: prevVout }],
+    vout: [
+      {
+        scriptpubkey_address: ADDR_OUT,
+        scriptpubkey_type: "v0_p2wpkh",
+        value: 99000,
+        n: 0,
+      },
+    ],
   };
 }
 
@@ -824,6 +854,107 @@ describe("runTxidBackfill (cancellation leaves a consistent DB)", () => {
 
     // The resolution count reflects only the input that was actually completed.
     expect(result.prevoutsResolved).toBe(1);
+  });
+});
+
+// ---- resolveBackfillPrevouts (input address resolution) --------------------
+//
+// runTxidBackfill runs a second pass (resolveBackfillPrevouts) after rebuilding
+// that fills in blank input addresses by chasing each input's prevout reference
+// — first from participant rows already in the DB, then by fetching the previous
+// transaction from the provider. These tests drive that pass through the public
+// runTxidBackfill entry point using orphans whose inputs lack prevout addresses.
+
+describe("resolveBackfillPrevouts (input address resolution)", () => {
+  it("fills a blank input address from a local participant cache without fetching the prevout", async () => {
+    // The referenced previous output is already in the DB as a participant row.
+    await testDb.transactionParticipants.add({
+      txid: PREV_TXID,
+      role: "output",
+      vout: 0,
+      address: PREV_ADDR,
+      amount: 50000,
+      scriptType: "v0_p2wpkh",
+    } as unknown as TransactionParticipant);
+
+    const seen: string[] = [];
+    const provider = makeProvider({
+      txs: new Map([[TXID_A, makeApiTxBlankInput(TXID_A)]]),
+      onGetTransaction: (txid) => seen.push(txid),
+    });
+
+    const result = await runTxidBackfill(provider, [TXID_A]);
+
+    expect(result.rebuilt).toBe(1);
+    expect(result.prevoutsResolved).toBe(1);
+
+    const input = await testDb.transactionParticipants
+      .where("txid")
+      .equals(TXID_A)
+      .and((p) => p.role === "input")
+      .first();
+    expect(input?.address).toBe(PREV_ADDR);
+    expect(input?.amount).toBe(50000);
+    expect(input?.scriptType).toBe("v0_p2wpkh");
+
+    // The prevout was already local, so the provider was only hit for the
+    // orphan itself — never for the previous transaction.
+    expect(seen).toContain(TXID_A);
+    expect(seen).not.toContain(PREV_TXID);
+  });
+
+  it("fetches the previous transaction from the provider when the prevout is not local", async () => {
+    const seen: string[] = [];
+    const prevTx = makeApiTx(PREV_TXID, {
+      outputs: [{ address: PREV_ADDR, amount: 50000, n: 0 }],
+    });
+    const provider = makeProvider({
+      txs: new Map([
+        [TXID_A, makeApiTxBlankInput(TXID_A)],
+        [PREV_TXID, prevTx],
+      ]),
+      onGetTransaction: (txid) => seen.push(txid),
+    });
+
+    const result = await runTxidBackfill(provider, [TXID_A]);
+
+    expect(result.rebuilt).toBe(1);
+    expect(result.prevoutsResolved).toBe(1);
+    // The prevout was missing locally, so it had to be fetched.
+    expect(seen).toContain(PREV_TXID);
+
+    const input = await testDb.transactionParticipants
+      .where("txid")
+      .equals(TXID_A)
+      .and((p) => p.role === "input")
+      .first();
+    expect(input?.address).toBe(PREV_ADDR);
+    expect(input?.amount).toBe(50000);
+    expect(input?.scriptType).toBe("v0_p2wpkh");
+  });
+
+  it("links a resolved input address to an existing record by recordId", async () => {
+    const recId = await testDb.records.add(makeAddressRecord(PREV_ADDR));
+    const prevTx = makeApiTx(PREV_TXID, {
+      outputs: [{ address: PREV_ADDR, amount: 50000, n: 0 }],
+    });
+    const provider = makeProvider({
+      txs: new Map([
+        [TXID_A, makeApiTxBlankInput(TXID_A)],
+        [PREV_TXID, prevTx],
+      ]),
+    });
+
+    const result = await runTxidBackfill(provider, [TXID_A]);
+    expect(result.prevoutsResolved).toBe(1);
+
+    const input = await testDb.transactionParticipants
+      .where("txid")
+      .equals(TXID_A)
+      .and((p) => p.role === "input")
+      .first();
+    expect(input?.address).toBe(PREV_ADDR);
+    expect(input?.recordId).toBe(recId);
   });
 });
 
