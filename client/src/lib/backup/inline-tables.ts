@@ -44,7 +44,7 @@ import { getAllPriceData, addPriceData, clearPriceData } from "@/lib/data/price-
 import { getAllSettings } from "@/lib/data/settings-crud";
 import {
   getAllNodeSettings,
-  addNodeSettings,
+  putNodeSettings,
   clearNodeSettings,
 } from "@/lib/data/node-settings-crud";
 import {
@@ -214,8 +214,8 @@ export async function restoreInlineTables(
   }
 
   for (const ns of arr("nodeSettings")) {
-    const { id, ...d } = ns;
-    await addNodeSettings(d, { skipNotification: true });
+    const row = { ...ns, id: ns.id ?? "default" };
+    await putNodeSettings(row, { skipNotification: true });
   }
 
   // utxoLineage and custodySegments are streamed tables now, so NEW backups

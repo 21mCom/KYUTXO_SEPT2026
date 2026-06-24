@@ -67,7 +67,7 @@ import { clearRecordOrigins } from "@/lib/data/record-origins-crud";
 import { clearCustomFields, addCustomField as addCustomFieldCrud, getCustomFieldBySlug } from "@/lib/data/custom-fields-crud";
 import { clearAddressSyncState, bulkAddAddressSyncState, getAllAddressSyncState, type CreateAddressSyncStateData } from "@/lib/data/address-sync-crud";
 import { clearPriceData, addPriceData } from "@/lib/data/price-data-crud";
-import { clearNodeSettings, addNodeSettings } from "@/lib/data/node-settings-crud";
+import { clearNodeSettings, putNodeSettings } from "@/lib/data/node-settings-crud";
 import { clearDerivationTemplates, addDerivationTemplate, getAllDerivationTemplates, type CreateDerivationTemplateData } from "@/lib/data/derivation-templates-crud";
 import { updateSettings } from "@/lib/data/settings-crud";
 import { deriveKey, decrypt, base64ToBuffer, verifyPassword } from "@/lib/crypto";
@@ -1375,8 +1375,8 @@ export default function SettingsPage() {
       // Restore node settings (v2.2.0+, not encrypted)
       if (backupNodeSettings && backupNodeSettings.length > 0) {
         for (const ns of backupNodeSettings) {
-          const { id, ...nsData } = ns;
-          await addNodeSettings(nsData, { skipNotification: true });
+          const row = { ...ns, id: ns.id ?? "default" };
+          await putNodeSettings(row, { skipNotification: true });
         }
       }
 
