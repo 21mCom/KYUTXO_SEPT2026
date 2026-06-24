@@ -534,6 +534,141 @@ describe("runTxidBackfill (concurrent races)", () => {
   });
 });
 
+// ---- writeOnChainData field mapping ----------------------------------------
+
+describe("writeOnChainData field mapping", () => {
+  it("persists fee/feeRate/size/weight/vsize/blockHeight/blockTime from the parsed tx", async () => {
+    // makeApiTx defaults: fee=1000, size=200, weight=800, blockHeight=800000,
+    // blockTime=1700000000. parseTransaction derives feeRate = round(fee/weight*4)
+    // = round(1000/800*4) = 5 and vsize = ceil(weight/4) = 200.
+    const provider = makeProvider({ txs: new Map([[TXID_A, makeApiTx(TXID_A)]]) });
+
+    const result = await runTxidBackfill(provider, [TXID_A]);
+    expect(result.rebuilt).toBe(1);
+
+    const row = await testDb.blockchainTransactions.where("txid").equals(TXID_A).first();
+    expect(row).toBeDefined();
+    expect(row!.fee).toBe(1000);
+    expect(row!.feeRate).toBe(5);
+    expect(row!.size).toBe(200);
+    expect(row!.weight).toBe(800);
+    expect(row!.vsize).toBe(200);
+    expect(row!.blockHeight).toBe(800000);
+    expect(row!.blockTime).toBe(1700000000);
+  });
+
+  it("captures an OP_RETURN output into hasOpReturn/opReturnData, not a participant", async () => {
+    // "48656c6c6f20576f726c64" is the hex for "Hello World".
+    const opReturnAsm = "OP_RETURN OP_PUSHBYTES_11 48656c6c6f20576f726c64";
+    const apiTx: ApiTransaction = {
+      txid: TXID_A,
+      status: { confirmed: true, block_height: 800000, block_time: 1700000000 },
+      fee: 1000,
+      size: 200,
+      weight: 800,
+      vin: [
+        {
+          txid: PREV_TXID,
+          vout: 0,
+          prevout: {
+            scriptpubkey_address: ADDR_IN,
+            scriptpubkey_type: "v0_p2wpkh",
+            value: 100000,
+          },
+        },
+      ],
+      vout: [
+        {
+          scriptpubkey_address: ADDR_OUT,
+          scriptpubkey_type: "v0_p2wpkh",
+          value: 99000,
+          n: 0,
+        },
+        {
+          scriptpubkey_type: "op_return",
+          scriptpubkey_asm: opReturnAsm,
+          value: 0,
+          n: 1,
+        },
+      ],
+    };
+    const provider = makeProvider({ txs: new Map([[TXID_A, apiTx]]) });
+
+    const result = await runTxidBackfill(provider, [TXID_A]);
+    expect(result.rebuilt).toBe(1);
+
+    const row = await testDb.blockchainTransactions.where("txid").equals(TXID_A).first();
+    expect(row!.hasOpReturn).toBe(true);
+    expect(row!.opReturnData).toEqual([
+      {
+        vout: 1,
+        dataHex: "48656c6c6f20576f726c64",
+        dataText: "Hello World",
+        dataAsm: opReturnAsm,
+      },
+    ]);
+
+    const participants = await testDb.transactionParticipants
+      .where("txid")
+      .equals(TXID_A)
+      .toArray();
+    // Only the real input + the spendable output; the OP_RETURN output is not a participant.
+    expect(participants).toHaveLength(2);
+    expect(participants.some((p) => p.role === "input" && p.address === ADDR_IN)).toBe(true);
+    expect(participants.some((p) => p.role === "output" && p.address === ADDR_OUT)).toBe(true);
+    expect(participants.some((p) => p.scriptType === "op_return")).toBe(false);
+    expect(participants.some((p) => p.role === "output" && p.vout === 1)).toBe(false);
+  });
+
+  it("excludes a coinbase input (empty/zero prev txid) from input participants", async () => {
+    const ZERO_TXID = "0".repeat(64);
+    const apiTx: ApiTransaction = {
+      txid: TXID_A,
+      status: { confirmed: true, block_height: 800000, block_time: 1700000000 },
+      fee: 1000,
+      size: 200,
+      weight: 800,
+      vin: [
+        // Coinbase input: zero prev txid, no prevout → must be skipped.
+        { txid: ZERO_TXID, vout: 0 },
+        // A normal input alongside it must still be captured.
+        {
+          txid: PREV_TXID,
+          vout: 0,
+          prevout: {
+            scriptpubkey_address: ADDR_IN,
+            scriptpubkey_type: "v0_p2wpkh",
+            value: 100000,
+          },
+        },
+      ],
+      vout: [
+        {
+          scriptpubkey_address: ADDR_OUT,
+          scriptpubkey_type: "v0_p2wpkh",
+          value: 99000,
+          n: 0,
+        },
+      ],
+    };
+    const provider = makeProvider({ txs: new Map([[TXID_A, apiTx]]) });
+
+    const result = await runTxidBackfill(provider, [TXID_A]);
+    expect(result.rebuilt).toBe(1);
+
+    const inputs = await testDb.transactionParticipants
+      .where("txid")
+      .equals(TXID_A)
+      .and((p) => p.role === "input")
+      .toArray();
+    // Only the non-coinbase input survives.
+    expect(inputs).toHaveLength(1);
+    expect(inputs[0].address).toBe(ADDR_IN);
+    expect(inputs[0].prevTxid).toBe(PREV_TXID);
+    expect(inputs.some((p) => p.prevTxid === ZERO_TXID)).toBe(false);
+  });
+});
+
 // ---- detectAndBackfill (offline / deferral) --------------------------------
 
 describe("detectAndBackfill", () => {
