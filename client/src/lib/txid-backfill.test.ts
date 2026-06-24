@@ -85,9 +85,13 @@ const TXID_B = "b".repeat(64);
 const TXID_C = "c".repeat(64);
 const TXID_D = "d".repeat(64);
 const PREV_TXID = "e".repeat(64);
+const PREV_1 = "1".repeat(64);
+const PREV_2 = "2".repeat(64);
 
 const ADDR_IN = "bc1qinputaddrxxxxxxxxxxxxxxxxxxxxxxxxxxx0";
 const ADDR_OUT = "bc1qoutputaddrxxxxxxxxxxxxxxxxxxxxxxxxxxx1";
+const ADDR_PREV1 = "bc1qprevoneaddrxxxxxxxxxxxxxxxxxxxxxxxxxx2";
+const ADDR_PREV2 = "bc1qprevtwoaddrxxxxxxxxxxxxxxxxxxxxxxxxxx3";
 
 function makeTxRecord(inputString: string): DbRecord {
   const now = Date.now();
@@ -666,6 +670,160 @@ describe("writeOnChainData field mapping", () => {
     expect(inputs[0].address).toBe(ADDR_IN);
     expect(inputs[0].prevTxid).toBe(PREV_TXID);
     expect(inputs.some((p) => p.prevTxid === ZERO_TXID)).toBe(false);
+  });
+});
+
+// ---- runTxidBackfill (cancellation leaves a consistent DB) -----------------
+//
+// Cancelling mid-flight must never leave the database half-written. Two
+// invariants are at stake:
+//   1. Fetch/write phase: a txid is written atomically per writeOnChainData —
+//      its blockchainTransactions row and its full participant set go in
+//      together. An abort at a chunk boundary may skip the *rest* of the work,
+//      but anything already persisted must be complete (never a row with no
+//      participants, never a partial participant set), and result.rebuilt must
+//      equal the number of complete txids actually persisted.
+//   2. Prevout-resolution phase: each input participant is rewritten as a whole
+//      row, so an abort must leave every input either fully resolved (address +
+//      amount + scriptType filled in) or completely untouched (still blank) —
+//      never partially updated.
+
+describe("runTxidBackfill (cancellation leaves a consistent DB)", () => {
+  it("aborting the fetch/write phase leaves only complete txids (row + full participants)", async () => {
+    // Three orphans with distinct participant shapes so a complete write is
+    // distinguishable from a half-write by participant count alone.
+    const expectedParticipants = new Map<string, number>([
+      [TXID_A, 2], // 1 input + 1 output
+      [TXID_B, 5], // 2 inputs + 3 outputs
+      [TXID_C, 3], // 1 input + 2 outputs
+    ]);
+    const txs = new Map<string, ApiTransaction | null>([
+      [TXID_A, makeApiTx(TXID_A)],
+      [
+        TXID_B,
+        makeApiTx(TXID_B, {
+          inputs: [
+            { address: ADDR_IN, amount: 100000, prevTxid: PREV_1, prevVout: 0 },
+            { address: ADDR_OUT, amount: 50000, prevTxid: PREV_2, prevVout: 1 },
+          ],
+          outputs: [
+            { address: ADDR_OUT, amount: 40000, n: 0 },
+            { address: ADDR_PREV1, amount: 40000, n: 1 },
+            { address: ADDR_PREV2, amount: 40000, n: 2 },
+          ],
+        }),
+      ],
+      [
+        TXID_C,
+        makeApiTx(TXID_C, {
+          outputs: [
+            { address: ADDR_OUT, amount: 40000, n: 0 },
+            { address: ADDR_PREV1, amount: 50000, n: 1 },
+          ],
+        }),
+      ],
+    ]);
+    const controller = new AbortController();
+    const provider = makeProvider({
+      txs,
+      onGetTransaction: () => controller.abort(), // abort once the first fetch starts
+    });
+
+    const result = await runTxidBackfill(provider, [TXID_A, TXID_B, TXID_C], {
+      concurrency: 1,
+      signal: controller.signal,
+    });
+
+    // Every persisted blockchain row must carry its complete participant set.
+    const rows = await testDb.blockchainTransactions.toArray();
+    for (const row of rows) {
+      const participants = await testDb.transactionParticipants
+        .where("txid")
+        .equals(row.txid)
+        .toArray();
+      expect(participants.length).toBeGreaterThan(0); // never an orphaned row
+      expect(participants.length).toBe(expectedParticipants.get(row.txid));
+    }
+
+    // No participant rows exist for txids that never got a blockchain row.
+    const writtenTxids = new Set(rows.map((r) => r.txid));
+    const allParticipants = await testDb.transactionParticipants.toArray();
+    for (const p of allParticipants) {
+      expect(writtenTxids.has(p.txid)).toBe(true);
+    }
+
+    // result.rebuilt matches exactly the number of complete txids persisted.
+    expect(result.rebuilt).toBe(rows.length);
+    // The abort short-circuited before the whole set was processed.
+    expect(result.rebuilt).toBeLessThan(expectedParticipants.size);
+  });
+
+  it("aborting prevout resolution leaves inputs fully resolved or untouched, never partial", async () => {
+    // One orphan with two blank-address inputs, each pointing at a different
+    // previous transaction we must fetch to resolve. Aborting after the first
+    // prevout fetch must resolve that input in full and leave the other exactly
+    // as it was written — no partially-filled rows.
+    const orphan = makeApiTx(TXID_A, {
+      inputs: [
+        { address: "", amount: 0, prevTxid: PREV_1, prevVout: 0 },
+        { address: "", amount: 0, prevTxid: PREV_2, prevVout: 0 },
+      ],
+      outputs: [{ address: ADDR_OUT, amount: 80000, n: 0 }],
+    });
+    const prev1 = makeApiTx(PREV_1, {
+      outputs: [{ address: ADDR_PREV1, amount: 60000, n: 0 }],
+    });
+    const prev2 = makeApiTx(PREV_2, {
+      outputs: [{ address: ADDR_PREV2, amount: 70000, n: 0 }],
+    });
+
+    const controller = new AbortController();
+    const provider = makeProvider({
+      txs: new Map<string, ApiTransaction | null>([
+        [TXID_A, orphan],
+        [PREV_1, prev1],
+        [PREV_2, prev2],
+      ]),
+      onGetTransaction: (txid) => {
+        // Let the write phase and the first prevout fetch (PREV_1) through, then
+        // abort so the resolution loop breaks before fetching PREV_2.
+        if (txid === PREV_1) controller.abort();
+      },
+    });
+
+    const result = await runTxidBackfill(provider, [TXID_A], {
+      concurrency: 1,
+      signal: controller.signal,
+    });
+
+    // The orphan itself was written before the abort (resolution is a later pass).
+    expect(result.rebuilt).toBe(1);
+    expect(
+      await testDb.blockchainTransactions.where("txid").equals(TXID_A).count(),
+    ).toBe(1);
+
+    const inputs = await testDb.transactionParticipants
+      .where("txid")
+      .equals(TXID_A)
+      .and((p) => p.role === "input")
+      .toArray();
+    expect(inputs).toHaveLength(2);
+
+    const byPrev = new Map(inputs.map((p) => [p.prevTxid, p]));
+    const resolved = byPrev.get(PREV_1)!;
+    const untouched = byPrev.get(PREV_2)!;
+
+    // PREV_1's input was fully resolved: address, amount and scriptType together.
+    expect(resolved.address).toBe(ADDR_PREV1);
+    expect(resolved.amount).toBe(60000);
+    expect(resolved.scriptType).toBeDefined();
+
+    // PREV_2's input is exactly as first written — not a partial update.
+    expect(untouched.address ?? "").toBe("");
+    expect(untouched.amount).toBe(0);
+
+    // The resolution count reflects only the input that was actually completed.
+    expect(result.prevoutsResolved).toBe(1);
   });
 });
 
