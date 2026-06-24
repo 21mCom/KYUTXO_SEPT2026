@@ -67,7 +67,7 @@ import { clearRecordOrigins } from "@/lib/data/record-origins-crud";
 import { clearCustomFields, addCustomField as addCustomFieldCrud, getCustomFieldBySlug } from "@/lib/data/custom-fields-crud";
 import { clearAddressSyncState, bulkAddAddressSyncState, getAllAddressSyncState, type CreateAddressSyncStateData } from "@/lib/data/address-sync-crud";
 import { clearPriceData, addPriceData } from "@/lib/data/price-data-crud";
-import { clearNodeSettings, putNodeSettings } from "@/lib/data/node-settings-crud";
+import { clearNodeSettings, putNodeSettings, getNodeSettings } from "@/lib/data/node-settings-crud";
 import { clearDerivationTemplates, addDerivationTemplate, getAllDerivationTemplates, type CreateDerivationTemplateData } from "@/lib/data/derivation-templates-crud";
 import { updateSettings } from "@/lib/data/settings-crud";
 import { deriveKey, decrypt, base64ToBuffer, verifyPassword } from "@/lib/crypto";
@@ -95,6 +95,8 @@ import {
   type SearchFadeOption,
 } from "@/config/debounce";
 import { useActivityBus } from "@/lib/activity-bus";
+import { detectAndBackfill, detectOrphanedTxRecords, runTxidBackfill, type BackfillResult } from "@/lib/txid-backfill";
+import { createProviderFromSettings } from "@/lib/blockchain-api";
 
 const DELETE_CONFIRMATION_PHRASE = "DELETE ALL DATA";
 
@@ -157,6 +159,13 @@ export default function SettingsPage() {
   const [searchFadeIntensity, setSearchFadeIntensity] = useState<SearchFadeOption>(getSearchFadePreference);
   const [, setIsStripRunning] = useState(false);
   const { monitorEnabled, setMonitorEnabled } = useActivityBus();
+
+  // Txid backfill state (post-restore and manual)
+  const [isBackfilling, setIsBackfilling] = useState(false);
+  const [backfillProgress, setBackfillProgress] = useState(0);
+  const [backfillMessage, setBackfillMessage] = useState("");
+  const [backfillResult, setBackfillResult] = useState<BackfillResult | null>(null);
+  const backfillAbortRef = useRef<AbortController | null>(null);
 
   const handleToggleBuiltInField = async (field: keyof typeof fieldVisibility) => {
     try {
@@ -688,6 +697,78 @@ export default function SettingsPage() {
     setRecomputeMessage("Cancelling...");
   };
 
+  // Manual backfill: detect orphaned txids and fetch their on-chain data
+  const handleManualBackfill = async () => {
+    const controller = new AbortController();
+    backfillAbortRef.current = controller;
+    setIsBackfilling(true);
+    setBackfillProgress(0);
+    setBackfillMessage("Scanning for orphaned transaction records...");
+    setBackfillResult(null);
+
+    try {
+      const result = await detectAndBackfill({
+        signal: controller.signal,
+        onProgress: (p) => {
+          if (p.phase === 'scanning') {
+            setBackfillProgress(2);
+            setBackfillMessage("Scanning for orphaned transaction records...");
+          } else if (p.phase === 'fetching') {
+            const pct = p.orphansFound > 0
+              ? Math.round(4 + (p.processed / p.orphansFound) * 94)
+              : 98;
+            setBackfillProgress(pct);
+            setBackfillMessage(
+              `Rebuilding ${p.processed.toLocaleString()} of ${p.orphansFound.toLocaleString()} transactions...`
+            );
+          } else if (p.phase === 'complete' || p.phase === 'deferred') {
+            setBackfillProgress(100);
+            setBackfillMessage("Done.");
+          }
+        },
+      });
+
+      setBackfillResult(result);
+
+      if (result.deferred) {
+        toast({
+          title: "Transaction Rebuild Deferred",
+          description: result.deferReason ?? "No connectivity. Run again when a blockchain node is reachable.",
+        });
+      } else if (result.orphansFound === 0) {
+        toast({
+          title: "No Orphaned Transactions",
+          description: "All transaction records already have on-chain data.",
+        });
+      } else {
+        const parts: string[] = [];
+        if (result.rebuilt > 0) parts.push(`${result.rebuilt} rebuilt`);
+        if (result.skipped > 0) parts.push(`${result.skipped} skipped`);
+        if (result.failed > 0) parts.push(`${result.failed} failed`);
+        toast({
+          title: "Transaction Rebuild Complete",
+          description: `Found ${result.orphansFound} orphaned transaction${result.orphansFound !== 1 ? "s" : ""}. ${parts.join(", ")}.`,
+        });
+      }
+    } catch (err) {
+      toast({
+        variant: "destructive",
+        title: "Transaction Rebuild Failed",
+        description: err instanceof Error ? err.message : "An error occurred.",
+      });
+    } finally {
+      backfillAbortRef.current = null;
+      setIsBackfilling(false);
+      setBackfillProgress(0);
+      setBackfillMessage("");
+    }
+  };
+
+  const handleCancelBackfill = () => {
+    backfillAbortRef.current?.abort();
+    setBackfillMessage("Cancelling...");
+  };
+
   // Handle file selection for restore
   const handleFileSelect = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -807,12 +888,61 @@ export default function SettingsPage() {
         });
 
         setRestoreProgress(100);
-        setRestoreMessage("Restore complete!");
+        setRestoreMessage("Restore complete! Checking for missing transaction data...");
 
-        toast({
-          title: "Restore Successful",
-          description: `Restored ${result.counts.records} records, ${result.counts.blockchainTransactions} transactions, ${result.counts.transactionParticipants} participants, ${result.counts.attachmentFiles} attachment files. Existing data was replaced.`,
-        });
+        // --- Post-restore txid backfill ---
+        // Detect orphaned transaction records and fetch their on-chain data.
+        // If the provider is unreachable, defer gracefully and tell the user.
+        try {
+          const { txids } = await detectOrphanedTxRecords();
+          if (txids.length > 0) {
+            setRestoreMessage(`Rebuilding on-chain data for ${txids.length} transaction${txids.length !== 1 ? "s" : ""}…`);
+            const nodeSettings = await getNodeSettings('default');
+            let backfillSummary = "";
+            if (!nodeSettings) {
+              backfillSummary = ` ${txids.length} transaction${txids.length !== 1 ? "s" : ""} need on-chain data — run "Rebuild Missing Transactions" in Settings when connected.`;
+            } else {
+              try {
+                const provider = createProviderFromSettings(nodeSettings);
+                await provider.getBlockHeight(); // connectivity probe
+                const bfResult = await runTxidBackfill(provider, txids, {
+                  onProgress: (p) => {
+                    const pct = p.orphansFound > 0
+                      ? Math.round(p.processed / p.orphansFound * 100)
+                      : 100;
+                    setRestoreMessage(
+                      `Rebuilding ${p.processed.toLocaleString()} of ${p.orphansFound.toLocaleString()} transactions…`
+                    );
+                    setRestoreProgress(pct);
+                  },
+                });
+                const parts: string[] = [];
+                if (bfResult.rebuilt > 0) parts.push(`${bfResult.rebuilt} rebuilt`);
+                if (bfResult.skipped > 0) parts.push(`${bfResult.skipped} skipped`);
+                if (bfResult.failed > 0) parts.push(`${bfResult.failed} failed`);
+                backfillSummary = parts.length > 0
+                  ? ` Transaction data: ${parts.join(", ")}.`
+                  : "";
+              } catch {
+                backfillSummary = ` ${txids.length} transaction${txids.length !== 1 ? "s" : ""} need on-chain data — run "Rebuild Missing Transactions" in Settings when connected.`;
+              }
+            }
+            toast({
+              title: "Restore Successful",
+              description: `Restored ${result.counts.records} records, ${result.counts.blockchainTransactions} transactions, ${result.counts.transactionParticipants} participants, ${result.counts.attachmentFiles} attachment files.${backfillSummary}`,
+            });
+          } else {
+            toast({
+              title: "Restore Successful",
+              description: `Restored ${result.counts.records} records, ${result.counts.blockchainTransactions} transactions, ${result.counts.transactionParticipants} participants, ${result.counts.attachmentFiles} attachment files. Existing data was replaced.`,
+            });
+          }
+        } catch {
+          toast({
+            title: "Restore Successful",
+            description: `Restored ${result.counts.records} records, ${result.counts.blockchainTransactions} transactions, ${result.counts.transactionParticipants} participants, ${result.counts.attachmentFiles} attachment files. Existing data was replaced.`,
+          });
+        }
 
         setTimeout(() => {
           setRestoreDialogOpen(false);
@@ -1508,7 +1638,7 @@ export default function SettingsPage() {
       console.log(`[Restore] transactions: ${transactionsAdded}, participants: ${participantsAdded}, synced addresses: ${addressSyncAdded}`);
 
       setRestoreProgress(100);
-      setRestoreMessage("Restore complete!");
+      setRestoreMessage("Restore complete! Checking for missing transaction data...");
 
       let attachmentFilesMsg = "";
       if (attachmentFilesRestored > 0 && attachmentFilesErrors === 0) {
@@ -1529,13 +1659,53 @@ export default function SettingsPage() {
         additionalDataMsg = `, ${parts.join(", ")}`;
       }
 
-      const message = restoreMode === "merge"
+      const baseMessage = restoreMode === "merge"
         ? `Added ${recordsAdded} records (${recordsSkipped} skipped), ${tagsAdded} tags, ${categoriesAdded} categories, ${vocabularyAdded} vocabulary items, ${templatesAdded} templates${attachmentFilesMsg}${additionalDataMsg}.`
         : `Restored ${recordsAdded} records, ${tagsAdded} tags, ${categoriesAdded} categories, ${vocabularyAdded} vocabulary items, ${templatesAdded} templates${attachmentFilesMsg}${additionalDataMsg}.`;
 
+      // --- Post-restore txid backfill ---
+      let backfillSuffix = "";
+      try {
+        const { txids: orphanTxids } = await detectOrphanedTxRecords();
+        if (orphanTxids.length > 0) {
+          setRestoreMessage(`Rebuilding on-chain data for ${orphanTxids.length} transaction${orphanTxids.length !== 1 ? "s" : ""}…`);
+          const nodeSettingsForBf = await getNodeSettings('default');
+          if (!nodeSettingsForBf) {
+            backfillSuffix = ` ${orphanTxids.length} transaction${orphanTxids.length !== 1 ? "s" : ""} need on-chain data — run "Rebuild Missing Transactions" in Settings when connected.`;
+          } else {
+            try {
+              const bfProvider = createProviderFromSettings(nodeSettingsForBf);
+              await bfProvider.getBlockHeight(); // connectivity probe
+              const bfResult = await runTxidBackfill(bfProvider, orphanTxids, {
+                onProgress: (p) => {
+                  const pct = p.orphansFound > 0
+                    ? Math.round(p.processed / p.orphansFound * 100)
+                    : 100;
+                  setRestoreMessage(
+                    `Rebuilding ${p.processed.toLocaleString()} of ${p.orphansFound.toLocaleString()} transactions…`
+                  );
+                  setRestoreProgress(pct);
+                },
+              });
+              const bfParts: string[] = [];
+              if (bfResult.rebuilt > 0) bfParts.push(`${bfResult.rebuilt} rebuilt`);
+              if (bfResult.skipped > 0) bfParts.push(`${bfResult.skipped} skipped`);
+              if (bfResult.failed > 0) bfParts.push(`${bfResult.failed} failed`);
+              backfillSuffix = bfParts.length > 0
+                ? ` Transaction data: ${bfParts.join(", ")}.`
+                : "";
+            } catch {
+              backfillSuffix = ` ${orphanTxids.length} transaction${orphanTxids.length !== 1 ? "s" : ""} need on-chain data — run "Rebuild Missing Transactions" in Settings when connected.`;
+            }
+          }
+        }
+      } catch {
+        // backfill detection failure is non-fatal
+      }
+
       toast({
         title: "Restore Successful",
-        description: message,
+        description: baseMessage + backfillSuffix,
       });
 
       // Close dialog and reset state
@@ -2295,6 +2465,35 @@ export default function SettingsPage() {
 
             <Separator />
 
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <div>
+                <Label className="text-base">Rebuild Missing Transactions</Label>
+                <p className="text-sm text-muted-foreground">
+                  Fetch on-chain data for transaction records that were restored from an older backup or added manually without syncing. Requires a connected blockchain provider.
+                </p>
+              </div>
+              <Button
+                variant="outline"
+                onClick={handleManualBackfill}
+                disabled={isBackfilling}
+                data-testid="button-rebuild-transactions"
+              >
+                {isBackfilling ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Rebuilding...
+                  </>
+                ) : (
+                  <>
+                    <RefreshCw className="h-4 w-4 mr-2" />
+                    Rebuild
+                  </>
+                )}
+              </Button>
+            </div>
+
+            <Separator />
+
             <div className="flex items-center justify-between">
               <div>
                 <Label className="text-base">Restore from Backup</Label>
@@ -2747,6 +2946,32 @@ export default function SettingsPage() {
               variant="outline"
               onClick={handleCancelRecompute}
               data-testid="button-cancel-recompute"
+            >
+              Cancel
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isBackfilling}>
+        <DialogContent className="sm:max-w-md" data-testid="dialog-backfill-transactions">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <RefreshCw className="h-5 w-5" />
+              Rebuilding Missing Transaction Data
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <Progress value={backfillProgress} data-testid="progress-backfill" />
+            <p className="text-sm text-muted-foreground" data-testid="text-backfill-message">
+              {backfillMessage}
+            </p>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={handleCancelBackfill}
+              data-testid="button-cancel-backfill"
             >
               Cancel
             </Button>
