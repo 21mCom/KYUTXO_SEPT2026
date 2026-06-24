@@ -855,6 +855,84 @@ describe("runTxidBackfill (cancellation leaves a consistent DB)", () => {
     // The resolution count reflects only the input that was actually completed.
     expect(result.prevoutsResolved).toBe(1);
   });
+
+  it("stops fetching previous transactions from the network once cancelled mid-resolution", async () => {
+    // One orphan with three blank-address inputs, each pointing at a distinct
+    // previous transaction that has to be fetched from the provider to resolve.
+    // Cancelling while the first prevout is in flight must break the resolution
+    // loop before any further previous transactions are pulled from the
+    // network — the exact regression this guards against: the app continuing to
+    // fetch prevouts after the user already stopped the rebuild.
+    const PREV_3 = "3".repeat(64);
+    const ADDR_PREV3 = "bc1qprevthreeaddrxxxxxxxxxxxxxxxxxxxxxx4";
+
+    const orphan = makeApiTx(TXID_A, {
+      inputs: [
+        { address: "", amount: 0, prevTxid: PREV_1, prevVout: 0 },
+        { address: "", amount: 0, prevTxid: PREV_2, prevVout: 0 },
+        { address: "", amount: 0, prevTxid: PREV_3, prevVout: 0 },
+      ],
+      outputs: [{ address: ADDR_OUT, amount: 70000, n: 0 }],
+    });
+    const prev1 = makeApiTx(PREV_1, {
+      outputs: [{ address: ADDR_PREV1, amount: 30000, n: 0 }],
+    });
+    const prev2 = makeApiTx(PREV_2, {
+      outputs: [{ address: ADDR_PREV2, amount: 40000, n: 0 }],
+    });
+    const prev3 = makeApiTx(PREV_3, {
+      outputs: [{ address: ADDR_PREV3, amount: 50000, n: 0 }],
+    });
+
+    const controller = new AbortController();
+    const seen: string[] = [];
+    const provider = makeProvider({
+      txs: new Map<string, ApiTransaction | null>([
+        [TXID_A, orphan],
+        [PREV_1, prev1],
+        [PREV_2, prev2],
+        [PREV_3, prev3],
+      ]),
+      onGetTransaction: (txid) => {
+        seen.push(txid);
+        // Abort the moment the first previous transaction is fetched.
+        if (txid === PREV_1) controller.abort();
+      },
+    });
+
+    const result = await runTxidBackfill(provider, [TXID_A], {
+      concurrency: 1,
+      signal: controller.signal,
+    });
+
+    // The orphan itself was written before resolution began.
+    expect(result.rebuilt).toBe(1);
+
+    // The resolution pass stopped early: only the orphan and the first prevout
+    // were ever requested. No further previous transactions were pulled from
+    // the network after the cancel.
+    expect(seen).toContain(TXID_A);
+    expect(seen).toContain(PREV_1);
+    expect(seen).not.toContain(PREV_2);
+    expect(seen).not.toContain(PREV_3);
+
+    // Only the input whose prevout was fetched before the abort was filled in —
+    // the count reflects the partial work, not all three inputs.
+    expect(result.prevoutsResolved).toBe(1);
+
+    const inputs = await testDb.transactionParticipants
+      .where("txid")
+      .equals(TXID_A)
+      .and((p) => p.role === "input")
+      .toArray();
+    expect(inputs).toHaveLength(3);
+    const byPrev = new Map(inputs.map((p) => [p.prevTxid, p]));
+    // The fetched prevout resolved its input fully.
+    expect(byPrev.get(PREV_1)!.address).toBe(ADDR_PREV1);
+    // The un-fetched prevouts left their inputs exactly as first written.
+    expect(byPrev.get(PREV_2)!.address ?? "").toBe("");
+    expect(byPrev.get(PREV_3)!.address ?? "").toBe("");
+  });
 });
 
 // ---- resolveBackfillPrevouts (input address resolution) --------------------
