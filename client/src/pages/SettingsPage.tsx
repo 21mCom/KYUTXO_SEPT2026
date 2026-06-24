@@ -722,6 +722,9 @@ export default function SettingsPage() {
             setBackfillMessage(
               `Rebuilding ${p.processed.toLocaleString()} of ${p.orphansFound.toLocaleString()} transactions...`
             );
+          } else if (p.phase === 'resolving') {
+            setBackfillProgress(99);
+            setBackfillMessage("Resolving input addresses...");
           } else if (p.phase === 'complete' || p.phase === 'deferred') {
             setBackfillProgress(100);
             setBackfillMessage("Done.");
@@ -934,6 +937,7 @@ export default function SettingsPage() {
                 if (bfResult.rebuilt > 0) parts.push(`${bfResult.rebuilt} rebuilt`);
                 if (bfResult.skipped > 0) parts.push(`${bfResult.skipped} skipped`);
                 if (bfResult.failed > 0) parts.push(`${bfResult.failed} failed`);
+                if (bfResult.prevoutsResolved > 0) parts.push(`${bfResult.prevoutsResolved} input addresses resolved`);
                 backfillSummary = parts.length > 0
                   ? ` Transaction data: ${parts.join(", ")}.`
                   : "";
@@ -1705,6 +1709,7 @@ export default function SettingsPage() {
               if (bfResult.rebuilt > 0) bfParts.push(`${bfResult.rebuilt} rebuilt`);
               if (bfResult.skipped > 0) bfParts.push(`${bfResult.skipped} skipped`);
               if (bfResult.failed > 0) bfParts.push(`${bfResult.failed} failed`);
+              if (bfResult.prevoutsResolved > 0) bfParts.push(`${bfResult.prevoutsResolved} input addresses resolved`);
               backfillSuffix = bfParts.length > 0
                 ? ` Transaction data: ${bfParts.join(", ")}.`
                 : "";

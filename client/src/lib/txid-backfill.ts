@@ -14,6 +14,8 @@
 import {
   db,
   type Record,
+  type TransactionParticipant,
+  type ScriptType,
 } from './database';
 import {
   createProviderFromSettings,
@@ -23,6 +25,7 @@ import {
 import {
   addTransaction,
   bulkAddParticipants,
+  bulkPutParticipants,
   getTransactionByTxid,
 } from './data/transaction-crud';
 import { getNodeSettings } from './data/node-settings-crud';
@@ -31,7 +34,7 @@ import type { BlockchainProvider, ParsedTransaction } from './blockchain-api';
 // ─── Public result types ────────────────────────────────────────────────────
 
 export interface BackfillProgress {
-  phase: 'scanning' | 'fetching' | 'complete' | 'deferred';
+  phase: 'scanning' | 'fetching' | 'resolving' | 'complete' | 'deferred';
   orphansFound: number;
   processed: number;
   rebuilt: number;
@@ -48,6 +51,8 @@ export interface BackfillResult {
   rebuilt: number;
   skipped: number;
   failed: number;
+  /** Number of blank input addresses filled in by prevout resolution. */
+  prevoutsResolved: number;
   deferred: boolean;
   deferReason?: string;
   errors: string[];
@@ -238,6 +243,7 @@ export async function runTxidBackfill(
     rebuilt: 0,
     skipped: 0,
     failed: 0,
+    prevoutsResolved: 0,
     deferred: false,
     errors: [],
   };
@@ -245,6 +251,9 @@ export async function runTxidBackfill(
   if (txids.length === 0) return result;
 
   let processed = 0;
+  // Track which txids actually got new on-chain rows written so prevout
+  // resolution only scans the participants we just created.
+  const rebuiltTxids: string[] = [];
 
   const reportProgress = (currentTxid?: string) => {
     onProgress?.({
@@ -315,6 +324,7 @@ export async function runTxidBackfill(
       if (r.status === 'fulfilled') {
         if (r.value.status === 'rebuilt') {
           result.rebuilt++;
+          rebuiltTxids.push(txid);
         } else {
           result.skipped++;
         }
@@ -331,6 +341,32 @@ export async function runTxidBackfill(
     await new Promise(resolve => setTimeout(resolve, 0));
   }
 
+  // After importing, resolve any blank input addresses for the participants we
+  // just wrote. The txid-driven path writes inputs straight from the raw tx,
+  // which may lack prevout addresses (same gap the full sync closes with its
+  // own resolvePrevouts() pass). Errors here never fail the backfill.
+  if (!signal?.aborted && rebuiltTxids.length > 0) {
+    try {
+      onProgress?.({
+        phase: 'resolving',
+        orphansFound: txids.length,
+        processed,
+        rebuilt: result.rebuilt,
+        skipped: result.skipped,
+        failed: result.failed,
+        message: 'Resolving input addresses…',
+      });
+      result.prevoutsResolved = await resolveBackfillPrevouts(
+        provider,
+        rebuiltTxids,
+        { signal, concurrency },
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      result.errors.push(`prevout resolution: ${msg}`);
+    }
+  }
+
   onProgress?.({
     phase: 'complete',
     orphansFound: txids.length,
@@ -341,6 +377,163 @@ export async function runTxidBackfill(
   });
 
   return result;
+}
+
+/**
+ * Resolves blank input addresses for the given (just-rebuilt) txids.
+ *
+ * Inputs written by the txid backfill may have no address when the raw
+ * transaction did not include prevout data. For each such input we look up the
+ * referenced previous output — first from participant rows we already hold
+ * locally, then by fetching the previous transaction from the provider — and
+ * fill in the address, amount, scriptType, and recordId.
+ *
+ * This is a slimmed, standalone equivalent of
+ * TransactionSyncService.resolvePrevouts(): it is scoped to the txids we just
+ * wrote (instead of every input in the database) and uses the provider already
+ * configured for the backfill, so no second TransactionSyncService instance is
+ * created. All writes go through transaction-crud.ts.
+ *
+ * Returns the number of inputs whose address was filled in.
+ */
+async function resolveBackfillPrevouts(
+  provider: BlockchainProvider,
+  txids: string[],
+  options: { signal?: AbortSignal; concurrency?: number } = {},
+): Promise<number> {
+  const { signal, concurrency = 4 } = options;
+
+  // Collect the input participants for the rebuilt txids that still need an
+  // address but carry a prevout reference we can chase.
+  const unresolvedInputs: TransactionParticipant[] = [];
+  for (let i = 0; i < txids.length; i += 500) {
+    if (signal?.aborted) return 0;
+    const batch = txids.slice(i, i + 500);
+    const inputs = await db.transactionParticipants
+      .where('txid')
+      .anyOf(batch)
+      .and(p => p.role === 'input')
+      .toArray();
+    for (const p of inputs) {
+      if (
+        (!p.address || p.address === '') &&
+        p.prevTxid !== undefined &&
+        p.prevVout !== undefined
+      ) {
+        unresolvedInputs.push(p);
+      }
+    }
+    await new Promise(resolve => setTimeout(resolve, 0));
+  }
+
+  if (unresolvedInputs.length === 0) return 0;
+
+  // Build a cache of previous outputs from participant rows we already have.
+  const outputCache = new Map<string, { address: string; amount: number; scriptType?: ScriptType }>();
+  const prevTxids = new Set<string>();
+  for (const inp of unresolvedInputs) {
+    if (inp.prevTxid) prevTxids.add(inp.prevTxid);
+  }
+  const prevTxidArr = Array.from(prevTxids);
+  for (let i = 0; i < prevTxidArr.length; i += 500) {
+    if (signal?.aborted) return 0;
+    const batch = prevTxidArr.slice(i, i + 500);
+    const outputs = await db.transactionParticipants
+      .where('txid')
+      .anyOf(batch)
+      .and(p => p.role === 'output')
+      .toArray();
+    for (const o of outputs) {
+      if (o.vout !== undefined) {
+        outputCache.set(`${o.txid}:${o.vout}`, {
+          address: o.address,
+          amount: Number(o.amount) || 0,
+          scriptType: o.scriptType,
+        });
+      }
+    }
+  }
+
+  // Determine which previous transactions we still need to fetch.
+  const needFetch = new Set<string>();
+  for (const inp of unresolvedInputs) {
+    const key = `${inp.prevTxid}:${inp.prevVout}`;
+    if (!outputCache.has(key) && inp.prevTxid) {
+      needFetch.add(inp.prevTxid);
+    }
+  }
+
+  if (needFetch.size > 0) {
+    const fetchArr = Array.from(needFetch);
+    for (let i = 0; i < fetchArr.length; i += concurrency) {
+      if (signal?.aborted) break;
+      const chunk = fetchArr.slice(i, i + concurrency);
+      const results = await Promise.allSettled(
+        chunk.map(txid => provider.getTransaction(txid).then(apiTx => ({ txid, apiTx }))),
+      );
+      for (const r of results) {
+        if (r.status === 'fulfilled' && r.value.apiTx) {
+          const { txid, apiTx } = r.value;
+          for (const vout of apiTx.vout) {
+            if (vout.scriptpubkey_address) {
+              outputCache.set(`${txid}:${vout.n}`, {
+                address: vout.scriptpubkey_address,
+                amount: vout.value,
+                scriptType: vout.scriptpubkey_type as ScriptType,
+              });
+            }
+          }
+        }
+      }
+      await new Promise(resolve => setTimeout(resolve, 0));
+    }
+  }
+
+  // Map resolved addresses to existing record ids so participants stay linked.
+  const resolvedAddresses = new Set<string>();
+  for (const inp of unresolvedInputs) {
+    const resolved = outputCache.get(`${inp.prevTxid}:${inp.prevVout}`);
+    if (resolved?.address) resolvedAddresses.add(resolved.address);
+  }
+
+  const addressToRecordId = new Map<string, number>();
+  const addrArr = Array.from(resolvedAddresses);
+  for (let i = 0; i < addrArr.length; i += 500) {
+    const batch = addrArr.slice(i, i + 500);
+    const records = await db.records
+      .where('inputString')
+      .anyOf(batch)
+      .toArray();
+    for (const r of records) {
+      if (r.id !== undefined && r.inputString) {
+        addressToRecordId.set(r.inputString, r.id);
+      }
+    }
+  }
+
+  // Build the updated participant rows.
+  const updated: TransactionParticipant[] = [];
+  for (const inp of unresolvedInputs) {
+    const resolved = outputCache.get(`${inp.prevTxid}:${inp.prevVout}`);
+    if (resolved?.address && inp.id) {
+      updated.push({
+        ...inp,
+        address: resolved.address,
+        amount: resolved.amount,
+        scriptType: resolved.scriptType,
+        recordId: addressToRecordId.get(resolved.address),
+      });
+    }
+  }
+
+  if (updated.length === 0) return 0;
+
+  for (let i = 0; i < updated.length; i += 200) {
+    const batch = updated.slice(i, i + 200);
+    await bulkPutParticipants(batch, { skipNotification: true });
+  }
+
+  return updated.length;
 }
 
 /**
@@ -379,6 +572,7 @@ export async function detectAndBackfill(
       rebuilt: 0,
       skipped: 0,
       failed: 0,
+      prevoutsResolved: 0,
       deferred: false,
       errors: [],
     };
@@ -394,6 +588,7 @@ export async function detectAndBackfill(
         rebuilt: 0,
         skipped: 0,
         failed: 0,
+        prevoutsResolved: 0,
         deferred: true,
         deferReason: 'No node settings configured. Configure a blockchain provider in Settings to rebuild missing transaction data.',
         errors: [],
@@ -410,6 +605,7 @@ export async function detectAndBackfill(
       rebuilt: 0,
       skipped: 0,
       failed: 0,
+      prevoutsResolved: 0,
       deferred: true,
       deferReason: `Could not connect to blockchain provider: ${msg}. You can rebuild missing transaction data later from Settings > Data Management.`,
       errors: [],
@@ -422,6 +618,7 @@ export async function detectAndBackfill(
       rebuilt: 0,
       skipped: 0,
       failed: 0,
+      prevoutsResolved: 0,
       deferred: false,
       errors: [],
     };
