@@ -1,4 +1,4 @@
-import { db } from '@/lib/database';
+import { db, notifyDbChange, type Attachment } from '@/lib/database';
 import { isElectron, getElectronAPI } from '@/lib/electron';
 import { updateEvidenceAttachment } from '@/lib/data/evidence-crud';
 import { getRecord } from '@/lib/data/record-crud';
@@ -133,18 +133,38 @@ export async function downloadAttachment(objectPath: string): Promise<Blob> {
   }
 }
 
-// Download attachment by ID (looks up encryption status from metadata)
+// Download attachment by ID. The stored path is tried first; if it no longer
+// resolves to a file on disk (the file was moved into the hashed/opaque scheme
+// by a prior privacy migration but this row's pointer drifted), we locate the
+// real file, re-link the row, and open it. If it genuinely cannot be found, we
+// throw a clear, actionable error pointing at the Settings repair tool instead
+// of a generic failure.
 export async function downloadAttachmentById(attachmentId: number): Promise<{ blob: Blob; filename: string; mimeType: string }> {
   const attachment = await getAttachment(attachmentId);
   if (!attachment) {
     throw new Error('Attachment not found');
   }
-  
-  const blob = await downloadAttachment(attachment.objectStoragePath);
-  
+
+  let blob: Blob;
+  try {
+    blob = await downloadAttachment(attachment.objectStoragePath);
+  } catch (err) {
+    // The stored path did not resolve. Try to find the real file on disk and
+    // re-link this row to it — only ever to an unambiguous, already-migrated
+    // hashed/opaque file, never back onto a legacy plaintext path.
+    const relinked = await locateAndRelinkAttachment(attachment).catch(() => null);
+    if (relinked) {
+      blob = await downloadAttachment(relinked);
+    } else {
+      throw new Error(
+        'This attachment\u2019s file could not be found on disk. Open Settings \u2192 Storage & Files and run \u201CRepair attachment links\u201D to reconnect your files.',
+      );
+    }
+  }
+
   // Create blob with original mime type
   const typedBlob = new Blob([blob], { type: attachment.mimeType });
-  
+
   return {
     blob: typedBlob,
     filename: attachment.filename,
@@ -538,6 +558,287 @@ export async function auditAttachments(): Promise<AttachmentAuditResult> {
   };
 }
 
+// ============ RECONCILIATION / RE-LINK CORE ============
+//
+// When a privacy migration moved attachment files into the hashed/opaque scheme
+// (attachments/<sha256(identifier)>/<32-hex opaque><ext>) but a DB row's stored
+// path drifted out of sync, the literal path no longer resolves and the file
+// "won't open". These helpers locate the real file on disk and re-link the row
+// to it. They NEVER move, copy, or delete bytes — they only repoint DB rows, and
+// only ever to an unambiguous, already-migrated hashed/opaque file.
+
+interface AttachmentDiskIndex {
+  // Normalised on-disk relative paths (forward slashes, no `attachments/` prefix).
+  diskSet: Set<string>;
+  // Directory (path minus filename, '' for root files) -> filenames in it.
+  byDir: Map<string, string[]>;
+  // Normalised paths already referenced/claimed by a DB row. Files NOT in here
+  // are orphans available to be claimed by a drifted row.
+  referenced: Set<string>;
+}
+
+function splitDirFile(norm: string): { dir: string; file: string } {
+  const parts = norm.split('/').filter(Boolean);
+  const file = parts[parts.length - 1] ?? '';
+  const dir = parts.length >= 2 ? parts.slice(0, -1).join('/') : '';
+  return { dir, file };
+}
+
+function indexAddFile(byDir: Map<string, string[]>, norm: string): void {
+  const { dir, file } = splitDirFile(norm);
+  if (!file) return;
+  let list = byDir.get(dir);
+  if (!list) {
+    list = [];
+    byDir.set(dir, list);
+  }
+  if (!list.includes(file)) list.push(file);
+}
+
+function indexRemoveFile(byDir: Map<string, string[]>, norm: string): void {
+  const { dir, file } = splitDirFile(norm);
+  const list = byDir.get(dir);
+  if (!list) return;
+  const i = list.indexOf(file);
+  if (i >= 0) list.splice(i, 1);
+}
+
+async function buildAttachmentDiskIndex(): Promise<{ diskSet: Set<string>; byDir: Map<string, string[]> }> {
+  const files = await listAllAttachmentFiles();
+  const diskSet = new Set<string>();
+  const byDir = new Map<string, string[]>();
+  for (const raw of files) {
+    const norm = raw.replace(/\\/g, '/');
+    diskSet.add(norm);
+    indexAddFile(byDir, norm);
+  }
+  return { diskSet, byDir };
+}
+
+// Batched keyset scan of BOTH attachment tables, accumulating only the set of
+// on-disk paths some row already points at (cheap strings, never the rows). Used
+// to identify orphaned files that a drifted row may safely claim.
+async function collectReferencedPaths(diskSet: Set<string>): Promise<Set<string>> {
+  const referenced = new Set<string>();
+  const BATCH = 500;
+  const tables: Array<'attachments' | 'evidenceAttachments'> = ['attachments', 'evidenceAttachments'];
+  for (const table of tables) {
+    let lastId = 0;
+    for (;;) {
+      const chunk =
+        table === 'attachments'
+          ? await db.attachments.where('id').above(lastId).limit(BATCH).toArray()
+          : await db.evidenceAttachments.where('id').above(lastId).limit(BATCH).toArray();
+      if (chunk.length === 0) break;
+      lastId = chunk[chunk.length - 1].id!;
+      for (const row of chunk) {
+        if (!row.objectStoragePath) continue;
+        const norm = normalizeStoredPath(row.objectStoragePath);
+        if (diskSet.has(norm)) referenced.add(norm);
+      }
+      await new Promise(r => setTimeout(r, 0));
+      if (chunk.length < BATCH) break;
+    }
+  }
+  return referenced;
+}
+
+async function buildAttachmentRepairIndex(): Promise<AttachmentDiskIndex> {
+  const { diskSet, byDir } = await buildAttachmentDiskIndex();
+  const referenced = await collectReferencedPaths(diskSet);
+  return { diskSet, byDir, referenced };
+}
+
+function extLower(name: string): string {
+  const base = name.replace(/\\/g, '/').split('/').pop() || name;
+  const i = base.lastIndexOf('.');
+  return i > 0 ? base.slice(i).toLowerCase() : '';
+}
+
+// Max same-extension candidates we will read bytes for to break a tie by exact
+// size. Kept small so a pathological directory can never turn one repair into a
+// huge read amplification.
+const MAX_SIZE_DISAMBIG = 8;
+
+// Find the real on-disk file for a drifted DB row, or null if it cannot be
+// resolved unambiguously. Only ever returns a hashed/opaque file (the migrated
+// scheme): we never re-link a row back onto a legacy plaintext path. Candidate
+// directories are hashed only, because the migration hashes the old directory
+// name and uploads hash the owning record's identifier — both reconstruct the
+// same directory the file was moved into.
+async function findActualFileForRow(
+  objectStoragePath: string,
+  filename: string,
+  size: number | undefined,
+  recordInputString: string | undefined,
+  byDir: Map<string, string[]>,
+  referenced: Set<string>,
+): Promise<string | null> {
+  const { dir: storedDir } = splitDirFile(normalizeStoredPath(objectStoragePath));
+
+  const candidateDirs: string[] = [];
+  const addDir = (d: string) => {
+    if (d && !candidateDirs.includes(d)) candidateDirs.push(d);
+  };
+  if (storedDir) {
+    if (isAlreadyHashed(storedDir)) addDir(storedDir);
+    else addDir(await hashIdentifier(storedDir));
+  }
+  if (recordInputString) addDir(await hashIdentifier(recordInputString));
+
+  // Gather orphaned (unclaimed), opaque-named files in those directories.
+  const available: string[] = [];
+  for (const dir of candidateDirs) {
+    const files = byDir.get(dir);
+    if (!files) continue;
+    for (const f of files) {
+      if (!isOpaqueFilename(f)) continue; // hashed/opaque scheme only
+      const full = `${dir}/${f}`;
+      if (referenced.has(full)) continue; // already claimed by another row
+      if (!available.includes(full)) available.push(full);
+    }
+  }
+  if (available.length === 0) return null;
+  if (available.length === 1) return available[0];
+
+  // Multiple candidates: prefer ones whose extension matches the row's filename.
+  const wantExt = extLower(filename);
+  const extMatches = wantExt ? available.filter(p => extLower(p) === wantExt) : [];
+  const pool = extMatches.length > 0 ? extMatches : available;
+  if (pool.length === 1) return pool[0];
+
+  // Still ambiguous: break the tie by exact byte size when we know it and the
+  // candidate set is small. Never guess if the size ties or can't be read.
+  if (size != null && pool.length > 0 && pool.length <= MAX_SIZE_DISAMBIG) {
+    const sizeMatches: string[] = [];
+    for (const p of pool) {
+      try {
+        const bytes = await readAttachmentBytes(p);
+        if (bytes.byteLength === size) sizeMatches.push(p);
+      } catch {
+        // Skip unreadable candidate.
+      }
+    }
+    if (sizeMatches.length === 1) return sizeMatches[0];
+  }
+  return null; // ambiguous — do not guess
+}
+
+// Re-apply the original row's path style (Electron stores without an
+// `attachments/` prefix; the web server stores with it) to a normalised target.
+function reapplyAttachmentPrefix(originalStoredPath: string, normalizedTarget: string): string {
+  const hadPrefix = originalStoredPath.replace(/\\/g, '/').startsWith('attachments/');
+  return hadPrefix ? `attachments/${normalizedTarget}` : normalizedTarget;
+}
+
+// Used by the tolerant open path. Builds the repair index, finds the real file
+// for a single record attachment, and re-links the row. Returns the new stored
+// path on success, or null when the file cannot be resolved unambiguously.
+async function locateAndRelinkAttachment(attachment: Attachment): Promise<string | null> {
+  const { byDir, referenced } = await buildAttachmentRepairIndex();
+  let inputString: string | undefined;
+  if (attachment.recordId != null) {
+    const rec = await getRecord(attachment.recordId);
+    inputString = rec?.inputString;
+  }
+  const found = await findActualFileForRow(
+    attachment.objectStoragePath,
+    attachment.filename,
+    attachment.size,
+    inputString,
+    byDir,
+    referenced,
+  );
+  if (!found) return null;
+  const newPath = reapplyAttachmentPrefix(attachment.objectStoragePath, found);
+  await updateAttachment(attachment.id!, { objectStoragePath: newPath });
+  return newPath;
+}
+
+export interface AttachmentReconcileResult {
+  repaired: number;
+  unresolved: number;
+}
+
+// Repair drifted attachment pointers by re-linking each row whose stored path no
+// longer resolves to a file on disk. Relink-only: never moves, copies, or
+// deletes bytes. Batched + yielding so it stays responsive and bounded on large
+// vaults. Covers both the record-attachment and evidence tables.
+export async function reconcileAttachmentPaths(
+  onProgress?: (current: number, total: number, message: string) => void,
+): Promise<AttachmentReconcileResult> {
+  const { diskSet, byDir } = await buildAttachmentDiskIndex();
+  const referenced = await collectReferencedPaths(diskSet);
+
+  const total = (await countAttachments()) + (await db.evidenceAttachments.count());
+  if (total === 0) return { repaired: 0, unresolved: 0 };
+
+  const BATCH = 500;
+  let repaired = 0;
+  let unresolved = 0;
+  let processed = 0;
+
+  const tables: Array<'attachments' | 'evidenceAttachments'> = ['attachments', 'evidenceAttachments'];
+  for (const table of tables) {
+    let lastId = 0;
+    for (;;) {
+      const chunk =
+        table === 'attachments'
+          ? await db.attachments.where('id').above(lastId).limit(BATCH).toArray()
+          : await db.evidenceAttachments.where('id').above(lastId).limit(BATCH).toArray();
+      if (chunk.length === 0) break;
+      lastId = chunk[chunk.length - 1].id!;
+
+      for (const row of chunk) {
+        processed++;
+        if (onProgress) {
+          onProgress(processed, total, `Checking attachment ${processed} of ${total}`);
+        }
+        if (!row.objectStoragePath) continue;
+        const norm = normalizeStoredPath(row.objectStoragePath);
+        if (diskSet.has(norm)) continue; // already resolves — nothing to do
+
+        let inputString: string | undefined;
+        if (table === 'attachments' && (row as Attachment).recordId != null) {
+          const rec = await getRecord((row as Attachment).recordId);
+          inputString = rec?.inputString;
+        }
+
+        const found = await findActualFileForRow(
+          row.objectStoragePath,
+          row.filename,
+          row.size,
+          inputString,
+          byDir,
+          referenced,
+        );
+        if (!found) {
+          unresolved++;
+          continue;
+        }
+
+        const newPath = reapplyAttachmentPrefix(row.objectStoragePath, found);
+        if (table === 'attachments') {
+          await updateAttachment(row.id!, { objectStoragePath: newPath }, { skipNotification: true });
+        } else {
+          await updateEvidenceAttachment(row.id!, { objectStoragePath: newPath }, { skipNotification: true });
+        }
+        referenced.add(found); // claim it so no other row re-links to the same file
+        repaired++;
+      }
+
+      await new Promise(r => setTimeout(r, 0));
+      if (chunk.length < BATCH) break;
+    }
+  }
+
+  if (repaired > 0) {
+    notifyDbChange('attachments');
+    notifyDbChange('evidenceAttachments');
+  }
+  return { repaired, unresolved };
+}
+
 // Classifies a stored path: 'skip' (already in hashed/opaque scheme or empty),
 // 'rename' (legacy two-segment plaintext path), or 'root' (single-segment file
 // stranded at the attachments root — previously skipped entirely).
@@ -556,13 +857,52 @@ interface AttachmentMigrationItem {
   id: number;
   objectStoragePath: string;
   recordId?: number;
+  filename: string;
+  size?: number;
   isRootFile: boolean;
 }
 
 // Migrate a single attachment row's stored path into the hashed/opaque scheme.
 // Throws on failure (the caller counts it). Extracted so the keyset loop below
 // stays a thin pump over batches rather than holding the whole table in memory.
-async function migrateOneAttachmentPath(item: AttachmentMigrationItem): Promise<void> {
+//
+// When an `index` is supplied, the migration also CONVERGES: a row whose current
+// file is already gone from its stored location (a prior partial migration moved
+// it, or a restore left the pointer stale) is re-linked to the existing on-disk
+// file instead of failing on a missing rename/copy source. Relink-only — never
+// moves or copies bytes on that path. The index is kept consistent as files are
+// renamed/copied/relinked so later rows in the same run see the truth.
+async function migrateOneAttachmentPath(item: AttachmentMigrationItem, index?: AttachmentDiskIndex): Promise<void> {
+  if (index) {
+    const norm = normalizeStoredPath(item.objectStoragePath);
+    if (!index.diskSet.has(norm)) {
+      let inputString: string | undefined;
+      if (item.table === 'attachments' && item.recordId != null) {
+        const rec = await getRecord(item.recordId);
+        inputString = rec?.inputString;
+      }
+      const found = await findActualFileForRow(
+        item.objectStoragePath,
+        item.filename,
+        item.size,
+        inputString,
+        index.byDir,
+        index.referenced,
+      );
+      if (found) {
+        const newStoragePath = reapplyAttachmentPrefix(item.objectStoragePath, found);
+        if (item.table === 'attachments') {
+          await updateAttachment(item.id, { objectStoragePath: newStoragePath }, { skipNotification: true });
+        } else {
+          await updateEvidenceAttachment(item.id, { objectStoragePath: newStoragePath }, { skipNotification: true });
+        }
+        index.referenced.add(found);
+        console.log(`[Migration] Re-linked attachment ${item.id} to existing file: ${item.objectStoragePath} -> ${newStoragePath}`);
+        return;
+      }
+    }
+  }
+
   if (item.isRootFile) {
     // Single-segment file stranded at the attachments root. Recover it into
     // the hashed/opaque scheme by COPYING (read+write+verify) then updating
@@ -598,6 +938,15 @@ async function migrateOneAttachmentPath(item: AttachmentMigrationItem): Promise<
       await updateAttachment(item.id, { objectStoragePath: newStoragePath }, { skipNotification: true });
     } else {
       await updateEvidenceAttachment(item.id, { objectStoragePath: newStoragePath }, { skipNotification: true });
+    }
+
+    if (index) {
+      // A new copy now exists at the hashed/opaque path and is claimed by this
+      // row. The original root file is intentionally left in place (orphan).
+      const newNorm = normalizeStoredPath(newStoragePath);
+      index.diskSet.add(newNorm);
+      indexAddFile(index.byDir, newNorm);
+      index.referenced.add(newNorm);
     }
 
     console.log(`[Migration] Recovered root file for attachment ${item.id}: ${item.objectStoragePath} -> ${newStoragePath}`);
@@ -649,6 +998,19 @@ async function migrateOneAttachmentPath(item: AttachmentMigrationItem): Promise<
     throw dbError;
   }
 
+  if (index) {
+    // Keep the in-memory index consistent so later rows in this run never match
+    // a file that was just moved away, nor treat the new file as an orphan.
+    const newNorm = normalizeStoredPath(newStoragePath);
+    if (didRenameFile) {
+      index.diskSet.delete(oldRelPath);
+      indexRemoveFile(index.byDir, oldRelPath);
+    }
+    index.diskSet.add(newNorm);
+    indexAddFile(index.byDir, newNorm);
+    index.referenced.add(newNorm);
+  }
+
   console.log(`[Migration] Successfully migrated attachment ${item.id}: ${item.objectStoragePath} -> ${newStoragePath}`);
 }
 
@@ -668,6 +1030,12 @@ export async function migrateAttachmentPaths(
   let migrated = 0;
   let failed = 0;
   let processed = 0;
+
+  // Build the on-disk index once so a drifted row whose file already moved can
+  // be re-linked (convergence) instead of failing on a missing rename/copy
+  // source. The index is kept consistent inside migrateOneAttachmentPath as
+  // files are renamed/copied/relinked.
+  const index = await buildAttachmentRepairIndex();
 
   const tables: Array<'attachments' | 'evidenceAttachments'> = ['attachments', 'evidenceAttachments'];
   for (const table of tables) {
@@ -690,6 +1058,8 @@ export async function migrateAttachmentPaths(
           id: att.id!,
           objectStoragePath: att.objectStoragePath,
           recordId: table === 'attachments' ? (att as Attachment).recordId : undefined,
+          filename: att.filename,
+          size: att.size,
           isRootFile: kind === 'root',
         };
 
@@ -698,7 +1068,7 @@ export async function migrateAttachmentPaths(
         }
 
         try {
-          await migrateOneAttachmentPath(item);
+          await migrateOneAttachmentPath(item, index);
           migrated++;
         } catch (error) {
           console.error(`Failed to migrate attachment ${item.id} (${item.table}):`, error);

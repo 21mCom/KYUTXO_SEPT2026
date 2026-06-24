@@ -55,8 +55,8 @@ export function AttachmentList({ attachments, onDelete }: AttachmentListProps) {
     } catch (error) {
       toast({
         variant: "destructive",
-        title: "Download Failed",
-        description: error instanceof Error ? error.message : "Failed to download attachment",
+        title: "Couldn't open attachment",
+        description: error instanceof Error ? error.message : "Failed to open this attachment",
       });
     }
   };

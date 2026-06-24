@@ -1,6 +1,6 @@
 import { useState, useRef } from "react";
 import { Link } from "wouter";
-import { Moon, Eye, Database, Plus, Trash2, Pencil, AlertTriangle, Upload, RefreshCw, Loader2, Paperclip, KeyRound, Shield, Download, Stethoscope, ChevronRight } from "lucide-react";
+import { Moon, Eye, Database, Plus, Trash2, Pencil, AlertTriangle, Upload, RefreshCw, Loader2, Paperclip, KeyRound, Shield, Download, Stethoscope, ChevronRight, Wrench } from "lucide-react";
 import { isElectron, getElectronAPI } from "@/lib/electron";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
@@ -73,7 +73,7 @@ import { updateSettings } from "@/lib/data/settings-crud";
 import { deriveKey, decrypt, base64ToBuffer, verifyPassword } from "@/lib/crypto";
 import { getVaultSettings, vaultDb } from "@/lib/vault";
 import { generateSalt, hashPassword, bufferToBase64 } from "@/lib/crypto";
-import { migrateAttachmentPaths, auditAttachments, downloadFile, deleteFile, formatFileSize, type AttachmentAuditResult } from "@/lib/attachments";
+import { migrateAttachmentPaths, auditAttachments, reconcileAttachmentPaths, downloadFile, deleteFile, formatFileSize, type AttachmentAuditResult, type AttachmentReconcileResult } from "@/lib/attachments";
 import { getTrashedAttachments, deleteTrashedAttachment } from "@/lib/data/trash-crud";
 import { 
   setAttachmentPathsMigrated,
@@ -141,6 +141,8 @@ export default function SettingsPage() {
   const [isMigratingAttachments, setIsMigratingAttachments] = useState(false);
   const [isAuditingAttachments, setIsAuditingAttachments] = useState(false);
   const [attachmentAudit, setAttachmentAudit] = useState<AttachmentAuditResult | null>(null);
+  const [isRepairingAttachments, setIsRepairingAttachments] = useState(false);
+  const [attachmentRepair, setAttachmentRepair] = useState<AttachmentReconcileResult | null>(null);
   const [trashList, setTrashList] = useState<TrashedAttachment[] | null>(null);
   const [isLoadingTrash, setIsLoadingTrash] = useState(false);
   const [isPurgingTrash, setIsPurgingTrash] = useState(false);
@@ -513,6 +515,42 @@ export default function SettingsPage() {
       });
     } finally {
       setIsAuditingAttachments(false);
+    }
+  };
+
+  const handleRepairAttachmentLinks = async () => {
+    setIsRepairingAttachments(true);
+    try {
+      const result = await reconcileAttachmentPaths((current, total, message) => {
+        console.log(`[Repair] ${message}`);
+      });
+      setAttachmentRepair(result);
+      if (result.repaired === 0 && result.unresolved === 0) {
+        toast({
+          title: "Nothing to repair",
+          description: "All attachments already point to a file on disk.",
+        });
+      } else if (result.unresolved === 0) {
+        toast({
+          title: "Repair complete",
+          description: `Reconnected ${result.repaired} attachment${result.repaired !== 1 ? "s" : ""} to ${result.repaired !== 1 ? "their" : "its"} file on disk.`,
+        });
+      } else {
+        toast({
+          variant: result.repaired > 0 ? "default" : "destructive",
+          title: result.repaired > 0 ? "Repair partially complete" : "Some attachments couldn't be repaired",
+          description: `Reconnected ${result.repaired}, but ${result.unresolved} file${result.unresolved !== 1 ? "s" : ""} could not be found on disk. Run "Check" for details, or restore from a backup.`,
+        });
+      }
+    } catch (error) {
+      console.error("Attachment repair failed:", error);
+      toast({
+        variant: "destructive",
+        title: "Repair Failed",
+        description: error instanceof Error ? error.message : "An error occurred during repair.",
+      });
+    } finally {
+      setIsRepairingAttachments(false);
     }
   };
 
@@ -1980,6 +2018,52 @@ export default function SettingsPage() {
                 )}
               </Button>
             </div>
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <div>
+                <Label className="text-base">Repair Attachment Links</Label>
+                <p className="text-sm text-muted-foreground">
+                  Reconnect attachments whose file moved during a previous migration. Relinks records to the matching file on disk — never moves or deletes files.
+                </p>
+              </div>
+              <Button
+                variant="outline"
+                onClick={handleRepairAttachmentLinks}
+                disabled={isRepairingAttachments}
+                data-testid="button-repair-attachments"
+              >
+                {isRepairingAttachments ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Repairing...
+                  </>
+                ) : (
+                  <>
+                    <Wrench className="h-4 w-4 mr-2" />
+                    Repair
+                  </>
+                )}
+              </Button>
+            </div>
+            {attachmentRepair && (
+              <div
+                className="rounded-md border p-4 space-y-2 text-sm"
+                data-testid="text-attachment-repair-result"
+              >
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <span className="text-muted-foreground">Reconnected</span>
+                  <span data-testid="text-repair-repaired">{attachmentRepair.repaired}</span>
+                </div>
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <span className="text-muted-foreground">Still missing (no matching file found)</span>
+                  <span data-testid="text-repair-unresolved">{attachmentRepair.unresolved}</span>
+                </div>
+                {attachmentRepair.repaired === 0 && attachmentRepair.unresolved === 0 && (
+                  <p className="text-muted-foreground pt-1">
+                    Everything was already linked. No repairs were needed.
+                  </p>
+                )}
+              </div>
+            )}
             <div className="flex items-center justify-between gap-2 flex-wrap">
               <div>
                 <Label className="text-base">Check Attachments</Label>

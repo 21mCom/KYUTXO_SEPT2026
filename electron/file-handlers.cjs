@@ -65,7 +65,12 @@ function registerFileHandlers(ipcMain, { dataDir, attachmentsDir, portableMode }
         return { success: false, error: 'Path traversal detected' };
       }
       const data = fs.readFileSync(filePath);
-      return { success: true, data: data.buffer };
+      // Return exactly the file's bytes. fs.readFileSync can hand back a Buffer
+      // that is a view into a larger shared pool (for small files), so exposing
+      // `data.buffer` directly would leak unrelated pooled bytes and corrupt the
+      // read. Slice the backing ArrayBuffer to this Buffer's exact window.
+      const exact = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+      return { success: true, data: exact };
     } catch (error) {
       return { success: false, error: error.message };
     }
