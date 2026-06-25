@@ -1540,8 +1540,8 @@ export class TransactionSyncService {
     return stats;
   }
 
-  async resolvePrevouts(onProgress?: (resolved: number, total: number) => void): Promise<{ resolved: number; fetchedFromNode: number; errors: number }> {
-    const stats = { resolved: 0, fetchedFromNode: 0, errors: 0 };
+  async resolvePrevouts(onProgress?: (resolved: number, total: number) => void): Promise<{ resolved: number; fetchedFromNode: number; errors: number; resolvedAddresses: string[] }> {
+    const stats = { resolved: 0, fetchedFromNode: 0, errors: 0, resolvedAddresses: [] as string[] };
 
     const allInputs = await db.transactionParticipants
       .where('role').equals('input')
@@ -1624,20 +1624,21 @@ export class TransactionSyncService {
       }
     }
 
-    const resolvedAddresses = new Set<string>();
+    const resolvedAddressSet = new Set<string>();
     for (const inp of unresolvedInputs) {
       const key = `${inp.prevTxid}:${inp.prevVout}`;
       const resolved = localOutputCache.get(key);
       if (resolved && resolved.address) {
-        resolvedAddresses.add(resolved.address);
+        resolvedAddressSet.add(resolved.address);
         // These addresses now have a known input amount, so their balance
         // changed — mark them for a local-only stats recompute.
         this.statsTouchedAddresses.add(resolved.address);
       }
     }
+    stats.resolvedAddresses = Array.from(resolvedAddressSet);
 
     const addressToRecordId = new Map<string, number>();
-    const addrArr = Array.from(resolvedAddresses);
+    const addrArr = Array.from(resolvedAddressSet);
     for (let i = 0; i < addrArr.length; i += 500) {
       const batch = addrArr.slice(i, i + 500);
       const records = await db.records

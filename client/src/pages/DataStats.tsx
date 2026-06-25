@@ -1,4 +1,4 @@
-import { useState, useEffect, type ReactNode } from 'react';
+import { useState, useEffect, useRef, type ReactNode } from 'react';
 import { db, ALL_IMPORTANCE_TIERS, IMPORTANCE_TIER_LABELS } from '@/lib/database';
 import { countAttachments } from '@/lib/data/attachments-crud';
 import { countAddressSyncState } from '@/lib/data/address-sync-crud';
@@ -13,8 +13,10 @@ import {
   countTransactions,
   countTransactionParticipants,
   countAddresslessParticipants,
+  countUnresolvedPrevoutInputs,
 } from '@/lib/data/transaction-crud';
 import { hasLegacyEncryptedRecords } from '@/lib/legacy-decrypt';
+import { detectStaleCachedBalances, type StaleBalanceCheckResult } from '@/lib/data/address-stats';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -37,6 +39,7 @@ import {
   RefreshCw,
   ShieldCheck,
   AlertTriangle,
+  Loader2,
 } from 'lucide-react';
 
 interface StatCardProps {
@@ -105,6 +108,7 @@ interface StatsData {
   addressSyncState: number;
   priceData: number;
   addresslessParticipants: number;
+  unresolvedPrevoutInputs: number;
   hasLegacyEncryptedData: boolean;
 }
 
@@ -122,6 +126,7 @@ async function loadAllStats(): Promise<StatsData> {
     addressSyncState,
     priceData,
     addresslessParticipants,
+    unresolvedPrevoutInputs,
     hasLegacyEncryptedData,
     ...importanceCounts
   ] = await Promise.all([
@@ -137,6 +142,7 @@ async function loadAllStats(): Promise<StatsData> {
     countAddressSyncState(),
     countPriceData(),
     countAddresslessParticipants(),
+    countUnresolvedPrevoutInputs(),
     hasLegacyEncryptedRecords(),
     ...ALL_IMPORTANCE_TIERS.map(tier =>
       countRecordsByImportance(tier as Parameters<typeof countRecordsByImportance>[0])
@@ -184,6 +190,7 @@ async function loadAllStats(): Promise<StatsData> {
     addressSyncState,
     priceData,
     addresslessParticipants,
+    unresolvedPrevoutInputs,
     hasLegacyEncryptedData,
   };
 }
@@ -191,6 +198,14 @@ async function loadAllStats(): Promise<StatsData> {
 export default function DataStats() {
   const [stats, setStats] = useState<StatsData | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+
+  // On-demand stale cached balance check
+  const [staleCheckState, setStaleCheckState] = useState<
+    | { status: 'idle' }
+    | { status: 'running'; sampled: number }
+    | { status: 'done'; result: StaleBalanceCheckResult }
+  >({ status: 'idle' });
+  const staleCheckAbortRef = useRef<AbortController | null>(null);
 
   const refresh = async () => {
     setIsLoading(true);
@@ -204,8 +219,27 @@ export default function DataStats() {
     }
   };
 
+  const runStaleCheck = async () => {
+    staleCheckAbortRef.current?.abort();
+    const abort = new AbortController();
+    staleCheckAbortRef.current = abort;
+    setStaleCheckState({ status: 'running', sampled: 0 });
+    try {
+      const result = await detectStaleCachedBalances({
+        signal: abort.signal,
+        onProgress: (sampled) => setStaleCheckState({ status: 'running', sampled }),
+      });
+      if (!abort.signal.aborted) {
+        setStaleCheckState({ status: 'done', result });
+      }
+    } catch {
+      if (!abort.signal.aborted) setStaleCheckState({ status: 'idle' });
+    }
+  };
+
   useEffect(() => {
     refresh();
+    return () => { staleCheckAbortRef.current?.abort(); };
   }, []);
 
   if (!stats) {
@@ -479,6 +513,23 @@ export default function DataStats() {
               </div>
 
               <div className="rounded-md border p-3 space-y-1">
+                <p className="text-sm font-medium flex items-center gap-1.5">
+                  Unresolved spend inputs
+                  {stats.unresolvedPrevoutInputs > 0 && (
+                    <AlertTriangle className="h-3.5 w-3.5 text-yellow-600 dark:text-yellow-400" />
+                  )}
+                </p>
+                <p className="text-2xl font-bold" data-testid="stat-unresolved-prevouts">
+                  {stats.unresolvedPrevoutInputs.toLocaleString()}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {stats.unresolvedPrevoutInputs > 0
+                    ? 'Input rows whose source address is not yet known. These spends are not subtracted from any wallet balance, causing overstated totals. Use "Resolve & Recompute" in the Balance page to fix.'
+                    : 'All spend inputs have a known source address. Balances are complete.'}
+                </p>
+              </div>
+
+              <div className="rounded-md border p-3 space-y-1">
                 <p className="text-sm font-medium">Transaction sync participants</p>
                 <p className="text-2xl font-bold" data-testid="stat-total-participants">
                   {stats.transactionParticipants.toLocaleString()}
@@ -487,6 +538,59 @@ export default function DataStats() {
                   Total input + output rows created by blockchain sync. Deep multi-hop syncs grow
                   this count quickly.
                 </p>
+              </div>
+
+              <div className="rounded-md border p-3 space-y-2">
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <p className="text-sm font-medium flex items-center gap-1.5">
+                    Stale cached balances
+                    {staleCheckState.status === 'done' && staleCheckState.result.staleCount > 0 && (
+                      <AlertTriangle className="h-3.5 w-3.5 text-yellow-600 dark:text-yellow-400" />
+                    )}
+                    {staleCheckState.status === 'done' && staleCheckState.result.staleCount === 0 && (
+                      <CheckCircle2 className="h-3.5 w-3.5 text-green-600 dark:text-green-400" />
+                    )}
+                  </p>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={runStaleCheck}
+                    disabled={staleCheckState.status === 'running'}
+                    data-testid="button-run-stale-check"
+                  >
+                    {staleCheckState.status === 'running' ? (
+                      <>
+                        <Loader2 className="h-3 w-3 animate-spin mr-1.5" />
+                        Checking…
+                      </>
+                    ) : (
+                      'Run Check'
+                    )}
+                  </Button>
+                </div>
+                {staleCheckState.status === 'idle' && (
+                  <p className="text-xs text-muted-foreground">
+                    Compares cached address balances against a fresh recompute to detect stale values.
+                    Samples up to 2,000 synced addresses. Click "Run Check" to start.
+                  </p>
+                )}
+                {staleCheckState.status === 'running' && (
+                  <p className="text-xs text-muted-foreground" data-testid="text-stale-check-progress">
+                    Checking… {staleCheckState.sampled.toLocaleString()} addresses sampled so far.
+                  </p>
+                )}
+                {staleCheckState.status === 'done' && (
+                  <>
+                    <p className="text-2xl font-bold" data-testid="stat-stale-balances">
+                      {staleCheckState.result.staleCount.toLocaleString()}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      {staleCheckState.result.staleCount > 0
+                        ? `${staleCheckState.result.staleCount} of ${staleCheckState.result.sampled.toLocaleString()} sampled addresses have a cached balance that differs from a fresh recompute. Use "Resolve & Recompute" in the Balance page, or run "Recompute Stats" from Settings.`
+                        : `All ${staleCheckState.result.sampled.toLocaleString()} sampled addresses have up-to-date cached balances.`}
+                    </p>
+                  </>
+                )}
               </div>
 
               <div className="rounded-md border p-3 space-y-1">

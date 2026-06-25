@@ -272,6 +272,20 @@ export async function countAddresslessParticipants(): Promise<number> {
     .count();
 }
 
+/**
+ * Count input participant rows that are unresolved: they have a blank/empty
+ * address but DO have prevTxid and prevVout populated. These represent spends
+ * whose source address is not yet known. Until they are resolved the spending
+ * amount is never subtracted from any address's balance, causing overstated
+ * balances. Running prevout resolution can attribute them to the correct address.
+ */
+export async function countUnresolvedPrevoutInputs(): Promise<number> {
+  return db.transactionParticipants
+    .where('role').equals('input')
+    .filter(p => (!p.address || p.address.trim() === '') && p.prevTxid !== undefined && p.prevVout !== undefined)
+    .count();
+}
+
 // =============================================================================
 // FRESHNESS FINGERPRINTS — compared against the native engine mirror before a
 // read is served from the engine. All reads below are index-only (count + the

@@ -39,6 +39,73 @@ export interface RecomputeResult {
   cancelled: boolean;
 }
 
+export interface StaleBalanceCheckResult {
+  /** Number of synced address records sampled. */
+  sampled: number;
+  /** Number of those where cachedBalanceSats differs from a fresh compute. */
+  staleCount: number;
+  cancelled: boolean;
+}
+
+/**
+ * Sample synced address records and count how many have a cached balance that
+ * disagrees with a freshly computed value. Only considers addresses that have
+ * been synced (have a statsComputedAt timestamp). Stops after `sampleLimit`
+ * addresses to keep the check fast on large vaults.
+ *
+ * This is an on-demand diagnostic; it should NOT run automatically on page
+ * load. Callers are responsible for aborting and reporting progress.
+ */
+export async function detectStaleCachedBalances(opts: {
+  sampleLimit?: number;
+  signal?: AbortSignal;
+  onProgress?: (sampled: number) => void;
+}): Promise<StaleBalanceCheckResult> {
+  const limit = opts.sampleLimit ?? 2000;
+  let sampled = 0;
+  let staleCount = 0;
+  let lastId = 0;
+  const BATCH = 200;
+
+  while (sampled < limit) {
+    if (isAborted(opts.signal)) return { sampled, staleCount, cancelled: true };
+
+    const batch = await db.records
+      .where('[type+id]')
+      .between(['address', lastId], ['address', Dexie.maxKey], false, true)
+      .limit(BATCH)
+      .toArray();
+
+    if (batch.length === 0) break;
+    lastId = batch[batch.length - 1].id!;
+
+    // Only check addresses that have been synced (statsComputedAt set)
+    const synced = batch.filter(r => r.statsComputedAt != null && r.inputString && r.id != null);
+    if (synced.length === 0) {
+      if (batch.length < BATCH) break;
+      continue;
+    }
+
+    const addresses = synced.map(r => r.inputString);
+    const freshStats = await computeStatsForAddresses(addresses, opts.signal);
+
+    for (const rec of synced) {
+      const fresh = freshStats.get(rec.inputString);
+      const freshBalance = fresh?.balanceSats ?? 0;
+      const cached = rec.cachedBalanceSats ?? 0;
+      if (cached !== freshBalance) staleCount++;
+      sampled++;
+      if (sampled >= limit) break;
+    }
+
+    opts.onProgress?.(sampled);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    if (batch.length < BATCH || sampled >= limit) break;
+  }
+
+  return { sampled, staleCount, cancelled: isAborted(opts.signal) };
+}
+
 interface AddressAgg {
   outputSats: number;
   inputSats: number;

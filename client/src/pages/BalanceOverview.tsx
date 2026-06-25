@@ -10,6 +10,8 @@ import {
 import { engineGetBalanceGroupSummaries, subscribeEngineReadiness } from "@/lib/engine/engine-client";
 import { evaluateEngineFreshness } from "@/lib/engine/engine-freshness";
 import { recomputeAddressStats } from "@/lib/data/address-stats";
+import { countUnresolvedPrevoutInputs } from "@/lib/data/transaction-crud";
+import { transactionSyncService } from "@/lib/transaction-sync";
 import {
   type GroupBy,
   type AddressBalanceRow,
@@ -29,6 +31,8 @@ import {
   Wallet,
   Copy,
   Check,
+  AlertTriangle,
+  X,
 } from "lucide-react";
 import { SiBitcoin } from "react-icons/si";
 
@@ -211,9 +215,14 @@ export default function BalanceOverview() {
   const [displayUnit, setDisplayUnit] = useState<DisplayUnit>("btc");
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
 
-  const dbSignal = useDbChangeSignal(["records", "blockchainTransactions"]);
+  const dbSignal = useDbChangeSignal(["records", "blockchainTransactions", "transactionParticipants"]);
   const computationId = useRef(0);
   const [engineReadySignal, setEngineReadySignal] = useState(0);
+
+  // Spend health: unresolved prevout inputs (blank-address inputs with prevTxid/prevVout).
+  const [unresolvedPrevouts, setUnresolvedPrevouts] = useState<number | null>(null);
+  const [spendWarningDismissed, setSpendWarningDismissed] = useState(false);
+  const [fixingPrevouts, setFixingPrevouts] = useState(false);
 
   // Re-run aggregation when the native read-engine flips to ready so the fast
   // path can take over from any Dexie fallback that ran first.
@@ -342,6 +351,38 @@ export default function BalanceOverview() {
     };
   }, [groupBy, dbSignal, engineReadySignal]);
 
+  // Spend health: check for unresolved prevout inputs whenever db changes.
+  useEffect(() => {
+    let cancelled = false;
+    countUnresolvedPrevoutInputs().then((count) => {
+      if (!cancelled) {
+        setUnresolvedPrevouts(count);
+        if (count === 0) setSpendWarningDismissed(false);
+      }
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [dbSignal]);
+
+  const handleFixPrevouts = useCallback(async () => {
+    setFixingPrevouts(true);
+    try {
+      const result = await transactionSyncService.resolvePrevouts();
+      if (result.resolvedAddresses.length > 0) {
+        // Recompute only the addresses whose spend inputs were just attributed —
+        // avoids a full-vault scan while still closing the stale-cache gap for
+        // every address that had a newly-resolved spend.
+        await recomputeAddressStats({ addresses: result.resolvedAddresses, origin: "user" });
+      }
+      const remaining = await countUnresolvedPrevoutInputs();
+      setUnresolvedPrevouts(remaining);
+      if (remaining === 0) setSpendWarningDismissed(false);
+    } catch (err) {
+      console.warn("[BalanceOverview] Prevout fix failed:", err);
+    } finally {
+      setFixingPrevouts(false);
+    }
+  }, []);
+
   const ensureGroupRows = useCallback(async (name: string) => {
     if (groupRowsRef.current.has(name) || loadingGroupsRef.current.has(name)) return;
     setLoadingGroups((prev) => {
@@ -438,6 +479,11 @@ export default function BalanceOverview() {
       ? Math.round((backfillProgress.processed / backfillProgress.total) * 100)
       : 0;
 
+  const showSpendWarning =
+    !spendWarningDismissed &&
+    unresolvedPrevouts !== null &&
+    unresolvedPrevouts > 0;
+
   return (
     <div className="flex flex-col h-full">
       <div className="flex-none p-4 pb-2 border-b">
@@ -485,6 +531,50 @@ export default function BalanceOverview() {
           </div>
         </div>
       </div>
+
+      {showSpendWarning && (
+        <div
+          className="flex-none flex items-start gap-3 px-4 py-3 border-b bg-yellow-50 dark:bg-yellow-950/30"
+          data-testid="banner-spend-warning"
+        >
+          <AlertTriangle className="h-4 w-4 text-yellow-600 dark:text-yellow-400 mt-0.5 flex-none" />
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-medium text-yellow-800 dark:text-yellow-200">
+              Some spends could not be attributed — balances may be too high
+            </p>
+            <p className="text-xs text-yellow-700/80 dark:text-yellow-300/70 mt-0.5">
+              {unresolvedPrevouts!.toLocaleString()} spend{unresolvedPrevouts !== 1 ? "s" : ""} with an unknown source address.
+              Resolving them will subtract the correct amounts from the source wallets.
+            </p>
+          </div>
+          <div className="flex items-center gap-2 flex-none">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={handleFixPrevouts}
+              disabled={fixingPrevouts}
+              data-testid="button-fix-prevouts"
+              className="border-yellow-400 dark:border-yellow-600 text-yellow-800 dark:text-yellow-200"
+            >
+              {fixingPrevouts ? (
+                <>
+                  <Loader2 className="h-3 w-3 animate-spin mr-1.5" />
+                  Resolving…
+                </>
+              ) : (
+                "Resolve & Recompute"
+              )}
+            </Button>
+            <button
+              onClick={() => setSpendWarningDismissed(true)}
+              className="text-yellow-600/60 dark:text-yellow-400/60 hover:text-yellow-700 dark:hover:text-yellow-300 transition-colors"
+              data-testid="button-dismiss-spend-warning"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+      )}
 
       <div className="flex-1 overflow-auto p-4">
         {phase === "backfilling" ? (
