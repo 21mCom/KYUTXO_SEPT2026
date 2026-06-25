@@ -16,7 +16,8 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { 
   Search, Info, GitBranch, Clock, TrendingUp, 
   ArrowRight, Loader2, Database, Globe, AlertCircle, Route,
-  Filter, ChevronDown, ChevronRight, Wallet, User, Tag
+  Filter, ChevronDown, ChevronRight, Wallet, User, Tag,
+  Copy, Check
 } from "lucide-react";
 import { SiBitcoin } from "react-icons/si";
 import { useVirtualizer } from "@tanstack/react-virtual";
@@ -176,6 +177,79 @@ const generateFlowPathData = (nodes: FlowNode[], centerAddress: string) => {
   return { nodes: pathNodes, links: pathLinks };
 };
 
+function AddressFinderRow({ addr, onSelect, satsToBtcDisplay, formatDate, rowHeight }: {
+  addr: FilteredAddress;
+  onSelect: (address: string) => void;
+  satsToBtcDisplay: (sats: number) => string;
+  formatDate: (ts: number) => string;
+  rowHeight: number;
+}) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = (e: React.MouseEvent | React.KeyboardEvent) => {
+    e.stopPropagation();
+    navigator.clipboard.writeText(addr.address);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  const handleRowKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      onSelect(addr.address);
+    }
+  };
+
+  const handleCopyKeyDown = (e: React.KeyboardEvent<HTMLButtonElement>) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      handleCopy(e);
+    }
+  };
+
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={() => onSelect(addr.address)}
+      onKeyDown={handleRowKeyDown}
+      className="w-full grid grid-cols-[1fr_auto_auto_auto_auto] gap-2 px-3 text-sm hover-elevate border-t items-center cursor-pointer"
+      style={{ height: rowHeight }}
+      data-testid={`button-finder-address-${addr.address.slice(-8)}`}
+    >
+      <div className="min-w-0">
+        <div className="font-mono text-xs truncate">{addr.address}</div>
+        {addr.label && (
+          <div className="text-xs text-muted-foreground truncate">{addr.label}</div>
+        )}
+      </div>
+      <div className="text-right font-mono text-xs min-w-[120px]">
+        {satsToBtcDisplay(addr.balanceSats)} BTC
+      </div>
+      <div className="text-right text-xs text-muted-foreground min-w-[90px]">
+        {formatDate(addr.lastTxDate)}
+      </div>
+      <div className="text-right text-xs text-muted-foreground min-w-[40px]">
+        {addr.txCount}
+      </div>
+      <div className="flex items-center justify-end">
+        <button
+          type="button"
+          onClick={handleCopy}
+          onKeyDown={handleCopyKeyDown}
+          aria-label={copied ? "Copied" : "Copy address"}
+          className="p-1 rounded text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          data-testid={`button-copy-finder-address-${addr.address.slice(-8)}`}
+        >
+          {copied
+            ? <Check className="h-3 w-3 text-green-600" />
+            : <Copy className="h-3 w-3" />}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function AddressFinderList({ addresses, onSelect, satsToBtcDisplay, formatDate }: {
   addresses: FilteredAddress[];
   onSelect: (address: string) => void;
@@ -196,40 +270,31 @@ function AddressFinderList({ addresses, onSelect, satsToBtcDisplay, formatDate }
 
   return (
     <div className="border rounded-md overflow-hidden">
-      <div className="grid grid-cols-[1fr_auto_auto_auto] gap-2 px-3 py-2 bg-muted/50 text-xs font-medium text-muted-foreground">
+      <div className="grid grid-cols-[1fr_auto_auto_auto_auto] gap-2 px-3 py-2 bg-muted/50 text-xs font-medium text-muted-foreground">
         <span>Address</span>
         <span className="text-right min-w-[120px]">Balance</span>
         <span className="text-right min-w-[90px]">Last Tx</span>
         <span className="text-right min-w-[40px]">Txs</span>
+        <span className="min-w-[24px]" />
       </div>
       <div ref={parentRef} className="overflow-auto" style={{ height: containerHeight }}>
         <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
           {virtualizer.getVirtualItems().map(virtualRow => {
             const addr = addresses[virtualRow.index];
             return (
-              <button
+              <div
                 key={addr.address}
-                onClick={() => onSelect(addr.address)}
-                className="absolute left-0 w-full grid grid-cols-[1fr_auto_auto_auto] gap-2 px-3 text-sm hover-elevate border-t text-left items-center"
+                className="absolute left-0 w-full"
                 style={{ top: virtualRow.start, height: rowHeight }}
-                data-testid={`button-finder-address-${addr.address.slice(-8)}`}
               >
-                <div className="min-w-0">
-                  <div className="font-mono text-xs truncate">{addr.address}</div>
-                  {addr.label && (
-                    <div className="text-xs text-muted-foreground truncate">{addr.label}</div>
-                  )}
-                </div>
-                <div className="text-right font-mono text-xs min-w-[120px]">
-                  {satsToBtcDisplay(addr.balanceSats)} BTC
-                </div>
-                <div className="text-right text-xs text-muted-foreground min-w-[90px]">
-                  {formatDate(addr.lastTxDate)}
-                </div>
-                <div className="text-right text-xs text-muted-foreground min-w-[40px]">
-                  {addr.txCount}
-                </div>
-              </button>
+                <AddressFinderRow
+                  addr={addr}
+                  onSelect={onSelect}
+                  satsToBtcDisplay={satsToBtcDisplay}
+                  formatDate={formatDate}
+                  rowHeight={rowHeight}
+                />
+              </div>
             );
           })}
         </div>
