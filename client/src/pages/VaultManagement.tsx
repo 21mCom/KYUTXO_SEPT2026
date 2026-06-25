@@ -11,7 +11,6 @@ import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { useToast } from "@/hooks/use-toast";
-import StripMarkersPanel from "@/components/StripMarkersPanel";
 import { updateRecord } from "@/lib/dataFacade";
 import type { VaultMetadata, AddressImportance } from "@/lib/database";
 import { getAddressRecordsByImportanceTiersFiltered } from "@/lib/data/record-crud";
@@ -93,7 +92,6 @@ export default function VaultManagement() {
   const [editingNotesVault, setEditingNotesVault] = useState<string | null>(null);
   const [editNotesText, setEditNotesText] = useState("");
   const [savingNotes, setSavingNotes] = useState(false);
-  const [, setIsStripRunning] = useState(false);
   const [engineReadySignal, setEngineReadySignal] = useState(0);
   const { toast } = useToast();
 
@@ -304,12 +302,6 @@ export default function VaultManagement() {
       <div className="flex items-center gap-2 mb-6">
         <Layers className="h-6 w-6" />
         <h1 className="text-2xl font-semibold" data-testid="heading-vault-management">Vault Management</h1>
-      </div>
-
-      <div className="mb-4">
-        <StripMarkersPanel
-          onRunningChange={setIsStripRunning}
-        />
       </div>
 
       <div className="mb-6">
