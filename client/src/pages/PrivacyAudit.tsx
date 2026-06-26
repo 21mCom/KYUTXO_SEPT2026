@@ -66,6 +66,7 @@ import {
   FINDING_TYPE_LABELS,
   type PrivacyAuditResult,
   type PrivacyFinding,
+  type EntityCitation,
   type PrivacyFindingType,
   type PrivacySeverity,
   type ScoreWaterfallEntry,
@@ -1431,6 +1432,7 @@ function getSeverityBadgePropsLocal(severity: PrivacySeverity) {
 
 function FindingCard({ finding }: { finding: PrivacyFinding }) {
   const [expanded, setExpanded] = useState(false);
+  const citations = (finding.details?.citations as EntityCitation[] | undefined) ?? [];
 
   return (
     <div
@@ -1508,6 +1510,41 @@ function FindingCard({ finding }: { finding: PrivacyFinding }) {
                       +{finding.addresses.length - 10} more
                     </span>
                   )}
+                </div>
+              </div>
+            )}
+
+            {citations.length > 0 && (
+              <div data-testid="container-entity-citations">
+                <span className="text-xs font-medium text-muted-foreground">Source citations:</span>
+                <div className="space-y-1.5 mt-1">
+                  {citations.map((c) => (
+                    <div
+                      key={c.address}
+                      className="bg-muted/50 rounded p-2"
+                      data-testid={`citation-entity-${c.address}`}
+                    >
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="text-xs font-medium" data-testid={`text-entity-name-${c.address}`}>
+                          {c.name}
+                        </span>
+                        <Badge variant="secondary" className="text-[10px]" data-testid={`badge-entity-category-${c.address}`}>
+                          {c.categoryLabel}
+                        </Badge>
+                      </div>
+                      <div className="text-[11px] text-muted-foreground font-mono mt-0.5 break-all">
+                        {c.address}
+                      </div>
+                      {c.sourceNote && (
+                        <p
+                          className="text-[11px] text-muted-foreground mt-1 break-words"
+                          data-testid={`text-entity-source-${c.address}`}
+                        >
+                          {c.sourceNote}
+                        </p>
+                      )}
+                    </div>
+                  ))}
                 </div>
               </div>
             )}

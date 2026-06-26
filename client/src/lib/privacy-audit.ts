@@ -52,6 +52,19 @@ export type PrivacyFindingType =
 
 // ─── Interfaces ───────────────────────────────────────────────────────────────
 
+/**
+ * A source citation for a flagged known-entity address. Surfaced in the
+ * Privacy Audit UI so users can see *why* and *based on what public source*
+ * a counterparty was tagged. The `sourceNote` may contain a URL — it is shown
+ * as informational plain text and is never fetched at runtime (offline-first).
+ */
+export interface EntityCitation {
+  name: string;
+  address: string;
+  categoryLabel: string;
+  sourceNote?: string;
+}
+
 export interface PrivacyFinding {
   type: PrivacyFindingType;
   severity: PrivacySeverity;
@@ -1128,7 +1141,7 @@ function detectEntityContacts(ctx: AuditContext): PrivacyFinding[] {
 
   const entityMatches = lookupEntities(Array.from(externalAddresses));
 
-  interface EntityMatch { name: string; txids: string[]; addrs: string[] }
+  interface EntityMatch { name: string; txids: string[]; addrs: string[]; sourceNote?: string }
   const byCategory = new Map<EntityCategory, EntityMatch[]>();
 
   for (const [address, entity] of entityMatches) {
@@ -1137,7 +1150,7 @@ function detectEntityContacts(ctx: AuditContext): PrivacyFinding[] {
       if (parts.some(p => p.address === address)) txids.push(txid);
     }
     const list = byCategory.get(entity.category) ?? [];
-    list.push({ name: entity.name, txids, addrs: [address] });
+    list.push({ name: entity.name, txids, addrs: [address], sourceNote: entity.sourceNote });
     byCategory.set(entity.category, list);
   }
 
@@ -1169,11 +1182,29 @@ function detectEntityContacts(ctx: AuditContext): PrivacyFinding[] {
     const addrs = [...new Set(items.flatMap(i => i.addrs))];
     const sev = categorySeverity[category];
 
+    // Build per-entity source citations (name, category label, and the public
+    // attribution note). Deduped by address so each flagged counterparty shows
+    // exactly why and based on what public source it was tagged. URLs in the
+    // sourceNote are informational text only — never fetched at runtime.
+    const seenAddrs = new Set<string>();
+    const citations: EntityCitation[] = [];
+    for (const item of items) {
+      const address = item.addrs[0];
+      if (!address || seenAddrs.has(address)) continue;
+      seenAddrs.add(address);
+      citations.push({
+        name: item.name,
+        address,
+        categoryLabel: ENTITY_CATEGORY_LABELS[category],
+        sourceNote: item.sourceNote,
+      });
+    }
+
     findings.push({
       type: categoryFindingType[category],
       severity: sev,
       description: `Your transactions interact with ${names.length} known ${ENTITY_CATEGORY_LABELS[category]} address(es): ${names.join(", ")}. This creates a public on-chain link between your wallet and these entities.`,
-      details: { category, entities: names, txCount: txids.length },
+      details: { category, entities: names, txCount: txids.length, citations },
       correction:
         category === "scam" || category === "darknet"
           ? "Transactions linking your wallet to scam or darknet addresses may create legal and privacy risks. Review these transactions carefully."
