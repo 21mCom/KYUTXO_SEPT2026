@@ -39,11 +39,28 @@ export interface RecomputeResult {
   cancelled: boolean;
 }
 
+/** A single synced address whose cached balance disagrees with a fresh compute. */
+export interface StaleAddressDetail {
+  /** The address record's id, for linking to the Records page. */
+  recordId: number;
+  /** The address string. */
+  address: string;
+  /** The currently cached balance (sats). */
+  cachedSats: number;
+  /** The freshly computed balance (sats). */
+  computedSats: number;
+}
+
 export interface StaleBalanceCheckResult {
   /** Number of synced address records sampled. */
   sampled: number;
   /** Number of those where cachedBalanceSats differs from a fresh compute. */
   staleCount: number;
+  /**
+   * Details of the mismatched addresses, collected when `collectDetails` is set.
+   * Capped at `detailLimit` entries (the running `staleCount` is always exact).
+   */
+  staleAddresses: StaleAddressDetail[];
   cancelled: boolean;
 }
 
@@ -60,15 +77,21 @@ export async function detectStaleCachedBalances(opts: {
   sampleLimit?: number;
   signal?: AbortSignal;
   onProgress?: (sampled: number) => void;
+  /** Collect details of each mismatched address into `staleAddresses`. */
+  collectDetails?: boolean;
+  /** Maximum number of detail entries to collect (default 5000). */
+  detailLimit?: number;
 }): Promise<StaleBalanceCheckResult> {
   const limit = opts.sampleLimit ?? 2000;
+  const detailLimit = opts.detailLimit ?? 5000;
   let sampled = 0;
   let staleCount = 0;
   let lastId = 0;
   const BATCH = 200;
+  const staleAddresses: StaleAddressDetail[] = [];
 
   while (sampled < limit) {
-    if (isAborted(opts.signal)) return { sampled, staleCount, cancelled: true };
+    if (isAborted(opts.signal)) return { sampled, staleCount, staleAddresses, cancelled: true };
 
     const batch = await db.records
       .where('[type+id]')
@@ -93,7 +116,17 @@ export async function detectStaleCachedBalances(opts: {
       const fresh = freshStats.get(rec.inputString);
       const freshBalance = fresh?.balanceSats ?? 0;
       const cached = rec.cachedBalanceSats ?? 0;
-      if (cached !== freshBalance) staleCount++;
+      if (cached !== freshBalance) {
+        staleCount++;
+        if (opts.collectDetails && staleAddresses.length < detailLimit) {
+          staleAddresses.push({
+            recordId: rec.id!,
+            address: rec.inputString,
+            cachedSats: cached,
+            computedSats: freshBalance,
+          });
+        }
+      }
       sampled++;
       if (sampled >= limit) break;
     }
@@ -103,7 +136,7 @@ export async function detectStaleCachedBalances(opts: {
     if (batch.length < BATCH || sampled >= limit) break;
   }
 
-  return { sampled, staleCount, cancelled: isAborted(opts.signal) };
+  return { sampled, staleCount, staleAddresses, cancelled: isAborted(opts.signal) };
 }
 
 interface AddressAgg {

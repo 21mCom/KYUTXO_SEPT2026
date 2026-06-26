@@ -18,6 +18,7 @@
  */
 import { useCallback, useRef, useState } from "react";
 import { Link } from "wouter";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   Stethoscope,
   Play,
@@ -31,6 +32,7 @@ import {
   Scale,
   RefreshCw,
   Ban,
+  ExternalLink,
 } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -47,6 +49,7 @@ import {
   detectStaleCachedBalances,
   recomputeAddressStats,
   type StaleBalanceCheckResult,
+  type StaleAddressDetail,
 } from "@/lib/data/address-stats";
 
 // The markers the v27 migration left on rows whose ciphertext was preserved.
@@ -697,6 +700,94 @@ type BalanceCheckState =
   | { status: "recomputing"; processed: number; total: number }
   | { status: "error"; message: string };
 
+function formatSats(sats: number): string {
+  return sats.toLocaleString() + " sats";
+}
+
+// Virtualized list of the specific addresses whose cached balance disagreed with
+// a fresh recompute. Each row shows the cached vs. computed balance side by side
+// and links to that address record on the Records page. Virtualized so it stays
+// responsive even when thousands of addresses are stale.
+const STALE_ROW_HEIGHT = 56;
+
+function StaleAddressList({ rows }: { rows: StaleAddressDetail[] }) {
+  const parentRef = useRef<HTMLDivElement>(null);
+
+  const virtualizer = useVirtualizer({
+    count: rows.length,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => STALE_ROW_HEIGHT,
+    overscan: 12,
+  });
+
+  return (
+    <div className="border rounded-md" data-testid="list-stale-addresses">
+      <div className="grid grid-cols-[1fr_auto_auto_auto] gap-3 px-3 py-2 bg-muted/50 border-b text-xs font-medium text-muted-foreground">
+        <span>Address</span>
+        <span className="text-right">Cached</span>
+        <span className="text-right">Computed</span>
+        <span className="text-right">View</span>
+      </div>
+      <div
+        ref={parentRef}
+        className="h-[260px] overflow-auto"
+        data-testid="scroll-stale-addresses"
+      >
+        <div
+          className="relative w-full"
+          style={{ height: `${virtualizer.getTotalSize()}px` }}
+        >
+          {virtualizer.getVirtualItems().map((virtualRow) => {
+            const row = rows[virtualRow.index];
+            return (
+              <div
+                key={row.recordId}
+                className="absolute left-0 right-0 grid grid-cols-[1fr_auto_auto_auto] items-center gap-3 px-3 border-b last:border-b-0"
+                style={{
+                  height: `${STALE_ROW_HEIGHT}px`,
+                  transform: `translateY(${virtualRow.start}px)`,
+                }}
+                data-testid={`row-stale-address-${row.recordId}`}
+              >
+                <span
+                  className="font-mono text-xs truncate"
+                  title={row.address}
+                  data-testid={`text-stale-address-${row.recordId}`}
+                >
+                  {row.address}
+                </span>
+                <span
+                  className="text-right text-xs font-mono tabular-nums text-muted-foreground"
+                  data-testid={`text-stale-cached-${row.recordId}`}
+                >
+                  {formatSats(row.cachedSats)}
+                </span>
+                <span
+                  className="text-right text-xs font-mono tabular-nums"
+                  data-testid={`text-stale-computed-${row.recordId}`}
+                >
+                  {formatSats(row.computedSats)}
+                </span>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  asChild
+                  data-testid={`link-stale-address-${row.recordId}`}
+                >
+                  <Link href={`/records?id=${row.recordId}`}>
+                    <ExternalLink className="h-4 w-4" />
+                    Open
+                  </Link>
+                </Button>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function BalanceIntegrityCard() {
   const [state, setState] = useState<BalanceCheckState>({ status: "idle" });
   const abortRef = useRef<AbortController | null>(null);
@@ -713,6 +804,7 @@ function BalanceIntegrityCard() {
     try {
       const result = await detectStaleCachedBalances({
         signal: abort.signal,
+        collectDetails: true,
         onProgress: (sampled) => setState({ status: "checking", sampled }),
       });
       if (abort.signal.aborted) {
@@ -866,6 +958,17 @@ function BalanceIntegrityCard() {
                     : "Cached balances match the values computed from your transaction rows."}
               </p>
             </div>
+          </div>
+        )}
+
+        {state.status === "done" && hasStale && state.result.staleAddresses.length > 0 && (
+          <div className="space-y-2">
+            <p className="text-sm text-muted-foreground" data-testid="text-stale-list-caption">
+              {state.result.staleAddresses.length < state.result.staleCount
+                ? `Showing the first ${state.result.staleAddresses.length.toLocaleString()} of ${state.result.staleCount.toLocaleString()} stale addresses. Each opens its record on the Records page.`
+                : "Each row opens that address's record on the Records page."}
+            </p>
+            <StaleAddressList rows={state.result.staleAddresses} />
           </div>
         )}
       </CardContent>
