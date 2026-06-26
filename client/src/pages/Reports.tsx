@@ -507,6 +507,48 @@ function PrivacyAuditReportPanel() {
             )}
           </div>
 
+          {/* Score breakdown waterfall */}
+          {result.scoreWaterfall.length > 0 && (
+            <Card data-testid="card-privacy-report-waterfall">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-sm">Score Breakdown</CardTitle>
+                <CardDescription>How each finding category adjusted the score from the base of 100.</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="rounded-md border overflow-hidden">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="bg-muted/50 text-xs uppercase tracking-wide text-muted-foreground">
+                        <th className="text-left font-medium p-2">Category</th>
+                        <th className="text-right font-medium p-2">Count</th>
+                        <th className="text-right font-medium p-2">Delta</th>
+                        <th className="text-right font-medium p-2">Score</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border">
+                      {result.scoreWaterfall.map((entry, i) => (
+                        <tr key={i} data-testid={`row-privacy-waterfall-${i}`}>
+                          <td className="p-2">{entry.label}</td>
+                          <td className="p-2 text-right tabular-nums text-muted-foreground">
+                            {entry.count > 0 ? entry.count.toLocaleString() : "—"}
+                          </td>
+                          <td className={`p-2 text-right tabular-nums font-medium ${
+                            entry.delta < 0 ? "text-red-600 dark:text-red-400"
+                            : entry.delta > 0 ? "text-green-600 dark:text-green-400"
+                            : "text-muted-foreground"
+                          }`}>
+                            {entry.delta === 0 ? "—" : `${entry.delta > 0 ? "+" : ""}${entry.delta}`}
+                          </td>
+                          <td className="p-2 text-right tabular-nums font-medium">{entry.runningScore}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
           {/* Findings table */}
           {(result.findings.length + result.warnings.length) > 0 ? (
             <div className="space-y-2">
