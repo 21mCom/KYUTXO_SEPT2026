@@ -19,7 +19,7 @@ import {
   type PrivacySeverity,
   type EntityCitation,
 } from "@/lib/privacy-audit";
-import { mapFinding } from "@/lib/privacy-report-export";
+import { buildPrivacyReport } from "@/lib/privacy-report-export";
 import { getRecordsPageByTypeIdReverseKeyset } from "@/lib/data/record-crud";
 
 // ─── Privacy Audit Report ────────────────────────────────────────────────────
@@ -274,24 +274,12 @@ function PrivacyAuditReportPanel() {
     // Per-entity source citations are surfaced as a clean top-level field on
     // ENTITY_* findings via mapFinding (see lib/privacy-report-export). URLs in
     // sourceNote remain plain text — never fetched (offline-first).
-    const report = {
-      generatedAt: new Date().toISOString(),
-      scope: { owner: selectedOwner === "all" ? null : selectedOwner, wallet: selectedWallet === "all" ? null : selectedWallet },
-      summary: {
-        score: result.score,
-        grade: result.grade,
-        transactionsAnalyzed: result.transactionsAnalyzed,
-        addressesScanned: result.addressesScanned,
-        isClean: result.isClean,
-        fingerprintCoverage: result.fingerprintCoverage,
-        needsResync: result.needsResync,
-        findingsCount: result.findings.length,
-        warningsCount: result.warnings.length,
-      },
-      scoreWaterfall: result.scoreWaterfall,
-      findings: result.findings.map(mapFinding),
-      warnings: result.warnings.map(mapFinding),
-    };
+    // buildPrivacyReport is the single source of truth for the export shape so
+    // the UI and its regression tests cannot drift.
+    const report = buildPrivacyReport(result, {
+      owner: selectedOwner === "all" ? null : selectedOwner,
+      wallet: selectedWallet === "all" ? null : selectedWallet,
+    });
     const blob = new Blob([JSON.stringify(report, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");

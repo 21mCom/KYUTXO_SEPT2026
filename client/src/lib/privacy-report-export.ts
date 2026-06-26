@@ -4,6 +4,8 @@ import {
   type PrivacyFindingType,
   type PrivacySeverity,
   type EntityCitation,
+  type PrivacyAuditResult,
+  type ScoreWaterfallEntry,
 } from "@/lib/privacy-audit";
 
 /**
@@ -55,5 +57,66 @@ export function mapFinding(f: PrivacyFinding): ExportedFinding {
     addresses: f.addresses,
     details: f.details,
     citations: extractCitations(f),
+  };
+}
+
+/** Owner/wallet scope the audit was run against (null = "All"). */
+export interface ExportScope {
+  owner: string | null;
+  wallet: string | null;
+}
+
+/** Condensed audit summary block carried at the top of the exported report. */
+export interface ExportedSummary {
+  score: number;
+  grade: string;
+  transactionsAnalyzed: number;
+  addressesScanned: number;
+  isClean: boolean;
+  fingerprintCoverage: number;
+  needsResync: boolean;
+  findingsCount: number;
+  warningsCount: number;
+}
+
+/** Full shape of the exported Privacy Audit JSON report. */
+export interface ExportedReport {
+  generatedAt: string;
+  scope: ExportScope;
+  summary: ExportedSummary;
+  scoreWaterfall: ScoreWaterfallEntry[];
+  findings: ExportedFinding[];
+  warnings: ExportedFinding[];
+}
+
+/**
+ * Assemble the full Privacy Audit JSON export report from an audit result and
+ * the chosen owner/wallet scope. This is the single source of truth for the
+ * exported report shape — used both by the UI export action and by tests, so
+ * the two cannot drift. URLs in citation `sourceNote` remain plain text and are
+ * never fetched (offline-first).
+ */
+export function buildPrivacyReport(
+  result: PrivacyAuditResult,
+  scope: ExportScope,
+  generatedAt: string = new Date().toISOString(),
+): ExportedReport {
+  return {
+    generatedAt,
+    scope,
+    summary: {
+      score: result.score,
+      grade: result.grade,
+      transactionsAnalyzed: result.transactionsAnalyzed,
+      addressesScanned: result.addressesScanned,
+      isClean: result.isClean,
+      fingerprintCoverage: result.fingerprintCoverage,
+      needsResync: result.needsResync,
+      findingsCount: result.findings.length,
+      warningsCount: result.warnings.length,
+    },
+    scoreWaterfall: result.scoreWaterfall,
+    findings: result.findings.map(mapFinding),
+    warnings: result.warnings.map(mapFinding),
   };
 }

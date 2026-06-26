@@ -85,7 +85,11 @@ vi.mock('../data/record-queries', () => ({
 }));
 
 import { runPrivacyAudit } from '../privacy-audit';
-import { mapFinding } from '../privacy-report-export';
+// buildPrivacyReport is the SAME function Reports.tsx (exportJson) uses to
+// assemble the export, so these tests guard the real production shape — not a
+// copy. If the export adds, drops, or renames a top-level key, summary field,
+// or finding field, the assertions below catch it.
+import { mapFinding, buildPrivacyReport } from '../privacy-report-export';
 
 describe('privacy report export — entity citations', () => {
   beforeEach(() => {
@@ -238,5 +242,109 @@ describe('privacy report export — entity citations', () => {
       categoryLabel: COINBASE_ENTITY.categoryLabel,
       sourceNote: COINBASE_ENTITY.sourceNote,
     });
+  });
+});
+
+describe('privacy report export — full report shape', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('contains all expected top-level keys after serialization', async () => {
+    const result = await runPrivacyAudit([USER_ADDRESS]);
+    const report = JSON.parse(
+      JSON.stringify(buildPrivacyReport(result, { owner: null, wallet: null })),
+    ) as Record<string, unknown>;
+
+    expect(Object.keys(report).sort()).toEqual(
+      [
+        'findings',
+        'generatedAt',
+        'scope',
+        'scoreWaterfall',
+        'summary',
+        'warnings',
+      ].sort(),
+    );
+    expect(typeof report.generatedAt).toBe('string');
+    expect(Array.isArray(report.scoreWaterfall)).toBe(true);
+    expect(Array.isArray(report.findings)).toBe(true);
+    expect(Array.isArray(report.warnings)).toBe(true);
+  });
+
+  it('carries the scope chosen for the export', async () => {
+    const result = await runPrivacyAudit([USER_ADDRESS]);
+    const report = buildPrivacyReport(result, { owner: 'Alice', wallet: 'Cold Storage' });
+    expect(report.scope).toEqual({ owner: 'Alice', wallet: 'Cold Storage' });
+  });
+
+  it('summary block matches the audit result', async () => {
+    const result = await runPrivacyAudit([USER_ADDRESS]);
+    const report = buildPrivacyReport(result, { owner: null, wallet: null });
+
+    expect(report.summary).toEqual({
+      score: result.score,
+      grade: result.grade,
+      transactionsAnalyzed: result.transactionsAnalyzed,
+      addressesScanned: result.addressesScanned,
+      isClean: result.isClean,
+      fingerprintCoverage: result.fingerprintCoverage,
+      needsResync: result.needsResync,
+      findingsCount: result.findings.length,
+      warningsCount: result.warnings.length,
+    });
+    // Spot-check the coverage flags are genuine booleans/numbers, not undefined.
+    expect(typeof report.summary.isClean).toBe('boolean');
+    expect(typeof report.summary.needsResync).toBe('boolean');
+    expect(typeof report.summary.fingerprintCoverage).toBe('number');
+  });
+
+  it('preserves the scoreWaterfall from the audit result', async () => {
+    const result = await runPrivacyAudit([USER_ADDRESS]);
+    const report = JSON.parse(
+      JSON.stringify(buildPrivacyReport(result, { owner: null, wallet: null })),
+    ) as { scoreWaterfall: unknown };
+
+    expect(report.scoreWaterfall).toEqual(
+      JSON.parse(JSON.stringify(result.scoreWaterfall)),
+    );
+  });
+
+  it('each mapped finding carries label/severity/description/correction/txids/addresses', async () => {
+    const result = await runPrivacyAudit([USER_ADDRESS]);
+    const report = JSON.parse(
+      JSON.stringify(buildPrivacyReport(result, { owner: null, wallet: null })),
+    ) as {
+      findings: Array<Record<string, unknown>>;
+      warnings: Array<Record<string, unknown>>;
+    };
+
+    const allFindings = [...report.findings, ...report.warnings];
+    // Sanity: the audit produced findings to assert against.
+    expect(allFindings.length).toBeGreaterThan(0);
+
+    for (const f of allFindings) {
+      expect(typeof f.type).toBe('string');
+      expect(typeof f.label).toBe('string');
+      expect((f.label as string).length).toBeGreaterThan(0);
+      expect(typeof f.severity).toBe('string');
+      expect(typeof f.description).toBe('string');
+      expect(typeof f.correction).toBe('string');
+      expect(Array.isArray(f.txids)).toBe(true);
+      expect(Array.isArray(f.addresses)).toBe(true);
+      expect(typeof f.details).toBe('object');
+    }
+  });
+
+  it('maps the human-readable label, not just the raw finding type', async () => {
+    const result = await runPrivacyAudit([USER_ADDRESS]);
+    const exported = [...result.findings, ...result.warnings].map(mapFinding);
+
+    const entity = exported.find((f) => f.type === 'ENTITY_SCAM');
+    expect(entity).toBeDefined();
+    // mapFinding resolves the friendly label via FINDING_TYPE_LABELS.
+    expect(entity!.label).not.toBe(entity!.type);
+    expect(entity!.txids.length).toBeGreaterThan(0);
+    expect(entity!.addresses.length).toBeGreaterThan(0);
   });
 });
