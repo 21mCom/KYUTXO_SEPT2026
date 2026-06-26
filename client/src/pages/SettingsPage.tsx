@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { Link } from "wouter";
-import { Moon, Eye, Database, Plus, Trash2, Pencil, AlertTriangle, Upload, RefreshCw, Loader2, Paperclip, KeyRound, Shield, Download, Stethoscope, ChevronRight, Wrench } from "lucide-react";
+import { Moon, Eye, Database, Plus, Trash2, Pencil, AlertTriangle, Upload, RefreshCw, Loader2, Paperclip, KeyRound, Shield, Download, Stethoscope, ChevronRight, ChevronDown, Wrench } from "lucide-react";
 import { isElectron, getElectronAPI } from "@/lib/electron";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
@@ -79,7 +80,8 @@ import {
   type EntitySnapshotError,
   type EntitySnapshotPreview,
 } from "@/lib/data/entity-list-store";
-import { getBundledEntityCount } from "@/lib/privacy-entity-list";
+import { getBundledEntityCount, ENTITY_CATEGORY_LABELS, type EntityEntry } from "@/lib/privacy-entity-list";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { deriveKey, decrypt, base64ToBuffer, verifyPassword } from "@/lib/crypto";
 import { getVaultSettings, vaultDb } from "@/lib/vault";
 import { generateSalt, hashPassword, bufferToBase64 } from "@/lib/crypto";
@@ -110,6 +112,77 @@ import { createProviderFromSettings } from "@/lib/blockchain-api";
 
 const DELETE_CONFIRMATION_PHRASE = "DELETE ALL DATA";
 
+const ENTITY_DIFF_ROW_HEIGHT = 52;
+
+/**
+ * Virtualized list of entity entries (address + name + category) shown in the
+ * import confirmation dialog so users can inspect exactly which entries are
+ * being added or removed. Virtualized so large diffs stay responsive.
+ */
+function EntityDiffList({
+  entries,
+  emptyLabel,
+  variant,
+}: {
+  entries: EntityEntry[];
+  emptyLabel: string;
+  variant: "added" | "removed";
+}) {
+  const parentRef = useRef<HTMLDivElement>(null);
+  const virtualizer = useVirtualizer({
+    count: entries.length,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => ENTITY_DIFF_ROW_HEIGHT,
+    overscan: 8,
+  });
+
+  if (entries.length === 0) {
+    return (
+      <p
+        className="text-sm text-muted-foreground px-3 py-6 text-center"
+        data-testid={`text-entity-diff-empty-${variant}`}
+      >
+        {emptyLabel}
+      </p>
+    );
+  }
+
+  return (
+    <div
+      ref={parentRef}
+      className="max-h-64 overflow-y-auto rounded-md border"
+      data-testid={`list-entity-diff-${variant}`}
+    >
+      <div style={{ height: `${virtualizer.getTotalSize()}px`, position: "relative", width: "100%" }}>
+        {virtualizer.getVirtualItems().map((virtualRow) => {
+          const entry = entries[virtualRow.index];
+          return (
+            <div
+              key={virtualRow.key}
+              className="absolute left-0 top-0 w-full border-b px-3 py-1.5 flex items-center justify-between gap-3"
+              style={{
+                height: `${virtualRow.size}px`,
+                transform: `translateY(${virtualRow.start}px)`,
+              }}
+              data-testid={`row-entity-diff-${variant}-${virtualRow.index}`}
+            >
+              <div className="min-w-0">
+                <p className="text-sm font-medium truncate" data-testid={`text-entity-diff-name-${variant}-${virtualRow.index}`}>
+                  {entry.name}
+                </p>
+                <p className="text-xs font-mono text-muted-foreground truncate">{entry.address}</p>
+              </div>
+              <Badge variant="secondary" className="shrink-0">
+                {ENTITY_CATEGORY_LABELS[entry.category]}
+              </Badge>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 export default function SettingsPage() {
   const { settings, fieldVisibility, cancelConfirmThreshold, isLoading: settingsLoading } = useSettings();
   const { customFields, isLoading: customFieldsLoading } = useCustomFields();
@@ -123,6 +196,7 @@ export default function SettingsPage() {
   const [entityImportErrors, setEntityImportErrors] = useState<EntitySnapshotError[] | null>(null);
   const [entityPreview, setEntityPreview] = useState<EntitySnapshotPreview | null>(null);
   const [entityPreviewSource, setEntityPreviewSource] = useState<string | undefined>(undefined);
+  const [showEntityDiff, setShowEntityDiff] = useState(false);
   const [isApplyingEntities, setIsApplyingEntities] = useState(false);
   const entityFileInputRef = useRef<HTMLInputElement>(null);
   
@@ -232,6 +306,7 @@ export default function SettingsPage() {
 
       // Valid — stage a preview and wait for explicit confirmation.
       setEntityPreviewSource(file.name);
+      setShowEntityDiff(false);
       setEntityPreview(result.preview);
     } catch (error: any) {
       toast({
@@ -2431,6 +2506,52 @@ export default function SettingsPage() {
                     ))}
                   </div>
                 </div>
+
+                {(entityPreview.added > 0 || entityPreview.removed > 0) && (
+                  <div>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="px-2"
+                      onClick={() => setShowEntityDiff((v) => !v)}
+                      data-testid="button-toggle-entity-diff"
+                    >
+                      {showEntityDiff ? (
+                        <ChevronDown className="h-4 w-4" />
+                      ) : (
+                        <ChevronRight className="h-4 w-4" />
+                      )}
+                      {showEntityDiff ? "Hide changed entries" : "Show changed entries"}
+                    </Button>
+
+                    {showEntityDiff && (
+                      <Tabs defaultValue="added" className="mt-2">
+                        <TabsList className="grid w-full grid-cols-2">
+                          <TabsTrigger value="added" data-testid="tab-entity-diff-added">
+                            Added ({entityPreview.added.toLocaleString()})
+                          </TabsTrigger>
+                          <TabsTrigger value="removed" data-testid="tab-entity-diff-removed">
+                            Removed ({entityPreview.removed.toLocaleString()})
+                          </TabsTrigger>
+                        </TabsList>
+                        <TabsContent value="added" className="mt-2">
+                          <EntityDiffList
+                            entries={entityPreview.addedEntries}
+                            emptyLabel="No entries will be added."
+                            variant="added"
+                          />
+                        </TabsContent>
+                        <TabsContent value="removed" className="mt-2">
+                          <EntityDiffList
+                            entries={entityPreview.removedEntries}
+                            emptyLabel="No entries will be removed."
+                            variant="removed"
+                          />
+                        </TabsContent>
+                      </Tabs>
+                    )}
+                  </div>
+                )}
               </div>
             )}
 

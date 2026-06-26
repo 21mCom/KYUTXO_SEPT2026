@@ -185,6 +185,10 @@ export interface EntitySnapshotPreview {
   unchanged: number;
   /** Per-category breakdown (only categories with at least one entry on either side). */
   categories: EntityCategoryDiff[];
+  /** The actual entries being added (incoming addresses not in the current list). */
+  addedEntries: EntityEntry[];
+  /** The actual entries being removed (current addresses not in the incoming snapshot). */
+  removedEntries: EntityEntry[];
 }
 
 /**
@@ -196,14 +200,10 @@ export function buildEntitySnapshotPreview(entries: EntityEntry[]): EntitySnapsh
   const currentAddrs = new Set(current.map((e) => e.address));
   const incomingAddrs = new Set(entries.map((e) => e.address));
 
-  let added = 0;
-  incomingAddrs.forEach((addr) => {
-    if (!currentAddrs.has(addr)) added += 1;
-  });
-  let removed = 0;
-  currentAddrs.forEach((addr) => {
-    if (!incomingAddrs.has(addr)) removed += 1;
-  });
+  const addedEntries = entries.filter((e) => !currentAddrs.has(e.address));
+  const removedEntries = current.filter((e) => !incomingAddrs.has(e.address));
+  const added = addedEntries.length;
+  const removed = removedEntries.length;
   const unchanged = incomingAddrs.size - added;
 
   const incomingByCat = new Map<EntityCategory, number>();
@@ -232,6 +232,8 @@ export function buildEntitySnapshotPreview(entries: EntityEntry[]): EntitySnapsh
     removed,
     unchanged,
     categories,
+    addedEntries,
+    removedEntries,
   };
 }
 
