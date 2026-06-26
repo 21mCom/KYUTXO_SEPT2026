@@ -15,6 +15,7 @@ import { RecordTypeBadge } from "./RecordTypeBadge";
 import { AttachmentList } from "./AttachmentList";
 import { AttachmentUpload } from "./AttachmentUpload";
 import { MetadataSourcesPanel } from "./MetadataSourcesPanel";
+import { renderSourceNote } from "@/lib/renderSourceNote";
 import {
   Collapsible,
   CollapsibleContent,
@@ -646,7 +647,7 @@ export function RecordDetailPanel({
               <div>
                 <h4 className="text-sm font-medium mb-2">Notes</h4>
                 <p className="text-sm text-muted-foreground whitespace-pre-wrap" data-testid="text-notes-detail">
-                  {record.notes}
+                  {renderSourceNote(record.notes)}
                 </p>
               </div>
             )}
