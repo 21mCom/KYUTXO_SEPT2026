@@ -50,6 +50,7 @@ const { putSettings, getSettings } = await import("@/lib/data/settings-crud");
 const {
   resetActiveEntityList,
   getActiveEntitySource,
+  getActiveEntityCount,
   getBundledEntityCount,
 } = await import("@/lib/privacy-entity-list");
 import type { Settings } from "@/lib/db-types";
@@ -127,6 +128,59 @@ describe("SettingsPage — Privacy Audit Entity List panel", () => {
 
     // Persisted to the settings record.
     const settings = await getSettings("default");
+    expect(settings?.entityListSnapshot?.entries).toHaveLength(2);
+    expect(settings?.entityListSnapshot?.sourceLabel).toBe("snapshot.json");
+
+    // Preview dialog closed.
+    await waitFor(() =>
+      expect(screen.queryByTestId("text-preview-incoming")).toBeNull(),
+    );
+  });
+
+  it("merge mode: unions imported entries onto the bundled list and persists only user entries", async () => {
+    render(
+      <ActivityBusProvider>
+        <SettingsPage />
+      </ActivityBusProvider>,
+    );
+
+    // Starts on the bundled list.
+    await screen.findByTestId("badge-entity-source");
+    expect(getActiveEntitySource()).toBe("bundled");
+    const bundledCount = getBundledEntityCount();
+
+    // Choose the "Merge with bundled" mode before importing.
+    fireEvent.click(screen.getByTestId("radio-entity-merge"));
+
+    // Both addresses are new (not in the bundled list), so the merge adds two.
+    const snapshot = JSON.stringify([
+      { address: ADDR.a, name: "New Exchange", category: "exchange" },
+      { address: ADDR.b, name: "New Mixer", category: "mixer" },
+    ]);
+    await selectEntityFile("snapshot.json", snapshot);
+
+    // Preview dialog appears. For merge the baseline is the bundled list, and
+    // "after merge" reflects bundled + the two new entries.
+    const incoming = await screen.findByTestId("text-preview-incoming");
+    expect(incoming.textContent).toBe("2");
+
+    // Nothing applied until the user confirms.
+    expect(getActiveEntitySource()).toBe("bundled");
+
+    fireEvent.click(screen.getByTestId("button-confirm-entity-import"));
+
+    // Active source flips to imported and the active count is bundled + new
+    // entries — NOT just the two imported entries.
+    await waitFor(() => expect(getActiveEntitySource()).toBe("imported"));
+    await waitFor(() =>
+      expect(screen.getByTestId("badge-entity-source").textContent).toBe("Imported"),
+    );
+    expect(getActiveEntityCount()).toBe(bundledCount + 2);
+
+    // Persisted snapshot records merge mode and only the user-supplied entries
+    // (so future bundled updates still flow through).
+    const settings = await getSettings("default");
+    expect(settings?.entityListSnapshot?.mode).toBe("merge");
     expect(settings?.entityListSnapshot?.entries).toHaveLength(2);
     expect(settings?.entityListSnapshot?.sourceLabel).toBe("snapshot.json");
 
