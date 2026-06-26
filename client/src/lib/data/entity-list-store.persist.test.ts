@@ -59,6 +59,9 @@ const ADDR = {
   // A valid mainnet address that is NOT in the bundled list, so a merge that
   // includes it grows the active list by exactly one beyond the bundled count.
   notBundled: "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq",
+  // A second valid mainnet address that is NOT in the bundled list, so a merge
+  // of two user entries grows the active list by exactly two.
+  notBundled2: "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4",
 } as const;
 
 function entry(
@@ -271,6 +274,43 @@ describe("loadEntitySnapshotFromStorage", () => {
     expect(getActiveEntityList()).toHaveLength(getBundledEntityCount() + 1);
     const active = new Set(getActiveEntityList().map((e) => e.address));
     expect(active.has(ADDR.notBundled)).toBe(true);
+  });
+
+  it("keeps a directly-persisted merge snapshot merged after a refresh", async () => {
+    // Simulate a page refresh: a merge snapshot was previously persisted to the
+    // settings record (mode: 'merge' with a couple of user-supplied entries),
+    // and the in-memory list starts out as bundled. Seed the record directly so
+    // this exercises only the load path — not the import path that wrote it.
+    await putSettings(
+      {
+        id: "default",
+        entityListSnapshot: {
+          importedAt: Date.now(),
+          sourceLabel: "merged.json",
+          mode: "merge",
+          entries: [
+            { address: ADDR.notBundled, name: "New Market", category: "darknet" },
+            { address: ADDR.notBundled2, name: "New Mixer", category: "mixer" },
+          ],
+        },
+      } as Settings,
+      { skipNotification: true },
+    );
+    resetActiveEntityList();
+    expect(getActiveEntitySource()).toBe("bundled");
+
+    const status = await loadEntitySnapshotFromStorage();
+
+    // The merge must be re-applied (not treated as a replace): the active list
+    // is the bundled list unioned with the two persisted user entries, so the
+    // count is bundledCount + 2 rather than just 2.
+    expect(status.source).toBe("imported");
+    expect(getActiveEntitySource()).toBe("imported");
+    expect(status.activeCount).toBe(getBundledEntityCount() + 2);
+    expect(getActiveEntityList()).toHaveLength(getBundledEntityCount() + 2);
+    const active = new Set(getActiveEntityList().map((e) => e.address));
+    expect(active.has(ADDR.notBundled)).toBe(true);
+    expect(active.has(ADDR.notBundled2)).toBe(true);
   });
 
   it("replaces with exactly the persisted entries for a mode='replace' snapshot", async () => {
