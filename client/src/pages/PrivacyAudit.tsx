@@ -1328,7 +1328,7 @@ function formatHistoryDate(ts: number): string {
   });
 }
 
-function PrivacyHistoryCard() {
+export function PrivacyHistoryCard() {
   const history = useLiveQuery(
     () => db.privacyAuditHistory.orderBy("timestamp").toArray(),
   );
