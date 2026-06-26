@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from "react";
+import { useToast } from "@/hooks/use-toast";
 import { useDbChangeSignal } from "@/hooks/use-db-change-signal";
 import { useLiveQuery } from "dexie-react-hooks";
 import { getBtcUsdPriceData } from "@/lib/data/price-data-crud";
@@ -228,6 +229,11 @@ export default function BalanceOverview() {
   // Per-group breakdown of unresolved spends: groupKey -> number of pending spends.
   // Lets each affected wallet card flag that its balance is overstated.
   const [unresolvedByGroup, setUnresolvedByGroup] = useState<Map<string, number>>(new Map());
+  // groupKey -> source record ids whose spends are pending. Powers the per-wallet
+  // "Resolve" action so it can scope resolution to just that group's records.
+  const [unresolvedRecordIdsByGroup, setUnresolvedRecordIdsByGroup] = useState<Map<string, number[]>>(new Map());
+  // Groups currently running a targeted resolve (one at a time per group).
+  const [resolvingGroups, setResolvingGroups] = useState<Set<string>>(new Set());
 
   // Re-run aggregation when the native read-engine flips to ready so the fast
   // path can take over from any Dexie fallback that ran first.
@@ -378,25 +384,84 @@ export default function BalanceOverview() {
       if (cancelled) return;
       if (byRecordId.size === 0) {
         setUnresolvedByGroup(new Map());
+        setUnresolvedRecordIdsByGroup(new Map());
         return;
       }
       const records = await getRecordsByIds(Array.from(byRecordId.keys()));
       if (cancelled) return;
       const byGroup = new Map<string, number>();
+      const recordIdsByGroup = new Map<string, number[]>();
       for (const rec of records) {
         if (rec.id == null) continue;
         const count = byRecordId.get(rec.id) ?? 0;
         if (count <= 0) continue;
         for (const key of getGroupKeys(rec, groupBy)) {
           byGroup.set(key, (byGroup.get(key) ?? 0) + count);
+          const ids = recordIdsByGroup.get(key);
+          if (ids) ids.push(rec.id);
+          else recordIdsByGroup.set(key, [rec.id]);
         }
       }
       setUnresolvedByGroup(byGroup);
+      setUnresolvedRecordIdsByGroup(recordIdsByGroup);
     })().catch(() => {});
     return () => {
       cancelled = true;
     };
   }, [dbSignal, groupBy]);
+
+  const { toast } = useToast();
+
+  const handleResolveGroup = useCallback(async (name: string) => {
+    const recordIds = unresolvedRecordIdsByGroup.get(name);
+    if (!recordIds || recordIds.length === 0) return;
+    const before = unresolvedByGroup.get(name) ?? 0;
+    setResolvingGroups((prev) => new Set(prev).add(name));
+    try {
+      const result = await transactionSyncService.resolvePrevouts(undefined, {
+        recomputeOrigin: "user",
+        restrictToRecordIds: new Set(recordIds),
+      });
+      // Refresh the global count so the top banner stays in sync. The per-group
+      // badge/note and this group's balance refresh automatically because
+      // resolvePrevouts notifies the 'records'/'transactionParticipants' scopes.
+      const remaining = await countUnresolvedPrevoutInputs();
+      setUnresolvedPrevouts(remaining);
+      if (remaining === 0) setSpendWarningDismissed(false);
+
+      const stillPending = Math.max(before - result.resolved, 0);
+      if (result.resolved === 0) {
+        toast({
+          title: "Nothing to resolve",
+          description: `No spends in "${name}" could be attributed to a known source. Their balances can't be corrected automatically.`,
+          variant: "destructive",
+        });
+      } else if (stillPending > 0) {
+        toast({
+          title: "Partially resolved",
+          description: `Resolved ${result.resolved.toLocaleString()} spend${result.resolved !== 1 ? "s" : ""} in "${name}". ${stillPending.toLocaleString()} still can't be attributed.`,
+        });
+      } else {
+        toast({
+          title: "Resolved",
+          description: `Resolved ${result.resolved.toLocaleString()} spend${result.resolved !== 1 ? "s" : ""} in "${name}" and recomputed its balance.`,
+        });
+      }
+    } catch (err) {
+      console.warn("[BalanceOverview] Per-group prevout resolve failed:", err);
+      toast({
+        title: "Resolve failed",
+        description: "Could not resolve this wallet's pending spends. Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setResolvingGroups((prev) => {
+        const next = new Set(prev);
+        next.delete(name);
+        return next;
+      });
+    }
+  }, [unresolvedRecordIdsByGroup, unresolvedByGroup, toast]);
 
   const handleFixPrevouts = useCallback(async () => {
     setFixingPrevouts(true);
@@ -747,9 +812,29 @@ export default function BalanceOverview() {
                           data-testid={`note-unresolved-${group.name}`}
                         >
                           <AlertTriangle className="h-3.5 w-3.5 flex-none" />
-                          <span>
+                          <span className="flex-1">
                             {unresolvedCount.toLocaleString()} spend{unresolvedCount !== 1 ? "s" : ""} pending attribution — this balance may be too high until resolved.
                           </span>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              void handleResolveGroup(group.name);
+                            }}
+                            disabled={resolvingGroups.has(group.name)}
+                            data-testid={`button-resolve-${group.name}`}
+                            className="flex-none border-yellow-400 dark:border-yellow-600 text-yellow-800 dark:text-yellow-200"
+                          >
+                            {resolvingGroups.has(group.name) ? (
+                              <>
+                                <Loader2 className="h-3 w-3 animate-spin mr-1.5" />
+                                Resolving…
+                              </>
+                            ) : (
+                              "Resolve"
+                            )}
+                          </Button>
                         </div>
                       )}
                       {rowsLoading && !rows ? (

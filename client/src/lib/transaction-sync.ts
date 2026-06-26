@@ -1594,9 +1594,15 @@ export class TransactionSyncService {
 
   async resolvePrevouts(
     onProgress?: (resolved: number, total: number) => void,
-    options?: { recomputeOrigin?: string },
+    options?: { recomputeOrigin?: string; restrictToRecordIds?: Set<number> },
   ): Promise<{ resolved: number; fetchedFromNode: number; errors: number; resolvedAddresses: string[] }> {
     const recomputeOrigin = options?.recomputeOrigin ?? 'blockchain-sync';
+    // When set, only spends whose resolved source output maps to one of these
+    // record ids are attributed — used by the per-wallet "Resolve" action on the
+    // Balance page. Scoped resolution is LOCAL-only: a spend can only be tied to
+    // a specific wallet when its prevout output is already known locally, so we
+    // never hit the network in this mode.
+    const restrictToRecordIds = options?.restrictToRecordIds;
     const stats = { resolved: 0, fetchedFromNode: 0, errors: 0, resolvedAddresses: [] as string[] };
 
     const allInputs = await db.transactionParticipants
@@ -1645,7 +1651,7 @@ export class TransactionSyncService {
       }
     }
 
-    if (needFetch.size > 0) {
+    if (needFetch.size > 0 && !restrictToRecordIds) {
       console.log(`[TransactionSync] Fetching ${needFetch.size} previous transactions from node for prevout resolution`);
       const fetchArr = Array.from(needFetch);
       const CONCURRENCY = 4;
@@ -1705,20 +1711,35 @@ export class TransactionSyncService {
     }
 
     const resolvedParticipants: TransactionParticipant[] = [];
+    // Addresses we actually wrote a resolution for — drives the stats recompute.
+    // In restrict mode this is a subset of resolvedAddressSet (only the targeted
+    // wallet's source addresses), so we recompute exactly the affected balances.
+    const writtenAddressSet = new Set<string>();
     for (const inp of unresolvedInputs) {
       const key = `${inp.prevTxid}:${inp.prevVout}`;
       const resolved = localOutputCache.get(key);
       if (resolved && resolved.address && inp.id) {
+        const recordId = addressToRecordId.get(resolved.address);
+        // Per-wallet resolve: only attribute spends whose source output maps to
+        // one of the requested records. Spends with no locally-known source
+        // record are left untouched (graceful fallback — their badge persists).
+        if (restrictToRecordIds && (recordId === undefined || !restrictToRecordIds.has(recordId))) {
+          continue;
+        }
         const updated: TransactionParticipant = {
           ...inp,
           address: resolved.address,
           amount: resolved.amount,
           scriptType: resolved.scriptType as any,
-          recordId: addressToRecordId.get(resolved.address),
+          recordId,
         };
         resolvedParticipants.push(updated);
+        writtenAddressSet.add(resolved.address);
         stats.resolved++;
       }
+    }
+    if (restrictToRecordIds) {
+      stats.resolvedAddresses = Array.from(writtenAddressSet);
     }
 
     if (resolvedParticipants.length > 0) {
@@ -1735,10 +1756,11 @@ export class TransactionSyncService {
       // drops in the SAME run, even when resolvePrevouts runs standalone (e.g.
       // the Balance page "fix" button) and even for addresses that were never
       // part of the original sync set. Local-only recompute; never hits network.
-      if (resolvedAddressSet.size > 0) {
+      const recomputeAddresses = restrictToRecordIds ? writtenAddressSet : resolvedAddressSet;
+      if (recomputeAddresses.size > 0) {
         try {
           await recomputeAddressStats({
-            addresses: Array.from(resolvedAddressSet),
+            addresses: Array.from(recomputeAddresses),
             origin: recomputeOrigin,
             skipNotification: true,
           });
