@@ -52,23 +52,15 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { useAuth } from "@/contexts/AuthContext";
-import { db, type Evidence, type TrashedAttachment } from "@/lib/database";
-import {
-  restoreTag,
-  restoreCategory,
-  restoreOwner,
-  restoreWalletName,
-  restoreSeedName,
-  restoreWalletSoftware,
-} from "@/lib/data/vocabulary-crud";
+import { db, type TrashedAttachment } from "@/lib/database";
 import { clearAllRecords } from "@/lib/data/record-crud";
 import { recomputeAddressStats } from "@/lib/data/address-stats";
 import { clearTransactions, clearParticipants } from "@/lib/data/transaction-crud";
 import { addUtxoLineage, addCustodySegment, clearUtxoLineage, clearCustodySegments } from "@/lib/data/lineage-crud";
-import { bulkAddEvidence, clearEvidence, clearEvidenceAttachments, addEvidenceAttachment as addEvidenceAttachmentCrud } from "@/lib/data/evidence-crud";
+import { clearEvidence, clearEvidenceAttachments } from "@/lib/data/evidence-crud";
 import { clearAttachments } from "@/lib/data/attachments-crud";
 import { clearRecordOrigins } from "@/lib/data/record-origins-crud";
-import { clearCustomFields, addCustomField as addCustomFieldCrud, getCustomFieldBySlug } from "@/lib/data/custom-fields-crud";
+import { clearCustomFields } from "@/lib/data/custom-fields-crud";
 import { clearAddressSyncState } from "@/lib/data/address-sync-crud";
 import { clearPriceData, addPriceData } from "@/lib/data/price-data-crud";
 import { clearNodeSettings, getNodeSettings } from "@/lib/data/node-settings-crud";
@@ -79,7 +71,13 @@ import {
   restoreLegacyTransactions,
   restoreLegacyAddressSyncState,
 } from "@/lib/backup/legacy-restore";
-import { clearDerivationTemplates, addDerivationTemplate, getAllDerivationTemplates, type CreateDerivationTemplateData } from "@/lib/data/derivation-templates-crud";
+import {
+  restoreLegacyVocabulary,
+  restoreLegacyCustomFields,
+  restoreLegacyDerivationTemplates,
+  restoreLegacyEvidence,
+} from "@/lib/backup/legacy-restore-misc";
+import { clearDerivationTemplates } from "@/lib/data/derivation-templates-crud";
 import { updateSettings } from "@/lib/data/settings-crud";
 import {
   prepareEntitySnapshot,
@@ -1805,67 +1803,17 @@ export default function SettingsPage() {
 
       setRestoreMessage("Restoring tags and categories...");
 
-      // Track existing tag/category names for merge mode
-      let existingTagNames = new Set<string>();
-      let existingCategoryNames = new Set<string>();
-      
-      if (restoreMode === "merge") {
-        const existingTags = await db.tags.toArray();
-        for (const tag of existingTags) {
-          existingTagNames.add(tag.name);
-        }
-        
-        const existingCategories = await db.categories.toArray();
-        for (const cat of existingCategories) {
-          existingCategoryNames.add(cat.name);
-        }
-      }
-
-      let tagsAdded = 0;
-      let categoriesAdded = 0;
-
-      // Restore tags
-      if (tags && tags.length > 0) {
-        for (const tag of tags) {
-          const { id, ...tagData } = tag;
-          const tagName = tagData.name || "";
-          
-          // Skip duplicates in merge mode
-          if (restoreMode === "merge" && existingTagNames.has(tagName)) {
-            continue;
-          }
-          
-          const newTag = {
-            name: tagName,
-            color: tagData.color || "#888888",
-            createdAt: tagData.createdAt || Date.now(),
-          };
-          
-          await restoreTag(newTag);
-          tagsAdded++;
-        }
-      }
-
-      // Restore categories
-      if (categories && categories.length > 0) {
-        for (const category of categories) {
-          const { id, ...catData } = category;
-          const catName = catData.name || "";
-          
-          // Skip duplicates in merge mode
-          if (restoreMode === "merge" && existingCategoryNames.has(catName)) {
-            continue;
-          }
-          
-          const newCategory = {
-            name: catName,
-            createdAt: catData.createdAt || Date.now(),
-          };
-          
-          await restoreCategory(newCategory);
-          categoriesAdded++;
-        }
-      }
+      // Restore vocabulary (tags, categories, owners, wallet names, seed names,
+      // wallet software). Merge mode skips entries whose name already exists;
+      // replace mode adds every entry (cleared above). Shared with tests via the
+      // legacy-restore-misc helpers.
+      const vocabResult = await restoreLegacyVocabulary(
+        { tags, categories, owners, walletNames, seedNames, walletSoftware },
+        restoreMode,
+      );
+      const tagsAdded = vocabResult.tagsAdded;
+      const categoriesAdded = vocabResult.categoriesAdded;
+      const vocabularyAdded = vocabResult.vocabularyAdded;
 
       setRestoreProgress(80);
       setRestoreMessage("Restoring attachments...");
@@ -1937,231 +1885,38 @@ export default function SettingsPage() {
       setRestoreProgress(90);
       setRestoreMessage("Restoring custom fields...");
 
-      let customFieldsAdded = 0;
-
-      // Restore custom fields
-      if (backupCustomFields && backupCustomFields.length > 0) {
-        for (const field of backupCustomFields) {
-          const { id, ...fieldData } = field;
-          if (restoreMode === "merge") {
-            const existing = await getCustomFieldBySlug(fieldData.slug);
-            if (!existing) {
-              await addCustomFieldCrud({ ...fieldData, createdAt: fieldData.createdAt || Date.now() }, { skipNotification: true });
-              customFieldsAdded++;
-            }
-          } else {
-            await addCustomFieldCrud({ ...fieldData, createdAt: fieldData.createdAt || Date.now() }, { skipNotification: true });
-            customFieldsAdded++;
-          }
-        }
-      }
-
-      setRestoreProgress(92);
-      setRestoreMessage("Restoring vocabulary items...");
-
-      let vocabularyAdded = 0;
-
-      // Track existing vocabulary names for merge mode
-      let existingOwnerNames = new Set<string>();
-      let existingWalletNameNames = new Set<string>();
-      let existingSeedNameNames = new Set<string>();
-      let existingWalletSoftwareNames = new Set<string>();
-      
-      if (restoreMode === "merge") {
-        const existingOwners = await db.owners.toArray();
-        for (const owner of existingOwners) {
-          existingOwnerNames.add(owner.name);
-        }
-        
-        const existingWalletNames = await db.walletNames.toArray();
-        for (const wn of existingWalletNames) {
-          existingWalletNameNames.add(wn.name);
-        }
-        
-        const existingSeedNames = await db.seedNames.toArray();
-        for (const sn of existingSeedNames) {
-          existingSeedNameNames.add(sn.name);
-        }
-        
-        const existingWalletSoftware = await db.walletSoftware.toArray();
-        for (const ws of existingWalletSoftware) {
-          existingWalletSoftwareNames.add(ws.name);
-        }
-      }
-
-      // Restore owners
-      if (owners && owners.length > 0) {
-        for (const owner of owners) {
-          const { id, ...ownerData } = owner;
-          const ownerName = ownerData.name || "";
-          
-          if (restoreMode === "merge" && existingOwnerNames.has(ownerName)) {
-            continue;
-          }
-          
-          const newOwner = {
-            name: ownerName,
-            createdAt: ownerData.createdAt || Date.now(),
-          };
-          
-          await restoreOwner(newOwner);
-          vocabularyAdded++;
-        }
-      }
-
-      // Restore wallet names
-      if (walletNames && walletNames.length > 0) {
-        for (const wn of walletNames) {
-          const { id, ...wnData } = wn;
-          const wnName = wnData.name || "";
-          
-          if (restoreMode === "merge" && existingWalletNameNames.has(wnName)) {
-            continue;
-          }
-          
-          const newWalletName = {
-            name: wnName,
-            createdAt: wnData.createdAt || Date.now(),
-          };
-          
-          await restoreWalletName(newWalletName);
-          vocabularyAdded++;
-        }
-      }
-
-      // Restore seed names
-      if (seedNames && seedNames.length > 0) {
-        for (const sn of seedNames) {
-          const { id, ...snData } = sn;
-          const snName = snData.name || "";
-          
-          if (restoreMode === "merge" && existingSeedNameNames.has(snName)) {
-            continue;
-          }
-          
-          const newSeedName = {
-            name: snName,
-            createdAt: snData.createdAt || Date.now(),
-          };
-          
-          await restoreSeedName(newSeedName);
-          vocabularyAdded++;
-        }
-      }
-
-      // Restore wallet software
-      if (walletSoftware && walletSoftware.length > 0) {
-        for (const ws of walletSoftware) {
-          const { id, ...wsData } = ws;
-          const wsName = wsData.name || "";
-          
-          if (restoreMode === "merge" && existingWalletSoftwareNames.has(wsName)) {
-            continue;
-          }
-          
-          const newWalletSoftware = {
-            name: wsName,
-            createdAt: wsData.createdAt || Date.now(),
-          };
-          
-          await restoreWalletSoftware(newWalletSoftware);
-          vocabularyAdded++;
-        }
-      }
+      // Restore custom fields (merge mode de-dups by `slug`; replace mode adds
+      // every field). Shared with tests via the legacy-restore-misc helpers.
+      const customFieldsAdded = await restoreLegacyCustomFields(
+        backupCustomFields,
+        restoreMode,
+      );
 
       setRestoreProgress(96);
       setRestoreMessage("Restoring derivation templates...");
 
-      let templatesAdded = 0;
-
-      // Restore derivation templates
-      if (derivationTemplates && derivationTemplates.length > 0) {
-        // Track existing templates by fingerprint+scriptType for merge mode
-        let existingTemplateKeys = new Set<string>();
-        if (restoreMode === "merge") {
-          const existingTemplates = await getAllDerivationTemplates();
-          for (const t of existingTemplates) {
-            existingTemplateKeys.add(`${t.fingerprint}:${t.scriptType}`);
-          }
-        }
-        
-        for (const template of derivationTemplates) {
-          const { id, ...templateData } = template;
-          const templateKey = `${templateData.fingerprint}:${templateData.scriptType}`;
-          
-          if (restoreMode === "merge" && existingTemplateKeys.has(templateKey)) {
-            continue;
-          }
-          
-          const newTemplate: CreateDerivationTemplateData = {
-            fingerprint: templateData.fingerprint || "unknown",
-            scriptType: templateData.scriptType || "P2WPKH",
-            derivationPath: templateData.derivationPath || "m/84'/0'/0'",
-            xpub: templateData.xpub,
-            gapLimit: templateData.gapLimit || 20,
-            network: templateData.network || "mainnet",
-            owner: templateData.owner,
-            walletName: templateData.walletName,
-            seedName: templateData.seedName,
-            notes: templateData.notes,
-            createdAt: templateData.createdAt || Date.now(),
-            updatedAt: templateData.updatedAt || Date.now(),
-          };
-          
-          await addDerivationTemplate(newTemplate, { skipNotification: true });
-          templatesAdded++;
-        }
-      }
+      // Restore derivation templates (merge mode de-dups by
+      // `fingerprint:scriptType`; replace mode adds every template). Shared with
+      // tests via the legacy-restore-misc helpers.
+      const templatesAdded = await restoreLegacyDerivationTemplates(
+        derivationTemplates,
+        restoreMode,
+      );
 
       setRestoreProgress(97);
       setRestoreMessage("Restoring evidence and additional data...");
 
-      let evidenceAdded = 0;
-      let evidenceAttachmentsAdded = 0;
       let priceDataAdded = 0;
       let lineageDataAdded = 0;
 
-      // Restore evidence documents (v2.2.0+)
-      if (evidence && evidence.length > 0) {
-        for (const ev of evidence) {
-          const { id, ...evData } = ev;
-          
-          const newEvidence = {
-            title: evData.title || "Restored Evidence",
-            documentType: evData.documentType || "other",
-            originalDate: evData.originalDate,
-            notes: evData.notes,
-            tags: evData.tags || [],
-            partiesInvolved: evData.partiesInvolved || [],
-            source: evData.source,
-            importance: evData.importance,
-            createdAt: evData.createdAt || Date.now(),
-            updatedAt: evData.updatedAt || Date.now(),
-          };
-          
-          await bulkAddEvidence([newEvidence as Evidence], { skipNotification: true });
-          evidenceAdded++;
-        }
-      }
-
-      // Restore evidence attachments (v2.2.0+)
-      if (evidenceAttachments && evidenceAttachments.length > 0) {
-        for (const ea of evidenceAttachments) {
-          const { id, ...eaData } = ea;
-          
-          const newEvidenceAttachment = {
-            evidenceId: eaData.evidenceId,
-            filename: eaData.filename || "unknown",
-            mimeType: eaData.mimeType || "application/octet-stream",
-            size: eaData.size || 0,
-            objectStoragePath: eaData.objectStoragePath || "",
-            createdAt: eaData.createdAt || Date.now(),
-          };
-          
-          await addEvidenceAttachmentCrud(newEvidenceAttachment, { skipNotification: true });
-          evidenceAttachmentsAdded++;
-        }
-      }
+      // Restore evidence documents and attachments (no de-dup in either mode).
+      // Shared with tests via the legacy-restore-misc helpers.
+      const evidenceResult = await restoreLegacyEvidence(
+        evidence,
+        evidenceAttachments,
+      );
+      const evidenceAdded = evidenceResult.evidenceAdded;
+      const evidenceAttachmentsAdded = evidenceResult.evidenceAttachmentsAdded;
 
       // Restore price data (v2.2.0+, not encrypted)
       if (priceData && priceData.length > 0) {
