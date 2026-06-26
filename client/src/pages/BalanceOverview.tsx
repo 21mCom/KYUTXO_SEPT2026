@@ -12,7 +12,7 @@ import {
 import { engineGetBalanceGroupSummaries, subscribeEngineReadiness } from "@/lib/engine/engine-client";
 import { evaluateEngineFreshness } from "@/lib/engine/engine-freshness";
 import { recomputeAddressStats } from "@/lib/data/address-stats";
-import { countUnresolvedPrevoutInputs, getUnresolvedSpendsByRecordId } from "@/lib/data/transaction-crud";
+import { countUnresolvedPrevoutInputs, getUnresolvedSpendBreakdown } from "@/lib/data/transaction-crud";
 import { transactionSyncService } from "@/lib/transaction-sync";
 import {
   type GroupBy,
@@ -225,6 +225,10 @@ export default function BalanceOverview() {
   const [unresolvedPrevouts, setUnresolvedPrevouts] = useState<number | null>(null);
   const [spendWarningDismissed, setSpendWarningDismissed] = useState(false);
   const [fixingPrevouts, setFixingPrevouts] = useState(false);
+  // Unresolved spends that map to no tracked source record (prevout not locally
+  // known, or its output belongs to no tracked address). These overstate the
+  // overall balance but no single wallet card can reflect them.
+  const [unattributableSpends, setUnattributableSpends] = useState(0);
 
   // Per-group breakdown of unresolved spends: groupKey -> number of pending spends.
   // Lets each affected wallet card flag that its balance is overstated.
@@ -380,8 +384,9 @@ export default function BalanceOverview() {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const byRecordId = await getUnresolvedSpendsByRecordId();
+      const { byRecordId, unattributable } = await getUnresolvedSpendBreakdown();
       if (cancelled) return;
+      setUnattributableSpends(unattributable);
       if (byRecordId.size === 0) {
         setUnresolvedByGroup(new Map());
         setUnresolvedRecordIdsByGroup(new Map());
@@ -642,6 +647,15 @@ export default function BalanceOverview() {
               {unresolvedPrevouts!.toLocaleString()} spend{unresolvedPrevouts !== 1 ? "s" : ""} with an unknown source address.
               Resolving them will subtract the correct amounts from the source wallets.
             </p>
+            {unattributableSpends > 0 && (
+              <p
+                className="text-xs text-yellow-700/80 dark:text-yellow-300/70 mt-0.5"
+                data-testid="text-unattributable-spends"
+              >
+                {unattributableSpends.toLocaleString()} of these can't yet be tied to any tracked wallet
+                {unattributableSpends === unresolvedPrevouts ? " — resolving needs more transaction history first." : "."}
+              </p>
+            )}
           </div>
           <div className="flex items-center gap-2 flex-none">
             <Button

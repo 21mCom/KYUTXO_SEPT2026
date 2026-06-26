@@ -64,7 +64,7 @@ vi.mock("@/lib/database", async () => {
   };
 });
 
-const { getUnresolvedSpendsByRecordId } = await import("./transaction-crud");
+const { getUnresolvedSpendsByRecordId, getUnresolvedSpendBreakdown } = await import("./transaction-crud");
 
 // ---- Fixtures --------------------------------------------------------------
 
@@ -227,5 +227,57 @@ describe("getUnresolvedSpendsByRecordId", () => {
     const result = await getUnresolvedSpendsByRecordId();
 
     expect(Object.fromEntries(result)).toEqual({ 9: 1 });
+  });
+});
+
+describe("getUnresolvedSpendBreakdown", () => {
+  it("reports zero unattributable when there are no unresolved inputs", async () => {
+    await testDb.transactionParticipants.bulkAdd([mkOutput("txA", 0, { recordId: 1 })]);
+
+    const { byRecordId, unattributable } = await getUnresolvedSpendBreakdown();
+
+    expect(byRecordId.size).toBe(0);
+    expect(unattributable).toBe(0);
+  });
+
+  it("counts spends whose prevout is not present locally as unattributable", async () => {
+    await testDb.transactionParticipants.bulkAdd([
+      mkUnresolvedInput("spend1", "txMissing", 0),
+      mkUnresolvedInput("spend2", "txMissing", 1),
+    ]);
+
+    const { byRecordId, unattributable } = await getUnresolvedSpendBreakdown();
+
+    expect(byRecordId.size).toBe(0);
+    expect(unattributable).toBe(2);
+  });
+
+  it("counts spends whose prevout maps to no tracked record as unattributable", async () => {
+    await testDb.transactionParticipants.bulkAdd([
+      mkOutput("txSrc", 0, { recordId: undefined, address: "unknown-addr" }),
+      mkUnresolvedInput("txSpend", "txSrc", 0),
+    ]);
+
+    const { byRecordId, unattributable } = await getUnresolvedSpendBreakdown();
+
+    expect(byRecordId.size).toBe(0);
+    expect(unattributable).toBe(1);
+  });
+
+  it("separates attributable spends from unattributable ones", async () => {
+    await testDb.transactionParticipants.bulkAdd([
+      mkOutput("txSrc", 0, { recordId: 42 }),
+      mkUnresolvedInput("spendKnown", "txSrc", 0),
+      // Not present locally -> unattributable.
+      mkUnresolvedInput("spendMissing", "txGone", 0),
+      // Present but no tracked record -> unattributable.
+      mkOutput("txUntracked", 0, { recordId: undefined, address: "no-record" }),
+      mkUnresolvedInput("spendUntracked", "txUntracked", 0),
+    ]);
+
+    const { byRecordId, unattributable } = await getUnresolvedSpendBreakdown();
+
+    expect(Object.fromEntries(byRecordId)).toEqual({ 42: 1 });
+    expect(unattributable).toBe(2);
   });
 });

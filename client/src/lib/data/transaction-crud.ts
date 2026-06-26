@@ -308,16 +308,29 @@ export async function countUnresolvedPrevoutInputs(): Promise<number> {
  * only (never the network, KYUTXO stays offline) and return a map of
  * recordId -> number of unresolved spends pending attribution to that record.
  * Inputs whose prevout output is not locally known (or maps to no tracked
- * record) are simply omitted — they cannot be tied to a specific wallet.
+ * record) are simply omitted from the per-record map — they cannot be tied to a
+ * specific wallet — but they ARE tallied separately as `unattributable` so the
+ * UI can surface pending work that no single wallet card reflects.
  */
-export async function getUnresolvedSpendsByRecordId(): Promise<Map<number, number>> {
+export interface UnresolvedSpendBreakdown {
+  /** recordId -> number of unresolved spends pending attribution to that record. */
+  byRecordId: Map<number, number>;
+  /**
+   * Unresolved spends whose prevout output is not locally known, or maps to no
+   * tracked record. These overstate the overall balance picture but cannot be
+   * attributed to any single wallet group.
+   */
+  unattributable: number;
+}
+
+export async function getUnresolvedSpendBreakdown(): Promise<UnresolvedSpendBreakdown> {
   const result = new Map<number, number>();
 
   const unresolvedInputs = await db.transactionParticipants
     .where('role').equals('input')
     .filter(p => (!p.address || p.address.trim() === '') && p.prevTxid !== undefined && p.prevVout !== undefined)
     .toArray();
-  if (unresolvedInputs.length === 0) return result;
+  if (unresolvedInputs.length === 0) return { byRecordId: result, unattributable: 0 };
 
   // Batch-load the local OUTPUT participants for every referenced prevTxid so we
   // can map each unresolved input's (prevTxid, prevVout) to its source output.
@@ -357,15 +370,32 @@ export async function getUnresolvedSpendsByRecordId(): Promise<Map<number, numbe
     }
   }
 
+  let unattributable = 0;
   for (const inp of unresolvedInputs) {
     const out = outputCache.get(`${inp.prevTxid}:${inp.prevVout}`);
-    if (!out) continue;
+    if (!out) {
+      unattributable++;
+      continue;
+    }
     const recordId = out.recordId ?? (out.address ? addrToRecordId.get(out.address) : undefined);
-    if (recordId === undefined) continue;
+    if (recordId === undefined) {
+      unattributable++;
+      continue;
+    }
     result.set(recordId, (result.get(recordId) ?? 0) + 1);
   }
 
-  return result;
+  return { byRecordId: result, unattributable };
+}
+
+/**
+ * Backward-compatible accessor returning only the per-record attribution map.
+ * Prefer {@link getUnresolvedSpendBreakdown} when the unattributable count is
+ * also needed.
+ */
+export async function getUnresolvedSpendsByRecordId(): Promise<Map<number, number>> {
+  const { byRecordId } = await getUnresolvedSpendBreakdown();
+  return byRecordId;
 }
 
 // =============================================================================
