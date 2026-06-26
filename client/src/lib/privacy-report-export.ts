@@ -242,3 +242,60 @@ export function buildPrivacyTextReport(
 
   return lines.join("\n");
 }
+
+/**
+ * The minimal toast callback shape the copy helper needs. The real
+ * `useToast().toast` returns a handle object, but the helper only relies on the
+ * call's side effect, so a `=> void` return keeps it easy to test.
+ */
+export type ReportCopyToast = (opts: {
+  variant?: "default" | "destructive";
+  title: string;
+  description: string;
+}) => void;
+
+/**
+ * The outcome of an in-app copy attempt, so callers/tests can assert which
+ * branch ran without inspecting toast text.
+ */
+export type ReportCopyOutcome = "copied" | "unavailable" | "failed";
+
+/**
+ * Extracted logic behind the in-app "Copy" button on the Privacy Audit report.
+ * Writes the already-built plain-text report to the async Clipboard API and
+ * surfaces the result via `toast`:
+ *   - no `navigator.clipboard.writeText`  → "Clipboard Unavailable" (destructive)
+ *   - write succeeds                      → "Copied to Clipboard"
+ *   - write rejects                       → "Copy Failed" (destructive)
+ * This is the single source of truth for that handler so it can be unit-tested
+ * independently of the React component.
+ */
+export async function copyPrivacyReportText(
+  text: string,
+  toast: ReportCopyToast,
+): Promise<ReportCopyOutcome> {
+  if (!navigator.clipboard?.writeText) {
+    toast({
+      variant: "destructive",
+      title: "Clipboard Unavailable",
+      description: "Copying isn't supported here. Use Export Text to save the report instead.",
+    });
+    return "unavailable";
+  }
+
+  try {
+    await navigator.clipboard.writeText(text);
+    toast({
+      title: "Copied to Clipboard",
+      description: "The Privacy Audit report is ready to paste.",
+    });
+    return "copied";
+  } catch {
+    toast({
+      variant: "destructive",
+      title: "Copy Failed",
+      description: "Couldn't access the clipboard. Use Export Text to save the report instead.",
+    });
+    return "failed";
+  }
+}

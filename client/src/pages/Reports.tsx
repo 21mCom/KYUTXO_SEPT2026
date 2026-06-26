@@ -20,7 +20,7 @@ import {
   type EntityCitation,
 } from "@/lib/privacy-audit";
 import { renderSourceNote } from "@/lib/renderSourceNote";
-import { buildPrivacyReport, buildPrivacyTextReport, formatScoreDelta } from "@/lib/privacy-report-export";
+import { buildPrivacyReport, buildPrivacyTextReport, copyPrivacyReportText, formatScoreDelta } from "@/lib/privacy-report-export";
 import { buildPrintableReport, severityLabel, wireReportCopyButton } from "@/lib/privacy-report-html";
 import { getRecordsPageByTypeIdReverseKeyset } from "@/lib/data/record-crud";
 
@@ -152,29 +152,7 @@ export function PrivacyAuditReportPanel() {
   const copyText = useCallback(async () => {
     const text = buildText();
     if (text == null) return;
-
-    if (!navigator.clipboard?.writeText) {
-      toast({
-        variant: "destructive",
-        title: "Clipboard Unavailable",
-        description: "Copying isn't supported here. Use Export Text to save the report instead.",
-      });
-      return;
-    }
-
-    try {
-      await navigator.clipboard.writeText(text);
-      toast({
-        title: "Copied to Clipboard",
-        description: "The Privacy Audit report is ready to paste.",
-      });
-    } catch {
-      toast({
-        variant: "destructive",
-        title: "Copy Failed",
-        description: "Couldn't access the clipboard. Use Export Text to save the report instead.",
-      });
-    }
+    await copyPrivacyReportText(text, toast);
   }, [buildText, toast]);
 
   const exportPdf = useCallback(() => {
