@@ -24,6 +24,8 @@ import {
   ScanSearch,
   Info,
   ExternalLink,
+  List,
+  GitBranch,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -579,9 +581,236 @@ interface PeelStep {
   changeAddress: string;
 }
 
+const PEEL_PAYMENT_COLOR = "hsl(var(--chart-5))"; // payment peeled off to external address
+const PEEL_CHANGE_COLOR = "hsl(var(--chart-2))"; // change forwarded along the chain
+
+function shortPeelAddr(a: string): string {
+  if (!a || a === "—") return "—";
+  return a.length > 16 ? `${a.slice(0, 7)}…${a.slice(-5)}` : a;
+}
+
+function shortPeelTxid(t: string): string {
+  return t.length > 12 ? `${t.slice(0, 8)}…${t.slice(-4)}` : t;
+}
+
+// Node-link diagram of the peel chain. Transactions form a vertical spine;
+// change outputs flow down the spine (becoming the next hop's input) while
+// payments branch off to the right toward external addresses.
+function PeelChainGraph({ steps }: { steps: PeelStep[] }) {
+  const marginTop = 36;
+  const hopGap = 150;
+  const txX = 92;
+  const payX = 300;
+  const svgWidth = 440;
+  const svgHeight = marginTop + steps.length * hopGap + 24;
+  const fmt = (sats: number) => `${(sats / 1e8).toFixed(6)} BTC`;
+
+  const txY = (i: number) => marginTop + i * hopGap;
+  const changeY = (i: number) => txY(i) + hopGap / 2;
+
+  return (
+    <div className="space-y-3" data-testid="container-peel-graph">
+      <p className="text-xs text-muted-foreground">
+        Each hop peels off a payment to an external address and forwards the remaining change to a fresh address,
+        which becomes the input to the next transaction. This forms a traceable chain of {steps.length} transactions.
+      </p>
+      <div className="flex items-center gap-4 flex-wrap text-xs text-muted-foreground">
+        <span className="inline-flex items-center gap-1.5">
+          <span className="inline-block h-0.5 w-5 rounded" style={{ backgroundColor: PEEL_PAYMENT_COLOR }} />
+          Payment out
+        </span>
+        <span className="inline-flex items-center gap-1.5">
+          <span className="inline-block h-0.5 w-5 rounded" style={{ backgroundColor: PEEL_CHANGE_COLOR }} />
+          Change forwarded
+        </span>
+      </div>
+      <div className="overflow-auto rounded-md border" style={{ maxHeight: 520 }}>
+        <svg
+          width={svgWidth}
+          height={svgHeight}
+          viewBox={`0 0 ${svgWidth} ${svgHeight}`}
+          className="block"
+          role="img"
+          aria-label={`Peel chain graph of ${steps.length} transactions`}
+        >
+          <defs>
+            <marker
+              id="peel-arrow-payment"
+              viewBox="0 0 10 10"
+              refX="9"
+              refY="5"
+              markerWidth="6"
+              markerHeight="6"
+              orient="auto-start-reverse"
+            >
+              <path d="M 0 0 L 10 5 L 0 10 z" fill={PEEL_PAYMENT_COLOR} />
+            </marker>
+            <marker
+              id="peel-arrow-change"
+              viewBox="0 0 10 10"
+              refX="9"
+              refY="5"
+              markerWidth="6"
+              markerHeight="6"
+              orient="auto-start-reverse"
+            >
+              <path d="M 0 0 L 10 5 L 0 10 z" fill={PEEL_CHANGE_COLOR} />
+            </marker>
+          </defs>
+
+          {/* Edges first so nodes render on top */}
+          {steps.map((step, i) => {
+            const ty = txY(i);
+            const cy = changeY(i);
+            const nextTy = txY(i + 1);
+            const isLast = i === steps.length - 1;
+            return (
+              <Fragment key={`edges-${step.txid}`}>
+                {/* Payment branch to the right */}
+                <line
+                  x1={txX + 20}
+                  y1={ty}
+                  x2={payX - 12}
+                  y2={ty}
+                  stroke={PEEL_PAYMENT_COLOR}
+                  strokeWidth={1.5}
+                  markerEnd="url(#peel-arrow-payment)"
+                />
+                <text
+                  x={(txX + 20 + payX - 12) / 2}
+                  y={ty - 6}
+                  textAnchor="middle"
+                  className="font-mono"
+                  fontSize={9}
+                  fill={PEEL_PAYMENT_COLOR}
+                >
+                  {fmt(step.payment)}
+                </text>
+                {/* Change forwarded down the spine */}
+                <line
+                  x1={txX}
+                  y1={ty + 20}
+                  x2={txX}
+                  y2={cy - 10}
+                  stroke={PEEL_CHANGE_COLOR}
+                  strokeWidth={1.5}
+                  markerEnd="url(#peel-arrow-change)"
+                />
+                <text
+                  x={txX + 8}
+                  y={(ty + 20 + cy - 10) / 2 + 3}
+                  className="font-mono"
+                  fontSize={9}
+                  fill={PEEL_CHANGE_COLOR}
+                >
+                  {fmt(step.change)}
+                </text>
+                {/* Change address spends into the next transaction */}
+                {!isLast && (
+                  <line
+                    x1={txX}
+                    y1={cy + 10}
+                    x2={txX}
+                    y2={nextTy - 20}
+                    stroke={PEEL_CHANGE_COLOR}
+                    strokeWidth={1.5}
+                    strokeDasharray="3 3"
+                    markerEnd="url(#peel-arrow-change)"
+                  />
+                )}
+              </Fragment>
+            );
+          })}
+
+          {/* Nodes */}
+          {steps.map((step, i) => {
+            const ty = txY(i);
+            const cy = changeY(i);
+            const isLast = i === steps.length - 1;
+            return (
+              <Fragment key={`nodes-${step.txid}`}>
+                {/* Transaction node */}
+                <g data-testid={`graph-tx-${i}`}>
+                  <title>{`Hop ${i + 1} — ${step.txid}\nin ${fmt(step.carriedIn)}`}</title>
+                  <circle cx={txX} cy={ty} r={20} fill="hsl(var(--primary))" />
+                  <text
+                    x={txX}
+                    y={ty + 4}
+                    textAnchor="middle"
+                    fontSize={11}
+                    fontWeight={600}
+                    fill="hsl(var(--primary-foreground))"
+                  >
+                    {`H${i + 1}`}
+                  </text>
+                  <text
+                    x={txX}
+                    y={ty + 34}
+                    textAnchor="middle"
+                    className="font-mono"
+                    fontSize={9}
+                    fill="hsl(var(--muted-foreground))"
+                  >
+                    {shortPeelTxid(step.txid)}
+                  </text>
+                </g>
+
+                {/* Payment address node */}
+                <g data-testid={`graph-payment-${i}`}>
+                  <title>{`Payment → ${step.paymentAddress}\n${fmt(step.payment)}`}</title>
+                  <circle
+                    cx={payX}
+                    cy={ty}
+                    r={10}
+                    fill="hsl(var(--background))"
+                    stroke={PEEL_PAYMENT_COLOR}
+                    strokeWidth={2}
+                  />
+                  <text
+                    x={payX + 16}
+                    y={ty + 3}
+                    className="font-mono"
+                    fontSize={9}
+                    fill="hsl(var(--foreground))"
+                  >
+                    {shortPeelAddr(step.paymentAddress)}
+                  </text>
+                </g>
+
+                {/* Change address node on the spine */}
+                <g data-testid={`graph-change-${i}`}>
+                  <title>{`Change → ${step.changeAddress}\n${fmt(step.change)}${isLast ? "" : "\nspent by next hop"}`}</title>
+                  <circle
+                    cx={txX}
+                    cy={cy}
+                    r={10}
+                    fill="hsl(var(--background))"
+                    stroke={PEEL_CHANGE_COLOR}
+                    strokeWidth={2}
+                  />
+                  <text
+                    x={txX + 16}
+                    y={cy + 3}
+                    className="font-mono"
+                    fontSize={9}
+                    fill="hsl(var(--foreground))"
+                  >
+                    {shortPeelAddr(step.changeAddress)}
+                  </text>
+                </g>
+              </Fragment>
+            );
+          })}
+        </svg>
+      </div>
+    </div>
+  );
+}
+
 function PeelChainView({ txids, changeAddresses }: { txids: string[]; changeAddresses: string[] }) {
   const [loading, setLoading] = useState(true);
   const [steps, setSteps] = useState<PeelStep[]>([]);
+  const [viewMode, setViewMode] = useState<"graph" | "list">("graph");
 
   useEffect(() => {
     let cancelled = false;
@@ -637,13 +866,41 @@ function PeelChainView({ txids, changeAddresses }: { txids: string[]; changeAddr
   }
 
   return (
-    <div className="space-y-2" data-testid="container-peel-chain">
-      <p className="text-xs text-muted-foreground">
-        Each hop peels off a payment to an external address and forwards the remaining change to a fresh address,
-        which becomes the input to the next transaction. This forms a traceable chain of {steps.length} transactions.
-      </p>
-      <div className="space-y-1">
-        {steps.map((step, i) => (
+    <div className="space-y-3" data-testid="container-peel-chain">
+      <div className="flex justify-end">
+        <div className="inline-flex rounded-md border p-0.5 gap-0.5">
+          <Button
+            type="button"
+            size="sm"
+            variant={viewMode === "graph" ? "secondary" : "ghost"}
+            onClick={() => setViewMode("graph")}
+            data-testid="button-peel-view-graph"
+          >
+            <GitBranch className="h-4 w-4" />
+            Graph
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant={viewMode === "list" ? "secondary" : "ghost"}
+            onClick={() => setViewMode("list")}
+            data-testid="button-peel-view-list"
+          >
+            <List className="h-4 w-4" />
+            List
+          </Button>
+        </div>
+      </div>
+      {viewMode === "graph" ? (
+        <PeelChainGraph steps={steps} />
+      ) : (
+        <div className="space-y-2">
+          <p className="text-xs text-muted-foreground">
+            Each hop peels off a payment to an external address and forwards the remaining change to a fresh address,
+            which becomes the input to the next transaction. This forms a traceable chain of {steps.length} transactions.
+          </p>
+          <div className="space-y-1">
+            {steps.map((step, i) => (
           <Fragment key={step.txid}>
             <div
               className="border rounded-md p-3 space-y-2"
@@ -685,8 +942,10 @@ function PeelChainView({ txids, changeAddresses }: { txids: string[]; changeAddr
               </div>
             )}
           </Fragment>
-        ))}
-      </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
