@@ -84,7 +84,9 @@ import {
   applyEntitySnapshot,
   resetEntitySnapshot,
   serializeActiveEntityList,
+  ENTITY_ERROR_KIND_LABELS,
   type EntitySnapshotError,
+  type EntitySnapshotErrorKind,
   type EntitySnapshotWarning,
   type EntitySnapshotPreview,
   type EntityListMode,
@@ -418,31 +420,108 @@ function EntityErrorRow({
   );
 }
 
-/**
- * Scrollable list of per-entry validation errors shown when a hand-edited
- * entity-list import fails. Each row pinpoints the offending entry (its
- * 1-based position in the file) and the specific reason it was rejected, so a
- * user can fix their JSON rather than seeing a generic failure. Large error
- * sets switch to virtual scrolling so a file with hundreds of bad entries
- * stays scannable and responsive.
- */
-function EntityErrorList({ errors }: { errors: EntitySnapshotError[] }) {
-  if (errors.length <= ENTITY_ERROR_VIRTUALIZE_THRESHOLD) {
-    return (
-      <div
-        className="max-h-64 overflow-y-auto rounded-md border border-destructive/40"
-        data-testid="list-entity-errors"
-      >
-        {errors.map((err, i) => (
-          <EntityErrorRow key={i} err={err} index={i} />
-        ))}
-      </div>
-    );
-  }
-  return <VirtualizedEntityErrorList errors={errors} />;
+/** A kind of error paired with all the entries that hit that kind. */
+interface EntityErrorGroup {
+  kind: EntitySnapshotErrorKind;
+  label: string;
+  errors: EntitySnapshotError[];
 }
 
-/** Virtual-scrolling variant of {@link EntityErrorList} for large error sets. */
+/**
+ * Bucket a flat list of validation errors by their stable `kind`, preserving
+ * first-seen order of each kind, then sort groups by descending count so the
+ * most common problems (the ones worth fixing first) bubble to the top.
+ */
+function groupEntityErrors(errors: EntitySnapshotError[]): EntityErrorGroup[] {
+  const groups = new Map<EntitySnapshotErrorKind, EntitySnapshotError[]>();
+  for (const err of errors) {
+    const existing = groups.get(err.kind);
+    if (existing) {
+      existing.push(err);
+    } else {
+      groups.set(err.kind, [err]);
+    }
+  }
+  return Array.from(groups.entries())
+    .map(([kind, errs]) => ({ kind, label: ENTITY_ERROR_KIND_LABELS[kind], errors: errs }))
+    .sort((a, b) => b.errors.length - a.errors.length);
+}
+
+/**
+ * Validation errors shown when a hand-edited entity-list import fails, grouped
+ * by problem type (e.g. "Unknown category", "Invalid Bitcoin address") with a
+ * per-group count. Each group collapses by default so a file with many similar
+ * mistakes is fast to triage; expanding a group reveals the individual
+ * offending entries (their 1-based position + specific reason). Large groups
+ * keep the existing virtual scrolling so hundreds of bad entries stay
+ * responsive.
+ */
+function EntityErrorList({ errors }: { errors: EntitySnapshotError[] }) {
+  const groups = useMemo(() => groupEntityErrors(errors), [errors]);
+  // With a single group there's nothing to triage between, so open it
+  // immediately rather than making the user click to see the only problem.
+  const singleGroup = groups.length === 1;
+
+  return (
+    <div className="space-y-2" data-testid="list-entity-errors">
+      {groups.map((group) => (
+        <EntityErrorGroupItem key={group.kind} group={group} defaultOpen={singleGroup} />
+      ))}
+    </div>
+  );
+}
+
+/** A single collapsible problem-type group with its count and offending rows. */
+function EntityErrorGroupItem({
+  group,
+  defaultOpen,
+}: {
+  group: EntityErrorGroup;
+  defaultOpen: boolean;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  const count = group.errors.length;
+
+  return (
+    <div
+      className="rounded-md border border-destructive/40 overflow-hidden"
+      data-testid={`group-entity-error-${group.kind}`}
+    >
+      <button
+        type="button"
+        onClick={() => setOpen((prev) => !prev)}
+        className="w-full flex items-center gap-2 px-3 py-2 text-left hover-elevate"
+        aria-expanded={open}
+        data-testid={`button-entity-error-group-${group.kind}`}
+      >
+        {open ? (
+          <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
+        ) : (
+          <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
+        )}
+        <span className="text-sm font-medium flex-1">{group.label}</span>
+        <Badge variant="secondary" className="shrink-0" data-testid={`badge-entity-error-count-${group.kind}`}>
+          {count.toLocaleString()}
+        </Badge>
+      </button>
+      {open && (
+        <div className="border-t border-destructive/40">
+          {count <= ENTITY_ERROR_VIRTUALIZE_THRESHOLD ? (
+            <div className="max-h-64 overflow-y-auto">
+              {group.errors.map((err, i) => (
+                <EntityErrorRow key={i} err={err} index={i} />
+              ))}
+            </div>
+          ) : (
+            <VirtualizedEntityErrorList errors={group.errors} />
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Virtual-scrolling variant for a large group of errors. */
 function VirtualizedEntityErrorList({ errors }: { errors: EntitySnapshotError[] }) {
   const parentRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
@@ -453,11 +532,7 @@ function VirtualizedEntityErrorList({ errors }: { errors: EntitySnapshotError[] 
   });
 
   return (
-    <div
-      ref={parentRef}
-      className="max-h-64 overflow-y-auto rounded-md border border-destructive/40"
-      data-testid="list-entity-errors"
-    >
+    <div ref={parentRef} className="max-h-64 overflow-y-auto">
       <div style={{ height: `${virtualizer.getTotalSize()}px`, position: "relative", width: "100%" }}>
         {virtualizer.getVirtualItems().map((virtualRow) => (
           <EntityErrorRow

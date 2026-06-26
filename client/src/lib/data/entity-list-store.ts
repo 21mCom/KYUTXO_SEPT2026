@@ -38,9 +38,43 @@ export type EntityListMode = 'replace' | 'merge';
 
 const VALID_CATEGORIES = new Set<string>(Object.keys(ENTITY_CATEGORY_LABELS));
 
+/**
+ * A stable discriminator describing *what kind* of problem an error reports,
+ * independent of the human-readable (and often value-interpolated) `message`.
+ * The UI uses this to group many similar failures (e.g. dozens of typo'd
+ * categories) under a single expandable heading rather than a flat list.
+ */
+export type EntitySnapshotErrorKind =
+  | 'invalid-structure'
+  | 'entry-not-object'
+  | 'missing-address'
+  | 'invalid-address'
+  | 'duplicate-address'
+  | 'missing-name'
+  | 'missing-category'
+  | 'unknown-category'
+  | 'invalid-source-note'
+  | 'no-entries';
+
+/** Human-readable group headings for each {@link EntitySnapshotErrorKind}. */
+export const ENTITY_ERROR_KIND_LABELS: Record<EntitySnapshotErrorKind, string> = {
+  'invalid-structure': 'Invalid file structure',
+  'entry-not-object': 'Entry is not an object',
+  'missing-address': 'Missing address',
+  'invalid-address': 'Invalid Bitcoin address',
+  'duplicate-address': 'Duplicate address',
+  'missing-name': 'Missing name',
+  'missing-category': 'Missing category',
+  'unknown-category': 'Unknown category',
+  'invalid-source-note': 'Invalid source note',
+  'no-entries': 'No entries',
+};
+
 export interface EntitySnapshotError {
   /** Zero-based index of the offending entry within the parsed array. */
   index: number;
+  /** Stable problem type, used to group similar errors in the UI. */
+  kind: EntitySnapshotErrorKind;
   message: string;
 }
 
@@ -115,7 +149,13 @@ export function validateEntitySnapshot(raw: unknown): EntitySnapshotValidation {
     return {
       valid: false,
       entries: [],
-      errors: [{ index: -1, message: 'Expected a JSON array of entries or an object with an "entries" array.' }],
+      errors: [
+        {
+          index: -1,
+          kind: 'invalid-structure',
+          message: 'Expected a JSON array of entries or an object with an "entries" array.',
+        },
+      ],
       warnings: [],
       total: 0,
     };
@@ -128,7 +168,7 @@ export function validateEntitySnapshot(raw: unknown): EntitySnapshotValidation {
 
   arr.forEach((item, index) => {
     if (!item || typeof item !== 'object') {
-      errors.push({ index, message: 'Entry must be an object.' });
+      errors.push({ index, kind: 'entry-not-object', message: 'Entry must be an object.' });
       return;
     }
     const obj = item as Record<string, unknown>;
@@ -139,28 +179,29 @@ export function validateEntitySnapshot(raw: unknown): EntitySnapshotValidation {
     const sourceNote = obj.sourceNote;
 
     if (!address) {
-      errors.push({ index, message: 'Missing "address".' });
+      errors.push({ index, kind: 'missing-address', message: 'Missing "address".' });
     } else if (!validateAddress(address).isValid) {
-      errors.push({ index, message: `Invalid Bitcoin address "${address}".` });
+      errors.push({ index, kind: 'invalid-address', message: `Invalid Bitcoin address "${address}".` });
     } else if (seen.has(address)) {
-      errors.push({ index, message: `Duplicate address "${address}".` });
+      errors.push({ index, kind: 'duplicate-address', message: `Duplicate address "${address}".` });
     }
 
     if (!name) {
-      errors.push({ index, message: 'Missing "name".' });
+      errors.push({ index, kind: 'missing-name', message: 'Missing "name".' });
     }
 
     if (!category) {
-      errors.push({ index, message: 'Missing "category".' });
+      errors.push({ index, kind: 'missing-category', message: 'Missing "category".' });
     } else if (!VALID_CATEGORIES.has(category)) {
       errors.push({
         index,
+        kind: 'unknown-category',
         message: `Unknown category "${category}". Valid: ${Array.from(VALID_CATEGORIES).join(', ')}.`,
       });
     }
 
     if (sourceNote !== undefined && typeof sourceNote !== 'string') {
-      errors.push({ index, message: '"sourceNote" must be a string when present.' });
+      errors.push({ index, kind: 'invalid-source-note', message: '"sourceNote" must be a string when present.' });
     }
 
     // Only collect when this entry itself is fully valid.
@@ -199,7 +240,7 @@ export function validateEntitySnapshot(raw: unknown): EntitySnapshotValidation {
   });
 
   if (entries.length === 0 && errors.length === 0) {
-    errors.push({ index: -1, message: 'Snapshot contains no entries.' });
+    errors.push({ index: -1, kind: 'no-entries', message: 'Snapshot contains no entries.' });
   }
 
   return {
