@@ -298,6 +298,76 @@ export async function countUnresolvedPrevoutInputs(): Promise<number> {
     .count();
 }
 
+/**
+ * Attribute unresolved spend inputs (blank-address inputs with prevTxid/prevVout)
+ * to the source address record they will deduct from once resolved. Each such
+ * input's prevout (prevTxid:prevVout) points at a previous OUTPUT; when that
+ * output belongs to one of our tracked addresses, the spend will eventually be
+ * subtracted from that address's balance — so until it is resolved that wallet's
+ * balance is overstated. We resolve prevouts against LOCAL output participants
+ * only (never the network, KYUTXO stays offline) and return a map of
+ * recordId -> number of unresolved spends pending attribution to that record.
+ * Inputs whose prevout output is not locally known (or maps to no tracked
+ * record) are simply omitted — they cannot be tied to a specific wallet.
+ */
+export async function getUnresolvedSpendsByRecordId(): Promise<Map<number, number>> {
+  const result = new Map<number, number>();
+
+  const unresolvedInputs = await db.transactionParticipants
+    .where('role').equals('input')
+    .filter(p => (!p.address || p.address.trim() === '') && p.prevTxid !== undefined && p.prevVout !== undefined)
+    .toArray();
+  if (unresolvedInputs.length === 0) return result;
+
+  // Batch-load the local OUTPUT participants for every referenced prevTxid so we
+  // can map each unresolved input's (prevTxid, prevVout) to its source output.
+  const prevTxids = new Set<string>();
+  for (const inp of unresolvedInputs) {
+    if (inp.prevTxid) prevTxids.add(inp.prevTxid);
+  }
+  const prevTxidArr = Array.from(prevTxids);
+  const outputCache = new Map<string, { recordId?: number; address: string }>();
+  for (let i = 0; i < prevTxidArr.length; i += 500) {
+    const batch = prevTxidArr.slice(i, i + 500);
+    const outputs = await db.transactionParticipants
+      .where('txid').anyOf(batch)
+      .and(p => p.role === 'output')
+      .toArray();
+    for (const o of outputs) {
+      if (o.vout !== undefined) {
+        outputCache.set(`${o.txid}:${o.vout}`, { recordId: o.recordId, address: o.address });
+      }
+    }
+  }
+
+  // Some source outputs carry an address but no recordId (e.g. created before the
+  // address was tracked); resolve those addresses to a record via inputString.
+  const addrsNeedingLookup = new Set<string>();
+  for (const inp of unresolvedInputs) {
+    const out = outputCache.get(`${inp.prevTxid}:${inp.prevVout}`);
+    if (out && out.recordId === undefined && out.address) addrsNeedingLookup.add(out.address);
+  }
+  const addrToRecordId = new Map<string, number>();
+  const addrArr = Array.from(addrsNeedingLookup);
+  for (let i = 0; i < addrArr.length; i += 500) {
+    const batch = addrArr.slice(i, i + 500);
+    const records = await db.records.where('inputString').anyOf(batch).toArray();
+    for (const r of records) {
+      if (r.id != null && r.inputString) addrToRecordId.set(r.inputString, r.id);
+    }
+  }
+
+  for (const inp of unresolvedInputs) {
+    const out = outputCache.get(`${inp.prevTxid}:${inp.prevVout}`);
+    if (!out) continue;
+    const recordId = out.recordId ?? (out.address ? addrToRecordId.get(out.address) : undefined);
+    if (recordId === undefined) continue;
+    result.set(recordId, (result.get(recordId) ?? 0) + 1);
+  }
+
+  return result;
+}
+
 // =============================================================================
 // FRESHNESS FINGERPRINTS — compared against the native engine mirror before a
 // read is served from the engine. All reads below are index-only (count + the

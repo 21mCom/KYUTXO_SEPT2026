@@ -6,11 +6,12 @@ import {
   countRecordsByType,
   getRecordsPageByTypeIdReverseKeyset,
   getAddressBalanceRowsForGroup,
+  getRecordsByIds,
 } from "@/lib/data/record-crud";
 import { engineGetBalanceGroupSummaries, subscribeEngineReadiness } from "@/lib/engine/engine-client";
 import { evaluateEngineFreshness } from "@/lib/engine/engine-freshness";
 import { recomputeAddressStats } from "@/lib/data/address-stats";
-import { countUnresolvedPrevoutInputs } from "@/lib/data/transaction-crud";
+import { countUnresolvedPrevoutInputs, getUnresolvedSpendsByRecordId } from "@/lib/data/transaction-crud";
 import { transactionSyncService } from "@/lib/transaction-sync";
 import {
   type GroupBy,
@@ -224,6 +225,10 @@ export default function BalanceOverview() {
   const [spendWarningDismissed, setSpendWarningDismissed] = useState(false);
   const [fixingPrevouts, setFixingPrevouts] = useState(false);
 
+  // Per-group breakdown of unresolved spends: groupKey -> number of pending spends.
+  // Lets each affected wallet card flag that its balance is overstated.
+  const [unresolvedByGroup, setUnresolvedByGroup] = useState<Map<string, number>>(new Map());
+
   // Re-run aggregation when the native read-engine flips to ready so the fast
   // path can take over from any Dexie fallback that ran first.
   useEffect(() => subscribeEngineReadiness(() => setEngineReadySignal((s) => s + 1)), []);
@@ -362,6 +367,36 @@ export default function BalanceOverview() {
     }).catch(() => {});
     return () => { cancelled = true; };
   }, [dbSignal]);
+
+  // Spend health (per group): attribute unresolved spends to the wallet groups
+  // whose source addresses will be debited once resolved. Recomputed alongside
+  // the global count whenever the db changes or the grouping dimension changes.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const byRecordId = await getUnresolvedSpendsByRecordId();
+      if (cancelled) return;
+      if (byRecordId.size === 0) {
+        setUnresolvedByGroup(new Map());
+        return;
+      }
+      const records = await getRecordsByIds(Array.from(byRecordId.keys()));
+      if (cancelled) return;
+      const byGroup = new Map<string, number>();
+      for (const rec of records) {
+        if (rec.id == null) continue;
+        const count = byRecordId.get(rec.id) ?? 0;
+        if (count <= 0) continue;
+        for (const key of getGroupKeys(rec, groupBy)) {
+          byGroup.set(key, (byGroup.get(key) ?? 0) + count);
+        }
+      }
+      setUnresolvedByGroup(byGroup);
+    })().catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [dbSignal, groupBy]);
 
   const handleFixPrevouts = useCallback(async () => {
     setFixingPrevouts(true);
@@ -651,6 +686,7 @@ export default function BalanceOverview() {
               const usdValue = latestPrice ? (group.totalSats / 100_000_000) * latestPrice.price : null;
               const rows = groupRows.get(group.name);
               const rowsLoading = loadingGroups.has(group.name);
+              const unresolvedCount = unresolvedByGroup.get(group.name) ?? 0;
 
               return (
                 <Card key={group.name} data-testid={`card-group-${group.name}`}>
@@ -676,6 +712,17 @@ export default function BalanceOverview() {
                         <Badge variant="outline" className="text-xs flex-none">
                           {group.utxoCount} UTXO{group.utxoCount !== 1 ? "s" : ""}
                         </Badge>
+                        {unresolvedCount > 0 && (
+                          <Badge
+                            variant="outline"
+                            className="text-xs flex-none gap-1 border-yellow-400 dark:border-yellow-600 text-yellow-700 dark:text-yellow-300"
+                            title={`${unresolvedCount.toLocaleString()} spend${unresolvedCount !== 1 ? "s" : ""} pending attribution — balance may be too high`}
+                            data-testid={`badge-unresolved-${group.name}`}
+                          >
+                            <AlertTriangle className="h-3 w-3" />
+                            {unresolvedCount.toLocaleString()} pending
+                          </Badge>
+                        )}
                       </div>
                     </div>
 
@@ -698,6 +745,17 @@ export default function BalanceOverview() {
 
                   {isExpanded && (
                     <div className="border-t">
+                      {unresolvedCount > 0 && (
+                        <div
+                          className="flex items-center gap-2 px-4 py-2 text-xs text-yellow-700 dark:text-yellow-300 bg-yellow-50 dark:bg-yellow-950/30 border-b"
+                          data-testid={`note-unresolved-${group.name}`}
+                        >
+                          <AlertTriangle className="h-3.5 w-3.5 flex-none" />
+                          <span>
+                            {unresolvedCount.toLocaleString()} spend{unresolvedCount !== 1 ? "s" : ""} pending attribution — this balance may be too high until resolved.
+                          </span>
+                        </div>
+                      )}
                       {rowsLoading && !rows ? (
                         <div className="flex items-center justify-center gap-2 py-4 text-sm text-muted-foreground">
                           <Loader2 className="h-4 w-4 animate-spin" />
