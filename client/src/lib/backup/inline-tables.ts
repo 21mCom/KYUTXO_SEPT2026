@@ -4,7 +4,8 @@
 // regression for these tables:
 //   - `settings` is not cleared and not wholesale restored (current app
 //     settings survive), but a small allow-list of portable preferences (e.g.
-//     `disableOrphanCheck`) is merged from the backup on restore.
+//     `disableOrphanCheck`) plus the user's custom Privacy Audit entity-list
+//     snapshot (`entityListSnapshot`) is merged from the backup on restore.
 //   - `recordOrigins` is cleared but NOT re-added (legacy never restored it).
 // Records and the four record-dependent big tables are handled by the streaming
 // orchestrator (restore.ts), not here.
@@ -82,6 +83,11 @@ export async function restoreNodeSettingsRows(rows: any[]): Promise<void> {
  * A field that is absent from the backup is left untouched, so restoring an
  * older backup that predates a preference keeps that preference at its current
  * (default) value.
+ *
+ * The allow-list currently carries:
+ *   - `disableOrphanCheck` (boolean preference), and
+ *   - `entityListSnapshot` (the user's custom Privacy Audit entity list, only
+ *     when it is a well-formed, non-empty snapshot).
  */
 export async function restoreSettingsPreferences(rows: any[]): Promise<void> {
   if (!Array.isArray(rows) || rows.length === 0) return;
@@ -91,6 +97,21 @@ export async function restoreSettingsPreferences(rows: any[]): Promise<void> {
   const updates: Record<string, unknown> = {};
   if (typeof source.disableOrphanCheck === "boolean") {
     updates.disableOrphanCheck = source.disableOrphanCheck;
+  }
+  // The Privacy Audit entity-list snapshot is user data (not a device-local
+  // preference), so it must follow the user across devices/backups. Only carry
+  // it when the backup has a well-formed snapshot with at least one entry;
+  // anything else leaves the current value untouched (so older backups that
+  // predate the feature, or backups taken after a "revert to bundled", do not
+  // clobber a snapshot already present on this device).
+  const snap = source.entityListSnapshot;
+  if (
+    snap &&
+    typeof snap === "object" &&
+    Array.isArray(snap.entries) &&
+    snap.entries.length > 0
+  ) {
+    updates.entityListSnapshot = snap;
   }
   if (Object.keys(updates).length === 0) return;
 
