@@ -83,6 +83,7 @@ import {
   type EntitySnapshotError,
   type EntitySnapshotPreview,
   type EntityListMode,
+  type EntityChange,
 } from "@/lib/data/entity-list-store";
 import { getBundledEntityCount, ENTITY_CATEGORY_LABELS, type EntityEntry } from "@/lib/privacy-entity-list";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
@@ -179,6 +180,95 @@ function EntityDiffList({
               <Badge variant="secondary" className="shrink-0">
                 {ENTITY_CATEGORY_LABELS[entry.category]}
               </Badge>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Virtualized list of entries whose name and/or category changed between the
+ * current list and the incoming snapshot. Shows the old value struck through
+ * alongside the new value so users can review re-categorizations / renames.
+ */
+function ChangedEntityList({
+  changes,
+  emptyLabel,
+}: {
+  changes: EntityChange[];
+  emptyLabel: string;
+}) {
+  const parentRef = useRef<HTMLDivElement>(null);
+  const virtualizer = useVirtualizer({
+    count: changes.length,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => ENTITY_DIFF_ROW_HEIGHT,
+    overscan: 8,
+  });
+
+  if (changes.length === 0) {
+    return (
+      <p
+        className="text-sm text-muted-foreground px-3 py-6 text-center"
+        data-testid="text-entity-diff-empty-changed"
+      >
+        {emptyLabel}
+      </p>
+    );
+  }
+
+  return (
+    <div
+      ref={parentRef}
+      className="max-h-64 overflow-y-auto rounded-md border"
+      data-testid="list-entity-diff-changed"
+    >
+      <div style={{ height: `${virtualizer.getTotalSize()}px`, position: "relative", width: "100%" }}>
+        {virtualizer.getVirtualItems().map((virtualRow) => {
+          const change = changes[virtualRow.index];
+          return (
+            <div
+              key={virtualRow.key}
+              className="absolute left-0 top-0 w-full border-b px-3 py-1.5"
+              style={{
+                height: `${virtualRow.size}px`,
+                transform: `translateY(${virtualRow.start}px)`,
+              }}
+              data-testid={`row-entity-diff-changed-${virtualRow.index}`}
+            >
+              <div className="flex items-center justify-between gap-3 min-w-0">
+                <div className="min-w-0">
+                  {change.nameChanged ? (
+                    <p className="text-sm truncate" data-testid={`text-entity-diff-name-changed-${virtualRow.index}`}>
+                      <span className="line-through text-muted-foreground">{change.current.name}</span>
+                      <span className="mx-1 text-muted-foreground">→</span>
+                      <span className="font-medium">{change.incoming.name}</span>
+                    </p>
+                  ) : (
+                    <p className="text-sm font-medium truncate" data-testid={`text-entity-diff-name-changed-${virtualRow.index}`}>
+                      {change.incoming.name}
+                    </p>
+                  )}
+                  <p className="text-xs font-mono text-muted-foreground truncate">{change.address}</p>
+                </div>
+                {change.categoryChanged ? (
+                  <span className="flex items-center gap-1 shrink-0">
+                    <Badge variant="outline" className="line-through opacity-70">
+                      {ENTITY_CATEGORY_LABELS[change.current.category]}
+                    </Badge>
+                    <span className="text-muted-foreground">→</span>
+                    <Badge variant="secondary">
+                      {ENTITY_CATEGORY_LABELS[change.incoming.category]}
+                    </Badge>
+                  </span>
+                ) : (
+                  <Badge variant="secondary" className="shrink-0">
+                    {ENTITY_CATEGORY_LABELS[change.incoming.category]}
+                  </Badge>
+                )}
+              </div>
             </div>
           );
         })}
@@ -386,6 +476,18 @@ export default function SettingsPage() {
       (e) =>
         e.address.toLowerCase().includes(q) ||
         e.name.toLowerCase().includes(q),
+    );
+  }, [entityPreview, entityDiffSearch]);
+
+  const filteredChangedEntries = useMemo(() => {
+    const q = entityDiffSearch.trim().toLowerCase();
+    const changes = entityPreview?.changedEntries ?? [];
+    if (!q) return changes;
+    return changes.filter(
+      (c) =>
+        c.address.toLowerCase().includes(q) ||
+        c.current.name.toLowerCase().includes(q) ||
+        c.incoming.name.toLowerCase().includes(q),
     );
   }, [entityPreview, entityDiffSearch]);
 
@@ -2694,6 +2796,9 @@ export default function SettingsPage() {
                   <Badge variant="destructive" data-testid="badge-preview-removed">
                     −{entityPreview.removed.toLocaleString()} removed
                   </Badge>
+                  <Badge variant="outline" data-testid="badge-preview-changed">
+                    {entityPreview.changed.toLocaleString()} changed
+                  </Badge>
                   <Badge variant="secondary" data-testid="badge-preview-unchanged">
                     {entityPreview.unchanged.toLocaleString()} unchanged
                   </Badge>
@@ -2729,7 +2834,7 @@ export default function SettingsPage() {
                   </div>
                 </div>
 
-                {(entityPreview.added > 0 || entityPreview.removed > 0) && (
+                {(entityPreview.added > 0 || entityPreview.removed > 0 || entityPreview.changed > 0) && (
                   <div>
                     <Button
                       variant="ghost"
@@ -2758,9 +2863,12 @@ export default function SettingsPage() {
                             data-testid="input-entity-diff-search"
                           />
                         </div>
-                        <TabsList className="grid w-full grid-cols-2">
+                        <TabsList className="grid w-full grid-cols-3">
                           <TabsTrigger value="added" data-testid="tab-entity-diff-added">
                             Added ({filteredAddedEntries.length.toLocaleString()})
+                          </TabsTrigger>
+                          <TabsTrigger value="changed" data-testid="tab-entity-diff-changed">
+                            Changed ({filteredChangedEntries.length.toLocaleString()})
                           </TabsTrigger>
                           <TabsTrigger value="removed" data-testid="tab-entity-diff-removed">
                             Removed ({filteredRemovedEntries.length.toLocaleString()})
@@ -2775,6 +2883,16 @@ export default function SettingsPage() {
                                 : "No entries will be added."
                             }
                             variant="added"
+                          />
+                        </TabsContent>
+                        <TabsContent value="changed" className="mt-2">
+                          <ChangedEntityList
+                            changes={filteredChangedEntries}
+                            emptyLabel={
+                              entityDiffSearch.trim()
+                                ? "No changed entries match your search."
+                                : "No entries changed name or category."
+                            }
                           />
                         </TabsContent>
                         <TabsContent value="removed" className="mt-2">

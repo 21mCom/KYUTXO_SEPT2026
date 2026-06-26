@@ -180,6 +180,23 @@ export interface EntityCategoryDiff {
 }
 
 /**
+ * An address present in BOTH lists whose name and/or category differs between
+ * the current and incoming snapshot. Surfaced so users can review meaningful
+ * re-categorizations / renames, not just pure adds and removes.
+ */
+export interface EntityChange {
+  address: string;
+  /** The entry as it exists in the currently active list. */
+  current: EntityEntry;
+  /** The entry as it appears in the incoming snapshot. */
+  incoming: EntityEntry;
+  /** True when the display name differs between current and incoming. */
+  nameChanged: boolean;
+  /** True when the category differs between current and incoming. */
+  categoryChanged: boolean;
+}
+
+/**
  * A validated, not-yet-applied snapshot together with a comparison against the
  * currently active list. Built after validation succeeds so the UI can show a
  * confirmation before anything is replaced.
@@ -195,14 +212,18 @@ export interface EntitySnapshotPreview {
   added: number;
   /** Addresses present in the current list but not in the incoming snapshot. */
   removed: number;
-  /** Addresses present in both lists. */
+  /** Addresses present in both lists with identical name and category. */
   unchanged: number;
+  /** Addresses present in both lists whose name and/or category differs. */
+  changed: number;
   /** Per-category breakdown (only categories with at least one entry on either side). */
   categories: EntityCategoryDiff[];
   /** The actual entries being added (incoming addresses not in the current list). */
   addedEntries: EntityEntry[];
   /** The actual entries being removed (current addresses not in the incoming snapshot). */
   removedEntries: EntityEntry[];
+  /** Entries present in both lists whose name and/or category changed. */
+  changedEntries: EntityChange[];
 }
 
 /**
@@ -211,14 +232,36 @@ export interface EntitySnapshotPreview {
  */
 export function buildEntitySnapshotPreview(entries: EntityEntry[]): EntitySnapshotPreview {
   const current = getActiveEntityList();
-  const currentAddrs = new Set(current.map((e) => e.address));
+  const currentByAddr = new Map(current.map((e) => [e.address, e]));
   const incomingAddrs = new Set(entries.map((e) => e.address));
 
-  const addedEntries = entries.filter((e) => !currentAddrs.has(e.address));
+  const addedEntries = entries.filter((e) => !currentByAddr.has(e.address));
   const removedEntries = current.filter((e) => !incomingAddrs.has(e.address));
   const added = addedEntries.length;
   const removed = removedEntries.length;
-  const unchanged = incomingAddrs.size - added;
+
+  // Addresses present in both lists: split into truly unchanged vs. changed
+  // (same address but a different name and/or category).
+  const changedEntries: EntityChange[] = [];
+  let unchanged = 0;
+  for (const inc of entries) {
+    const cur = currentByAddr.get(inc.address);
+    if (!cur) continue;
+    const nameChanged = cur.name !== inc.name;
+    const categoryChanged = cur.category !== inc.category;
+    if (nameChanged || categoryChanged) {
+      changedEntries.push({
+        address: inc.address,
+        current: cur,
+        incoming: inc,
+        nameChanged,
+        categoryChanged,
+      });
+    } else {
+      unchanged += 1;
+    }
+  }
+  const changed = changedEntries.length;
 
   const incomingByCat = new Map<EntityCategory, number>();
   for (const e of entries) {
@@ -245,9 +288,11 @@ export function buildEntitySnapshotPreview(entries: EntityEntry[]): EntitySnapsh
     added,
     removed,
     unchanged,
+    changed,
     categories,
     addedEntries,
     removedEntries,
+    changedEntries,
   };
 }
 

@@ -610,9 +610,21 @@ describe("buildEntitySnapshotPreview", () => {
 
     const preview = buildEntitySnapshotPreview([incomingBinance, incomingGambling]);
 
-    // binance is in both lists → unchanged, so it appears in neither array.
-    expect(preview.unchanged).toBe(1);
+    // binance is in both lists but its name AND category differ, so it is a
+    // change (not unchanged) and appears in neither the added nor removed array.
+    expect(preview.changed).toBe(1);
+    expect(preview.unchanged).toBe(0);
     expect(preview.removedEntries).toEqual([]);
+    // The change records both sides: current object and incoming object.
+    expect(preview.changedEntries).toEqual([
+      {
+        address: ADDR.binance,
+        current: currentBinance,
+        incoming: incomingBinance,
+        nameChanged: true,
+        categoryChanged: true,
+      },
+    ]);
     // Only gambling1 is genuinely new, and it comes from the incoming list.
     expect(preview.addedEntries).toEqual([incomingGambling]);
   });
@@ -692,7 +704,10 @@ describe("prepareEntitySnapshot", () => {
     expect(result.preview).toBeDefined();
     expect(result.preview!.incomingCount).toBe(2);
     expect(result.preview!.added).toBe(1); // gambling1
-    expect(result.preview!.unchanged).toBe(1); // binance
+    // binance is in both lists but its name differs ("Test" -> "Binance"),
+    // so it is a change rather than unchanged.
+    expect(result.preview!.changed).toBe(1); // binance renamed
+    expect(result.preview!.unchanged).toBe(0);
     expect(result.preview!.currentCount).toBe(1);
   });
 
@@ -708,7 +723,9 @@ describe("prepareEntitySnapshot", () => {
     expect(result.valid).toBe(true);
     expect(result.preview!.incomingCount).toBe(1);
     expect(result.preview!.added).toBe(0);
-    expect(result.preview!.unchanged).toBe(1);
+    // binance is in both lists but renamed ("Test" -> "Binance"): changed, not unchanged.
+    expect(result.preview!.changed).toBe(1);
+    expect(result.preview!.unchanged).toBe(0);
   });
 
   it("returns errors and no preview for an invalid snapshot", () => {
