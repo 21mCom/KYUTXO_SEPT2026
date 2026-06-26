@@ -25,6 +25,7 @@ import {
   Info,
   List,
   GitBranch,
+  RotateCw,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -396,6 +397,7 @@ function TransactionDeepDive({
   const [result, setResult] = useState<BoltzmannResult | null>(null);
   const [data, setData] = useState<DeepDiveData | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [canRetry, setCanRetry] = useState(false);
   const workerRef = useRef<Worker | null>(null);
   const pendingIdRef = useRef<string | null>(null);
   const autoRunRef = useRef(false);
@@ -406,6 +408,7 @@ function TransactionDeepDive({
     setResult(null);
     setData(null);
     setMessage(null);
+    setCanRetry(false);
     try {
       const tx = await getTransactionByTxid(txid);
       const participants = await getParticipantsByTxids([txid]);
@@ -443,11 +446,13 @@ function TransactionDeepDive({
       };
       worker.onerror = () => {
         setMessage("Couldn't analyse this transaction — the calculation failed unexpectedly. Please try again.");
+        setCanRetry(true);
         setLoading(false);
       };
       worker.postMessage({ id, inputs: bInputs, outputs: bOutputs, fee });
     } catch {
       setMessage("Couldn't load this transaction's data. Please try again.");
+      setCanRetry(true);
       setLoading(false);
     }
   }, [coinjoinTxids]);
@@ -516,7 +521,19 @@ function TransactionDeepDive({
             data-testid="text-deep-dive-message"
           >
             <Info className="h-4 w-4 mt-0.5 shrink-0" />
-            <span>{message}</span>
+            <span className="flex-1">{message}</span>
+            {canRetry && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => analyse(selectedTxid)}
+                disabled={loading || !selectedTxid}
+                data-testid="button-retry-deep-dive"
+              >
+                <RotateCw className="h-4 w-4 mr-1" />
+                Retry
+              </Button>
+            )}
           </div>
         )}
 
