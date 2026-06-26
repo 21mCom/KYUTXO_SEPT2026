@@ -192,6 +192,19 @@ export function buildPrivacyTextReport(
   }
   lines.push("");
 
+  if (result.scoreWaterfall.length > 0) {
+    lines.push(sub);
+    lines.push("SCORE BREAKDOWN");
+    lines.push(sub);
+    for (const entry of result.scoreWaterfall) {
+      const count = entry.count > 0 ? entry.count.toLocaleString() : "—";
+      const delta = entry.delta === 0 ? "—" : (entry.delta > 0 ? "+" : "") + entry.delta;
+      lines.push(`  ${entry.label}`);
+      lines.push(`    Count: ${count}  ·  Delta: ${delta}  ·  Score: ${entry.runningScore}`);
+    }
+    lines.push("");
+  }
+
   lines.push(sub);
   lines.push(`FINDINGS & WARNINGS (${allFindings.length})`);
   lines.push(sub);

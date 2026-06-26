@@ -458,6 +458,45 @@ describe('privacy report export — plain text', () => {
     }
   });
 
+  it('renders the score breakdown section with each waterfall entry', async () => {
+    const result = await runPrivacyAudit([USER_ADDRESS]);
+    const text = buildPrivacyTextReport(result, { owner: null, wallet: null }, FIXED_GENERATED_AT);
+
+    expect(text).toContain('SCORE BREAKDOWN');
+
+    // Sanity: the audit produced a waterfall to assert against.
+    expect(result.scoreWaterfall.length).toBeGreaterThan(0);
+
+    for (const entry of result.scoreWaterfall) {
+      const count = entry.count > 0 ? entry.count.toLocaleString() : '—';
+      const delta = entry.delta === 0 ? '—' : (entry.delta > 0 ? '+' : '') + entry.delta;
+      // Label line and the count/delta/score detail line, matching the printed report.
+      expect(text).toContain(`  ${entry.label}`);
+      expect(text).toContain(
+        `    Count: ${count}  ·  Delta: ${delta}  ·  Score: ${entry.runningScore}`,
+      );
+    }
+  });
+
+  it('omits the score breakdown section when the waterfall is empty', () => {
+    const cleanResult = {
+      grade: 'A+',
+      score: 100,
+      transactionsAnalyzed: 0,
+      addressesScanned: 0,
+      isClean: true,
+      fingerprintCoverage: 1,
+      needsResync: false,
+      findings: [],
+      warnings: [],
+      scoreWaterfall: [],
+    } as unknown as PrivacyAuditResult;
+
+    const text = buildPrivacyTextReport(cleanResult, { owner: null, wallet: null }, FIXED_GENERATED_AT);
+
+    expect(text).not.toContain('SCORE BREAKDOWN');
+  });
+
   it('lists every finding with its label, severity, description, and metadata', async () => {
     const result = await runPrivacyAudit([USER_ADDRESS]);
     const text = buildPrivacyTextReport(result, { owner: null, wallet: null }, FIXED_GENERATED_AT);
