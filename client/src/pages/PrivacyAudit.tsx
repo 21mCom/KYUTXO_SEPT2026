@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, Fragment, useRef } from "react";
+import { useState, useCallback, useMemo, Fragment, useRef, useEffect } from "react";
 import {
   Eye,
   ShieldAlert,
@@ -31,6 +31,7 @@ import { Progress } from "@/components/ui/progress";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogTrigger } from "@/components/ui/dialog";
 import {
   BarChart,
   Bar,
@@ -46,7 +47,7 @@ import {
 } from "recharts";
 import { useLiveQuery } from "dexie-react-hooks";
 import { beginBulkOperation, endBulkOperation, db } from "@/lib/database";
-import type { Record as DbRecord, PrivacyAuditHistoryEntry } from "@/lib/database";
+import type { Record as DbRecord, PrivacyAuditHistoryEntry, TransactionParticipant } from "@/lib/database";
 import { addPrivacyAuditHistoryEntry, clearPrivacyAuditHistory } from "@/lib/data/privacy-history-crud";
 import { createTag } from "@/lib/data/vocabulary-crud";
 import { updateRecord, countRecordsByType, getRecordsPageByTypeIdReverseKeyset, getRecordsByInputStrings } from "@/lib/data/record-crud";
@@ -299,12 +300,53 @@ function BoltzmannHeatmap({ linkMatrix }: { linkMatrix: BoltzmannResult["linkMat
   );
 }
 
-// ─── Boltzmann panel ──────────────────────────────────────────────────────────
+// ─── CoinJoin fund-flow Sankey helper ─────────────────────────────────────────
 
-function BoltzmannPanel({ txids }: { txids: string[] }) {
+interface SankeyData {
+  nodes: { name: string }[];
+  links: { source: number; target: number; value: number }[];
+}
+
+/** Build a proportional fund-flow Sankey model from a tx's inputs/outputs. */
+function buildSankey(inputs: TransactionParticipant[], outputs: TransactionParticipant[]): SankeyData {
+  const nodes = [
+    ...inputs.map((p, i) => ({ name: `In ${i + 1}\n${(p.amount / 1e8).toFixed(5)} BTC` })),
+    ...outputs.map((p, i) => ({ name: `Out ${i + 1}\n${(p.amount / 1e8).toFixed(5)} BTC` })),
+  ];
+  // Distribute each input proportionally to all outputs (CoinJoin merges funds)
+  const totalIn = inputs.reduce((s, p) => s + p.amount, 0) || 1;
+  const links: { source: number; target: number; value: number }[] = [];
+  inputs.forEach((inp, si) => {
+    outputs.forEach((out, ti) => {
+      const value = Math.round((inp.amount / totalIn) * out.amount);
+      if (value > 0) links.push({ source: si, target: inputs.length + ti, value });
+    });
+  });
+  return { nodes, links };
+}
+
+// ─── Transaction deep-dive (heatmap + summary + CoinJoin Sankey) ───────────────
+
+interface DeepDiveData {
+  inputs: TransactionParticipant[];
+  outputs: TransactionParticipant[];
+  totalIn: number;
+  totalOut: number;
+  fee: number;
+  isCoinJoin: boolean;
+}
+
+function TransactionDeepDive({
+  txids,
+  coinjoinTxids,
+}: {
+  txids: string[];
+  coinjoinTxids: Set<string>;
+}) {
   const [selectedTxid, setSelectedTxid] = useState<string>(txids[0] ?? "");
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<BoltzmannResult | null>(null);
+  const [data, setData] = useState<DeepDiveData | null>(null);
   const workerRef = useRef<Worker | null>(null);
   const pendingIdRef = useRef<string | null>(null);
 
@@ -312,18 +354,22 @@ function BoltzmannPanel({ txids }: { txids: string[] }) {
     if (!txid) return;
     setLoading(true);
     setResult(null);
+    setData(null);
     try {
       const tx = await getTransactionByTxid(txid);
-      if (!tx) { setLoading(false); return; }
       const participants = await getParticipantsByTxids([txid]);
-      const inputs: BoltzmannInput[] = participants
-        .filter(p => p.role === "input")
-        .map((p, i) => ({ index: i, address: p.address, amount: Math.round(p.amount) }));
-      const outputs: BoltzmannOutput[] = participants
-        .filter(p => p.role === "output")
-        .map((p, i) => ({ index: i, address: p.address, amount: Math.round(p.amount) }));
+      const inputs = participants.filter(p => p.role === "input");
+      const outputs = participants.filter(p => p.role === "output");
+      if (inputs.length === 0 || outputs.length === 0) { setLoading(false); return; }
+
+      const totalIn = inputs.reduce((s, p) => s + p.amount, 0);
+      const totalOut = outputs.reduce((s, p) => s + p.amount, 0);
       // Safe fee extraction — tx.fee may be undefined for unconfirmed/legacy rows
-      const fee = tx.fee != null ? Math.max(0, tx.fee) : 0;
+      const fee = tx?.fee != null ? Math.max(0, tx.fee) : Math.max(0, totalIn - totalOut);
+      setData({ inputs, outputs, totalIn, totalOut, fee, isCoinJoin: coinjoinTxids.has(txid) });
+
+      const bInputs: BoltzmannInput[] = inputs.map((p, i) => ({ index: i, address: p.address, amount: Math.round(p.amount) }));
+      const bOutputs: BoltzmannOutput[] = outputs.map((p, i) => ({ index: i, address: p.address, amount: Math.round(p.amount) }));
 
       // Run Boltzmann in a dedicated worker to keep the UI thread responsive
       if (!workerRef.current) {
@@ -341,24 +387,26 @@ function BoltzmannPanel({ txids }: { txids: string[] }) {
         setLoading(false);
       };
       worker.onerror = () => setLoading(false);
-      worker.postMessage({ id, inputs, outputs, fee });
+      worker.postMessage({ id, inputs: bInputs, outputs: bOutputs, fee });
     } catch {
       setLoading(false);
     }
-  }, []);
+  }, [coinjoinTxids]);
 
   if (txids.length === 0) return null;
 
+  const sankey = data && data.isCoinJoin ? buildSankey(data.inputs, data.outputs) : null;
+
   return (
-    <Card data-testid="container-boltzmann-panel">
+    <Card data-testid="container-transaction-deep-dive">
       <CardHeader className="py-3 px-4">
         <CardTitle className="text-sm flex items-center gap-2">
           <ScanSearch className="h-4 w-4" />
-          Boltzmann Linkability Analysis
+          Transaction Deep-Dive
         </CardTitle>
         <CardDescription className="text-xs">
-          Computes transaction entropy and link-probability matrix. 0 bits = fully traceable; higher = more interpretations.
-          Runs entirely offline.
+          Pick any flagged transaction for a forensic breakdown: Boltzmann entropy, a color-coded link-probability
+          heatmap, and — for CoinJoins — a fund-flow Sankey diagram. Runs entirely offline.
         </CardDescription>
       </CardHeader>
       <CardContent className="px-4 pb-4 space-y-3">
@@ -366,13 +414,13 @@ function BoltzmannPanel({ txids }: { txids: string[] }) {
           <div className="space-y-1 min-w-[200px] flex-1">
             <label className="text-xs text-muted-foreground">Transaction</label>
             <Select value={selectedTxid} onValueChange={setSelectedTxid}>
-              <SelectTrigger data-testid="select-boltzmann-txid">
+              <SelectTrigger data-testid="select-deep-dive-txid">
                 <SelectValue placeholder="Select transaction" />
               </SelectTrigger>
               <SelectContent>
                 {txids.slice(0, 50).map(t => (
                   <SelectItem key={t} value={t}>
-                    {t.substring(0, 20)}…
+                    {coinjoinTxids.has(t) ? "⇄ " : ""}{t.substring(0, 20)}…
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -383,12 +431,33 @@ function BoltzmannPanel({ txids }: { txids: string[] }) {
             variant="outline"
             onClick={() => analyse(selectedTxid)}
             disabled={loading || !selectedTxid}
-            data-testid="button-analyse-boltzmann"
+            data-testid="button-analyse-deep-dive"
           >
             {loading ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <ScanSearch className="h-4 w-4 mr-1" />}
             Analyse
           </Button>
         </div>
+
+        {data && (
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2" data-testid="container-deep-dive-summary">
+            <div className="bg-muted/40 rounded-md p-2 text-center">
+              <div className="text-base font-bold" data-testid="text-deep-dive-inputs">{data.inputs.length}</div>
+              <div className="text-xs text-muted-foreground">Inputs</div>
+            </div>
+            <div className="bg-muted/40 rounded-md p-2 text-center">
+              <div className="text-base font-bold" data-testid="text-deep-dive-outputs">{data.outputs.length}</div>
+              <div className="text-xs text-muted-foreground">Outputs</div>
+            </div>
+            <div className="bg-muted/40 rounded-md p-2 text-center">
+              <div className="text-base font-bold" data-testid="text-deep-dive-total">{(data.totalIn / 1e8).toFixed(4)}</div>
+              <div className="text-xs text-muted-foreground">BTC In</div>
+            </div>
+            <div className="bg-muted/40 rounded-md p-2 text-center">
+              <div className="text-base font-bold" data-testid="text-deep-dive-fee">{data.fee.toLocaleString()}</div>
+              <div className="text-xs text-muted-foreground">Fee (sats)</div>
+            </div>
+          </div>
+        )}
 
         {result && (
           <div className="space-y-3" data-testid="container-boltzmann-result">
@@ -435,117 +504,158 @@ function BoltzmannPanel({ txids }: { txids: string[] }) {
             )}
           </div>
         )}
+
+        {sankey && sankey.links.length > 0 && (
+          <div className="space-y-2" data-testid="container-coinjoin-sankey">
+            <div className="flex items-center gap-2">
+              <Shuffle className="h-4 w-4 text-muted-foreground" />
+              <h4 className="text-xs font-medium">CoinJoin Fund-Flow</h4>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              How inputs flow to outputs in this CoinJoin. Equal output sizes make linkage ambiguous.
+            </p>
+            <div className="overflow-x-auto">
+              <Sankey
+                width={560}
+                height={Math.max(160, sankey.nodes.length * 22)}
+                data={sankey}
+                nodePadding={8}
+                nodeWidth={12}
+                iterations={32}
+                link={{ stroke: "hsl(var(--muted-foreground) / 0.25)" }}
+              >
+                <Tooltip
+                  formatter={(value: number) => [`${(value / 1e8).toFixed(8)} BTC`, "Flow"]}
+                />
+              </Sankey>
+            </div>
+          </div>
+        )}
       </CardContent>
     </Card>
   );
 }
 
-// ─── CoinJoin fund-flow Sankey ────────────────────────────────────────────────
+// ─── Peel-chain visualization ─────────────────────────────────────────────────
 
-function CoinJoinFlowPanel({ txids }: { txids: string[] }) {
-  const [selectedTxid, setSelectedTxid] = useState<string>(txids[0] ?? "");
-  const [loading, setLoading] = useState(false);
-  const [sankeyData, setSankeyData] = useState<{
-    nodes: { name: string }[];
-    links: { source: number; target: number; value: number }[];
-  } | null>(null);
+interface PeelStep {
+  txid: string;
+  carriedIn: number;      // total input value entering this hop
+  payment: number;        // value peeled off to an external address
+  paymentAddress: string;
+  change: number;         // value returned to our (change) address
+  changeAddress: string;
+}
 
-  const load = useCallback(async (txid: string) => {
-    if (!txid) return;
-    setLoading(true);
-    setSankeyData(null);
-    try {
-      const participants = await getParticipantsByTxids([txid]);
-      const inputs = participants.filter(p => p.role === "input");
-      const outputs = participants.filter(p => p.role === "output");
-      if (inputs.length === 0 || outputs.length === 0) { setLoading(false); return; }
+function PeelChainView({ txids, changeAddresses }: { txids: string[]; changeAddresses: string[] }) {
+  const [loading, setLoading] = useState(true);
+  const [steps, setSteps] = useState<PeelStep[]>([]);
 
-      const nodes = [
-        ...inputs.map((p, i) => ({ name: `In ${i + 1}\n${(p.amount / 1e8).toFixed(5)} BTC` })),
-        ...outputs.map((p, i) => ({ name: `Out ${i + 1}\n${(p.amount / 1e8).toFixed(5)} BTC` })),
-      ];
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      try {
+        const changeSet = new Set(changeAddresses);
+        const parts = await getParticipantsByTxids(txids);
+        const byTxid = new Map<string, TransactionParticipant[]>();
+        for (const p of parts) {
+          const list = byTxid.get(p.txid);
+          if (list) list.push(p);
+          else byTxid.set(p.txid, [p]);
+        }
+        const built: PeelStep[] = [];
+        for (const txid of txids) {
+          const tp = byTxid.get(txid) ?? [];
+          const inputs = tp.filter(p => p.role === "input");
+          const outputs = tp.filter(p => p.role === "output");
+          const carriedIn = inputs.reduce((s, p) => s + p.amount, 0);
+          // The change output is the one going back to one of our change addresses.
+          // Fall back to the smaller output if no address match is available.
+          let changeOut = outputs.find(p => changeSet.has(p.address));
+          let paymentOut = outputs.find(p => p !== changeOut);
+          if (!changeOut && outputs.length === 2) {
+            const sorted = [...outputs].sort((a, b) => a.amount - b.amount);
+            changeOut = sorted[0];
+            paymentOut = sorted[1];
+          }
+          built.push({
+            txid,
+            carriedIn,
+            payment: paymentOut?.amount ?? 0,
+            paymentAddress: paymentOut?.address ?? "—",
+            change: changeOut?.amount ?? 0,
+            changeAddress: changeOut?.address ?? "—",
+          });
+        }
+        if (!cancelled) setSteps(built);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [txids, changeAddresses]);
 
-      // Distribute each input proportionally to all outputs (CoinJoin merges funds)
-      const totalIn = inputs.reduce((s, p) => s + p.amount, 0);
-      const links: { source: number; target: number; value: number }[] = [];
-      inputs.forEach((inp, si) => {
-        outputs.forEach((out, ti) => {
-          const value = Math.round((inp.amount / totalIn) * out.amount);
-          if (value > 0) links.push({ source: si, target: inputs.length + ti, value });
-        });
-      });
-
-      setSankeyData({ nodes, links });
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  if (txids.length === 0) return null;
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-8" data-testid="status-peel-chain-loading">
+        <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
 
   return (
-    <Card data-testid="container-coinjoin-flow-panel">
-      <CardHeader className="py-3 px-4">
-        <CardTitle className="text-sm flex items-center gap-2">
-          <Shuffle className="h-4 w-4" />
-          CoinJoin Fund-Flow Visualizer
-        </CardTitle>
-        <CardDescription className="text-xs">
-          Sankey diagram of how inputs flow to outputs in a CoinJoin transaction. Equal output sizes make linkage ambiguous.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="px-4 pb-4 space-y-3">
-        <div className="flex flex-wrap gap-2 items-end">
-          <div className="space-y-1 min-w-[200px] flex-1">
-            <label className="text-xs text-muted-foreground">CoinJoin Transaction</label>
-            <Select value={selectedTxid} onValueChange={setSelectedTxid}>
-              <SelectTrigger data-testid="select-coinjoin-txid">
-                <SelectValue placeholder="Select transaction" />
-              </SelectTrigger>
-              <SelectContent>
-                {txids.slice(0, 30).map(t => (
-                  <SelectItem key={t} value={t}>{t.substring(0, 20)}…</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <Button
-            size="default"
-            variant="outline"
-            onClick={() => load(selectedTxid)}
-            disabled={loading || !selectedTxid}
-            data-testid="button-load-coinjoin-flow"
-          >
-            {loading ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <Shuffle className="h-4 w-4 mr-1" />}
-            Visualize
-          </Button>
-        </div>
-
-        {sankeyData && sankeyData.links.length > 0 && (
-          <div className="overflow-x-auto" data-testid="container-coinjoin-sankey">
-            <Sankey
-              width={560}
-              height={Math.max(160, sankeyData.nodes.length * 22)}
-              data={sankeyData}
-              nodePadding={8}
-              nodeWidth={12}
-              iterations={32}
-              link={{ stroke: "hsl(var(--muted-foreground) / 0.25)" }}
+    <div className="space-y-2" data-testid="container-peel-chain">
+      <p className="text-xs text-muted-foreground">
+        Each hop peels off a payment to an external address and forwards the remaining change to a fresh address,
+        which becomes the input to the next transaction. This forms a traceable chain of {steps.length} transactions.
+      </p>
+      <div className="space-y-1">
+        {steps.map((step, i) => (
+          <Fragment key={step.txid}>
+            <div
+              className="border rounded-md p-3 space-y-2"
+              data-testid={`card-peel-step-${i}`}
             >
-              <Tooltip
-                formatter={(value: number) => [`${(value / 1e8).toFixed(8)} BTC`, "Flow"]}
-              />
-            </Sankey>
-          </div>
-        )}
-
-        {!loading && !sankeyData && (
-          <p className="text-xs text-muted-foreground">
-            Select a CoinJoin transaction and click Visualize to see the fund-flow diagram.
-          </p>
-        )}
-      </CardContent>
-    </Card>
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <div className="flex items-center gap-2">
+                  <Badge variant="secondary" className="font-mono">Hop {i + 1}</Badge>
+                  <TxidLink txid={step.txid} />
+                </div>
+                <span className="text-xs text-muted-foreground font-mono">
+                  in {(step.carriedIn / 1e8).toFixed(6)} BTC
+                </span>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <div className="bg-muted/40 rounded p-2">
+                  <div className="text-xs font-medium text-muted-foreground mb-1">Payment out</div>
+                  <div className="text-sm font-mono" data-testid={`text-peel-payment-${i}`}>
+                    {(step.payment / 1e8).toFixed(6)} BTC
+                  </div>
+                  <div className="mt-1">
+                    <ClickableAddress address={step.paymentAddress} />
+                  </div>
+                </div>
+                <div className="bg-muted/40 rounded p-2">
+                  <div className="text-xs font-medium text-muted-foreground mb-1">Change forwarded</div>
+                  <div className="text-sm font-mono" data-testid={`text-peel-change-${i}`}>
+                    {(step.change / 1e8).toFixed(6)} BTC
+                  </div>
+                  <div className="mt-1">
+                    <ClickableAddress address={step.changeAddress} />
+                  </div>
+                </div>
+              </div>
+            </div>
+            {i < steps.length - 1 && (
+              <div className="flex justify-center text-muted-foreground" aria-hidden="true">
+                <TrendingDown className="h-4 w-4" />
+              </div>
+            )}
+          </Fragment>
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -1014,6 +1124,8 @@ export default function PrivacyAudit() {
     return txids;
   }, [result]);
 
+  const coinjoinWarningSet = useMemo(() => new Set(coinjoinWarningTxids), [coinjoinWarningTxids]);
+
   const countBySeverity = (severity: PrivacySeverity) => {
     if (!result) return 0;
     return [...result.findings, ...result.warnings].filter((f) => f.severity === severity).length;
@@ -1223,14 +1335,12 @@ export default function PrivacyAudit() {
               </div>
             )}
 
-            {/* CoinJoin fund-flow Sankey — shown when CoinJoin warnings are present */}
-            {coinjoinWarningTxids.length > 0 && (
-              <CoinJoinFlowPanel txids={coinjoinWarningTxids} />
-            )}
-
-            {/* Boltzmann panel */}
+            {/* Per-transaction deep-dive: heatmap, entropy, and CoinJoin fund-flow */}
             {allFindingTxids.length > 0 && (
-              <BoltzmannPanel txids={allFindingTxids} />
+              <TransactionDeepDive
+                txids={allFindingTxids}
+                coinjoinTxids={coinjoinWarningSet}
+              />
             )}
 
             {/* Clean state */}
@@ -1364,6 +1474,26 @@ function FindingCard({ finding }: { finding: PrivacyFinding }) {
                   )}
                 </div>
               </div>
+            )}
+
+            {finding.type === "PEEL_CHAIN" && finding.txids.length > 0 && (
+              <Dialog>
+                <DialogTrigger asChild>
+                  <Button variant="outline" size="sm" data-testid="button-view-peel-chain">
+                    <TrendingDown className="h-3 w-3 mr-1" />
+                    View Peel Chain
+                  </Button>
+                </DialogTrigger>
+                <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto" data-testid="dialog-peel-chain">
+                  <DialogHeader>
+                    <DialogTitle>Peel Chain ({finding.txids.length} transactions)</DialogTitle>
+                    <DialogDescription>
+                      Step-by-step view of how funds were peeled across consecutive transactions.
+                    </DialogDescription>
+                  </DialogHeader>
+                  <PeelChainView txids={finding.txids} changeAddresses={finding.addresses} />
+                </DialogContent>
+              </Dialog>
             )}
 
             {finding.addresses.length > 0 && (
