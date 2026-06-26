@@ -90,7 +90,12 @@ import { runPrivacyAudit } from '../privacy-audit';
 // copy. If the export adds, drops, or renames a top-level key, summary field,
 // or finding field, the assertions below catch it.
 import { mapFinding, buildPrivacyReport, buildPrivacyTextReport } from '../privacy-report-export';
-import { FINDING_TYPE_LABELS } from '../privacy-audit';
+import { FINDING_TYPE_LABELS, type PrivacyAuditResult } from '../privacy-audit';
+// buildPrintableReport is the SAME function Reports.tsx (exportPdf) feeds into the
+// print window, so these tests guard the real printable HTML — not a copy. If the
+// HTML drops the header, summary, severity chips, scope, or any per-finding field,
+// or stops escaping user-controlled text, the assertions below catch it.
+import { buildPrintableReport, escapeHtml, severityLabel } from '../privacy-report-html';
 
 describe('privacy report export — entity citations', () => {
   beforeEach(() => {
@@ -501,5 +506,218 @@ describe('privacy report export — plain text', () => {
     expect(text).toContain('Clean — no privacy findings.');
     expect(text).toContain('FINDINGS & WARNINGS (0)');
     expect(text).toContain('No privacy findings — your transaction history is clean.');
+  });
+});
+
+// buildPrintableReport is the SAME function Reports.tsx (exportPdf) writes into
+// the print window for "Print / PDF", so these tests guard the real printable
+// HTML — not a copy. If the HTML drops the header, summary, severity chips,
+// scope, or any per-finding field (label/severity/description/correction/
+// address+transaction counts/citations), or stops escaping user-controlled
+// text, the assertions below catch it.
+describe('privacy report export — printable HTML', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  // A fixed Date keeps the "Generated …" line and the <title> date deterministic.
+  const FIXED_NOW = new Date('2026-01-15T09:30:00.000Z');
+
+  it('renders the header, offline note, and chosen scope', async () => {
+    const result = await runPrivacyAudit([USER_ADDRESS]);
+    const html = buildPrintableReport(
+      result,
+      { owner: 'Alice', wallet: 'Cold Storage' },
+      FIXED_NOW,
+    );
+
+    expect(html).toContain('<!DOCTYPE html>');
+    expect(html).toContain('<h1>Privacy Audit Report</h1>');
+    expect(html).toContain('All analysis ran fully offline.');
+    expect(html).toContain(`Generated ${escapeHtml(FIXED_NOW.toLocaleString())}`);
+    // The <title> carries the ISO date (YYYY-MM-DD).
+    expect(html).toContain('Privacy Audit Report — 2026-01-15');
+    // Scope line reflects the chosen owner/wallet.
+    expect(html).toContain('Owner: Alice');
+    expect(html).toContain('Wallet: Cold Storage');
+    // Offline footer is present.
+    expect(html).toContain(
+      'KYUTXO Privacy Audit · Offline-first compliance artifact.',
+    );
+    expect(html).toContain(
+      'Citation URLs are shown as plain text and are never fetched.',
+    );
+  });
+
+  it('renders "All" scope for an unscoped (null owner/wallet) export', async () => {
+    const result = await runPrivacyAudit([USER_ADDRESS]);
+    const html = buildPrintableReport(result, { owner: null, wallet: null }, FIXED_NOW);
+
+    expect(html).toContain('Owner: All');
+    expect(html).toContain('Wallet: All');
+  });
+
+  it('renders the summary boxes from the audit result', async () => {
+    const result = await runPrivacyAudit([USER_ADDRESS]);
+    const html = buildPrintableReport(result, { owner: null, wallet: null }, FIXED_NOW);
+
+    expect(html).toContain(`<div class="value">${escapeHtml(result.grade)}</div><div class="label">Grade</div>`);
+    expect(html).toContain(`<div class="value">${result.score}/100</div><div class="label">Score</div>`);
+    expect(html).toContain(`<div class="value">${result.transactionsAnalyzed.toLocaleString()}</div><div class="label">Txs Analyzed</div>`);
+    expect(html).toContain(`<div class="value">${result.addressesScanned.toLocaleString()}</div><div class="label">Addresses</div>`);
+  });
+
+  it('renders a severity chip for each present severity', async () => {
+    const result = await runPrivacyAudit([USER_ADDRESS]);
+    const html = buildPrintableReport(result, { owner: null, wallet: null }, FIXED_NOW);
+
+    const allFindings = [...result.findings, ...result.warnings];
+    expect(allFindings.length).toBeGreaterThan(0);
+
+    for (const sev of ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'] as const) {
+      const count = allFindings.filter((f) => f.severity === sev).length;
+      if (count > 0) {
+        expect(html).toContain(`${count} ${severityLabel(sev)}`);
+      }
+    }
+  });
+
+  it('renders every finding with label/severity/description/correction and counts', async () => {
+    const result = await runPrivacyAudit([USER_ADDRESS]);
+    const html = buildPrintableReport(result, { owner: null, wallet: null }, FIXED_NOW);
+
+    const allFindings = [...result.findings, ...result.warnings];
+    expect(allFindings.length).toBeGreaterThan(0);
+    expect(html).toContain(`Findings &amp; Warnings (${allFindings.length})`);
+
+    for (const f of allFindings) {
+      const label = FINDING_TYPE_LABELS[f.type] ?? f.type;
+      expect(html).toContain(escapeHtml(label));
+      expect(html).toContain(`>${escapeHtml(severityLabel(f.severity))}</span>`);
+      expect(html).toContain(escapeHtml(f.description));
+      if (f.correction) {
+        expect(html).toContain(`<strong>Fix:</strong> ${escapeHtml(f.correction)}`);
+      }
+      if (f.addresses.length > 0) {
+        expect(html).toContain(`${f.addresses.length} address(es)`);
+      }
+      if (f.txids.length > 0) {
+        expect(html).toContain(`${f.txids.length} transaction(s)`);
+      }
+    }
+  });
+
+  it('renders entity source citations in the printable HTML', async () => {
+    const result = await runPrivacyAudit([USER_ADDRESS]);
+    const html = buildPrintableReport(result, { owner: null, wallet: null }, FIXED_NOW);
+
+    expect(html).toContain('Source Citations');
+    // Scam entity citation row, with its public-attribution URL as plain text.
+    expect(html).toContain(escapeHtml(SCAM_ENTITY.name));
+    expect(html).toContain(escapeHtml(SCAM_ENTITY.address));
+    expect(html).toContain(escapeHtml(SCAM_ENTITY.categoryLabel));
+    expect(html).toContain(escapeHtml(SCAM_ENTITY.sourceNote));
+    expect(html).toContain('https://www.treasury.gov/');
+
+    // Both distinct exchange entities are cited.
+    expect(html).toContain(escapeHtml(EXCHANGE_ENTITY.name));
+    expect(html).toContain(escapeHtml(EXCHANGE_ENTITY.address));
+    expect(html).toContain(escapeHtml(COINBASE_ENTITY.name));
+    expect(html).toContain(escapeHtml(COINBASE_ENTITY.address));
+  });
+
+  it('renders the score-waterfall rows when present', async () => {
+    const result = await runPrivacyAudit([USER_ADDRESS]);
+    const html = buildPrintableReport(result, { owner: null, wallet: null }, FIXED_NOW);
+
+    if (result.scoreWaterfall.length > 0) {
+      expect(html).toContain('Score Breakdown');
+      for (const entry of result.scoreWaterfall) {
+        expect(html).toContain(escapeHtml(entry.label));
+      }
+    }
+  });
+
+  it('escapes user-controlled text and leaves citation URLs as plain text', () => {
+    const xssCitation = {
+      name: 'Evil <script>alert("x")</script> & Co',
+      address: '1BoatSLRHtKNngkdXEeobR76b53LETtpyT',
+      categoryLabel: 'Scam & <Fraud>',
+      sourceNote: 'Reported at https://example.com/report?a=1&b=2 <ref>',
+    };
+    const syntheticResult = {
+      findings: [
+        {
+          type: 'ENTITY_SCAM',
+          severity: 'CRITICAL',
+          description: 'Linked to a flagged entity <bad> & risky',
+          details: { citations: [xssCitation] },
+          correction: 'Rotate <keys> & stop using this address',
+          txids: ['tx1'],
+          addresses: [xssCitation.address],
+        },
+      ],
+      warnings: [],
+      transactionsAnalyzed: 1,
+      addressesScanned: 1,
+      isClean: false,
+      score: 30,
+      grade: 'D',
+      scoreWaterfall: [],
+      needsResync: false,
+      fingerprintCoverage: 1,
+    } as unknown as PrivacyAuditResult;
+
+    const html = buildPrintableReport(
+      syntheticResult,
+      { owner: 'Bob & <Friends>', wallet: 'Hot <Wallet>' },
+      FIXED_NOW,
+    );
+
+    // No raw user-controlled angle brackets survive into the HTML body.
+    expect(html).toContain('Evil &lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt; &amp; Co');
+    expect(html).toContain('Scam &amp; &lt;Fraud&gt;');
+    expect(html).toContain('Linked to a flagged entity &lt;bad&gt; &amp; risky');
+    expect(html).toContain('Rotate &lt;keys&gt; &amp; stop using this address');
+    expect(html).toContain('Owner: Bob &amp; &lt;Friends&gt;');
+    expect(html).toContain('Wallet: Hot &lt;Wallet&gt;');
+
+    // The raw, unescaped attacker markup must never appear verbatim.
+    expect(html).not.toContain('<script>alert');
+    expect(html).not.toContain('<Fraud>');
+    expect(html).not.toContain('<bad>');
+
+    // The citation URL is preserved (the &-escaped query string is still the
+    // same URL text), shown as plain text — never turned into a fetched <a>.
+    expect(html).toContain('https://example.com/report?a=1&amp;b=2');
+    expect(html).not.toContain('<a href');
+  });
+
+  it('renders a clean report when there are no findings', () => {
+    const cleanResult = {
+      grade: 'A+',
+      score: 100,
+      transactionsAnalyzed: 0,
+      addressesScanned: 0,
+      isClean: true,
+      fingerprintCoverage: 1,
+      needsResync: false,
+      findings: [],
+      warnings: [],
+      scoreWaterfall: [],
+    } as unknown as PrivacyAuditResult;
+
+    const html = buildPrintableReport(cleanResult, { owner: null, wallet: null }, FIXED_NOW);
+
+    expect(html).toContain('Findings &amp; Warnings (0)');
+    expect(html).toContain('No privacy findings — your transaction history is clean.');
+    // The severity summary collapses to a single "Clean" chip.
+    expect(html).toContain('>Clean</span>');
+  });
+
+  it('escapeHtml encodes the five HTML-sensitive characters', () => {
+    expect(escapeHtml(`<a href="x" title='y'>& </a>`)).toBe(
+      '&lt;a href=&quot;x&quot; title=&#39;y&#39;&gt;&amp; &lt;/a&gt;',
+    );
   });
 });
