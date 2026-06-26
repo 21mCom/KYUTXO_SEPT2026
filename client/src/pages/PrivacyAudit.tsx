@@ -370,7 +370,7 @@ function summariseError(raw: string): string {
   return firstLine.length > 200 ? `${firstLine.slice(0, 200)}…` : firstLine;
 }
 
-function TransactionDeepDive({
+export function TransactionDeepDive({
   txids,
   coinjoinTxids,
   autoAnalyse = false,
