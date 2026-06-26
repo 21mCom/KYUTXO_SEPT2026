@@ -186,6 +186,19 @@ describe('printable HTML report — sections present', () => {
     expect(html).toContain('Fingerprint data 42%');
     expect(html).toContain('re-sync recommended');
   });
+
+  it('renders a screen-only Copy control (hidden from the printed page)', () => {
+    const html = buildPrintableReport(makeResult(), { owner: null, wallet: null }, FIXED_NOW);
+
+    // The copy button and its status target are present for the print/PDF window
+    // (wired up by Reports.tsx after document.write).
+    expect(html).toContain('id="copy-report-btn"');
+    expect(html).toContain('id="copy-report-status"');
+    expect(html).toContain('Copy report text');
+    // The toolbar is marked no-print so it never appears in the saved PDF.
+    expect(html).toContain('class="toolbar no-print"');
+    expect(html).toContain('.no-print { display: none !important; }');
+  });
 });
 
 describe('printable HTML report — escaping of user-controlled values', () => {

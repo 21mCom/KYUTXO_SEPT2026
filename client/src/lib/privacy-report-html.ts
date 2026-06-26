@@ -159,13 +159,22 @@ export function buildPrintableReport(
   .mono { font-family: "JetBrains Mono", "Courier New", monospace; }
   .clean { color: #16a34a; font-size: 14px; }
   .footer { margin-top: 28px; padding-top: 12px; border-top: 1px solid #ddd; font-size: 11px; color: #777; }
-  @media print { body { padding: 0; } }
+  .toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: 0 0 24px; }
+  .copy-btn { font: inherit; font-size: 13px; line-height: 1.2; padding: 7px 14px; border: 1px solid #ccc; border-radius: 6px; background: #f5f5f5; color: #1a1a1a; cursor: pointer; }
+  .copy-btn:hover { background: #ececec; }
+  .copy-status { font-size: 12px; color: #16a34a; }
+  @media print { body { padding: 0; } .no-print { display: none !important; } }
 </style>
 </head>
 <body>
   <h1>Privacy Audit Report</h1>
   <p class="subtitle">Generated ${escapeHtml(generatedAt)} · All analysis ran fully offline.</p>
   <p class="scope">${scopeText}</p>
+
+  <div class="toolbar no-print">
+    <button type="button" id="copy-report-btn" class="copy-btn">Copy report text</button>
+    <span id="copy-report-status" class="copy-status" role="status" aria-live="polite"></span>
+  </div>
 
   <div class="summary">
     <div class="summary-box"><div class="value">${escapeHtml(result.grade)}</div><div class="label">Grade</div></div>
