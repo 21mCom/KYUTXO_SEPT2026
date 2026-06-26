@@ -787,6 +787,7 @@ interface PeelStep {
 
 const PEEL_PAYMENT_COLOR = "hsl(var(--chart-5))"; // payment peeled off to external address
 const PEEL_CHANGE_COLOR = "hsl(var(--chart-2))"; // change forwarded along the chain
+const PEEL_COINJOIN_COLOR = "hsl(var(--chart-4))"; // mixing (CoinJoin) hop highlight
 
 function shortPeelAddr(a: string): string {
   if (!a || a === "—") return "—";
@@ -839,6 +840,14 @@ function PeelChainGraph({ steps, coinjoinTxids }: { steps: PeelStep[]; coinjoinT
         <span className="inline-flex items-center gap-1.5">
           <span className="inline-block h-0.5 w-5 rounded" style={{ backgroundColor: PEEL_CHANGE_COLOR }} />
           Change forwarded
+        </span>
+        <span className="inline-flex items-center gap-1.5" data-testid="legend-peel-coinjoin">
+          <span
+            className="inline-block h-3 w-3 rounded-full border-2 bg-transparent"
+            style={{ borderColor: PEEL_COINJOIN_COLOR }}
+          />
+          <span aria-hidden="true" style={{ color: PEEL_COINJOIN_COLOR }}>⇄</span>
+          CoinJoin (mixing) hop
         </span>
       </div>
       <div className="overflow-auto rounded-md border" style={{ maxHeight: 520 }}>
@@ -944,18 +953,31 @@ function PeelChainGraph({ steps, coinjoinTxids }: { steps: PeelStep[]; coinjoinT
             const ty = txY(i);
             const cy = changeY(i);
             const isLast = i === steps.length - 1;
+            const isCoinJoin = coinjoinTxids.has(step.txid);
             return (
               <Fragment key={`nodes-${step.txid}`}>
                 {/* Transaction node — click to view the record; badge opens the forensic deep-dive */}
                 <g
                   data-testid={`graph-tx-${i}`}
+                  data-coinjoin={isCoinJoin ? "true" : undefined}
                   role="button"
                   tabIndex={0}
                   className="cursor-pointer outline-none transition-opacity hover:opacity-80 focus-visible:opacity-80"
                   onClick={() => openNode(step.txid)}
                   onKeyDown={(e) => onNodeKeyDown(e, step.txid)}
                 >
-                  <title>{`Hop ${i + 1} — ${step.txid}\nin ${fmt(step.carriedIn)}\nClick to view transaction`}</title>
+                  <title>{`Hop ${i + 1} — ${step.txid}\nin ${fmt(step.carriedIn)}${isCoinJoin ? "\n⇄ CoinJoin (mixing) hop" : ""}\nClick to view transaction`}</title>
+                  {/* Highlight ring for CoinJoin (mixing) hops */}
+                  {isCoinJoin && (
+                    <circle
+                      cx={txX}
+                      cy={ty}
+                      r={24}
+                      fill="none"
+                      stroke={PEEL_COINJOIN_COLOR}
+                      strokeWidth={2}
+                    />
+                  )}
                   <circle cx={txX} cy={ty} r={20} fill="hsl(var(--primary))" />
                   <text
                     x={txX}
@@ -991,6 +1013,21 @@ function PeelChainGraph({ steps, coinjoinTxids }: { steps: PeelStep[]; coinjoinT
                     <circle r={8} fill="hsl(var(--background))" stroke="hsl(var(--primary))" strokeWidth={1.5} />
                     <ScanSearch x={-5} y={-5} width={10} height={10} color="hsl(var(--primary))" />
                   </g>
+                  {/* CoinJoin (mixing) marker on the node */}
+                  {isCoinJoin && (
+                    <g transform={`translate(${txX - 12}, ${ty - 20})`} data-testid={`graph-coinjoin-${i}`}>
+                      <circle r={8} fill={PEEL_COINJOIN_COLOR} />
+                      <text
+                        textAnchor="middle"
+                        y={3.5}
+                        fontSize={10}
+                        fontWeight={700}
+                        fill="hsl(var(--background))"
+                      >
+                        ⇄
+                      </text>
+                    </g>
+                  )}
                   <text
                     x={txX}
                     y={ty + 34}
