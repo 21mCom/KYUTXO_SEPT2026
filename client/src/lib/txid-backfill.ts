@@ -52,6 +52,16 @@ export interface BackfillProgress {
    * written. Undefined until the bulk-write stage begins.
    */
   resolveTotal?: number;
+  /**
+   * During the 'resolving' phase: number of previous transactions fetched from
+   * the provider so far. Undefined unless the prevout fetch loop is running.
+   */
+  fetchProcessed?: number;
+  /**
+   * During the 'resolving' phase: total number of previous transactions that
+   * need fetching from the provider. Undefined unless the fetch loop is running.
+   */
+  fetchTotal?: number;
 }
 
 export type BackfillProgressCallback = (progress: BackfillProgress) => void;
@@ -382,7 +392,20 @@ export async function runTxidBackfill(
         {
           signal,
           concurrency,
-          onProgress: (resolveProcessed, resolveTotal) => {
+          onFetchProgress: (fetchProcessed, fetchTotal) => {
+            onProgress?.({
+              phase: 'resolving',
+              orphansFound: txids.length,
+              processed,
+              rebuilt: result.rebuilt,
+              skipped: result.skipped,
+              failed: result.failed,
+              message: 'Fetching previous transactions…',
+              fetchProcessed,
+              fetchTotal,
+            });
+          },
+          onWriteProgress: (resolveProcessed, resolveTotal) => {
             onProgress?.({
               phase: 'resolving',
               orphansFound: txids.length,
@@ -438,10 +461,11 @@ async function resolveBackfillPrevouts(
   options: {
     signal?: AbortSignal;
     concurrency?: number;
-    onProgress?: (processed: number, total: number) => void;
+    onFetchProgress?: (fetched: number, total: number) => void;
+    onWriteProgress?: (written: number, total: number) => void;
   } = {},
 ): Promise<number> {
-  const { signal, concurrency = 4, onProgress } = options;
+  const { signal, concurrency = 4, onFetchProgress, onWriteProgress } = options;
 
   // Collect the input participants for the rebuilt txids that still need an
   // address but carry a prevout reference we can chase.
@@ -466,13 +490,15 @@ async function resolveBackfillPrevouts(
     await new Promise(resolve => setTimeout(resolve, 0));
   }
 
-  // Map the backfill's onProgress (resolved count vs total) onto the shared
-  // core's bulk-write progress hook so the manual backfill UI can show a
-  // progress bar during the final, cancellable write phase.
+  // Forward the shared core's fetch- and write-phase progress hooks so the
+  // manual backfill UI can show a progress bar both while fetching missing
+  // previous transactions over the network and during the final, cancellable
+  // write phase.
   return resolveUnresolvedInputs(provider, unresolvedInputs, {
     signal,
     concurrency,
-    onWriteProgress: onProgress,
+    onFetchProgress,
+    onWriteProgress,
   });
 }
 

@@ -1179,8 +1179,16 @@ export default function SettingsPage() {
               `Rebuilding ${p.processed.toLocaleString()} of ${p.orphansFound.toLocaleString()} transactions...`
             );
           } else if (p.phase === 'resolving') {
-            if (p.resolveTotal && p.resolveTotal > 0) {
-              const pct = Math.round((p.resolveProcessed ?? 0) / p.resolveTotal * 100);
+            if (p.fetchTotal && p.fetchTotal > 0) {
+              // Fetch sub-phase occupies the first half of the resolving bar.
+              const pct = Math.round((p.fetchProcessed ?? 0) / p.fetchTotal * 50);
+              setBackfillProgress(pct);
+              setBackfillMessage(
+                `Fetching previous transactions... ${(p.fetchProcessed ?? 0).toLocaleString()} of ${p.fetchTotal.toLocaleString()}`
+              );
+            } else if (p.resolveTotal && p.resolveTotal > 0) {
+              // Write sub-phase occupies the second half of the resolving bar.
+              const pct = 50 + Math.round((p.resolveProcessed ?? 0) / p.resolveTotal * 50);
               setBackfillProgress(pct);
               setBackfillMessage(
                 `Resolving input addresses... ${(p.resolveProcessed ?? 0).toLocaleString()} of ${p.resolveTotal.toLocaleString()}`
