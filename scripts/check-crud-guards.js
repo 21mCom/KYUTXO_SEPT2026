@@ -143,6 +143,7 @@ const ALWAYS_ALLOWED_FILES = new Set([
   path.resolve(ROOT, 'client/src/lib/records-query.equivalence.test.ts'),
   path.resolve(ROOT, 'client/src/pages/PrivacyAudit.peelGraph.test.tsx'),
   path.resolve(ROOT, 'client/src/pages/PrivacyAudit.peelGraph.coinjoin.test.tsx'),
+  path.resolve(ROOT, 'client/src/pages/PrivacyAudit.peelList.test.tsx'),
   path.resolve(ROOT, 'client/src/lib/privacy-audit.ts'),
   path.resolve(ROOT, 'client/src/lib/data/record-queries.ts'),
   path.resolve(ROOT, 'client/src/lib/data/address-stats.ts'),

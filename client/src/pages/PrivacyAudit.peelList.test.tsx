@@ -41,6 +41,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { db, type Settings } from "@/lib/database";
 import { addTransaction, addParticipant } from "@/lib/data/transaction-crud";
 import { getSettings } from "@/lib/data/settings-crud";
+import { createRecord } from "@/lib/dataFacade";
 import { RecordPreviewProvider } from "@/contexts/RecordPreviewContext";
 import { PeelChainView } from "./PrivacyAudit";
 
@@ -210,5 +211,85 @@ describe("PeelChainView list mode", () => {
         `button-deep-dive-${COINJOIN_TXID.slice(0, 8)}`,
       ),
     ).toBeTruthy();
+  });
+});
+
+// Both list addresses share the same `clickable-address-{slice}` testid prefix
+// (PAYMENT_ADDR and CHANGE_ADDR both start with "bc1qpeel"), so we locate each
+// ClickableAddress by its full address text inside the hop card and click that
+// span directly.
+describe("PeelChainView list mode address navigation", () => {
+  const PAYMENT_LABEL = "External Payment Address Record";
+
+  function renderViewWithHistory() {
+    const { hook, history } = memoryLocation({
+      path: "/privacy-audit",
+      record: true,
+    });
+    const utils = render(
+      <Router hook={hook}>
+        <TooltipProvider>
+          <RecordPreviewProvider>
+            <PeelChainView
+              txids={[COINJOIN_TXID, PLAIN_TXID]}
+              changeAddresses={[CHANGE_ADDR]}
+              coinjoinTxids={new Set<string>([COINJOIN_TXID])}
+            />
+          </RecordPreviewProvider>
+        </TooltipProvider>
+      </Router>,
+    );
+    return { ...utils, history: history! };
+  }
+
+  it("opens the RecordDetailPanel for a list address that has a record", async () => {
+    // Seed a record for the peel-chain payment address (beforeEach left
+    // db.records empty after seeding the hops).
+    await createRecord(
+      {
+        type: "address",
+        inputString: PAYMENT_ADDR,
+        label: PAYMENT_LABEL,
+        source: "manual",
+        tags: [],
+        categories: [],
+      },
+      { skipVocabularySync: true },
+    );
+
+    const { getByTestId, findByText } = renderViewWithHistory();
+    await waitForToggle(getByTestId);
+
+    fireEvent.click(getByTestId("button-peel-view-list"));
+    await waitFor(() => {
+      expect(getByTestId("card-peel-step-0")).toBeTruthy();
+    });
+
+    // Click the payment address span within the first hop card.
+    const card0 = getByTestId("card-peel-step-0");
+    fireEvent.click(within(card0).getByText(PAYMENT_ADDR));
+
+    // RecordDetailPanel surfaces the matched record's label as its title.
+    expect(await findByText(PAYMENT_LABEL)).toBeTruthy();
+  });
+
+  it("navigates to /records?search=<address> when the address has no record", async () => {
+    // No record seeded for any peel-chain address, so the click should fall
+    // through to navigation instead of opening the panel.
+    const { getByTestId, history } = renderViewWithHistory();
+    await waitForToggle(getByTestId);
+
+    fireEvent.click(getByTestId("button-peel-view-list"));
+    await waitFor(() => {
+      expect(getByTestId("card-peel-step-0")).toBeTruthy();
+    });
+
+    const card0 = getByTestId("card-peel-step-0");
+    fireEvent.click(within(card0).getByText(PAYMENT_ADDR));
+
+    const expectedPath = `/records?search=${encodeURIComponent(PAYMENT_ADDR)}`;
+    await waitFor(() => {
+      expect(history).toContain(expectedPath);
+    });
   });
 });
