@@ -1592,7 +1592,11 @@ export class TransactionSyncService {
     return stats;
   }
 
-  async resolvePrevouts(onProgress?: (resolved: number, total: number) => void): Promise<{ resolved: number; fetchedFromNode: number; errors: number; resolvedAddresses: string[] }> {
+  async resolvePrevouts(
+    onProgress?: (resolved: number, total: number) => void,
+    options?: { recomputeOrigin?: string },
+  ): Promise<{ resolved: number; fetchedFromNode: number; errors: number; resolvedAddresses: string[] }> {
+    const recomputeOrigin = options?.recomputeOrigin ?? 'blockchain-sync';
     const stats = { resolved: 0, fetchedFromNode: 0, errors: 0, resolvedAddresses: [] as string[] };
 
     const allInputs = await db.transactionParticipants
@@ -1682,9 +1686,6 @@ export class TransactionSyncService {
       const resolved = localOutputCache.get(key);
       if (resolved && resolved.address) {
         resolvedAddressSet.add(resolved.address);
-        // These addresses now have a known input amount, so their balance
-        // changed — mark them for a local-only stats recompute.
-        this.statsTouchedAddresses.add(resolved.address);
       }
     }
     stats.resolvedAddresses = Array.from(resolvedAddressSet);
@@ -1727,7 +1728,27 @@ export class TransactionSyncService {
         if (onProgress) onProgress(Math.min(stats.resolved, unresolvedInputs.length), unresolvedInputs.length);
       }
       console.log(`[TransactionSync] Resolved ${stats.resolved} prevout inputs (${stats.fetchedFromNode} fetched from node, ${stats.errors} errors)`);
+
+      // Recompute cached stats for every source address whose spend input we
+      // just attributed. Doing this here (rather than relying on the sync run's
+      // statsTouchedAddresses set + finally pass) guarantees the source balance
+      // drops in the SAME run, even when resolvePrevouts runs standalone (e.g.
+      // the Balance page "fix" button) and even for addresses that were never
+      // part of the original sync set. Local-only recompute; never hits network.
+      if (resolvedAddressSet.size > 0) {
+        try {
+          await recomputeAddressStats({
+            addresses: Array.from(resolvedAddressSet),
+            origin: recomputeOrigin,
+            skipNotification: true,
+          });
+        } catch (err) {
+          console.warn('[TransactionSync] Stats recompute after prevout resolution failed (non-fatal):', err);
+        }
+      }
+
       this.deferNotification('transactionParticipants');
+      this.deferNotification('records');
       this.flushNotifications();
     }
 

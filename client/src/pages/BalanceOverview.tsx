@@ -401,13 +401,9 @@ export default function BalanceOverview() {
   const handleFixPrevouts = useCallback(async () => {
     setFixingPrevouts(true);
     try {
-      const result = await transactionSyncService.resolvePrevouts();
-      if (result.resolvedAddresses.length > 0) {
-        // Recompute only the addresses whose spend inputs were just attributed —
-        // avoids a full-vault scan while still closing the stale-cache gap for
-        // every address that had a newly-resolved spend.
-        await recomputeAddressStats({ addresses: result.resolvedAddresses, origin: "user" });
-      }
+      // resolvePrevouts now recomputes stats for every newly-resolved source
+      // address itself (origin "user"), so we don't need a second pass here.
+      await transactionSyncService.resolvePrevouts(undefined, { recomputeOrigin: "user" });
       const remaining = await countUnresolvedPrevoutInputs();
       setUnresolvedPrevouts(remaining);
       if (remaining === 0) setSpendWarningDismissed(false);
