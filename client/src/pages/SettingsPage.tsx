@@ -2861,14 +2861,24 @@ export default function SettingsPage() {
                 </div>
 
                 {entityPreview.mode === "merge" ? (
-                  <div className="flex items-center gap-2 flex-wrap text-sm">
-                    <Badge variant="default" data-testid="badge-preview-added">
-                      +{entityPreview.added.toLocaleString()} brand-new
-                    </Badge>
-                    <Badge variant="destructive" data-testid="badge-preview-overridden">
-                      {entityPreview.overridden.toLocaleString()} override bundled
-                    </Badge>
-                  </div>
+                  (() => {
+                    const overriddenChanged = entityPreview.overrides.filter(
+                      (o) => o.changed,
+                    ).length;
+                    return (
+                      <div className="flex items-center gap-2 flex-wrap text-sm">
+                        <Badge variant="default" data-testid="badge-preview-added">
+                          +{entityPreview.added.toLocaleString()} brand-new
+                        </Badge>
+                        <Badge variant="destructive" data-testid="badge-preview-overridden">
+                          {entityPreview.overridden.toLocaleString()} override bundled
+                          {entityPreview.overridden > 0
+                            ? ` (${overriddenChanged.toLocaleString()} changed)`
+                            : ""}
+                        </Badge>
+                      </div>
+                    );
+                  })()
                 ) : (
                   <div className="flex items-center gap-2 flex-wrap text-sm">
                     <Badge variant="default" data-testid="badge-preview-added">
@@ -2886,14 +2896,25 @@ export default function SettingsPage() {
                   </div>
                 )}
 
-                {entityPreview.mode === "merge" && entityPreview.overridden > 0 && (
-                  <p className="text-xs text-muted-foreground" data-testid="text-merge-override-note">
-                    {entityPreview.overridden.toLocaleString()} imported{" "}
-                    {entityPreview.overridden === 1 ? "address" : "addresses"} already exist in the bundled
-                    list and will overwrite{" "}
-                    {entityPreview.overridden === 1 ? "that entry" : "those entries"}. Review them below.
-                  </p>
-                )}
+                {entityPreview.mode === "merge" && entityPreview.overridden > 0 && (() => {
+                  const overriddenChanged = entityPreview.overrides.filter(
+                    (o) => o.changed,
+                  ).length;
+                  return (
+                    <p className="text-xs text-muted-foreground" data-testid="text-merge-override-note">
+                      {entityPreview.overridden.toLocaleString()} imported{" "}
+                      {entityPreview.overridden === 1 ? "address" : "addresses"} already exist in the bundled
+                      list, but only {overriddenChanged.toLocaleString()} will actually change{" "}
+                      {overriddenChanged === 1 ? "an entry" : "entries"}
+                      {overriddenChanged < entityPreview.overridden
+                        ? ` (the other ${(entityPreview.overridden - overriddenChanged).toLocaleString()} ${
+                            entityPreview.overridden - overriddenChanged === 1 ? "is" : "are"
+                          } identical re-imports)`
+                        : ""}
+                      . Review them below.
+                    </p>
+                  );
+                })()}
 
                 {entityImportWarnings.length > 0 && (
                   <div
