@@ -230,13 +230,22 @@ describe("PrivacyAuditReportPanel — Print / PDF", () => {
     // Default scope (no owner/wallet selected) is reflected in the report.
     expect(html).toContain("Owner: All");
     expect(html).toContain("Wallet: All");
+
+    // After a short layout delay the print dialog is invoked so users can
+    // "Save as PDF". The 250ms setTimeout fires on real timers within waitFor.
+    await waitFor(() => expect(fake.win.print).toHaveBeenCalledTimes(1));
   });
 
-  it("shows a destructive toast when the pop-up is blocked (window.open returns null)", async () => {
+  it("shows a destructive toast and does not write/print when the pop-up is blocked (window.open returns null)", async () => {
+    // A fake window we deliberately do NOT return from window.open: it lets us
+    // prove the blocked branch never touches a window's document or print().
+    const fake = makeFakeWindow();
+    const writeSpy = vi.spyOn(fake.win.document, "write");
     vi.spyOn(window, "open").mockReturnValue(null);
 
     const { getByTestId } = await renderWithResult();
-    fireEvent.click(getByTestId("button-print-privacy-report"));
+    // Clicking must not throw even though there is no window to write into.
+    expect(() => fireEvent.click(getByTestId("button-print-privacy-report"))).not.toThrow();
 
     expect(toastSpy).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -245,6 +254,13 @@ describe("PrivacyAuditReportPanel — Print / PDF", () => {
         description: expect.stringContaining("pop-ups"),
       }),
     );
+
+    // The early return means nothing is ever written or printed. Give the print
+    // setTimeout (250ms) ample time to confirm it was never scheduled.
+    await new Promise((r) => setTimeout(r, 350));
+    expect(writeSpy).not.toHaveBeenCalled();
+    expect(fake.win.print).not.toHaveBeenCalled();
+    expect(fake.win.focus).not.toHaveBeenCalled();
   });
 
   it("wires the in-window Copy button to write the report via the Clipboard API", async () => {
