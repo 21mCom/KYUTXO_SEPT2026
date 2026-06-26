@@ -32,6 +32,9 @@ import {
 const ADDR_A = "34xp4vRoCGJym3xR7yCVPFHoCNxv4Twseo";
 const ADDR_B = "1NDyJtNTjmwk5xPNhjgAMu4HDHigtobu1s";
 const ADDR_C = "bc1ql42rmpvvq488tkqxvg8wmaa7j3jsrkxgnm8cy6";
+// A valid bech32 (segwit) address containing a `0`, which base58 excludes. The
+// `0` previously truncated the captured citation at "bc1qw5".
+const ADDR_BECH32 = "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4";
 
 // Real, known-valid mainnet Bitcoin addresses drawn from the bundled list so
 // they pass validateAddress() inside prepareEntitySnapshot.
@@ -193,6 +196,26 @@ describe("findMismatchedCitations", () => {
     const note = `See /address/${ADDR_B} and /address/${ADDR_C}`;
     expect(findMismatchedCitations(note, ADDR_A)).toEqual([ADDR_B, ADDR_C]);
   });
+
+  it("captures a full bech32 citation without truncating at its first 0", () => {
+    // The cited bech32 address contains a 0; a base58-only regex would have
+    // stopped at "bc1qw5". The full address must come through.
+    expect(
+      findMismatchedCitations(
+        `https://www.walletexplorer.com/address/${ADDR_BECH32}`,
+        ADDR_A,
+      ),
+    ).toEqual([ADDR_BECH32]);
+  });
+
+  it("does not warn when a bech32 citation matches the entry's own address", () => {
+    expect(
+      findMismatchedCitations(
+        `https://www.walletexplorer.com/address/${ADDR_BECH32}`,
+        ADDR_BECH32,
+      ),
+    ).toEqual([]);
+  });
 });
 
 describe("validateEntitySnapshot citation warnings", () => {
@@ -210,6 +233,19 @@ describe("validateEntitySnapshot citation warnings", () => {
     expect(result.warnings[0].index).toBe(0);
     expect(result.warnings[0].message).toContain(ADDR_A);
     expect(result.warnings[0].message).toContain(ADDR_B);
+  });
+
+  it("shows the full bech32 cited address in the warning message", () => {
+    const result = validateEntitySnapshot([
+      entry({
+        address: ADDR_A,
+        sourceNote: `https://www.walletexplorer.com/address/${ADDR_BECH32}`,
+      }),
+    ]);
+    expect(result.valid).toBe(true);
+    expect(result.warnings).toHaveLength(1);
+    // The complete bech32 address (with its 0) is present, not just "bc1qw5".
+    expect(result.warnings[0].message).toContain(ADDR_BECH32);
   });
 
   it("does not warn when the citation matches the entry's address", () => {

@@ -8,6 +8,7 @@ import {
   type EntityCategory,
   type EntityEntry,
 } from "./privacy-entity-list";
+import { findMismatchedCitations } from "./data/entity-list-store";
 
 const VALID_CATEGORIES: ReadonlySet<EntityCategory> = new Set<EntityCategory>([
   "exchange",
@@ -75,20 +76,16 @@ describe("privacy-entity-list dataset integrity", () => {
     // WalletExplorer-style citations embed the cited address in the URL path,
     // e.g. https://www.walletexplorer.com/address/<addr>. A row duplicated by
     // copy/paste but never re-pointed will cite a different address than its
-    // own `address` field — catch that silent breakage here.
-    const citationRe = /address\/([a-zA-HJ-NP-Za-km-z1-9]+)/gi;
+    // own `address` field — catch that silent breakage here. Share the exact
+    // extraction helper used by the import-time warning so both stay in lockstep
+    // (and both capture bech32 citations in full, not truncated at the first 0).
     const mismatched: string[] = [];
     for (const entry of ENTITY_LIST) {
       if (!entry.sourceNote) continue;
-      let match: RegExpExecArray | null;
-      citationRe.lastIndex = 0;
-      while ((match = citationRe.exec(entry.sourceNote)) !== null) {
-        const cited = match[1];
-        if (cited !== entry.address) {
-          mismatched.push(
-            `${entry.name} (${entry.address}) cites ${cited} in sourceNote`,
-          );
-        }
+      for (const cited of findMismatchedCitations(entry.sourceNote, entry.address)) {
+        mismatched.push(
+          `${entry.name} (${entry.address}) cites ${cited} in sourceNote`,
+        );
       }
     }
     expect(

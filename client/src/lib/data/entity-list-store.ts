@@ -103,10 +103,14 @@ export interface EntitySnapshotValidation {
 /**
  * Matches WalletExplorer-style address citations embedded in a sourceNote URL,
  * e.g. https://www.walletexplorer.com/address/<addr>. The captured group is the
- * cited Bitcoin address. Mirrors the build-time guard in
- * `privacy-entity-list.test.ts` so user imports are held to the same standard.
+ * cited Bitcoin address. The character class is the union of base58 (legacy)
+ * and bech32/bech32m (`bc1...` segwit/taproot) alphabets — i.e. any
+ * alphanumeric run with the `i` flag — so a modern bech32 citation is captured
+ * in full rather than truncated at its first `0` (which base58 excludes).
+ * Mirrors the build-time guard in `privacy-entity-list.test.ts` so user imports
+ * are held to the same standard.
  */
-const CITATION_RE = /address\/([a-zA-HJ-NP-Za-km-z1-9]+)/gi;
+const CITATION_RE = /address\/([0-9a-z]+)/gi;
 
 /**
  * Scan a sourceNote for embedded `address/<addr>` citations and return any
