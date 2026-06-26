@@ -291,6 +291,9 @@ export default function BalanceOverview() {
   const [resolvingGroups, setResolvingGroups] = useState<Set<string>>(new Set());
   // Source record ids currently running a targeted per-address resolve.
   const [resolvingRecordIds, setResolvingRecordIds] = useState<Set<number>>(new Set());
+  // Per-group resolve progress: groupKey -> { resolved, total } as reported by
+  // resolvePrevouts' onProgress callback, so the group card can show how far along it is.
+  const [resolveProgressByGroup, setResolveProgressByGroup] = useState<Map<string, { resolved: number; total: number }>>(new Map());
 
   // Re-run aggregation when the native read-engine flips to ready so the fast
   // path can take over from any Dexie fallback that ran first.
@@ -477,11 +480,25 @@ export default function BalanceOverview() {
     if (!recordIds || recordIds.length === 0) return;
     const before = unresolvedByGroup.get(name) ?? 0;
     setResolvingGroups((prev) => new Set(prev).add(name));
+    setResolveProgressByGroup((prev) => {
+      const next = new Map(prev);
+      next.set(name, { resolved: 0, total: 0 });
+      return next;
+    });
     try {
-      const result = await transactionSyncService.resolvePrevouts(undefined, {
-        recomputeOrigin: "user",
-        restrictToRecordIds: new Set(recordIds),
-      });
+      const result = await transactionSyncService.resolvePrevouts(
+        (resolved, total) => {
+          setResolveProgressByGroup((prev) => {
+            const next = new Map(prev);
+            next.set(name, { resolved, total });
+            return next;
+          });
+        },
+        {
+          recomputeOrigin: "user",
+          restrictToRecordIds: new Set(recordIds),
+        },
+      );
       // Refresh the global count so the top banner stays in sync. The per-group
       // badge/note and this group's balance refresh automatically because
       // resolvePrevouts notifies the 'records'/'transactionParticipants' scopes.
@@ -517,6 +534,12 @@ export default function BalanceOverview() {
     } finally {
       setResolvingGroups((prev) => {
         const next = new Set(prev);
+        next.delete(name);
+        return next;
+      });
+      setResolveProgressByGroup((prev) => {
+        if (!prev.has(name)) return prev;
+        const next = new Map(prev);
         next.delete(name);
         return next;
       });
@@ -948,7 +971,12 @@ export default function BalanceOverview() {
                             {resolvingGroups.has(group.name) ? (
                               <>
                                 <Loader2 className="h-3 w-3 animate-spin mr-1.5" />
-                                Resolving…
+                                {(() => {
+                                  const prog = resolveProgressByGroup.get(group.name);
+                                  return prog && prog.total > 0
+                                    ? `Resolving… ${prog.resolved.toLocaleString()}/${prog.total.toLocaleString()}`
+                                    : "Resolving…";
+                                })()}
                               </>
                             ) : (
                               "Resolve"
