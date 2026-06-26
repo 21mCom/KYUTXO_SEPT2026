@@ -313,6 +313,49 @@ describe("loadEntitySnapshotFromStorage", () => {
     expect(active.has(ADDR.notBundled2)).toBe(true);
   });
 
+  it("re-applies a merge override of a bundled address after a refresh", async () => {
+    // A merge can override an EXISTING bundled address (not just add a new one).
+    // Persist a merge snapshot whose single entry reuses a bundled address but
+    // with a different name/category, then simulate a refresh. After load, the
+    // active entry for that address must reflect the user's values (the override
+    // re-applied), and the active count must equal bundledCount — overriding an
+    // existing address is a net-zero change, not an add.
+    const customName = "My Custom Binance";
+    const customCategory: EntityEntry["category"] = "scam";
+    await putSettings(
+      {
+        id: "default",
+        entityListSnapshot: {
+          importedAt: Date.now(),
+          sourceLabel: "override.json",
+          mode: "merge",
+          entries: [entry(ADDR.binance, customCategory, customName)],
+        },
+      } as Settings,
+      { skipNotification: true },
+    );
+    resetActiveEntityList();
+    expect(getActiveEntitySource()).toBe("bundled");
+
+    const status = await loadEntitySnapshotFromStorage();
+
+    // Overriding an existing bundled address adds nothing: the count is
+    // unchanged from the bundled list.
+    expect(status.source).toBe("imported");
+    expect(getActiveEntitySource()).toBe("imported");
+    expect(status.activeCount).toBe(getBundledEntityCount());
+    expect(getActiveEntityList()).toHaveLength(getBundledEntityCount());
+
+    // The active entry for that address shows the user's values, not the
+    // bundled defaults (which are name "Binance", category "exchange").
+    const overridden = getActiveEntityList().find(
+      (e) => e.address === ADDR.binance,
+    );
+    expect(overridden).toBeDefined();
+    expect(overridden!.name).toBe(customName);
+    expect(overridden!.category).toBe(customCategory);
+  });
+
   it("replaces with exactly the persisted entries for a mode='replace' snapshot", async () => {
     await importEntitySnapshot(
       [{ address: ADDR.binance, name: "Binance", category: "exchange" }],
