@@ -61,18 +61,24 @@ import {
   restoreSeedName,
   restoreWalletSoftware,
 } from "@/lib/data/vocabulary-crud";
-import { bulkCreateRecords, clearAllRecords, getRecordsByInputStrings, type CreateRecordData } from "@/lib/data/record-crud";
+import { clearAllRecords } from "@/lib/data/record-crud";
 import { recomputeAddressStats } from "@/lib/data/address-stats";
-import { clearTransactions, clearParticipants, bulkAddTransactions, bulkAddParticipants, getTransactionsByTxids, type CreateTransactionData } from "@/lib/data/transaction-crud";
+import { clearTransactions, clearParticipants } from "@/lib/data/transaction-crud";
 import { addUtxoLineage, addCustodySegment, clearUtxoLineage, clearCustodySegments } from "@/lib/data/lineage-crud";
 import { bulkAddEvidence, clearEvidence, clearEvidenceAttachments, addEvidenceAttachment as addEvidenceAttachmentCrud } from "@/lib/data/evidence-crud";
-import { clearAttachments, addAttachment, getAllAttachments, type CreateAttachmentData } from "@/lib/data/attachments-crud";
+import { clearAttachments } from "@/lib/data/attachments-crud";
 import { clearRecordOrigins } from "@/lib/data/record-origins-crud";
 import { clearCustomFields, addCustomField as addCustomFieldCrud, getCustomFieldBySlug } from "@/lib/data/custom-fields-crud";
-import { clearAddressSyncState, bulkAddAddressSyncState, getAllAddressSyncState, type CreateAddressSyncStateData } from "@/lib/data/address-sync-crud";
+import { clearAddressSyncState } from "@/lib/data/address-sync-crud";
 import { clearPriceData, addPriceData } from "@/lib/data/price-data-crud";
 import { clearNodeSettings, getNodeSettings } from "@/lib/data/node-settings-crud";
 import { restoreNodeSettingsRows } from "@/lib/backup/inline-tables";
+import {
+  restoreLegacyRecords,
+  restoreLegacyAttachments,
+  restoreLegacyTransactions,
+  restoreLegacyAddressSyncState,
+} from "@/lib/backup/legacy-restore";
 import { clearDerivationTemplates, addDerivationTemplate, getAllDerivationTemplates, type CreateDerivationTemplateData } from "@/lib/data/derivation-templates-crud";
 import { updateSettings } from "@/lib/data/settings-crud";
 import {
@@ -1610,77 +1616,14 @@ export default function SettingsPage() {
       // state) must rewrite its recordId through this map, or it would link to
       // the wrong record — or to none at all.
       const recordIdMap = new Map<number, number>();
-      const remapRecordId = (oldId: number | undefined | null): number | undefined =>
-        oldId === undefined || oldId === null ? undefined : recordIdMap.get(oldId);
 
-      // Restore records
+      // Restore records (de-dup by inputString in merge mode; backup id -> live
+      // id recorded in recordIdMap for dependent rows). Shared with tests via
+      // the legacy-restore helpers.
+      const recordResult = await restoreLegacyRecords(records, restoreMode, recordIdMap);
+      recordsAdded = recordResult.recordsAdded;
+      recordsSkipped = recordResult.recordsSkipped;
       if (records && records.length > 0) {
-        const existingByInputString = new Map<string, number>();
-        if (restoreMode === "merge") {
-          const backupInputStrings: string[] = [];
-          for (const rec of records) {
-            if (rec.inputString) backupInputStrings.push(rec.inputString);
-          }
-          const MERGE_BATCH = 500;
-          for (let i = 0; i < backupInputStrings.length; i += MERGE_BATCH) {
-            const batch = backupInputStrings.slice(i, i + MERGE_BATCH);
-            const found = await getRecordsByInputStrings(batch);
-            for (const r of found) {
-              if (typeof r.id === "number") existingByInputString.set(r.inputString, r.id);
-            }
-          }
-        }
-        
-        const recordsToCreate: CreateRecordData[] = [];
-        const oldIdsForCreate: Array<number | undefined> = [];
-        for (let i = 0; i < records.length; i++) {
-          const record = records[i];
-          const { id, ...recordData } = record;
-          
-          if (restoreMode === "merge" && existingByInputString.has(recordData.inputString)) {
-            // Record already present: link dependent rows to the existing one.
-            if (typeof id === "number") {
-              recordIdMap.set(id, existingByInputString.get(recordData.inputString)!);
-            }
-            recordsSkipped++;
-            continue;
-          }
-
-          recordsToCreate.push({
-            type: recordData.type || "address",
-            inputString: recordData.inputString || "",
-            label: recordData.label || "Restored Record",
-            notes: recordData.notes,
-            amount: recordData.amount,
-            date: recordData.date,
-            tags: recordData.tags || [],
-            categories: recordData.categories || [],
-            chainType: recordData.chainType,
-            seedName: recordData.seedName,
-            walletSoftware: recordData.walletSoftware,
-            privateKeyStatus: recordData.privateKeyStatus,
-            owner: recordData.owner,
-            walletName: recordData.walletName,
-            source: recordData.source,
-            customFields: recordData.customFields,
-            addressImportance: recordData.addressImportance,
-            syncDepth: recordData.syncDepth,
-            xpub: recordData.xpub,
-            derivationPath: recordData.derivationPath,
-            createdAt: recordData.createdAt || Date.now(),
-            updatedAt: recordData.updatedAt || Date.now(),
-          } as CreateRecordData);
-          oldIdsForCreate.push(typeof id === "number" ? id : undefined);
-        }
-
-        if (recordsToCreate.length > 0) {
-          const newRecordIds = await bulkCreateRecords(recordsToCreate, { skipNotification: true, skipVocabularySync: true });
-          for (let j = 0; j < newRecordIds.length; j++) {
-            const oldId = oldIdsForCreate[j];
-            if (typeof oldId === "number") recordIdMap.set(oldId, newRecordIds[j]);
-          }
-          recordsAdded = recordsToCreate.length;
-        }
         setRestoreProgress(70);
       }
 
@@ -1751,54 +1694,14 @@ export default function SettingsPage() {
       setRestoreProgress(80);
       setRestoreMessage("Restoring attachments...");
 
-      let attachmentsAdded = 0;
-
-      // Restore attachments (metadata only - files would need separate handling)
-      if (attachments && attachments.length > 0) {
-        // Build set of existing attachments for merge mode (recordId + filename combo)
-        let existingAttachmentKeys = new Set<string>();
-        if (restoreMode === "merge") {
-          const existingAttachments = await getAllAttachments();
-          for (const att of existingAttachments) {
-            // Use objectStoragePath (sha256-derived, unique per stored file) as
-            // the identity key. The old recordId:filename key collapsed every
-            // attachment on a record that shared a filename, so a record with
-            // more than 2 such attachments lost all but the first on restore.
-            const key = att.objectStoragePath || `${att.recordId}:${att.filename}`;
-            existingAttachmentKeys.add(key);
-          }
-        }
-        
-        for (const attachment of attachments) {
-          const { id, ...attData } = attachment;
-          // Attachments require a record. Rewrite the backup recordId to the
-          // live id; if the owning record wasn't restored, skip the orphan
-          // rather than create a dangling link.
-          const mappedRecordId = remapRecordId(attData.recordId);
-          if (mappedRecordId === undefined) {
-            continue;
-          }
-          const attKey = attData.objectStoragePath || `${mappedRecordId}:${attData.filename}`;
-          
-          // Skip duplicates in merge mode
-          if (restoreMode === "merge" && existingAttachmentKeys.has(attKey)) {
-            continue;
-          }
-          
-          const newAttachment: CreateAttachmentData = {
-            recordId: mappedRecordId,
-            filename: attData.filename || "unknown",
-            mimeType: attData.mimeType || "application/octet-stream",
-            size: attData.size || 0,
-            objectStoragePath: attData.objectStoragePath || "",
-            createdAt: attData.createdAt || Date.now(),
-          };
-          
-          await addAttachment(newAttachment, { skipNotification: true });
-          existingAttachmentKeys.add(attKey);
-          attachmentsAdded++;
-        }
-      }
+      // Restore attachment metadata (de-dup by objectStoragePath in merge mode;
+      // recordId remapped through recordIdMap, orphans dropped). Shared with
+      // tests via the legacy-restore helpers.
+      const attachmentsAdded = await restoreLegacyAttachments(
+        attachments,
+        restoreMode,
+        recordIdMap,
+      );
 
       // Restore attachment files from ZIP
       setRestoreProgress(85);
@@ -2118,72 +2021,27 @@ export default function SettingsPage() {
       // Restore blockchain transaction data (v2.2.0+, not encrypted): confirmed
       // transactions, their input/output participants, and per-address sync
       // state. Without this a restored vault would have to re-sync everything
-      // from scratch. Each row's own primary key is stripped (autoincrement);
-      // participant recordId links are rewritten through the recordIdMap (or
-      // left undefined when the owning record is absent), matching the
-      // attachment restore behaviour.
-      let transactionsAdded = 0;
-      let participantsAdded = 0;
-      let addressSyncAdded = 0;
+      // from scratch. Transactions de-dup by txid; participants are only added
+      // for transactions actually inserted and their recordId is rewritten
+      // through the recordIdMap (or left undefined when the owning record is
+      // absent). Shared with tests via the legacy-restore helpers.
+      const txResult = await restoreLegacyTransactions(
+        blockchainTransactions,
+        transactionParticipants,
+        restoreMode,
+        recordIdMap,
+      );
+      const transactionsAdded = txResult.transactionsAdded;
+      const participantsAdded = txResult.participantsAdded;
 
-      const restoredTxids = new Set<string>();
-      if (blockchainTransactions && blockchainTransactions.length > 0) {
-        const existingTxids = new Set<string>();
-        if (restoreMode === "merge") {
-          const incomingTxids = blockchainTransactions
-            .map((t: any) => t.txid)
-            .filter((t: any) => typeof t === "string");
-          const TX_MERGE_BATCH = 500;
-          for (let i = 0; i < incomingTxids.length; i += TX_MERGE_BATCH) {
-            const found = await getTransactionsByTxids(incomingTxids.slice(i, i + TX_MERGE_BATCH));
-            for (const tx of found) existingTxids.add(tx.txid);
-          }
-        }
-
-        const txToAdd: CreateTransactionData[] = [];
-        for (const tx of blockchainTransactions) {
-          if (!tx.txid || existingTxids.has(tx.txid) || restoredTxids.has(tx.txid)) continue;
-          const { id, ...txData } = tx;
-          txToAdd.push(txData as CreateTransactionData);
-          restoredTxids.add(tx.txid);
-        }
-        await bulkAddTransactions(txToAdd, { skipNotification: true });
-        transactionsAdded = txToAdd.length;
-      }
-
-      // Participants only for transactions we actually inserted, so merge mode
-      // never duplicates participants for transactions that already existed.
-      if (transactionParticipants && transactionParticipants.length > 0 && restoredTxids.size > 0) {
-        const participantsToAdd = transactionParticipants
-          .filter((p: any) => p.txid && restoredTxids.has(p.txid))
-          .map((p: any) => {
-            const { id, ...pData } = p;
-            return { ...pData, recordId: remapRecordId(pData.recordId) };
-          });
-        await bulkAddParticipants(participantsToAdd, { skipNotification: true });
-        participantsAdded = participantsToAdd.length;
-      }
-
-      // Address sync state: the `address` index is unique, so duplicates would
-      // throw. Skip addresses that already exist (merge) and dedupe within the
-      // incoming set (both modes).
-      if (addressSyncState && addressSyncState.length > 0) {
-        const existingAddresses = new Set<string>();
-        if (restoreMode === "merge") {
-          const existing = await getAllAddressSyncState();
-          for (const s of existing) existingAddresses.add(s.address);
-        }
-        const seenAddresses = new Set<string>();
-        const syncToAdd: CreateAddressSyncStateData[] = [];
-        for (const s of addressSyncState) {
-          if (!s.address || existingAddresses.has(s.address) || seenAddresses.has(s.address)) continue;
-          const { id, ...sData } = s;
-          syncToAdd.push({ ...sData, recordId: remapRecordId(sData.recordId) } as CreateAddressSyncStateData);
-          seenAddresses.add(s.address);
-        }
-        await bulkAddAddressSyncState(syncToAdd, { skipNotification: true });
-        addressSyncAdded = syncToAdd.length;
-      }
+      // Address sync state: unique `address` index, de-duped against existing
+      // (merge) and the incoming set; recordId remapped. Shared with tests via
+      // the legacy-restore helpers.
+      const addressSyncAdded = await restoreLegacyAddressSyncState(
+        addressSyncState,
+        restoreMode,
+        recordIdMap,
+      );
 
       console.log(`[Restore] transactions: ${transactionsAdded}, participants: ${participantsAdded}, synced addresses: ${addressSyncAdded}`);
 
