@@ -293,3 +293,88 @@ describe("PeelChainView list mode address navigation", () => {
     });
   });
 });
+
+// The list view renders each hop's transaction id via TxidLink. Clicking that
+// link should resolve the txid to its transaction record and open the
+// RecordDetailPanel, or fall through to /records?search=<txid> navigation when
+// no record exists. (The graph view's tx-node navigation is covered separately
+// in PrivacyAudit.peelGraph.test.tsx.) TxidLink exposes a stable testid keyed
+// on the first 8 chars of the txid (`link-txid-{slice}`).
+describe("PeelChainView list mode transaction navigation", () => {
+  const TX_LABEL = "Hop One Transaction Record";
+
+  function renderViewWithHistory() {
+    const { hook, history } = memoryLocation({
+      path: "/privacy-audit",
+      record: true,
+    });
+    const utils = render(
+      <Router hook={hook}>
+        <TooltipProvider>
+          <RecordPreviewProvider>
+            <PeelChainView
+              txids={[COINJOIN_TXID, PLAIN_TXID]}
+              changeAddresses={[CHANGE_ADDR]}
+              coinjoinTxids={new Set<string>([COINJOIN_TXID])}
+            />
+          </RecordPreviewProvider>
+        </TooltipProvider>
+      </Router>,
+    );
+    return { ...utils, history: history! };
+  }
+
+  it("opens the RecordDetailPanel for a list hop txid that has a record", async () => {
+    // Seed a transaction-type record for the first hop's txid.
+    await createRecord(
+      {
+        type: "transaction",
+        inputString: COINJOIN_TXID,
+        label: TX_LABEL,
+        source: "manual",
+        tags: [],
+        categories: [],
+      },
+      { skipVocabularySync: true },
+    );
+
+    const { getByTestId, findByText } = renderViewWithHistory();
+    await waitForToggle(getByTestId);
+
+    fireEvent.click(getByTestId("button-peel-view-list"));
+    await waitFor(() => {
+      expect(getByTestId("card-peel-step-0")).toBeTruthy();
+    });
+
+    // Click the txid link inside the first hop card.
+    const card0 = getByTestId("card-peel-step-0");
+    fireEvent.click(
+      within(card0).getByTestId(`link-txid-${COINJOIN_TXID.slice(0, 8)}`),
+    );
+
+    // RecordDetailPanel surfaces the matched record's label as its title.
+    expect(await findByText(TX_LABEL)).toBeTruthy();
+  });
+
+  it("navigates to /records?search=<txid> when the hop txid has no record", async () => {
+    // No record seeded for any hop txid, so the click should fall through to
+    // navigation instead of opening the panel.
+    const { getByTestId, history } = renderViewWithHistory();
+    await waitForToggle(getByTestId);
+
+    fireEvent.click(getByTestId("button-peel-view-list"));
+    await waitFor(() => {
+      expect(getByTestId("card-peel-step-0")).toBeTruthy();
+    });
+
+    const card0 = getByTestId("card-peel-step-0");
+    fireEvent.click(
+      within(card0).getByTestId(`link-txid-${COINJOIN_TXID.slice(0, 8)}`),
+    );
+
+    const expectedPath = `/records?search=${encodeURIComponent(COINJOIN_TXID)}`;
+    await waitFor(() => {
+      expect(history).toContain(expectedPath);
+    });
+  });
+});
