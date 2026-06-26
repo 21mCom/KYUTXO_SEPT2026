@@ -109,7 +109,7 @@ import {
   type SearchFadeOption,
 } from "@/config/debounce";
 import { useActivityBus } from "@/lib/activity-bus";
-import { detectAndBackfill, detectOrphanedTxRecords, runTxidBackfill, type BackfillResult } from "@/lib/txid-backfill";
+import { detectAndBackfill, detectOrphanedTxRecords, runTxidBackfill, resolveAllBlankInputAddresses, type BackfillResult } from "@/lib/txid-backfill";
 import { createProviderFromSettings } from "@/lib/blockchain-api";
 
 const DELETE_CONFIRMATION_PHRASE = "DELETE ALL DATA";
@@ -265,6 +265,12 @@ export default function SettingsPage() {
   const [backfillResult, setBackfillResult] = useState<BackfillResult | null>(null);
   const backfillAbortRef = useRef<AbortController | null>(null);
   const rebuildSectionRef = useRef<HTMLDivElement | null>(null);
+
+  // Resolve blank input addresses (whole-database one-off pass) state
+  const [isResolvingInputs, setIsResolvingInputs] = useState(false);
+  const [resolveInputsProgress, setResolveInputsProgress] = useState(0);
+  const [resolveInputsMessage, setResolveInputsMessage] = useState("");
+  const resolveInputsAbortRef = useRef<AbortController | null>(null);
 
   const handleToggleBuiltInField = async (field: keyof typeof fieldVisibility) => {
     try {
@@ -988,6 +994,83 @@ export default function SettingsPage() {
   const handleCancelBackfill = () => {
     backfillAbortRef.current?.abort();
     setBackfillMessage("Cancelling...");
+  };
+
+  // One-off pass: resolve blank input addresses across the entire database, not
+  // just txids rebuilt in the current run. Covers transactions rebuilt by older
+  // backfills before automatic prevout resolution existed.
+  const handleResolveInputs = async () => {
+    const controller = new AbortController();
+    resolveInputsAbortRef.current = controller;
+    setIsResolvingInputs(true);
+    setResolveInputsProgress(2);
+    setResolveInputsMessage("Scanning for inputs missing addresses...");
+
+    try {
+      const result = await resolveAllBlankInputAddresses({
+        signal: controller.signal,
+        onProgress: (p) => {
+          if (p.phase === "scanning") {
+            setResolveInputsProgress(5);
+            setResolveInputsMessage(
+              `Scanning for inputs missing addresses... (${p.unresolvedFound.toLocaleString()} found)`,
+            );
+          } else if (p.phase === "resolving") {
+            const pct = p.totalToFetch > 0
+              ? Math.round(10 + (p.fetched / p.totalToFetch) * 88)
+              : 50;
+            setResolveInputsProgress(pct);
+            setResolveInputsMessage(
+              p.totalToFetch > 0
+                ? `Resolving addresses... fetched ${p.fetched.toLocaleString()} of ${p.totalToFetch.toLocaleString()} prior transactions`
+                : "Resolving addresses from local data...",
+            );
+          } else if (p.phase === "complete") {
+            setResolveInputsProgress(100);
+            setResolveInputsMessage("Done.");
+          }
+        },
+      });
+
+      if (result.deferred) {
+        toast({
+          title: "Resolution Deferred",
+          description: result.deferReason ?? "No connectivity. Try again when a blockchain node is reachable.",
+        });
+      } else if (result.errors.length > 0) {
+        toast({
+          variant: "destructive",
+          title: "Resolution Finished With Errors",
+          description: `Resolved ${result.resolved.toLocaleString()} input address${result.resolved !== 1 ? "es" : ""}. ${result.errors[0]}`,
+        });
+      } else if (result.unresolvedFound === 0) {
+        toast({
+          title: "No Missing Input Addresses",
+          description: "All transaction inputs already have resolved addresses.",
+        });
+      } else {
+        toast({
+          title: "Input Addresses Resolved",
+          description: `Resolved ${result.resolved.toLocaleString()} of ${result.unresolvedFound.toLocaleString()} blank input address${result.unresolvedFound !== 1 ? "es" : ""}.`,
+        });
+      }
+    } catch (err) {
+      toast({
+        variant: "destructive",
+        title: "Resolution Failed",
+        description: err instanceof Error ? err.message : "An error occurred.",
+      });
+    } finally {
+      resolveInputsAbortRef.current = null;
+      setIsResolvingInputs(false);
+      setResolveInputsProgress(0);
+      setResolveInputsMessage("");
+    }
+  };
+
+  const handleCancelResolveInputs = () => {
+    resolveInputsAbortRef.current?.abort();
+    setResolveInputsMessage("Cancelling...");
   };
 
   // When the user opens Settings via the startup "missing transaction data"
@@ -3072,6 +3155,35 @@ export default function SettingsPage() {
 
             <Separator />
 
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <div>
+                <Label className="text-base">Resolve Input Addresses</Label>
+                <p className="text-sm text-muted-foreground">
+                  Fill in missing input addresses across all transactions, including ones rebuilt by earlier imports. Requires a connected blockchain provider.
+                </p>
+              </div>
+              <Button
+                variant="outline"
+                onClick={handleResolveInputs}
+                disabled={isResolvingInputs}
+                data-testid="button-resolve-inputs"
+              >
+                {isResolvingInputs ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Resolving...
+                  </>
+                ) : (
+                  <>
+                    <RefreshCw className="h-4 w-4 mr-2" />
+                    Resolve
+                  </>
+                )}
+              </Button>
+            </div>
+
+            <Separator />
+
             <div className="flex items-center justify-between">
               <div>
                 <Label className="text-base">Restore from Backup</Label>
@@ -3550,6 +3662,32 @@ export default function SettingsPage() {
               variant="outline"
               onClick={handleCancelBackfill}
               data-testid="button-cancel-backfill"
+            >
+              Cancel
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isResolvingInputs}>
+        <DialogContent className="sm:max-w-md" data-testid="dialog-resolve-inputs">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <RefreshCw className="h-5 w-5" />
+              Resolving Input Addresses
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <Progress value={resolveInputsProgress} data-testid="progress-resolve-inputs" />
+            <p className="text-sm text-muted-foreground" data-testid="text-resolve-inputs-message">
+              {resolveInputsMessage}
+            </p>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={handleCancelResolveInputs}
+              data-testid="button-cancel-resolve-inputs"
             >
               Cancel
             </Button>

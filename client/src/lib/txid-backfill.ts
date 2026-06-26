@@ -411,7 +411,7 @@ async function resolveBackfillPrevouts(
   txids: string[],
   options: { signal?: AbortSignal; concurrency?: number } = {},
 ): Promise<number> {
-  const { signal, concurrency = 4 } = options;
+  const { signal } = options;
 
   // Collect the input participants for the rebuilt txids that still need an
   // address but carry a prevout reference we can chase.
@@ -435,6 +435,34 @@ async function resolveBackfillPrevouts(
     }
     await new Promise(resolve => setTimeout(resolve, 0));
   }
+
+  return resolveUnresolvedInputs(provider, unresolvedInputs, options);
+}
+
+/**
+ * Shared core of prevout resolution. Given a list of input participants that
+ * lack an address but carry a prevout reference (`prevTxid`/`prevVout`), this
+ * resolves each referenced previous output — first from participant rows we
+ * already hold locally, then by fetching the previous transaction from the
+ * provider — and fills in the address, amount, scriptType, and recordId.
+ *
+ * Both the scoped backfill path (resolveBackfillPrevouts) and the whole-
+ * database pass (resolveAllBlankPrevouts) feed their unresolved inputs through
+ * here so the cache/fetch/link/write logic lives in one place. All writes go
+ * through transaction-crud.ts.
+ *
+ * Returns the number of inputs whose address was filled in.
+ */
+async function resolveUnresolvedInputs(
+  provider: BlockchainProvider,
+  unresolvedInputs: TransactionParticipant[],
+  options: {
+    signal?: AbortSignal;
+    concurrency?: number;
+    onFetchProgress?: (fetched: number, total: number) => void;
+  } = {},
+): Promise<number> {
+  const { signal, concurrency = 4, onFetchProgress } = options;
 
   if (unresolvedInputs.length === 0) return 0;
 
@@ -475,6 +503,8 @@ async function resolveBackfillPrevouts(
 
   if (needFetch.size > 0) {
     const fetchArr = Array.from(needFetch);
+    let fetched = 0;
+    onFetchProgress?.(0, fetchArr.length);
     for (let i = 0; i < fetchArr.length; i += concurrency) {
       if (signal?.aborted) break;
       const chunk = fetchArr.slice(i, i + concurrency);
@@ -495,6 +525,8 @@ async function resolveBackfillPrevouts(
           }
         }
       }
+      fetched += chunk.length;
+      onFetchProgress?.(Math.min(fetched, fetchArr.length), fetchArr.length);
       await new Promise(resolve => setTimeout(resolve, 0));
     }
   }
@@ -544,6 +576,171 @@ async function resolveBackfillPrevouts(
   }
 
   return updated.length;
+}
+
+// ─── Whole-database blank-input resolution ───────────────────────────────────
+
+export interface ResolveAllInputsProgress {
+  phase: 'scanning' | 'resolving' | 'complete';
+  /** Unresolved blank inputs discovered so far (or total once scanning ends). */
+  unresolvedFound: number;
+  /** Previous transactions fetched from the provider so far. */
+  fetched: number;
+  /** Total previous transactions that need fetching (known after scanning). */
+  totalToFetch: number;
+}
+
+export type ResolveAllInputsProgressCallback = (progress: ResolveAllInputsProgress) => void;
+
+export interface ResolveAllInputsResult {
+  /** Number of blank inputs found that carried a chaseable prevout reference. */
+  unresolvedFound: number;
+  /** Number of inputs whose address was actually filled in. */
+  resolved: number;
+  deferred: boolean;
+  deferReason?: string;
+  errors: string[];
+}
+
+export interface ResolveAllInputsOptions {
+  signal?: AbortSignal;
+  onProgress?: ResolveAllInputsProgressCallback;
+  concurrency?: number;
+}
+
+/**
+ * Scans the entire database for input participants that still have a blank
+ * address but carry a prevout reference, and resolves them through the shared
+ * resolution core. Unlike resolveBackfillPrevouts (scoped to a freshly-rebuilt
+ * set of txids), this covers transactions rebuilt by earlier backfills that
+ * pre-date the automatic resolution step.
+ *
+ * Returns the number of inputs whose address was filled in.
+ */
+async function resolveAllBlankPrevouts(
+  provider: BlockchainProvider,
+  options: ResolveAllInputsOptions = {},
+): Promise<{ unresolvedFound: number; resolved: number }> {
+  const { signal, onProgress, concurrency = 4 } = options;
+
+  // Scan every input participant by id keyset, collecting only those that are
+  // blank but reference a previous output we can chase. Keyset paging keeps the
+  // UI responsive on databases with millions of participant rows.
+  const SCAN_BATCH = 1000;
+  let lastId = 0;
+  const unresolvedInputs: TransactionParticipant[] = [];
+
+  for (;;) {
+    if (signal?.aborted) break;
+    const batch = await db.transactionParticipants
+      .where('id')
+      .above(lastId)
+      .limit(SCAN_BATCH)
+      .toArray();
+
+    if (batch.length === 0) break;
+
+    for (const p of batch) {
+      if (p.id !== undefined) lastId = p.id;
+      if (
+        p.role === 'input' &&
+        (!p.address || p.address === '') &&
+        p.prevTxid !== undefined &&
+        p.prevVout !== undefined
+      ) {
+        unresolvedInputs.push(p);
+      }
+    }
+
+    onProgress?.({
+      phase: 'scanning',
+      unresolvedFound: unresolvedInputs.length,
+      fetched: 0,
+      totalToFetch: 0,
+    });
+
+    if (batch.length < SCAN_BATCH) break;
+    await new Promise(resolve => setTimeout(resolve, 0));
+  }
+
+  if (signal?.aborted || unresolvedInputs.length === 0) {
+    return { unresolvedFound: unresolvedInputs.length, resolved: 0 };
+  }
+
+  const resolved = await resolveUnresolvedInputs(provider, unresolvedInputs, {
+    signal,
+    concurrency,
+    onFetchProgress: (fetched, total) => {
+      onProgress?.({
+        phase: 'resolving',
+        unresolvedFound: unresolvedInputs.length,
+        fetched,
+        totalToFetch: total,
+      });
+    },
+  });
+
+  return { unresolvedFound: unresolvedInputs.length, resolved };
+}
+
+/**
+ * High-level convenience for the Settings "Resolve Input Addresses" action:
+ * builds a provider from stored node settings, then resolves all remaining
+ * blank input addresses across the whole database. If no node is configured or
+ * connectivity fails, returns a deferred result instead of throwing.
+ */
+export async function resolveAllBlankInputAddresses(
+  options: ResolveAllInputsOptions = {},
+): Promise<ResolveAllInputsResult> {
+  const { signal, onProgress } = options;
+
+  // Build a provider from stored node settings (mirrors detectAndBackfill()).
+  let provider: BlockchainProvider;
+  try {
+    const nodeSettings = await getNodeSettings('default');
+    if (!nodeSettings) {
+      return {
+        unresolvedFound: 0,
+        resolved: 0,
+        deferred: true,
+        deferReason: 'No node settings configured. Configure a blockchain provider in Settings to resolve input addresses.',
+        errors: [],
+      };
+    }
+    provider = createProviderFromSettings(nodeSettings);
+
+    // Quick connectivity probe
+    await provider.getBlockHeight();
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Connection failed';
+    return {
+      unresolvedFound: 0,
+      resolved: 0,
+      deferred: true,
+      deferReason: `Could not connect to blockchain provider: ${msg}. Try again when a blockchain node is reachable.`,
+      errors: [],
+    };
+  }
+
+  if (signal?.aborted) {
+    return { unresolvedFound: 0, resolved: 0, deferred: false, errors: [] };
+  }
+
+  const errors: string[] = [];
+  try {
+    const { unresolvedFound, resolved } = await resolveAllBlankPrevouts(provider, options);
+    onProgress?.({
+      phase: 'complete',
+      unresolvedFound,
+      fetched: 0,
+      totalToFetch: 0,
+    });
+    return { unresolvedFound, resolved, deferred: false, errors };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    errors.push(msg);
+    return { unresolvedFound: 0, resolved: 0, deferred: false, errors };
+  }
 }
 
 /**
