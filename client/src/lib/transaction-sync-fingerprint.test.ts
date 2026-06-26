@@ -358,6 +358,37 @@ describe("syncAddress fingerprint backfill (re-sync)", () => {
     expect(participants).toHaveLength(0);
   });
 
+  it("skips a tx above minConfirmedHeight without backfilling or importing", async () => {
+    const trackedId = (await testDb.records.add(
+      makeAddressRecord(ADDR_TRACKED),
+    )) as number;
+
+    // The tx's block height sits ABOVE the minConfirmedHeight we pass in, so it
+    // is not yet deeply confirmed. The confirmation guard must skip it before any
+    // fingerprint write, import, or participant row is created.
+    const stats = await runSyncAddress([makeFingerprintApiTx(TXID_A)], trackedId, {
+      minConfirmedHeight: TX_BLOCK_HEIGHT - 1,
+      currentHeight: TX_BLOCK_HEIGHT,
+    });
+
+    expect(stats.skippedUnconfirmed).toBe(1);
+    expect(stats.imported).toBe(0);
+    expect(stats.updated).toBe(0);
+
+    // Nothing was written: no transaction row and no participant rows.
+    const rows = await testDb.blockchainTransactions
+      .where("txid")
+      .equals(TXID_A)
+      .toArray();
+    expect(rows).toHaveLength(0);
+
+    const participants = await testDb.transactionParticipants
+      .where("txid")
+      .equals(TXID_A)
+      .toArray();
+    expect(participants).toHaveLength(0);
+  });
+
   it("leaves a row already carrying fingerprint data untouched on re-sync", async () => {
     const trackedId = (await testDb.records.add(
       makeAddressRecord(ADDR_TRACKED),
