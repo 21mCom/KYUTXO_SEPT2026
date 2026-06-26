@@ -68,6 +68,31 @@ describe("useSettings", () => {
     const { result } = renderHook(() => useSettings());
     expect(result.current.customFieldColumns).toEqual({});
   });
+
+  it("returns first-time defaults for Privacy Audit view prefs when settings is unset", () => {
+    mockQueryReturn = undefined;
+    const { result } = renderHook(() => useSettings());
+    expect(result.current.peelChainViewMode).toBe("graph");
+    expect(result.current.showScoreBreakdown).toBe(false);
+  });
+
+  it("returns first-time defaults for Privacy Audit view prefs when fields are absent", () => {
+    mockQueryReturn = { id: "default" };
+    const { result } = renderHook(() => useSettings());
+    expect(result.current.peelChainViewMode).toBe("graph");
+    expect(result.current.showScoreBreakdown).toBe(false);
+  });
+
+  it("returns persisted Privacy Audit view prefs when settings has them", () => {
+    mockQueryReturn = {
+      id: "default",
+      peelChainViewMode: "list",
+      showScoreBreakdown: true,
+    };
+    const { result } = renderHook(() => useSettings());
+    expect(result.current.peelChainViewMode).toBe("list");
+    expect(result.current.showScoreBreakdown).toBe(true);
+  });
 });
 
 describe("useCustomFields", () => {
