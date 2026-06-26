@@ -1102,6 +1102,132 @@ describe("runTxidBackfill (prevout resolution error isolation)", () => {
   });
 });
 
+// ---- runTxidBackfill (per-fetch prevout resilience) ------------------------
+//
+// resolveBackfillPrevouts fetches the previous transactions in parallel batches
+// with Promise.allSettled, which swallows individual fetch rejections so the
+// remaining prevouts still get resolved. This per-fetch resilience is distinct
+// from the whole-pass try/catch above: here the resolution pass itself does NOT
+// throw — one provider fetch rejects while the others succeed, and the inputs
+// backed by the successful fetches must still be filled in. A regression that
+// let one failed provider fetch silently drop the other inputs is what this
+// guards against.
+
+describe("runTxidBackfill (per-fetch prevout resilience)", () => {
+  it("one rejected prevout fetch does not block resolving the others", async () => {
+    // A single orphan with two blank-address inputs pointing at two different
+    // previous transactions. The provider serves the orphan and PREV_2 but
+    // rejects the fetch for PREV_1.
+    const orphan = makeApiTx(TXID_A, {
+      inputs: [
+        { address: "", amount: 0, prevTxid: PREV_1, prevVout: 0 },
+        { address: "", amount: 0, prevTxid: PREV_2, prevVout: 0 },
+      ],
+      outputs: [{ address: ADDR_OUT, amount: 80000, n: 0 }],
+    });
+    const prev2 = makeApiTx(PREV_2, {
+      outputs: [{ address: ADDR_PREV2, amount: 70000, n: 0 }],
+    });
+
+    const phases: string[] = [];
+    const provider = makeProvider({
+      txs: new Map<string, ApiTransaction | null>([
+        [TXID_A, orphan],
+        // PREV_1 has no entry and is in errorTxids → its fetch rejects.
+        [PREV_2, prev2],
+      ]),
+      errorTxids: new Set([PREV_1]),
+    });
+
+    const result = await runTxidBackfill(provider, [TXID_A], {
+      onProgress: (p) => phases.push(p.phase),
+    });
+
+    // The orphan was rebuilt and the run completed without aborting.
+    expect(result.rebuilt).toBe(1);
+    expect(result.failed).toBe(0);
+    expect(phases[phases.length - 1]).toBe("complete");
+
+    const inputs = await testDb.transactionParticipants
+      .where("txid")
+      .equals(TXID_A)
+      .and((p) => p.role === "input")
+      .toArray();
+    expect(inputs).toHaveLength(2);
+    const byPrev = new Map(inputs.map((p) => [p.prevTxid, p]));
+
+    // PREV_2's fetch succeeded → its input is fully resolved.
+    const resolved = byPrev.get(PREV_2)!;
+    expect(resolved.address).toBe(ADDR_PREV2);
+    expect(resolved.amount).toBe(70000);
+    expect(resolved.scriptType).toBeDefined();
+
+    // PREV_1's fetch rejected → its input is exactly as first written, not
+    // dropped or partially updated.
+    const failed = byPrev.get(PREV_1)!;
+    expect(failed.address ?? "").toBe("");
+    expect(failed.amount).toBe(0);
+
+    // Only the successfully fetched prevout is counted as resolved.
+    expect(result.prevoutsResolved).toBe(1);
+  });
+
+  it("with many inputs, a single failed prevout fetch only drops its own input", async () => {
+    // Three blank-address inputs across three previous transactions; the
+    // middle one's fetch rejects. The other two must still resolve.
+    const PREV_3 = "3".repeat(64);
+    const ADDR_PREV3 = "bc1qprevthreeaddrxxxxxxxxxxxxxxxxxxxxxx4";
+
+    const orphan = makeApiTx(TXID_A, {
+      inputs: [
+        { address: "", amount: 0, prevTxid: PREV_1, prevVout: 0 },
+        { address: "", amount: 0, prevTxid: PREV_2, prevVout: 0 },
+        { address: "", amount: 0, prevTxid: PREV_3, prevVout: 0 },
+      ],
+      outputs: [{ address: ADDR_OUT, amount: 60000, n: 0 }],
+    });
+    const prev1 = makeApiTx(PREV_1, {
+      outputs: [{ address: ADDR_PREV1, amount: 30000, n: 0 }],
+    });
+    const prev3 = makeApiTx(PREV_3, {
+      outputs: [{ address: ADDR_PREV3, amount: 50000, n: 0 }],
+    });
+
+    const provider = makeProvider({
+      txs: new Map<string, ApiTransaction | null>([
+        [TXID_A, orphan],
+        [PREV_1, prev1],
+        // PREV_2 rejects.
+        [PREV_3, prev3],
+      ]),
+      errorTxids: new Set([PREV_2]),
+    });
+
+    const result = await runTxidBackfill(provider, [TXID_A]);
+
+    expect(result.rebuilt).toBe(1);
+    expect(result.failed).toBe(0);
+
+    const inputs = await testDb.transactionParticipants
+      .where("txid")
+      .equals(TXID_A)
+      .and((p) => p.role === "input")
+      .toArray();
+    expect(inputs).toHaveLength(3);
+    const byPrev = new Map(inputs.map((p) => [p.prevTxid, p]));
+
+    // The two successful fetches resolved their inputs.
+    expect(byPrev.get(PREV_1)!.address).toBe(ADDR_PREV1);
+    expect(byPrev.get(PREV_3)!.address).toBe(ADDR_PREV3);
+
+    // The rejected fetch left only its own input blank.
+    expect(byPrev.get(PREV_2)!.address ?? "").toBe("");
+
+    // prevoutsResolved counts only the two that succeeded.
+    expect(result.prevoutsResolved).toBe(2);
+  });
+});
+
 // ---- detectAndBackfill (offline / deferral) --------------------------------
 
 describe("detectAndBackfill", () => {
