@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useMemo } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { Link } from "wouter";
-import { Moon, Eye, Database, Plus, Trash2, Pencil, AlertTriangle, Upload, RefreshCw, Loader2, Paperclip, KeyRound, Shield, Download, Stethoscope, ChevronRight, ChevronDown, Wrench, Search, ArrowRight } from "lucide-react";
+import { Moon, Eye, Database, Plus, Trash2, Pencil, AlertTriangle, Upload, RefreshCw, Loader2, Paperclip, KeyRound, Shield, Download, Stethoscope, ChevronRight, ChevronDown, Wrench, Search, ArrowRight, Copy } from "lucide-react";
 import { isElectron, getElectronAPI } from "@/lib/electron";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
@@ -423,6 +423,47 @@ function EntityOverrideList({
  */
 const ENTITY_ERROR_VIRTUALIZE_THRESHOLD = 100;
 
+/**
+ * Copy plain text to the clipboard, falling back to a hidden `<textarea>` +
+ * `execCommand("copy")` when the async Clipboard API is unavailable or rejects
+ * (e.g. an older Electron renderer or a denied permission). Returns whether the
+ * copy succeeded so the caller can surface the right toast. Mirrors the fallback
+ * used by the printable report copy button.
+ */
+async function copyTextToClipboard(text: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    // Fall through to the execCommand fallback below.
+  }
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.setAttribute("readonly", "");
+    ta.style.position = "fixed";
+    ta.style.left = "-9999px";
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    const ok = document.execCommand("copy");
+    document.body.removeChild(ta);
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Render a single error's entry label for copy output: "Entry N" for a
+ * 1-based entry position, or "File" for a file-level (index -1) problem.
+ */
+function entityErrorLabel(err: EntitySnapshotError): string {
+  return err.index >= 0 ? `Entry ${err.index + 1}` : "File";
+}
+
 /** A single per-entry validation error row (index label + reason). */
 function EntityErrorRow({
   err,
@@ -433,7 +474,7 @@ function EntityErrorRow({
   index: number;
   style?: React.CSSProperties;
 }) {
-  const label = err.index >= 0 ? `Entry ${err.index + 1}` : "File";
+  const label = entityErrorLabel(err);
   return (
     <div
       className="border-b border-destructive/20 px-3 py-1.5 flex items-start gap-2"
@@ -510,7 +551,27 @@ function EntityErrorGroupItem({
   defaultOpen: boolean;
 }) {
   const [open, setOpen] = useState(defaultOpen);
+  const { toast } = useToast();
   const count = group.errors.length;
+
+  // Copy actions operate on the full `group.errors` array, not just the rows
+  // currently rendered, so they cover large virtual-scrolled groups in full.
+  const handleCopy = async (what: "numbers" | "details") => {
+    const text =
+      what === "numbers"
+        ? group.errors.map((err) => entityErrorLabel(err)).join("\n")
+        : group.errors.map((err) => `${entityErrorLabel(err)}: ${err.message}`).join("\n");
+    const ok = await copyTextToClipboard(text);
+    toast({
+      title: ok ? "Copied to clipboard" : "Copy failed",
+      description: ok
+        ? what === "numbers"
+          ? `${count.toLocaleString()} entry ${count === 1 ? "number" : "numbers"} copied — paste to search your source file.`
+          : `${count.toLocaleString()} ${count === 1 ? "entry" : "entries"} with reasons copied.`
+        : "Couldn't access the clipboard. Try selecting the text manually.",
+      variant: ok ? undefined : "destructive",
+    });
+  };
 
   return (
     <div
@@ -536,6 +597,28 @@ function EntityErrorGroupItem({
       </button>
       {open && (
         <div className="border-t border-destructive/40">
+          <div className="flex flex-wrap items-center gap-2 px-3 py-2 border-b border-destructive/40">
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={() => handleCopy("numbers")}
+              data-testid={`button-copy-entity-error-numbers-${group.kind}`}
+            >
+              <Copy className="h-4 w-4" />
+              Copy entry numbers
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={() => handleCopy("details")}
+              data-testid={`button-copy-entity-error-details-${group.kind}`}
+            >
+              <Copy className="h-4 w-4" />
+              Copy entries with reasons
+            </Button>
+          </div>
           {count <= ENTITY_ERROR_VIRTUALIZE_THRESHOLD ? (
             <div className="max-h-64 overflow-y-auto">
               {group.errors.map((err, i) => (

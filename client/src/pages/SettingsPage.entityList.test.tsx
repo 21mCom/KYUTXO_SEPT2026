@@ -302,6 +302,96 @@ describe("SettingsPage — Privacy Audit Entity List panel", () => {
     expect(settings?.entityListSnapshot).toBeUndefined();
   });
 
+  it("copies a group's entry numbers and reasons as plain text", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    const originalClipboard = navigator.clipboard;
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+
+    try {
+      render(
+        <ActivityBusProvider>
+          <SettingsPage />
+        </ActivityBusProvider>,
+      );
+      await screen.findByTestId("badge-entity-source");
+
+      // Three entries that all fail the same way (invalid address) so they fall
+      // into a single group, which opens by default.
+      const badSnapshot = JSON.stringify([
+        { address: "bad-0", name: "A", category: "exchange" },
+        { address: "bad-1", name: "B", category: "exchange" },
+        { address: "bad-2", name: "C", category: "exchange" },
+      ]);
+      await selectEntityFile("bad.json", badSnapshot);
+      await screen.findByTestId("container-entity-errors");
+
+      // Copy just the entry numbers (1-based positions, newline separated).
+      fireEvent.click(screen.getByTestId("button-copy-entity-error-numbers-invalid-address"));
+      await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+      expect(writeText).toHaveBeenLastCalledWith("Entry 1\nEntry 2\nEntry 3");
+
+      // Copy the entries with their reasons.
+      fireEvent.click(screen.getByTestId("button-copy-entity-error-details-invalid-address"));
+      await waitFor(() => expect(writeText).toHaveBeenCalledTimes(2));
+      const detailText = writeText.mock.calls[1][0] as string;
+      const lines = detailText.split("\n");
+      expect(lines).toHaveLength(3);
+      expect(lines[0]).toContain("Entry 1:");
+      expect(lines[0]).toContain("bad-0");
+    } finally {
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: originalClipboard,
+      });
+    }
+  });
+
+  it("copies every entry number in a large virtual-scrolled group, not just rendered rows", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    const originalClipboard = navigator.clipboard;
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+
+    try {
+      render(
+        <ActivityBusProvider>
+          <SettingsPage />
+        </ActivityBusProvider>,
+      );
+      await screen.findByTestId("badge-entity-source");
+
+      const ERROR_COUNT = 250;
+      const badEntries = Array.from({ length: ERROR_COUNT }, (_, i) => ({
+        address: `bad-${i}`,
+        name: `Bad ${i}`,
+        category: "exchange",
+      }));
+      await selectEntityFile("many-bad.json", JSON.stringify(badEntries));
+      await screen.findByTestId("container-entity-errors");
+
+      // Only a window of rows is mounted (virtualized), but copy must cover all.
+      const mountedRows = screen.getAllByTestId(/^text-entity-error-\d+$/);
+      expect(mountedRows.length).toBeLessThan(ERROR_COUNT);
+
+      fireEvent.click(screen.getByTestId("button-copy-entity-error-numbers-invalid-address"));
+      await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+      const copied = writeText.mock.calls[0][0] as string;
+      expect(copied.split("\n")).toHaveLength(ERROR_COUNT);
+      expect(copied.startsWith("Entry 1\n")).toBe(true);
+      expect(copied.endsWith(`Entry ${ERROR_COUNT}`)).toBe(true);
+    } finally {
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: originalClipboard,
+      });
+    }
+  });
+
   it("stays responsive with hundreds of errors: virtualizes the list and applies nothing", async () => {
     render(
       <ActivityBusProvider>
