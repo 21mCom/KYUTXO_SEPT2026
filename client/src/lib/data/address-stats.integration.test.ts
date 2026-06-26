@@ -200,6 +200,94 @@ describe("detectStaleCachedBalances", () => {
     expect(result.staleCount).toBe(2);
   });
 
+  it("collects details for each stale address with collectDetails:true", async () => {
+    // Two stale addresses (cache disagrees with computed) and one matching one.
+    await testDb.records.bulkAdd([
+      mkAddr({ id: 1, inputString: "addr-1", statsComputedAt: 5000, cachedBalanceSats: 0 }),
+      mkAddr({ id: 2, inputString: "addr-2", statsComputedAt: 5000, cachedBalanceSats: 50 }),
+      mkAddr({ id: 3, inputString: "addr-3", statsComputedAt: 5000, cachedBalanceSats: 1000 }),
+    ]);
+    await testDb.transactionParticipants.bulkAdd([
+      mkOutput("addr-1", "t1", 1000),
+      mkOutput("addr-2", "t2", 2000),
+      mkOutput("addr-3", "t3", 1000),
+    ]);
+    await testDb.blockchainTransactions.bulkAdd([
+      mkTx("t1", 111),
+      mkTx("t2", 222),
+      mkTx("t3", 333),
+    ]);
+
+    const result = await detectStaleCachedBalances({ collectDetails: true });
+
+    expect(result.sampled).toBe(3);
+    expect(result.staleCount).toBe(2);
+    expect(result.staleAddresses).toHaveLength(2);
+
+    const byId = new Map(result.staleAddresses.map((d) => [d.recordId, d]));
+    expect(byId.get(1)).toEqual({
+      recordId: 1,
+      address: "addr-1",
+      cachedSats: 0,
+      computedSats: 1000,
+    });
+    expect(byId.get(2)).toEqual({
+      recordId: 2,
+      address: "addr-2",
+      cachedSats: 50,
+      computedSats: 2000,
+    });
+    // The matching address (id 3) is never included in the detail list.
+    expect(byId.has(3)).toBe(false);
+  });
+
+  it("caps staleAddresses at detailLimit but keeps staleCount exact", async () => {
+    // Three stale addresses, but only collect details for the first one.
+    await testDb.records.bulkAdd([
+      mkAddr({ id: 1, inputString: "c1", statsComputedAt: 5000, cachedBalanceSats: 0 }),
+      mkAddr({ id: 2, inputString: "c2", statsComputedAt: 5000, cachedBalanceSats: 0 }),
+      mkAddr({ id: 3, inputString: "c3", statsComputedAt: 5000, cachedBalanceSats: 0 }),
+    ]);
+    await testDb.transactionParticipants.bulkAdd([
+      mkOutput("c1", "t1", 100),
+      mkOutput("c2", "t2", 200),
+      mkOutput("c3", "t3", 300),
+    ]);
+    await testDb.blockchainTransactions.bulkAdd([
+      mkTx("t1", 111),
+      mkTx("t2", 222),
+      mkTx("t3", 333),
+    ]);
+
+    const result = await detectStaleCachedBalances({
+      collectDetails: true,
+      detailLimit: 1,
+    });
+
+    // staleCount counts every mismatch; the detail list is capped at detailLimit.
+    expect(result.sampled).toBe(3);
+    expect(result.staleCount).toBe(3);
+    expect(result.staleAddresses).toHaveLength(1);
+  });
+
+  it("collects no details when collectDetails is omitted", async () => {
+    await testDb.records.add(
+      mkAddr({
+        id: 1,
+        inputString: "addr-nodetails",
+        statsComputedAt: 5000,
+        cachedBalanceSats: 1,
+      }),
+    );
+    await testDb.transactionParticipants.add(mkOutput("addr-nodetails", "tx-nd", 2000));
+    await testDb.blockchainTransactions.add(mkTx("tx-nd", 111));
+
+    const result = await detectStaleCachedBalances({});
+
+    expect(result.staleCount).toBe(1);
+    expect(result.staleAddresses).toEqual([]);
+  });
+
   it("returns cancelled: true when the signal is already aborted", async () => {
     await testDb.records.add(
       mkAddr({

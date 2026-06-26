@@ -1,0 +1,94 @@
+// @vitest-environment jsdom
+//
+// Component test for the StaleAddressList rendered by the Database Doctor's
+// Balance Integrity check. It verifies the virtualized list renders a row per
+// stale address and that each "Open" link targets the matching Records page
+// record (/records?id=<recordId>).
+
+import { describe, it, expect, beforeAll, afterEach } from "vitest";
+import { render, screen, cleanup } from "@testing-library/react";
+
+// DatabaseDoctor.tsx pulls in the IndexedDB-backed db and the stats module.
+// StaleAddressList is a pure presentational component, so stub those heavy
+// imports to keep this test fast and isolated.
+import { vi } from "vitest";
+vi.mock("@/lib/database", () => ({ db: {} }));
+vi.mock("@/lib/data/address-stats", () => ({
+  detectStaleCachedBalances: vi.fn(),
+  recomputeAddressStats: vi.fn(),
+}));
+vi.mock("@/lib/legacy-decrypt", () => ({ isEncryptedPlaceholder: () => false }));
+
+// @tanstack/react-virtual needs ResizeObserver and real element dimensions to
+// emit virtual rows. jsdom provides neither, so shim them; without this the
+// virtualized list would render zero rows.
+const FAKE_RECT: DOMRect = {
+  width: 600,
+  height: 260,
+  top: 0,
+  left: 0,
+  right: 600,
+  bottom: 260,
+  x: 0,
+  y: 0,
+  toJSON() {},
+};
+
+beforeAll(() => {
+  Object.defineProperty(window.HTMLElement.prototype, "offsetWidth", {
+    configurable: true,
+    get() {
+      return 600;
+    },
+  });
+  Object.defineProperty(window.HTMLElement.prototype, "offsetHeight", {
+    configurable: true,
+    get() {
+      return 260;
+    },
+  });
+  (globalThis as any).ResizeObserver = class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  };
+  window.HTMLElement.prototype.getBoundingClientRect = function () {
+    return FAKE_RECT;
+  };
+});
+
+afterEach(() => cleanup());
+
+const { StaleAddressList } = await import("./DatabaseDoctor");
+
+const rows = [
+  { recordId: 11, address: "addr-eleven", cachedSats: 0, computedSats: 1000 },
+  { recordId: 22, address: "addr-twenty-two", cachedSats: 50, computedSats: 2000 },
+];
+
+describe("StaleAddressList", () => {
+  it("renders a row per stale address with cached and computed balances", () => {
+    render(<StaleAddressList rows={rows} />);
+
+    expect(screen.getByTestId("row-stale-address-11")).toBeTruthy();
+    expect(screen.getByTestId("row-stale-address-22")).toBeTruthy();
+
+    expect(screen.getByTestId("text-stale-address-11").textContent).toBe("addr-eleven");
+    expect(screen.getByTestId("text-stale-cached-11").textContent).toBe("0 sats");
+    expect(screen.getByTestId("text-stale-computed-11").textContent).toBe("1,000 sats");
+    expect(screen.getByTestId("text-stale-cached-22").textContent).toBe("50 sats");
+    expect(screen.getByTestId("text-stale-computed-22").textContent).toBe("2,000 sats");
+  });
+
+  it("links each Open button to that record on the Records page", () => {
+    render(<StaleAddressList rows={rows} />);
+
+    // The Button uses asChild, so the wouter Link's anchor receives the testid.
+    const link11 = screen.getByTestId("link-stale-address-11");
+    const link22 = screen.getByTestId("link-stale-address-22");
+
+    expect(link11.tagName).toBe("A");
+    expect(link11.getAttribute("href")).toBe("/records?id=11");
+    expect(link22.getAttribute("href")).toBe("/records?id=22");
+  });
+});

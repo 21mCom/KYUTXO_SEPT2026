@@ -710,7 +710,7 @@ function formatSats(sats: number): string {
 // responsive even when thousands of addresses are stale.
 const STALE_ROW_HEIGHT = 56;
 
-function StaleAddressList({ rows }: { rows: StaleAddressDetail[] }) {
+export function StaleAddressList({ rows }: { rows: StaleAddressDetail[] }) {
   const parentRef = useRef<HTMLDivElement>(null);
 
   const virtualizer = useVirtualizer({
