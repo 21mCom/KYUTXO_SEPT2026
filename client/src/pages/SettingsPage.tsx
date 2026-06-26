@@ -240,9 +240,10 @@ function ChangedEntityList({
           return (
             <div
               key={virtualRow.key}
+              ref={virtualizer.measureElement}
+              data-index={virtualRow.index}
               className="absolute left-0 top-0 w-full border-b px-3 py-1.5"
               style={{
-                height: `${virtualRow.size}px`,
                 transform: `translateY(${virtualRow.start}px)`,
               }}
               data-testid={`row-entity-diff-changed-${virtualRow.index}`}
@@ -278,6 +279,21 @@ function ChangedEntityList({
                   </Badge>
                 )}
               </div>
+              {change.sourceNoteChanged && (
+                <p
+                  className="mt-1 text-xs text-muted-foreground min-w-0"
+                  data-testid={`text-entity-diff-sourcenote-changed-${virtualRow.index}`}
+                >
+                  <span className="mr-1 font-medium">Source:</span>
+                  <span className="line-through break-words">
+                    {change.current.sourceNote ?? "(none)"}
+                  </span>
+                  <span className="mx-1">→</span>
+                  <span className="text-foreground break-words">
+                    {change.incoming.sourceNote ?? "(none)"}
+                  </span>
+                </p>
+              )}
             </div>
           );
         })}

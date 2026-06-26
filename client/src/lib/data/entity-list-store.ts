@@ -181,9 +181,10 @@ export interface EntityCategoryDiff {
 }
 
 /**
- * An address present in BOTH lists whose name and/or category differs between
- * the current and incoming snapshot. Surfaced so users can review meaningful
- * re-categorizations / renames, not just pure adds and removes.
+ * An address present in BOTH lists whose name, category, and/or source note
+ * differs between the current and incoming snapshot. Surfaced so users can
+ * review meaningful re-categorizations / renames / re-attributions, not just
+ * pure adds and removes.
  */
 export interface EntityChange {
   address: string;
@@ -195,6 +196,8 @@ export interface EntityChange {
   nameChanged: boolean;
   /** True when the category differs between current and incoming. */
   categoryChanged: boolean;
+  /** True when the source note differs (including added/removed) between current and incoming. */
+  sourceNoteChanged: boolean;
 }
 
 /**
@@ -301,18 +304,20 @@ export function buildEntitySnapshotPreview(
     removed = removedEntries.length;
 
     // Addresses present in both lists: split into truly unchanged vs. changed
-    // (same address but a different name and/or category).
+    // (same address but a different name, category, and/or source note).
     for (const inc of overlapping) {
       const cur = currentByAddr.get(inc.address)!;
       const nameChanged = cur.name !== inc.name;
       const categoryChanged = cur.category !== inc.category;
-      if (nameChanged || categoryChanged) {
+      const sourceNoteChanged = (cur.sourceNote ?? '') !== (inc.sourceNote ?? '');
+      if (nameChanged || categoryChanged || sourceNoteChanged) {
         changedEntries.push({
           address: inc.address,
           current: cur,
           incoming: inc,
           nameChanged,
           categoryChanged,
+          sourceNoteChanged,
         });
       } else {
         unchanged += 1;

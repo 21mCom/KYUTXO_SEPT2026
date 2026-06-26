@@ -623,10 +623,61 @@ describe("buildEntitySnapshotPreview", () => {
         incoming: incomingBinance,
         nameChanged: true,
         categoryChanged: true,
+        sourceNoteChanged: false,
       },
     ]);
     // Only gambling1 is genuinely new, and it comes from the incoming list.
     expect(preview.addedEntries).toEqual([incomingGambling]);
+  });
+
+  it("treats a differing sourceNote (changed, added, or removed) as a change", () => {
+    const currentChanged = addrEntry(ADDR.binance, "exchange", "Binance");
+    currentChanged.sourceNote = "WalletExplorer";
+    const currentAdded = addrEntry(ADDR.binanceCold, "exchange", "Binance Cold");
+    const currentRemoved = addrEntry(ADDR.gambling1, "gambling", "Casino");
+    currentRemoved.sourceNote = "GraphSense";
+    setActiveEntityList([currentChanged, currentAdded, currentRemoved]);
+
+    const incomingChanged = addrEntry(ADDR.binance, "exchange", "Binance");
+    incomingChanged.sourceNote = "OFAC SDN";
+    const incomingAdded = addrEntry(ADDR.binanceCold, "exchange", "Binance Cold");
+    incomingAdded.sourceNote = "WalletExplorer";
+    const incomingRemoved = addrEntry(ADDR.gambling1, "gambling", "Casino");
+
+    const preview = buildEntitySnapshotPreview([
+      incomingChanged,
+      incomingAdded,
+      incomingRemoved,
+    ]);
+
+    expect(preview.changed).toBe(3);
+    expect(preview.unchanged).toBe(0);
+
+    const byAddr = new Map(preview.changedEntries.map((c) => [c.address, c]));
+    expect(byAddr.get(ADDR.binance)).toMatchObject({
+      nameChanged: false,
+      categoryChanged: false,
+      sourceNoteChanged: true,
+    });
+    expect(byAddr.get(ADDR.binanceCold)).toMatchObject({
+      sourceNoteChanged: true,
+    });
+    expect(byAddr.get(ADDR.gambling1)).toMatchObject({
+      sourceNoteChanged: true,
+    });
+  });
+
+  it("does not flag an unchanged sourceNote as a change", () => {
+    const current = addrEntry(ADDR.binance, "exchange", "Binance");
+    current.sourceNote = "WalletExplorer";
+    setActiveEntityList([current]);
+
+    const incoming = addrEntry(ADDR.binance, "exchange", "Binance");
+    incoming.sourceNote = "WalletExplorer";
+    const preview = buildEntitySnapshotPreview([incoming]);
+
+    expect(preview.changed).toBe(0);
+    expect(preview.unchanged).toBe(1);
   });
 
   it("reports empty added/removed entry arrays for an identical list", () => {
