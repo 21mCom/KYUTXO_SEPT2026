@@ -20,6 +20,16 @@ const SCAM_ENTITY = {
   sourceNote:
     'OFAC / US Treasury — https://www.treasury.gov/resource-center/sanctions/OFAC-Enforcement/Pages/20200302.aspx',
 };
+// A second, distinct exchange entity (different address & name) that shares the
+// ENTITY_EXCHANGE finding with Binance — used to prove every distinct entity in
+// a category is cited, not just the first.
+const COINBASE_ENTITY = {
+  address: '3D2oetdNuZUqQHPJmcMDDHYoqkyNVsFk9r',
+  name: 'Coinbase (custody)',
+  categoryLabel: 'Exchange',
+  sourceNote:
+    'Widely published / tagged on public blockchain explorers (e.g., blockchain.com, OXT, BitInfoCharts)',
+};
 
 const USER_ADDRESS = 'bc1quseraddressxxxxxxxxxxxxxxxxxxxxxxxxqqqq';
 
@@ -28,11 +38,19 @@ const USER_ADDRESS = 'bc1quseraddressxxxxxxxxxxxxxxxxxxxxxxxxqqqq';
 const { ALL_PARTICIPANTS, TX_RECORDS } = vi.hoisted(() => {
   const userAddress = 'bc1quseraddressxxxxxxxxxxxxxxxxxxxxxxxxqqqq';
   const exchangeAddr = '34xp4vRoCGJym3xR7yCVPFHoCNxv4Twseo';
+  const coinbaseAddr = '3D2oetdNuZUqQHPJmcMDDHYoqkyNVsFk9r';
   const scamAddr = '134r8iHv69xdT6p5qVKTsHrcUEuBVZAYak';
   return {
     ALL_PARTICIPANTS: [
+      // The exchange address (Binance) appears as an output in TWO separate
+      // transactions, so its citation must still be emitted exactly once.
       { txid: 'tx_exchange', role: 'input', address: userAddress, amount: 100000, vout: 0 },
       { txid: 'tx_exchange', role: 'output', address: exchangeAddr, amount: 90000, vout: 0 },
+      { txid: 'tx_exchange2', role: 'input', address: userAddress, amount: 70000, vout: 0 },
+      { txid: 'tx_exchange2', role: 'output', address: exchangeAddr, amount: 60000, vout: 0 },
+      // A second, distinct exchange entity (Coinbase) in the same category.
+      { txid: 'tx_coinbase', role: 'input', address: userAddress, amount: 30000, vout: 0 },
+      { txid: 'tx_coinbase', role: 'output', address: coinbaseAddr, amount: 25000, vout: 0 },
       { txid: 'tx_scam', role: 'input', address: userAddress, amount: 50000, vout: 0 },
       { txid: 'tx_scam', role: 'output', address: scamAddr, amount: 45000, vout: 0 },
     ] as TransactionParticipant[],
@@ -40,6 +58,8 @@ const { ALL_PARTICIPANTS, TX_RECORDS } = vi.hoisted(() => {
       // nVersion=1 with captured fingerprint data reliably yields a non-entity
       // FINGERPRINT_NVERSION finding, so we can assert citations are omitted on it.
       { txid: 'tx_exchange', blockHeight: 800000, blockTime: 1_700_000_000, fee: 1000, feeRate: 5, syncedAt: 1_700_000_100, rawFingerprintCaptured: true, nVersion: 1 },
+      { txid: 'tx_exchange2', blockHeight: 800002, blockTime: 1_700_000_400, fee: 1000, feeRate: 5, syncedAt: 1_700_000_500, rawFingerprintCaptured: true, nVersion: 2 },
+      { txid: 'tx_coinbase', blockHeight: 800003, blockTime: 1_700_000_600, fee: 1000, feeRate: 5, syncedAt: 1_700_000_700, rawFingerprintCaptured: true, nVersion: 2 },
       { txid: 'tx_scam', blockHeight: 800001, blockTime: 1_700_000_200, fee: 1000, feeRate: 5, syncedAt: 1_700_000_300, rawFingerprintCaptured: true, nVersion: 2 },
     ] as BlockchainTransaction[],
   };
@@ -172,5 +192,51 @@ describe('privacy report export — entity citations', () => {
     for (const f of nonEntityFindings) {
       expect('citations' in f).toBe(false);
     }
+  });
+
+  it('cites a repeated entity address only once across multiple transactions', async () => {
+    const result = await runPrivacyAudit([USER_ADDRESS]);
+    const exported = [...result.findings, ...result.warnings].map(mapFinding);
+
+    const exchangeFinding = exported.find((f) => f.type === 'ENTITY_EXCHANGE');
+    expect(exchangeFinding).toBeDefined();
+
+    // Binance appears as an output in both tx_exchange and tx_exchange2 (and so
+    // is flagged across two transactions), but its citation must be deduped by
+    // address — listed exactly once, never repeated per transaction.
+    const binanceCitations = exchangeFinding!.citations!.filter(
+      (c) => c.address === EXCHANGE_ENTITY.address,
+    );
+    expect(binanceCitations).toHaveLength(1);
+
+    // No citation address may appear more than once in the entire finding.
+    const allAddrs = exchangeFinding!.citations!.map((c) => c.address);
+    expect(allAddrs.length).toBe(new Set(allAddrs).size);
+  });
+
+  it('cites every distinct entity in the same category', async () => {
+    const result = await runPrivacyAudit([USER_ADDRESS]);
+    const exported = [...result.findings, ...result.warnings].map(mapFinding);
+
+    const exchangeFinding = exported.find((f) => f.type === 'ENTITY_EXCHANGE');
+    expect(exchangeFinding).toBeDefined();
+
+    // Both distinct exchange entities (Binance and Coinbase) must each be cited,
+    // proving dedup-by-address does not collapse separate counterparties.
+    const citedAddrs = new Set(
+      exchangeFinding!.citations!.map((c) => c.address),
+    );
+    expect(citedAddrs.has(EXCHANGE_ENTITY.address)).toBe(true);
+    expect(citedAddrs.has(COINBASE_ENTITY.address)).toBe(true);
+
+    const coinbaseCitation = exchangeFinding!.citations!.find(
+      (c) => c.address === COINBASE_ENTITY.address,
+    );
+    expect(coinbaseCitation).toEqual({
+      name: COINBASE_ENTITY.name,
+      address: COINBASE_ENTITY.address,
+      categoryLabel: COINBASE_ENTITY.categoryLabel,
+      sourceNote: COINBASE_ENTITY.sourceNote,
+    });
   });
 });
