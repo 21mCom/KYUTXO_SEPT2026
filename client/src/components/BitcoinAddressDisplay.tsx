@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Copy, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useToast } from "@/hooks/use-toast";
 
 interface BitcoinAddressDisplayProps {
   address: string;
@@ -11,11 +12,27 @@ interface BitcoinAddressDisplayProps {
 
 export function BitcoinAddressDisplay({ address, truncate = true, className = "" }: BitcoinAddressDisplayProps) {
   const [copied, setCopied] = useState(false);
+  const { toast } = useToast();
 
   const handleCopy = () => {
-    navigator.clipboard.writeText(address);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    const notifyFailure = () => {
+      toast({
+        title: "Copy failed",
+        description: "Could not copy the address to your clipboard.",
+        variant: "destructive",
+      });
+    };
+    try {
+      navigator.clipboard.writeText(address)
+        .then(() => {
+          setCopied(true);
+          setTimeout(() => setCopied(false), 2000);
+          toast({ description: "Address copied" });
+        })
+        .catch(notifyFailure);
+    } catch {
+      notifyFailure();
+    }
   };
 
   const displayAddress = truncate && address.length > 20

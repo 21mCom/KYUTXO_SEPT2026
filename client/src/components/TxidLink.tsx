@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { getRecordsByInputString } from "@/lib/data/record-crud";
 import { useRecordPreview } from "@/contexts/RecordPreviewContext";
+import { useToast } from "@/hooks/use-toast";
 
 interface TxidLinkProps {
   txid: string;
@@ -31,6 +32,7 @@ export function TxidLink({
   onNavigate
 }: TxidLinkProps) {
   const { openRecordPreview, openRecordPreviewByAddress } = useRecordPreview();
+  const { toast } = useToast();
   const [copied, setCopied] = useState(false);
   const [resolvedRecordId, setResolvedRecordId] = useState<number | null>(recordId ?? null);
   const [resolvedHasMetadata, setResolvedHasMetadata] = useState<boolean>(hasMetadata ?? false);
@@ -38,10 +40,25 @@ export function TxidLink({
 
   const handleCopy = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
-    navigator.clipboard.writeText(txid);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  }, [txid]);
+    const notifyFailure = () => {
+      toast({
+        title: "Copy failed",
+        description: "Could not copy the transaction ID to your clipboard.",
+        variant: "destructive",
+      });
+    };
+    try {
+      navigator.clipboard.writeText(txid)
+        .then(() => {
+          setCopied(true);
+          setTimeout(() => setCopied(false), 2000);
+          toast({ description: "Transaction ID copied" });
+        })
+        .catch(notifyFailure);
+    } catch {
+      notifyFailure();
+    }
+  }, [txid, toast]);
 
   const resolveRecord = useCallback(async (): Promise<{ recordId: number | null; hasMetadata: boolean }> => {
     if (resolvedRecordId !== null) {

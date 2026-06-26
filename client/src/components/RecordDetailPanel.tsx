@@ -16,6 +16,7 @@ import { AttachmentList } from "./AttachmentList";
 import { AttachmentUpload } from "./AttachmentUpload";
 import { MetadataSourcesPanel } from "./MetadataSourcesPanel";
 import { renderSourceNote } from "@/lib/renderSourceNote";
+import { useToast } from "@/hooks/use-toast";
 import {
   Collapsible,
   CollapsibleContent,
@@ -286,6 +287,7 @@ function TransactionHistorySection({ address }: { address: string }) {
   const [loaded, setLoaded] = useState(false);
   const [expandedTxid, setExpandedTxid] = useState<string | null>(null);
   const [copiedTxid, setCopiedTxid] = useState<string | null>(null);
+  const { toast } = useToast();
 
   useEffect(() => {
     setEntries([]);
@@ -383,8 +385,14 @@ function TransactionHistorySection({ address }: { address: string }) {
       await navigator.clipboard.writeText(txid);
       setCopiedTxid(txid);
       setTimeout(() => setCopiedTxid(null), 2000);
+      toast({ description: "Transaction ID copied" });
     } catch {
       console.error("Failed to copy txid");
+      toast({
+        title: "Copy failed",
+        description: "Could not copy the transaction ID to your clipboard.",
+        variant: "destructive",
+      });
     }
   };
 

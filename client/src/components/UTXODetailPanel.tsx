@@ -35,6 +35,7 @@ import {
 import { Record as DbRecord, TransactionParticipant, BlockchainTransaction, PriceData } from "@/lib/database";
 import { getParticipantsByTxid, getTransactionByTxid, getRecordsByType } from "@/lib/dataFacade";
 import { cn } from "@/lib/utils";
+import { useToast } from "@/hooks/use-toast";
 
 interface UTXO {
   id: string;
@@ -87,6 +88,7 @@ function truncateAddress(addr: string): string {
 }
 
 export function UTXODetailPanel({ open, onClose, utxo, latestPrice }: UTXODetailPanelProps) {
+  const { toast } = useToast();
   const [copiedValue, setCopiedValue] = useState<string | null>(null);
   const [fundingInputs, setFundingInputs] = useState<FundingInput[]>([]);
   const [fundingTx, setFundingTx] = useState<BlockchainTransaction | null>(null);
@@ -137,13 +139,18 @@ export function UTXODetailPanel({ open, onClose, utxo, latestPrice }: UTXODetail
     loadFundingTransaction();
   }, [open, utxo]);
 
-  const copyToClipboard = async (value: string) => {
+  const copyToClipboard = async (value: string, label: string = "Value") => {
     try {
       await navigator.clipboard.writeText(value);
       setCopiedValue(value);
       setTimeout(() => setCopiedValue(null), 2000);
+      toast({ description: `${label} copied` });
     } catch {
-      // Ignore clipboard errors
+      toast({
+        title: "Copy failed",
+        description: `Could not copy the ${label.toLowerCase()} to your clipboard.`,
+        variant: "destructive",
+      });
     }
   };
 
@@ -198,7 +205,7 @@ export function UTXODetailPanel({ open, onClose, utxo, latestPrice }: UTXODetail
                       variant="ghost"
                       size="icon"
                       className="h-6 w-6 flex-shrink-0"
-                      onClick={() => copyToClipboard(utxo.txid)}
+                      onClick={() => copyToClipboard(utxo.txid, "Transaction ID")}
                       data-testid="button-copy-txid"
                     >
                       {copiedValue === utxo.txid ? (
@@ -313,7 +320,7 @@ export function UTXODetailPanel({ open, onClose, utxo, latestPrice }: UTXODetail
                       variant="ghost"
                       size="icon"
                       className="h-6 w-6 flex-shrink-0"
-                      onClick={() => copyToClipboard(utxo.address)}
+                      onClick={() => copyToClipboard(utxo.address, "Address")}
                       data-testid="button-copy-address"
                     >
                       {copiedValue === utxo.address ? (

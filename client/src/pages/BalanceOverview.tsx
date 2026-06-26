@@ -836,10 +836,25 @@ export default function BalanceOverview() {
 
   const [copiedAddress, setCopiedAddress] = useState<string | null>(null);
   const copyAddress = useCallback((address: string) => {
-    navigator.clipboard.writeText(address);
-    setCopiedAddress(address);
-    setTimeout(() => setCopiedAddress(null), 2000);
-  }, []);
+    const notifyFailure = () => {
+      toast({
+        title: "Copy failed",
+        description: "Could not copy the address to your clipboard.",
+        variant: "destructive",
+      });
+    };
+    try {
+      navigator.clipboard.writeText(address)
+        .then(() => {
+          setCopiedAddress(address);
+          setTimeout(() => setCopiedAddress(null), 2000);
+          toast({ description: "Address copied" });
+        })
+        .catch(notifyFailure);
+    } catch {
+      notifyFailure();
+    }
+  }, [toast]);
 
   const totalBalance = totals.sats;
   const totalAddresses = totals.addresses;

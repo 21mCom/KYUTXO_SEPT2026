@@ -1,5 +1,6 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
+import { useToast } from "@/hooks/use-toast";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { PAGE_DEBOUNCE } from "@/config/debounce";
 import { useAsyncMemo, yieldToUI, checkAbort } from "@/hooks/use-async-memo";
@@ -176,6 +177,7 @@ type SortColumn = "amount" | "date" | "address" | "gain";
 type SortDirection = "asc" | "desc";
 
 export default function UTXOs() {
+  const { toast } = useToast();
   const initialSettings = useMemo(() => loadSettings(), []);
   
   const [search, setSearch] = useState("");
@@ -1093,8 +1095,13 @@ export default function UTXOs() {
       await navigator.clipboard.writeText(txid);
       setCopiedTxid(txid);
       setTimeout(() => setCopiedTxid(null), 2000);
+      toast({ description: "Transaction ID copied" });
     } catch {
-      // Ignore clipboard errors
+      toast({
+        title: "Copy failed",
+        description: "Could not copy the transaction ID to your clipboard.",
+        variant: "destructive",
+      });
     }
   };
 

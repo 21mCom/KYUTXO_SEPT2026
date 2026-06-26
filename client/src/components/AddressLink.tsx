@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { getRecordsByInputString } from "@/lib/data/record-crud";
 import { useRecordPreview } from "@/contexts/RecordPreviewContext";
+import { useToast } from "@/hooks/use-toast";
 
 interface AddressLinkProps {
   address: string;
@@ -29,6 +30,7 @@ export function AddressLink({
   onNavigate
 }: AddressLinkProps) {
   const { openRecordPreview, openRecordPreviewByAddress } = useRecordPreview();
+  const { toast } = useToast();
   const [copied, setCopied] = useState(false);
   const [resolvedRecordId, setResolvedRecordId] = useState<number | null>(recordId ?? null);
   const [resolvedHasMetadata, setResolvedHasMetadata] = useState<boolean>(hasMetadata ?? false);
@@ -36,10 +38,25 @@ export function AddressLink({
 
   const handleCopy = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
-    navigator.clipboard.writeText(address);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  }, [address]);
+    const notifyFailure = () => {
+      toast({
+        title: "Copy failed",
+        description: "Could not copy the address to your clipboard.",
+        variant: "destructive",
+      });
+    };
+    try {
+      navigator.clipboard.writeText(address)
+        .then(() => {
+          setCopied(true);
+          setTimeout(() => setCopied(false), 2000);
+          toast({ description: "Address copied" });
+        })
+        .catch(notifyFailure);
+    } catch {
+      notifyFailure();
+    }
+  }, [address, toast]);
 
   const resolveRecord = useCallback(async (): Promise<{ recordId: number | null; hasMetadata: boolean }> => {
     if (resolvedRecordId !== null) {
