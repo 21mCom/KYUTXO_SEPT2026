@@ -23,7 +23,6 @@ import {
   Network,
   ScanSearch,
   Info,
-  ExternalLink,
   List,
   GitBranch,
 } from "lucide-react";
@@ -82,14 +81,37 @@ type ScanState = "idle" | "analyzing" | "tagging" | "complete";
 const AUDIT_INPUT_BATCH = 1000;
 const TAG_FETCH_BATCH = 500;
 
-// Extracts the first http(s) URL from a source citation note, if present.
-// The URL is never fetched at load time — it is only opened externally on an
-// explicit user click (offline-first).
-function extractSourceUrl(note: string | undefined): string | null {
-  if (!note) return null;
+// Renders a source citation note with the first http(s) URL turned into an
+// inline clickable link. The link is only opened externally on an explicit
+// user click (window.open) — the URL is never fetched at load time, preserving
+// offline-first behavior. Notes without a URL render as plain text.
+function renderSourceNote(note: string): React.ReactNode {
   const match = note.match(/https?:\/\/[^\s)]+/i);
-  if (!match) return null;
-  return match[0].replace(/[.,;]+$/, "");
+  if (!match || match.index === undefined) return note;
+  const raw = match[0];
+  // Keep trailing punctuation out of the link target, but render it as text.
+  const trailing = raw.match(/[.,;]+$/)?.[0] ?? "";
+  const url = trailing ? raw.slice(0, raw.length - trailing.length) : raw;
+  const before = note.slice(0, match.index);
+  const after = note.slice(match.index + raw.length);
+  return (
+    <>
+      {before}
+      <a
+        href={url}
+        onClick={(e) => {
+          e.preventDefault();
+          window.open(url, "_blank", "noopener,noreferrer");
+        }}
+        className="text-primary underline underline-offset-2 hover:opacity-80 break-all cursor-pointer"
+        title={`Open ${url}`}
+      >
+        {url}
+      </a>
+      {trailing}
+      {after}
+    </>
+  );
 }
 
 // ─── Icon mapping ─────────────────────────────────────────────────────────────
@@ -1919,26 +1941,13 @@ function FindingCard({ finding, coinjoinTxids }: { finding: PrivacyFinding; coin
                         {c.address}
                       </div>
                       {c.sourceNote && (
-                        <div className="flex items-start justify-between gap-2 mt-1">
+                        <div className="mt-1">
                           <p
                             className="text-[11px] text-muted-foreground break-words"
                             data-testid={`text-entity-source-${c.address}`}
                           >
-                            {c.sourceNote}
+                            {renderSourceNote(c.sourceNote)}
                           </p>
-                          {extractSourceUrl(c.sourceNote) && (
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              className="h-6 shrink-0 gap-1 px-2 text-[11px]"
-                              onClick={() => window.open(extractSourceUrl(c.sourceNote)!, "_blank", "noopener,noreferrer")}
-                              title={`Open ${extractSourceUrl(c.sourceNote)}`}
-                              data-testid={`button-open-source-${c.address}`}
-                            >
-                              <ExternalLink className="h-3 w-3" />
-                              Open source
-                            </Button>
-                          )}
                         </div>
                       )}
                     </div>
