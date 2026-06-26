@@ -723,6 +723,11 @@ export interface ResolveAllInputsResult {
   resolved: number;
   /** Number of address records whose cached stats were recomputed afterwards. */
   recomputed: number;
+  /**
+   * True when the pass was cancelled partway through. Even when cancelled, any
+   * inputs already committed are reflected in `resolved`/`recomputed`.
+   */
+  cancelled: boolean;
   deferred: boolean;
   deferReason?: string;
   errors: string[];
@@ -829,6 +834,7 @@ export async function resolveAllBlankInputAddresses(
         unresolvedFound: 0,
         resolved: 0,
         recomputed: 0,
+        cancelled: false,
         deferred: true,
         deferReason: 'No node settings configured. Configure a blockchain provider in Settings to resolve input addresses.',
         errors: [],
@@ -844,6 +850,7 @@ export async function resolveAllBlankInputAddresses(
       unresolvedFound: 0,
       resolved: 0,
       recomputed: 0,
+      cancelled: false,
       deferred: true,
       deferReason: `Could not connect to blockchain provider: ${msg}. Try again when a blockchain node is reachable.`,
       errors: [],
@@ -851,7 +858,7 @@ export async function resolveAllBlankInputAddresses(
   }
 
   if (signal?.aborted) {
-    return { unresolvedFound: 0, resolved: 0, recomputed: 0, deferred: false, errors: [] };
+    return { unresolvedFound: 0, resolved: 0, recomputed: 0, cancelled: true, deferred: false, errors: [] };
   }
 
   const errors: string[] = [];
@@ -865,13 +872,19 @@ export async function resolveAllBlankInputAddresses(
     // only compute that never hits the network. Errors are non-fatal — the
     // inputs are already resolved, so a failed recompute just leaves stats to
     // be refreshed by a later manual "Recompute Address Stats" run.
+    // If the pass was cancelled, resolveAllBlankPrevouts still returns the
+    // addresses for the inputs that were already committed before the abort.
+    // Recompute those so partial work isn't left with stale balances. We must
+    // NOT forward the aborted signal here, or recomputeAddressStats would bail
+    // immediately and leave the committed addresses' cached stats stale.
+    const wasCancelled = !!signal?.aborted;
     let recomputed = 0;
-    if (resolvedAddresses.length > 0 && !signal?.aborted) {
+    if (resolvedAddresses.length > 0) {
       try {
         const recomputeResult = await recomputeAddressStats({
           addresses: resolvedAddresses,
           origin: 'input-resolution',
-          signal,
+          signal: wasCancelled ? undefined : signal,
           onProgress: ({ processed, total }) => {
             onProgress?.({
               phase: 'recomputing',
@@ -896,11 +909,11 @@ export async function resolveAllBlankInputAddresses(
       fetched: 0,
       totalToFetch: 0,
     });
-    return { unresolvedFound, resolved, recomputed, deferred: false, errors };
+    return { unresolvedFound, resolved, recomputed, cancelled: wasCancelled, deferred: false, errors };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     errors.push(msg);
-    return { unresolvedFound: 0, resolved: 0, recomputed: 0, deferred: false, errors };
+    return { unresolvedFound: 0, resolved: 0, recomputed: 0, cancelled: false, deferred: false, errors };
   }
 }
 

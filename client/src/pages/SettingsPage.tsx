@@ -1441,6 +1441,15 @@ export default function SettingsPage() {
           title: "Resolution Deferred",
           description: result.deferReason ?? "No connectivity. Try again when a blockchain node is reachable.",
         });
+      } else if (result.cancelled) {
+        const recomputeNote =
+          result.recomputed > 0
+            ? ` Updated balances for ${result.recomputed.toLocaleString()} address${result.recomputed !== 1 ? "es" : ""}.`
+            : "";
+        toast({
+          title: "Resolution Cancelled",
+          description: `Cancelled after resolving ${result.resolved.toLocaleString()} input address${result.resolved !== 1 ? "es" : ""}.${recomputeNote}`,
+        });
       } else if (result.errors.length > 0) {
         toast({
           variant: "destructive",

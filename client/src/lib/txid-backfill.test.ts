@@ -1553,6 +1553,68 @@ describe("resolveAllBlankInputAddresses", () => {
     expect(result.unresolvedFound).toBe(0);
     expect(result.resolved).toBe(0);
   });
+
+  it("recomputes balances for inputs committed before a cancelled pass", async () => {
+    // More than one write-batch worth of blank inputs, all resolvable from local
+    // participant output rows (no network fetch needed) and all attributing to
+    // the same source address. We abort once the first 200-row batch has been
+    // committed, so the write loop stops with 200 inputs persisted and 50 left
+    // blank — the exact "cancelled after committing some work" case.
+    const hex = (n: number) => n.toString(16).padStart(64, "0");
+
+    const recId = await testDb.records.add(makeAddressRecord(PREV_ADDR));
+    // Mark the source address as synced so the recompute writes a balance.
+    await testDb.addressSyncState.add({ address: PREV_ADDR } as unknown as {
+      address: string;
+    });
+
+    const TOTAL = 250;
+    for (let i = 0; i < TOTAL; i++) {
+      const prevTxid = hex(i + 1);
+      await addBlankInput(hex(1000 + i), prevTxid, 0);
+      await addOutputRow(prevTxid, 0, PREV_ADDR, 1000 + i, "v0_p2wpkh");
+    }
+
+    await testDb.nodeSettings.add({ id: "default" } as unknown as NodeSettings);
+    nextProvider = makeProvider();
+
+    const controller = new AbortController();
+    let updates = 0;
+    const onUpdate = () => {
+      updates += 1;
+      // Abort the moment the first full batch (200 rows) has been written so the
+      // loop stops before committing the remaining rows.
+      if (updates === 200) controller.abort();
+      return undefined;
+    };
+    testDb.transactionParticipants.hook("updating", onUpdate);
+
+    let result;
+    try {
+      result = await resolveAllBlankInputAddresses({ signal: controller.signal });
+    } finally {
+      testDb.transactionParticipants.hook("updating").unsubscribe(onUpdate);
+    }
+
+    // The pass reports cancellation and the partial work it actually committed.
+    expect(result.cancelled).toBe(true);
+    expect(result.resolved).toBe(200);
+
+    // The committed source address had its cached stats recomputed despite the
+    // cancel — this is the regression under test (recompute used to be skipped
+    // entirely once the signal was aborted).
+    expect(result.recomputed).toBe(1);
+    const rec = await testDb.records.get(recId);
+    expect(rec?.statsComputedAt).toBeTruthy();
+
+    // Exactly the first batch of inputs was filled in; the rest stayed blank.
+    const inputs = await testDb.transactionParticipants
+      .where("role")
+      .equals("input")
+      .toArray();
+    const resolvedCount = inputs.filter((p) => p.address === PREV_ADDR).length;
+    expect(resolvedCount).toBe(200);
+  });
 });
 
 // ---- detectAndBackfill (offline / deferral) --------------------------------
