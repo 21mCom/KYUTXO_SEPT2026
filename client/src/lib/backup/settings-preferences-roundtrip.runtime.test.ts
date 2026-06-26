@@ -139,4 +139,53 @@ describe("settings preferences backup round-trip", () => {
 
     expect(await getSettings("default")).toBeUndefined();
   });
+
+  it("restores non-default numeric preferences", async () => {
+    await putSettings(
+      { ...BASE_SETTINGS, cancelConfirmThreshold: 90, privacyHistoryLimit: 100 },
+      { skipNotification: true },
+    );
+
+    // Export captures the non-default numeric preferences.
+    const sink = new MemorySink();
+    await exportBackup({
+      sink: sink as BackupSink,
+      encrypted: false,
+      batchSize: 25,
+      attachmentIO,
+    });
+    const blob = sink.blob as Blob;
+
+    // Flip the live values so restore has to re-apply the backed-up ones.
+    await updateSettings(
+      "default",
+      { cancelConfirmThreshold: 50, privacyHistoryLimit: 30 },
+      { skipNotification: true },
+    );
+
+    await restoreV3Backup({ source: blobChunks(blob), attachmentWriter });
+
+    const restored = await getSettings("default");
+    expect(restored?.cancelConfirmThreshold).toBe(90);
+    expect(restored?.privacyHistoryLimit).toBe(100);
+  });
+
+  it("leaves current numeric preferences untouched when the backup lacks them", async () => {
+    await putSettings(
+      { ...BASE_SETTINGS, cancelConfirmThreshold: 80, privacyHistoryLimit: 45 },
+      { skipNotification: true },
+    );
+
+    // Simulate an OLDER backup whose settings row predates these fields, and
+    // a malformed (NaN) value which must also be ignored.
+    const olderRow = { ...BASE_SETTINGS };
+    delete (olderRow as any).cancelConfirmThreshold;
+    delete (olderRow as any).privacyHistoryLimit;
+    (olderRow as any).privacyHistoryLimit = Number.NaN;
+    await restoreSettingsPreferences([olderRow]);
+
+    const after = await getSettings("default");
+    expect(after?.cancelConfirmThreshold).toBe(80);
+    expect(after?.privacyHistoryLimit).toBe(45);
+  });
 });

@@ -85,7 +85,11 @@ export async function restoreNodeSettingsRows(rows: any[]): Promise<void> {
  * (default) value.
  *
  * The allow-list currently carries:
- *   - `disableOrphanCheck` (boolean preference), and
+ *   - `disableOrphanCheck` (boolean preference),
+ *   - `cancelConfirmThreshold` (lineage build cancel-confirmation threshold, a
+ *     finite number),
+ *   - `privacyHistoryLimit` (Privacy Audit history retention count, a finite
+ *     number), and
  *   - `entityListSnapshot` (the user's custom Privacy Audit entity list, only
  *     when it is a well-formed, non-empty snapshot).
  */
@@ -97,6 +101,14 @@ export async function restoreSettingsPreferences(rows: any[]): Promise<void> {
   const updates: Record<string, unknown> = {};
   if (typeof source.disableOrphanCheck === "boolean") {
     updates.disableOrphanCheck = source.disableOrphanCheck;
+  }
+  // Numeric user preferences: only carry finite numbers so an older/malformed
+  // backup (missing field, NaN, etc.) leaves the current value untouched.
+  if (typeof source.cancelConfirmThreshold === "number" && Number.isFinite(source.cancelConfirmThreshold)) {
+    updates.cancelConfirmThreshold = source.cancelConfirmThreshold;
+  }
+  if (typeof source.privacyHistoryLimit === "number" && Number.isFinite(source.privacyHistoryLimit)) {
+    updates.privacyHistoryLimit = source.privacyHistoryLimit;
   }
   // The Privacy Audit entity-list snapshot is user data (not a device-local
   // preference), so it must follow the user across devices/backups. Only carry
