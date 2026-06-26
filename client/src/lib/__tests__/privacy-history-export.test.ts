@@ -14,23 +14,30 @@ vi.mock('jspdf-autotable', () => ({
   },
 }));
 
-// jsPDF assigns `text` as an own property on each instance (not the prototype),
-// so it can't be spied via the prototype. Instead we wrap the jsPDF constructor
-// to record every doc.text(...) call while still delegating to the real
-// implementation, so the produced Blob stays valid.
-const { textCalls } = vi.hoisted(() => ({
-  textCalls: [] as unknown[][],
+// Wrap the real jsPDF so PDF content still draws onto a genuine doc
+// (doc.output("blob") returns a valid PDF), while every vector drawing call
+// (rect/line/circle) and every text() call is recorded. The summary line is
+// drawn via doc.text() and the score-trend chart via rect/line/circle, so
+// recording these lets the tests assert geometry/content without parsing the
+// binary output. Methods are wrapped per-instance because jsPDF assigns some
+// (e.g. text) as own properties rather than on the prototype.
+const { drawCalls } = vi.hoisted(() => ({
+  drawCalls: { rect: [], line: [], circle: [], text: [] } as Record<string, unknown[][]>,
 }));
 vi.mock('jspdf', async (importOriginal) => {
   const actual = await importOriginal<typeof import('jspdf')>();
   const RealJsPDF = actual.jsPDF;
   function Wrapped(...args: unknown[]) {
-    const doc = new (RealJsPDF as new (...a: unknown[]) => InstanceType<typeof RealJsPDF>)(...args);
-    const realText = doc.text.bind(doc);
-    doc.text = ((...targs: unknown[]) => {
-      textCalls.push(targs);
-      return (realText as (...a: unknown[]) => unknown)(...targs);
-    }) as typeof doc.text;
+    const doc = new (RealJsPDF as new (...a: unknown[]) => InstanceType<typeof RealJsPDF>)(
+      ...args,
+    ) as unknown as Record<string, (...a: unknown[]) => unknown>;
+    for (const name of Object.keys(drawCalls)) {
+      const orig = doc[name].bind(doc);
+      doc[name] = (...a: unknown[]) => {
+        drawCalls[name].push(a);
+        return orig(...a);
+      };
+    }
     return doc;
   }
   (Wrapped as unknown as { API: unknown }).API = RealJsPDF.API;
@@ -262,12 +269,12 @@ describe('buildPrivacyHistoryPdf', () => {
 // and picking the string drawn at the summary anchor (x=14, y=27).
 describe('buildPrivacyHistoryPdf summary line', () => {
   beforeEach(() => {
-    textCalls.length = 0;
+    drawCalls.text.length = 0;
   });
 
   /** The summary string drawn at the summary anchor (x=14, y=27). */
   function summaryText(): string | undefined {
-    const call = textCalls.find((args) => args[1] === 14 && args[2] === 27);
+    const call = drawCalls.text.find((args) => args[1] === 14 && args[2] === 27);
     return call?.[0] as string | undefined;
   }
 
@@ -303,5 +310,74 @@ describe('buildPrivacyHistoryPdf summary line', () => {
     const newer = makeEntry({ id: 2, timestamp: Date.UTC(2026, 0, 2), score: 80, grade: 'A' });
     await buildPrivacyHistoryPdf([older, newer]);
     expect(summaryText()).toBe('2 audit runs  |  0 pts overall  |  latest 80/100 (A)');
+  });
+});
+
+// The score-trend sparkline is drawn with raw jsPDF vector primitives (rect for
+// the frame, line for the threshold guides + connecting segments, circle for the
+// point markers). autoTable is mocked, so the only rect/line/circle calls that
+// reach the real jsPDF come from drawScoreTrend — letting us assert the chart
+// geometry from the recorded drawCalls.
+describe('buildPrivacyHistoryPdf score-trend chart', () => {
+  beforeEach(() => {
+    autoTableCalls.length = 0;
+    drawCalls.rect.length = 0;
+    drawCalls.line.length = 0;
+    drawCalls.circle.length = 0;
+    drawCalls.text.length = 0;
+  });
+
+  it('draws the trend chart (frame, threshold guides, segments, markers) for 2+ runs', async () => {
+    await buildPrivacyHistoryPdf([
+      makeEntry({ id: 1, timestamp: Date.UTC(2026, 0, 1), score: 50 }),
+      makeEntry({ id: 2, timestamp: Date.UTC(2026, 0, 2), score: 90 }),
+      makeEntry({ id: 3, timestamp: Date.UTC(2026, 0, 3), score: 70 }),
+    ]);
+
+    // Single plot frame.
+    expect(drawCalls.rect).toHaveLength(1);
+    // One marker per point.
+    expect(drawCalls.circle).toHaveLength(3);
+    // Two threshold guide lines + (n-1) connecting segments.
+    expect(drawCalls.line).toHaveLength(2 + 2);
+  });
+
+  it('draws the A/C threshold guide lines (80 and 60) as horizontal rules with labels', async () => {
+    await buildPrivacyHistoryPdf([
+      makeEntry({ id: 1, timestamp: Date.UTC(2026, 0, 1), score: 50 }),
+      makeEntry({ id: 2, timestamp: Date.UTC(2026, 0, 2), score: 90 }),
+    ]);
+
+    // The first two line() calls are the threshold guides, drawn before any
+    // connecting segment; each spans the plot width at a constant y (horizontal).
+    const guides = drawCalls.line.slice(0, 2) as number[][];
+    expect(guides).toHaveLength(2);
+    for (const [x1, y1, x2, y2] of guides) {
+      expect(y1).toBe(y2); // horizontal rule
+      expect(x2).toBeGreaterThan(x1); // spans left → right
+    }
+    // The two guides sit at distinct heights (the 80 vs 60 thresholds).
+    expect(guides[0][1]).not.toBe(guides[1][1]);
+
+    // Each guide is labelled with its threshold score.
+    const labels = drawCalls.text.map((c) => c[0]);
+    expect(labels).toContain('80');
+    expect(labels).toContain('60');
+  });
+
+  it('no-ops the chart (no frame, guides, or markers) for a single run', async () => {
+    await buildPrivacyHistoryPdf([makeEntry()]);
+
+    expect(drawCalls.rect).toHaveLength(0);
+    expect(drawCalls.line).toHaveLength(0);
+    expect(drawCalls.circle).toHaveLength(0);
+  });
+
+  it('no-ops the chart for the empty case', async () => {
+    await buildPrivacyHistoryPdf([]);
+
+    expect(drawCalls.rect).toHaveLength(0);
+    expect(drawCalls.line).toHaveLength(0);
+    expect(drawCalls.circle).toHaveLength(0);
   });
 });
