@@ -16,6 +16,9 @@ vi.mock("@/components/HopPathExplorer", () => ({ HopPathExplorer: () => null }))
 vi.mock("@/components/RecordDetailPanel", () => ({ RecordDetailPanel: () => null }));
 vi.mock("@/components/ScrollPositionIndicator", () => ({ ScrollPositionIndicator: () => null }));
 
+const { toastMock } = vi.hoisted(() => ({ toastMock: vi.fn() }));
+vi.mock("@/hooks/use-toast", () => ({ useToast: () => ({ toast: toastMock }) }));
+
 import { AddressFinderRow } from "./BitcoinFlowVisualizer";
 
 const ADDRESS = "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq";
@@ -43,6 +46,13 @@ function renderRow(onSelect = vi.fn()) {
 
 let writeText: ReturnType<typeof vi.fn>;
 
+// Flush pending promise microtasks (and the React state updates they trigger).
+async function flush() {
+  await act(async () => {
+    await Promise.resolve();
+  });
+}
+
 beforeEach(() => {
   writeText = vi.fn(() => Promise.resolve());
   Object.defineProperty(navigator, "clipboard", {
@@ -68,7 +78,7 @@ describe("BitcoinFlowVisualizer AddressFinderRow copy button", () => {
     expect(writeText).toHaveBeenCalledWith(ADDRESS);
   });
 
-  it("switches to the Check (copied) state and resets after 2s", () => {
+  it("switches to the Check (copied) state and resets after 2s", async () => {
     vi.useFakeTimers();
     renderRow();
     const btn = screen.getByTestId(copyTestId);
@@ -76,6 +86,7 @@ describe("BitcoinFlowVisualizer AddressFinderRow copy button", () => {
     expect(btn.getAttribute("aria-label")).toBe("Copy address");
 
     fireEvent.click(btn);
+    await flush();
     expect(btn.getAttribute("aria-label")).toBe("Copied");
 
     act(() => {
@@ -102,11 +113,12 @@ describe("BitcoinFlowVisualizer AddressFinderRow copy button", () => {
     expect(onSelect).toHaveBeenCalledWith(ADDRESS);
   });
 
-  it("copies via keyboard activation (Enter and Space) without selecting the row", () => {
+  it("copies via keyboard activation (Enter and Space) without selecting the row", async () => {
     const onSelect = renderRow();
     const btn = screen.getByTestId(copyTestId);
 
     fireEvent.keyDown(btn, { key: "Enter" });
+    await flush();
     expect(writeText).toHaveBeenCalledTimes(1);
     expect(btn.getAttribute("aria-label")).toBe("Copied");
 
@@ -114,5 +126,41 @@ describe("BitcoinFlowVisualizer AddressFinderRow copy button", () => {
     expect(writeText).toHaveBeenCalledTimes(2);
 
     expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it("does not show the copied state and surfaces a toast when the clipboard write is rejected", async () => {
+    writeText.mockImplementation(() => Promise.reject(new Error("denied")));
+    const onSelect = renderRow();
+    const btn = screen.getByTestId(copyTestId);
+
+    fireEvent.click(btn);
+    await flush();
+
+    expect(btn.getAttribute("aria-label")).toBe("Copy address");
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(toastMock).toHaveBeenCalledTimes(1);
+    expect(toastMock).toHaveBeenCalledWith(
+      expect.objectContaining({ variant: "destructive" }),
+    );
+  });
+
+  it("does not show the copied state and surfaces a toast when the Clipboard API is unavailable", async () => {
+    Object.defineProperty(navigator, "clipboard", {
+      value: undefined,
+      configurable: true,
+      writable: true,
+    });
+    const onSelect = renderRow();
+    const btn = screen.getByTestId(copyTestId);
+
+    fireEvent.click(btn);
+    await flush();
+
+    expect(btn.getAttribute("aria-label")).toBe("Copy address");
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(toastMock).toHaveBeenCalledTimes(1);
+    expect(toastMock).toHaveBeenCalledWith(
+      expect.objectContaining({ variant: "destructive" }),
+    );
   });
 });

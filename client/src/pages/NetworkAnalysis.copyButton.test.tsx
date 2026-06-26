@@ -19,11 +19,21 @@ vi.mock("@/lib/network-analysis", () => ({
   getCommunityColor: vi.fn(() => "#000000"),
 }));
 
+const { toastMock } = vi.hoisted(() => ({ toastMock: vi.fn() }));
+vi.mock("@/hooks/use-toast", () => ({ useToast: () => ({ toast: toastMock }) }));
+
 import { CopyAddressButton } from "./NetworkAnalysis";
 
 const ADDRESS = "bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh";
 
 let writeText: ReturnType<typeof vi.fn>;
+
+// Flush pending promise microtasks (and the React state updates they trigger).
+async function flush() {
+  await act(async () => {
+    await Promise.resolve();
+  });
+}
 
 beforeEach(() => {
   writeText = vi.fn(() => Promise.resolve());
@@ -48,7 +58,7 @@ describe("NetworkAnalysis CopyAddressButton", () => {
     expect(writeText).toHaveBeenCalledWith(ADDRESS);
   });
 
-  it("switches to the Check (copied) state and resets after 2s", () => {
+  it("switches to the Check (copied) state and resets after 2s", async () => {
     vi.useFakeTimers();
     render(<CopyAddressButton address={ADDRESS} />);
     const btn = screen.getByTestId(`button-copy-network-address-${ADDRESS.slice(-8)}`);
@@ -56,6 +66,7 @@ describe("NetworkAnalysis CopyAddressButton", () => {
     expect(btn.getAttribute("aria-label")).toBe("Copy address");
 
     fireEvent.click(btn);
+    await flush();
     expect(btn.getAttribute("aria-label")).toBe("Copied");
 
     act(() => {
@@ -81,7 +92,7 @@ describe("NetworkAnalysis CopyAddressButton", () => {
     expect(parentClick).not.toHaveBeenCalled();
   });
 
-  it("copies via keyboard activation (Enter and Space) without bubbling to the parent", () => {
+  it("copies via keyboard activation (Enter and Space) without bubbling to the parent", async () => {
     const parentKeyDown = vi.fn();
     render(
       <div onKeyDown={parentKeyDown} data-testid="parent">
@@ -91,6 +102,7 @@ describe("NetworkAnalysis CopyAddressButton", () => {
     const btn = screen.getByTestId(`button-copy-network-address-${ADDRESS.slice(-8)}`);
 
     fireEvent.keyDown(btn, { key: "Enter" });
+    await flush();
     expect(writeText).toHaveBeenCalledTimes(1);
     expect(btn.getAttribute("aria-label")).toBe("Copied");
 
@@ -98,5 +110,39 @@ describe("NetworkAnalysis CopyAddressButton", () => {
     expect(writeText).toHaveBeenCalledTimes(2);
 
     expect(parentKeyDown).not.toHaveBeenCalled();
+  });
+
+  it("does not show the copied state and surfaces a toast when the clipboard write is rejected", async () => {
+    writeText.mockImplementation(() => Promise.reject(new Error("denied")));
+    render(<CopyAddressButton address={ADDRESS} />);
+    const btn = screen.getByTestId(`button-copy-network-address-${ADDRESS.slice(-8)}`);
+
+    fireEvent.click(btn);
+    await flush();
+
+    expect(btn.getAttribute("aria-label")).toBe("Copy address");
+    expect(toastMock).toHaveBeenCalledTimes(1);
+    expect(toastMock).toHaveBeenCalledWith(
+      expect.objectContaining({ variant: "destructive" }),
+    );
+  });
+
+  it("does not show the copied state and surfaces a toast when the Clipboard API is unavailable", async () => {
+    Object.defineProperty(navigator, "clipboard", {
+      value: undefined,
+      configurable: true,
+      writable: true,
+    });
+    render(<CopyAddressButton address={ADDRESS} />);
+    const btn = screen.getByTestId(`button-copy-network-address-${ADDRESS.slice(-8)}`);
+
+    fireEvent.click(btn);
+    await flush();
+
+    expect(btn.getAttribute("aria-label")).toBe("Copy address");
+    expect(toastMock).toHaveBeenCalledTimes(1);
+    expect(toastMock).toHaveBeenCalledWith(
+      expect.objectContaining({ variant: "destructive" }),
+    );
   });
 });

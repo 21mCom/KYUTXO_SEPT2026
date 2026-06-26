@@ -30,6 +30,7 @@ import { getParticipantsByAddresses } from "@/lib/dataFacade";
 import { useOwners } from "@/hooks/use-owners";
 import { useWalletNames } from "@/hooks/use-wallet-names";
 import { useTags } from "@/hooks/use-tags";
+import { useToast } from "@/hooks/use-toast";
 import { ScrollPositionIndicator } from "@/components/ScrollPositionIndicator";
 
 interface FilteredAddress {
@@ -155,12 +156,27 @@ export function AddressFinderRow({ addr, onSelect, satsToBtcDisplay, formatDate,
   rowHeight: number;
 }) {
   const [copied, setCopied] = useState(false);
+  const { toast } = useToast();
 
   const handleCopy = (e: React.MouseEvent | React.KeyboardEvent) => {
     e.stopPropagation();
-    navigator.clipboard.writeText(addr.address);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    const notifyFailure = () => {
+      toast({
+        title: "Copy failed",
+        description: "Could not copy the address to your clipboard.",
+        variant: "destructive",
+      });
+    };
+    try {
+      navigator.clipboard.writeText(addr.address)
+        .then(() => {
+          setCopied(true);
+          setTimeout(() => setCopied(false), 2000);
+        })
+        .catch(notifyFailure);
+    } catch {
+      notifyFailure();
+    }
   };
 
   const handleRowKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {

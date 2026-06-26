@@ -682,12 +682,27 @@ function StatsPanel({ stats }: { stats: GraphStats }) {
 
 export function CopyAddressButton({ address }: { address: string }) {
   const [copied, setCopied] = useState(false);
+  const { toast } = useToast();
 
   const handleCopy = (e: React.MouseEvent | React.KeyboardEvent) => {
     e.stopPropagation();
-    navigator.clipboard.writeText(address);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    const notifyFailure = () => {
+      toast({
+        title: "Copy failed",
+        description: "Could not copy the address to your clipboard.",
+        variant: "destructive",
+      });
+    };
+    try {
+      navigator.clipboard.writeText(address)
+        .then(() => {
+          setCopied(true);
+          setTimeout(() => setCopied(false), 2000);
+        })
+        .catch(notifyFailure);
+    } catch {
+      notifyFailure();
+    }
   };
 
   const handleCopyKeyDown = (e: React.KeyboardEvent<HTMLButtonElement>) => {
