@@ -53,6 +53,7 @@ import {
 import {
   getAllEvidence,
   getAllEvidenceAttachments,
+  bulkAddEvidence,
   clearEvidence,
   clearEvidenceAttachments,
 } from "@/lib/data/evidence-crud";
@@ -302,24 +303,51 @@ describe("legacy restore: evidence", () => {
     expect(live.every((e) => typeof e.id === "number")).toBe(true);
   });
 
-  it("adds evidence and its attachments, preserving the backup evidenceId verbatim (legacy: no remap)", async () => {
+  it("remaps each attachment's evidenceId to the freshly-assigned evidence id so files link to the correct record", async () => {
+    // Seed + clear evidence first so the restored rows get FRESH ids that differ
+    // from the backup ids (clear() does NOT reset IndexedDB key generation) —
+    // the exact condition that orphaned attachments before the remap fix.
+    await bulkAddEvidence(
+      [
+        { title: "seed-1", documentType: "other", tags: [], partiesInvolved: [], createdAt: 1, updatedAt: 1 } as any,
+        { title: "seed-2", documentType: "other", tags: [], partiesInvolved: [], createdAt: 1, updatedAt: 1 } as any,
+      ],
+      { skipNotification: true },
+    );
+    await clearEvidence({ skipNotification: true });
+
     const { evidenceAdded, evidenceAttachmentsAdded } =
       await restoreLegacyEvidence(
-        [evidenceRow(101, "Receipt A")],
+        [evidenceRow(101, "Receipt A"), evidenceRow(102, "Receipt B")],
         [
           attachmentRow(1, 101, "a.pdf"),
           attachmentRow(2, 101, "b.pdf"),
+          attachmentRow(3, 102, "c.pdf"),
         ],
       );
-    expect(evidenceAdded).toBe(1);
-    expect(evidenceAttachmentsAdded).toBe(2);
+    expect(evidenceAdded).toBe(2);
+    expect(evidenceAttachmentsAdded).toBe(3);
 
+    const liveEvidence = await getAllEvidence();
     const attachments = await getAllEvidenceAttachments();
-    expect(attachments).toHaveLength(2);
-    // Legacy path does NOT remap evidence ids: the attachment keeps the backup
-    // evidenceId (101). (Relinking attachments to freshly-assigned evidence ids
-    // is tracked as a separate fix.)
-    expect(attachments.every((a) => a.evidenceId === 101)).toBe(true);
+    expect(liveEvidence).toHaveLength(2);
+    expect(attachments).toHaveLength(3);
+
+    const recA = liveEvidence.find((e) => e.title === "Receipt A")!;
+    const recB = liveEvidence.find((e) => e.title === "Receipt B")!;
+    // Backup ids 101/102 do not survive — the new live ids must differ.
+    expect(recA.id).not.toBe(101);
+    expect(recB.id).not.toBe(102);
+
+    // Each attachment links to the LIVE evidence id of the record it originally
+    // belonged to, not the stale backup id.
+    expect(attachments.find((a) => a.filename === "a.pdf")!.evidenceId).toBe(recA.id);
+    expect(attachments.find((a) => a.filename === "b.pdf")!.evidenceId).toBe(recA.id);
+    expect(attachments.find((a) => a.filename === "c.pdf")!.evidenceId).toBe(recB.id);
+
+    // No orphans: every attachment points at an evidence record that exists.
+    const liveIds = new Set(liveEvidence.map((e) => e.id));
+    expect(attachments.every((a) => liveIds.has(a.evidenceId))).toBe(true);
   });
 
   it("no-ops cleanly on empty/undefined input", async () => {

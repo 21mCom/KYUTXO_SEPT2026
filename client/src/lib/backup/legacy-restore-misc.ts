@@ -18,11 +18,10 @@
 //   - derivation templates: merge mode de-dups by `fingerprint:scriptType`;
 //     replace mode adds every entry.
 //   - evidence: no de-dup in either mode — every evidence row and every evidence
-//     attachment is added. The legacy path does NOT remap evidence ids, so
-//     evidence attachments keep their backup `evidenceId` as-is. (Relinking
-//     attachments to the freshly-assigned evidence ids — the fix for old backups
-//     orphaning evidence attachments — is tracked separately; this helper
-//     preserves the existing legacy behaviour so it can be characterised.)
+//     attachment is added. Evidence rows receive fresh autoincrement ids on
+//     restore, so each backup evidence id is mapped to its new live id and the
+//     attachments' `evidenceId` is remapped through that map; without this an old
+//     backup would orphan/mislink every evidence file (mirrors the v3 path).
 // Every guarded table (evidence, evidenceAttachments) is touched only through
 // its CRUD module; the vocabulary tables are not guarded and are read/written
 // through the vocabulary CRUD module too.
@@ -237,10 +236,12 @@ export async function restoreLegacyDerivationTemplates(
 /**
  * Restore evidence documents and their attachments. The legacy path does NOT
  * de-dup evidence in either mode (every row is added with a fresh autoincrement
- * id) and does NOT remap evidence ids — evidence attachments keep their backup
- * `evidenceId` verbatim. (The id-remap that prevents old backups from orphaning
- * evidence attachments is tracked as a separate fix; this helper preserves the
- * existing legacy behaviour so it can be characterised and tested.)
+ * id). Evidence rows receive FRESH ids on restore (clear() does NOT reset
+ * IndexedDB key generation), so each backup evidence id is mapped to its new
+ * live id and the attachments' `evidenceId` is remapped through that map —
+ * otherwise restoring an old backup would orphan/mislink every evidence file by
+ * leaving the attachment pointed at a stale backup id (mirrors the v3 restore
+ * path in `inline-tables.ts`).
  */
 export async function restoreLegacyEvidence(
   evidence: any[] | undefined,
@@ -249,11 +250,12 @@ export async function restoreLegacyEvidence(
   let evidenceAdded = 0;
   let evidenceAttachmentsAdded = 0;
   const now = Date.now();
+  const evidenceIdMap = new Map<number, number>();
 
   if (evidence && evidence.length > 0) {
-    const evidenceRows = evidence.map((ev) => {
+    for (const ev of evidence) {
       const { id, ...evData } = ev;
-      return {
+      const newEvidence = {
         title: evData.title || "Restored Evidence",
         documentType: evData.documentType || "other",
         originalDate: evData.originalDate,
@@ -265,17 +267,26 @@ export async function restoreLegacyEvidence(
         createdAt: evData.createdAt || now,
         updatedAt: evData.updatedAt || now,
       };
-    });
-    await bulkAddEvidence(evidenceRows as Evidence[], { skipNotification: true });
-    evidenceAdded = evidenceRows.length;
+      const [newId] = await bulkAddEvidence([newEvidence as Evidence], {
+        skipNotification: true,
+      });
+      if (typeof id === "number" && typeof newId === "number") {
+        evidenceIdMap.set(id, newId);
+      }
+      evidenceAdded++;
+    }
   }
 
   if (evidenceAttachments && evidenceAttachments.length > 0) {
     for (const ea of evidenceAttachments) {
       const { id, ...eaData } = ea;
+      const mappedEvidenceId =
+        typeof eaData.evidenceId === "number"
+          ? evidenceIdMap.get(eaData.evidenceId) ?? eaData.evidenceId
+          : eaData.evidenceId;
       await addEvidenceAttachment(
         {
-          evidenceId: eaData.evidenceId,
+          evidenceId: mappedEvidenceId,
           filename: eaData.filename || "unknown",
           mimeType: eaData.mimeType || "application/octet-stream",
           size: eaData.size || 0,

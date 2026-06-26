@@ -1909,8 +1909,12 @@ export default function SettingsPage() {
       let priceDataAdded = 0;
       let lineageDataAdded = 0;
 
-      // Restore evidence documents and attachments (no de-dup in either mode).
-      // Shared with tests via the legacy-restore-misc helpers.
+      // Restore evidence documents and their attachments. Evidence rows get
+      // fresh auto-increment ids on restore (clear() does NOT reset IndexedDB
+      // key generation), so the attachments' evidenceId must be remapped to the
+      // new ids — otherwise restore orphans/mislinks every evidence file. The
+      // shared helper does this remapping (mirroring the v3 path) and is covered
+      // by a regression test.
       const evidenceResult = await restoreLegacyEvidence(
         evidence,
         evidenceAttachments,
