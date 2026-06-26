@@ -172,6 +172,26 @@ function OrphanedTxNotifier() {
   return null;
 }
 
+// Loads any persisted offline entity-list snapshot into the active Privacy
+// Audit list once at startup. Falls back silently to the bundled list.
+function EntityListLoader() {
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const { loadEntitySnapshotFromStorage } = await import("@/lib/data/entity-list-store");
+        if (!cancelled) await loadEntitySnapshotFromStorage();
+      } catch {
+        // Silent: loading the snapshot must never disrupt app startup.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  return null;
+}
+
 function AuthenticatedApp() {
   const { logout } = useAuth();
   
@@ -186,6 +206,7 @@ function AuthenticatedApp() {
         <SidebarProvider style={style as React.CSSProperties}>
           <EngineBootstrapper />
           <OrphanedTxNotifier />
+          <EntityListLoader />
           <div className="flex h-screen w-full">
             <AppSidebar />
             <div className="flex flex-col flex-1 overflow-hidden">

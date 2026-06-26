@@ -471,19 +471,33 @@
   { address: "1Ai52Uw6usjhpcDrwSmkUvjuqLpcznUuyF", name: "Twitter 2020 Hack Scam", category: "scam", sourceNote: "2020 Twitter hack — https://techcrunch.com/2020/07/15/twitter-accounts-hacked-crypto-scam/" },
 ];
   
-  /** Build a lookup map: address → EntityEntry */
-  const _exactMap = new Map<string, EntityEntry>();
-  for (const entry of ENTITY_LIST) {
-    _exactMap.set(entry.address, entry);
+  /** Build a lookup map from a list of entries: address → EntityEntry */
+  function buildEntityMap(entries: EntityEntry[]): Map<string, EntityEntry> {
+    const map = new Map<string, EntityEntry>();
+    for (const entry of entries) {
+      map.set(entry.address, entry);
+    }
+    return map;
   }
 
+  /** The bundled (default) lookup map. Never mutated — used as the fallback. */
+  const _bundledMap = buildEntityMap(ENTITY_LIST);
+
   /**
-   * Look up an address against the curated entity list.
+   * The active lookup map. Defaults to the bundled list but can be replaced at
+   * runtime by a user-supplied offline snapshot (see `data/entity-list-store.ts`).
+   * Either way this is purely in-memory — zero network access.
+   */
+  let _activeMap: Map<string, EntityEntry> = _bundledMap;
+  let _activeSource: 'bundled' | 'imported' = 'bundled';
+
+  /**
+   * Look up an address against the active entity list.
    * Returns the matching entry, or undefined if not found.
    * Purely in-memory — zero network access.
    */
   export function lookupEntity(address: string): EntityEntry | undefined {
-    return _exactMap.get(address);
+    return _activeMap.get(address);
   }
 
   /**
@@ -492,10 +506,45 @@
   export function lookupEntities(addresses: string[]): Map<string, EntityEntry> {
     const result = new Map<string, EntityEntry>();
     for (const addr of addresses) {
-      const entry = _exactMap.get(addr);
+      const entry = _activeMap.get(addr);
       if (entry) result.set(addr, entry);
     }
     return result;
+  }
+
+  /** Number of entries in the bundled (default) list. */
+  export function getBundledEntityCount(): number {
+    return _bundledMap.size;
+  }
+
+  /** Number of entries in the currently active list. */
+  export function getActiveEntityCount(): number {
+    return _activeMap.size;
+  }
+
+  /** Whether the active list is the bundled default or a user import. */
+  export function getActiveEntitySource(): 'bundled' | 'imported' {
+    return _activeSource;
+  }
+
+  /** Snapshot of the currently active entries (e.g. for export/editing). */
+  export function getActiveEntityList(): EntityEntry[] {
+    return Array.from(_activeMap.values());
+  }
+
+  /**
+   * Replace the active list with a user-supplied snapshot. In-memory only;
+   * persistence is handled by the caller (`data/entity-list-store.ts`).
+   */
+  export function setActiveEntityList(entries: EntityEntry[]): void {
+    _activeMap = buildEntityMap(entries);
+    _activeSource = 'imported';
+  }
+
+  /** Restore the active list back to the bundled default. */
+  export function resetActiveEntityList(): void {
+    _activeMap = _bundledMap;
+    _activeSource = 'bundled';
   }
 
   export const ENTITY_CATEGORY_LABELS: Record<EntityCategory, string> = {

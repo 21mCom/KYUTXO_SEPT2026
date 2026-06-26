@@ -70,6 +70,13 @@ import { clearPriceData, addPriceData } from "@/lib/data/price-data-crud";
 import { clearNodeSettings, putNodeSettings, getNodeSettings } from "@/lib/data/node-settings-crud";
 import { clearDerivationTemplates, addDerivationTemplate, getAllDerivationTemplates, type CreateDerivationTemplateData } from "@/lib/data/derivation-templates-crud";
 import { updateSettings } from "@/lib/data/settings-crud";
+import {
+  importEntitySnapshot,
+  resetEntitySnapshot,
+  serializeActiveEntityList,
+  type EntitySnapshotError,
+} from "@/lib/data/entity-list-store";
+import { getBundledEntityCount } from "@/lib/privacy-entity-list";
 import { deriveKey, decrypt, base64ToBuffer, verifyPassword } from "@/lib/crypto";
 import { getVaultSettings, vaultDb } from "@/lib/vault";
 import { generateSalt, hashPassword, bufferToBase64 } from "@/lib/crypto";
@@ -101,9 +108,17 @@ import { createProviderFromSettings } from "@/lib/blockchain-api";
 const DELETE_CONFIRMATION_PHRASE = "DELETE ALL DATA";
 
 export default function SettingsPage() {
-  const { fieldVisibility, cancelConfirmThreshold, isLoading: settingsLoading } = useSettings();
+  const { settings, fieldVisibility, cancelConfirmThreshold, isLoading: settingsLoading } = useSettings();
   const { customFields, isLoading: customFieldsLoading } = useCustomFields();
   const { toast } = useToast();
+
+  // Privacy entity list import state
+  const entitySnapshot = settings?.entityListSnapshot;
+  const bundledEntityCount = getBundledEntityCount();
+  const [isImportingEntities, setIsImportingEntities] = useState(false);
+  const [isResettingEntities, setIsResettingEntities] = useState(false);
+  const [entityImportErrors, setEntityImportErrors] = useState<EntitySnapshotError[] | null>(null);
+  const entityFileInputRef = useRef<HTMLInputElement>(null);
   
   const [newFieldName, setNewFieldName] = useState("");
   const [isAddingField, setIsAddingField] = useState(false);
@@ -175,6 +190,90 @@ export default function SettingsPage() {
       toast({
         title: "Error",
         description: "Failed to update field visibility",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleEntityFileSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    // Reset so re-selecting the same file fires the change event again.
+    e.target.value = "";
+    if (!file) return;
+
+    setEntityImportErrors(null);
+    setIsImportingEntities(true);
+    try {
+      const text = await file.text();
+      let raw: unknown;
+      try {
+        raw = JSON.parse(text);
+      } catch {
+        throw new Error("File is not valid JSON.");
+      }
+
+      const result = await importEntitySnapshot(raw, file.name);
+      if (!result.valid) {
+        setEntityImportErrors(result.errors);
+        toast({
+          title: "Import failed",
+          description: `${result.errors.length} problem${result.errors.length === 1 ? "" : "s"} found. No changes were made.`,
+          variant: "destructive",
+        });
+        return;
+      }
+
+      toast({
+        title: "Entity list updated",
+        description: `Now using ${result.count.toLocaleString()} imported entries for Privacy Audit.`,
+      });
+    } catch (error: any) {
+      toast({
+        title: "Import failed",
+        description: error?.message || "Could not read the file.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsImportingEntities(false);
+    }
+  };
+
+  const handleResetEntities = async () => {
+    setIsResettingEntities(true);
+    try {
+      await resetEntitySnapshot();
+      setEntityImportErrors(null);
+      toast({
+        title: "Reverted to bundled list",
+        description: `Privacy Audit is using the bundled list of ${bundledEntityCount.toLocaleString()} entries again.`,
+      });
+    } catch {
+      toast({
+        title: "Error",
+        description: "Failed to revert to the bundled list",
+        variant: "destructive",
+      });
+    } finally {
+      setIsResettingEntities(false);
+    }
+  };
+
+  const handleExportEntities = () => {
+    try {
+      const json = serializeActiveEntityList();
+      const blob = new Blob([json], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "kyutxo-entity-list.json";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch {
+      toast({
+        title: "Error",
+        description: "Failed to export the entity list",
         variant: "destructive",
       });
     }
@@ -2095,6 +2194,132 @@ export default function SettingsPage() {
                 </SelectContent>
               </Select>
             </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Shield className="h-5 w-5" />
+              Privacy Audit Entity List
+            </CardTitle>
+            <CardDescription>
+              The Privacy Audit flags transactions that touch known exchanges, mixers,
+              darknet markets and sanctioned addresses. KYUTXO ships a bundled list compiled
+              from public sources (WalletExplorer, GraphSense TagPacks, OFAC SDN). Because
+              KYUTXO stays fully offline, you can refresh it by importing an updated JSON
+              snapshot — nothing is ever fetched from the network.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="flex items-center justify-between gap-4 flex-wrap">
+              <div>
+                <Label className="text-base">Current list</Label>
+                <p className="text-sm text-muted-foreground">
+                  {entitySnapshot ? (
+                    <>
+                      Imported snapshot —{" "}
+                      <span data-testid="text-entity-count">
+                        {entitySnapshot.entries.length.toLocaleString()}
+                      </span>{" "}
+                      entries, loaded {new Date(entitySnapshot.importedAt).toLocaleString()}
+                      {entitySnapshot.sourceLabel ? ` from "${entitySnapshot.sourceLabel}"` : ""}.
+                    </>
+                  ) : (
+                    <>
+                      Bundled default —{" "}
+                      <span data-testid="text-entity-count">
+                        {bundledEntityCount.toLocaleString()}
+                      </span>{" "}
+                      entries.
+                    </>
+                  )}
+                </p>
+              </div>
+              <Badge variant={entitySnapshot ? "default" : "secondary"} data-testid="badge-entity-source">
+                {entitySnapshot ? "Imported" : "Bundled"}
+              </Badge>
+            </div>
+
+            <p className="text-sm text-muted-foreground">
+              Snapshot format: a JSON array (or an object with an{" "}
+              <code className="text-xs">entries</code> array) of{" "}
+              <code className="text-xs">{`{ address, name, category, sourceNote? }`}</code>{" "}
+              objects. Every address is validated and the category must be one of: exchange,
+              payment-service, gambling, scam, darknet, mining-pool, mixer, p2p-exchange.
+              Export the current list to use it as a starting template.
+            </p>
+
+            <input
+              ref={entityFileInputRef}
+              type="file"
+              accept="application/json,.json"
+              className="hidden"
+              onChange={handleEntityFileSelected}
+              data-testid="input-entity-file"
+            />
+
+            <div className="flex items-center gap-2 flex-wrap">
+              <Button
+                onClick={() => entityFileInputRef.current?.click()}
+                disabled={isImportingEntities}
+                data-testid="button-import-entities"
+              >
+                {isImportingEntities ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Upload className="h-4 w-4" />
+                )}
+                Import snapshot
+              </Button>
+              <Button
+                variant="outline"
+                onClick={handleExportEntities}
+                data-testid="button-export-entities"
+              >
+                <Download className="h-4 w-4" />
+                Export current list
+              </Button>
+              {entitySnapshot && (
+                <Button
+                  variant="outline"
+                  onClick={handleResetEntities}
+                  disabled={isResettingEntities}
+                  data-testid="button-reset-entities"
+                >
+                  {isResettingEntities ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <RefreshCw className="h-4 w-4" />
+                  )}
+                  Revert to bundled
+                </Button>
+              )}
+            </div>
+
+            {entityImportErrors && entityImportErrors.length > 0 && (
+              <div
+                className="rounded-md border border-destructive/50 bg-destructive/10 p-3 space-y-1"
+                data-testid="container-entity-errors"
+              >
+                <p className="text-sm font-medium text-destructive flex items-center gap-2">
+                  <AlertTriangle className="h-4 w-4" />
+                  {entityImportErrors.length.toLocaleString()} problem
+                  {entityImportErrors.length === 1 ? "" : "s"} — nothing was imported
+                </p>
+                <ul className="text-sm text-muted-foreground list-disc pl-5 space-y-0.5">
+                  {entityImportErrors.slice(0, 20).map((err, i) => (
+                    <li key={i} data-testid={`text-entity-error-${i}`}>
+                      {err.index >= 0 ? `Entry ${err.index + 1}: ` : ""}
+                      {err.message}
+                    </li>
+                  ))}
+                  {entityImportErrors.length > 20 && (
+                    <li>…and {(entityImportErrors.length - 20).toLocaleString()} more.</li>
+                  )}
+                </ul>
+              </div>
+            )}
           </CardContent>
         </Card>
 

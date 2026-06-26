@@ -369,6 +369,23 @@ export interface Settings {
   theme: 'light' | 'dark';
   defaultView: 'table' | 'grid';
   cancelConfirmThreshold: number;
+  // Optional user-supplied offline snapshot for the Privacy Audit entity list.
+  // When present it replaces the bundled list at runtime; the bundled list
+  // remains the fallback (cleared via "reset to bundled"). No network access.
+  entityListSnapshot?: {
+    importedAt: number;
+    sourceLabel?: string;
+    entries: EntityListSnapshotEntry[];
+  };
+}
+
+// Mirrors `EntityEntry` from privacy-entity-list.ts. Defined locally so the
+// Settings type does not pull the large bundled dataset module into type files.
+export interface EntityListSnapshotEntry {
+  address: string;
+  name: string;
+  category: string;
+  sourceNote?: string;
 }
 
 // Historical price data for Bitcoin and other cryptocurrencies
