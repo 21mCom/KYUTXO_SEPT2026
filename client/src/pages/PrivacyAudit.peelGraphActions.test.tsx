@@ -209,6 +209,49 @@ describe("PeelChainGraph copy-address badges", () => {
   });
 });
 
+describe("PeelChainGraph copy-address failure branch", () => {
+  it("shows a destructive 'Copy failed' toast when the clipboard write is rejected", async () => {
+    // Simulate a denied/unavailable clipboard (e.g. permission denied).
+    writeText.mockRejectedValueOnce(new Error("clipboard blocked"));
+
+    const { getByTestId, findAllByText } = renderGraph();
+    await waitForGraph(getByTestId);
+
+    fireEvent.click(getByTestId("button-graph-copy-payment-0"));
+
+    // The write was still attempted with the full address...
+    expect(writeText).toHaveBeenCalledWith(PAYMENT_ADDR);
+    // ...but it rejected, so the destructive failure toast surfaces (and the
+    // happy-path "Address copied" toast must NOT).
+    expect((await findAllByText("Copy failed")).length).toBeGreaterThan(0);
+    expect(
+      (await findAllByText("Could not copy to clipboard")).length,
+    ).toBeGreaterThan(0);
+  });
+
+  it("does not switch the badge to its copied (Check) state when the write fails", async () => {
+    writeText.mockRejectedValue(new Error("clipboard blocked"));
+
+    const { getByTestId, findAllByText } = renderGraph();
+    await waitForGraph(getByTestId);
+
+    const badge = getByTestId("button-graph-copy-change-0");
+    // Pre-condition: the badge starts showing the Copy icon, not the Check icon.
+    expect(badge.querySelector(".lucide-copy")).toBeTruthy();
+    expect(badge.querySelector(".lucide-check")).toBeNull();
+
+    fireEvent.click(badge);
+
+    // Wait for the failure path to actually run (toast confirms the catch fired).
+    await findAllByText("Copy failed");
+
+    // The badge must remain in its un-copied (Copy) state and never flip to the
+    // Check confirmation icon, since nothing was actually copied.
+    expect(badge.querySelector(".lucide-check")).toBeNull();
+    expect(badge.querySelector(".lucide-copy")).toBeTruthy();
+  });
+});
+
 describe("PeelChainGraph deep-dive badge", () => {
   it("opens the deep-dive dialog for the right transaction on click", async () => {
     const { getByTestId, findByTestId } = renderGraph();
