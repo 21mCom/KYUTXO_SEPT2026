@@ -95,6 +95,7 @@ const {
   getActiveEntitySource,
   getActiveEntityCount,
   getBundledEntityCount,
+  getBundledEntityList,
 } = await import("@/lib/privacy-entity-list");
 import type { Settings } from "@/lib/db-types";
 
@@ -231,6 +232,63 @@ describe("SettingsPage — Privacy Audit Entity List panel", () => {
     await waitFor(() =>
       expect(screen.queryByTestId("text-preview-incoming")).toBeNull(),
     );
+  });
+
+  it("merge mode: override badge and note split genuinely-changed overrides from identical re-imports", async () => {
+    render(
+      <ActivityBusProvider>
+        <SettingsPage />
+      </ActivityBusProvider>,
+    );
+
+    await screen.findByTestId("badge-entity-source");
+
+    // Pull two real bundled entries to overlap with. One is re-imported
+    // byte-for-byte (a no-op), the other only differs by display name (a
+    // genuine change). A brand-new address rounds out the snapshot.
+    const bundled = getBundledEntityList();
+    const identical = bundled[0];
+    const toChange = bundled[1];
+
+    const snapshot = JSON.stringify([
+      // Brand-new address (not in the bundled list) -> added.
+      { address: ADDR.a, name: "New Exchange", category: "exchange" },
+      // Identical re-import of a bundled entry -> override but NOT changed.
+      {
+        address: identical.address,
+        name: identical.name,
+        category: identical.category,
+        ...(identical.sourceNote ? { sourceNote: identical.sourceNote } : {}),
+      },
+      // Same address as a bundled entry but a different name -> changed override.
+      {
+        address: toChange.address,
+        name: `${toChange.name} (renamed)`,
+        category: toChange.category,
+        ...(toChange.sourceNote ? { sourceNote: toChange.sourceNote } : {}),
+      },
+    ]);
+
+    fireEvent.click(screen.getByTestId("radio-entity-merge"));
+    await selectEntityFile("snapshot.json", snapshot);
+
+    // Preview dialog appears.
+    await screen.findByTestId("text-preview-incoming");
+
+    // Two of the three imported addresses overlap the bundled list, but only one
+    // of them actually differs. The badge reports the total override count plus
+    // the changed suffix.
+    const overriddenBadge = screen.getByTestId("badge-preview-overridden");
+    expect(overriddenBadge.textContent).toContain("2 override bundled");
+    expect(overriddenBadge.textContent).toContain("(1 changed)");
+
+    // The note explains only the changed override will alter an entry and calls
+    // out the identical re-import remainder.
+    const note = screen.getByTestId("text-merge-override-note");
+    const noteText = note.textContent ?? "";
+    expect(noteText).toContain("2 imported addresses already exist in the bundled list");
+    expect(noteText).toContain("only 1 will actually change");
+    expect(noteText).toContain("the other 1 is identical re-imports");
   });
 
   it("warns about a mismatched source citation but still allows the import", async () => {
