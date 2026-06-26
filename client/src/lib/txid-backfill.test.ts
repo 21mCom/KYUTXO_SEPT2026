@@ -793,44 +793,59 @@ describe("runTxidBackfill (cancellation leaves a consistent DB)", () => {
   });
 
   it("aborting prevout resolution leaves inputs fully resolved or untouched, never partial", async () => {
-    // One orphan with two blank-address inputs, each pointing at a different
-    // previous transaction we must fetch to resolve. Aborting after the first
-    // prevout fetch must resolve that input in full and leave the other exactly
-    // as it was written — no partially-filled rows.
+    // The resolution pass commits resolved inputs in 200-row batches and checks
+    // the abort signal *between* batches: each committed batch leaves the DB
+    // consistent, and a re-run resumes the still-unresolved rows. To exercise
+    // that boundary deterministically we rebuild one orphan with 201 blank
+    // inputs — all chasing the same previous transaction — so resolution
+    // produces exactly two write batches (200 + 1). The abort is fired straight
+    // from the write-progress callback the instant the first batch commits, so
+    // it never races on fetch timing. The result must be: batch one's 200 inputs
+    // fully resolved, the lone batch-two input completely untouched, and not a
+    // single partially-written row.
+    const INPUT_COUNT = 201;
+    const FIRST_BATCH = 200;
+
     const orphan = makeApiTx(TXID_A, {
-      inputs: [
-        { address: "", amount: 0, prevTxid: PREV_1, prevVout: 0 },
-        { address: "", amount: 0, prevTxid: PREV_2, prevVout: 0 },
-      ],
+      inputs: Array.from({ length: INPUT_COUNT }, (_, k) => ({
+        address: "",
+        amount: 0,
+        prevTxid: PREV_1,
+        prevVout: k,
+      })),
       outputs: [{ address: ADDR_OUT, amount: 80000, n: 0 }],
     });
-    const prev1 = makeApiTx(PREV_1, {
-      outputs: [{ address: ADDR_PREV1, amount: 60000, n: 0 }],
-    });
-    const prev2 = makeApiTx(PREV_2, {
-      outputs: [{ address: ADDR_PREV2, amount: 70000, n: 0 }],
+    // A single previous transaction exposes one resolvable output per referenced
+    // vout, so the whole orphan resolves from a single fetch — keeping the abort
+    // strictly in the write phase rather than the fetch phase.
+    const prev = makeApiTx(PREV_1, {
+      outputs: Array.from({ length: INPUT_COUNT }, (_, k) => ({
+        address: ADDR_PREV1,
+        amount: 1000 + k,
+        n: k,
+      })),
     });
 
     const controller = new AbortController();
     const provider = makeProvider({
       txs: new Map<string, ApiTransaction | null>([
         [TXID_A, orphan],
-        [PREV_1, prev1],
-        [PREV_2, prev2],
+        [PREV_1, prev],
       ]),
-      onGetTransaction: (txid) => {
-        // Let the write phase and the first prevout fetch (PREV_1) through, then
-        // abort so the resolution loop breaks before fetching PREV_2.
-        if (txid === PREV_1) controller.abort();
-      },
     });
 
     const result = await runTxidBackfill(provider, [TXID_A], {
       concurrency: 1,
       signal: controller.signal,
+      // Abort deterministically the moment the first write batch is committed.
+      onProgress: (p) => {
+        if (p.phase === "resolving" && p.resolveProcessed === FIRST_BATCH) {
+          controller.abort();
+        }
+      },
     });
 
-    // The orphan itself was written before the abort (resolution is a later pass).
+    // The orphan itself was written before resolution ran.
     expect(result.rebuilt).toBe(1);
     expect(
       await testDb.blockchainTransactions.where("txid").equals(TXID_A).count(),
@@ -841,23 +856,36 @@ describe("runTxidBackfill (cancellation leaves a consistent DB)", () => {
       .equals(TXID_A)
       .and((p) => p.role === "input")
       .toArray();
-    expect(inputs).toHaveLength(2);
+    expect(inputs).toHaveLength(INPUT_COUNT);
 
-    const byPrev = new Map(inputs.map((p) => [p.prevTxid, p]));
-    const resolved = byPrev.get(PREV_1)!;
-    const untouched = byPrev.get(PREV_2)!;
+    // Classify every input as fully resolved, fully untouched, or (illegally)
+    // partial — an address with no amount/scriptType, or amount/scriptType with
+    // no address. A blank input keeps its parsed scriptType, so "untouched" is
+    // defined by a missing address *and* zero amount.
+    let resolved = 0;
+    let untouched = 0;
+    let partial = 0;
+    for (const p of inputs) {
+      const hasAddress = !!p.address;
+      const hasAmount = (p.amount ?? 0) > 0;
+      const hasScriptType = !!p.scriptType;
+      if (hasAddress && hasAmount && hasScriptType) {
+        resolved++;
+      } else if (!hasAddress && !hasAmount) {
+        untouched++;
+      } else {
+        partial++;
+      }
+    }
 
-    // PREV_1's input was fully resolved: address, amount and scriptType together.
-    expect(resolved.address).toBe(ADDR_PREV1);
-    expect(resolved.amount).toBe(60000);
-    expect(resolved.scriptType).toBeDefined();
-
-    // PREV_2's input is exactly as first written — not a partial update.
-    expect(untouched.address ?? "").toBe("");
-    expect(untouched.amount).toBe(0);
-
-    // The resolution count reflects only the input that was actually completed.
-    expect(result.prevoutsResolved).toBe(1);
+    // No row is ever left half-written.
+    expect(partial).toBe(0);
+    // The committed first batch is fully resolved; the uncommitted remainder is
+    // left exactly as it was first written.
+    expect(resolved).toBe(FIRST_BATCH);
+    expect(untouched).toBe(INPUT_COUNT - FIRST_BATCH);
+    // The resolution count reflects only the inputs actually committed.
+    expect(result.prevoutsResolved).toBe(FIRST_BATCH);
   });
 
   it("stops fetching previous transactions from the network once cancelled mid-resolution", async () => {
@@ -890,24 +918,61 @@ describe("runTxidBackfill (cancellation leaves a consistent DB)", () => {
 
     const controller = new AbortController();
     const seen: string[] = [];
-    const provider = makeProvider({
-      txs: new Map<string, ApiTransaction | null>([
-        [TXID_A, orphan],
-        [PREV_1, prev1],
-        [PREV_2, prev2],
-        [PREV_3, prev3],
-      ]),
-      onGetTransaction: (txid) => {
-        seen.push(txid);
-        // Abort the moment the first previous transaction is fetched.
-        if (txid === PREV_1) controller.abort();
-      },
+
+    // Deferred gates make the cancel land at an exact, controlled point instead
+    // of racing the resolution loop: `prev1Requested` resolves the moment the
+    // loop calls getTransaction(PREV_1); `prev1Release` is what lets that call
+    // return. Holding the first fetch open lets the test abort *before* PREV_1
+    // resolves, so the loop is guaranteed to observe the cancel before it could
+    // advance to PREV_2/PREV_3.
+    let signalPrev1Requested!: () => void;
+    const prev1Requested = new Promise<void>((r) => {
+      signalPrev1Requested = r;
+    });
+    let releasePrev1!: () => void;
+    const prev1Release = new Promise<void>((r) => {
+      releasePrev1 = r;
     });
 
-    const result = await runTxidBackfill(provider, [TXID_A], {
+    const txs = new Map<string, ApiTransaction | null>([
+      [TXID_A, orphan],
+      [PREV_1, prev1],
+      [PREV_2, prev2],
+      [PREV_3, prev3],
+    ]);
+    const provider: BlockchainProvider = {
+      name: "fake",
+      async getBlockHeight() {
+        return 800010;
+      },
+      async getAddressTransactions() {
+        return [];
+      },
+      async getTransaction(txid: string) {
+        seen.push(txid);
+        if (txid === PREV_1) {
+          signalPrev1Requested();
+          await prev1Release;
+        }
+        return txs.has(txid) ? txs.get(txid)! : null;
+      },
+      async testConnection() {
+        return { success: true };
+      },
+    };
+
+    const runPromise = runTxidBackfill(provider, [TXID_A], {
       concurrency: 1,
       signal: controller.signal,
     });
+
+    // Once the loop is parked inside the first prevout fetch, cancel — then let
+    // that fetch return. The loop must stop before requesting any further prevout.
+    await prev1Requested;
+    controller.abort();
+    releasePrev1();
+
+    const result = await runPromise;
 
     // The orphan itself was written before resolution began.
     expect(result.rebuilt).toBe(1);
@@ -920,22 +985,21 @@ describe("runTxidBackfill (cancellation leaves a consistent DB)", () => {
     expect(seen).not.toContain(PREV_2);
     expect(seen).not.toContain(PREV_3);
 
-    // Only the input whose prevout was fetched before the abort was filled in —
-    // the count reflects the partial work, not all three inputs.
-    expect(result.prevoutsResolved).toBe(1);
+    // The interrupted write batch is discarded on cancel (each committed batch
+    // is consistent; a re-run resumes the rest), so nothing was resolved...
+    expect(result.prevoutsResolved).toBe(0);
 
+    // ...and every input is left exactly as first written — never partial.
     const inputs = await testDb.transactionParticipants
       .where("txid")
       .equals(TXID_A)
       .and((p) => p.role === "input")
       .toArray();
     expect(inputs).toHaveLength(3);
-    const byPrev = new Map(inputs.map((p) => [p.prevTxid, p]));
-    // The fetched prevout resolved its input fully.
-    expect(byPrev.get(PREV_1)!.address).toBe(ADDR_PREV1);
-    // The un-fetched prevouts left their inputs exactly as first written.
-    expect(byPrev.get(PREV_2)!.address ?? "").toBe("");
-    expect(byPrev.get(PREV_3)!.address ?? "").toBe("");
+    for (const p of inputs) {
+      expect(p.address ?? "").toBe("");
+      expect(p.amount ?? 0).toBe(0);
+    }
   });
 });
 
