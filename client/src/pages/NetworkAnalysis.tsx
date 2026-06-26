@@ -17,6 +17,8 @@ import {
   Users,
   GitBranch,
   Circle,
+  Copy,
+  Check,
 } from "lucide-react";
 import {
   getRecordsByType,
@@ -656,6 +658,39 @@ function StatsPanel({ stats }: { stats: GraphStats }) {
   );
 }
 
+function CopyAddressButton({ address }: { address: string }) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = (e: React.MouseEvent | React.KeyboardEvent) => {
+    e.stopPropagation();
+    navigator.clipboard.writeText(address);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  const handleCopyKeyDown = (e: React.KeyboardEvent<HTMLButtonElement>) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      handleCopy(e);
+    }
+  };
+
+  return (
+    <button
+      type="button"
+      onClick={handleCopy}
+      onKeyDown={handleCopyKeyDown}
+      aria-label={copied ? "Copied" : "Copy address"}
+      className="p-1 rounded text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring flex-shrink-0"
+      data-testid={`button-copy-network-address-${address.slice(-8)}`}
+    >
+      {copied
+        ? <Check className="h-3 w-3 text-green-600" />
+        : <Copy className="h-3 w-3" />}
+    </button>
+  );
+}
+
 function NodeDetail({
   node,
   stats,
@@ -680,9 +715,12 @@ function NodeDetail({
         </Button>
       </div>
       <div className="space-y-1.5 text-xs">
-        <div>
-          <span className="text-muted-foreground">Address: </span>
-          <span className="font-mono break-all" data-testid="text-selected-address">{node.id}</span>
+        <div className="flex items-start gap-1">
+          <div className="min-w-0 flex-1">
+            <span className="text-muted-foreground">Address: </span>
+            <span className="font-mono break-all" data-testid="text-selected-address">{node.id}</span>
+          </div>
+          <CopyAddressButton address={node.id} />
         </div>
         {node.label && node.label !== node.id.slice(0, 8) + '...' && (
           <div>
