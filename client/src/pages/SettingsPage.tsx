@@ -493,6 +493,7 @@ export default function SettingsPage() {
   const [entityPreview, setEntityPreview] = useState<EntitySnapshotPreview | null>(null);
   const [entityPreviewSource, setEntityPreviewSource] = useState<string | undefined>(undefined);
   const [showEntityDiff, setShowEntityDiff] = useState(false);
+  const [overridesOnlyChanged, setOverridesOnlyChanged] = useState(false);
   const [entityDiffSearch, setEntityDiffSearch] = useState("");
   const [entityDiffCategory, setEntityDiffCategory] = useState<EntityCategory | "all">("all");
   const [isApplyingEntities, setIsApplyingEntities] = useState(false);
@@ -701,7 +702,7 @@ export default function SettingsPage() {
     );
   }, [entityPreview, entityDiffSearch, entityDiffCategory]);
 
-  const filteredOverrides = useMemo(() => {
+  const searchedOverrides = useMemo(() => {
     const q = entityDiffSearch.trim().toLowerCase();
     const overrides = entityPreview?.overrides ?? [];
     return overrides.filter(
@@ -715,6 +716,16 @@ export default function SettingsPage() {
           o.previous.name.toLowerCase().includes(q)),
     );
   }, [entityPreview, entityDiffSearch, entityDiffCategory]);
+
+  const changedOverrideCount = useMemo(
+    () => searchedOverrides.filter((o) => o.changed).length,
+    [searchedOverrides],
+  );
+
+  const filteredOverrides = useMemo(
+    () => (overridesOnlyChanged ? searchedOverrides.filter((o) => o.changed) : searchedOverrides),
+    [searchedOverrides, overridesOnlyChanged],
+  );
 
   const entityDiffFiltering = entityDiffSearch.trim().length > 0 || entityDiffCategory !== "all";
 
@@ -3025,19 +3036,39 @@ export default function SettingsPage() {
                             </div>
                             <TabsList className="grid w-full grid-cols-2">
                               <TabsTrigger value="overrides" data-testid="tab-entity-diff-overrides">
-                                Overrides ({filteredOverrides.length.toLocaleString()})
+                                Overrides ({searchedOverrides.length.toLocaleString()}
+                                {changedOverrideCount !== searchedOverrides.length
+                                  ? `, ${changedOverrideCount.toLocaleString()} changed`
+                                  : ""}
+                                )
                               </TabsTrigger>
                               <TabsTrigger value="added" data-testid="tab-entity-diff-added">
                                 Brand-new ({filteredAddedEntries.length.toLocaleString()})
                               </TabsTrigger>
                             </TabsList>
-                            <TabsContent value="overrides" className="mt-2">
+                            <TabsContent value="overrides" className="mt-2 space-y-2">
+                              <div className="flex items-center gap-2">
+                                <Switch
+                                  id="overrides-only-changed"
+                                  checked={overridesOnlyChanged}
+                                  onCheckedChange={setOverridesOnlyChanged}
+                                  data-testid="switch-overrides-only-changed"
+                                />
+                                <Label
+                                  htmlFor="overrides-only-changed"
+                                  className="text-sm font-normal cursor-pointer"
+                                >
+                                  Only show changed
+                                </Label>
+                              </div>
                               <EntityOverrideList
                                 overrides={filteredOverrides}
                                 emptyLabel={
-                                  entityDiffFiltering
-                                    ? "No overrides match your search."
-                                    : "No bundled entries will be overridden."
+                                  overridesOnlyChanged && searchedOverrides.length > 0
+                                    ? "No overrides change anything — every match is identical to the bundled entry."
+                                    : entityDiffFiltering
+                                      ? "No overrides match your search."
+                                      : "No bundled entries will be overridden."
                                 }
                               />
                             </TabsContent>
