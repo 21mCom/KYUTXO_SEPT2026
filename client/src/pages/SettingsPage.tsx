@@ -1,7 +1,7 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { Link } from "wouter";
-import { Moon, Eye, Database, Plus, Trash2, Pencil, AlertTriangle, Upload, RefreshCw, Loader2, Paperclip, KeyRound, Shield, Download, Stethoscope, ChevronRight, ChevronDown, Wrench } from "lucide-react";
+import { Moon, Eye, Database, Plus, Trash2, Pencil, AlertTriangle, Upload, RefreshCw, Loader2, Paperclip, KeyRound, Shield, Download, Stethoscope, ChevronRight, ChevronDown, Wrench, Search } from "lucide-react";
 import { isElectron, getElectronAPI } from "@/lib/electron";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
@@ -201,6 +201,7 @@ export default function SettingsPage() {
   const [entityPreview, setEntityPreview] = useState<EntitySnapshotPreview | null>(null);
   const [entityPreviewSource, setEntityPreviewSource] = useState<string | undefined>(undefined);
   const [showEntityDiff, setShowEntityDiff] = useState(false);
+  const [entityDiffSearch, setEntityDiffSearch] = useState("");
   const [isApplyingEntities, setIsApplyingEntities] = useState(false);
   const [entityImportMode, setEntityImportMode] = useState<EntityListMode>("replace");
   const entityFileInputRef = useRef<HTMLInputElement>(null);
@@ -318,6 +319,7 @@ export default function SettingsPage() {
       // Valid — stage a preview and wait for explicit confirmation.
       setEntityPreviewSource(file.name);
       setShowEntityDiff(false);
+      setEntityDiffSearch("");
       setEntityPreview(result.preview);
     } catch (error: any) {
       toast({
@@ -362,7 +364,30 @@ export default function SettingsPage() {
   const handleCancelEntityImport = () => {
     setEntityPreview(null);
     setEntityPreviewSource(undefined);
+    setEntityDiffSearch("");
   };
+
+  const filteredAddedEntries = useMemo(() => {
+    const q = entityDiffSearch.trim().toLowerCase();
+    const entries = entityPreview?.addedEntries ?? [];
+    if (!q) return entries;
+    return entries.filter(
+      (e) =>
+        e.address.toLowerCase().includes(q) ||
+        e.name.toLowerCase().includes(q),
+    );
+  }, [entityPreview, entityDiffSearch]);
+
+  const filteredRemovedEntries = useMemo(() => {
+    const q = entityDiffSearch.trim().toLowerCase();
+    const entries = entityPreview?.removedEntries ?? [];
+    if (!q) return entries;
+    return entries.filter(
+      (e) =>
+        e.address.toLowerCase().includes(q) ||
+        e.name.toLowerCase().includes(q),
+    );
+  }, [entityPreview, entityDiffSearch]);
 
   const handleResetEntities = async () => {
     setIsResettingEntities(true);
@@ -2723,25 +2748,43 @@ export default function SettingsPage() {
 
                     {showEntityDiff && (
                       <Tabs defaultValue="added" className="mt-2">
+                        <div className="relative mb-2">
+                          <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
+                          <Input
+                            value={entityDiffSearch}
+                            onChange={(e) => setEntityDiffSearch(e.target.value)}
+                            placeholder="Filter by address or name..."
+                            className="pl-8"
+                            data-testid="input-entity-diff-search"
+                          />
+                        </div>
                         <TabsList className="grid w-full grid-cols-2">
                           <TabsTrigger value="added" data-testid="tab-entity-diff-added">
-                            Added ({entityPreview.added.toLocaleString()})
+                            Added ({filteredAddedEntries.length.toLocaleString()})
                           </TabsTrigger>
                           <TabsTrigger value="removed" data-testid="tab-entity-diff-removed">
-                            Removed ({entityPreview.removed.toLocaleString()})
+                            Removed ({filteredRemovedEntries.length.toLocaleString()})
                           </TabsTrigger>
                         </TabsList>
                         <TabsContent value="added" className="mt-2">
                           <EntityDiffList
-                            entries={entityPreview.addedEntries}
-                            emptyLabel="No entries will be added."
+                            entries={filteredAddedEntries}
+                            emptyLabel={
+                              entityDiffSearch.trim()
+                                ? "No added entries match your search."
+                                : "No entries will be added."
+                            }
                             variant="added"
                           />
                         </TabsContent>
                         <TabsContent value="removed" className="mt-2">
                           <EntityDiffList
-                            entries={entityPreview.removedEntries}
-                            emptyLabel="No entries will be removed."
+                            entries={filteredRemovedEntries}
+                            emptyLabel={
+                              entityDiffSearch.trim()
+                                ? "No removed entries match your search."
+                                : "No entries will be removed."
+                            }
                             variant="removed"
                           />
                         </TabsContent>
