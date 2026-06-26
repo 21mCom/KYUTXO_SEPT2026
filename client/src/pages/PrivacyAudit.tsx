@@ -353,9 +353,13 @@ interface DeepDiveData {
 function TransactionDeepDive({
   txids,
   coinjoinTxids,
+  autoAnalyse = false,
+  embedded = false,
 }: {
   txids: string[];
   coinjoinTxids: Set<string>;
+  autoAnalyse?: boolean;
+  embedded?: boolean;
 }) {
   const [selectedTxid, setSelectedTxid] = useState<string>(txids[0] ?? "");
   const [loading, setLoading] = useState(false);
@@ -364,6 +368,7 @@ function TransactionDeepDive({
   const [message, setMessage] = useState<string | null>(null);
   const workerRef = useRef<Worker | null>(null);
   const pendingIdRef = useRef<string | null>(null);
+  const autoRunRef = useRef(false);
 
   const analyse = useCallback(async (txid: string) => {
     if (!txid) return;
@@ -417,39 +422,41 @@ function TransactionDeepDive({
     }
   }, [coinjoinTxids]);
 
+  // When opened directly from a finding, run the analysis immediately for the
+  // pre-selected transaction so the user lands on results, not an empty panel.
+  useEffect(() => {
+    if (autoAnalyse && selectedTxid && !autoRunRef.current) {
+      autoRunRef.current = true;
+      analyse(selectedTxid);
+    }
+  }, [autoAnalyse, selectedTxid, analyse]);
+
   if (txids.length === 0) return null;
 
   const sankey = data && data.isCoinJoin ? buildSankey(data.inputs, data.outputs) : null;
+  const singleTxid = txids.length === 1;
 
-  return (
-    <Card data-testid="container-transaction-deep-dive">
-      <CardHeader className="py-3 px-4">
-        <CardTitle className="text-sm flex items-center gap-2">
-          <ScanSearch className="h-4 w-4" />
-          Transaction Deep-Dive
-        </CardTitle>
-        <CardDescription className="text-xs">
-          Pick any flagged transaction for a forensic breakdown: Boltzmann entropy, a color-coded link-probability
-          heatmap, and — for CoinJoins — a fund-flow Sankey diagram. Runs entirely offline.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="px-4 pb-4 space-y-3">
+  const body = (
+    <>
+        {!(embedded && singleTxid) && (
         <div className="flex flex-wrap gap-2 items-end">
-          <div className="space-y-1 min-w-[200px] flex-1">
-            <label className="text-xs text-muted-foreground">Transaction</label>
-            <Select value={selectedTxid} onValueChange={setSelectedTxid}>
-              <SelectTrigger data-testid="select-deep-dive-txid">
-                <SelectValue placeholder="Select transaction" />
-              </SelectTrigger>
-              <SelectContent>
-                {txids.slice(0, 50).map(t => (
-                  <SelectItem key={t} value={t}>
-                    {coinjoinTxids.has(t) ? "⇄ " : ""}{t.substring(0, 20)}…
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
+          {!singleTxid && (
+            <div className="space-y-1 min-w-[200px] flex-1">
+              <label className="text-xs text-muted-foreground">Transaction</label>
+              <Select value={selectedTxid} onValueChange={setSelectedTxid}>
+                <SelectTrigger data-testid="select-deep-dive-txid">
+                  <SelectValue placeholder="Select transaction" />
+                </SelectTrigger>
+                <SelectContent>
+                  {txids.slice(0, 50).map(t => (
+                    <SelectItem key={t} value={t}>
+                      {coinjoinTxids.has(t) ? "⇄ " : ""}{t.substring(0, 20)}…
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
           <Button
             size="default"
             variant="outline"
@@ -461,6 +468,17 @@ function TransactionDeepDive({
             Analyse
           </Button>
         </div>
+        )}
+
+        {embedded && singleTxid && loading && !data && (
+          <div
+            className="flex items-center gap-2 text-sm text-muted-foreground"
+            data-testid="status-deep-dive-loading"
+          >
+            <Loader2 className="h-4 w-4 animate-spin" />
+            Analysing transaction…
+          </div>
+        )}
 
         {message && (
           <div
@@ -565,8 +583,76 @@ function TransactionDeepDive({
             </div>
           </div>
         )}
+    </>
+  );
+
+  if (embedded) {
+    return (
+      <div className="space-y-3" data-testid="container-transaction-deep-dive">
+        {body}
+      </div>
+    );
+  }
+
+  return (
+    <Card data-testid="container-transaction-deep-dive">
+      <CardHeader className="py-3 px-4">
+        <CardTitle className="text-sm flex items-center gap-2">
+          <ScanSearch className="h-4 w-4" />
+          Transaction Deep-Dive
+        </CardTitle>
+        <CardDescription className="text-xs">
+          Pick any flagged transaction for a forensic breakdown: Boltzmann entropy, a color-coded link-probability
+          heatmap, and — for CoinJoins — a fund-flow Sankey diagram. Runs entirely offline.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="px-4 pb-4 space-y-3">
+        {body}
       </CardContent>
     </Card>
+  );
+}
+
+// ─── Per-finding deep-dive dialog ─────────────────────────────────────────────
+
+function DeepDiveDialog({ txid, coinjoinTxids }: { txid: string; coinjoinTxids: Set<string> }) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <Button
+          size="icon"
+          variant="ghost"
+          className="h-5 w-5"
+          title="Deep dive"
+          aria-label="Deep dive into this transaction"
+          data-testid={`button-deep-dive-${txid.slice(0, 8)}`}
+        >
+          <ScanSearch className="h-3 w-3" />
+        </Button>
+      </DialogTrigger>
+      <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto" data-testid="dialog-deep-dive">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <ScanSearch className="h-4 w-4" />
+            Transaction Deep-Dive
+          </DialogTitle>
+          <DialogDescription className="font-mono break-all">
+            {txid}
+          </DialogDescription>
+        </DialogHeader>
+        {/* Only mount (and auto-run) the analysis while the dialog is open */}
+        {open && (
+          <TransactionDeepDive
+            txids={[txid]}
+            coinjoinTxids={coinjoinTxids}
+            autoAnalyse
+            embedded
+          />
+        )}
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -1687,7 +1773,11 @@ export default function PrivacyAudit() {
                       <CollapsibleContent>
                         <CardContent className="pt-0 pb-4 px-4 space-y-3">
                           {items.map((finding, idx) => (
-                            <FindingCard key={`${finding.type}-${idx}`} finding={finding} />
+                            <FindingCard
+                              key={`${finding.type}-${idx}`}
+                              finding={finding}
+                              coinjoinTxids={coinjoinWarningSet}
+                            />
                           ))}
                         </CardContent>
                       </CollapsibleContent>
@@ -1720,7 +1810,7 @@ function getSeverityBadgePropsLocal(severity: PrivacySeverity) {
   }
 }
 
-function FindingCard({ finding }: { finding: PrivacyFinding }) {
+function FindingCard({ finding, coinjoinTxids }: { finding: PrivacyFinding; coinjoinTxids: Set<string> }) {
   const [expanded, setExpanded] = useState(false);
   const citations = (finding.details?.citations as EntityCitation[] | undefined) ?? [];
 
@@ -1755,9 +1845,12 @@ function FindingCard({ finding }: { finding: PrivacyFinding }) {
             {finding.txids.length > 0 && (
               <div>
                 <span className="text-xs font-medium text-muted-foreground">Transactions:</span>
-                <div className="flex flex-wrap gap-1 mt-1">
+                <div className="flex flex-wrap gap-x-2 gap-y-1 mt-1">
                   {finding.txids.slice(0, 10).map((txid) => (
-                    <TxidLink key={txid} txid={txid} />
+                    <span key={txid} className="inline-flex items-center gap-0.5">
+                      <TxidLink txid={txid} />
+                      <DeepDiveDialog txid={txid} coinjoinTxids={coinjoinTxids} />
+                    </span>
                   ))}
                   {finding.txids.length > 10 && (
                     <span className="text-xs text-muted-foreground">
