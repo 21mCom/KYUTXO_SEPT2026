@@ -344,12 +344,15 @@ function EntityOverrideList({
       <div style={{ height: `${virtualizer.getTotalSize()}px`, position: "relative", width: "100%" }}>
         {virtualizer.getVirtualItems().map((virtualRow) => {
           const { previous, incoming, changed } = overrides[virtualRow.index];
+          const sourceNoteChanged =
+            (previous.sourceNote ?? "") !== (incoming.sourceNote ?? "");
           return (
             <div
               key={virtualRow.key}
+              ref={virtualizer.measureElement}
+              data-index={virtualRow.index}
               className="absolute left-0 top-0 w-full border-b px-3 py-1.5 space-y-1"
               style={{
-                height: `${virtualRow.size}px`,
                 transform: `translateY(${virtualRow.start}px)`,
               }}
               data-testid={`row-entity-override-${virtualRow.index}`}
@@ -379,6 +382,21 @@ function EntityOverrideList({
                   </Badge>
                 )}
               </div>
+              {sourceNoteChanged && (
+                <p
+                  className="text-xs text-muted-foreground min-w-0"
+                  data-testid={`text-entity-override-sourcenote-${virtualRow.index}`}
+                >
+                  <span className="mr-1 font-medium">Source:</span>
+                  <span className="line-through break-words">
+                    {previous.sourceNote ?? "(none)"}
+                  </span>
+                  <span className="mx-1">→</span>
+                  <span className="text-foreground break-words">
+                    {incoming.sourceNote ?? "(none)"}
+                  </span>
+                </p>
+              )}
             </div>
           );
         })}
