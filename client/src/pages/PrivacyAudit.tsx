@@ -348,6 +348,7 @@ function TransactionDeepDive({
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<BoltzmannResult | null>(null);
   const [data, setData] = useState<DeepDiveData | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
   const workerRef = useRef<Worker | null>(null);
   const pendingIdRef = useRef<string | null>(null);
 
@@ -356,12 +357,17 @@ function TransactionDeepDive({
     setLoading(true);
     setResult(null);
     setData(null);
+    setMessage(null);
     try {
       const tx = await getTransactionByTxid(txid);
       const participants = await getParticipantsByTxids([txid]);
       const inputs = participants.filter(p => p.role === "input");
       const outputs = participants.filter(p => p.role === "output");
-      if (inputs.length === 0 || outputs.length === 0) { setLoading(false); return; }
+      if (inputs.length === 0 || outputs.length === 0) {
+        setMessage("No participant data available for this transaction — re-sync the address to load its inputs and outputs.");
+        setLoading(false);
+        return;
+      }
 
       const totalIn = inputs.reduce((s, p) => s + p.amount, 0);
       const totalOut = outputs.reduce((s, p) => s + p.amount, 0);
@@ -387,9 +393,13 @@ function TransactionDeepDive({
         setResult(e.data.result ?? null);
         setLoading(false);
       };
-      worker.onerror = () => setLoading(false);
+      worker.onerror = () => {
+        setMessage("Couldn't analyse this transaction — the calculation failed unexpectedly. Please try again.");
+        setLoading(false);
+      };
       worker.postMessage({ id, inputs: bInputs, outputs: bOutputs, fee });
     } catch {
+      setMessage("Couldn't load this transaction's data. Please try again.");
       setLoading(false);
     }
   }, [coinjoinTxids]);
@@ -438,6 +448,16 @@ function TransactionDeepDive({
             Analyse
           </Button>
         </div>
+
+        {message && (
+          <div
+            className="flex items-start gap-2 rounded-md bg-muted/40 p-3 text-sm text-muted-foreground"
+            data-testid="text-deep-dive-message"
+          >
+            <Info className="h-4 w-4 mt-0.5 shrink-0" />
+            <span>{message}</span>
+          </div>
+        )}
 
         {data && (
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2" data-testid="container-deep-dive-summary">
