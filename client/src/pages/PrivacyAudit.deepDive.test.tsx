@@ -185,6 +185,54 @@ describe("TransactionDeepDive failure handling", () => {
       expect(mockedGetTx).toHaveBeenCalledTimes(2);
     });
   });
+
+  it("fully clears the prior error state once a retry succeeds", async () => {
+    // First analyse fails on the data load, every later call succeeds. We make
+    // the first attempt fail twice (analyse + one Retry) so the next-steps hint
+    // is on screen, then let the third attempt succeed — proving the success
+    // path wipes the error message, the hint and the Retry button.
+    mockedGetTx
+      .mockRejectedValueOnce(new Error("boom"))
+      .mockRejectedValueOnce(new Error("boom"))
+      .mockResolvedValue({ txid: TXID, fee: 1_000 } as any);
+    mockedGetParticipants.mockResolvedValue(validParticipants());
+
+    renderDeepDive();
+    fireEvent.click(screen.getByTestId("button-analyse-deep-dive"));
+
+    // First failure: message + retry, no hint yet.
+    await screen.findByTestId("button-retry-deep-dive");
+    expect(screen.queryByTestId("text-deep-dive-next-steps")).toBeNull();
+
+    // Second failure surfaces the next-steps hint.
+    fireEvent.click(screen.getByTestId("button-retry-deep-dive"));
+    await screen.findByTestId("text-deep-dive-next-steps");
+
+    // Third attempt succeeds: data loads and the worker is posted to.
+    fireEvent.click(screen.getByTestId("button-retry-deep-dive"));
+    await waitFor(() => {
+      expect(lastWorker).not.toBeNull();
+      expect(lastWorker!.postMessage).toHaveBeenCalled();
+    });
+
+    // Drive a valid worker result back using the id from the latest postMessage.
+    const calls = lastWorker!.postMessage.mock.calls;
+    const { id } = calls[calls.length - 1][0] as { id: string };
+    act(() => {
+      lastWorker!.onmessage!({
+        data: { id, result: { tooComplex: true } },
+      } as MessageEvent);
+    });
+
+    // Results render…
+    await screen.findByTestId("container-boltzmann-result");
+    expect(screen.getByTestId("container-deep-dive-summary")).toBeTruthy();
+
+    // …and every trace of the prior error is gone.
+    expect(screen.queryByTestId("text-deep-dive-message")).toBeNull();
+    expect(screen.queryByTestId("text-deep-dive-next-steps")).toBeNull();
+    expect(screen.queryByTestId("button-retry-deep-dive")).toBeNull();
+  });
 });
 
 // A transaction can load successfully yet have no participant rows (e.g. the
