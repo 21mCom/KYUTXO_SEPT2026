@@ -25,6 +25,14 @@ async function getPrivacyHistoryLimit(): Promise<number> {
 }
 
 /**
+ * Return the total number of stored audit snapshots. Useful for previewing how
+ * many runs a retention-limit change would remove before committing it.
+ */
+export async function getPrivacyAuditHistoryCount(): Promise<number> {
+  return db.privacyAuditHistory.count();
+}
+
+/**
  * Trim the audit history table down to the most recent `retentionLimit`
  * entries, removing the oldest first. When `retentionLimit` is omitted the
  * configured limit (or default) is used. Returns the number of entries removed.

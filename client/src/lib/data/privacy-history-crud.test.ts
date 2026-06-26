@@ -50,6 +50,7 @@ vi.mock("@/lib/database", async () => {
 const {
   addPrivacyAuditHistoryEntry,
   getPrivacyAuditHistory,
+  getPrivacyAuditHistoryCount,
   clearPrivacyAuditHistory,
   trimPrivacyAuditHistory,
   DEFAULT_PRIVACY_HISTORY_LIMIT,
@@ -208,6 +209,20 @@ describe("trimPrivacyAuditHistory", () => {
     // A limit equal to the current count also removes nothing.
     expect(await trimPrivacyAuditHistory(6)).toBe(0);
     expect(await testDb.privacyAuditHistory.count()).toBe(6);
+  });
+});
+
+describe("getPrivacyAuditHistoryCount", () => {
+  it("returns the total number of stored runs", async () => {
+    expect(await getPrivacyAuditHistoryCount()).toBe(0);
+
+    for (let i = 1; i <= 7; i++) {
+      await addPrivacyAuditHistoryEntry(mkEntry(i * 1000));
+    }
+    expect(await getPrivacyAuditHistoryCount()).toBe(7);
+
+    await clearPrivacyAuditHistory();
+    expect(await getPrivacyAuditHistoryCount()).toBe(0);
   });
 });
 

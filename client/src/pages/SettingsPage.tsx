@@ -54,6 +54,7 @@ import {
 import { useAuth } from "@/contexts/AuthContext";
 import { db, type TrashedAttachment } from "@/lib/database";
 import { clearAllRecords } from "@/lib/data/record-crud";
+import { getPrivacyAuditHistoryCount } from "@/lib/data/privacy-history-crud";
 import { recomputeAddressStats } from "@/lib/data/address-stats";
 import { clearTransactions, clearParticipants } from "@/lib/data/transaction-crud";
 import { addUtxoLineage, addCustodySegment, clearUtxoLineage, clearCustodySegments } from "@/lib/data/lineage-crud";
@@ -130,6 +131,11 @@ import { resetOrphanCheckGate } from "@/lib/orphan-check-session";
 import { createProviderFromSettings } from "@/lib/blockchain-api";
 
 const DELETE_CONFIRMATION_PHRASE = "DELETE ALL DATA";
+
+// Lowering the Privacy Audit History limit deletes the oldest runs. When more
+// than this many runs would be removed, confirm with the user first so a misclick
+// doesn't silently wipe a lot of history.
+const PRIVACY_HISTORY_TRIM_CONFIRM_THRESHOLD = 20;
 
 const ENTITY_DIFF_ROW_HEIGHT = 52;
 const ENTITY_OVERRIDE_ROW_HEIGHT = 60;
@@ -625,6 +631,12 @@ export default function SettingsPage() {
   // can no longer keep the existing vault, so we warn before allowing it.
   const [restoreCancellable, setRestoreCancellable] = useState(false);
   const [showCancelRestoreConfirm, setShowCancelRestoreConfirm] = useState(false);
+  // Confirmation before lowering the Privacy Audit History limit when a large
+  // number of runs would be deleted, so a misclick doesn't silently wipe a lot
+  // of history. Holds the pending new limit and how many runs would be removed.
+  const [pendingHistoryTrim, setPendingHistoryTrim] = useState<
+    { limit: number; removeCount: number } | null
+  >(null);
   // Two-stage restore for v3 backups: "configure" (pick file/password/mode) then
   // "confirm" (review which portable preferences the backup will carry over,
   // before the destructive restore runs). `prefPreview` is computed without
@@ -2403,6 +2415,51 @@ export default function SettingsPage() {
     setRestoreMessage("Cancelling...");
   };
 
+  // Commit a new Privacy Audit History retention limit, trimming older runs and
+  // surfacing how many were removed.
+  const applyPrivacyHistoryLimit = async (limit: number) => {
+    try {
+      const removed = await updatePrivacyHistoryLimit(limit);
+      if (removed > 0) {
+        toast({
+          title: `Removed ${removed.toLocaleString()} older ${removed === 1 ? "run" : "runs"}`,
+          description: "Older Privacy Audit runs beyond the new limit were deleted.",
+        });
+      }
+    } catch {
+      toast({
+        title: "Error",
+        description: "Failed to update retention limit",
+        variant: "destructive",
+      });
+    }
+  };
+
+  // Picking a new limit: if a large number of runs would be deleted, confirm
+  // first so a misclick doesn't silently wipe a lot of history. Small/no-op
+  // trims apply immediately.
+  const handlePrivacyHistoryLimitChange = async (limit: number) => {
+    try {
+      const total = await getPrivacyAuditHistoryCount();
+      const removeCount = total - limit;
+      if (removeCount > PRIVACY_HISTORY_TRIM_CONFIRM_THRESHOLD) {
+        setPendingHistoryTrim({ limit, removeCount });
+        return;
+      }
+    } catch {
+      // If we can't preview the count, fall through to applying directly; the
+      // trim itself still reports what it removed.
+    }
+    await applyPrivacyHistoryLimit(limit);
+  };
+
+  const confirmPrivacyHistoryTrim = async () => {
+    if (!pendingHistoryTrim) return;
+    const { limit } = pendingHistoryTrim;
+    setPendingHistoryTrim(null);
+    await applyPrivacyHistoryLimit(limit);
+  };
+
   const isLoading = settingsLoading || customFieldsLoading;
 
   return (
@@ -2694,22 +2751,8 @@ export default function SettingsPage() {
               </div>
               <Select
                 value={String(privacyHistoryLimit)}
-                onValueChange={async (val) => {
-                  try {
-                    const removed = await updatePrivacyHistoryLimit(Number(val));
-                    if (removed > 0) {
-                      toast({
-                        title: `Removed ${removed.toLocaleString()} older ${removed === 1 ? "run" : "runs"}`,
-                        description: "Older Privacy Audit runs beyond the new limit were deleted.",
-                      });
-                    }
-                  } catch {
-                    toast({
-                      title: "Error",
-                      description: "Failed to update retention limit",
-                      variant: "destructive",
-                    });
-                  }
+                onValueChange={(val) => {
+                  void handlePrivacyHistoryLimitChange(Number(val));
                 }}
                 disabled={settingsLoading}
               >
@@ -4210,7 +4253,36 @@ export default function SettingsPage() {
         </DialogContent>
       </Dialog>
 
-      {/* Confirm cancel after the destructive clear has begun */}
+      {/* Confirm before lowering the Privacy Audit History limit deletes a large batch of older runs */}
+      <AlertDialog
+        open={pendingHistoryTrim !== null}
+        onOpenChange={(open) => !open && setPendingHistoryTrim(null)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="h-5 w-5 text-destructive" />
+              Remove older audit runs?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {pendingHistoryTrim
+                ? `This will permanently remove ${pendingHistoryTrim.removeCount.toLocaleString()} older Privacy Audit ${pendingHistoryTrim.removeCount === 1 ? "run" : "runs"}, keeping only the most recent ${pendingHistoryTrim.limit.toLocaleString()}. This cannot be undone. Continue?`
+                : ""}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel data-testid="button-cancel-history-trim">Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => void confirmPrivacyHistoryTrim()}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              data-testid="button-confirm-history-trim"
+            >
+              Remove runs
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
       <AlertDialog open={showCancelRestoreConfirm} onOpenChange={setShowCancelRestoreConfirm}>
         <AlertDialogContent>
           <AlertDialogHeader>
