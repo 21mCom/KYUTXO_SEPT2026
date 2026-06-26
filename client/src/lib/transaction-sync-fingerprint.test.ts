@@ -302,6 +302,62 @@ describe("syncAddress fingerprint backfill (re-sync)", () => {
     expect(participants).toHaveLength(0);
   });
 
+  it("backfills a pre-feature row first seen via another address (existingTx branch, above lastSyncedHeight)", async () => {
+    const trackedId = (await testDb.records.add(
+      makeAddressRecord(ADDR_TRACKED),
+    )) as number;
+
+    // The tx row was imported earlier through a *different* tracked address,
+    // before fingerprint capture existed — so it carries no fingerprint fields.
+    await testDb.blockchainTransactions.add(
+      makePreFingerprintTxRow(TXID_A) as BlockchainTransaction,
+    );
+    const before = await testDb.blockchainTransactions
+      .where("txid")
+      .equals(TXID_A)
+      .first();
+    expect(before!.rawFingerprintCaptured).toBeUndefined();
+
+    // This address has been synced, but only up to a height BELOW the tx's block
+    // height. So the tx is *above* lastSyncedHeight and skips the height-skip
+    // branch, landing in the existingTx branch (row exists, not re-imported).
+    await testDb.addressSyncState.add({
+      address: ADDR_TRACKED,
+      recordId: trackedId,
+      lastSyncedHeight: TX_BLOCK_HEIGHT - 100,
+      lastSyncedAt: Date.now(),
+      txCount: 0,
+    } as AddressSyncState);
+
+    const stats = await runSyncAddress([makeFingerprintApiTx(TXID_A)], trackedId, {
+      currentHeight: 800100,
+    });
+
+    // existingTx branch: the row already existed, so nothing is imported...
+    expect(stats.imported).toBe(0);
+    expect(stats.skippedAlreadySynced).toBe(0);
+    // ...but the backfill wrote the fingerprint fields, tallied as updated.
+    expect(stats.updated).toBe(1);
+
+    // The existing row was updated in place — still exactly one row for the txid.
+    const rows = await testDb.blockchainTransactions
+      .where("txid")
+      .equals(TXID_A)
+      .toArray();
+    expect(rows).toHaveLength(1);
+    expect(rows[0].rawFingerprintCaptured).toBe(true);
+    expect(rows[0].nVersion).toBe(2);
+    expect(rows[0].nLockTime).toBe(0);
+    expect(rows[0].hasRbf).toBe(true);
+
+    // Backfill must not import the transaction: no participant rows are written.
+    const participants = await testDb.transactionParticipants
+      .where("txid")
+      .equals(TXID_A)
+      .toArray();
+    expect(participants).toHaveLength(0);
+  });
+
   it("leaves a row already carrying fingerprint data untouched on re-sync", async () => {
     const trackedId = (await testDb.records.add(
       makeAddressRecord(ADDR_TRACKED),
