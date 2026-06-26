@@ -81,23 +81,28 @@ type ScanState = "idle" | "analyzing" | "tagging" | "complete";
 const AUDIT_INPUT_BATCH = 1000;
 const TAG_FETCH_BATCH = 500;
 
-// Renders a source citation note with the first http(s) URL turned into an
-// inline clickable link. The link is only opened externally on an explicit
-// user click (window.open) — the URL is never fetched at load time, preserving
-// offline-first behavior. Notes without a URL render as plain text.
+// Renders a free-text note with every http(s) URL turned into an inline
+// clickable link. Links are only opened externally on an explicit user click
+// (window.open) — URLs are never fetched at load time, preserving offline-first
+// behavior. Notes without a URL render as plain text. Used for source citation
+// notes, finding descriptions, and remediation text.
 function renderSourceNote(note: string): React.ReactNode {
-  const match = note.match(/https?:\/\/[^\s)]+/i);
-  if (!match || match.index === undefined) return note;
-  const raw = match[0];
-  // Keep trailing punctuation out of the link target, but render it as text.
-  const trailing = raw.match(/[.,;]+$/)?.[0] ?? "";
-  const url = trailing ? raw.slice(0, raw.length - trailing.length) : raw;
-  const before = note.slice(0, match.index);
-  const after = note.slice(match.index + raw.length);
-  return (
-    <>
-      {before}
+  const urlRegex = /https?:\/\/[^\s)]+/gi;
+  const parts: React.ReactNode[] = [];
+  let lastIndex = 0;
+  let key = 0;
+  let match: RegExpExecArray | null;
+  while ((match = urlRegex.exec(note)) !== null) {
+    const raw = match[0];
+    // Keep trailing punctuation out of the link target, but render it as text.
+    const trailing = raw.match(/[.,;]+$/)?.[0] ?? "";
+    const url = trailing ? raw.slice(0, raw.length - trailing.length) : raw;
+    if (match.index > lastIndex) {
+      parts.push(note.slice(lastIndex, match.index));
+    }
+    parts.push(
       <a
+        key={`link-${key++}`}
         href={url}
         onClick={(e) => {
           e.preventDefault();
@@ -107,11 +112,14 @@ function renderSourceNote(note: string): React.ReactNode {
         title={`Open ${url}`}
       >
         {url}
-      </a>
-      {trailing}
-      {after}
-    </>
-  );
+      </a>,
+    );
+    if (trailing) parts.push(trailing);
+    lastIndex = match.index + raw.length;
+  }
+  if (parts.length === 0) return note;
+  if (lastIndex < note.length) parts.push(note.slice(lastIndex));
+  return <>{parts}</>;
 }
 
 // ─── Icon mapping ─────────────────────────────────────────────────────────────
@@ -1846,7 +1854,7 @@ function FindingCard({ finding, coinjoinTxids }: { finding: PrivacyFinding; coin
         <Badge {...getSeverityBadgePropsLocal(finding.severity)} data-testid="badge-finding-severity">
           {finding.severity}
         </Badge>
-        <p className="text-sm flex-1">{finding.description}</p>
+        <p className="text-sm flex-1">{renderSourceNote(finding.description)}</p>
         {finding.scoreDelta !== undefined && finding.scoreDelta < 0 && (
           <span className="text-xs text-red-500 dark:text-red-400 font-mono shrink-0" data-testid="text-score-delta">
             {finding.scoreDelta > -1 ? "<-1" : Math.round(finding.scoreDelta)} pts
@@ -1963,7 +1971,7 @@ function FindingCard({ finding, coinjoinTxids }: { finding: PrivacyFinding; coin
             >
               <span className="text-xs font-medium text-muted-foreground">Remediation:</span>
               <p className="text-xs mt-0.5" data-testid="text-remediation">
-                {finding.correction}
+                {renderSourceNote(finding.correction)}
               </p>
             </div>
           </div>
