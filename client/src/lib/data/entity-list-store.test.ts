@@ -354,6 +354,63 @@ describe("serializeActiveEntityList round-trip", () => {
     expect(result.entries).toHaveLength(getBundledEntityCount());
   });
 
+  it("re-imports a hand-edited export template (add/edit/remove)", async () => {
+    // A brand-new valid address that is not in the bundled list.
+    const NEW_ADDR = "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq";
+
+    const json = serializeActiveEntityList();
+    const parsed = JSON.parse(json) as {
+      entries: Array<{ address: string; name: string; category: string; sourceNote?: string }>;
+    };
+    const bundledCount = parsed.entries.length;
+    expect(bundledCount).toBe(getBundledEntityCount());
+    expect(bundledCount).toBeGreaterThan(2);
+
+    // Simulate a realistic hand-edit of the template:
+    // 1) Add one brand-new valid entry.
+    parsed.entries.push({
+      address: NEW_ADDR,
+      name: "Hand Added Market",
+      category: "darknet",
+    });
+    // 2) Edit an existing entry's name and category.
+    parsed.entries[0] = {
+      ...parsed.entries[0],
+      name: "Renamed Entity",
+      category: "mixer",
+    };
+    // 3) Remove an existing entry.
+    const removed = parsed.entries.splice(1, 1)[0];
+
+    // Net effect: +1 added, -1 removed → same count as the bundled list.
+    const expectedCount = bundledCount;
+    expect(parsed.entries).toHaveLength(expectedCount);
+
+    const result = validateEntitySnapshot(parsed);
+    expect(result.valid).toBe(true);
+    expect(result.errors).toEqual([]);
+    expect(result.total).toBe(expectedCount);
+    expect(result.entries).toHaveLength(expectedCount);
+
+    // The edited and added entries are present; the removed one is gone.
+    expect(result.entries.find((e) => e.address === NEW_ADDR)).toEqual({
+      address: NEW_ADDR,
+      name: "Hand Added Market",
+      category: "darknet",
+    });
+    const edited = result.entries.find((e) => e.address === parsed.entries[0].address);
+    expect(edited).toMatchObject({ name: "Renamed Entity", category: "mixer" });
+    expect(result.entries.find((e) => e.address === removed.address)).toBeUndefined();
+
+    // The hand-edited snapshot imports without errors.
+    updateSettingsMock.mockClear();
+    const imported = await importEntitySnapshot(parsed, "hand-edited.json");
+    expect(imported.valid).toBe(true);
+    expect(imported.count).toBe(expectedCount);
+    expect(imported.errors).toEqual([]);
+    expect(getActiveEntityList()).toHaveLength(expectedCount);
+  });
+
   it("round-trips a previously imported list back through validation and import", async () => {
     // Replace the active list with a small custom snapshot.
     const custom = [
