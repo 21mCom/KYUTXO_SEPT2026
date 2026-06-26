@@ -664,23 +664,40 @@ function TransactionDeepDive({
 
 // ─── Per-finding deep-dive dialog ─────────────────────────────────────────────
 
-function DeepDiveDialog({ txid, coinjoinTxids }: { txid: string; coinjoinTxids: Set<string> }) {
-  const [open, setOpen] = useState(false);
+function DeepDiveDialog({
+  txid,
+  coinjoinTxids,
+  open: controlledOpen,
+  onOpenChange: controlledOnOpenChange,
+  showTrigger = true,
+}: {
+  txid: string;
+  coinjoinTxids: Set<string>;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  showTrigger?: boolean;
+}) {
+  const [internalOpen, setInternalOpen] = useState(false);
+  const isControlled = controlledOpen !== undefined;
+  const open = isControlled ? controlledOpen : internalOpen;
+  const setOpen = isControlled ? (controlledOnOpenChange ?? (() => {})) : setInternalOpen;
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>
-        <Button
-          size="icon"
-          variant="ghost"
-          className="h-5 w-5"
-          title="Deep dive"
-          aria-label="Deep dive into this transaction"
-          data-testid={`button-deep-dive-${txid.slice(0, 8)}`}
-        >
-          <ScanSearch className="h-3 w-3" />
-        </Button>
-      </DialogTrigger>
+      {showTrigger && (
+        <DialogTrigger asChild>
+          <Button
+            size="icon"
+            variant="ghost"
+            className="h-5 w-5"
+            title="Deep dive"
+            aria-label="Deep dive into this transaction"
+            data-testid={`button-deep-dive-${txid.slice(0, 8)}`}
+          >
+            <ScanSearch className="h-3 w-3" />
+          </Button>
+        </DialogTrigger>
+      )}
       <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto" data-testid="dialog-deep-dive">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
@@ -731,8 +748,9 @@ function shortPeelTxid(t: string): string {
 // Node-link diagram of the peel chain. Transactions form a vertical spine;
 // change outputs flow down the spine (becoming the next hop's input) while
 // payments branch off to the right toward external addresses.
-function PeelChainGraph({ steps }: { steps: PeelStep[] }) {
+function PeelChainGraph({ steps, coinjoinTxids }: { steps: PeelStep[]; coinjoinTxids: Set<string> }) {
   const { openRecordPreviewByAddress } = useRecordPreview();
+  const [deepDiveTxid, setDeepDiveTxid] = useState<string | null>(null);
   const marginTop = 36;
   const hopGap = 150;
   const txX = 92;
@@ -876,7 +894,7 @@ function PeelChainGraph({ steps }: { steps: PeelStep[] }) {
             const isLast = i === steps.length - 1;
             return (
               <Fragment key={`nodes-${step.txid}`}>
-                {/* Transaction node */}
+                {/* Transaction node — click to view the record; badge opens the forensic deep-dive */}
                 <g
                   data-testid={`graph-tx-${i}`}
                   role="button"
@@ -897,6 +915,30 @@ function PeelChainGraph({ steps }: { steps: PeelStep[] }) {
                   >
                     {`H${i + 1}`}
                   </text>
+                  {/* Deep-dive affordance badge on the node */}
+                  <g
+                    transform={`translate(${txX + 12}, ${ty - 20})`}
+                    role="button"
+                    tabIndex={0}
+                    style={{ cursor: "pointer" }}
+                    aria-label={`Deep dive into hop ${i + 1} transaction`}
+                    data-testid={`button-graph-deep-dive-${i}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setDeepDiveTxid(step.txid);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setDeepDiveTxid(step.txid);
+                      }
+                    }}
+                  >
+                    <title>{`Deep dive into hop ${i + 1}`}</title>
+                    <circle r={8} fill="hsl(var(--background))" stroke="hsl(var(--primary))" strokeWidth={1.5} />
+                    <ScanSearch x={-5} y={-5} width={10} height={10} color="hsl(var(--primary))" />
+                  </g>
                   <text
                     x={txX}
                     y={ty + 34}
@@ -971,6 +1013,18 @@ function PeelChainGraph({ steps }: { steps: PeelStep[] }) {
           })}
         </svg>
       </div>
+      {deepDiveTxid && (
+        <DeepDiveDialog
+          key={deepDiveTxid}
+          txid={deepDiveTxid}
+          coinjoinTxids={coinjoinTxids}
+          open
+          onOpenChange={(o) => {
+            if (!o) setDeepDiveTxid(null);
+          }}
+          showTrigger={false}
+        />
+      )}
     </div>
   );
 }
@@ -1064,7 +1118,7 @@ function PeelChainView({ txids, changeAddresses, coinjoinTxids }: { txids: strin
         </div>
       </div>
       {viewMode === "graph" ? (
-        <PeelChainGraph steps={steps} />
+        <PeelChainGraph steps={steps} coinjoinTxids={coinjoinTxids} />
       ) : (
         <div className="space-y-2">
           <p className="text-xs text-muted-foreground">
