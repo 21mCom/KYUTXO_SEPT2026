@@ -11,7 +11,7 @@
 
 import 'fake-indexeddb/auto';
 import { describe, it, expect, beforeEach, beforeAll, afterEach } from "vitest";
-import { render, screen, cleanup, waitFor } from "@testing-library/react";
+import { render, screen, cleanup, waitFor, fireEvent } from "@testing-library/react";
 import {
   clearStaleReport,
   appendStaleReportRows,
@@ -85,9 +85,29 @@ beforeEach(async () => {
 
 afterEach(() => cleanup());
 
+// Minimal selection harness: most tests don't exercise selection, so default
+// to an empty set and no-op handlers. Specific tests override these.
+function renderList(
+  overrides: Partial<{
+    count: number;
+    selectedIds: Set<number>;
+    onToggleRow: (recordId: number) => void;
+    onSetManySelected: (recordIds: number[], select: boolean) => void;
+  }> = {},
+) {
+  return render(
+    <StaleAddressList
+      count={overrides.count ?? rows.length}
+      selectedIds={overrides.selectedIds ?? new Set<number>()}
+      onToggleRow={overrides.onToggleRow ?? (() => {})}
+      onSetManySelected={overrides.onSetManySelected ?? (() => {})}
+    />,
+  );
+}
+
 describe("StaleAddressList", () => {
   it("renders a row per stale address with cached and computed balances", async () => {
-    render(<StaleAddressList count={rows.length} />);
+    renderList();
 
     // Rows are fetched from the scratch store on demand, so wait for the first
     // window to load in.
@@ -104,7 +124,7 @@ describe("StaleAddressList", () => {
   });
 
   it("links each Open button to that record on the Records page", async () => {
-    render(<StaleAddressList count={rows.length} />);
+    renderList();
 
     // The Button uses asChild, so the wouter Link's anchor receives the testid.
     const link11 = await screen.findByTestId("link-stale-address-11");
@@ -113,5 +133,49 @@ describe("StaleAddressList", () => {
     expect(link11.tagName).toBe("A");
     expect(link11.getAttribute("href")).toBe("/records?id=11");
     expect(link22.getAttribute("href")).toBe("/records?id=22");
+  });
+
+  it("calls onToggleRow with the record id when a row checkbox is clicked", async () => {
+    const onToggleRow = vi.fn();
+    renderList({ onToggleRow });
+
+    const checkbox = await screen.findByTestId("checkbox-stale-11");
+    fireEvent.click(checkbox);
+    expect(onToggleRow).toHaveBeenCalledWith(11);
+  });
+
+  it("reflects the selected state on each row's checkbox", async () => {
+    renderList({ selectedIds: new Set([22]) });
+
+    await screen.findByTestId("checkbox-stale-11");
+    expect(screen.getByTestId("checkbox-stale-11").getAttribute("data-state")).toBe(
+      "unchecked",
+    );
+    expect(screen.getByTestId("checkbox-stale-22").getAttribute("data-state")).toBe(
+      "checked",
+    );
+  });
+
+  it("select-all toggles every loaded row via onSetManySelected", async () => {
+    const onSetManySelected = vi.fn();
+    renderList({ onSetManySelected });
+
+    // Wait for the loaded window so both record ids are known to the header.
+    await screen.findByTestId("checkbox-stale-11");
+    fireEvent.click(screen.getByTestId("checkbox-stale-select-all"));
+
+    expect(onSetManySelected).toHaveBeenCalledTimes(1);
+    const [ids, select] = onSetManySelected.mock.calls[0];
+    expect([...ids].sort((a: number, b: number) => a - b)).toEqual([11, 22]);
+    expect(select).toBe(true);
+  });
+
+  it("select-all header shows checked once every loaded row is selected", async () => {
+    renderList({ selectedIds: new Set([11, 22]) });
+
+    await screen.findByTestId("checkbox-stale-11");
+    expect(
+      screen.getByTestId("checkbox-stale-select-all").getAttribute("data-state"),
+    ).toBe("checked");
   });
 });

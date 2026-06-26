@@ -41,6 +41,7 @@ import {
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Separator } from "@/components/ui/separator";
 import { db } from "@/lib/database";
 import {
@@ -731,7 +732,17 @@ function formatSats(sats: number): string {
 const STALE_ROW_HEIGHT = 56;
 const STALE_WINDOW_SIZE = 100;
 
-export function StaleAddressList({ count }: { count: number }) {
+export function StaleAddressList({
+  count,
+  selectedIds,
+  onToggleRow,
+  onSetManySelected,
+}: {
+  count: number;
+  selectedIds: Set<number>;
+  onToggleRow: (recordId: number) => void;
+  onSetManySelected: (recordIds: number[], select: boolean) => void;
+}) {
   const parentRef = useRef<HTMLDivElement>(null);
   // Loaded rows keyed by absolute row index; only visited windows are present.
   const rowCacheRef = useRef<Map<number, StaleAddressDetail>>(new Map());
@@ -757,6 +768,16 @@ export function StaleAddressList({ count }: { count: number }) {
   const virtualItems = virtualizer.getVirtualItems();
   const firstIndex = virtualItems.length ? virtualItems[0].index : 0;
   const lastIndex = virtualItems.length ? virtualItems[virtualItems.length - 1].index : 0;
+
+  // Record ids of every row whose window has been loaded into the cache. The
+  // header "select all" checkbox acts on exactly these — the rows the user has
+  // actually scrolled into view — never the unloaded remainder. Reading the ref
+  // during render is safe because cacheVersion bumps re-render it after a load.
+  const loadedIds: number[] = [];
+  rowCacheRef.current.forEach((row) => loadedIds.push(row.recordId));
+  const allLoadedSelected = loadedIds.length > 0 && loadedIds.every((id) => selectedIds.has(id));
+  const someLoadedSelected = loadedIds.some((id) => selectedIds.has(id));
+  const headerChecked = allLoadedSelected ? true : someLoadedSelected ? "indeterminate" : false;
 
   // Load any visible windows that aren't cached yet, then re-render.
   useEffect(() => {
@@ -797,7 +818,14 @@ export function StaleAddressList({ count }: { count: number }) {
 
   return (
     <div className="border rounded-md" data-testid="list-stale-addresses">
-      <div className="grid grid-cols-[1fr_auto_auto_auto] gap-3 px-3 py-2 bg-muted/50 border-b text-xs font-medium text-muted-foreground">
+      <div className="grid grid-cols-[auto_1fr_auto_auto_auto] gap-3 px-3 py-2 bg-muted/50 border-b text-xs font-medium text-muted-foreground items-center">
+        <Checkbox
+          checked={headerChecked}
+          onCheckedChange={(v) => onSetManySelected(loadedIds, v === true)}
+          aria-label="Select all loaded addresses"
+          title="Select all loaded rows"
+          data-testid="checkbox-stale-select-all"
+        />
         <span>Address</span>
         <span className="text-right">Cached</span>
         <span className="text-right">Computed</span>
@@ -833,13 +861,19 @@ export function StaleAddressList({ count }: { count: number }) {
             return (
               <div
                 key={row.recordId}
-                className="absolute left-0 right-0 grid grid-cols-[1fr_auto_auto_auto] items-center gap-3 px-3 border-b last:border-b-0"
+                className="absolute left-0 right-0 grid grid-cols-[auto_1fr_auto_auto_auto] items-center gap-3 px-3 border-b last:border-b-0"
                 style={{
                   height: `${STALE_ROW_HEIGHT}px`,
                   transform: `translateY(${virtualRow.start}px)`,
                 }}
                 data-testid={`row-stale-address-${row.recordId}`}
               >
+                <Checkbox
+                  checked={selectedIds.has(row.recordId)}
+                  onCheckedChange={() => onToggleRow(row.recordId)}
+                  aria-label={`Select ${row.address}`}
+                  data-testid={`checkbox-stale-${row.recordId}`}
+                />
                 <span
                   className="font-mono text-xs truncate"
                   title={row.address}
@@ -890,6 +924,27 @@ export function BalanceIntegrityCard() {
   // Remembers whether the last run was a full-table scan, so the post-recompute
   // re-check repeats the same scope the user chose.
   const lastCheckAllRef = useRef(false);
+  // Record ids the user has ticked in the stale list, so they can rebuild just
+  // those addresses instead of every cached stat. Reset on each new check.
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+
+  const toggleRow = useCallback((recordId: number) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(recordId)) next.delete(recordId);
+      else next.add(recordId);
+      return next;
+    });
+  }, []);
+
+  const setManySelected = useCallback((recordIds: number[], select: boolean) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (select) recordIds.forEach((id) => next.add(id));
+      else recordIds.forEach((id) => next.delete(id));
+      return next;
+    });
+  }, []);
 
   // Drop the scratch store when this card unmounts so diagnostic data does not
   // linger after the user leaves the page.
@@ -910,6 +965,7 @@ export function BalanceIntegrityCard() {
     lastCheckAllRef.current = checkAll;
     await clearStaleReport();
     setStaleRowsCount(0);
+    setSelectedIds(new Set());
     setState({ status: "checking", sampled: 0, checkAll });
     try {
       const result = await detectStaleCachedBalances({
@@ -938,7 +994,11 @@ export function BalanceIntegrityCard() {
     }
   }, []);
 
-  const recompute = useCallback(async () => {
+  // Rebuild cached stats and re-run the check. With no `recordIds` this rebuilds
+  // every address (the original "Recompute"); with `recordIds` it rebuilds only
+  // the rows the user picked from the stale list. Both share the same progress
+  // and cancellation handling.
+  const runRecompute = useCallback(async (recordIds?: number[]) => {
     abortRef.current?.abort();
     const abort = new AbortController();
     abortRef.current = abort;
@@ -947,6 +1007,7 @@ export function BalanceIntegrityCard() {
       await recomputeAddressStats({
         origin: "user",
         signal: abort.signal,
+        ...(recordIds && recordIds.length > 0 ? { recordIds } : {}),
         onProgress: ({ processed, total }) => setState({ status: "recomputing", processed, total }),
       });
       if (abort.signal.aborted) {
@@ -954,7 +1015,8 @@ export function BalanceIntegrityCard() {
         return;
       }
       // Re-run the read-only check so the user sees the now-corrected count,
-      // matching the scope (sample vs. full-table) of the original run.
+      // matching the scope (sample vs. full-table) of the original run. runCheck
+      // also clears the current selection.
       await runCheck(lastCheckAllRef.current);
     } catch (err) {
       if (abort.signal.aborted) {
@@ -964,6 +1026,12 @@ export function BalanceIntegrityCard() {
       setState({ status: "error", message: err instanceof Error ? err.message : String(err) });
     }
   }, [runCheck]);
+
+  const recompute = useCallback(() => runRecompute(), [runRecompute]);
+  const recomputeSelected = useCallback(
+    () => runRecompute(Array.from(selectedIds)),
+    [runRecompute, selectedIds],
+  );
 
   const cancel = useCallback(() => {
     abortRef.current?.abort();
@@ -1043,6 +1111,23 @@ export function BalanceIntegrityCard() {
                 <RefreshCw className="h-4 w-4" />
               )}
               {isRecomputing ? "Recomputing…" : "Recompute"}
+            </Button>
+          )}
+          {hasStale && selectedIds.size > 0 && (
+            <Button
+              variant="outline"
+              onClick={recomputeSelected}
+              disabled={isBusy}
+              data-testid="button-recompute-selected"
+            >
+              {isRecomputing ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <RefreshCw className="h-4 w-4" />
+              )}
+              {isRecomputing
+                ? "Recomputing…"
+                : `Recompute selected (${selectedIds.size.toLocaleString()})`}
             </Button>
           )}
           {isBusy && (
@@ -1130,8 +1215,8 @@ export function BalanceIntegrityCard() {
             <div className="flex items-end justify-between gap-2 flex-wrap">
               <p className="text-sm text-muted-foreground" data-testid="text-stale-list-caption">
                 {staleRowsCount < state.result.staleCount
-                  ? `Showing the first ${staleRowsCount.toLocaleString()} of ${state.result.staleCount.toLocaleString()} stale addresses. Each opens its record on the Records page.`
-                  : "Each row opens that address's record on the Records page."}
+                  ? `Showing the first ${staleRowsCount.toLocaleString()} of ${state.result.staleCount.toLocaleString()} stale addresses. Tick rows to rebuild just those with "Recompute selected", or open a record on the Records page.`
+                  : 'Tick rows to rebuild just those with "Recompute selected", or open a record on the Records page.'}
               </p>
               <div className="flex items-center gap-2">
                 <Button
@@ -1164,7 +1249,12 @@ export function BalanceIntegrityCard() {
                 </Button>
               </div>
             </div>
-            <StaleAddressList count={staleRowsCount} />
+            <StaleAddressList
+              count={staleRowsCount}
+              selectedIds={selectedIds}
+              onToggleRow={toggleRow}
+              onSetManySelected={setManySelected}
+            />
           </div>
         )}
       </CardContent>
