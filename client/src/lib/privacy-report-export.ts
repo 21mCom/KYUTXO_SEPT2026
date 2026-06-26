@@ -137,7 +137,7 @@ export function buildPrivacyReport(
 }
 
 /** Human-friendly severity label ("CRITICAL" → "Critical"). */
-function severityLabel(s: PrivacySeverity): string {
+export function severityLabel(s: PrivacySeverity): string {
   return s.charAt(0) + s.slice(1).toLowerCase();
 }
 

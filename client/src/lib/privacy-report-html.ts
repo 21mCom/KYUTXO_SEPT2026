@@ -3,13 +3,15 @@ import {
   type PrivacyAuditResult,
   type PrivacyFinding,
   type PrivacySeverity,
-  type EntityCitation,
 } from "@/lib/privacy-audit";
-import { formatScoreDelta, type ExportScope } from "@/lib/privacy-report-export";
+import {
+  type ExportScope,
+  extractCitations,
+  formatScoreDelta,
+  severityLabel,
+} from "@/lib/privacy-report-export";
 
-export function severityLabel(s: PrivacySeverity): string {
-  return s.charAt(0) + s.slice(1).toLowerCase();
-}
+export { severityLabel } from "@/lib/privacy-report-export";
 
 /** Escape user-controlled strings before interpolating into report HTML. */
 export function escapeHtml(s: string): string {
@@ -51,8 +53,7 @@ export function buildPrintableReport(
     .filter(x => x.count > 0);
 
   const renderCitations = (f: PrivacyFinding): string => {
-    if (!f.type.startsWith("ENTITY_")) return "";
-    const citations = (f.details as { citations?: EntityCitation[] }).citations;
+    const citations = extractCitations(f);
     if (!citations || citations.length === 0) return "";
     const rows = citations.map(c => `
       <tr>
