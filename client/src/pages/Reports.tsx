@@ -54,11 +54,20 @@ function PrivacyAuditReportPanel() {
   const [result, setResult] = useState<PrivacyAuditResult | null>(null);
   const [highlightedType, setHighlightedType] = useState<PrivacyFinding["type"] | null>(null);
   const findingsRef = useRef<HTMLDivElement | null>(null);
+  const waterfallRef = useRef<HTMLDivElement | null>(null);
 
   const focusFindingsByType = useCallback((findingType: PrivacyFinding["type"]) => {
     setHighlightedType(findingType);
     requestAnimationFrame(() => {
       const el = findingsRef.current?.querySelector<HTMLElement>(`[data-finding-type="${findingType}"]`);
+      el?.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+  }, []);
+
+  const focusWaterfallByType = useCallback((findingType: PrivacyFinding["type"]) => {
+    setHighlightedType(findingType);
+    requestAnimationFrame(() => {
+      const el = waterfallRef.current?.querySelector<HTMLElement>(`[data-waterfall-type="${findingType}"]`);
       el?.scrollIntoView({ behavior: "smooth", block: "center" });
     });
   }, []);
@@ -289,7 +298,7 @@ function PrivacyAuditReportPanel() {
                 <CardDescription>How each finding category adjusted the score from the base of 100.</CardDescription>
               </CardHeader>
               <CardContent>
-                <div className="rounded-md border overflow-hidden">
+                <div ref={waterfallRef} className="rounded-md border overflow-hidden">
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="bg-muted/50 text-xs uppercase tracking-wide text-muted-foreground">
@@ -308,6 +317,7 @@ function PrivacyAuditReportPanel() {
                           <tr
                             key={i}
                             data-testid={`row-privacy-waterfall-${i}`}
+                            data-waterfall-type={isBase ? undefined : entry.findingType}
                             onClick={hasFindings ? () => focusFindingsByType(entry.findingType as PrivacyFinding["type"]) : undefined}
                             role={hasFindings ? "button" : undefined}
                             tabIndex={hasFindings ? 0 : undefined}
@@ -317,7 +327,7 @@ function PrivacyAuditReportPanel() {
                                 focusFindingsByType(entry.findingType as PrivacyFinding["type"]);
                               }
                             } : undefined}
-                            className={`${hasFindings ? "cursor-pointer hover-elevate" : ""} ${isHighlighted ? "bg-muted" : ""}`}
+                            className={`scroll-mt-4 ${hasFindings ? "cursor-pointer hover-elevate" : ""} ${isHighlighted ? "bg-muted" : ""}`}
                           >
                             <td className="p-2">
                               <span>{entry.label}</span>
@@ -351,29 +361,53 @@ function PrivacyAuditReportPanel() {
             <div className="space-y-2">
               <h3 className="text-sm font-medium">Findings &amp; Warnings</h3>
               <div ref={findingsRef} className="rounded-md border divide-y divide-border text-sm" data-testid="container-privacy-report-findings">
-                {[...result.findings, ...result.warnings].map((f, i) => (
-                  <div
-                    key={i}
-                    data-finding-type={f.type}
-                    className={`p-3 flex flex-wrap gap-2 items-start scroll-mt-4 transition-colors ${
-                      highlightedType === f.type ? "bg-muted" : ""
-                    }`}
-                    data-testid={`row-privacy-finding-${i}`}
-                  >
-                    <Badge className={`shrink-0 ${severityBadgeClass(f.severity)}`}>{severityLabel(f.severity)}</Badge>
-                    <div className="flex-1 min-w-0">
-                      <div className="font-medium">{FINDING_TYPE_LABELS[f.type] ?? f.type}</div>
-                      <div className="text-xs text-muted-foreground mt-0.5 line-clamp-2">{f.description}</div>
-                      {f.correction && (
-                        <div className="text-xs text-muted-foreground mt-0.5 italic">Fix: {f.correction}</div>
-                      )}
-                      <div className="text-xs text-muted-foreground mt-0.5">
-                        {f.addresses.length > 0 && <span>{f.addresses.length} address(es)</span>}
-                        {f.txids.length > 0 && <span className="ml-2">{f.txids.length} tx(s)</span>}
+                {[...result.findings, ...result.warnings].map((f, i) => {
+                  const impact = f.scoreDelta != null ? Math.round(f.scoreDelta) : 0;
+                  const hasImpact = impact !== 0;
+                  return (
+                    <div
+                      key={i}
+                      data-finding-type={f.type}
+                      onClick={() => focusWaterfallByType(f.type)}
+                      role="button"
+                      tabIndex={0}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          focusWaterfallByType(f.type);
+                        }
+                      }}
+                      className={`p-3 flex flex-wrap gap-2 items-start scroll-mt-4 transition-colors cursor-pointer hover-elevate ${
+                        highlightedType === f.type ? "bg-muted" : ""
+                      }`}
+                      data-testid={`row-privacy-finding-${i}`}
+                    >
+                      <Badge className={`shrink-0 ${severityBadgeClass(f.severity)}`}>{severityLabel(f.severity)}</Badge>
+                      <div className="flex-1 min-w-0">
+                        <div className="font-medium">{FINDING_TYPE_LABELS[f.type] ?? f.type}</div>
+                        <div className="text-xs text-muted-foreground mt-0.5 line-clamp-2">{f.description}</div>
+                        {f.correction && (
+                          <div className="text-xs text-muted-foreground mt-0.5 italic">Fix: {f.correction}</div>
+                        )}
+                        <div className="text-xs text-muted-foreground mt-0.5">
+                          {f.addresses.length > 0 && <span>{f.addresses.length} address(es)</span>}
+                          {f.txids.length > 0 && <span className="ml-2">{f.txids.length} tx(s)</span>}
+                        </div>
+                      </div>
+                      <div className="shrink-0 flex items-center gap-1 self-center" data-testid={`text-privacy-finding-impact-${i}`}>
+                        <span
+                          className={`text-xs tabular-nums font-medium ${
+                            hasImpact ? "text-red-600 dark:text-red-400" : "text-muted-foreground"
+                          }`}
+                          title="Score impact — click to view in Score Breakdown"
+                        >
+                          {hasImpact ? `${impact} pts` : "0 pts"}
+                        </span>
+                        <ChevronRight className="h-3 w-3 text-muted-foreground" />
                       </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           ) : (
