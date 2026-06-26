@@ -52,6 +52,7 @@ export function useSettings() {
     cancelConfirmThreshold: settings?.cancelConfirmThreshold ?? DEFAULT_CANCEL_CONFIRM_THRESHOLD,
     privacyHistoryLimit: settings?.privacyHistoryLimit ?? DEFAULT_PRIVACY_HISTORY_LIMIT,
     peelChainViewMode: settings?.peelChainViewMode ?? 'graph',
+    showScoreBreakdown: settings?.showScoreBreakdown ?? false,
     disableOrphanCheck: settings?.disableOrphanCheck ?? false,
     isLoading: settings === undefined,
   };
@@ -138,6 +139,15 @@ export async function updatePeelChainViewMode(mode: 'graph' | 'list') {
   if (settings) {
     await updateStoredSettings('default', {
       peelChainViewMode: mode,
+    });
+  }
+}
+
+export async function updateShowScoreBreakdown(value: boolean) {
+  const settings = await getStoredSettings('default');
+  if (settings) {
+    await updateStoredSettings('default', {
+      showScoreBreakdown: value,
     });
   }
 }

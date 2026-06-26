@@ -375,6 +375,9 @@ export interface Settings {
   // Persisted user preference for the Privacy Audit peel-chain view toggle.
   // Defaults to 'graph' for first-time users when unset.
   peelChainViewMode?: 'graph' | 'list';
+  // Persisted user preference for whether the Privacy Audit score breakdown
+  // (waterfall chart) is expanded. Defaults to false (collapsed) when unset.
+  showScoreBreakdown?: boolean;
   // When true, the startup scan for transaction records missing on-chain data
   // ("orphaned" txids) is skipped entirely. Defaults to false (check enabled).
   disableOrphanCheck?: boolean;

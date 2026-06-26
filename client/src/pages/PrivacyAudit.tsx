@@ -60,7 +60,7 @@ import { createTag } from "@/lib/data/vocabulary-crud";
 import { updateRecord, countRecordsByType, getRecordsPageByTypeIdReverseKeyset, getRecordsByInputStrings } from "@/lib/data/record-crud";
 import { getTransactionByTxid } from "@/lib/data/transaction-crud";
 import { getParticipantsByTxids } from "@/lib/data/record-queries";
-import { useSettings, updatePeelChainViewMode } from "@/hooks/use-settings";
+import { useSettings, updatePeelChainViewMode, updateShowScoreBreakdown } from "@/hooks/use-settings";
 import { useTags } from "@/hooks/use-tags";
 import { useOwners } from "@/hooks/use-owners";
 import { useWalletNames } from "@/hooks/use-wallet-names";
@@ -1624,7 +1624,12 @@ export default function PrivacyAudit() {
   const [selectedOwner, setSelectedOwner] = useState<string>("all");
   const [selectedWallet, setSelectedWallet] = useState<string>("all");
   const [openTypes, setOpenTypes] = useState<Record<string, boolean>>({});
-  const [showWaterfall, setShowWaterfall] = useState(false);
+  const { showScoreBreakdown } = useSettings();
+  const showWaterfall = showScoreBreakdown;
+  const setShowWaterfall = (next: boolean | ((v: boolean) => boolean)) => {
+    const value = typeof next === "function" ? next(showWaterfall) : next;
+    void updateShowScoreBreakdown(value);
+  };
 
   const { tags } = useTags();
   const { owners } = useOwners();
