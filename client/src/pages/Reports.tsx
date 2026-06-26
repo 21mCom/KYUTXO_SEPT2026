@@ -21,7 +21,7 @@ import {
 } from "@/lib/privacy-audit";
 import { renderSourceNote } from "@/lib/renderSourceNote";
 import { buildPrivacyReport, buildPrivacyTextReport, formatScoreDelta } from "@/lib/privacy-report-export";
-import { buildPrintableReport, severityLabel } from "@/lib/privacy-report-html";
+import { buildPrintableReport, severityLabel, wireReportCopyButton } from "@/lib/privacy-report-html";
 import { getRecordsPageByTypeIdReverseKeyset } from "@/lib/data/record-crud";
 
 // ─── Privacy Audit Report ────────────────────────────────────────────────────
@@ -202,42 +202,7 @@ export function PrivacyAuditReportPanel() {
     // in the document.write'd window. The report text is the same plain-text
     // export used elsewhere, so the formats stay in sync.
     const reportText = buildPrivacyTextReport(result, scope);
-    const btn = win.document.getElementById("copy-report-btn");
-    const statusEl = win.document.getElementById("copy-report-status");
-    const setStatus = (msg: string, ok: boolean) => {
-      if (!statusEl) return;
-      statusEl.textContent = msg;
-      (statusEl as HTMLElement).style.color = ok ? "#16a34a" : "#dc2626";
-    };
-    btn?.addEventListener("click", async () => {
-      try {
-        if (win.navigator.clipboard?.writeText) {
-          await win.navigator.clipboard.writeText(reportText);
-          setStatus("Copied to clipboard.", true);
-          return;
-        }
-      } catch {
-        // Fall through to the execCommand fallback below.
-      }
-      try {
-        const ta = win.document.createElement("textarea");
-        ta.value = reportText;
-        ta.setAttribute("readonly", "");
-        ta.style.position = "fixed";
-        ta.style.left = "-9999px";
-        win.document.body.appendChild(ta);
-        ta.focus();
-        ta.select();
-        const ok = win.document.execCommand("copy");
-        win.document.body.removeChild(ta);
-        setStatus(
-          ok ? "Copied to clipboard." : "Copy unavailable — select the text and press Ctrl/Cmd+C.",
-          ok,
-        );
-      } catch {
-        setStatus("Copy unavailable — select the text and press Ctrl/Cmd+C.", false);
-      }
-    });
+    wireReportCopyButton(win, reportText);
 
     // Wait for layout before invoking the print dialog so users can Save as PDF.
     win.focus();

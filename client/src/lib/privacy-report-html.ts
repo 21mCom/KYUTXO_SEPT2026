@@ -30,6 +30,63 @@ export const PRINT_SEVERITY_COLORS: Record<PrivacySeverity, string> = {
   LOW: "#3b82f6",
 };
 
+/** Status colors for the in-window copy confirmation (green ok, red failure). */
+const COPY_STATUS_OK_COLOR = "#16a34a";
+const COPY_STATUS_FAIL_COLOR = "#dc2626";
+
+/**
+ * Wire the "Copy report text" button inside the printable report window.
+ *
+ * The print/PDF document is produced by {@link buildPrintableReport} and opened
+ * via `document.write`. Because the production CSP forbids inline scripts in that
+ * window, the button must be wired from the app context after the document is
+ * written. This helper attaches the click handler, writes `reportText` (the same
+ * plain-text export shown elsewhere) to the clipboard, falls back to a
+ * `textarea` + `execCommand("copy")` when the async Clipboard API is missing or
+ * rejects, and reports the outcome in the `#copy-report-status` element.
+ *
+ * Extracted from `Reports.tsx` so the wiring is unit-testable against a jsdom
+ * window without rendering the whole page.
+ */
+export function wireReportCopyButton(win: Window, reportText: string): void {
+  const btn = win.document.getElementById("copy-report-btn");
+  const statusEl = win.document.getElementById("copy-report-status");
+  const setStatus = (msg: string, ok: boolean) => {
+    if (!statusEl) return;
+    statusEl.textContent = msg;
+    (statusEl as HTMLElement).style.color = ok ? COPY_STATUS_OK_COLOR : COPY_STATUS_FAIL_COLOR;
+  };
+  btn?.addEventListener("click", async () => {
+    try {
+      if (win.navigator.clipboard?.writeText) {
+        await win.navigator.clipboard.writeText(reportText);
+        setStatus("Copied to clipboard.", true);
+        return;
+      }
+    } catch {
+      // Fall through to the execCommand fallback below.
+    }
+    try {
+      const ta = win.document.createElement("textarea");
+      ta.value = reportText;
+      ta.setAttribute("readonly", "");
+      ta.style.position = "fixed";
+      ta.style.left = "-9999px";
+      win.document.body.appendChild(ta);
+      ta.focus();
+      ta.select();
+      const ok = win.document.execCommand("copy");
+      win.document.body.removeChild(ta);
+      setStatus(
+        ok ? "Copied to clipboard." : "Copy unavailable — select the text and press Ctrl/Cmd+C.",
+        ok,
+      );
+    } catch {
+      setStatus("Copy unavailable — select the text and press Ctrl/Cmd+C.", false);
+    }
+  });
+}
+
 /**
  * Assemble the full printable Privacy Audit report as a standalone HTML
  * document string. This is the single source of truth for the print/HTML
