@@ -36,6 +36,7 @@ import {
   Ban,
   ExternalLink,
   ListChecks,
+  Download,
 } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -58,6 +59,7 @@ import {
   clearStaleReport,
   appendStaleReportRows,
   getStaleReportWindow,
+  exportStaleReport,
 } from "@/lib/data/stale-balance-report-store";
 
 // The markers the v27 migration left on rows whose ciphertext was preserved.
@@ -968,6 +970,33 @@ function BalanceIntegrityCard() {
     setState({ status: "idle" });
   }, []);
 
+  // Streamed export of the full stale-address report (CSV/JSON). Reads the rows
+  // back from the local scratch store window-by-window so even a very large set
+  // never lives in a single in-memory array; stays fully offline.
+  const [exporting, setExporting] = useState<null | "csv" | "json">(null);
+
+  const exportReport = useCallback(async (format: "csv" | "json") => {
+    setExporting(format);
+    try {
+      const { blob, rowCount } = await exportStaleReport(format);
+      if (rowCount === 0) return;
+      const url = URL.createObjectURL(blob);
+      try {
+        const link = document.createElement("a");
+        const stamp = new Date().toISOString().slice(0, 10);
+        link.href = url;
+        link.download = `stale-addresses-${stamp}.${format}`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+      } finally {
+        URL.revokeObjectURL(url);
+      }
+    } finally {
+      setExporting(null);
+    }
+  }, []);
+
   const hasStale = state.status === "done" && state.result.staleCount > 0;
   const allGood = state.status === "done" && state.result.staleCount === 0;
 
@@ -1098,11 +1127,43 @@ function BalanceIntegrityCard() {
 
         {state.status === "done" && hasStale && staleRowsCount > 0 && (
           <div className="space-y-2">
-            <p className="text-sm text-muted-foreground" data-testid="text-stale-list-caption">
-              {staleRowsCount < state.result.staleCount
-                ? `Showing the first ${staleRowsCount.toLocaleString()} of ${state.result.staleCount.toLocaleString()} stale addresses. Each opens its record on the Records page.`
-                : "Each row opens that address's record on the Records page."}
-            </p>
+            <div className="flex items-end justify-between gap-2 flex-wrap">
+              <p className="text-sm text-muted-foreground" data-testid="text-stale-list-caption">
+                {staleRowsCount < state.result.staleCount
+                  ? `Showing the first ${staleRowsCount.toLocaleString()} of ${state.result.staleCount.toLocaleString()} stale addresses. Each opens its record on the Records page.`
+                  : "Each row opens that address's record on the Records page."}
+              </p>
+              <div className="flex items-center gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => exportReport("csv")}
+                  disabled={exporting !== null}
+                  data-testid="button-export-stale-csv"
+                >
+                  {exporting === "csv" ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Download className="h-4 w-4" />
+                  )}
+                  {exporting === "csv" ? "Exporting…" : "Export CSV"}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => exportReport("json")}
+                  disabled={exporting !== null}
+                  data-testid="button-export-stale-json"
+                >
+                  {exporting === "json" ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Download className="h-4 w-4" />
+                  )}
+                  {exporting === "json" ? "Exporting…" : "Export JSON"}
+                </Button>
+              </div>
+            </div>
             <StaleAddressList count={staleRowsCount} />
           </div>
         )}

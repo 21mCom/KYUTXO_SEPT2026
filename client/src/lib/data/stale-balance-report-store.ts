@@ -64,3 +64,83 @@ export async function getStaleReportWindow(
 export async function countStaleReportRows(): Promise<number> {
   return getStore().rows.count();
 }
+
+/** How many rows each export pass pulls back from IndexedDB at a time. */
+const EXPORT_WINDOW_SIZE = 1000;
+
+/** Escape a single CSV field per RFC 4180 (quote when it contains , " or newline). */
+function csvField(value: string | number): string {
+  const s = String(value);
+  if (/[",\n\r]/.test(s)) {
+    return `"${s.replace(/"/g, '""')}"`;
+  }
+  return s;
+}
+
+/**
+ * Stream the entire stored stale report out as a downloadable file without ever
+ * holding the whole set in a single in-memory structure. Rows are read back from
+ * IndexedDB one window at a time, each window is serialised to a string chunk,
+ * and the chunks are handed to a Blob (which the browser backs with disk-spill
+ * for large payloads). Fully offline — no network is touched.
+ *
+ * `format` selects CSV (one row per stale address) or JSON (a single array).
+ * Returns the number of rows written.
+ */
+export async function exportStaleReport(
+  format: 'csv' | 'json',
+  onProgress?: (written: number, total: number) => void,
+): Promise<{ blob: Blob; rowCount: number }> {
+  const store = getStore();
+  const total = await store.rows.count();
+  const chunks: string[] = [];
+  let written = 0;
+
+  if (format === 'csv') {
+    chunks.push('recordId,address,cachedSats,computedSats\n');
+    for (let offset = 0; offset < total; offset += EXPORT_WINDOW_SIZE) {
+      const rows = await store.rows
+        .orderBy('seq')
+        .offset(offset)
+        .limit(EXPORT_WINDOW_SIZE)
+        .toArray();
+      if (rows.length === 0) break;
+      let block = '';
+      for (const r of rows) {
+        block +=
+          `${csvField(r.recordId)},${csvField(r.address)},` +
+          `${csvField(r.cachedSats)},${csvField(r.computedSats)}\n`;
+      }
+      chunks.push(block);
+      written += rows.length;
+      onProgress?.(written, total);
+    }
+    return { blob: new Blob(chunks, { type: 'text/csv;charset=utf-8' }), rowCount: written };
+  }
+
+  // JSON: emit a streamed array so we never build one giant string up front.
+  chunks.push('[');
+  for (let offset = 0; offset < total; offset += EXPORT_WINDOW_SIZE) {
+    const rows = await store.rows
+      .orderBy('seq')
+      .offset(offset)
+      .limit(EXPORT_WINDOW_SIZE)
+      .toArray();
+    if (rows.length === 0) break;
+    let block = '';
+    for (const r of rows) {
+      const entry = JSON.stringify({
+        recordId: r.recordId,
+        address: r.address,
+        cachedSats: r.cachedSats,
+        computedSats: r.computedSats,
+      });
+      block += written === 0 && block === '' ? entry : `,${entry}`;
+      written += 1;
+    }
+    chunks.push(block);
+    onProgress?.(written, total);
+  }
+  chunks.push(']');
+  return { blob: new Blob(chunks, { type: 'application/json;charset=utf-8' }), rowCount: written };
+}
