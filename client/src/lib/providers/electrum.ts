@@ -190,6 +190,8 @@ export class ElectrumProvider implements BlockchainProvider {
     const tx = electrumTx as {
       txid?: string;
       hash?: string;
+      version?: number;
+      locktime?: number;
       size?: number;
       vsize?: number;
       weight?: number;
@@ -200,6 +202,8 @@ export class ElectrumProvider implements BlockchainProvider {
       vin?: Array<{
         txid?: string;
         vout?: number;
+        sequence?: number;
+        txinwitness?: string[];
         scriptSig?: { hex?: string; asm?: string };
         value?: number;
         prevout?: {
@@ -233,6 +237,8 @@ export class ElectrumProvider implements BlockchainProvider {
     
     return {
       txid: tx.txid || tx.hash || '',
+      version: tx.version,
+      locktime: tx.locktime,
       status: {
         confirmed: height > 0,
         block_height: height > 0 ? height : undefined,
@@ -244,6 +250,8 @@ export class ElectrumProvider implements BlockchainProvider {
       vin: (tx.vin || []).map(input => ({
         txid: input.txid || '',
         vout: input.vout || 0,
+        sequence: input.sequence,
+        witness: input.txinwitness,
         prevout: input.prevout ? {
           value: input.prevout.value !== undefined ? toSatoshis(input.prevout.value) : 0,
           scriptpubkey: input.prevout.scriptpubkey,
