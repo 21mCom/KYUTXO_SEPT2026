@@ -19,7 +19,7 @@
 // the actual production behavior.
 
 import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from "vitest";
-import { render, fireEvent, cleanup, waitFor } from "@testing-library/react";
+import { render, fireEvent, cleanup, waitFor, screen } from "@testing-library/react";
 
 // A hoisted toast spy so the mocked useToast hands back the same fn we assert on.
 const { toastSpy } = vi.hoisted(() => ({ toastSpy: vi.fn() }));
@@ -344,5 +344,66 @@ describe("PrivacyAuditReportPanel — Print / PDF", () => {
       ),
     );
     expect(statusEl.style.color).toBe("rgb(220, 38, 38)"); // #dc2626
+  });
+
+  it("writes the selected owner/wallet scope into the printable HTML", async () => {
+    const fake = makeFakeWindow();
+    vi.spyOn(window, "open").mockReturnValue(fake.win);
+
+    render(<PrivacyAuditReportPanel />);
+
+    // Choose a specific owner and wallet before generating + printing.
+    fireEvent.change(screen.getByTestId("select-privacy-report-owner"), {
+      target: { value: "Alice" },
+    });
+    fireEvent.change(screen.getByTestId("select-privacy-report-wallet"), {
+      target: { value: "Cold Storage" },
+    });
+
+    fireEvent.click(screen.getByTestId("button-generate-privacy-report"));
+    await waitFor(() => screen.getByTestId("button-print-privacy-report"));
+
+    fireEvent.click(screen.getByTestId("button-print-privacy-report"));
+
+    // The printable HTML's scope line reflects the selection, not "All".
+    const html = fake.getWritten();
+    expect(html).toContain("Owner: Alice");
+    expect(html).toContain("Wallet: Cold Storage");
+    expect(html).not.toContain("Owner: All");
+    expect(html).not.toContain("Wallet: All");
+  });
+
+  it("carries the selected owner/wallet scope into the in-window copied report", async () => {
+    const fake = makeFakeWindow();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    fake.setClipboard({ writeText });
+    vi.spyOn(window, "open").mockReturnValue(fake.win);
+
+    render(<PrivacyAuditReportPanel />);
+
+    // Choose a specific owner and wallet before generating + printing.
+    fireEvent.change(screen.getByTestId("select-privacy-report-owner"), {
+      target: { value: "Alice" },
+    });
+    fireEvent.change(screen.getByTestId("select-privacy-report-wallet"), {
+      target: { value: "Cold Storage" },
+    });
+
+    fireEvent.click(screen.getByTestId("button-generate-privacy-report"));
+    await waitFor(() => screen.getByTestId("button-print-privacy-report"));
+
+    fireEvent.click(screen.getByTestId("button-print-privacy-report"));
+
+    const btn = fake.win.document.getElementById("copy-report-btn");
+    expect(btn).not.toBeNull();
+    btn.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await vi.waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+
+    // The copied plain-text report's scope line reflects the selection.
+    const copied = writeText.mock.calls[0][0] as string;
+    expect(copied).toContain("Owner: Alice");
+    expect(copied).toContain("Wallet: Cold Storage");
+    expect(copied).not.toContain("Owner: All");
+    expect(copied).not.toContain("Wallet: All");
   });
 });
