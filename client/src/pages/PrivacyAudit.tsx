@@ -915,7 +915,7 @@ function PeelChainGraph({ steps }: { steps: PeelStep[] }) {
   );
 }
 
-function PeelChainView({ txids, changeAddresses }: { txids: string[]; changeAddresses: string[] }) {
+function PeelChainView({ txids, changeAddresses, coinjoinTxids }: { txids: string[]; changeAddresses: string[]; coinjoinTxids: Set<string> }) {
   const [loading, setLoading] = useState(true);
   const [steps, setSteps] = useState<PeelStep[]>([]);
   const [viewMode, setViewMode] = useState<"graph" | "list">("graph");
@@ -1018,6 +1018,7 @@ function PeelChainView({ txids, changeAddresses }: { txids: string[]; changeAddr
                 <div className="flex items-center gap-2">
                   <Badge variant="secondary" className="font-mono">Hop {i + 1}</Badge>
                   <TxidLink txid={step.txid} />
+                  <DeepDiveDialog txid={step.txid} coinjoinTxids={coinjoinTxids} />
                 </div>
                 <span className="text-xs text-muted-foreground font-mono">
                   in {(step.carriedIn / 1e8).toFixed(6)} BTC
@@ -1898,7 +1899,7 @@ function FindingCard({ finding, coinjoinTxids }: { finding: PrivacyFinding; coin
                       Step-by-step view of how funds were peeled across consecutive transactions.
                     </DialogDescription>
                   </DialogHeader>
-                  <PeelChainView txids={finding.txids} changeAddresses={finding.addresses} />
+                  <PeelChainView txids={finding.txids} changeAddresses={finding.addresses} coinjoinTxids={coinjoinTxids} />
                 </DialogContent>
               </Dialog>
             )}
