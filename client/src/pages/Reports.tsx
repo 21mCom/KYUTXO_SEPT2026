@@ -4,7 +4,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { FileText, GitBranch, Search, Shield, Eye, Loader2, Download } from "lucide-react";
+import { FileText, GitBranch, Search, Shield, Eye, Loader2, Download, Printer } from "lucide-react";
 import { SourceOfFundsReport } from "@/components/reports/SourceOfFundsReport";
 import { HopPointReport } from "@/components/reports/HopPointReport";
 import { ContinuityCertificateReport } from "@/components/reports/ContinuityCertificateReport";
@@ -43,6 +43,149 @@ function gradeColor(grade: string): string {
   if (grade.startsWith("C")) return "text-yellow-600 dark:text-yellow-400";
   if (grade.startsWith("D")) return "text-orange-600 dark:text-orange-400";
   return "text-red-600 dark:text-red-400";
+}
+
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+const PRINT_SEVERITY_COLORS: Record<PrivacySeverity, string> = {
+  CRITICAL: "#dc2626",
+  HIGH: "#f97316",
+  MEDIUM: "#eab308",
+  LOW: "#3b82f6",
+};
+
+function buildPrintableReport(
+  result: PrivacyAuditResult,
+  scope: { owner: string | null; wallet: string | null },
+): string {
+  const generatedAt = new Date().toLocaleString();
+  const allFindings = [...result.findings, ...result.warnings];
+
+  const severityCounts = (["CRITICAL", "HIGH", "MEDIUM", "LOW"] as PrivacySeverity[])
+    .map(sev => ({ sev, count: allFindings.filter(f => f.severity === sev).length }))
+    .filter(x => x.count > 0);
+
+  const renderCitations = (f: PrivacyFinding): string => {
+    if (!f.type.startsWith("ENTITY_")) return "";
+    const citations = (f.details as { citations?: EntityCitation[] }).citations;
+    if (!citations || citations.length === 0) return "";
+    const rows = citations.map(c => `
+      <tr>
+        <td>${escapeHtml(c.name)}</td>
+        <td>${escapeHtml(c.categoryLabel)}</td>
+        <td class="mono">${escapeHtml(c.address)}</td>
+        <td>${c.sourceNote ? escapeHtml(c.sourceNote) : "—"}</td>
+      </tr>`).join("");
+    return `
+      <div class="citations">
+        <div class="citations-title">Source Citations</div>
+        <table class="citations-table">
+          <thead>
+            <tr><th>Entity</th><th>Category</th><th>Address</th><th>Source</th></tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>`;
+  };
+
+  const renderFinding = (f: PrivacyFinding): string => {
+    const label = (FINDING_TYPE_LABELS as Record<string, string>)[f.type] ?? f.type;
+    const sevColor = PRINT_SEVERITY_COLORS[f.severity];
+    return `
+      <div class="finding">
+        <div class="finding-head">
+          <span class="sev-badge" style="background:${sevColor}">${escapeHtml(severityLabel(f.severity))}</span>
+          <span class="finding-title">${escapeHtml(label)}</span>
+        </div>
+        <div class="finding-desc">${escapeHtml(f.description)}</div>
+        ${f.correction ? `<div class="finding-fix"><strong>Fix:</strong> ${escapeHtml(f.correction)}</div>` : ""}
+        <div class="finding-meta">
+          ${f.addresses.length > 0 ? `${f.addresses.length} address(es)` : ""}
+          ${f.txids.length > 0 ? `&nbsp;&nbsp;${f.txids.length} transaction(s)` : ""}
+        </div>
+        ${renderCitations(f)}
+      </div>`;
+  };
+
+  const findingsHtml = allFindings.length > 0
+    ? allFindings.map(renderFinding).join("")
+    : `<p class="clean">No privacy findings — your transaction history is clean.</p>`;
+
+  const scopeText = [
+    scope.owner ? `Owner: ${escapeHtml(scope.owner)}` : "Owner: All",
+    scope.wallet ? `Wallet: ${escapeHtml(scope.wallet)}` : "Wallet: All",
+  ].join(" · ");
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Privacy Audit Report — ${escapeHtml(new Date().toISOString().slice(0, 10))}</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; color: #1a1a1a; margin: 0; padding: 32px; line-height: 1.5; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .subtitle { color: #555; font-size: 13px; margin: 0 0 2px; }
+  .scope { color: #555; font-size: 12px; margin: 0 0 24px; }
+  .summary { display: flex; flex-wrap: wrap; gap: 16px; margin-bottom: 20px; }
+  .summary-box { border: 1px solid #ddd; border-radius: 6px; padding: 12px 16px; min-width: 110px; text-align: center; }
+  .summary-box .value { font-size: 24px; font-weight: 700; }
+  .summary-box .label { font-size: 11px; color: #666; margin-top: 2px; text-transform: uppercase; letter-spacing: 0.03em; }
+  .sev-summary { margin-bottom: 24px; font-size: 13px; }
+  .sev-chip { display: inline-block; color: #fff; border-radius: 4px; padding: 2px 8px; font-size: 12px; font-weight: 600; margin-right: 6px; }
+  h2 { font-size: 15px; border-bottom: 1px solid #ddd; padding-bottom: 6px; margin: 24px 0 12px; }
+  .finding { border: 1px solid #e2e2e2; border-radius: 6px; padding: 12px 14px; margin-bottom: 10px; page-break-inside: avoid; }
+  .finding-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+  .sev-badge { color: #fff; border-radius: 4px; padding: 1px 8px; font-size: 11px; font-weight: 600; }
+  .finding-title { font-weight: 600; font-size: 14px; }
+  .finding-desc { font-size: 13px; color: #333; }
+  .finding-fix { font-size: 12px; color: #444; font-style: italic; margin-top: 4px; }
+  .finding-meta { font-size: 11px; color: #777; margin-top: 4px; }
+  .citations { margin-top: 10px; }
+  .citations-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; color: #555; margin-bottom: 4px; }
+  .citations-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+  .citations-table th { text-align: left; background: #f5f5f5; padding: 4px 6px; border: 1px solid #e2e2e2; }
+  .citations-table td { padding: 4px 6px; border: 1px solid #e2e2e2; vertical-align: top; word-break: break-word; }
+  .mono { font-family: "JetBrains Mono", "Courier New", monospace; }
+  .clean { color: #16a34a; font-size: 14px; }
+  .footer { margin-top: 28px; padding-top: 12px; border-top: 1px solid #ddd; font-size: 11px; color: #777; }
+  @media print { body { padding: 0; } }
+</style>
+</head>
+<body>
+  <h1>Privacy Audit Report</h1>
+  <p class="subtitle">Generated ${escapeHtml(generatedAt)} · All analysis ran fully offline.</p>
+  <p class="scope">${scopeText}</p>
+
+  <div class="summary">
+    <div class="summary-box"><div class="value">${escapeHtml(result.grade)}</div><div class="label">Grade</div></div>
+    <div class="summary-box"><div class="value">${result.score}/100</div><div class="label">Score</div></div>
+    <div class="summary-box"><div class="value">${result.transactionsAnalyzed.toLocaleString()}</div><div class="label">Txs Analyzed</div></div>
+    <div class="summary-box"><div class="value">${result.addressesScanned.toLocaleString()}</div><div class="label">Addresses</div></div>
+  </div>
+
+  <div class="sev-summary">
+    ${severityCounts.length > 0
+      ? `<strong>Issues:</strong> ${severityCounts.map(x => `<span class="sev-chip" style="background:${PRINT_SEVERITY_COLORS[x.sev]}">${x.count} ${escapeHtml(severityLabel(x.sev))}</span>`).join("")}`
+      : `<span class="sev-chip" style="background:#16a34a">Clean</span>`}
+    ${result.needsResync ? `<div style="margin-top:6px;color:#b45309;">Fingerprint data ${Math.round(result.fingerprintCoverage * 100)}% — re-sync recommended for complete results.</div>` : ""}
+  </div>
+
+  <h2>Findings &amp; Warnings (${allFindings.length})</h2>
+  ${findingsHtml}
+
+  <div class="footer">
+    KYUTXO Privacy Audit · Offline-first compliance artifact. Citation URLs are shown as plain text and are never fetched.
+  </div>
+</body>
+</html>`;
 }
 
 function PrivacyAuditReportPanel() {
@@ -143,6 +286,31 @@ function PrivacyAuditReportPanel() {
     URL.revokeObjectURL(url);
   }, [result, selectedOwner, selectedWallet]);
 
+  const exportPdf = useCallback(() => {
+    if (!result) return;
+    const html = buildPrintableReport(result, {
+      owner: selectedOwner === "all" ? null : selectedOwner,
+      wallet: selectedWallet === "all" ? null : selectedWallet,
+    });
+    const win = window.open("", "_blank");
+    if (!win) {
+      toast({
+        variant: "destructive",
+        title: "Could Not Open Print View",
+        description: "Allow pop-ups for this app to print or save the report as PDF.",
+      });
+      return;
+    }
+    win.document.open();
+    win.document.write(html);
+    win.document.close();
+    // Wait for layout before invoking the print dialog so users can Save as PDF.
+    win.focus();
+    setTimeout(() => {
+      try { win.print(); } catch { /* user can print manually */ }
+    }, 250);
+  }, [result, selectedOwner, selectedWallet, toast]);
+
   const countBySeverity = (sev: PrivacySeverity) =>
     [...(result?.findings ?? []), ...(result?.warnings ?? [])].filter(f => f.severity === sev).length;
 
@@ -177,9 +345,14 @@ function PrivacyAuditReportPanel() {
           {running ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Analyzing…</> : <><Eye className="mr-2 h-4 w-4" />Generate Report</>}
         </Button>
         {result && (
-          <Button variant="outline" onClick={exportJson} data-testid="button-export-privacy-report">
-            <Download className="mr-2 h-4 w-4" />Export JSON
-          </Button>
+          <>
+            <Button variant="outline" onClick={exportPdf} data-testid="button-print-privacy-report">
+              <Printer className="mr-2 h-4 w-4" />Print / PDF
+            </Button>
+            <Button variant="outline" onClick={exportJson} data-testid="button-export-privacy-report">
+              <Download className="mr-2 h-4 w-4" />Export JSON
+            </Button>
+          </>
         )}
       </div>
 
@@ -250,7 +423,7 @@ function PrivacyAuditReportPanel() {
 
           <p className="text-xs text-muted-foreground">
             Report generated {new Date().toLocaleString()}. All analysis runs fully offline.
-            Use "Export JSON" to save a machine-readable copy for record-keeping or compliance purposes.
+            Use "Print / PDF" for a readable compliance artifact, or "Export JSON" for a machine-readable copy.
           </p>
         </div>
       )}
