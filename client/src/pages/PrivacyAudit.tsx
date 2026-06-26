@@ -60,6 +60,7 @@ import { beginBulkOperation, endBulkOperation, db } from "@/lib/database";
 import type { Record as DbRecord, PrivacyAuditHistoryEntry, TransactionParticipant } from "@/lib/database";
 import { addPrivacyAuditHistoryEntry, clearPrivacyAuditHistory } from "@/lib/data/privacy-history-crud";
 import { buildPrivacyHistoryCsv, buildPrivacyHistoryPdf } from "@/lib/privacy-history-export";
+import { formatScoreDelta } from "@/lib/privacy-report-export";
 import { createTag } from "@/lib/data/vocabulary-crud";
 import { updateRecord, countRecordsByType, getRecordsPageByTypeIdReverseKeyset, getRecordsByInputStrings } from "@/lib/data/record-crud";
 import { getTransactionByTxid } from "@/lib/data/transaction-crud";
@@ -2460,9 +2461,9 @@ function FindingCard({ finding, coinjoinTxids }: { finding: PrivacyFinding; coin
           {finding.severity}
         </Badge>
         <p className="text-sm flex-1">{renderSourceNote(finding.description)}</p>
-        {finding.scoreDelta !== undefined && finding.scoreDelta < 0 && (
+        {formatScoreDelta(finding.scoreDelta) !== null && (
           <span className="text-xs text-red-500 dark:text-red-400 font-mono shrink-0" data-testid="text-score-delta">
-            {finding.scoreDelta > -1 ? "<-1" : Math.round(finding.scoreDelta)} pts
+            {formatScoreDelta(finding.scoreDelta)}
           </span>
         )}
       </div>

@@ -20,7 +20,7 @@ import {
   type EntityCitation,
 } from "@/lib/privacy-audit";
 import { renderSourceNote } from "@/lib/renderSourceNote";
-import { buildPrivacyReport, buildPrivacyTextReport } from "@/lib/privacy-report-export";
+import { buildPrivacyReport, buildPrivacyTextReport, formatScoreDelta } from "@/lib/privacy-report-export";
 import { buildPrintableReport, severityLabel } from "@/lib/privacy-report-html";
 import { getRecordsPageByTypeIdReverseKeyset } from "@/lib/data/record-crud";
 
@@ -407,8 +407,8 @@ export function PrivacyAuditReportPanel() {
               <h3 className="text-sm font-medium">Findings &amp; Warnings</h3>
               <div ref={findingsRef} className="rounded-md border divide-y divide-border text-sm" data-testid="container-privacy-report-findings">
                 {[...result.findings, ...result.warnings].map((f, i) => {
-                  const impact = f.scoreDelta != null ? Math.round(f.scoreDelta) : 0;
-                  const hasImpact = impact !== 0;
+                  const impactLabel = formatScoreDelta(f.scoreDelta);
+                  const hasImpact = impactLabel !== null;
                   return (
                     <div
                       key={i}
@@ -446,7 +446,7 @@ export function PrivacyAuditReportPanel() {
                           }`}
                           title="Score impact — click to view in Score Breakdown"
                         >
-                          {hasImpact ? `${impact} pts` : "0 pts"}
+                          {hasImpact ? impactLabel : "0 pts"}
                         </span>
                         <ChevronRight className="h-3 w-3 text-muted-foreground" />
                       </div>
