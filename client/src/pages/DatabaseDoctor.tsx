@@ -879,7 +879,7 @@ export function StaleAddressList({ count }: { count: number }) {
   );
 }
 
-function BalanceIntegrityCard() {
+export function BalanceIntegrityCard() {
   const [state, setState] = useState<BalanceCheckState>({ status: "idle" });
   const abortRef = useRef<AbortController | null>(null);
   // Stale rows stream batch-by-batch into a local IndexedDB scratch store rather
