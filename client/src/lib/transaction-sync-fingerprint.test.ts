@@ -140,6 +140,45 @@ function makeFingerprintApiTx(txid: string): ApiTransaction {
 }
 
 /**
+ * An API tx that parseTransaction will reject (returns null): status.confirmed
+ * is false and it carries no block height/time — i.e. a pending/mempool tx the
+ * node returned that must never be written to the vault.
+ */
+function makeUnparseableApiTx(txid: string): ApiTransaction {
+  return {
+    txid,
+    version: 2,
+    locktime: 0,
+    status: {
+      confirmed: false,
+    },
+    fee: 1000,
+    size: 200,
+    weight: 800,
+    vin: [
+      {
+        txid: PREV_TXID,
+        vout: 0,
+        sequence: 0xfffffffd,
+        prevout: {
+          scriptpubkey_address: ADDR_IN,
+          scriptpubkey_type: "v0_p2wpkh",
+          value: 100000,
+        },
+      },
+    ],
+    vout: [
+      {
+        scriptpubkey_address: ADDR_OUT,
+        scriptpubkey_type: "v0_p2wpkh",
+        value: 99000,
+        n: 0,
+      },
+    ],
+  } as unknown as ApiTransaction;
+}
+
+/**
  * Pre-fingerprint blockchainTransactions row: everything a normal sync writes
  * EXCEPT the wallet-fingerprint subset, so rawFingerprintCaptured is undefined —
  * i.e. a row imported before the feature existed.
@@ -370,6 +409,34 @@ describe("syncAddress fingerprint backfill (re-sync)", () => {
       minConfirmedHeight: TX_BLOCK_HEIGHT - 1,
       currentHeight: TX_BLOCK_HEIGHT,
     });
+
+    expect(stats.skippedUnconfirmed).toBe(1);
+    expect(stats.imported).toBe(0);
+    expect(stats.updated).toBe(0);
+
+    // Nothing was written: no transaction row and no participant rows.
+    const rows = await testDb.blockchainTransactions
+      .where("txid")
+      .equals(TXID_A)
+      .toArray();
+    expect(rows).toHaveLength(0);
+
+    const participants = await testDb.transactionParticipants
+      .where("txid")
+      .equals(TXID_A)
+      .toArray();
+    expect(participants).toHaveLength(0);
+  });
+
+  it("skips an unparseable (unconfirmed) tx without backfilling or importing", async () => {
+    const trackedId = (await testDb.records.add(
+      makeAddressRecord(ADDR_TRACKED),
+    )) as number;
+
+    // The API returned a pending/mempool tx (status.confirmed=false, no block
+    // height/time), so parseTransaction returns null. The null-parse guard must
+    // skip it before any import, backfill, or participant write occurs.
+    const stats = await runSyncAddress([makeUnparseableApiTx(TXID_A)], trackedId);
 
     expect(stats.skippedUnconfirmed).toBe(1);
     expect(stats.imported).toBe(0);
