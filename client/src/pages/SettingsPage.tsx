@@ -2839,12 +2839,20 @@ export default function SettingsPage() {
                         className="flex items-center justify-between gap-2 px-3 py-1.5 text-sm"
                         data-testid={`row-preview-category-${c.category}`}
                       >
-                        <span>{c.label}</span>
+                        <span data-testid={`text-preview-category-label-${c.category}`}>
+                          {c.label}
+                        </span>
                         <span className="flex items-center gap-4 tabular-nums">
-                          <span className="w-16 text-right text-muted-foreground">
+                          <span
+                            className="w-16 text-right text-muted-foreground"
+                            data-testid={`text-preview-category-current-${c.category}`}
+                          >
                             {c.current.toLocaleString()}
                           </span>
-                          <span className="w-16 text-right font-medium">
+                          <span
+                            className="w-16 text-right font-medium"
+                            data-testid={`text-preview-category-incoming-${c.category}`}
+                          >
                             {c.incoming.toLocaleString()}
                           </span>
                         </span>
