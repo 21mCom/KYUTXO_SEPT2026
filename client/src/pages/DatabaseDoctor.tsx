@@ -16,7 +16,7 @@
  * Reads are done in id-keyset batches with a yield between each so it stays
  * responsive even on very large vaults.
  */
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { Link } from "wouter";
 import {
   Stethoscope,
@@ -28,6 +28,9 @@ import {
   Lock,
   Database,
   ArrowLeft,
+  Scale,
+  RefreshCw,
+  Ban,
 } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -40,6 +43,11 @@ import {
   isInputStringLowerRepaired,
 } from "@/lib/vault";
 import { isEncryptedPlaceholder } from "@/lib/legacy-decrypt";
+import {
+  detectStaleCachedBalances,
+  recomputeAddressStats,
+  type StaleBalanceCheckResult,
+} from "@/lib/data/address-stats";
 
 // The markers the v27 migration left on rows whose ciphertext was preserved.
 // These are kept on a row even AFTER a successful decrypt (the strip/cleanup step
@@ -324,6 +332,8 @@ export default function DatabaseDoctor() {
             )}
           </CardContent>
         </Card>
+
+        <BalanceIntegrityCard />
 
         {phase === "error" && errorMessage && (
           <div
@@ -669,6 +679,195 @@ function MigrationStatusCard({ flags }: { flags: MigrationFlags }) {
             {flags.completedTables.length > 0 ? flags.completedTables.join(", ") : "none"}
           </span>
         </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+// Balance Integrity check (Task #374). Unlike the rest of this page, the *check*
+// is read-only — it samples synced address records and compares each one's
+// cached balance against a value freshly computed from its participant rows
+// (via detectStaleCachedBalances). It writes NOTHING and is cancellable. The
+// optional "Recompute" action is the one explicit, user-initiated write on this
+// page: it rebuilds the stale caches and then re-runs the check to confirm.
+type BalanceCheckState =
+  | { status: "idle" }
+  | { status: "checking"; sampled: number }
+  | { status: "done"; result: StaleBalanceCheckResult }
+  | { status: "recomputing"; processed: number; total: number }
+  | { status: "error"; message: string };
+
+function BalanceIntegrityCard() {
+  const [state, setState] = useState<BalanceCheckState>({ status: "idle" });
+  const abortRef = useRef<AbortController | null>(null);
+
+  const isChecking = state.status === "checking";
+  const isRecomputing = state.status === "recomputing";
+  const isBusy = isChecking || isRecomputing;
+
+  const runCheck = useCallback(async () => {
+    abortRef.current?.abort();
+    const abort = new AbortController();
+    abortRef.current = abort;
+    setState({ status: "checking", sampled: 0 });
+    try {
+      const result = await detectStaleCachedBalances({
+        signal: abort.signal,
+        onProgress: (sampled) => setState({ status: "checking", sampled }),
+      });
+      if (abort.signal.aborted) {
+        setState({ status: "idle" });
+        return;
+      }
+      setState({ status: "done", result });
+    } catch (err) {
+      if (abort.signal.aborted) {
+        setState({ status: "idle" });
+        return;
+      }
+      setState({ status: "error", message: err instanceof Error ? err.message : String(err) });
+    }
+  }, []);
+
+  const recompute = useCallback(async () => {
+    abortRef.current?.abort();
+    const abort = new AbortController();
+    abortRef.current = abort;
+    setState({ status: "recomputing", processed: 0, total: 0 });
+    try {
+      await recomputeAddressStats({
+        origin: "user",
+        signal: abort.signal,
+        onProgress: ({ processed, total }) => setState({ status: "recomputing", processed, total }),
+      });
+      if (abort.signal.aborted) {
+        setState({ status: "idle" });
+        return;
+      }
+      // Re-run the read-only check so the user sees the now-corrected count.
+      await runCheck();
+    } catch (err) {
+      if (abort.signal.aborted) {
+        setState({ status: "idle" });
+        return;
+      }
+      setState({ status: "error", message: err instanceof Error ? err.message : String(err) });
+    }
+  }, [runCheck]);
+
+  const cancel = useCallback(() => {
+    abortRef.current?.abort();
+    setState({ status: "idle" });
+  }, []);
+
+  const hasStale = state.status === "done" && state.result.staleCount > 0;
+  const allGood = state.status === "done" && state.result.staleCount === 0;
+
+  return (
+    <Card data-testid="card-balance-integrity">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Scale className="h-5 w-5" />
+          Balance integrity
+        </CardTitle>
+        <CardDescription>
+          A read-only check that compares each synced address's cached balance against a value
+          freshly recomputed from its transaction rows. It samples up to 2,000 synced addresses and
+          never changes anything — use the optional Recompute button to fix any that disagree.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <div className="flex items-center gap-2 flex-wrap">
+          <Button onClick={runCheck} disabled={isBusy} data-testid="button-run-balance-check">
+            {isChecking ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+            {isChecking ? "Checking…" : "Run balance check"}
+          </Button>
+          {hasStale && (
+            <Button
+              variant="outline"
+              onClick={recompute}
+              disabled={isBusy}
+              data-testid="button-recompute-balances"
+            >
+              {isRecomputing ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <RefreshCw className="h-4 w-4" />
+              )}
+              {isRecomputing ? "Recomputing…" : "Recompute"}
+            </Button>
+          )}
+          {isBusy && (
+            <Button
+              variant="ghost"
+              onClick={cancel}
+              data-testid="button-cancel-balance-check"
+            >
+              <Ban className="h-4 w-4" />
+              Cancel
+            </Button>
+          )}
+        </div>
+
+        {state.status === "idle" && (
+          <p className="text-sm text-muted-foreground" data-testid="text-balance-idle">
+            Click "Run balance check" to start. The check is safe to cancel at any time.
+          </p>
+        )}
+
+        {state.status === "checking" && (
+          <p className="text-sm text-muted-foreground" data-testid="text-balance-progress">
+            Checking… {state.sampled.toLocaleString()} addresses sampled so far.
+          </p>
+        )}
+
+        {state.status === "recomputing" && (
+          <p className="text-sm text-muted-foreground" data-testid="text-balance-recompute-progress">
+            Recomputing balances… {state.processed.toLocaleString()}
+            {state.total > 0 ? ` of ${state.total.toLocaleString()}` : ""} addresses.
+          </p>
+        )}
+
+        {state.status === "error" && (
+          <div
+            className="rounded-md border border-destructive/40 bg-destructive/10 p-3 flex items-start gap-2"
+            data-testid="banner-balance-error"
+          >
+            <XCircle className="h-5 w-5 text-destructive mt-0.5 shrink-0" />
+            <div className="text-sm text-destructive">{state.message}</div>
+          </div>
+        )}
+
+        {state.status === "done" && (
+          <div
+            className={`rounded-md border p-3 flex items-start gap-3 ${
+              hasStale
+                ? "border-yellow-600/40 bg-yellow-600/10 dark:border-yellow-400/40 dark:bg-yellow-400/10"
+                : "border-green-600/40 bg-green-600/10 dark:border-green-400/40 dark:bg-green-400/10"
+            }`}
+            data-testid="banner-balance-result"
+          >
+            {hasStale ? (
+              <AlertTriangle className="h-5 w-5 text-yellow-600 dark:text-yellow-400 mt-0.5 shrink-0" />
+            ) : (
+              <CheckCircle2 className="h-5 w-5 text-green-600 dark:text-green-400 mt-0.5 shrink-0" />
+            )}
+            <div className="space-y-1">
+              <div className="font-medium" data-testid="text-balance-verdict">
+                {hasStale
+                  ? `${state.result.staleCount.toLocaleString()} of ${state.result.sampled.toLocaleString()} sampled addresses have a stale cached balance.`
+                  : `All ${state.result.sampled.toLocaleString()} sampled addresses have up-to-date cached balances.`}
+              </div>
+              <p className="text-sm text-muted-foreground">
+                {hasStale
+                  ? 'These addresses have a cached balance that differs from a fresh recompute. Click "Recompute" above to rebuild them from your local transaction data.'
+                  : state.result.sampled === 0
+                    ? "No synced addresses were found to check."
+                    : "Cached balances match the values computed from your transaction rows."}
+              </p>
+            </div>
+          </div>
+        )}
       </CardContent>
     </Card>
   );
