@@ -52,6 +52,22 @@ import {
   bulkAddCustodySegments,
 } from "@/lib/data/lineage-crud";
 
+/**
+ * Restore the `nodeSettings` singleton rows from a backup. Shared by BOTH the
+ * v3 streaming restore (`restoreInlineTables` below) and the legacy JSON restore
+ * in SettingsPage so the two paths can never diverge. `nodeSettings` is a
+ * singleton keyed by a stable id (default "default"); the id MUST be preserved
+ * and the write MUST use `put` (not `add`) so restoring an existing/duplicate
+ * backup overwrites in place instead of throwing a duplicate-key error.
+ */
+export async function restoreNodeSettingsRows(rows: any[]): Promise<void> {
+  if (!Array.isArray(rows) || rows.length === 0) return;
+  for (const ns of rows) {
+    const row = { ...ns, id: ns.id ?? "default" };
+    await putNodeSettings(row, { skipNotification: true });
+  }
+}
+
 export async function readInlineTables(): Promise<Record<string, unknown[]>> {
   const [tags, categories, owners, walletNames, seedNames, walletSoftware] =
     await Promise.all([
@@ -230,10 +246,7 @@ export async function restoreInlineTables(
     await addPriceData(d, { skipNotification: true });
   }
 
-  for (const ns of arr("nodeSettings")) {
-    const row = { ...ns, id: ns.id ?? "default" };
-    await putNodeSettings(row, { skipNotification: true });
-  }
+  await restoreNodeSettingsRows(arr("nodeSettings"));
 
   // utxoLineage and custodySegments are streamed tables now, so NEW backups
   // carry them as NDJSON (handled by the restore orchestrator) and won't have

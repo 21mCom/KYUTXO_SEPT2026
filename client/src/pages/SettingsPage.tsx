@@ -71,7 +71,8 @@ import { clearRecordOrigins } from "@/lib/data/record-origins-crud";
 import { clearCustomFields, addCustomField as addCustomFieldCrud, getCustomFieldBySlug } from "@/lib/data/custom-fields-crud";
 import { clearAddressSyncState, bulkAddAddressSyncState, getAllAddressSyncState, type CreateAddressSyncStateData } from "@/lib/data/address-sync-crud";
 import { clearPriceData, addPriceData } from "@/lib/data/price-data-crud";
-import { clearNodeSettings, putNodeSettings, getNodeSettings } from "@/lib/data/node-settings-crud";
+import { clearNodeSettings, getNodeSettings } from "@/lib/data/node-settings-crud";
+import { restoreNodeSettingsRows } from "@/lib/backup/inline-tables";
 import { clearDerivationTemplates, addDerivationTemplate, getAllDerivationTemplates, type CreateDerivationTemplateData } from "@/lib/data/derivation-templates-crud";
 import { updateSettings } from "@/lib/data/settings-crud";
 import {
@@ -1868,13 +1869,10 @@ export default function SettingsPage() {
         }
       }
 
-      // Restore node settings (v2.2.0+, not encrypted)
-      if (backupNodeSettings && backupNodeSettings.length > 0) {
-        for (const ns of backupNodeSettings) {
-          const row = { ...ns, id: ns.id ?? "default" };
-          await putNodeSettings(row, { skipNotification: true });
-        }
-      }
+      // Restore node settings (v2.2.0+, not encrypted). Uses the shared helper
+      // so the legacy path and the v3 streaming path can never diverge in how
+      // the nodeSettings singleton is restored (id preserved, `put` semantics).
+      await restoreNodeSettingsRows(backupNodeSettings);
 
       // Restore UTXO lineage data (v2.2.0+, not encrypted)
       if (utxoLineage && utxoLineage.length > 0) {
