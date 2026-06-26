@@ -385,6 +385,15 @@ interface DeepDiveData {
   isCoinJoin: boolean;
 }
 
+// Condense a caught error into a short, single-line reason that is safe to show
+// to the user. Strips multi-line stack traces and clamps the length so we never
+// leak a raw stack trace into the UI.
+function summariseError(raw: string): string {
+  const firstLine = (raw || "").split("\n")[0].trim();
+  if (!firstLine) return "Unknown error.";
+  return firstLine.length > 200 ? `${firstLine.slice(0, 200)}…` : firstLine;
+}
+
 function TransactionDeepDive({
   txids,
   coinjoinTxids,
@@ -401,6 +410,9 @@ function TransactionDeepDive({
   const [result, setResult] = useState<BoltzmannResult | null>(null);
   const [data, setData] = useState<DeepDiveData | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [errorDetail, setErrorDetail] = useState<string | null>(null);
+  const [showErrorDetail, setShowErrorDetail] = useState(false);
+  const [failCount, setFailCount] = useState(0);
   const [canRetry, setCanRetry] = useState(false);
   const workerRef = useRef<Worker | null>(null);
   const pendingIdRef = useRef<string | null>(null);
@@ -412,6 +424,8 @@ function TransactionDeepDive({
     setResult(null);
     setData(null);
     setMessage(null);
+    setErrorDetail(null);
+    setShowErrorDetail(false);
     setCanRetry(false);
     try {
       const tx = await getTransactionByTxid(txid);
@@ -448,14 +462,18 @@ function TransactionDeepDive({
         setResult(e.data.result ?? null);
         setLoading(false);
       };
-      worker.onerror = () => {
-        setMessage("Couldn't analyse this transaction — the calculation failed unexpectedly. Please try again.");
+      worker.onerror = (e: ErrorEvent) => {
+        setMessage("Couldn't analyse this transaction — the calculation failed unexpectedly.");
+        setErrorDetail(summariseError(e.message || "The analysis worker stopped unexpectedly."));
+        setFailCount(c => c + 1);
         setCanRetry(true);
         setLoading(false);
       };
       worker.postMessage({ id, inputs: bInputs, outputs: bOutputs, fee });
-    } catch {
-      setMessage("Couldn't load this transaction's data. Please try again.");
+    } catch (err) {
+      setMessage("Couldn't load this transaction's data.");
+      setErrorDetail(summariseError(err instanceof Error ? err.message : String(err)));
+      setFailCount(c => c + 1);
       setCanRetry(true);
       setLoading(false);
     }
@@ -525,7 +543,39 @@ function TransactionDeepDive({
             data-testid="text-deep-dive-message"
           >
             <Info className="h-4 w-4 mt-0.5 shrink-0" />
-            <span className="flex-1">{message}</span>
+            <div className="flex-1 space-y-2 min-w-0">
+              <span>{message}</span>
+              {failCount >= 2 && (
+                <p className="text-xs" data-testid="text-deep-dive-next-steps">
+                  This has failed more than once. Try re-syncing the address to
+                  refresh its data, then analyse again. If it keeps failing,
+                  check the browser console for details and report the issue.
+                </p>
+              )}
+              {errorDetail && (
+                <div>
+                  <button
+                    type="button"
+                    onClick={() => setShowErrorDetail(v => !v)}
+                    className="inline-flex items-center gap-1 text-xs underline-offset-2 hover:underline"
+                    data-testid="button-toggle-deep-dive-detail"
+                  >
+                    <ChevronDown
+                      className={`h-3 w-3 transition-transform ${showErrorDetail ? "rotate-180" : ""}`}
+                    />
+                    {showErrorDetail ? "Hide details" : "Show details"}
+                  </button>
+                  {showErrorDetail && (
+                    <p
+                      className="mt-1 rounded bg-muted px-2 py-1 font-mono text-xs break-words"
+                      data-testid="text-deep-dive-error-detail"
+                    >
+                      {errorDetail}
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
             {canRetry && (
               <Button
                 size="sm"
