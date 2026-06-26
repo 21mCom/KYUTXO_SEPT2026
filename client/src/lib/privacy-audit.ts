@@ -1268,7 +1268,7 @@ const PROXIMITY_CATEGORY_FINDING_TYPE: Record<EntityCategory, PrivacyFindingType
  * scale correctly. Only indirect contacts (hop ≥ 2) are emitted; direct
  * counterparties (hop 1) are already handled by detectEntityContacts.
  */
-function detectEntityProximity(ctx: AuditContext): PrivacyFinding[] {
+export function detectEntityProximity(ctx: AuditContext): PrivacyFinding[] {
   // Build address → [txid, …] index from the already-loaded participant map.
   const addressToTxids = new Map<string, string[]>();
   for (const [txid, parts] of ctx.participantsByTxid) {
