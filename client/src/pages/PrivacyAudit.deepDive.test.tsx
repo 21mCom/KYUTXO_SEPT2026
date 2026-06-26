@@ -186,3 +186,85 @@ describe("TransactionDeepDive failure handling", () => {
     });
   });
 });
+
+// A transaction can load successfully yet have no participant rows (e.g. the
+// address was never synced). That is a legitimate, non-error outcome: the panel
+// shows an informational message but must NOT treat it like a failure — so no
+// Retry button, no error-detail toggle, and it must never count toward the
+// consecutive-failure next-steps hint.
+describe("TransactionDeepDive empty-participants handling", () => {
+  function inputOnlyParticipants() {
+    return [
+      { txid: TXID, role: "input", address: "bc1qinput", amount: 100_000, vout: 0 },
+    ] as any;
+  }
+
+  function outputOnlyParticipants() {
+    return [
+      { txid: TXID, role: "output", address: "bc1qoutput", amount: 99_000, vout: 0 },
+    ] as any;
+  }
+
+  async function assertInformationalOnly() {
+    const message = await screen.findByTestId("text-deep-dive-message");
+    expect(message.textContent).toContain(
+      "No participant data available for this transaction",
+    );
+
+    // This is informational, not a failure: none of the failure affordances
+    // should appear.
+    expect(screen.queryByTestId("button-retry-deep-dive")).toBeNull();
+    expect(screen.queryByTestId("button-toggle-deep-dive-detail")).toBeNull();
+    expect(screen.queryByTestId("text-deep-dive-next-steps")).toBeNull();
+
+    // It must also never spin up the Boltzmann worker for an empty result.
+    expect(lastWorker).toBeNull();
+  }
+
+  it("shows an informational message (no failure affordances) when there are no participants", async () => {
+    mockedGetTx.mockResolvedValue({ txid: TXID, fee: 1_000 } as any);
+    mockedGetParticipants.mockResolvedValue([] as any);
+
+    renderDeepDive();
+    fireEvent.click(screen.getByTestId("button-analyse-deep-dive"));
+
+    await assertInformationalOnly();
+  });
+
+  it("treats inputs-only the same as empty (informational, no failure affordances)", async () => {
+    mockedGetTx.mockResolvedValue({ txid: TXID, fee: 1_000 } as any);
+    mockedGetParticipants.mockResolvedValue(inputOnlyParticipants());
+
+    renderDeepDive();
+    fireEvent.click(screen.getByTestId("button-analyse-deep-dive"));
+
+    await assertInformationalOnly();
+  });
+
+  it("treats outputs-only the same as empty (informational, no failure affordances)", async () => {
+    mockedGetTx.mockResolvedValue({ txid: TXID, fee: 1_000 } as any);
+    mockedGetParticipants.mockResolvedValue(outputOnlyParticipants());
+
+    renderDeepDive();
+    fireEvent.click(screen.getByTestId("button-analyse-deep-dive"));
+
+    await assertInformationalOnly();
+  });
+
+  it("does not show the next-steps hint even after repeated empty results", async () => {
+    mockedGetTx.mockResolvedValue({ txid: TXID, fee: 1_000 } as any);
+    mockedGetParticipants.mockResolvedValue([] as any);
+
+    renderDeepDive();
+    fireEvent.click(screen.getByTestId("button-analyse-deep-dive"));
+    await screen.findByTestId("text-deep-dive-message");
+
+    // Run it again — an empty result must never accumulate failCount, so the
+    // 2+ consecutive-failure hint must stay hidden.
+    fireEvent.click(screen.getByTestId("button-analyse-deep-dive"));
+    await screen.findByTestId("text-deep-dive-message");
+
+    expect(screen.queryByTestId("text-deep-dive-next-steps")).toBeNull();
+    expect(screen.queryByTestId("button-retry-deep-dive")).toBeNull();
+  });
+});
