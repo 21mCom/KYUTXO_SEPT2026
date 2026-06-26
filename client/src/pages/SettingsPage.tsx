@@ -946,8 +946,16 @@ export default function SettingsPage() {
               `Rebuilding ${p.processed.toLocaleString()} of ${p.orphansFound.toLocaleString()} transactions...`
             );
           } else if (p.phase === 'resolving') {
-            setBackfillProgress(99);
-            setBackfillMessage("Resolving input addresses...");
+            if (p.resolveTotal && p.resolveTotal > 0) {
+              const pct = Math.round((p.resolveProcessed ?? 0) / p.resolveTotal * 100);
+              setBackfillProgress(pct);
+              setBackfillMessage(
+                `Resolving input addresses... ${(p.resolveProcessed ?? 0).toLocaleString()} of ${p.resolveTotal.toLocaleString()}`
+              );
+            } else {
+              setBackfillProgress(99);
+              setBackfillMessage("Resolving input addresses...");
+            }
           } else if (p.phase === 'complete' || p.phase === 'deferred') {
             setBackfillProgress(100);
             setBackfillMessage("Done.");

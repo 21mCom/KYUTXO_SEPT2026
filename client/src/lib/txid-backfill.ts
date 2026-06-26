@@ -42,6 +42,16 @@ export interface BackfillProgress {
   failed: number;
   currentTxid?: string;
   message?: string;
+  /**
+   * During the 'resolving' phase: number of input rows whose address has been
+   * written so far. Undefined until the bulk-write stage begins.
+   */
+  resolveProcessed?: number;
+  /**
+   * During the 'resolving' phase: total number of resolvable input rows to be
+   * written. Undefined until the bulk-write stage begins.
+   */
+  resolveTotal?: number;
 }
 
 export type BackfillProgressCallback = (progress: BackfillProgress) => void;
@@ -369,7 +379,23 @@ export async function runTxidBackfill(
       result.prevoutsResolved = await resolveBackfillPrevouts(
         provider,
         rebuiltTxids,
-        { signal, concurrency },
+        {
+          signal,
+          concurrency,
+          onProgress: (resolveProcessed, resolveTotal) => {
+            onProgress?.({
+              phase: 'resolving',
+              orphansFound: txids.length,
+              processed,
+              rebuilt: result.rebuilt,
+              skipped: result.skipped,
+              failed: result.failed,
+              message: 'Resolving input addresses…',
+              resolveProcessed,
+              resolveTotal,
+            });
+          },
+        },
       );
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -409,9 +435,13 @@ export async function runTxidBackfill(
 async function resolveBackfillPrevouts(
   provider: BlockchainProvider,
   txids: string[],
-  options: { signal?: AbortSignal; concurrency?: number } = {},
+  options: {
+    signal?: AbortSignal;
+    concurrency?: number;
+    onProgress?: (processed: number, total: number) => void;
+  } = {},
 ): Promise<number> {
-  const { signal } = options;
+  const { signal, concurrency = 4, onProgress } = options;
 
   // Collect the input participants for the rebuilt txids that still need an
   // address but carry a prevout reference we can chase.
@@ -436,7 +466,14 @@ async function resolveBackfillPrevouts(
     await new Promise(resolve => setTimeout(resolve, 0));
   }
 
-  return resolveUnresolvedInputs(provider, unresolvedInputs, options);
+  // Map the backfill's onProgress (resolved count vs total) onto the shared
+  // core's bulk-write progress hook so the manual backfill UI can show a
+  // progress bar during the final, cancellable write phase.
+  return resolveUnresolvedInputs(provider, unresolvedInputs, {
+    signal,
+    concurrency,
+    onWriteProgress: onProgress,
+  });
 }
 
 /**
@@ -460,9 +497,10 @@ async function resolveUnresolvedInputs(
     signal?: AbortSignal;
     concurrency?: number;
     onFetchProgress?: (fetched: number, total: number) => void;
+    onWriteProgress?: (written: number, total: number) => void;
   } = {},
 ): Promise<number> {
-  const { signal, concurrency = 4, onFetchProgress } = options;
+  const { signal, concurrency = 4, onFetchProgress, onWriteProgress } = options;
 
   if (unresolvedInputs.length === 0) return 0;
 
@@ -570,12 +608,24 @@ async function resolveUnresolvedInputs(
 
   if (updated.length === 0) return 0;
 
+  // Final bulk-write phase. This can take a while for large backfills, so we
+  // check the abort signal between batches (prompt cancellation) and report
+  // incremental progress. Each completed batch is committed, so stopping early
+  // leaves the DB consistent — a re-run resumes from the still-unresolved rows.
+  const total = updated.length;
+  let written = 0;
+  onWriteProgress?.(written, total);
   for (let i = 0; i < updated.length; i += 200) {
+    if (signal?.aborted) return written;
     const batch = updated.slice(i, i + 200);
     await bulkPutParticipants(batch, { skipNotification: true });
+    written += batch.length;
+    onWriteProgress?.(written, total);
+    // Yield between batches so cancellation and the UI stay responsive.
+    await new Promise(resolve => setTimeout(resolve, 0));
   }
 
-  return updated.length;
+  return written;
 }
 
 // ─── Whole-database blank-input resolution ───────────────────────────────────
