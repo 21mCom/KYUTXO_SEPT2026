@@ -15,7 +15,9 @@ import {
   runPrivacyAudit,
   FINDING_TYPE_LABELS,
   type PrivacyAuditResult,
+  type PrivacyFinding,
   type PrivacySeverity,
+  type EntityCitation,
 } from "@/lib/privacy-audit";
 import { getRecordsPageByTypeIdReverseKeyset } from "@/lib/data/record-crud";
 
@@ -89,6 +91,31 @@ function PrivacyAuditReportPanel() {
 
   const exportJson = useCallback(() => {
     if (!result) return;
+    // Surface per-entity source citations (name, category label, sourceNote)
+    // as a clean top-level field on ENTITY_* findings so the citation travels
+    // with the exported report. URLs in sourceNote remain plain text — no fetch.
+    const extractCitations = (f: PrivacyFinding): EntityCitation[] | undefined => {
+      if (!f.type.startsWith("ENTITY_")) return undefined;
+      const citations = (f.details as { citations?: EntityCitation[] }).citations;
+      if (!citations || citations.length === 0) return undefined;
+      return citations.map(c => ({
+        name: c.name,
+        address: c.address,
+        categoryLabel: c.categoryLabel,
+        sourceNote: c.sourceNote,
+      }));
+    };
+    const mapFinding = (f: PrivacyFinding) => ({
+      type: f.type,
+      label: FINDING_TYPE_LABELS[f.type] ?? f.type,
+      severity: f.severity,
+      description: f.description,
+      correction: f.correction,
+      txids: f.txids,
+      addresses: f.addresses,
+      details: f.details,
+      citations: extractCitations(f),
+    });
     const report = {
       generatedAt: new Date().toISOString(),
       scope: { owner: selectedOwner === "all" ? null : selectedOwner, wallet: selectedWallet === "all" ? null : selectedWallet },
@@ -104,26 +131,8 @@ function PrivacyAuditReportPanel() {
         warningsCount: result.warnings.length,
       },
       scoreWaterfall: result.scoreWaterfall,
-      findings: result.findings.map(f => ({
-        type: f.type,
-        label: FINDING_TYPE_LABELS[f.type] ?? f.type,
-        severity: f.severity,
-        description: f.description,
-        correction: f.correction,
-        txids: f.txids,
-        addresses: f.addresses,
-        details: f.details,
-      })),
-      warnings: result.warnings.map(f => ({
-        type: f.type,
-        label: FINDING_TYPE_LABELS[f.type] ?? f.type,
-        severity: f.severity,
-        description: f.description,
-        correction: f.correction,
-        txids: f.txids,
-        addresses: f.addresses,
-        details: f.details,
-      })),
+      findings: result.findings.map(mapFinding),
+      warnings: result.warnings.map(mapFinding),
     };
     const blob = new Blob([JSON.stringify(report, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
