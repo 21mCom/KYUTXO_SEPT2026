@@ -288,6 +288,64 @@ describe("detectStaleCachedBalances", () => {
     expect(result.staleAddresses).toEqual([]);
   });
 
+  it("scans every synced address (ignoring the sample cap) when checkAll is set", async () => {
+    // Three synced, all-stale addresses. A normal run with sampleLimit 2 would
+    // stop early; checkAll must keep going and count all three.
+    await testDb.records.bulkAdd([
+      mkAddr({ id: 1, inputString: "a1", statsComputedAt: 5000, cachedBalanceSats: 0 }),
+      mkAddr({ id: 2, inputString: "a2", statsComputedAt: 5000, cachedBalanceSats: 0 }),
+      mkAddr({ id: 3, inputString: "a3", statsComputedAt: 5000, cachedBalanceSats: 0 }),
+    ]);
+    await testDb.transactionParticipants.bulkAdd([
+      mkOutput("a1", "t1", 100),
+      mkOutput("a2", "t2", 100),
+      mkOutput("a3", "t3", 100),
+    ]);
+    await testDb.blockchainTransactions.bulkAdd([
+      mkTx("t1", 111),
+      mkTx("t2", 222),
+      mkTx("t3", 333),
+    ]);
+
+    // sampleLimit is ignored once checkAll is true.
+    const result = await detectStaleCachedBalances({ checkAll: true, sampleLimit: 2 });
+
+    expect(result.sampled).toBe(3);
+    expect(result.staleCount).toBe(3);
+    expect(result.checkedAll).toBe(true);
+    expect(result.cancelled).toBe(false);
+  });
+
+  it("streams stale details via onStaleBatch instead of accumulating them", async () => {
+    await testDb.records.bulkAdd([
+      mkAddr({ id: 1, inputString: "s1", statsComputedAt: 5000, cachedBalanceSats: 0 }),
+      mkAddr({ id: 2, inputString: "s2", statsComputedAt: 5000, cachedBalanceSats: 0 }),
+    ]);
+    await testDb.transactionParticipants.bulkAdd([
+      mkOutput("s1", "u1", 500),
+      mkOutput("s2", "u2", 700),
+    ]);
+    await testDb.blockchainTransactions.bulkAdd([mkTx("u1", 111), mkTx("u2", 222)]);
+
+    const streamed: Array<{ recordId: number; address: string; computedSats: number }> = [];
+    const result = await detectStaleCachedBalances({
+      checkAll: true,
+      collectDetails: true,
+      onStaleBatch: (batch) => {
+        for (const d of batch) {
+          streamed.push({ recordId: d.recordId, address: d.address, computedSats: d.computedSats });
+        }
+      },
+    });
+
+    // Streaming means the returned array stays empty (caller owns the full set).
+    expect(result.staleAddresses).toHaveLength(0);
+    expect(result.staleCount).toBe(2);
+    expect(streamed).toHaveLength(2);
+    expect(streamed.map((d) => d.address).sort()).toEqual(["s1", "s2"]);
+    expect(streamed.find((d) => d.address === "s2")?.computedSats).toBe(700);
+  });
+
   it("returns cancelled: true when the signal is already aborted", async () => {
     await testDb.records.add(
       mkAddr({

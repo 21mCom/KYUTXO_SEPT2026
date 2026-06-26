@@ -7,16 +7,18 @@
  * screen has been failing to answer: "Is my data actually there and readable,
  * or is it still locked/blank?"
  *
- * It writes NOTHING. It never decrypts (so it needs no password) — it only
- * observes which fields are populated, which rows still carry the legacy
- * encryption markers left behind when the v27 migration stripped the encryption
- * flags without decrypting, and whether the one-time login decrypt + search
- * index repair ever completed.
+ * It writes NOTHING to vault data. It never decrypts (so it needs no password)
+ * — it only observes which fields are populated, which rows still carry the
+ * legacy encryption markers left behind when the v27 migration stripped the
+ * encryption flags without decrypting, and whether the one-time login decrypt +
+ * search index repair ever completed. (The Balance Integrity card additionally
+ * spools its stale-address report to a separate, local IndexedDB scratch store
+ * — never the vault — see BalanceIntegrityCard below.)
  *
  * Reads are done in id-keyset batches with a yield between each so it stays
  * responsive even on very large vaults.
  */
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "wouter";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
@@ -33,6 +35,7 @@ import {
   RefreshCw,
   Ban,
   ExternalLink,
+  ListChecks,
 } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -51,6 +54,11 @@ import {
   type StaleBalanceCheckResult,
   type StaleAddressDetail,
 } from "@/lib/data/address-stats";
+import {
+  clearStaleReport,
+  appendStaleReportRows,
+  getStaleReportWindow,
+} from "@/lib/data/stale-balance-report-store";
 
 // The markers the v27 migration left on rows whose ciphertext was preserved.
 // These are kept on a row even AFTER a successful decrypt (the strip/cleanup step
@@ -688,14 +696,19 @@ function MigrationStatusCard({ flags }: { flags: MigrationFlags }) {
 }
 
 // Balance Integrity check (Task #374). Unlike the rest of this page, the *check*
-// is read-only — it samples synced address records and compares each one's
-// cached balance against a value freshly computed from its participant rows
-// (via detectStaleCachedBalances). It writes NOTHING and is cancellable. The
-// optional "Recompute" action is the one explicit, user-initiated write on this
-// page: it rebuilds the stale caches and then re-runs the check to confirm.
+// never modifies vault data — it samples (or, in "Check all addresses" mode,
+// fully scans) synced address records and compares each one's cached balance
+// against a value freshly computed from its participant rows (via
+// detectStaleCachedBalances). The only thing it writes is a separate, local
+// IndexedDB scratch store (see stale-balance-report-store.ts) holding the
+// streamed stale-address report so the full set need not live in memory; the
+// vault itself is untouched, and the scratch store is cleared on each run and on
+// unmount. The check is cancellable. The optional "Recompute" action is the one
+// explicit, user-initiated write to vault data on this page: it rebuilds the
+// stale caches and then re-runs the check to confirm.
 type BalanceCheckState =
   | { status: "idle" }
-  | { status: "checking"; sampled: number }
+  | { status: "checking"; sampled: number; total?: number; checkAll: boolean }
   | { status: "done"; result: StaleBalanceCheckResult }
   | { status: "recomputing"; processed: number; total: number }
   | { status: "error"; message: string };
@@ -706,19 +719,79 @@ function formatSats(sats: number): string {
 
 // Virtualized list of the specific addresses whose cached balance disagreed with
 // a fresh recompute. Each row shows the cached vs. computed balance side by side
-// and links to that address record on the Records page. Virtualized so it stays
-// responsive even when thousands of addresses are stale.
+// and links to that address record on the Records page.
+//
+// The full stale set lives in a local IndexedDB scratch store (see
+// stale-balance-report-store.ts), NOT in memory. This component only ever holds
+// the rows for the windows the user has actually scrolled into view, so it stays
+// bounded even when a full-table scan finds hundreds of thousands of stale
+// addresses. Windows are fetched on demand and cached by row index.
 const STALE_ROW_HEIGHT = 56;
+const STALE_WINDOW_SIZE = 100;
 
-export function StaleAddressList({ rows }: { rows: StaleAddressDetail[] }) {
+export function StaleAddressList({ count }: { count: number }) {
   const parentRef = useRef<HTMLDivElement>(null);
+  // Loaded rows keyed by absolute row index; only visited windows are present.
+  const rowCacheRef = useRef<Map<number, StaleAddressDetail>>(new Map());
+  // Window indices currently being fetched, so we never double-load one.
+  const pendingRef = useRef<Set<number>>(new Set());
+  const [cacheVersion, setCacheVersion] = useState(0);
+
+  // A new run resets the store, so drop any cached rows when the count resets.
+  useEffect(() => {
+    if (count === 0) {
+      rowCacheRef.current.clear();
+      pendingRef.current.clear();
+    }
+  }, [count]);
 
   const virtualizer = useVirtualizer({
-    count: rows.length,
+    count,
     getScrollElement: () => parentRef.current,
     estimateSize: () => STALE_ROW_HEIGHT,
     overscan: 12,
   });
+
+  const virtualItems = virtualizer.getVirtualItems();
+  const firstIndex = virtualItems.length ? virtualItems[0].index : 0;
+  const lastIndex = virtualItems.length ? virtualItems[virtualItems.length - 1].index : 0;
+
+  // Load any visible windows that aren't cached yet, then re-render.
+  useEffect(() => {
+    if (count === 0 || virtualItems.length === 0) return;
+    const startWindow = Math.floor(firstIndex / STALE_WINDOW_SIZE);
+    const endWindow = Math.floor(lastIndex / STALE_WINDOW_SIZE);
+    const windowsToLoad: number[] = [];
+    for (let w = startWindow; w <= endWindow; w++) {
+      if (pendingRef.current.has(w)) continue;
+      const offset = w * STALE_WINDOW_SIZE;
+      const end = Math.min(offset + STALE_WINDOW_SIZE, count);
+      let missing = false;
+      for (let i = offset; i < end; i++) {
+        if (!rowCacheRef.current.has(i)) { missing = true; break; }
+      }
+      if (missing) windowsToLoad.push(w);
+    }
+    if (windowsToLoad.length === 0) return;
+
+    let cancelled = false;
+    for (const w of windowsToLoad) pendingRef.current.add(w);
+    (async () => {
+      try {
+        for (const w of windowsToLoad) {
+          const offset = w * STALE_WINDOW_SIZE;
+          const rows = await getStaleReportWindow(offset, STALE_WINDOW_SIZE);
+          rows.forEach((row, idx) => rowCacheRef.current.set(offset + idx, row));
+        }
+        if (!cancelled) setCacheVersion((v) => v + 1);
+      } finally {
+        for (const w of windowsToLoad) pendingRef.current.delete(w);
+      }
+    })();
+    return () => { cancelled = true; };
+    // cacheVersion intentionally excluded: it would re-trigger after each load.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [firstIndex, lastIndex, count]);
 
   return (
     <div className="border rounded-md" data-testid="list-stale-addresses">
@@ -736,9 +809,25 @@ export function StaleAddressList({ rows }: { rows: StaleAddressDetail[] }) {
         <div
           className="relative w-full"
           style={{ height: `${virtualizer.getTotalSize()}px` }}
+          data-cache-version={cacheVersion}
         >
-          {virtualizer.getVirtualItems().map((virtualRow) => {
-            const row = rows[virtualRow.index];
+          {virtualItems.map((virtualRow) => {
+            const row = rowCacheRef.current.get(virtualRow.index);
+            if (!row) {
+              return (
+                <div
+                  key={`loading-${virtualRow.index}`}
+                  className="absolute left-0 right-0 flex items-center px-3 border-b last:border-b-0"
+                  style={{
+                    height: `${STALE_ROW_HEIGHT}px`,
+                    transform: `translateY(${virtualRow.start}px)`,
+                  }}
+                  data-testid={`row-stale-loading-${virtualRow.index}`}
+                >
+                  <span className="text-xs text-muted-foreground">Loading…</span>
+                </div>
+              );
+            }
             return (
               <div
                 key={row.recordId}
@@ -791,21 +880,47 @@ export function StaleAddressList({ rows }: { rows: StaleAddressDetail[] }) {
 function BalanceIntegrityCard() {
   const [state, setState] = useState<BalanceCheckState>({ status: "idle" });
   const abortRef = useRef<AbortController | null>(null);
+  // Stale rows stream batch-by-batch into a local IndexedDB scratch store rather
+  // than into a React array, so a full-table scan never holds the whole stale
+  // set in memory. `staleRowsCount` tracks how many have been spooled so the
+  // virtualized list (which reads windows back on demand) knows its row count.
+  const [staleRowsCount, setStaleRowsCount] = useState(0);
+  // Remembers whether the last run was a full-table scan, so the post-recompute
+  // re-check repeats the same scope the user chose.
+  const lastCheckAllRef = useRef(false);
+
+  // Drop the scratch store when this card unmounts so diagnostic data does not
+  // linger after the user leaves the page.
+  useEffect(() => {
+    return () => {
+      void clearStaleReport();
+    };
+  }, []);
 
   const isChecking = state.status === "checking";
   const isRecomputing = state.status === "recomputing";
   const isBusy = isChecking || isRecomputing;
 
-  const runCheck = useCallback(async () => {
+  const runCheck = useCallback(async (checkAll: boolean) => {
     abortRef.current?.abort();
     const abort = new AbortController();
     abortRef.current = abort;
-    setState({ status: "checking", sampled: 0 });
+    lastCheckAllRef.current = checkAll;
+    await clearStaleReport();
+    setStaleRowsCount(0);
+    setState({ status: "checking", sampled: 0, checkAll });
     try {
       const result = await detectStaleCachedBalances({
         signal: abort.signal,
         collectDetails: true,
-        onProgress: (sampled) => setState({ status: "checking", sampled }),
+        checkAll,
+        // Awaited inside the scan: each batch is persisted before the next is
+        // gathered, giving backpressure and keeping peak memory bounded.
+        onStaleBatch: async (batch) => {
+          await appendStaleReportRows(batch);
+          setStaleRowsCount((c) => c + batch.length);
+        },
+        onProgress: (sampled, total) => setState({ status: "checking", sampled, total, checkAll }),
       });
       if (abort.signal.aborted) {
         setState({ status: "idle" });
@@ -836,8 +951,9 @@ function BalanceIntegrityCard() {
         setState({ status: "idle" });
         return;
       }
-      // Re-run the read-only check so the user sees the now-corrected count.
-      await runCheck();
+      // Re-run the read-only check so the user sees the now-corrected count,
+      // matching the scope (sample vs. full-table) of the original run.
+      await runCheck(lastCheckAllRef.current);
     } catch (err) {
       if (abort.signal.aborted) {
         setState({ status: "idle" });
@@ -864,15 +980,26 @@ function BalanceIntegrityCard() {
         </CardTitle>
         <CardDescription>
           A read-only check that compares each synced address's cached balance against a value
-          freshly recomputed from its transaction rows. It samples up to 2,000 synced addresses and
-          never changes anything — use the optional Recompute button to fix any that disagree.
+          freshly recomputed from its transaction rows. "Run balance check" samples up to 2,000
+          synced addresses for a quick read; "Check all addresses" scans every synced address (slower
+          on large vaults). Neither changes anything — use the optional Recompute button to fix any
+          that disagree.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
         <div className="flex items-center gap-2 flex-wrap">
-          <Button onClick={runCheck} disabled={isBusy} data-testid="button-run-balance-check">
-            {isChecking ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
-            {isChecking ? "Checking…" : "Run balance check"}
+          <Button onClick={() => runCheck(false)} disabled={isBusy} data-testid="button-run-balance-check">
+            {isChecking && !state.checkAll ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+            {isChecking && !state.checkAll ? "Checking…" : "Run balance check"}
+          </Button>
+          <Button
+            variant="outline"
+            onClick={() => runCheck(true)}
+            disabled={isBusy}
+            data-testid="button-check-all-balances"
+          >
+            {isChecking && state.checkAll ? <Loader2 className="h-4 w-4 animate-spin" /> : <ListChecks className="h-4 w-4" />}
+            {isChecking && state.checkAll ? "Checking all…" : "Check all addresses"}
           </Button>
           {hasStale && (
             <Button
@@ -909,7 +1036,11 @@ function BalanceIntegrityCard() {
 
         {state.status === "checking" && (
           <p className="text-sm text-muted-foreground" data-testid="text-balance-progress">
-            Checking… {state.sampled.toLocaleString()} addresses sampled so far.
+            {state.checkAll
+              ? `Checking all addresses… ${state.sampled.toLocaleString()}${
+                  state.total != null ? ` of ${state.total.toLocaleString()}` : ""
+                } scanned so far.`
+              : `Checking… ${state.sampled.toLocaleString()} addresses sampled so far.`}
           </p>
         )}
 
@@ -947,8 +1078,12 @@ function BalanceIntegrityCard() {
             <div className="space-y-1">
               <div className="font-medium" data-testid="text-balance-verdict">
                 {hasStale
-                  ? `${state.result.staleCount.toLocaleString()} of ${state.result.sampled.toLocaleString()} sampled addresses have a stale cached balance.`
-                  : `All ${state.result.sampled.toLocaleString()} sampled addresses have up-to-date cached balances.`}
+                  ? `${state.result.staleCount.toLocaleString()} of ${state.result.sampled.toLocaleString()} ${
+                      state.result.checkedAll ? "synced" : "sampled"
+                    } addresses have a stale cached balance.`
+                  : `All ${state.result.sampled.toLocaleString()} ${
+                      state.result.checkedAll ? "synced" : "sampled"
+                    } addresses have up-to-date cached balances.`}
               </div>
               <p className="text-sm text-muted-foreground">
                 {hasStale
@@ -961,14 +1096,14 @@ function BalanceIntegrityCard() {
           </div>
         )}
 
-        {state.status === "done" && hasStale && state.result.staleAddresses.length > 0 && (
+        {state.status === "done" && hasStale && staleRowsCount > 0 && (
           <div className="space-y-2">
             <p className="text-sm text-muted-foreground" data-testid="text-stale-list-caption">
-              {state.result.staleAddresses.length < state.result.staleCount
-                ? `Showing the first ${state.result.staleAddresses.length.toLocaleString()} of ${state.result.staleCount.toLocaleString()} stale addresses. Each opens its record on the Records page.`
+              {staleRowsCount < state.result.staleCount
+                ? `Showing the first ${staleRowsCount.toLocaleString()} of ${state.result.staleCount.toLocaleString()} stale addresses. Each opens its record on the Records page.`
                 : "Each row opens that address's record on the Records page."}
             </p>
-            <StaleAddressList rows={state.result.staleAddresses} />
+            <StaleAddressList count={staleRowsCount} />
           </div>
         )}
       </CardContent>

@@ -59,16 +59,22 @@ export interface StaleBalanceCheckResult {
   /**
    * Details of the mismatched addresses, collected when `collectDetails` is set.
    * Capped at `detailLimit` entries (the running `staleCount` is always exact).
+   * When `onStaleBatch` is supplied the details are streamed to the caller
+   * instead of accumulated here, so this array stays empty (the caller owns the
+   * full set) and the check itself never holds every stale address in memory.
    */
   staleAddresses: StaleAddressDetail[];
+  /** Whether the entire address table was scanned (no sampleLimit cap). */
+  checkedAll: boolean;
   cancelled: boolean;
 }
 
 /**
  * Sample synced address records and count how many have a cached balance that
  * disagrees with a freshly computed value. Only considers addresses that have
- * been synced (have a statsComputedAt timestamp). Stops after `sampleLimit`
- * addresses to keep the check fast on large vaults.
+ * been synced (have a statsComputedAt timestamp). By default it stops after
+ * `sampleLimit` addresses to keep the check fast on large vaults; pass
+ * `checkAll: true` to scan every synced address with no cap.
  *
  * This is an on-demand diagnostic; it should NOT run automatically on page
  * load. Callers are responsible for aborting and reporting progress.
@@ -76,22 +82,49 @@ export interface StaleBalanceCheckResult {
 export async function detectStaleCachedBalances(opts: {
   sampleLimit?: number;
   signal?: AbortSignal;
-  onProgress?: (sampled: number) => void;
+  /**
+   * Progress callback. `total`, when known (only in `checkAll` mode), is the
+   * total number of address records the scan will page through.
+   */
+  onProgress?: (sampled: number, total?: number) => void;
   /** Collect details of each mismatched address into `staleAddresses`. */
   collectDetails?: boolean;
   /** Maximum number of detail entries to collect (default 5000). */
   detailLimit?: number;
+  /**
+   * Scan the entire address table instead of stopping at `sampleLimit`, and
+   * collect every stale detail regardless of `detailLimit`. Intended for the
+   * "Check all addresses" lever on very large vaults.
+   */
+  checkAll?: boolean;
+  /**
+   * Stream batches of newly-found stale addresses as the scan progresses. When
+   * provided, details are handed off incrementally rather than accumulated in
+   * the returned `staleAddresses`, so a full-table scan never retains the whole
+   * stale set inside this function. May return a promise; the scan awaits it,
+   * which lets callers spool each batch to durable storage with backpressure
+   * before the next batch is gathered.
+   */
+  onStaleBatch?: (batch: StaleAddressDetail[]) => void | Promise<void>;
 }): Promise<StaleBalanceCheckResult> {
-  const limit = opts.sampleLimit ?? 2000;
-  const detailLimit = opts.detailLimit ?? 5000;
+  const checkAll = opts.checkAll ?? false;
+  const limit = checkAll ? Infinity : (opts.sampleLimit ?? 2000);
+  const detailLimit = checkAll ? Infinity : (opts.detailLimit ?? 5000);
+  const streaming = !!opts.onStaleBatch;
   let sampled = 0;
   let staleCount = 0;
   let lastId = 0;
   const BATCH = 200;
   const staleAddresses: StaleAddressDetail[] = [];
 
+  // In full-table mode, report a denominator so callers can show real progress.
+  let total: number | undefined;
+  if (checkAll) {
+    total = await db.records.where('type').equals('address').count();
+  }
+
   while (sampled < limit) {
-    if (isAborted(opts.signal)) return { sampled, staleCount, staleAddresses, cancelled: true };
+    if (isAborted(opts.signal)) return { sampled, staleCount, staleAddresses, checkedAll: checkAll, cancelled: true };
 
     const batch = await db.records
       .where('[type+id]')
@@ -112,31 +145,39 @@ export async function detectStaleCachedBalances(opts: {
     const addresses = synced.map(r => r.inputString);
     const freshStats = await computeStatsForAddresses(addresses, opts.signal);
 
+    const batchStale: StaleAddressDetail[] = [];
     for (const rec of synced) {
       const fresh = freshStats.get(rec.inputString);
       const freshBalance = fresh?.balanceSats ?? 0;
       const cached = rec.cachedBalanceSats ?? 0;
       if (cached !== freshBalance) {
         staleCount++;
-        if (opts.collectDetails && staleAddresses.length < detailLimit) {
-          staleAddresses.push({
+        if (opts.collectDetails) {
+          const detail: StaleAddressDetail = {
             recordId: rec.id!,
             address: rec.inputString,
             cachedSats: cached,
             computedSats: freshBalance,
-          });
+          };
+          if (streaming) {
+            batchStale.push(detail);
+          } else if (staleAddresses.length < detailLimit) {
+            staleAddresses.push(detail);
+          }
         }
       }
       sampled++;
       if (sampled >= limit) break;
     }
 
-    opts.onProgress?.(sampled);
+    if (streaming && batchStale.length > 0) await opts.onStaleBatch!(batchStale);
+
+    opts.onProgress?.(sampled, total);
     await new Promise(resolve => setTimeout(resolve, 0));
     if (batch.length < BATCH || sampled >= limit) break;
   }
 
-  return { sampled, staleCount, staleAddresses, cancelled: isAborted(opts.signal) };
+  return { sampled, staleCount, staleAddresses, checkedAll: checkAll, cancelled: isAborted(opts.signal) };
 }
 
 interface AddressAgg {
