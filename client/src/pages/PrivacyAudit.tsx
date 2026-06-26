@@ -2448,7 +2448,7 @@ function getSeverityBadgePropsLocal(severity: PrivacySeverity) {
   }
 }
 
-function FindingCard({ finding, coinjoinTxids }: { finding: PrivacyFinding; coinjoinTxids: Set<string> }) {
+export function FindingCard({ finding, coinjoinTxids }: { finding: PrivacyFinding; coinjoinTxids: Set<string> }) {
   const [expanded, setExpanded] = useState(false);
   const citations = (finding.details?.citations as EntityCitation[] | undefined) ?? [];
   const hopPath = (finding.details?.hopPath as string[] | undefined) ?? [];
