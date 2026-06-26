@@ -177,7 +177,7 @@ const generateFlowPathData = (nodes: FlowNode[], centerAddress: string) => {
   return { nodes: pathNodes, links: pathLinks };
 };
 
-function AddressFinderRow({ addr, onSelect, satsToBtcDisplay, formatDate, rowHeight }: {
+export function AddressFinderRow({ addr, onSelect, satsToBtcDisplay, formatDate, rowHeight }: {
   addr: FilteredAddress;
   onSelect: (address: string) => void;
   satsToBtcDisplay: (sats: number) => string;

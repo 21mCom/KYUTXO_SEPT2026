@@ -658,7 +658,7 @@ function StatsPanel({ stats }: { stats: GraphStats }) {
   );
 }
 
-function CopyAddressButton({ address }: { address: string }) {
+export function CopyAddressButton({ address }: { address: string }) {
   const [copied, setCopied] = useState(false);
 
   const handleCopy = (e: React.MouseEvent | React.KeyboardEvent) => {
