@@ -734,6 +734,51 @@ export default function SettingsPage() {
     [searchedOverrides, overridesOnlyChanged],
   );
 
+  const entityDiffCategoryCounts = useMemo(() => {
+    const counts = {} as Record<EntityCategory, number>;
+    let total = 0;
+    if (!entityPreview) return { counts, total };
+    const bump = (cats: EntityCategory[]) => {
+      for (const c of Array.from(new Set(cats))) {
+        counts[c] = (counts[c] ?? 0) + 1;
+      }
+      total += 1;
+    };
+    if (entityPreview.mode === "merge") {
+      for (const o of entityPreview.overrides) bump([o.previous.category, o.incoming.category]);
+      for (const e of entityPreview.addedEntries) bump([e.category]);
+    } else {
+      for (const e of entityPreview.addedEntries) bump([e.category]);
+      for (const e of entityPreview.removedEntries) bump([e.category]);
+      for (const c of entityPreview.changedEntries) bump([c.current.category, c.incoming.category]);
+    }
+    return { counts, total };
+  }, [entityPreview]);
+
+  const entityDiffCategoryOptions = useMemo(
+    () => (
+      <>
+        <SelectItem value="all" data-testid="option-entity-diff-category-all">
+          All categories ({entityDiffCategoryCounts.total.toLocaleString()})
+        </SelectItem>
+        {Object.entries(ENTITY_CATEGORY_LABELS).map(([value, label]) => {
+          const count = entityDiffCategoryCounts.counts[value as EntityCategory] ?? 0;
+          return (
+            <SelectItem
+              key={value}
+              value={value}
+              disabled={count === 0}
+              data-testid={`option-entity-diff-category-${value}`}
+            >
+              {label} ({count.toLocaleString()})
+            </SelectItem>
+          );
+        })}
+      </>
+    ),
+    [entityDiffCategoryCounts],
+  );
+
   const entityDiffFiltering = entityDiffSearch.trim().length > 0 || entityDiffCategory !== "all";
 
   const handleResetEntities = async () => {
@@ -2846,20 +2891,7 @@ export default function SettingsPage() {
                                 <SelectTrigger className="w-[12rem]" data-testid="select-entity-diff-category">
                                   <SelectValue placeholder="All categories" />
                                 </SelectTrigger>
-                                <SelectContent>
-                                  <SelectItem value="all" data-testid="option-entity-diff-category-all">
-                                    All categories
-                                  </SelectItem>
-                                  {Object.entries(ENTITY_CATEGORY_LABELS).map(([value, label]) => (
-                                    <SelectItem
-                                      key={value}
-                                      value={value}
-                                      data-testid={`option-entity-diff-category-${value}`}
-                                    >
-                                      {label}
-                                    </SelectItem>
-                                  ))}
-                                </SelectContent>
+                                <SelectContent>{entityDiffCategoryOptions}</SelectContent>
                               </Select>
                             </div>
                             <TabsList className="grid w-full grid-cols-2">
@@ -2952,20 +2984,7 @@ export default function SettingsPage() {
                                 <SelectTrigger className="w-[12rem]" data-testid="select-entity-diff-category">
                                   <SelectValue placeholder="All categories" />
                                 </SelectTrigger>
-                                <SelectContent>
-                                  <SelectItem value="all" data-testid="option-entity-diff-category-all">
-                                    All categories
-                                  </SelectItem>
-                                  {Object.entries(ENTITY_CATEGORY_LABELS).map(([value, label]) => (
-                                    <SelectItem
-                                      key={value}
-                                      value={value}
-                                      data-testid={`option-entity-diff-category-${value}`}
-                                    >
-                                      {label}
-                                    </SelectItem>
-                                  ))}
-                                </SelectContent>
+                                <SelectContent>{entityDiffCategoryOptions}</SelectContent>
                               </Select>
                             </div>
                             <TabsList className="grid w-full grid-cols-3">
