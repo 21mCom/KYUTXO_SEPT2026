@@ -422,3 +422,92 @@ describe("SettingsPage — entity list import (merge mode) diff filters", () => 
     ).toContain("No brand-new entries match your search.");
   });
 });
+
+describe("SettingsPage — entity list import (merge mode) source-note diff", () => {
+  it("renders the override source-note diff (old → new, '(none)' for absent notes) when the note changes", async () => {
+    renderPage();
+    await screen.findByTestId("badge-entity-source");
+
+    // Two bundled entries that both carry a real source note, so we can drive
+    // both a present→different-present diff and a present→absent ("(none)") diff.
+    const list = getBundledEntityList();
+    const withNote = list.filter((e) => e.sourceNote);
+    expect(withNote.length).toBeGreaterThanOrEqual(2);
+    const [first, second] = withNote;
+    expect(first.sourceNote).toBeTruthy();
+    expect(second.sourceNote).toBeTruthy();
+
+    fireEvent.click(screen.getByTestId("radio-entity-merge"));
+
+    const NEW_NOTE = "Updated provenance note for review";
+    const snapshot = JSON.stringify([
+      // Override 0: same name + category, only the source note changes
+      // (present → a different present note).
+      {
+        address: first.address,
+        name: first.name,
+        category: first.category,
+        sourceNote: NEW_NOTE,
+      },
+      // Override 1: same name + category, source note removed
+      // (present → absent, so the new side renders "(none)").
+      { address: second.address, name: second.name, category: second.category },
+    ]);
+    await selectEntityFile("merge-source-notes.json", snapshot);
+
+    await screen.findByTestId("text-preview-incoming");
+    fireEvent.click(screen.getByTestId("button-toggle-entity-diff"));
+    await screen.findByTestId("tab-entity-diff-overrides");
+
+    // Row 0: old (bundled) note struck through → new note.
+    const note0 = await screen.findByTestId("text-entity-override-sourcenote-0");
+    expect(note0.textContent).toContain("Source:");
+    expect(note0.textContent).toContain(first.sourceNote!);
+    expect(note0.textContent).toContain(NEW_NOTE);
+    // The struck-through side carries the old note.
+    expect(within(note0).getByText(first.sourceNote!).className).toContain(
+      "line-through",
+    );
+
+    // Row 1: old note → "(none)" because the incoming entry omits it.
+    const note1 = await screen.findByTestId("text-entity-override-sourcenote-1");
+    expect(note1.textContent).toContain("Source:");
+    expect(note1.textContent).toContain(second.sourceNote!);
+    expect(note1.textContent).toContain("(none)");
+  });
+
+  it("renders no source-note line when the source note is unchanged", async () => {
+    renderPage();
+    await screen.findByTestId("badge-entity-source");
+
+    const bundled = getBundledEntityList().find((e) => e.sourceNote);
+    expect(bundled).toBeTruthy();
+    expect(bundled!.sourceNote).toBeTruthy();
+
+    fireEvent.click(screen.getByTestId("radio-entity-merge"));
+
+    // Change only the display name; keep the source note identical to the
+    // bundled entry so sourceNoteChanged is false.
+    const snapshot = JSON.stringify([
+      {
+        address: bundled!.address,
+        name: "Renamed But Same Source",
+        category: bundled!.category,
+        sourceNote: bundled!.sourceNote,
+      },
+    ]);
+    await selectEntityFile("merge-unchanged-source.json", snapshot);
+
+    await screen.findByTestId("text-preview-incoming");
+    fireEvent.click(screen.getByTestId("button-toggle-entity-diff"));
+    await screen.findByTestId("tab-entity-diff-overrides");
+
+    // The override row still renders (the name changed)...
+    const row = await screen.findByTestId("row-entity-override-0");
+    expect(within(row).getByText("Renamed But Same Source")).toBeTruthy();
+    // ...but no source-note diff line is present.
+    expect(
+      screen.queryByTestId("text-entity-override-sourcenote-0"),
+    ).toBeNull();
+  });
+});
