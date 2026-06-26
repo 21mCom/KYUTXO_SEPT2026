@@ -62,6 +62,7 @@ import { useWalletNames } from "@/hooks/use-wallet-names";
 import { useToast } from "@/hooks/use-toast";
 import { ClickableAddress } from "@/components/ClickableAddress";
 import { TxidLink } from "@/components/TxidLink";
+import { useRecordPreview } from "@/contexts/RecordPreviewContext";
 import {
   runPrivacyAudit,
   PRIVACY_TAG_MAP,
@@ -730,6 +731,7 @@ function shortPeelTxid(t: string): string {
 // change outputs flow down the spine (becoming the next hop's input) while
 // payments branch off to the right toward external addresses.
 function PeelChainGraph({ steps }: { steps: PeelStep[] }) {
+  const { openRecordPreviewByAddress } = useRecordPreview();
   const marginTop = 36;
   const hopGap = 150;
   const txX = 92;
@@ -740,6 +742,17 @@ function PeelChainGraph({ steps }: { steps: PeelStep[] }) {
 
   const txY = (i: number) => marginTop + i * hopGap;
   const changeY = (i: number) => txY(i) + hopGap / 2;
+
+  const openNode = (value: string) => {
+    if (!value || value === "—") return;
+    void openRecordPreviewByAddress(value);
+  };
+  const onNodeKeyDown = (e: React.KeyboardEvent, value: string) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      openNode(value);
+    }
+  };
 
   return (
     <div className="space-y-3" data-testid="container-peel-graph">
@@ -863,8 +876,15 @@ function PeelChainGraph({ steps }: { steps: PeelStep[] }) {
             return (
               <Fragment key={`nodes-${step.txid}`}>
                 {/* Transaction node */}
-                <g data-testid={`graph-tx-${i}`}>
-                  <title>{`Hop ${i + 1} — ${step.txid}\nin ${fmt(step.carriedIn)}`}</title>
+                <g
+                  data-testid={`graph-tx-${i}`}
+                  role="button"
+                  tabIndex={0}
+                  className="cursor-pointer outline-none transition-opacity hover:opacity-80 focus-visible:opacity-80"
+                  onClick={() => openNode(step.txid)}
+                  onKeyDown={(e) => onNodeKeyDown(e, step.txid)}
+                >
+                  <title>{`Hop ${i + 1} — ${step.txid}\nin ${fmt(step.carriedIn)}\nClick to view transaction`}</title>
                   <circle cx={txX} cy={ty} r={20} fill="hsl(var(--primary))" />
                   <text
                     x={txX}
@@ -889,8 +909,15 @@ function PeelChainGraph({ steps }: { steps: PeelStep[] }) {
                 </g>
 
                 {/* Payment address node */}
-                <g data-testid={`graph-payment-${i}`}>
-                  <title>{`Payment → ${step.paymentAddress}\n${fmt(step.payment)}`}</title>
+                <g
+                  data-testid={`graph-payment-${i}`}
+                  role="button"
+                  tabIndex={step.paymentAddress === "—" ? -1 : 0}
+                  className={step.paymentAddress === "—" ? undefined : "cursor-pointer outline-none transition-opacity hover:opacity-80 focus-visible:opacity-80"}
+                  onClick={() => openNode(step.paymentAddress)}
+                  onKeyDown={(e) => onNodeKeyDown(e, step.paymentAddress)}
+                >
+                  <title>{`Payment → ${step.paymentAddress}\n${fmt(step.payment)}${step.paymentAddress === "—" ? "" : "\nClick to view address"}`}</title>
                   <circle
                     cx={payX}
                     cy={ty}
@@ -911,8 +938,15 @@ function PeelChainGraph({ steps }: { steps: PeelStep[] }) {
                 </g>
 
                 {/* Change address node on the spine */}
-                <g data-testid={`graph-change-${i}`}>
-                  <title>{`Change → ${step.changeAddress}\n${fmt(step.change)}${isLast ? "" : "\nspent by next hop"}`}</title>
+                <g
+                  data-testid={`graph-change-${i}`}
+                  role="button"
+                  tabIndex={step.changeAddress === "—" ? -1 : 0}
+                  className={step.changeAddress === "—" ? undefined : "cursor-pointer outline-none transition-opacity hover:opacity-80 focus-visible:opacity-80"}
+                  onClick={() => openNode(step.changeAddress)}
+                  onKeyDown={(e) => onNodeKeyDown(e, step.changeAddress)}
+                >
+                  <title>{`Change → ${step.changeAddress}\n${fmt(step.change)}${isLast ? "" : "\nspent by next hop"}${step.changeAddress === "—" ? "" : "\nClick to view address"}`}</title>
                   <circle
                     cx={txX}
                     cy={cy}
