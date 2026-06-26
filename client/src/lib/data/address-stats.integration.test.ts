@@ -346,3 +346,97 @@ describe("recomputeAddressStats then re-check", () => {
     expect(after.staleCount).toBe(0);
   });
 });
+
+describe("recomputeAddressStats mid-run cancellation", () => {
+  it("returns cancelled with a partial count and persists batches written before the abort", async () => {
+    // Four synced addresses, each with a wrong cached balance and a single
+    // output that fixes the computed balance. With batchSize 2 the recompute
+    // spans two batches; we abort partway through (after the first batch) via
+    // the onProgress callback.
+    const addresses = ["addr-0", "addr-1", "addr-2", "addr-3"];
+    const computedByAddr: Record<string, number> = {
+      "addr-0": 1000,
+      "addr-1": 2000,
+      "addr-2": 3000,
+      "addr-3": 4000,
+    };
+    const staleCachedByAddr: Record<string, number> = {
+      "addr-0": 1,
+      "addr-1": 2,
+      "addr-2": 3,
+      "addr-3": 4,
+    };
+
+    await testDb.records.bulkAdd(
+      addresses.map((addr, i) =>
+        mkAddr({
+          id: i + 1,
+          inputString: addr,
+          statsComputedAt: 1000,
+          cachedBalanceSats: staleCachedByAddr[addr],
+        }),
+      ),
+    );
+    await testDb.transactionParticipants.bulkAdd(
+      addresses.map((addr, i) => mkOutput(addr, `tx-${i}`, computedByAddr[addr])),
+    );
+    await testDb.blockchainTransactions.bulkAdd(
+      addresses.map((_, i) => mkTx(`tx-${i}`, 100 + i)),
+    );
+    await testDb.addressSyncState.bulkAdd(
+      addresses.map(
+        (addr, i) =>
+          ({
+            address: addr,
+            recordId: i + 1,
+            lastSyncedAt: 1000,
+          }) as unknown as AddressSyncState,
+      ),
+    );
+
+    const controller = new AbortController();
+    const progressEvents: number[] = [];
+    // Abort the first time a batch reports completed work (processed > 0), which
+    // happens after the first batch has been written. The initial onProgress
+    // fires with processed: 0 and must NOT trigger the abort.
+    const onProgress = vi.fn((p: { processed: number; total: number }) => {
+      progressEvents.push(p.processed);
+      if (p.processed > 0 && !controller.signal.aborted) {
+        controller.abort();
+      }
+    });
+
+    const result = await recomputeAddressStats({
+      addresses,
+      batchSize: 2,
+      signal: controller.signal,
+      onProgress,
+    });
+
+    // Cancelled partway through with only the first batch's records updated.
+    expect(result.cancelled).toBe(true);
+    expect(result.updated).toBe(2);
+
+    // The initial processed: 0 event fired, then the first batch's processed: 2.
+    expect(progressEvents[0]).toBe(0);
+    expect(progressEvents).toContain(2);
+    // The second batch never reported, so processed never reached 4.
+    expect(progressEvents).not.toContain(4);
+
+    // Records in the first batch kept their freshly recomputed cache values...
+    const rec0 = await testDb.records.get(1);
+    const rec1 = await testDb.records.get(2);
+    expect(rec0?.cachedBalanceSats).toBe(1000);
+    expect(rec1?.cachedBalanceSats).toBe(2000);
+    expect(rec0?.statsComputedAt).toBeGreaterThan(1000);
+    expect(rec1?.statsComputedAt).toBeGreaterThan(1000);
+
+    // ...while records that were never reached keep their original stale cache.
+    const rec2 = await testDb.records.get(3);
+    const rec3 = await testDb.records.get(4);
+    expect(rec2?.cachedBalanceSats).toBe(3);
+    expect(rec3?.cachedBalanceSats).toBe(4);
+    expect(rec2?.statsComputedAt).toBe(1000);
+    expect(rec3?.statsComputedAt).toBe(1000);
+  });
+});
