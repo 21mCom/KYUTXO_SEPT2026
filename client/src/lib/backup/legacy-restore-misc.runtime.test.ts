@@ -17,8 +17,10 @@
 //     autoincrement ids (backup id stripped).
 //   - derivation templates: merge de-dups by `fingerprint:scriptType`; replace
 //     adds every template.
-//   - evidence: no de-dup in either mode; the legacy path does NOT remap evidence
-//     ids, so an attachment keeps its backup `evidenceId` verbatim.
+//   - evidence: no de-dup in either mode; evidence rows get fresh autoincrement
+//     ids on restore, so each backup evidence id is mapped to its new live id and
+//     every attachment's `evidenceId` is remapped through that map (without this an
+//     old backup would orphan/mislink every evidence file).
 
 import "fake-indexeddb/auto";
 
