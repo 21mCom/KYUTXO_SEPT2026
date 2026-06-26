@@ -126,6 +126,7 @@ const DELETE_CONFIRMATION_PHRASE = "DELETE ALL DATA";
 
 const ENTITY_DIFF_ROW_HEIGHT = 52;
 const ENTITY_OVERRIDE_ROW_HEIGHT = 60;
+const ENTITY_ERROR_ROW_HEIGHT = 44;
 
 /**
  * Virtualized list of entity entries (address + name + category) shown in the
@@ -363,6 +364,100 @@ function EntityOverrideList({
             </div>
           );
         })}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Above this many errors the list switches to virtual scrolling. Below it the
+ * rows render in normal flow, which keeps the common case simple.
+ */
+const ENTITY_ERROR_VIRTUALIZE_THRESHOLD = 100;
+
+/** A single per-entry validation error row (index label + reason). */
+function EntityErrorRow({
+  err,
+  index,
+  style,
+}: {
+  err: EntitySnapshotError;
+  index: number;
+  style?: React.CSSProperties;
+}) {
+  const label = err.index >= 0 ? `Entry ${err.index + 1}` : "File";
+  return (
+    <div
+      className="border-b border-destructive/20 px-3 py-1.5 flex items-start gap-2"
+      style={style}
+      data-testid={`text-entity-error-${index}`}
+    >
+      <Badge variant="outline" className="shrink-0 mt-0.5 font-mono">
+        {label}
+      </Badge>
+      <p className="text-sm text-muted-foreground line-clamp-2" title={err.message}>
+        {err.message}
+      </p>
+    </div>
+  );
+}
+
+/**
+ * Scrollable list of per-entry validation errors shown when a hand-edited
+ * entity-list import fails. Each row pinpoints the offending entry (its
+ * 1-based position in the file) and the specific reason it was rejected, so a
+ * user can fix their JSON rather than seeing a generic failure. Large error
+ * sets switch to virtual scrolling so a file with hundreds of bad entries
+ * stays scannable and responsive.
+ */
+function EntityErrorList({ errors }: { errors: EntitySnapshotError[] }) {
+  if (errors.length <= ENTITY_ERROR_VIRTUALIZE_THRESHOLD) {
+    return (
+      <div
+        className="max-h-64 overflow-y-auto rounded-md border border-destructive/40"
+        data-testid="list-entity-errors"
+      >
+        {errors.map((err, i) => (
+          <EntityErrorRow key={i} err={err} index={i} />
+        ))}
+      </div>
+    );
+  }
+  return <VirtualizedEntityErrorList errors={errors} />;
+}
+
+/** Virtual-scrolling variant of {@link EntityErrorList} for large error sets. */
+function VirtualizedEntityErrorList({ errors }: { errors: EntitySnapshotError[] }) {
+  const parentRef = useRef<HTMLDivElement>(null);
+  const virtualizer = useVirtualizer({
+    count: errors.length,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => ENTITY_ERROR_ROW_HEIGHT,
+    overscan: 10,
+  });
+
+  return (
+    <div
+      ref={parentRef}
+      className="max-h-64 overflow-y-auto rounded-md border border-destructive/40"
+      data-testid="list-entity-errors"
+    >
+      <div style={{ height: `${virtualizer.getTotalSize()}px`, position: "relative", width: "100%" }}>
+        {virtualizer.getVirtualItems().map((virtualRow) => (
+          <EntityErrorRow
+            key={virtualRow.key}
+            err={errors[virtualRow.index]}
+            index={virtualRow.index}
+            style={{
+              position: "absolute",
+              left: 0,
+              top: 0,
+              width: "100%",
+              height: `${virtualRow.size}px`,
+              transform: `translateY(${virtualRow.start}px)`,
+            }}
+          />
+        ))}
       </div>
     </div>
   );
@@ -2737,17 +2832,10 @@ export default function SettingsPage() {
                   {entityImportErrors.length.toLocaleString()} problem
                   {entityImportErrors.length === 1 ? "" : "s"} — nothing was imported
                 </p>
-                <ul className="text-sm text-muted-foreground list-disc pl-5 space-y-0.5">
-                  {entityImportErrors.slice(0, 20).map((err, i) => (
-                    <li key={i} data-testid={`text-entity-error-${i}`}>
-                      {err.index >= 0 ? `Entry ${err.index + 1}: ` : ""}
-                      {err.message}
-                    </li>
-                  ))}
-                  {entityImportErrors.length > 20 && (
-                    <li>…and {(entityImportErrors.length - 20).toLocaleString()} more.</li>
-                  )}
-                </ul>
+                <p className="text-xs text-muted-foreground">
+                  Fix the entries below in your file, then import again.
+                </p>
+                <EntityErrorList errors={entityImportErrors} />
               </div>
             )}
           </CardContent>
