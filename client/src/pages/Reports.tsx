@@ -1,10 +1,10 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { FileText, GitBranch, Search, Shield, Eye, Loader2, Download, Printer } from "lucide-react";
+import { FileText, GitBranch, Search, Shield, Eye, Loader2, Download, Printer, ChevronRight } from "lucide-react";
 import { SourceOfFundsReport } from "@/components/reports/SourceOfFundsReport";
 import { HopPointReport } from "@/components/reports/HopPointReport";
 import { ContinuityCertificateReport } from "@/components/reports/ContinuityCertificateReport";
@@ -223,10 +223,21 @@ function PrivacyAuditReportPanel() {
   const [selectedWallet, setSelectedWallet] = useState("all");
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<PrivacyAuditResult | null>(null);
+  const [highlightedType, setHighlightedType] = useState<PrivacyFinding["type"] | null>(null);
+  const findingsRef = useRef<HTMLDivElement | null>(null);
+
+  const focusFindingsByType = useCallback((findingType: PrivacyFinding["type"]) => {
+    setHighlightedType(findingType);
+    requestAnimationFrame(() => {
+      const el = findingsRef.current?.querySelector<HTMLElement>(`[data-finding-type="${findingType}"]`);
+      el?.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+  }, []);
 
   const generate = useCallback(async () => {
     setRunning(true);
     setResult(null);
+    setHighlightedType(null);
     try {
       const allAddresses: string[] = [];
       let beforeId: number | undefined;
@@ -505,22 +516,45 @@ function PrivacyAuditReportPanel() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-border">
-                      {result.scoreWaterfall.map((entry, i) => (
-                        <tr key={i} data-testid={`row-privacy-waterfall-${i}`}>
-                          <td className="p-2">{entry.label}</td>
-                          <td className="p-2 text-right tabular-nums text-muted-foreground">
-                            {entry.count > 0 ? entry.count.toLocaleString() : "—"}
-                          </td>
-                          <td className={`p-2 text-right tabular-nums font-medium ${
-                            entry.delta < 0 ? "text-red-600 dark:text-red-400"
-                            : entry.delta > 0 ? "text-green-600 dark:text-green-400"
-                            : "text-muted-foreground"
-                          }`}>
-                            {entry.delta === 0 ? "—" : `${entry.delta > 0 ? "+" : ""}${entry.delta}`}
-                          </td>
-                          <td className="p-2 text-right tabular-nums font-medium">{entry.runningScore}</td>
-                        </tr>
-                      ))}
+                      {result.scoreWaterfall.map((entry, i) => {
+                        const isBase = entry.findingType === "BASE";
+                        const hasFindings = !isBase && entry.count > 0;
+                        const isHighlighted = !isBase && highlightedType === entry.findingType;
+                        return (
+                          <tr
+                            key={i}
+                            data-testid={`row-privacy-waterfall-${i}`}
+                            onClick={hasFindings ? () => focusFindingsByType(entry.findingType as PrivacyFinding["type"]) : undefined}
+                            role={hasFindings ? "button" : undefined}
+                            tabIndex={hasFindings ? 0 : undefined}
+                            onKeyDown={hasFindings ? (e) => {
+                              if (e.key === "Enter" || e.key === " ") {
+                                e.preventDefault();
+                                focusFindingsByType(entry.findingType as PrivacyFinding["type"]);
+                              }
+                            } : undefined}
+                            className={`${hasFindings ? "cursor-pointer hover-elevate" : ""} ${isHighlighted ? "bg-muted" : ""}`}
+                          >
+                            <td className="p-2">
+                              <span>{entry.label}</span>
+                              {hasFindings && (
+                                <ChevronRight className="inline-block ml-1 h-3 w-3 text-muted-foreground align-middle" />
+                              )}
+                            </td>
+                            <td className="p-2 text-right tabular-nums text-muted-foreground">
+                              {entry.count > 0 ? entry.count.toLocaleString() : "—"}
+                            </td>
+                            <td className={`p-2 text-right tabular-nums font-medium ${
+                              entry.delta < 0 ? "text-red-600 dark:text-red-400"
+                              : entry.delta > 0 ? "text-green-600 dark:text-green-400"
+                              : "text-muted-foreground"
+                            }`}>
+                              {entry.delta === 0 ? "—" : `${entry.delta > 0 ? "+" : ""}${entry.delta}`}
+                            </td>
+                            <td className="p-2 text-right tabular-nums font-medium">{entry.runningScore}</td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
@@ -532,9 +566,16 @@ function PrivacyAuditReportPanel() {
           {(result.findings.length + result.warnings.length) > 0 ? (
             <div className="space-y-2">
               <h3 className="text-sm font-medium">Findings &amp; Warnings</h3>
-              <div className="rounded-md border divide-y divide-border text-sm" data-testid="container-privacy-report-findings">
+              <div ref={findingsRef} className="rounded-md border divide-y divide-border text-sm" data-testid="container-privacy-report-findings">
                 {[...result.findings, ...result.warnings].map((f, i) => (
-                  <div key={i} className="p-3 flex flex-wrap gap-2 items-start" data-testid={`row-privacy-finding-${i}`}>
+                  <div
+                    key={i}
+                    data-finding-type={f.type}
+                    className={`p-3 flex flex-wrap gap-2 items-start scroll-mt-4 transition-colors ${
+                      highlightedType === f.type ? "bg-muted" : ""
+                    }`}
+                    data-testid={`row-privacy-finding-${i}`}
+                  >
                     <Badge className={`shrink-0 ${severityBadgeClass(f.severity)}`}>{severityLabel(f.severity)}</Badge>
                     <div className="flex-1 min-w-0">
                       <div className="font-medium">{FINDING_TYPE_LABELS[f.type] ?? f.type}</div>
