@@ -1618,6 +1618,53 @@ describe("resolveAllBlankInputAddresses", () => {
     expect(result.resolved).toBe(0);
   });
 
+  it("recomputes and drops the source balance when the pass runs to completion", async () => {
+    // The source address received two outputs (70000 sats total); its cached
+    // balance currently counts both because the spend of the first is not yet
+    // attributed (its spending input is still blank).
+    const recId = await testDb.records.add(makeAddressRecord(PREV_ADDR));
+    await testDb.records.update(recId, {
+      cachedBalanceSats: 70000,
+      cachedTxCount: 2,
+      cachedUtxoCount: 2,
+      statsComputedAt: Date.now(),
+    });
+
+    // Two local output rows the source received: PREV_1:0 (50000) will be spent,
+    // PREV_2:0 (20000) stays unspent.
+    await addOutputRow(PREV_1, 0, PREV_ADDR, 50000, "v0_p2wpkh");
+    await addOutputRow(PREV_2, 0, PREV_ADDR, 20000, "v0_p2wpkh");
+
+    // A blank input spending PREV_1:0 — resolvable from the local output row, so
+    // no fetch is needed and the whole pass completes (never cancelled).
+    const inputId = await addBlankInput(TXID_A, PREV_1, 0);
+
+    await testDb.nodeSettings.add({ id: "default" } as unknown as NodeSettings);
+    nextProvider = makeProvider();
+
+    const result = await resolveAllBlankInputAddresses();
+
+    // The pass ran to completion: nothing deferred, nothing cancelled.
+    expect(result.deferred).toBe(false);
+    expect(result.cancelled).toBe(false);
+    expect(result.unresolvedFound).toBe(1);
+    expect(result.resolved).toBe(1);
+
+    // The completion path recomputed the source address's cached stats.
+    expect(result.recomputed).toBeGreaterThan(0);
+
+    // The blank input is now attributed to the source address.
+    const input = await testDb.transactionParticipants.get(inputId);
+    expect(input?.address).toBe(PREV_ADDR);
+    expect(input?.amount).toBe(50000);
+    expect(input?.recordId).toBe(recId);
+
+    // The recompute dropped the cached balance by exactly the newly-attributed
+    // spend: 70000 received - 50000 spent = 20000.
+    const rec = await testDb.records.get(recId);
+    expect(rec?.cachedBalanceSats).toBe(20000);
+  });
+
   it("recomputes balances for inputs committed before a cancelled pass", async () => {
     // More than one write-batch worth of blank inputs, all resolvable from local
     // participant output rows (no network fetch needed) and all attributing to
