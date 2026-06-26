@@ -76,6 +76,7 @@ import {
 } from "@/components/ui/form";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useToast } from "@/hooks/use-toast";
+import { renderSourceNote } from "@/lib/renderSourceNote";
 import { type Evidence, type EvidenceAttachment, EVIDENCE_DOCUMENT_TYPE_OPTIONS, EVIDENCE_IMPORTANCE_OPTIONS, type EvidenceDocumentType, type EvidenceImportance } from "@/lib/database";
 import { 
   addEvidence, 
@@ -702,7 +703,7 @@ export default function EvidencePage() {
                   <CardContent>
                     {evidence.notes && (
                       <p className="text-sm text-muted-foreground line-clamp-2 mb-2">
-                        {evidence.notes}
+                        {renderSourceNote(evidence.notes)}
                       </p>
                     )}
                     
@@ -1224,7 +1225,7 @@ export default function EvidencePage() {
                 {selectedEvidence.notes && (
                   <div>
                     <h4 className="text-sm font-medium text-muted-foreground mb-1">Notes</h4>
-                    <p className="whitespace-pre-wrap">{selectedEvidence.notes}</p>
+                    <p className="whitespace-pre-wrap">{renderSourceNote(selectedEvidence.notes)}</p>
                   </div>
                 )}
 
@@ -1505,7 +1506,7 @@ export default function EvidencePage() {
                     {previewEvidence.notes && (
                       <div className="pt-2 border-t">
                         <div className="text-muted-foreground text-xs mb-1">Notes</div>
-                        <p className="text-sm whitespace-pre-wrap">{previewEvidence.notes}</p>
+                        <p className="text-sm whitespace-pre-wrap">{renderSourceNote(previewEvidence.notes)}</p>
                       </div>
                     )}
                   </CardContent>

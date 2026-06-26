@@ -52,6 +52,7 @@ import {
   Sankey,
 } from "recharts";
 import { useLiveQuery } from "dexie-react-hooks";
+import { renderSourceNote } from "@/lib/renderSourceNote";
 import { beginBulkOperation, endBulkOperation, db } from "@/lib/database";
 import type { Record as DbRecord, PrivacyAuditHistoryEntry, TransactionParticipant } from "@/lib/database";
 import { addPrivacyAuditHistoryEntry, clearPrivacyAuditHistory } from "@/lib/data/privacy-history-crud";
@@ -88,46 +89,9 @@ type ScanState = "idle" | "analyzing" | "tagging" | "complete";
 const AUDIT_INPUT_BATCH = 1000;
 const TAG_FETCH_BATCH = 500;
 
-// Renders a free-text note with every http(s) URL turned into an inline
-// clickable link. Links are only opened externally on an explicit user click
-// (window.open) — URLs are never fetched at load time, preserving offline-first
-// behavior. Notes without a URL render as plain text. Used for source citation
-// notes, finding descriptions, and remediation text.
-export function renderSourceNote(note: string): React.ReactNode {
-  const urlRegex = /https?:\/\/[^\s)]+/gi;
-  const parts: React.ReactNode[] = [];
-  let lastIndex = 0;
-  let key = 0;
-  let match: RegExpExecArray | null;
-  while ((match = urlRegex.exec(note)) !== null) {
-    const raw = match[0];
-    // Keep trailing punctuation out of the link target, but render it as text.
-    const trailing = raw.match(/[.,;]+$/)?.[0] ?? "";
-    const url = trailing ? raw.slice(0, raw.length - trailing.length) : raw;
-    if (match.index > lastIndex) {
-      parts.push(note.slice(lastIndex, match.index));
-    }
-    parts.push(
-      <a
-        key={`link-${key++}`}
-        href={url}
-        onClick={(e) => {
-          e.preventDefault();
-          window.open(url, "_blank", "noopener,noreferrer");
-        }}
-        className="text-primary underline underline-offset-2 hover:opacity-80 break-all cursor-pointer"
-        title={`Open ${url}`}
-      >
-        {url}
-      </a>,
-    );
-    if (trailing) parts.push(trailing);
-    lastIndex = match.index + raw.length;
-  }
-  if (parts.length === 0) return note;
-  if (lastIndex < note.length) parts.push(note.slice(lastIndex));
-  return <>{parts}</>;
-}
+// Re-exported from the shared module so existing imports keep working. See
+// client/src/lib/renderSourceNote.tsx for the implementation.
+export { renderSourceNote };
 
 // ─── Icon mapping ─────────────────────────────────────────────────────────────
 

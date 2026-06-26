@@ -19,6 +19,7 @@ import {
   type PrivacySeverity,
   type EntityCitation,
 } from "@/lib/privacy-audit";
+import { renderSourceNote } from "@/lib/renderSourceNote";
 import { buildPrivacyReport, buildPrivacyTextReport } from "@/lib/privacy-report-export";
 import { buildPrintableReport, severityLabel } from "@/lib/privacy-report-html";
 import { getRecordsPageByTypeIdReverseKeyset } from "@/lib/data/record-crud";
@@ -385,9 +386,9 @@ function PrivacyAuditReportPanel() {
                       <Badge className={`shrink-0 ${severityBadgeClass(f.severity)}`}>{severityLabel(f.severity)}</Badge>
                       <div className="flex-1 min-w-0">
                         <div className="font-medium">{FINDING_TYPE_LABELS[f.type] ?? f.type}</div>
-                        <div className="text-xs text-muted-foreground mt-0.5 line-clamp-2">{f.description}</div>
+                        <div className="text-xs text-muted-foreground mt-0.5 line-clamp-2">{renderSourceNote(f.description)}</div>
                         {f.correction && (
-                          <div className="text-xs text-muted-foreground mt-0.5 italic">Fix: {f.correction}</div>
+                          <div className="text-xs text-muted-foreground mt-0.5 italic">Fix: {renderSourceNote(f.correction)}</div>
                         )}
                         <div className="text-xs text-muted-foreground mt-0.5">
                           {f.addresses.length > 0 && <span>{f.addresses.length} address(es)</span>}
