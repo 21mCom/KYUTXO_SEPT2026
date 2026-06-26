@@ -1,7 +1,9 @@
 import { db, notifyDbChange, type Evidence, type EvidenceAttachment } from '../database';
 
 export type CreateEvidenceData = Omit<Evidence, 'id' | 'createdAt' | 'updatedAt'>;
-export type CreateEvidenceAttachmentData = Omit<EvidenceAttachment, 'id' | 'createdAt'>;
+export type CreateEvidenceAttachmentData = Omit<EvidenceAttachment, 'id' | 'createdAt'> & {
+  createdAt?: number;
+};
 
 export interface EvidenceWriteOptions {
   skipNotification?: boolean;
@@ -30,14 +32,16 @@ export async function addEvidence(
 export async function bulkAddEvidence(
   records: Evidence[],
   options?: EvidenceWriteOptions
-): Promise<void> {
-  if (records.length === 0) return;
+): Promise<number[]> {
+  if (records.length === 0) return [];
 
-  await db.evidence.bulkAdd(records);
+  const ids = await db.evidence.bulkAdd(records, { allKeys: true });
 
   if (!options?.skipNotification) {
     notifyDbChange('evidence');
   }
+
+  return ids as number[];
 }
 
 export async function putEvidence(
@@ -108,7 +112,7 @@ export async function addEvidenceAttachment(
 ): Promise<number> {
   const attachment: EvidenceAttachment = {
     ...data,
-    createdAt: Date.now(),
+    createdAt: data.createdAt ?? Date.now(),
   };
 
   const id = await db.evidenceAttachments.add(attachment);

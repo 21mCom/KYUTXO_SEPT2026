@@ -174,7 +174,12 @@ export async function restoreInlineTables(
     );
   }
 
-  const evidenceRows = arr("evidence").map((ev) => {
+  // Evidence rows are re-`add`ed and so receive fresh auto-increment ids. We map
+  // each original id to its new id so evidenceAttachments (which reference
+  // evidence by id) can be relinked below — otherwise restore would orphan every
+  // attachment because the table's key generator is not reset by `clear()`.
+  const evidenceSource = arr("evidence");
+  const evidenceRows = evidenceSource.map((ev) => {
     const { id, ...d } = ev;
     return {
       title: d.title || "Restored Evidence",
@@ -189,15 +194,27 @@ export async function restoreInlineTables(
       updatedAt: d.updatedAt || now,
     };
   });
+  const evidenceIdMap = new Map<number, number>();
   if (evidenceRows.length) {
-    await bulkAddEvidence(evidenceRows as Evidence[], { skipNotification: true });
+    const newIds = await bulkAddEvidence(evidenceRows as Evidence[], {
+      skipNotification: true,
+    });
+    evidenceSource.forEach((ev, i) => {
+      if (typeof ev.id === "number" && typeof newIds[i] === "number") {
+        evidenceIdMap.set(ev.id, newIds[i]);
+      }
+    });
   }
 
   for (const ea of arr("evidenceAttachments")) {
     const { id, ...d } = ea;
+    const mappedEvidenceId =
+      typeof d.evidenceId === "number"
+        ? evidenceIdMap.get(d.evidenceId) ?? d.evidenceId
+        : d.evidenceId;
     await addEvidenceAttachment(
       {
-        evidenceId: d.evidenceId,
+        evidenceId: mappedEvidenceId,
         filename: d.filename || "unknown",
         mimeType: d.mimeType || "application/octet-stream",
         size: d.size || 0,
