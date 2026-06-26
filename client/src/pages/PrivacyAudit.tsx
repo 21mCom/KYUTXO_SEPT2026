@@ -27,6 +27,8 @@ import {
   GitBranch,
   RotateCw,
   Download,
+  Copy,
+  Check,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -803,7 +805,9 @@ function shortPeelTxid(t: string): string {
 // payments branch off to the right toward external addresses.
 function PeelChainGraph({ steps, coinjoinTxids }: { steps: PeelStep[]; coinjoinTxids: Set<string> }) {
   const { openRecordPreviewByAddress } = useRecordPreview();
+  const { toast } = useToast();
   const [deepDiveTxid, setDeepDiveTxid] = useState<string | null>(null);
+  const [copiedAddr, setCopiedAddr] = useState<string | null>(null);
   const marginTop = 36;
   const hopGap = 150;
   const txX = 92;
@@ -823,6 +827,26 @@ function PeelChainGraph({ steps, coinjoinTxids }: { steps: PeelStep[]; coinjoinT
     if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();
       openNode(value);
+    }
+  };
+  const copyAddr = async (value: string) => {
+    if (!value || value === "—") return;
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopiedAddr(value);
+      window.setTimeout(() => {
+        setCopiedAddr((prev) => (prev === value ? null : prev));
+      }, 1500);
+      toast({ title: "Address copied", description: shortPeelAddr(value) });
+    } catch {
+      toast({ title: "Copy failed", description: "Could not copy to clipboard", variant: "destructive" });
+    }
+  };
+  const onCopyKeyDown = (e: React.KeyboardEvent, value: string) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      e.stopPropagation();
+      void copyAddr(value);
     }
   };
 
@@ -1067,6 +1091,30 @@ function PeelChainGraph({ steps, coinjoinTxids }: { steps: PeelStep[]; coinjoinT
                   >
                     {shortPeelAddr(step.paymentAddress)}
                   </text>
+                  {/* Copy-address affordance badge on the node */}
+                  {step.paymentAddress !== "—" && (
+                    <g
+                      transform={`translate(${payX + 10}, ${ty - 12})`}
+                      role="button"
+                      tabIndex={0}
+                      style={{ cursor: "pointer" }}
+                      aria-label={`Copy payment address for hop ${i + 1}`}
+                      data-testid={`button-graph-copy-payment-${i}`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void copyAddr(step.paymentAddress);
+                      }}
+                      onKeyDown={(e) => onCopyKeyDown(e, step.paymentAddress)}
+                    >
+                      <title>{`Copy ${step.paymentAddress}`}</title>
+                      <circle r={7} fill="hsl(var(--background))" stroke={PEEL_PAYMENT_COLOR} strokeWidth={1.5} />
+                      {copiedAddr === step.paymentAddress ? (
+                        <Check x={-4} y={-4} width={8} height={8} color={PEEL_PAYMENT_COLOR} />
+                      ) : (
+                        <Copy x={-4} y={-4} width={8} height={8} color={PEEL_PAYMENT_COLOR} />
+                      )}
+                    </g>
+                  )}
                 </g>
 
                 {/* Change address node on the spine */}
@@ -1096,6 +1144,30 @@ function PeelChainGraph({ steps, coinjoinTxids }: { steps: PeelStep[]; coinjoinT
                   >
                     {shortPeelAddr(step.changeAddress)}
                   </text>
+                  {/* Copy-address affordance badge on the node */}
+                  {step.changeAddress !== "—" && (
+                    <g
+                      transform={`translate(${txX + 10}, ${cy - 12})`}
+                      role="button"
+                      tabIndex={0}
+                      style={{ cursor: "pointer" }}
+                      aria-label={`Copy change address for hop ${i + 1}`}
+                      data-testid={`button-graph-copy-change-${i}`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void copyAddr(step.changeAddress);
+                      }}
+                      onKeyDown={(e) => onCopyKeyDown(e, step.changeAddress)}
+                    >
+                      <title>{`Copy ${step.changeAddress}`}</title>
+                      <circle r={7} fill="hsl(var(--background))" stroke={PEEL_CHANGE_COLOR} strokeWidth={1.5} />
+                      {copiedAddr === step.changeAddress ? (
+                        <Check x={-4} y={-4} width={8} height={8} color={PEEL_CHANGE_COLOR} />
+                      ) : (
+                        <Copy x={-4} y={-4} width={8} height={8} color={PEEL_CHANGE_COLOR} />
+                      )}
+                    </g>
+                  )}
                 </g>
               </Fragment>
             );
