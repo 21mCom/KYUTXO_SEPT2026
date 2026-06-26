@@ -41,6 +41,10 @@ args = "lockfile-urls"
 task = "workflow.run"
 args = "no-external-resources"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "entity-list"
+
 [[workflows.workflow]]
 name = "Start application"
 author = "agent"
@@ -79,6 +83,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-no-external-resources.js"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "entity-list"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/lib/privacy-entity-list.test.ts"
 
 [workflows.workflow.metadata]
 isValidation = true
