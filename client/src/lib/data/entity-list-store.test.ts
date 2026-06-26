@@ -166,6 +166,41 @@ describe("validateEntitySnapshot", () => {
     expect(result.entries).toHaveLength(3);
   });
 
+  it("captures the raw offending entry on each per-entry error", () => {
+    const bad = { address: "not-an-address", name: "Bad", category: "exchange" };
+    const result = validateEntitySnapshot([bad]);
+    expect(result.valid).toBe(false);
+    expect(result.errors[0].rawEntry).toEqual(bad);
+  });
+
+  it("captures the raw value for a non-object entry", () => {
+    const result = validateEntitySnapshot([null]);
+    expect(result.valid).toBe(false);
+    expect(result.errors[0].rawEntry).toBeNull();
+  });
+
+  it("captures the raw entry for every error on a multi-problem entry", () => {
+    const bad = { category: "bank" };
+    const result = validateEntitySnapshot([bad]);
+    expect(result.valid).toBe(false);
+    expect(result.errors.length).toBeGreaterThan(1);
+    for (const err of result.errors) {
+      expect(err.rawEntry).toEqual(bad);
+    }
+  });
+
+  it("does not attach rawEntry to structure-level errors", () => {
+    const result = validateEntitySnapshot("nope");
+    expect(result.valid).toBe(false);
+    expect("rawEntry" in result.errors[0]).toBe(false);
+  });
+
+  it("does not attach rawEntry to the no-entries error", () => {
+    const result = validateEntitySnapshot([]);
+    expect(result.valid).toBe(false);
+    expect("rawEntry" in result.errors[0]).toBe(false);
+  });
+
   it("reports no warnings for a clean snapshot", () => {
     const result = validateEntitySnapshot([
       entry({ address: ADDR_A, sourceNote: "Reported by a public source" }),

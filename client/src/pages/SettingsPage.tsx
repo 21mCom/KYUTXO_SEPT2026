@@ -630,18 +630,31 @@ function EntityErrorGroupItem({
 
   // Copy actions operate on the full `group.errors` array, not just the rows
   // currently rendered, so they cover large virtual-scrolled groups in full.
-  const handleCopy = async (what: "numbers" | "details") => {
-    const text =
-      what === "numbers"
-        ? group.errors.map((err) => entityErrorLabel(err)).join("\n")
-        : group.errors.map((err) => `${entityErrorLabel(err)}: ${err.message}`).join("\n");
+  // The "json" action copies the raw offending entries (address/name/category/
+  // sourceNote) as a valid JSON array so users can fix or remove them without
+  // re-finding each line in their source file. Entries that pre-date raw-entry
+  // capture (or structure-level errors not tied to an entry) carry no
+  // `rawEntry`, so only those that actually have one are exported.
+  const entriesWithRaw = group.errors.filter((err) => "rawEntry" in err);
+  const handleCopy = async (what: "numbers" | "details" | "json") => {
+    let text: string;
+    if (what === "numbers") {
+      text = group.errors.map((err) => entityErrorLabel(err)).join("\n");
+    } else if (what === "details") {
+      text = group.errors.map((err) => `${entityErrorLabel(err)}: ${err.message}`).join("\n");
+    } else {
+      text = JSON.stringify(entriesWithRaw.map((err) => err.rawEntry), null, 2);
+    }
     const ok = await copyTextToClipboard(text);
+    const jsonCount = entriesWithRaw.length;
     toast({
       title: ok ? "Copied to clipboard" : "Copy failed",
       description: ok
         ? what === "numbers"
           ? `${count.toLocaleString()} entry ${count === 1 ? "number" : "numbers"} copied — paste to search your source file.`
-          : `${count.toLocaleString()} ${count === 1 ? "entry" : "entries"} with reasons copied.`
+          : what === "details"
+            ? `${count.toLocaleString()} ${count === 1 ? "entry" : "entries"} with reasons copied.`
+            : `${jsonCount.toLocaleString()} ${jsonCount === 1 ? "entry" : "entries"} copied as JSON.`
         : "Couldn't access the clipboard. Try selecting the text manually.",
       variant: ok ? undefined : "destructive",
     });
@@ -692,6 +705,18 @@ function EntityErrorGroupItem({
               <Copy className="h-4 w-4" />
               Copy entries with reasons
             </Button>
+            {entriesWithRaw.length > 0 && (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => handleCopy("json")}
+                data-testid={`button-copy-entity-error-json-${group.kind}`}
+              >
+                <Copy className="h-4 w-4" />
+                Copy entries (JSON)
+              </Button>
+            )}
           </div>
           {count <= ENTITY_ERROR_VIRTUALIZE_THRESHOLD ? (
             <div className="max-h-64 overflow-y-auto">

@@ -76,6 +76,15 @@ export interface EntitySnapshotError {
   /** Stable problem type, used to group similar errors in the UI. */
   kind: EntitySnapshotErrorKind;
   message: string;
+  /**
+   * The raw parsed value of the offending entry, exactly as it appeared in the
+   * input array. Surfaced so the UI can let users copy the actual broken JSON
+   * objects (address/name/category/sourceNote) and fix or remove them without
+   * re-finding each line in their source file. Absent for structure-level
+   * errors that are not tied to a specific entry (e.g. `invalid-structure`,
+   * `no-entries`).
+   */
+  rawEntry?: unknown;
 }
 
 /**
@@ -180,7 +189,7 @@ export function validateEntitySnapshot(raw: unknown): EntitySnapshotValidation {
 
   arr.forEach((item, index) => {
     if (!item || typeof item !== 'object') {
-      errors.push({ index, kind: 'entry-not-object', message: 'Entry must be an object.' });
+      errors.push({ index, kind: 'entry-not-object', message: 'Entry must be an object.', rawEntry: item });
       return;
     }
     const obj = item as Record<string, unknown>;
@@ -191,29 +200,30 @@ export function validateEntitySnapshot(raw: unknown): EntitySnapshotValidation {
     const sourceNote = obj.sourceNote;
 
     if (!address) {
-      errors.push({ index, kind: 'missing-address', message: 'Missing "address".' });
+      errors.push({ index, kind: 'missing-address', message: 'Missing "address".', rawEntry: item });
     } else if (!validateAddress(address).isValid) {
-      errors.push({ index, kind: 'invalid-address', message: `Invalid Bitcoin address "${address}".` });
+      errors.push({ index, kind: 'invalid-address', message: `Invalid Bitcoin address "${address}".`, rawEntry: item });
     } else if (seen.has(address)) {
-      errors.push({ index, kind: 'duplicate-address', message: `Duplicate address "${address}".` });
+      errors.push({ index, kind: 'duplicate-address', message: `Duplicate address "${address}".`, rawEntry: item });
     }
 
     if (!name) {
-      errors.push({ index, kind: 'missing-name', message: 'Missing "name".' });
+      errors.push({ index, kind: 'missing-name', message: 'Missing "name".', rawEntry: item });
     }
 
     if (!category) {
-      errors.push({ index, kind: 'missing-category', message: 'Missing "category".' });
+      errors.push({ index, kind: 'missing-category', message: 'Missing "category".', rawEntry: item });
     } else if (!VALID_CATEGORIES.has(category)) {
       errors.push({
         index,
         kind: 'unknown-category',
         message: `Unknown category "${category}". Valid: ${Array.from(VALID_CATEGORIES).join(', ')}.`,
+        rawEntry: item,
       });
     }
 
     if (sourceNote !== undefined && typeof sourceNote !== 'string') {
-      errors.push({ index, kind: 'invalid-source-note', message: '"sourceNote" must be a string when present.' });
+      errors.push({ index, kind: 'invalid-source-note', message: '"sourceNote" must be a string when present.', rawEntry: item });
     }
 
     // Only collect when this entry itself is fully valid.
