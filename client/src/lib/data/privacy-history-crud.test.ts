@@ -16,15 +16,17 @@ import "fake-indexeddb/auto";
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import Dexie, { type Table } from "dexie";
-import type { PrivacyAuditHistoryEntry } from "@/lib/db-types";
+import type { PrivacyAuditHistoryEntry, Settings } from "@/lib/db-types";
 
 class TestDb extends Dexie {
   privacyAuditHistory!: Table<PrivacyAuditHistoryEntry, number>;
+  settings!: Table<Settings, string>;
   constructor(name: string) {
     super(name);
-    // Mirrors the privacyAuditHistory schema in database.ts (v34).
+    // Mirrors the privacyAuditHistory + settings schemas in database.ts.
     this.version(1).stores({
       privacyAuditHistory: "++id, timestamp",
+      settings: "id",
     });
   }
 }
@@ -49,8 +51,15 @@ const {
   addPrivacyAuditHistoryEntry,
   getPrivacyAuditHistory,
   clearPrivacyAuditHistory,
-  PRIVACY_HISTORY_LIMIT,
+  trimPrivacyAuditHistory,
+  DEFAULT_PRIVACY_HISTORY_LIMIT,
 } = await import("./privacy-history-crud");
+
+// The retention limit resolves from settings.privacyHistoryLimit, falling back
+// to DEFAULT_PRIVACY_HISTORY_LIMIT when unset. Helper to override it per test.
+async function setRetentionLimit(limit: number | undefined): Promise<void> {
+  await testDb.settings.put({ id: "default", privacyHistoryLimit: limit } as Settings);
+}
 
 // ---- Fixture ---------------------------------------------------------------
 
@@ -74,6 +83,9 @@ function mkEntry(
 beforeEach(async () => {
   testDb = new TestDb(`KYUTXO-privacy-history-${Date.now()}-${Math.random()}`);
   await testDb.open();
+  // Seed a default settings row so getPrivacyHistoryLimit falls back to the
+  // default (no privacyHistoryLimit set). Individual tests override as needed.
+  await setRetentionLimit(undefined);
 });
 
 afterEach(async () => {
@@ -123,29 +135,79 @@ describe("getPrivacyAuditHistory ordering", () => {
 describe("retention trimming", () => {
   it("keeps the table at the limit, deleting the oldest entries first", async () => {
     const overBy = 5;
-    const total = PRIVACY_HISTORY_LIMIT + overBy;
+    const total = DEFAULT_PRIVACY_HISTORY_LIMIT + overBy;
     for (let i = 1; i <= total; i++) {
       await addPrivacyAuditHistoryEntry(mkEntry(i * 1000));
     }
 
     const count = await testDb.privacyAuditHistory.count();
-    expect(count).toBe(PRIVACY_HISTORY_LIMIT);
+    expect(count).toBe(DEFAULT_PRIVACY_HISTORY_LIMIT);
 
     const all = await getPrivacyAuditHistory();
     // Oldest `overBy` timestamps (1000..5000) should have been trimmed away.
     expect(all[0].timestamp).toBe((overBy + 1) * 1000);
     expect(all[all.length - 1].timestamp).toBe(total * 1000);
-    expect(all).toHaveLength(PRIVACY_HISTORY_LIMIT);
+    expect(all).toHaveLength(DEFAULT_PRIVACY_HISTORY_LIMIT);
   });
 
   it("does not trim while at or below the limit", async () => {
-    for (let i = 1; i <= PRIVACY_HISTORY_LIMIT; i++) {
+    for (let i = 1; i <= DEFAULT_PRIVACY_HISTORY_LIMIT; i++) {
       await addPrivacyAuditHistoryEntry(mkEntry(i * 1000));
     }
-    expect(await testDb.privacyAuditHistory.count()).toBe(PRIVACY_HISTORY_LIMIT);
+    expect(await testDb.privacyAuditHistory.count()).toBe(
+      DEFAULT_PRIVACY_HISTORY_LIMIT,
+    );
 
     const all = await getPrivacyAuditHistory();
     expect(all[0].timestamp).toBe(1000);
+  });
+});
+
+describe("trimPrivacyAuditHistory", () => {
+  it("immediately removes the oldest runs beyond an explicit lower limit", async () => {
+    // 20 runs stored under the default (30) limit, so nothing is trimmed yet.
+    for (let i = 1; i <= 20; i++) {
+      await addPrivacyAuditHistoryEntry(mkEntry(i * 1000));
+    }
+    expect(await testDb.privacyAuditHistory.count()).toBe(20);
+
+    // Lower the limit to 5 and trim right away.
+    const removed = await trimPrivacyAuditHistory(5);
+    expect(removed).toBe(15);
+
+    const all = await getPrivacyAuditHistory();
+    expect(all).toHaveLength(5);
+    // The 5 most-recent runs survive (16000..20000); oldest first removed.
+    expect(all.map((e) => e.timestamp)).toEqual([
+      16000, 17000, 18000, 19000, 20000,
+    ]);
+  });
+
+  it("resolves the configured limit from settings when none is passed", async () => {
+    for (let i = 1; i <= 12; i++) {
+      await addPrivacyAuditHistoryEntry(mkEntry(i * 1000));
+    }
+    await setRetentionLimit(4);
+
+    const removed = await trimPrivacyAuditHistory();
+    expect(removed).toBe(8);
+
+    const all = await getPrivacyAuditHistory();
+    expect(all.map((e) => e.timestamp)).toEqual([9000, 10000, 11000, 12000]);
+  });
+
+  it("makes no change when the limit is raised or unchanged", async () => {
+    for (let i = 1; i <= 6; i++) {
+      await addPrivacyAuditHistoryEntry(mkEntry(i * 1000));
+    }
+
+    // Raising the effective limit removes nothing.
+    expect(await trimPrivacyAuditHistory(100)).toBe(0);
+    expect(await testDb.privacyAuditHistory.count()).toBe(6);
+
+    // A limit equal to the current count also removes nothing.
+    expect(await trimPrivacyAuditHistory(6)).toBe(0);
+    expect(await testDb.privacyAuditHistory.count()).toBe(6);
   });
 });
 

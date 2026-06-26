@@ -25,6 +25,37 @@ async function getPrivacyHistoryLimit(): Promise<number> {
 }
 
 /**
+ * Trim the audit history table down to the most recent `retentionLimit`
+ * entries, removing the oldest first. When `retentionLimit` is omitted the
+ * configured limit (or default) is used. Returns the number of entries removed.
+ */
+export async function trimPrivacyAuditHistory(
+  retentionLimit?: number,
+  options?: PrivacyHistoryWriteOptions
+): Promise<number> {
+  const limit = retentionLimit ?? (await getPrivacyHistoryLimit());
+  const total = await db.privacyAuditHistory.count();
+  let removed = 0;
+  if (total > limit) {
+    const excess = total - limit;
+    const oldestIds = await db.privacyAuditHistory
+      .orderBy('timestamp')
+      .limit(excess)
+      .primaryKeys();
+    if (oldestIds.length > 0) {
+      await db.privacyAuditHistory.bulkDelete(oldestIds as number[]);
+      removed = oldestIds.length;
+    }
+  }
+
+  if (removed > 0 && !options?.skipNotification) {
+    notifyDbChange('privacyAuditHistory');
+  }
+
+  return removed;
+}
+
+/**
  * Append a new audit snapshot and trim the table to the most recent
  * configured number of entries (oldest removed first).
  */
@@ -35,18 +66,7 @@ export async function addPrivacyAuditHistoryEntry(
   const id = await db.privacyAuditHistory.add(entry as PrivacyAuditHistoryEntry);
 
   // Trim oldest entries beyond the retention limit.
-  const retentionLimit = await getPrivacyHistoryLimit();
-  const total = await db.privacyAuditHistory.count();
-  if (total > retentionLimit) {
-    const excess = total - retentionLimit;
-    const oldestIds = await db.privacyAuditHistory
-      .orderBy('timestamp')
-      .limit(excess)
-      .primaryKeys();
-    if (oldestIds.length > 0) {
-      await db.privacyAuditHistory.bulkDelete(oldestIds as number[]);
-    }
-  }
+  await trimPrivacyAuditHistory(undefined, { skipNotification: true });
 
   if (!options?.skipNotification) {
     notifyDbChange('privacyAuditHistory');

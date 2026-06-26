@@ -39,7 +39,10 @@ const defaultFieldVisibility = {
 };
 
 import { DEFAULT_CANCEL_CONFIRM_THRESHOLD } from '@/lib/buildProgress';
-import { DEFAULT_PRIVACY_HISTORY_LIMIT } from '@/lib/data/privacy-history-crud';
+import {
+  DEFAULT_PRIVACY_HISTORY_LIMIT,
+  trimPrivacyAuditHistory,
+} from '@/lib/data/privacy-history-crud';
 
 export function useSettings() {
   const settings = useLiveQuery(() => getStoredSettings('default'));
@@ -131,6 +134,9 @@ export async function updatePrivacyHistoryLimit(value: number) {
     await updateStoredSettings('default', {
       privacyHistoryLimit: value,
     });
+    // Immediately remove any runs beyond the new limit (oldest first) so
+    // lowering the limit takes effect right away rather than on next audit.
+    await trimPrivacyAuditHistory(value);
   }
 }
 
