@@ -3184,6 +3184,7 @@ export default function SettingsPage() {
                           {entityPreview.mode === "merge" ? "Bundled" : "Current"}
                         </span>
                         <span className="w-16 text-right">New</span>
+                        <span className="w-14 text-right">Change</span>
                       </span>
                     </div>
                     {entityPreview.categories.map((c) => (
@@ -3207,6 +3208,22 @@ export default function SettingsPage() {
                             data-testid={`text-preview-category-incoming-${c.category}`}
                           >
                             {c.incoming.toLocaleString()}
+                          </span>
+                          <span
+                            className={`w-14 text-right font-medium ${
+                              c.delta > 0
+                                ? "text-green-600 dark:text-green-400"
+                                : c.delta < 0
+                                  ? "text-red-600 dark:text-red-400"
+                                  : "text-muted-foreground"
+                            }`}
+                            data-testid={`text-preview-category-delta-${c.category}`}
+                          >
+                            {c.delta > 0
+                              ? `+${c.delta.toLocaleString()}`
+                              : c.delta < 0
+                                ? `\u2212${Math.abs(c.delta).toLocaleString()}`
+                                : "0"}
                           </span>
                         </span>
                       </div>

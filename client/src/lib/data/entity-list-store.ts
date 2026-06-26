@@ -287,6 +287,8 @@ export interface EntityCategoryDiff {
   incoming: number;
   /** Entry count for this category in the currently active list. */
   current: number;
+  /** Net change for this category (incoming minus current): positive = growing, negative = shrinking, 0 = unchanged. */
+  delta: number;
 }
 
 /**
@@ -445,12 +447,17 @@ export function buildEntitySnapshotPreview(
   }
 
   const categories: EntityCategoryDiff[] = (Object.keys(ENTITY_CATEGORY_LABELS) as EntityCategory[])
-    .map((category) => ({
-      category,
-      label: ENTITY_CATEGORY_LABELS[category],
-      incoming: incomingByCat.get(category) ?? 0,
-      current: currentByCat.get(category) ?? 0,
-    }))
+    .map((category) => {
+      const incoming = incomingByCat.get(category) ?? 0;
+      const current = currentByCat.get(category) ?? 0;
+      return {
+        category,
+        label: ENTITY_CATEGORY_LABELS[category],
+        incoming,
+        current,
+        delta: incoming - current,
+      };
+    })
     .filter((c) => c.incoming > 0 || c.current > 0);
 
   const resultingCount = mode === 'merge' ? current.length + added : entries.length;

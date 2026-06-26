@@ -898,6 +898,7 @@ describe("buildEntitySnapshotPreview", () => {
       label: "Gambling",
       incoming: 2,
       current: 0,
+      delta: 2,
     });
   });
 
@@ -920,6 +921,7 @@ describe("buildEntitySnapshotPreview", () => {
       label: "Gambling",
       incoming: 0,
       current: 2,
+      delta: -2,
     });
   });
 
@@ -941,6 +943,7 @@ describe("buildEntitySnapshotPreview", () => {
       label: "Exchange",
       incoming: 1,
       current: 2,
+      delta: -1,
     });
   });
 
@@ -984,6 +987,7 @@ describe("buildEntitySnapshotPreview", () => {
       label: "Exchange",
       incoming: 1,
       current: 2,
+      delta: -1,
     });
     // only in current
     expect(byCategory.mixer).toEqual({
@@ -991,6 +995,7 @@ describe("buildEntitySnapshotPreview", () => {
       label: "Mixer / CoinJoin Service",
       incoming: 0,
       current: 1,
+      delta: -1,
     });
     // only in incoming
     expect(byCategory.gambling).toEqual({
@@ -998,11 +1003,41 @@ describe("buildEntitySnapshotPreview", () => {
       label: "Gambling",
       incoming: 2,
       current: 0,
+      delta: 2,
     });
     // exactly these three; categories absent on both sides are excluded.
     expect(preview.categories).toHaveLength(3);
     expect(byCategory.darknet).toBeUndefined();
     expect(byCategory.scam).toBeUndefined();
+  });
+
+  it("reports a positive delta for a growing category, negative for a shrinking one, and zero for an unchanged one", () => {
+    // current: exchange x1 (grows), gambling x2 (shrinks), mixer x1 (unchanged)
+    setActiveEntityList([
+      addrEntry(ADDR.binance, "exchange"),
+      addrEntry(ADDR.gambling1, "gambling"),
+      addrEntry(ADDR.gambling2, "gambling"),
+      addrEntry(ADDR.bitstamp, "mixer"),
+    ]);
+    // incoming: exchange x2 (grows), gambling x1 (shrinks), mixer x1 (unchanged)
+    const incoming = [
+      addrEntry(ADDR.binance, "exchange"),
+      addrEntry(ADDR.binanceCold, "exchange"),
+      addrEntry(ADDR.gambling1, "gambling"),
+      addrEntry(ADDR.bitstamp, "mixer"),
+    ];
+
+    const preview = buildEntitySnapshotPreview(incoming);
+    const byCategory = Object.fromEntries(
+      preview.categories.map((c) => [c.category, c]),
+    );
+
+    // Growing: incoming 2 - current 1 = +1.
+    expect(byCategory.exchange.delta).toBe(1);
+    // Shrinking: incoming 1 - current 2 = -1.
+    expect(byCategory.gambling.delta).toBe(-1);
+    // Unchanged: incoming 1 - current 1 = 0.
+    expect(byCategory.mixer.delta).toBe(0);
   });
 });
 
