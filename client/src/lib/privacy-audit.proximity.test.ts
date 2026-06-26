@@ -254,6 +254,51 @@ describe("detectEntityProximity BFS engine", () => {
     expect(detectEntityProximity(ctx)).toEqual([]);
   });
 
+  it("records the connecting txid for each hop alongside hopPath", () => {
+    // owned1 → A (tx1) → B (tx2) → exchange entity (tx3): a hop-3 path whose
+    // three transactions connect each consecutive pair in the hop path.
+    const ctx = makeCtx(
+      {
+        tx1: [OWNED1, "A"],
+        tx2: ["A", "B"],
+        tx3: ["B", ENTITY_EXCHANGE],
+      },
+      [OWNED1],
+    );
+
+    const findings = detectEntityProximity(ctx);
+
+    expect(findings).toHaveLength(1);
+    const { hopPath, hopTxids } = findings[0].details as {
+      hopPath: string[];
+      hopTxids: string[];
+    };
+    expect(hopPath).toEqual([OWNED1, "A", "B", ENTITY_EXCHANGE]);
+    // One connecting txid per consecutive pair (always hopPath.length - 1).
+    expect(hopTxids).toHaveLength(hopPath.length - 1);
+    expect(hopTxids).toEqual(["tx1", "tx2", "tx3"]);
+  });
+
+  it("records the single connecting txid for a hop-2 path", () => {
+    const ctx = makeCtx(
+      {
+        tx1: [OWNED1, "A"],
+        tx2: ["A", ENTITY_EXCHANGE],
+      },
+      [OWNED1],
+    );
+
+    const findings = detectEntityProximity(ctx);
+
+    expect(findings).toHaveLength(1);
+    const { hopPath, hopTxids } = findings[0].details as {
+      hopPath: string[];
+      hopTxids: string[];
+    };
+    expect(hopPath).toEqual([OWNED1, "A", ENTITY_EXCHANGE]);
+    expect(hopTxids).toEqual(["tx1", "tx2"]);
+  });
+
   it("returns no findings when the entity list is empty", () => {
     setActiveEntityList([]);
     const ctx = makeCtx(

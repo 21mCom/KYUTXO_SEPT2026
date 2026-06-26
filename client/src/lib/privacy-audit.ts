@@ -1271,23 +1271,32 @@ const PROXIMITY_CATEGORY_FINDING_TYPE: Record<EntityCategory, PrivacyFindingType
 
 /**
  * Walk the BFS parent links back from `target` to `start`, returning the path
- * ordered start → … → target (owned address first, entity address last).
+ * ordered start → … → target (owned address first, entity address last) along
+ * with the connecting txid for each consecutive hop. `txids[i]` is the
+ * transaction that links `path[i]` to `path[i + 1]`, so `txids` always has one
+ * fewer element than `path`.
  */
 function reconstructPath(
   parentOf: Map<string, string>,
+  parentTxidOf: Map<string, string>,
   start: string,
   target: string,
-): string[] {
-  const reversed: string[] = [target];
+): { path: string[]; txids: string[] } {
+  const path: string[] = [target];
+  const txids: string[] = [];
   let current = target;
   // Guard against cycles with a bounded walk.
   for (let i = 0; i < MAX_BFS_NODES_PER_ADDRESS && current !== start; i++) {
     const parent = parentOf.get(current);
     if (parent === undefined) break;
-    reversed.push(parent);
+    const txid = parentTxidOf.get(current);
+    path.push(parent);
+    if (txid !== undefined) txids.push(txid);
     current = parent;
   }
-  return reversed.reverse();
+  path.reverse();
+  txids.reverse();
+  return { path, txids };
 }
 
 export function detectEntityProximity(ctx: AuditContext): PrivacyFinding[] {
@@ -1318,6 +1327,8 @@ export function detectEntityProximity(ctx: AuditContext): PrivacyFinding[] {
     ownedAddresses: string[];
     /** Representative shortest path: owned → intermediary… → entity. */
     hopPath: string[];
+    /** Connecting txid per hop; hopTxids[i] links hopPath[i] → hopPath[i+1]. */
+    hopTxids: string[];
   }>();
 
   for (const ownedAddr of ctx.userAddresses) {
@@ -1330,6 +1341,9 @@ export function detectEntityProximity(ctx: AuditContext): PrivacyFinding[] {
     // parentOf[child] = the address through which `child` was first reached.
     // Used to reconstruct the shortest path back to ownedAddr.
     const parentOf = new Map<string, string>();
+    // parentTxidOf[child] = the txid through which `child` was first reached.
+    // Used to surface the transaction connecting each hop.
+    const parentTxidOf = new Map<string, string>();
 
     // Track the closest hop we found per category so we don't emit two
     // distances for the same category from the same owned address.
@@ -1348,7 +1362,10 @@ export function detectEntityProximity(ctx: AuditContext): PrivacyFinding[] {
           for (const p of parts) {
             if (!p.address || visited.has(p.address)) continue;
             visited.add(p.address);
-            if (addr !== p.address) parentOf.set(p.address, addr);
+            if (addr !== p.address) {
+              parentOf.set(p.address, addr);
+              parentTxidOf.set(p.address, txid);
+            }
 
             const entity = entityInGraph.get(p.address);
             if (entity) {
@@ -1356,7 +1373,12 @@ export function detectEntityProximity(ctx: AuditContext): PrivacyFinding[] {
               if (hop >= 2 && !closestPerCategory.has(entity.category)) {
                 closestPerCategory.set(entity.category, hop);
 
-                const hopPath = reconstructPath(parentOf, ownedAddr, p.address);
+                const { path: hopPath, txids: hopTxids } = reconstructPath(
+                  parentOf,
+                  parentTxidOf,
+                  ownedAddr,
+                  p.address,
+                );
                 const key = `${entity.category}::${hop}`;
                 const existing = grouped.get(key);
                 if (existing) {
@@ -1375,6 +1397,7 @@ export function detectEntityProximity(ctx: AuditContext): PrivacyFinding[] {
                     entityAddresses: [p.address],
                     ownedAddresses: [ownedAddr],
                     hopPath,
+                    hopTxids,
                   });
                 }
               }
@@ -1414,6 +1437,7 @@ export function detectEntityProximity(ctx: AuditContext): PrivacyFinding[] {
         entityNames,
         entityAddresses: group.entityAddresses,
         hopPath: group.hopPath,
+        hopTxids: group.hopTxids,
         isProximity: true,
       },
       correction:

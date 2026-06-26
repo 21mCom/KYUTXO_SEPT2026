@@ -18,8 +18,9 @@ import {
   Layers,
   Lock,
   Shuffle,
-  ArrowRight,
   ArrowRightLeft,
+  ArrowDown,
+  CornerDownRight,
   Zap,
   Network,
   ScanSearch,
@@ -2452,6 +2453,7 @@ export function FindingCard({ finding, coinjoinTxids }: { finding: PrivacyFindin
   const [expanded, setExpanded] = useState(false);
   const citations = (finding.details?.citations as EntityCitation[] | undefined) ?? [];
   const hopPath = (finding.details?.hopPath as string[] | undefined) ?? [];
+  const hopTxids = (finding.details?.hopTxids as string[] | undefined) ?? [];
 
   return (
     <div
@@ -2523,14 +2525,25 @@ export function FindingCard({ finding, coinjoinTxids }: { finding: PrivacyFindin
             {hopPath.length > 1 && (
               <div data-testid="container-hop-path">
                 <span className="text-xs font-medium text-muted-foreground">Hop path:</span>
-                <div className="flex flex-wrap items-center gap-1 mt-1">
+                <div className="flex flex-col gap-1 mt-1">
                   {hopPath.map((addr, i) => (
-                    <span key={`${addr}-${i}`} className="inline-flex items-center gap-1">
+                    <div key={`${addr}-${i}`} className="flex flex-col gap-1">
                       <ClickableAddress address={addr} />
                       {i < hopPath.length - 1 && (
-                        <ArrowRight className="h-3 w-3 text-muted-foreground shrink-0" />
+                        <div className="flex flex-wrap items-center gap-1 pl-4 text-muted-foreground">
+                          <CornerDownRight className="h-3 w-3 shrink-0" />
+                          {hopTxids[i] ? (
+                            <>
+                              <span className="text-[11px]">via</span>
+                              <TxidLink txid={hopTxids[i]} />
+                              <DeepDiveDialog txid={hopTxids[i]} coinjoinTxids={coinjoinTxids} />
+                            </>
+                          ) : (
+                            <ArrowDown className="h-3 w-3 shrink-0" />
+                          )}
+                        </div>
                       )}
-                    </span>
+                    </div>
                   ))}
                 </div>
               </div>
