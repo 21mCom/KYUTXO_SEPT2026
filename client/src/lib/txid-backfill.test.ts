@@ -78,6 +78,7 @@ const {
   detectOrphanedTxRecords,
   runTxidBackfill,
   detectAndBackfill,
+  resolveAllBlankInputAddresses,
 } = await import("./txid-backfill");
 
 // ---- Fixtures --------------------------------------------------------------
@@ -1310,6 +1311,247 @@ describe("runTxidBackfill (source balance recompute after repair)", () => {
     // Untouched: the recompute never ran for this address.
     const srcRec = await testDb.records.get(srcRecId);
     expect(srcRec?.cachedBalanceSats).toBe(123456);
+  });
+});
+
+// ---- resolveAllBlankInputAddresses (whole-database resolution) -------------
+//
+// resolveAllBlankInputAddresses is the Settings "Resolve Input Addresses"
+// entry point. Unlike resolveBackfillPrevouts (scoped to a freshly-rebuilt set
+// of txids), it scans EVERY input participant in the database for rows that
+// still have a blank address but carry a chaseable prevout reference, then
+// resolves them through the shared core — first from local participant output
+// rows, then by fetching the previous transaction from the provider. It builds
+// its provider from stored node settings and defers (rather than throwing) when
+// no node is configured or connectivity fails.
+//
+// These tests seed transactionParticipants directly (no blockchain rows or
+// txid records needed) so the whole-database scan path is exercised in
+// isolation from the orphan-rebuild pass.
+
+/**
+ * Adds a blank-address input participant carrying a prevout reference — exactly
+ * the kind of row resolveAllBlankInputAddresses hunts for. Returns its id.
+ */
+function addBlankInput(
+  txid: string,
+  prevTxid: string,
+  prevVout = 0,
+): Promise<number> {
+  return testDb.transactionParticipants.add({
+    txid,
+    role: "input",
+    address: "",
+    amount: 0,
+    prevTxid,
+    prevVout,
+  } as unknown as TransactionParticipant);
+}
+
+/** Adds a local output participant row that the resolver can read from cache. */
+function addOutputRow(
+  txid: string,
+  vout: number,
+  address: string,
+  amount: number,
+  scriptType = "v0_p2wpkh",
+): Promise<number> {
+  return testDb.transactionParticipants.add({
+    txid,
+    role: "output",
+    vout,
+    address,
+    amount,
+    scriptType,
+  } as unknown as TransactionParticipant);
+}
+
+describe("resolveAllBlankInputAddresses", () => {
+  it("resolves a blank input from a local participant output row without fetching", async () => {
+    const inputId = await addBlankInput(TXID_A, PREV_TXID, 0);
+    // The referenced previous output is already in the DB as a participant row.
+    await addOutputRow(PREV_TXID, 0, PREV_ADDR, 50000, "v0_p2wpkh");
+
+    await testDb.nodeSettings.add({ id: "default" } as unknown as NodeSettings);
+    const seen: string[] = [];
+    nextProvider = makeProvider({ onGetTransaction: (t) => seen.push(t) });
+
+    const result = await resolveAllBlankInputAddresses();
+
+    expect(result.deferred).toBe(false);
+    expect(result.unresolvedFound).toBe(1);
+    expect(result.resolved).toBe(1);
+
+    const input = await testDb.transactionParticipants.get(inputId);
+    expect(input?.address).toBe(PREV_ADDR);
+    expect(input?.amount).toBe(50000);
+    expect(input?.scriptType).toBe("v0_p2wpkh");
+
+    // The prevout was already local, so the provider was never asked for it.
+    expect(seen).not.toContain(PREV_TXID);
+  });
+
+  it("resolves a blank input by fetching the previous transaction from the provider", async () => {
+    const inputId = await addBlankInput(TXID_A, PREV_TXID, 0);
+    // No local output row → the previous transaction must be fetched.
+    await testDb.nodeSettings.add({ id: "default" } as unknown as NodeSettings);
+
+    const seen: string[] = [];
+    const prevTx = makeApiTx(PREV_TXID, {
+      outputs: [{ address: PREV_ADDR, amount: 50000, n: 0 }],
+    });
+    nextProvider = makeProvider({
+      txs: new Map([[PREV_TXID, prevTx]]),
+      onGetTransaction: (t) => seen.push(t),
+    });
+
+    const result = await resolveAllBlankInputAddresses();
+
+    expect(result.deferred).toBe(false);
+    expect(result.unresolvedFound).toBe(1);
+    expect(result.resolved).toBe(1);
+    // The prevout was missing locally, so it had to be fetched.
+    expect(seen).toContain(PREV_TXID);
+
+    const input = await testDb.transactionParticipants.get(inputId);
+    expect(input?.address).toBe(PREV_ADDR);
+    expect(input?.amount).toBe(50000);
+    expect(input?.scriptType).toBe("v0_p2wpkh");
+  });
+
+  it("links a resolved input address to an existing record by recordId", async () => {
+    const recId = await testDb.records.add(makeAddressRecord(PREV_ADDR));
+    const inputId = await addBlankInput(TXID_A, PREV_TXID, 0);
+    await testDb.nodeSettings.add({ id: "default" } as unknown as NodeSettings);
+
+    const prevTx = makeApiTx(PREV_TXID, {
+      outputs: [{ address: PREV_ADDR, amount: 50000, n: 0 }],
+    });
+    nextProvider = makeProvider({ txs: new Map([[PREV_TXID, prevTx]]) });
+
+    const result = await resolveAllBlankInputAddresses();
+    expect(result.resolved).toBe(1);
+
+    const input = await testDb.transactionParticipants.get(inputId);
+    expect(input?.address).toBe(PREV_ADDR);
+    expect(input?.recordId).toBe(recId);
+  });
+
+  it("leaves an already-resolved input untouched and never refetches its prevout", async () => {
+    // An input that already carries an address must be ignored by the scan.
+    const resolvedId = await testDb.transactionParticipants.add({
+      txid: TXID_A,
+      role: "input",
+      address: ADDR_IN,
+      amount: 12345,
+      scriptType: "v0_p2wpkh",
+      prevTxid: PREV_1,
+      prevVout: 0,
+    } as unknown as TransactionParticipant);
+    // A genuinely blank input alongside it should still be resolved.
+    const blankId = await addBlankInput(TXID_B, PREV_2, 0);
+    await addOutputRow(PREV_2, 0, PREV_ADDR, 70000, "v0_p2wpkh");
+
+    await testDb.nodeSettings.add({ id: "default" } as unknown as NodeSettings);
+    const seen: string[] = [];
+    nextProvider = makeProvider({ onGetTransaction: (t) => seen.push(t) });
+
+    const result = await resolveAllBlankInputAddresses();
+
+    // Only the blank input is counted and resolved.
+    expect(result.unresolvedFound).toBe(1);
+    expect(result.resolved).toBe(1);
+
+    // The already-resolved input is byte-for-byte unchanged.
+    const untouched = await testDb.transactionParticipants.get(resolvedId);
+    expect(untouched?.address).toBe(ADDR_IN);
+    expect(untouched?.amount).toBe(12345);
+
+    // Its prevout was never chased.
+    expect(seen).not.toContain(PREV_1);
+
+    const blank = await testDb.transactionParticipants.get(blankId);
+    expect(blank?.address).toBe(PREV_ADDR);
+    expect(blank?.amount).toBe(70000);
+  });
+
+  it("resolves a mix of local-cache and provider-fetched inputs across the whole database", async () => {
+    // One input resolvable from a local output row, one needing a fetch.
+    const localId = await addBlankInput(TXID_A, PREV_1, 0);
+    await addOutputRow(PREV_1, 0, ADDR_PREV1, 30000, "v0_p2wpkh");
+    const fetchId = await addBlankInput(TXID_B, PREV_2, 0);
+
+    await testDb.nodeSettings.add({ id: "default" } as unknown as NodeSettings);
+    const seen: string[] = [];
+    const prev2 = makeApiTx(PREV_2, {
+      outputs: [{ address: ADDR_PREV2, amount: 40000, n: 0 }],
+    });
+    nextProvider = makeProvider({
+      txs: new Map([[PREV_2, prev2]]),
+      onGetTransaction: (t) => seen.push(t),
+    });
+
+    const result = await resolveAllBlankInputAddresses();
+
+    expect(result.unresolvedFound).toBe(2);
+    expect(result.resolved).toBe(2);
+
+    // Only the non-local prevout was fetched.
+    expect(seen).toContain(PREV_2);
+    expect(seen).not.toContain(PREV_1);
+
+    expect((await testDb.transactionParticipants.get(localId))?.address).toBe(ADDR_PREV1);
+    expect((await testDb.transactionParticipants.get(fetchId))?.address).toBe(ADDR_PREV2);
+  });
+
+  it("returns deferred=true when no node settings are configured", async () => {
+    // There is blank work to do, but with no provider configured it must defer.
+    await addBlankInput(TXID_A, PREV_TXID, 0);
+
+    const result = await resolveAllBlankInputAddresses();
+
+    expect(result.deferred).toBe(true);
+    expect(result.resolved).toBe(0);
+    expect(result.deferReason).toMatch(/node settings/i);
+
+    // The blank input is left exactly as it was — nothing was resolved.
+    const input = await testDb.transactionParticipants
+      .where("txid")
+      .equals(TXID_A)
+      .first();
+    expect(input?.address ?? "").toBe("");
+  });
+
+  it("returns deferred=true when the provider cannot connect", async () => {
+    await addBlankInput(TXID_A, PREV_TXID, 0);
+    await testDb.nodeSettings.add({ id: "default" } as unknown as NodeSettings);
+    nextProvider = makeProvider({ blockHeightThrows: true });
+
+    const result = await resolveAllBlankInputAddresses();
+
+    expect(result.deferred).toBe(true);
+    expect(result.resolved).toBe(0);
+    expect(result.deferReason).toMatch(/could not connect/i);
+  });
+
+  it("returns a non-deferred empty result when there are no blank inputs", async () => {
+    // A fully-resolved input only — nothing for the scan to do.
+    await testDb.transactionParticipants.add({
+      txid: TXID_A,
+      role: "input",
+      address: ADDR_IN,
+      amount: 100000,
+      prevTxid: PREV_TXID,
+      prevVout: 0,
+    } as unknown as TransactionParticipant);
+    await testDb.nodeSettings.add({ id: "default" } as unknown as NodeSettings);
+    nextProvider = makeProvider();
+
+    const result = await resolveAllBlankInputAddresses();
+
+    expect(result.deferred).toBe(false);
+    expect(result.unresolvedFound).toBe(0);
+    expect(result.resolved).toBe(0);
   });
 });
 
