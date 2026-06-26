@@ -336,6 +336,72 @@ describe("TransactionDeepDive failure handling", () => {
   });
 });
 
+// The worker.onmessage handler guards against out-of-order results: a slow
+// first analysis can deliver its result after the user has already kicked off a
+// second one. The handler compares e.data.id to pendingIdRef.current and bails
+// when they differ, so a stale result must never overwrite the current one.
+//
+// The Analyse button is disabled while an analysis is loading, so a second
+// analysis can't be started by clicking it again mid-flight. The reachable way
+// to have a *first* analysis still in flight (its id posted) while a *second*
+// one has started is the error→Retry path: the first analysis posts to the
+// reused worker, that worker reports an error (which re-enables the UI), the
+// user hits Retry to start a second analysis (a new id), and only then does the
+// first analysis's queued result straggle back from the still-alive, reused
+// worker. The guard must drop that stale result.
+describe("TransactionDeepDive stale-result guard", () => {
+  it("ignores a stale worker result delivered after a newer analysis started", async () => {
+    mockedGetTx.mockResolvedValue({ txid: TXID, fee: 1_000 } as any);
+    mockedGetParticipants.mockResolvedValue(validParticipants());
+
+    renderDeepDive();
+
+    // First analysis: load data and post to the worker, capturing its id (#1).
+    fireEvent.click(screen.getByTestId("button-analyse-deep-dive"));
+    await waitFor(() => {
+      expect(lastWorker).not.toBeNull();
+      expect(lastWorker!.postMessage).toHaveBeenCalledTimes(1);
+    });
+    const firstId = (lastWorker!.postMessage.mock.calls[0][0] as { id: string })
+      .id;
+
+    // The first analysis's worker errors — this re-enables the UI (Retry) while
+    // leaving the first id's result still pending from the reused worker.
+    act(() => {
+      lastWorker!.onerror!({ message: "transient worker hiccup" } as any);
+    });
+    await screen.findByTestId("button-retry-deep-dive");
+
+    // Second analysis via Retry on the SAME (reused) worker. Capture its id
+    // (#2); pendingIdRef.current is now this newer id.
+    fireEvent.click(screen.getByTestId("button-retry-deep-dive"));
+    await waitFor(() => {
+      expect(lastWorker!.postMessage).toHaveBeenCalledTimes(2);
+    });
+    const secondId = (lastWorker!.postMessage.mock.calls[1][0] as { id: string })
+      .id;
+    expect(secondId).not.toBe(firstId);
+
+    // The FIRST analysis's result finally straggles back. Its id no longer
+    // matches pendingIdRef.current, so the guard must ignore it — nothing renders.
+    act(() => {
+      lastWorker!.onmessage!({
+        data: { id: firstId, result: { tooComplex: true } },
+      } as MessageEvent);
+    });
+    await Promise.resolve();
+    expect(screen.queryByTestId("container-boltzmann-result")).toBeNull();
+
+    // The SECOND (current) analysis's result does render.
+    act(() => {
+      lastWorker!.onmessage!({
+        data: { id: secondId, result: { tooComplex: true } },
+      } as MessageEvent);
+    });
+    await screen.findByTestId("container-boltzmann-result");
+  });
+});
+
 // A transaction can load successfully yet have no participant rows (e.g. the
 // address was never synced). That is a legitimate, non-error outcome: the panel
 // shows an informational message but must NOT treat it like a failure — so no
