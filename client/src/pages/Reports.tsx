@@ -4,7 +4,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { FileText, GitBranch, Search, Shield, Eye, Loader2, Download, Printer, ChevronRight } from "lucide-react";
+import { FileText, GitBranch, Search, Shield, Eye, Loader2, Download, Printer, ChevronRight, Copy } from "lucide-react";
 import { SourceOfFundsReport } from "@/components/reports/SourceOfFundsReport";
 import { HopPointReport } from "@/components/reports/HopPointReport";
 import { ContinuityCertificateReport } from "@/components/reports/ContinuityCertificateReport";
@@ -118,12 +118,17 @@ function PrivacyAuditReportPanel() {
     URL.revokeObjectURL(url);
   }, [result, selectedOwner, selectedWallet]);
 
-  const exportText = useCallback(() => {
-    if (!result) return;
-    const text = buildPrivacyTextReport(result, {
+  const buildText = useCallback(() => {
+    if (!result) return null;
+    return buildPrivacyTextReport(result, {
       owner: selectedOwner === "all" ? null : selectedOwner,
       wallet: selectedWallet === "all" ? null : selectedWallet,
     });
+  }, [result, selectedOwner, selectedWallet]);
+
+  const exportText = useCallback(() => {
+    const text = buildText();
+    if (text == null) return;
 
     const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
     const url = URL.createObjectURL(blob);
@@ -132,7 +137,35 @@ function PrivacyAuditReportPanel() {
     a.download = `privacy-audit-report-${new Date().toISOString().slice(0, 10)}.txt`;
     a.click();
     URL.revokeObjectURL(url);
-  }, [result, selectedOwner, selectedWallet]);
+  }, [buildText]);
+
+  const copyText = useCallback(async () => {
+    const text = buildText();
+    if (text == null) return;
+
+    if (!navigator.clipboard?.writeText) {
+      toast({
+        variant: "destructive",
+        title: "Clipboard Unavailable",
+        description: "Copying isn't supported here. Use Export Text to save the report instead.",
+      });
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(text);
+      toast({
+        title: "Copied to Clipboard",
+        description: "The Privacy Audit report is ready to paste.",
+      });
+    } catch {
+      toast({
+        variant: "destructive",
+        title: "Copy Failed",
+        description: "Couldn't access the clipboard. Use Export Text to save the report instead.",
+      });
+    }
+  }, [buildText, toast]);
 
   const exportPdf = useCallback(() => {
     if (!result) return;
@@ -196,6 +229,9 @@ function PrivacyAuditReportPanel() {
           <>
             <Button variant="outline" onClick={exportPdf} data-testid="button-print-privacy-report">
               <Printer className="mr-2 h-4 w-4" />Print / PDF
+            </Button>
+            <Button variant="outline" onClick={copyText} data-testid="button-copy-privacy-report-text">
+              <Copy className="mr-2 h-4 w-4" />Copy
             </Button>
             <Button variant="outline" onClick={exportText} data-testid="button-export-privacy-report-text">
               <FileText className="mr-2 h-4 w-4" />Export Text
