@@ -280,11 +280,20 @@ describe("SettingsPage — Privacy Audit Entity List panel", () => {
     ]);
     await selectEntityFile("bad.json", badSnapshot);
 
-    // Error container is shown with per-entry messages (one per bad entry).
+    // Error container is shown, with the two bad entries bucketed into their
+    // problem-type groups (one invalid address, one missing category).
     const errors = await screen.findByTestId("container-entity-errors");
     expect(errors).toBeTruthy();
-    expect(screen.getByTestId("text-entity-error-0")).toBeTruthy();
-    expect(screen.getByTestId("text-entity-error-1")).toBeTruthy();
+    expect(screen.getByTestId("group-entity-error-invalid-address")).toBeTruthy();
+    expect(screen.getByTestId("group-entity-error-missing-category")).toBeTruthy();
+
+    // Two distinct kinds means the groups collapse by default; expanding one
+    // reveals its single offending entry row.
+    expect(screen.queryByTestId("text-entity-error-0")).toBeNull();
+    fireEvent.click(screen.getByTestId("button-entity-error-group-invalid-address"));
+    await waitFor(() =>
+      expect(screen.getByTestId("text-entity-error-0")).toBeTruthy(),
+    );
 
     // No preview dialog and nothing applied.
     expect(screen.queryByTestId("text-preview-incoming")).toBeNull();
@@ -334,6 +343,115 @@ describe("SettingsPage — Privacy Audit Entity List panel", () => {
     expect(getActiveEntitySource()).toBe("bundled");
     const settings = await getSettings("default");
     expect(settings?.entityListSnapshot).toBeUndefined();
+  });
+
+  it("groups a mixed-error snapshot by problem type with the right counts, ordering, and expansion", async () => {
+    render(
+      <ActivityBusProvider>
+        <SettingsPage />
+      </ActivityBusProvider>,
+    );
+    await screen.findByTestId("badge-entity-source");
+
+    // A file that hits three different error kinds with different multiplicities
+    // so we can assert grouping, per-group counts, and most-common-first order:
+    //   - unknown-category × 3  (valid address + name, bogus category)
+    //   - invalid-address  × 2  (bad address, valid name + category)
+    //   - missing-name     × 1  (valid address + category, empty name)
+    // Reusing the same valid address across the unknown-category entries is safe
+    // because only fully-valid entries are recorded for duplicate detection, so
+    // these never collapse into spurious duplicate-address errors.
+    const mixed = JSON.stringify([
+      { address: ADDR.a, name: "Bogus One", category: "not-a-category" },
+      { address: "totally-invalid-1", name: "Bad Addr One", category: "exchange" },
+      { address: ADDR.b, name: "Bogus Two", category: "definitely-wrong" },
+      { address: ADDR.a, name: "Bogus Three", category: "nope" },
+      { address: "totally-invalid-2", name: "Bad Addr Two", category: "mixer" },
+      { address: ADDR.b, name: "", category: "exchange" },
+    ]);
+    await selectEntityFile("mixed.json", mixed);
+
+    // The error container appears with the total problem count (6).
+    const container = await screen.findByTestId("container-entity-errors");
+    expect(container.textContent).toContain("6 problems");
+
+    // Each expected problem-type group heading is present with its count badge.
+    expect(screen.getByTestId("group-entity-error-unknown-category")).toBeTruthy();
+    expect(screen.getByTestId("group-entity-error-invalid-address")).toBeTruthy();
+    expect(screen.getByTestId("group-entity-error-missing-name")).toBeTruthy();
+    expect(
+      screen.getByTestId("badge-entity-error-count-unknown-category").textContent,
+    ).toBe("3");
+    expect(
+      screen.getByTestId("badge-entity-error-count-invalid-address").textContent,
+    ).toBe("2");
+    expect(
+      screen.getByTestId("badge-entity-error-count-missing-name").textContent,
+    ).toBe("1");
+
+    // Groups are ordered most-common-first: unknown-category (3), then
+    // invalid-address (2), then missing-name (1).
+    const order = screen
+      .getAllByTestId(/^group-entity-error-/)
+      .map((el) => el.getAttribute("data-testid"));
+    expect(order).toEqual([
+      "group-entity-error-unknown-category",
+      "group-entity-error-invalid-address",
+      "group-entity-error-missing-name",
+    ]);
+
+    // With multiple groups, every group starts collapsed — no offending entry
+    // rows are rendered until a heading is expanded.
+    expect(screen.queryByTestId("text-entity-error-0")).toBeNull();
+
+    // Expanding the unknown-category group reveals exactly its three offending
+    // entry rows (row indices are local to the expanded group).
+    fireEvent.click(
+      screen.getByTestId("button-entity-error-group-unknown-category"),
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("text-entity-error-0")).toBeTruthy(),
+    );
+    const rows = screen.getAllByTestId(/^text-entity-error-\d+$/);
+    expect(rows.length).toBe(3);
+    // The revealed rows are the unknown-category failures, not some other kind.
+    expect(container.textContent).toContain('Unknown category "not-a-category"');
+
+    // Nothing was applied — still on the bundled list, no persisted snapshot.
+    expect(getActiveEntitySource()).toBe("bundled");
+    expect((await getSettings("default"))?.entityListSnapshot).toBeUndefined();
+  });
+
+  it("auto-expands the only group when every error is the same kind", async () => {
+    render(
+      <ActivityBusProvider>
+        <SettingsPage />
+      </ActivityBusProvider>,
+    );
+    await screen.findByTestId("badge-entity-source");
+
+    // Every entry has the same problem (invalid address), so there is a single
+    // group with nothing to triage between — it should open automatically.
+    const sameKind = JSON.stringify([
+      { address: "totally-invalid-1", name: "One", category: "exchange" },
+      { address: "totally-invalid-2", name: "Two", category: "exchange" },
+    ]);
+    await selectEntityFile("same-kind.json", sameKind);
+
+    const group = await screen.findByTestId("group-entity-error-invalid-address");
+    expect(group).toBeTruthy();
+    expect(
+      screen.getByTestId("badge-entity-error-count-invalid-address").textContent,
+    ).toBe("2");
+
+    // The single group is expanded without any click, so its offending rows are
+    // already visible.
+    expect(screen.getByTestId("text-entity-error-0")).toBeTruthy();
+    expect(screen.getByTestId("text-entity-error-1")).toBeTruthy();
+    expect(screen.getAllByTestId(/^text-entity-error-\d+$/).length).toBe(2);
+
+    // Nothing applied.
+    expect(getActiveEntitySource()).toBe("bundled");
   });
 
   it("reverts to the bundled list and clears the persisted snapshot", async () => {
