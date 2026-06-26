@@ -2466,7 +2466,13 @@ export default function SettingsPage() {
                 value={String(privacyHistoryLimit)}
                 onValueChange={async (val) => {
                   try {
-                    await updatePrivacyHistoryLimit(Number(val));
+                    const removed = await updatePrivacyHistoryLimit(Number(val));
+                    if (removed > 0) {
+                      toast({
+                        title: `Removed ${removed.toLocaleString()} older ${removed === 1 ? "run" : "runs"}`,
+                        description: "Older Privacy Audit runs beyond the new limit were deleted.",
+                      });
+                    }
                   } catch {
                     toast({
                       title: "Error",

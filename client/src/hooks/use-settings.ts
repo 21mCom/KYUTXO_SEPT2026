@@ -128,7 +128,7 @@ export async function updateCancelConfirmThreshold(value: number) {
   }
 }
 
-export async function updatePrivacyHistoryLimit(value: number) {
+export async function updatePrivacyHistoryLimit(value: number): Promise<number> {
   const settings = await getStoredSettings('default');
   if (settings) {
     await updateStoredSettings('default', {
@@ -136,8 +136,9 @@ export async function updatePrivacyHistoryLimit(value: number) {
     });
     // Immediately remove any runs beyond the new limit (oldest first) so
     // lowering the limit takes effect right away rather than on next audit.
-    await trimPrivacyAuditHistory(value);
+    return await trimPrivacyAuditHistory(value);
   }
+  return 0;
 }
 
 export async function updatePeelChainViewMode(mode: 'graph' | 'list') {
