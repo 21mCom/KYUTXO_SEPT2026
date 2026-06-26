@@ -44,13 +44,49 @@ export interface EntitySnapshotError {
   message: string;
 }
 
+/**
+ * A non-fatal advisory about an otherwise-valid entry. Warnings never block an
+ * import; they surface likely mistakes (e.g. a sourceNote URL that cites a
+ * different address than the entry itself) so the user can review them first.
+ */
+export interface EntitySnapshotWarning {
+  /** Zero-based index of the entry within the parsed array. */
+  index: number;
+  message: string;
+}
+
 export interface EntitySnapshotValidation {
   valid: boolean;
   /** Valid, normalized entries (only meaningful when `valid` is true). */
   entries: EntityEntry[];
   errors: EntitySnapshotError[];
+  /** Non-fatal advisories about valid entries (e.g. mismatched citations). */
+  warnings: EntitySnapshotWarning[];
   /** Total number of entries seen in the input. */
   total: number;
+}
+
+/**
+ * Matches WalletExplorer-style address citations embedded in a sourceNote URL,
+ * e.g. https://www.walletexplorer.com/address/<addr>. The captured group is the
+ * cited Bitcoin address. Mirrors the build-time guard in
+ * `privacy-entity-list.test.ts` so user imports are held to the same standard.
+ */
+const CITATION_RE = /address\/([a-zA-HJ-NP-Za-km-z1-9]+)/gi;
+
+/**
+ * Scan a sourceNote for embedded `address/<addr>` citations and return any
+ * cited address that differs from the entry's own `address`. An empty array
+ * means every citation (if any) matched, or there were no citations at all.
+ */
+export function findMismatchedCitations(sourceNote: string, address: string): string[] {
+  const mismatched: string[] = [];
+  CITATION_RE.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = CITATION_RE.exec(sourceNote)) !== null) {
+    if (match[1] !== address) mismatched.push(match[1]);
+  }
+  return mismatched;
 }
 
 export interface EntityListStatus {
@@ -80,12 +116,14 @@ export function validateEntitySnapshot(raw: unknown): EntitySnapshotValidation {
       valid: false,
       entries: [],
       errors: [{ index: -1, message: 'Expected a JSON array of entries or an object with an "entries" array.' }],
+      warnings: [],
       total: 0,
     };
   }
 
   const arr = rawEntries as unknown[];
   const entries: EntityEntry[] = [];
+  const warnings: EntitySnapshotWarning[] = [];
   const seen = new Set<string>();
 
   arr.forEach((item, index) => {
@@ -136,14 +174,27 @@ export function validateEntitySnapshot(raw: unknown): EntitySnapshotValidation {
       (sourceNote === undefined || typeof sourceNote === 'string')
     ) {
       seen.add(address);
+      const trimmedNote =
+        typeof sourceNote === 'string' && sourceNote.trim() ? sourceNote.trim() : undefined;
       entries.push({
         address,
         name,
         category: category as EntityCategory,
-        ...(typeof sourceNote === 'string' && sourceNote.trim()
-          ? { sourceNote: sourceNote.trim() }
-          : {}),
+        ...(trimmedNote ? { sourceNote: trimmedNote } : {}),
       });
+
+      // Non-fatal: a sourceNote whose embedded citation points at a different
+      // address than the entry itself is almost always a copy/paste mistake.
+      if (trimmedNote) {
+        const cited = findMismatchedCitations(trimmedNote, address);
+        if (cited.length > 0) {
+          const unique = Array.from(new Set(cited));
+          warnings.push({
+            index,
+            message: `Source note for "${address}" cites a different address (${unique.join(', ')}).`,
+          });
+        }
+      }
     }
   });
 
@@ -155,6 +206,7 @@ export function validateEntitySnapshot(raw: unknown): EntitySnapshotValidation {
     valid: errors.length === 0 && entries.length > 0,
     entries,
     errors,
+    warnings,
     total: arr.length,
   };
 }
@@ -168,6 +220,8 @@ export interface ImportEntitySnapshotResult {
   total: number;
   mode: EntityListMode;
   errors: EntitySnapshotError[];
+  /** Non-fatal advisories about the imported entries (e.g. mismatched citations). */
+  warnings: EntitySnapshotWarning[];
 }
 
 /** Per-category breakdown comparing an incoming snapshot to the current list. */
@@ -379,6 +433,8 @@ export interface PrepareEntitySnapshotResult {
   valid: boolean;
   total: number;
   errors: EntitySnapshotError[];
+  /** Non-fatal advisories about the snapshot (e.g. mismatched citations). */
+  warnings: EntitySnapshotWarning[];
   /** Only present when `valid` is true. */
   preview?: EntitySnapshotPreview;
 }
@@ -394,12 +450,13 @@ export function prepareEntitySnapshot(
 ): PrepareEntitySnapshotResult {
   const result = validateEntitySnapshot(raw);
   if (!result.valid) {
-    return { valid: false, total: result.total, errors: result.errors };
+    return { valid: false, total: result.total, errors: result.errors, warnings: result.warnings };
   }
   return {
     valid: true,
     total: result.total,
     errors: [],
+    warnings: result.warnings,
     preview: buildEntitySnapshotPreview(result.entries, mode),
   };
 }
@@ -451,6 +508,7 @@ export async function importEntitySnapshot(
       total: result.total,
       mode,
       errors: result.errors,
+      warnings: result.warnings,
     };
   }
 
@@ -463,6 +521,7 @@ export async function importEntitySnapshot(
     total: result.total,
     mode,
     errors: [],
+    warnings: result.warnings,
   };
 }
 

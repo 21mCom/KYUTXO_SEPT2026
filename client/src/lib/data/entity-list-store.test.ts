@@ -17,6 +17,7 @@ import {
   serializeActiveEntityList,
   buildEntitySnapshotPreview,
   prepareEntitySnapshot,
+  findMismatchedCitations,
 } from "./entity-list-store";
 import {
   getActiveEntityList,
@@ -161,6 +162,90 @@ describe("validateEntitySnapshot", () => {
     expect(result.valid).toBe(true);
     expect(result.entries).toHaveLength(3);
   });
+
+  it("reports no warnings for a clean snapshot", () => {
+    const result = validateEntitySnapshot([
+      entry({ address: ADDR_A, sourceNote: "Reported by a public source" }),
+    ]);
+    expect(result.valid).toBe(true);
+    expect(result.warnings).toEqual([]);
+  });
+});
+
+describe("findMismatchedCitations", () => {
+  it("returns an empty array when there is no citation", () => {
+    expect(findMismatchedCitations("Just a free-text note", ADDR_A)).toEqual([]);
+  });
+
+  it("returns an empty array when the citation matches the address", () => {
+    expect(
+      findMismatchedCitations(`https://www.walletexplorer.com/address/${ADDR_A}`, ADDR_A),
+    ).toEqual([]);
+  });
+
+  it("returns the cited address when it differs from the entry address", () => {
+    expect(
+      findMismatchedCitations(`https://www.walletexplorer.com/address/${ADDR_B}`, ADDR_A),
+    ).toEqual([ADDR_B]);
+  });
+
+  it("collects every mismatched citation in the note", () => {
+    const note = `See /address/${ADDR_B} and /address/${ADDR_C}`;
+    expect(findMismatchedCitations(note, ADDR_A)).toEqual([ADDR_B, ADDR_C]);
+  });
+});
+
+describe("validateEntitySnapshot citation warnings", () => {
+  it("warns when a sourceNote cites a different address than the entry", () => {
+    const result = validateEntitySnapshot([
+      entry({
+        address: ADDR_A,
+        sourceNote: `https://www.walletexplorer.com/address/${ADDR_B}`,
+      }),
+    ]);
+    // Still valid — a mismatched citation is a non-fatal advisory.
+    expect(result.valid).toBe(true);
+    expect(result.errors).toEqual([]);
+    expect(result.warnings).toHaveLength(1);
+    expect(result.warnings[0].index).toBe(0);
+    expect(result.warnings[0].message).toContain(ADDR_A);
+    expect(result.warnings[0].message).toContain(ADDR_B);
+  });
+
+  it("does not warn when the citation matches the entry's address", () => {
+    const result = validateEntitySnapshot([
+      entry({
+        address: ADDR_A,
+        sourceNote: `https://www.walletexplorer.com/address/${ADDR_A}`,
+      }),
+    ]);
+    expect(result.valid).toBe(true);
+    expect(result.warnings).toEqual([]);
+  });
+
+  it("reports the correct index for a mismatched entry among several", () => {
+    const result = validateEntitySnapshot([
+      entry({ address: ADDR_A, sourceNote: `/address/${ADDR_A}` }),
+      entry({ address: ADDR_B, sourceNote: `/address/${ADDR_C}` }),
+      entry({ address: ADDR_C }),
+    ]);
+    expect(result.valid).toBe(true);
+    expect(result.warnings).toHaveLength(1);
+    expect(result.warnings[0].index).toBe(1);
+  });
+
+  it("de-duplicates repeated mismatched citations into one message", () => {
+    const result = validateEntitySnapshot([
+      entry({
+        address: ADDR_A,
+        sourceNote: `/address/${ADDR_B} ... also /address/${ADDR_B}`,
+      }),
+    ]);
+    expect(result.warnings).toHaveLength(1);
+    // The cited address appears once in the message, not twice.
+    const occurrences = result.warnings[0].message.split(ADDR_B).length - 1;
+    expect(occurrences).toBe(1);
+  });
 });
 
 describe("importEntitySnapshot", () => {
@@ -183,6 +268,19 @@ describe("importEntitySnapshot", () => {
     expect(changes.entityListSnapshot.sourceLabel).toBe("my-source.json");
     expect(changes.entityListSnapshot.entries).toHaveLength(1);
     expect(typeof changes.entityListSnapshot.importedAt).toBe("number");
+  });
+
+  it("surfaces citation warnings while still applying a valid snapshot", async () => {
+    const result = await importEntitySnapshot(
+      [entry({ address: ADDR_A, sourceNote: `/address/${ADDR_B}` })],
+      "src.json",
+    );
+    expect(result.valid).toBe(true);
+    expect(result.count).toBe(1);
+    expect(result.warnings).toHaveLength(1);
+    expect(result.warnings[0].index).toBe(0);
+    // Still applied despite the warning.
+    expect(getActiveEntitySource()).toBe("imported");
   });
 
   it("does not apply or persist an invalid snapshot", async () => {

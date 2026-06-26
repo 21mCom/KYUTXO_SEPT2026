@@ -190,6 +190,39 @@ describe("SettingsPage — Privacy Audit Entity List panel", () => {
     );
   });
 
+  it("warns about a mismatched source citation but still allows the import", async () => {
+    render(
+      <ActivityBusProvider>
+        <SettingsPage />
+      </ActivityBusProvider>,
+    );
+
+    await screen.findByTestId("badge-entity-source");
+
+    // ADDR.a's source note cites ADDR.b — a copy/paste mistake we should flag.
+    const snapshot = JSON.stringify([
+      {
+        address: ADDR.a,
+        name: "New Exchange",
+        category: "exchange",
+        sourceNote: `https://www.walletexplorer.com/address/${ADDR.b}`,
+      },
+    ]);
+    await selectEntityFile("snapshot.json", snapshot);
+
+    // Preview still appears (valid) and the warning container is shown alongside it.
+    await screen.findByTestId("text-preview-incoming");
+    const warnings = await screen.findByTestId("container-entity-import-warnings");
+    expect(warnings).toBeTruthy();
+    const warningText = screen.getByTestId("text-entity-warning-0").textContent ?? "";
+    expect(warningText).toContain("cites a different address");
+    expect(warningText).toContain(ADDR.a);
+
+    // The import can still be confirmed despite the warning.
+    fireEvent.click(screen.getByTestId("button-confirm-entity-import"));
+    await waitFor(() => expect(getActiveEntitySource()).toBe("imported"));
+  });
+
   it("surfaces per-entry errors for an invalid snapshot and applies nothing", async () => {
     render(
       <ActivityBusProvider>

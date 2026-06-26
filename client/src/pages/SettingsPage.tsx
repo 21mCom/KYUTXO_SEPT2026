@@ -87,6 +87,7 @@ import {
   resetEntitySnapshot,
   serializeActiveEntityList,
   type EntitySnapshotError,
+  type EntitySnapshotWarning,
   type EntitySnapshotPreview,
   type EntityListMode,
   type EntityChange,
@@ -490,6 +491,7 @@ export default function SettingsPage() {
   const [isImportingEntities, setIsImportingEntities] = useState(false);
   const [isResettingEntities, setIsResettingEntities] = useState(false);
   const [entityImportErrors, setEntityImportErrors] = useState<EntitySnapshotError[] | null>(null);
+  const [entityImportWarnings, setEntityImportWarnings] = useState<EntitySnapshotWarning[]>([]);
   const [entityPreview, setEntityPreview] = useState<EntitySnapshotPreview | null>(null);
   const [entityPreviewSource, setEntityPreviewSource] = useState<string | undefined>(undefined);
   const [showEntityDiff, setShowEntityDiff] = useState(false);
@@ -588,6 +590,7 @@ export default function SettingsPage() {
     if (!file) return;
 
     setEntityImportErrors(null);
+    setEntityImportWarnings([]);
     setEntityPreview(null);
     setIsImportingEntities(true);
     try {
@@ -610,11 +613,14 @@ export default function SettingsPage() {
         return;
       }
 
-      // Valid — stage a preview and wait for explicit confirmation.
+      // Valid — stage a preview and wait for explicit confirmation. Any
+      // non-fatal warnings (e.g. a source note that cites a different address)
+      // are surfaced alongside the preview so the user can review before applying.
       setEntityPreviewSource(file.name);
       setShowEntityDiff(false);
       setEntityDiffSearch("");
       setEntityDiffCategory("all");
+      setEntityImportWarnings(result.warnings);
       setEntityPreview(result.preview);
     } catch (error: any) {
       toast({
@@ -645,6 +651,7 @@ export default function SettingsPage() {
       });
       setEntityPreview(null);
       setEntityPreviewSource(undefined);
+      setEntityImportWarnings([]);
     } catch (error: any) {
       toast({
         title: "Import failed",
@@ -661,6 +668,7 @@ export default function SettingsPage() {
     setEntityPreviewSource(undefined);
     setEntityDiffSearch("");
     setEntityDiffCategory("all");
+    setEntityImportWarnings([]);
   };
 
   const filteredAddedEntries = useMemo(() => {
@@ -2946,6 +2954,37 @@ export default function SettingsPage() {
                     list and will overwrite{" "}
                     {entityPreview.overridden === 1 ? "that entry" : "those entries"}. Review them below.
                   </p>
+                )}
+
+                {entityImportWarnings.length > 0 && (
+                  <div
+                    className="rounded-md border border-yellow-500/40 bg-yellow-500/10 p-3 space-y-1.5"
+                    data-testid="container-entity-import-warnings"
+                  >
+                    <div className="flex items-center gap-2 text-sm font-medium text-yellow-700 dark:text-yellow-400">
+                      <AlertTriangle className="h-4 w-4 shrink-0" />
+                      <span data-testid="text-entity-warning-heading">
+                        {entityImportWarnings.length.toLocaleString()}{" "}
+                        {entityImportWarnings.length === 1 ? "entry has" : "entries have"} a mismatched
+                        source citation
+                      </span>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      The source note links to a different address than the entry itself — usually a
+                      copy/paste mistake. You can still import, but review these attributions first.
+                    </p>
+                    <ul className="space-y-1 max-h-32 overflow-y-auto text-xs">
+                      {entityImportWarnings.map((w, i) => (
+                        <li
+                          key={`${w.index}-${i}`}
+                          className="text-yellow-700 dark:text-yellow-400 break-words"
+                          data-testid={`text-entity-warning-${i}`}
+                        >
+                          {w.message}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
                 )}
 
                 <div>
