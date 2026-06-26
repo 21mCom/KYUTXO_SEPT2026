@@ -1793,6 +1793,79 @@ describe("resolveAllBlankInputAddresses", () => {
     // cancel toast path is reached.
     expect(phases[phases.length - 1]).toBe("complete");
   });
+
+  it("commits the already-fetched input and stops fetching when cancelled mid-fetch", async () => {
+    // The whole-database pass shares the same resolution core as the scoped
+    // orphan-rebuild path, whose contract is: a cancel halts further network
+    // fetching, but every prevout already fetched is committed, not discarded.
+    // Here two blank inputs each chase a DISTINCT previous transaction that has
+    // to be fetched (no local output rows), so resolution must hit the network
+    // once per input. With concurrency 1 the fetch loop pulls one prevout per
+    // chunk and re-checks the abort signal between chunks. Aborting straight
+    // from the provider's getTransaction the instant the FIRST prevout is
+    // fetched means: the first input's prevout lands in the cache and is
+    // committed, the loop breaks before the second prevout is ever requested,
+    // and the second input is left exactly as it was first written (blank). A
+    // regression that discarded fetched-but-uncommitted prevouts on cancel
+    // would leave the first input blank and under-report the resolved count.
+    const inputAId = await addBlankInput(TXID_A, PREV_1, 0);
+    const inputBId = await addBlankInput(TXID_B, PREV_2, 0);
+
+    await testDb.nodeSettings.add({ id: "default" } as unknown as NodeSettings);
+
+    const controller = new AbortController();
+    const seen: string[] = [];
+    const prev1 = makeApiTx(PREV_1, {
+      outputs: [{ address: ADDR_PREV1, amount: 30000, n: 0 }],
+    });
+    const prev2 = makeApiTx(PREV_2, {
+      outputs: [{ address: ADDR_PREV2, amount: 40000, n: 0 }],
+    });
+    nextProvider = makeProvider({
+      txs: new Map([
+        [PREV_1, prev1],
+        [PREV_2, prev2],
+      ]),
+      // Record every fetch and abort the moment the first prevout is pulled.
+      onGetTransaction: (t) => {
+        seen.push(t);
+        controller.abort();
+      },
+    });
+
+    // concurrency 1 → one prevout fetched per chunk, abort observed before the
+    // next chunk so the second prevout is never requested.
+    const result = await resolveAllBlankInputAddresses({
+      signal: controller.signal,
+      concurrency: 1,
+    });
+
+    // The pass reports cancellation, but the partial work it actually committed
+    // is reflected in the count rather than thrown away.
+    expect(result.cancelled).toBe(true);
+    expect(result.deferred).toBe(false);
+    // Both blank inputs were discovered during the scan…
+    expect(result.unresolvedFound).toBe(2);
+    // …but only the one whose prevout was fetched before the abort is resolved.
+    expect(result.resolved).toBe(1);
+
+    // The first input — whose prevout was fetched before the abort — is fully
+    // written: address and amount filled in from PREV_1's output.
+    const inputA = await testDb.transactionParticipants.get(inputAId);
+    expect(inputA?.address).toBe(ADDR_PREV1);
+    expect(inputA?.amount).toBe(30000);
+
+    // The second input — whose prevout was never fetched — is left exactly as it
+    // was first written: still blank, never partially filled in.
+    const inputB = await testDb.transactionParticipants.get(inputBId);
+    expect(inputB?.address ?? "").toBe("");
+    expect(inputB?.amount ?? 0).toBe(0);
+
+    // The cancel stopped further network fetching: PREV_1 was pulled, PREV_2
+    // never was.
+    expect(seen).toContain(PREV_1);
+    expect(seen).not.toContain(PREV_2);
+  });
 });
 
 // ---- detectAndBackfill (offline / deferral) --------------------------------
