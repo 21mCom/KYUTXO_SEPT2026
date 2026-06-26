@@ -36,6 +36,41 @@ vi.mock("@/lib/data/record-queries", () => ({
   getParticipantsByTxids: vi.fn(),
 }));
 
+// Radix Select doesn't open under jsdom (it relies on real pointer-capture and
+// layout), so swap it for a minimal native <select> that wires value /
+// onValueChange the same way. The single-txid tests never render the Select, so
+// this only affects the multi-txid switching test below.
+vi.mock("@/components/ui/select", async () => {
+  const React = await import("react");
+  const SelectTrigger: any = () => null;
+  SelectTrigger.__isTrigger = true;
+  return {
+    Select: ({ value, onValueChange, children }: any) => {
+      let testid: string | undefined;
+      React.Children.forEach(children, (child: any) => {
+        if (child && child.type && child.type.__isTrigger) {
+          testid = child.props["data-testid"];
+        }
+      });
+      return React.createElement(
+        "select",
+        {
+          "data-testid": testid,
+          value: value ?? "",
+          onChange: (e: any) => onValueChange?.(e.target.value),
+        },
+        children,
+      );
+    },
+    SelectTrigger,
+    SelectValue: () => null,
+    SelectContent: ({ children }: any) =>
+      React.createElement(React.Fragment, null, children),
+    SelectItem: ({ value, children }: any) =>
+      React.createElement("option", { value }, children),
+  };
+});
+
 import { getTransactionByTxid } from "@/lib/data/transaction-crud";
 import { getParticipantsByTxids } from "@/lib/data/record-queries";
 import { TransactionDeepDive } from "./PrivacyAudit";
@@ -229,6 +264,72 @@ describe("TransactionDeepDive failure handling", () => {
     expect(screen.getByTestId("container-deep-dive-summary")).toBeTruthy();
 
     // …and every trace of the prior error is gone.
+    expect(screen.queryByTestId("text-deep-dive-message")).toBeNull();
+    expect(screen.queryByTestId("text-deep-dive-next-steps")).toBeNull();
+    expect(screen.queryByTestId("button-retry-deep-dive")).toBeNull();
+  });
+
+  it("clears a prior transaction's error when a different tx is selected and analysed successfully", async () => {
+    // Multi-tx mode: the first transaction's analysis fails (twice, so the
+    // next-steps hint is on screen), then the user picks a *different*
+    // transaction from the dropdown and analyses it successfully. The success
+    // path must wipe the first tx's stale error UI — message, next-steps hint
+    // and Retry button — and never leave one tx's error showing over another's
+    // results.
+    const TXID2 = "a".repeat(64);
+
+    // The first two calls (for the first tx: analyse + Retry) fail; every call
+    // after that (the second tx) succeeds.
+    mockedGetTx
+      .mockRejectedValueOnce(new Error("boom"))
+      .mockRejectedValueOnce(new Error("boom"))
+      .mockResolvedValue({ txid: TXID2, fee: 1_000 } as any);
+    mockedGetParticipants.mockResolvedValue([
+      { txid: TXID2, role: "input", address: "bc1qinput", amount: 100_000, vout: 0 },
+      { txid: TXID2, role: "output", address: "bc1qoutput", amount: 99_000, vout: 0 },
+    ] as any);
+
+    render(
+      <TransactionDeepDive
+        txids={[TXID, TXID2]}
+        coinjoinTxids={new Set<string>()}
+      />,
+    );
+
+    // First tx fails, then fails again via Retry → the next-steps hint appears,
+    // so we have the full error UI (message + hint + Retry) on screen.
+    fireEvent.click(screen.getByTestId("button-analyse-deep-dive"));
+    await screen.findByTestId("button-retry-deep-dive");
+    fireEvent.click(screen.getByTestId("button-retry-deep-dive"));
+    await screen.findByTestId("text-deep-dive-next-steps");
+    expect(screen.getByTestId("text-deep-dive-message")).toBeTruthy();
+
+    // Switch to a different transaction…
+    fireEvent.change(screen.getByTestId("select-deep-dive-txid"), {
+      target: { value: TXID2 },
+    });
+
+    // …and analyse it. This succeeds: data loads and the worker is posted to.
+    fireEvent.click(screen.getByTestId("button-analyse-deep-dive"));
+    await waitFor(() => {
+      expect(lastWorker).not.toBeNull();
+      expect(lastWorker!.postMessage).toHaveBeenCalled();
+    });
+
+    // Drive a valid worker result back for the latest analysis.
+    const calls = lastWorker!.postMessage.mock.calls;
+    const { id } = calls[calls.length - 1][0] as { id: string };
+    act(() => {
+      lastWorker!.onmessage!({
+        data: { id, result: { tooComplex: true } },
+      } as MessageEvent);
+    });
+
+    // The second tx's results render…
+    await screen.findByTestId("container-boltzmann-result");
+    expect(screen.getByTestId("container-deep-dive-summary")).toBeTruthy();
+
+    // …and none of the first tx's error UI lingers.
     expect(screen.queryByTestId("text-deep-dive-message")).toBeNull();
     expect(screen.queryByTestId("text-deep-dive-next-steps")).toBeNull();
     expect(screen.queryByTestId("button-retry-deep-dive")).toBeNull();
