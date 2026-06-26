@@ -19,6 +19,7 @@ import {
   render,
   screen,
   fireEvent,
+  waitFor,
   within,
   cleanup,
 } from "@testing-library/react";
@@ -91,6 +92,40 @@ vi.mock("@/components/VocabularyManager", () => ({ default: () => null }));
 vi.mock("@/components/StripMarkersPanel", () => ({ default: () => null }));
 vi.mock("@/components/MigrationAuditPanel", () => ({ default: () => null }));
 vi.mock("@/components/LegacyRecoveryPanel", () => ({ default: () => null }));
+
+// Radix Select doesn't open under jsdom (it relies on real pointer-capture and
+// layout), so swap it for a minimal native <select> that wires value /
+// onValueChange the same way. The category-filter state path stays real.
+vi.mock("@/components/ui/select", async () => {
+  const React = await import("react");
+  const SelectTrigger: any = () => null;
+  SelectTrigger.__isTrigger = true;
+  return {
+    Select: ({ value, onValueChange, children }: any) => {
+      let testid: string | undefined;
+      React.Children.forEach(children, (child: any) => {
+        if (child && child.type && child.type.__isTrigger) {
+          testid = child.props["data-testid"];
+        }
+      });
+      return React.createElement(
+        "select",
+        {
+          "data-testid": testid,
+          value: value ?? "",
+          onChange: (e: any) => onValueChange?.(e.target.value),
+        },
+        children,
+      );
+    },
+    SelectTrigger,
+    SelectValue: () => null,
+    SelectContent: ({ children }: any) =>
+      React.createElement(React.Fragment, null, children),
+    SelectItem: ({ value, children }: any) =>
+      React.createElement("option", { value }, children),
+  };
+});
 
 const SettingsPage = (await import("./SettingsPage")).default;
 const { ActivityBusProvider } = await import("@/lib/activity-bus");
@@ -245,5 +280,145 @@ describe("SettingsPage — entity list import (merge mode)", () => {
     expect(
       await screen.findByTestId("text-entity-overrides-empty"),
     ).toBeTruthy();
+  });
+});
+
+describe("SettingsPage — entity list import (merge mode) diff filters", () => {
+  // A merge whose preview has 1 override + 2 brand-new entries in distinct
+  // categories, so search and category filters have something to narrow.
+  async function openMergeDiff() {
+    renderPage();
+    await screen.findByTestId("badge-entity-source");
+
+    const bundled = getBundledEntityList()[0];
+    expect(bundled).toBeTruthy();
+
+    fireEvent.click(screen.getByTestId("radio-entity-merge"));
+
+    const snapshot = JSON.stringify([
+      // Overrides a bundled entry (re-categorised to gambling).
+      { address: bundled.address, name: "Renamed Override Entity", category: "gambling" },
+      // Two brand-new entries with unique, search-distinct names.
+      { address: NEW_ADDR.a, name: "Qwizzle Mixer", category: "mixer" },
+      { address: NEW_ADDR.b, name: "Zorptast Exchange", category: "exchange" },
+    ]);
+    await selectEntityFile("merge-filters.json", snapshot);
+
+    await screen.findByTestId("text-preview-incoming");
+    fireEvent.click(screen.getByTestId("button-toggle-entity-diff"));
+    await screen.findByTestId("tab-entity-diff-overrides");
+    return { bundled };
+  }
+
+  function overridesTabText() {
+    return screen.getByTestId("tab-entity-diff-overrides").textContent ?? "";
+  }
+  function addedTabText() {
+    return screen.getByTestId("tab-entity-diff-added").textContent ?? "";
+  }
+  function typeSearch(value: string) {
+    fireEvent.change(screen.getByTestId("input-entity-diff-search"), {
+      target: { value },
+    });
+  }
+  function setCategory(value: string) {
+    fireEvent.change(screen.getByTestId("select-entity-diff-category"), {
+      target: { value },
+    });
+  }
+  // Radix Tabs default to "automatic" activation (a trigger activates when it
+  // receives focus). jsdom's fireEvent.click doesn't move focus, so focus the
+  // trigger explicitly to switch tabs.
+  function openAddedTab() {
+    const trigger = screen.getByTestId("tab-entity-diff-added");
+    fireEvent.focus(trigger);
+    fireEvent.click(trigger);
+  }
+
+  it("narrows the override/brand-new tab counts and visible rows as the search box is typed", async () => {
+    await openMergeDiff();
+
+    // Baseline: 1 override, 2 brand-new. The Overrides tab is active by default
+    // so its single row is on screen.
+    expect(overridesTabText()).toContain("Overrides (1");
+    expect(addedTabText()).toContain("Brand-new (2)");
+    expect(screen.getByTestId("row-entity-override-0")).toBeTruthy();
+
+    // A token unique to one brand-new entry: the override (different name +
+    // bundled name/address) and the other brand-new entry don't match.
+    typeSearch("qwizzle");
+
+    await waitFor(() => expect(addedTabText()).toContain("Brand-new (1)"));
+    expect(overridesTabText()).toContain("Overrides (0");
+
+    // The override list is now empty (filtered out).
+    expect(
+      await screen.findByTestId("text-entity-overrides-empty"),
+    ).toBeTruthy();
+
+    // Switch to the Brand-new tab: only the matching entry's row is rendered.
+    openAddedTab();
+    const addedRow = await screen.findByTestId("row-entity-diff-added-0");
+    expect(within(addedRow).getByText("Qwizzle Mixer")).toBeTruthy();
+    expect(screen.queryByText("Zorptast Exchange")).toBeNull();
+  });
+
+  it("filters the override and brand-new lists by the category dropdown", async () => {
+    const { bundled } = await openMergeDiff();
+    // An override matches a category if either side (previous bundled category
+    // or the incoming gambling category) equals it.
+    const overridesUnder = (cat: string) =>
+      cat === "gambling" || bundled.category === cat ? 1 : 0;
+
+    // Gambling matches the override (incoming category) but neither brand-new
+    // entry (mixer / exchange).
+    setCategory("gambling");
+    await waitFor(() => expect(overridesTabText()).toContain("Overrides (1"));
+    expect(addedTabText()).toContain("Brand-new (0)");
+    // The override row is still present on the (active) Overrides tab.
+    expect(screen.getByTestId("row-entity-override-0")).toBeTruthy();
+    // The Brand-new tab is empty under this category.
+    openAddedTab();
+    expect(
+      (await screen.findByTestId("text-entity-diff-empty-added")).textContent,
+    ).toContain("No brand-new entries match your search.");
+
+    // Mixer matches only the "Qwizzle Mixer" brand-new entry; the exchange
+    // entry drops out.
+    setCategory("mixer");
+    await waitFor(() => expect(addedTabText()).toContain("Brand-new (1)"));
+    expect(overridesTabText()).toContain(
+      `Overrides (${overridesUnder("mixer")}`,
+    );
+    const mixerRow = await screen.findByTestId("row-entity-diff-added-0");
+    expect(within(mixerRow).getByText("Qwizzle Mixer")).toBeTruthy();
+    expect(screen.queryByText("Zorptast Exchange")).toBeNull();
+
+    // Exchange matches only the "Zorptast Exchange" brand-new entry.
+    setCategory("exchange");
+    await waitFor(() => expect(addedTabText()).toContain("Brand-new (1)"));
+    const exchangeRow = await screen.findByTestId("row-entity-diff-added-0");
+    expect(within(exchangeRow).getByText("Zorptast Exchange")).toBeTruthy();
+    expect(screen.queryByText("Qwizzle Mixer")).toBeNull();
+  });
+
+  it("shows the empty-search labels on both tabs when nothing matches", async () => {
+    await openMergeDiff();
+
+    typeSearch("zzz-no-such-entity-anywhere");
+
+    await waitFor(() => expect(overridesTabText()).toContain("Overrides (0"));
+    expect(addedTabText()).toContain("Brand-new (0)");
+
+    // Overrides tab (active by default) shows its no-match empty label.
+    expect(
+      (await screen.findByTestId("text-entity-overrides-empty")).textContent,
+    ).toContain("No overrides match your search.");
+
+    // Brand-new tab shows its own no-match empty label.
+    openAddedTab();
+    expect(
+      (await screen.findByTestId("text-entity-diff-empty-added")).textContent,
+    ).toContain("No brand-new entries match your search.");
   });
 });
