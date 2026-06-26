@@ -44,6 +44,7 @@ import { useToast } from "@/hooks/use-toast";
 import { ToastAction } from "@/components/ui/toast";
 import { detectOrphanedTxRecords } from "@/lib/txid-backfill";
 import { subscribeToDbChanges } from "@/lib/database";
+import { ORPHAN_CHECK_DONE_KEY, ORPHANS_AWAITING_PROVIDER_KEY } from "@/lib/orphan-check-session";
 import { ActivityBusProvider } from "@/lib/activity-bus";
 import { ActivityPulseDot } from "@/components/ActivityPulseDot";
 import { EngineBootstrapper, EnginePreparingIndicator } from "@/components/EngineMaintenanceUI";
@@ -131,10 +132,10 @@ function OrphanedTxNotifier() {
   const [, setLocation] = useLocation();
 
   useEffect(() => {
-    const SESSION_KEY = "kyutxo:orphanCheckDone";
+    const SESSION_KEY = ORPHAN_CHECK_DONE_KEY;
     // Set once the startup check finds orphans but no provider is configured.
     // While set, a later provider configuration re-triggers the orphan check.
-    const AWAITING_PROVIDER_KEY = "kyutxo:orphansAwaitingProvider";
+    const AWAITING_PROVIDER_KEY = ORPHANS_AWAITING_PROVIDER_KEY;
 
     let cancelled = false;
 

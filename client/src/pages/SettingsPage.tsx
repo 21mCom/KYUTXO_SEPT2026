@@ -121,6 +121,7 @@ import {
 } from "@/config/debounce";
 import { useActivityBus } from "@/lib/activity-bus";
 import { detectAndBackfill, detectOrphanedTxRecords, runTxidBackfill, resolveAllBlankInputAddresses, type BackfillResult } from "@/lib/txid-backfill";
+import { resetOrphanCheckGate } from "@/lib/orphan-check-session";
 import { createProviderFromSettings } from "@/lib/blockchain-api";
 
 const DELETE_CONFIRMATION_PHRASE = "DELETE ALL DATA";
@@ -1671,6 +1672,13 @@ export default function SettingsPage() {
           });
         }
 
+        // A restore can introduce transaction records missing on-chain data.
+        // Reset the once-per-session orphan-check gate so the startup check in
+        // OrphanedTxNotifier re-evaluates after the reload and re-prompts (or
+        // auto-backfills) via the normal path. It sets the gate again on load,
+        // so this cannot loop.
+        resetOrphanCheckGate();
+
         setTimeout(() => {
           setRestoreDialogOpen(false);
           setRestoreFile(null);
@@ -2289,6 +2297,13 @@ export default function SettingsPage() {
         title: "Restore Successful",
         description: baseMessage + backfillSuffix,
       });
+
+      // A restore can introduce transaction records missing on-chain data. Reset
+      // the once-per-session orphan-check gate so the startup check in
+      // OrphanedTxNotifier re-evaluates after the reload and re-prompts (or
+      // auto-backfills) via the normal path. It sets the gate again on load, so
+      // this cannot loop.
+      resetOrphanCheckGate();
 
       // Close dialog and reset state
       setTimeout(() => {
