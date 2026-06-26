@@ -147,6 +147,24 @@ describe("PeelChainGraph node navigation", () => {
     });
   });
 
+  it("opens the forensic deep-dive dialog (not the record panel) from the node badge", async () => {
+    const { getByTestId, findByTestId, findByText, queryByText } = renderGraph();
+    await waitForGraph(getByTestId);
+
+    // The badge calls e.stopPropagation() so it must not bubble into the
+    // transaction node's record-preview navigation.
+    fireEvent.click(getByTestId("button-graph-deep-dive-0"));
+
+    // The DeepDiveDialog opens — its content and title are rendered.
+    expect(await findByTestId("dialog-deep-dive")).toBeTruthy();
+    expect(await findByText("Transaction Deep-Dive")).toBeTruthy();
+
+    // The record-preview panel for the txid must NOT have opened (stopPropagation
+    // honored). The dialog surfaces the raw txid, but never the record's label.
+    await new Promise((r) => setTimeout(r, 50));
+    expect(queryByText(TX_LABEL)).toBeNull();
+  });
+
   it("does not open any record for a placeholder '—' node", async () => {
     const { getByTestId, queryByText } = renderGraph();
     await waitForGraph(getByTestId);
