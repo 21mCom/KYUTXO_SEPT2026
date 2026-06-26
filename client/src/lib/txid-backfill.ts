@@ -667,10 +667,15 @@ async function resolveUnresolvedInputs(
 
   if (updated.length === 0) return { written: 0, resolvedAddresses: [] };
 
-  // Final bulk-write phase. This can take a while for large backfills, so we
-  // check the abort signal between batches (prompt cancellation) and report
-  // incremental progress. Each completed batch is committed, so stopping early
-  // leaves the DB consistent — a re-run resumes from the still-unresolved rows.
+  // Final bulk-write phase. Cancellation contract: a cancel halts further
+  // *network fetching* (the fetch loop above breaks on abort), but every prevout
+  // we already fetched and prepared here is committed rather than thrown away —
+  // the work is done and dropping it would waste the network round-trips and
+  // leave the count under-reporting work that actually completed. `updated` is
+  // therefore bounded by what was fetched before the abort, so this loop simply
+  // writes all of it; each completed batch leaves the DB consistent and a re-run
+  // resumes from any rows still unresolved. We report progress and yield between
+  // batches so the UI stays responsive even though we no longer bail mid-write.
   // Track the addresses of rows we actually committed so the caller can
   // recompute only their cached stats (the spending address's balance changes
   // once its previously-blank spend input gets an address + amount).
@@ -679,9 +684,6 @@ async function resolveUnresolvedInputs(
   const writtenAddresses = new Set<string>();
   onWriteProgress?.(written, total);
   for (let i = 0; i < updated.length; i += 200) {
-    if (signal?.aborted) {
-      return { written, resolvedAddresses: Array.from(writtenAddresses) };
-    }
     const batch = updated.slice(i, i + 200);
     await bulkPutParticipants(batch, { skipNotification: true });
     for (const row of batch) {
@@ -689,7 +691,7 @@ async function resolveUnresolvedInputs(
     }
     written += batch.length;
     onWriteProgress?.(written, total);
-    // Yield between batches so cancellation and the UI stay responsive.
+    // Yield between batches so the UI stays responsive.
     await new Promise(resolve => setTimeout(resolve, 0));
   }
 
