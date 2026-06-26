@@ -1268,6 +1268,28 @@ const PROXIMITY_CATEGORY_FINDING_TYPE: Record<EntityCategory, PrivacyFindingType
  * scale correctly. Only indirect contacts (hop ≥ 2) are emitted; direct
  * counterparties (hop 1) are already handled by detectEntityContacts.
  */
+
+/**
+ * Walk the BFS parent links back from `target` to `start`, returning the path
+ * ordered start → … → target (owned address first, entity address last).
+ */
+function reconstructPath(
+  parentOf: Map<string, string>,
+  start: string,
+  target: string,
+): string[] {
+  const reversed: string[] = [target];
+  let current = target;
+  // Guard against cycles with a bounded walk.
+  for (let i = 0; i < MAX_BFS_NODES_PER_ADDRESS && current !== start; i++) {
+    const parent = parentOf.get(current);
+    if (parent === undefined) break;
+    reversed.push(parent);
+    current = parent;
+  }
+  return reversed.reverse();
+}
+
 export function detectEntityProximity(ctx: AuditContext): PrivacyFinding[] {
   // Build address → [txid, …] index from the already-loaded participant map.
   const addressToTxids = new Map<string, string[]>();
@@ -1294,6 +1316,8 @@ export function detectEntityProximity(ctx: AuditContext): PrivacyFinding[] {
     entityNames: Set<string>;
     entityAddresses: string[];
     ownedAddresses: string[];
+    /** Representative shortest path: owned → intermediary… → entity. */
+    hopPath: string[];
   }>();
 
   for (const ownedAddr of ctx.userAddresses) {
@@ -1303,6 +1327,9 @@ export function detectEntityProximity(ctx: AuditContext): PrivacyFinding[] {
     const visited = new Set<string>([ownedAddr]);
     const visitedTxids = new Set<string>();
     let frontier: string[] = [ownedAddr];
+    // parentOf[child] = the address through which `child` was first reached.
+    // Used to reconstruct the shortest path back to ownedAddr.
+    const parentOf = new Map<string, string>();
 
     // Track the closest hop we found per category so we don't emit two
     // distances for the same category from the same owned address.
@@ -1321,6 +1348,7 @@ export function detectEntityProximity(ctx: AuditContext): PrivacyFinding[] {
           for (const p of parts) {
             if (!p.address || visited.has(p.address)) continue;
             visited.add(p.address);
+            if (addr !== p.address) parentOf.set(p.address, addr);
 
             const entity = entityInGraph.get(p.address);
             if (entity) {
@@ -1328,6 +1356,7 @@ export function detectEntityProximity(ctx: AuditContext): PrivacyFinding[] {
               if (hop >= 2 && !closestPerCategory.has(entity.category)) {
                 closestPerCategory.set(entity.category, hop);
 
+                const hopPath = reconstructPath(parentOf, ownedAddr, p.address);
                 const key = `${entity.category}::${hop}`;
                 const existing = grouped.get(key);
                 if (existing) {
@@ -1345,6 +1374,7 @@ export function detectEntityProximity(ctx: AuditContext): PrivacyFinding[] {
                     entityNames: new Set([entity.name]),
                     entityAddresses: [p.address],
                     ownedAddresses: [ownedAddr],
+                    hopPath,
                   });
                 }
               }
@@ -1383,6 +1413,7 @@ export function detectEntityProximity(ctx: AuditContext): PrivacyFinding[] {
         entityCategory: group.category,
         entityNames,
         entityAddresses: group.entityAddresses,
+        hopPath: group.hopPath,
         isProximity: true,
       },
       correction:

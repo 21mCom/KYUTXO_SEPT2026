@@ -18,6 +18,7 @@ import {
   Layers,
   Lock,
   Shuffle,
+  ArrowRight,
   ArrowRightLeft,
   Zap,
   Network,
@@ -2450,6 +2451,7 @@ function getSeverityBadgePropsLocal(severity: PrivacySeverity) {
 function FindingCard({ finding, coinjoinTxids }: { finding: PrivacyFinding; coinjoinTxids: Set<string> }) {
   const [expanded, setExpanded] = useState(false);
   const citations = (finding.details?.citations as EntityCitation[] | undefined) ?? [];
+  const hopPath = (finding.details?.hopPath as string[] | undefined) ?? [];
 
   return (
     <div
@@ -2516,6 +2518,22 @@ function FindingCard({ finding, coinjoinTxids }: { finding: PrivacyFinding; coin
                   <PeelChainView txids={finding.txids} changeAddresses={finding.addresses} coinjoinTxids={coinjoinTxids} />
                 </DialogContent>
               </Dialog>
+            )}
+
+            {hopPath.length > 1 && (
+              <div data-testid="container-hop-path">
+                <span className="text-xs font-medium text-muted-foreground">Hop path:</span>
+                <div className="flex flex-wrap items-center gap-1 mt-1">
+                  {hopPath.map((addr, i) => (
+                    <span key={`${addr}-${i}`} className="inline-flex items-center gap-1">
+                      <ClickableAddress address={addr} />
+                      {i < hopPath.length - 1 && (
+                        <ArrowRight className="h-3 w-3 text-muted-foreground shrink-0" />
+                      )}
+                    </span>
+                  ))}
+                </div>
+              </div>
             )}
 
             {finding.addresses.length > 0 && (
