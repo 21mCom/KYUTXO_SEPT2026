@@ -688,6 +688,132 @@ describe("buildEntitySnapshotPreview", () => {
     expect(preview.categories).toHaveLength(2);
     expect(byCategory.mixer).toBeUndefined();
   });
+
+  it("includes a category present only in the incoming list", () => {
+    setActiveEntityList([addrEntry(ADDR.binance, "exchange")]);
+    const incoming = [
+      addrEntry(ADDR.binance, "exchange"),
+      addrEntry(ADDR.gambling1, "gambling"),
+      addrEntry(ADDR.gambling2, "gambling"),
+    ];
+
+    const preview = buildEntitySnapshotPreview(incoming);
+    const byCategory = Object.fromEntries(
+      preview.categories.map((c) => [c.category, c]),
+    );
+
+    // gambling exists only on the incoming side.
+    expect(byCategory.gambling).toEqual({
+      category: "gambling",
+      label: "Gambling",
+      incoming: 2,
+      current: 0,
+    });
+  });
+
+  it("includes a category present only in the current list", () => {
+    setActiveEntityList([
+      addrEntry(ADDR.binance, "exchange"),
+      addrEntry(ADDR.gambling1, "gambling"),
+      addrEntry(ADDR.gambling2, "gambling"),
+    ]);
+    const incoming = [addrEntry(ADDR.binance, "exchange")];
+
+    const preview = buildEntitySnapshotPreview(incoming);
+    const byCategory = Object.fromEntries(
+      preview.categories.map((c) => [c.category, c]),
+    );
+
+    // gambling exists only on the current side.
+    expect(byCategory.gambling).toEqual({
+      category: "gambling",
+      label: "Gambling",
+      incoming: 0,
+      current: 2,
+    });
+  });
+
+  it("includes a category present on both sides with different counts", () => {
+    setActiveEntityList([
+      addrEntry(ADDR.binance, "exchange"),
+      addrEntry(ADDR.binanceCold, "exchange"),
+    ]);
+    const incoming = [addrEntry(ADDR.binance, "exchange")];
+
+    const preview = buildEntitySnapshotPreview(incoming);
+    const byCategory = Object.fromEntries(
+      preview.categories.map((c) => [c.category, c]),
+    );
+
+    // exchange is on both sides: incoming 1, current 2.
+    expect(byCategory.exchange).toEqual({
+      category: "exchange",
+      label: "Exchange",
+      incoming: 1,
+      current: 2,
+    });
+  });
+
+  it("excludes a category absent on both sides from the breakdown", () => {
+    setActiveEntityList([addrEntry(ADDR.binance, "exchange")]);
+    const incoming = [addrEntry(ADDR.gambling1, "gambling")];
+
+    const preview = buildEntitySnapshotPreview(incoming);
+    const present = preview.categories.map((c) => c.category);
+
+    // Only exchange (current) and gambling (incoming) appear; every other
+    // known category (mixer, darknet, scam, mining-pool, etc.) is excluded.
+    expect(present.sort()).toEqual(["exchange", "gambling"]);
+    expect(preview.categories).toHaveLength(2);
+    expect(present).not.toContain("mixer");
+    expect(present).not.toContain("darknet");
+  });
+
+  it("covers only-incoming, only-current, both-differing and absent categories together", () => {
+    // current: exchange x2, mixer x1
+    setActiveEntityList([
+      addrEntry(ADDR.binance, "exchange"),
+      addrEntry(ADDR.binanceCold, "exchange"),
+      addrEntry(ADDR.bitstamp, "mixer"),
+    ]);
+    // incoming: exchange x1, gambling x2
+    const incoming = [
+      addrEntry(ADDR.binance, "exchange"),
+      addrEntry(ADDR.gambling1, "gambling"),
+      addrEntry(ADDR.gambling2, "gambling"),
+    ];
+
+    const preview = buildEntitySnapshotPreview(incoming);
+    const byCategory = Object.fromEntries(
+      preview.categories.map((c) => [c.category, c]),
+    );
+
+    // both sides, different counts
+    expect(byCategory.exchange).toEqual({
+      category: "exchange",
+      label: "Exchange",
+      incoming: 1,
+      current: 2,
+    });
+    // only in current
+    expect(byCategory.mixer).toEqual({
+      category: "mixer",
+      label: "Mixer / CoinJoin Service",
+      incoming: 0,
+      current: 1,
+    });
+    // only in incoming
+    expect(byCategory.gambling).toEqual({
+      category: "gambling",
+      label: "Gambling",
+      incoming: 2,
+      current: 0,
+    });
+    // exactly these three; categories absent on both sides are excluded.
+    expect(preview.categories).toHaveLength(3);
+    expect(byCategory.darknet).toBeUndefined();
+    expect(byCategory.scam).toBeUndefined();
+  });
 });
 
 describe("buildEntitySnapshotPreview (merge mode)", () => {
