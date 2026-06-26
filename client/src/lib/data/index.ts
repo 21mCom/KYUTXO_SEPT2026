@@ -15,3 +15,4 @@ export * from './address-sync-crud';
 export * from './paused-sync-crud';
 export * from './sync-protection-crud';
 export * from './partial-export-crud';
+export * from './privacy-history-crud';

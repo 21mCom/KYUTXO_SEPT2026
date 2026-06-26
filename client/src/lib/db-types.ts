@@ -386,6 +386,40 @@ export interface PriceData {
   importedAt: number;     // Timestamp of when this data was imported
 }
 
+// === Privacy Audit History ===
+// A lightweight snapshot written after each completed Privacy Audit so users can
+// track how their privacy score changes over time as they adopt better habits
+// (CoinJoin, fresh addresses, avoiding consolidation). History is trimmed to the
+// most recent runs to avoid unbounded growth.
+export interface PrivacyAuditHistoryEntry {
+  id?: number;
+  // When this audit completed (ms epoch)
+  timestamp: number;
+  // Overall privacy score 0-100
+  score: number;
+  // Letter grade derived from the score (e.g. "A+", "B")
+  grade: string;
+  // Total number of findings + warnings detected
+  totalFindings: number;
+  // Number of transactions analyzed in this run
+  transactionsAnalyzed: number;
+  // Number of addresses scanned in this run
+  addressesScanned: number;
+  // Count of findings by severity tier
+  severityCounts: {
+    CRITICAL: number;
+    HIGH: number;
+    MEDIUM: number;
+    LOW: number;
+  };
+  // Count of findings keyed by finding type (e.g. ADDRESS_REUSE -> 3). Used to
+  // show which finding types changed between runs.
+  findingTypeCounts: { [findingType: string]: number };
+  // Filter scope this audit was run under (for display/context only)
+  owner?: string;
+  walletName?: string;
+}
+
 // Script type classification for addresses/outputs
 export type ScriptType = 
   | 'p2pkh'          // Pay-to-PubKey-Hash (legacy)

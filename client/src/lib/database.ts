@@ -10,7 +10,7 @@ import type {
   TransactionParticipant, AddressSyncState, NodeSettings, DerivationTemplate,
   UtxoLineage, CustodySegment, LineageSnapshot, Evidence, EvidenceAttachment,
   PausedSyncState, SkippedAddress, AddressBlacklist, PartialExportBundle,
-  TrashedAttachment,
+  TrashedAttachment, PrivacyAuditHistoryEntry,
 } from './db-types';
 
 export class KYUTXODatabase extends Dexie {
@@ -60,9 +60,18 @@ export class KYUTXODatabase extends Dexie {
   // Recoverable metadata for attachments whose record/row was deleted; the file
   // bytes are kept on disk so they can be downloaded back or purged from Settings.
   trashedAttachments!: Table<TrashedAttachment>;
+  // Snapshots of completed Privacy Audits for tracking score over time.
+  privacyAuditHistory!: Table<PrivacyAuditHistoryEntry>;
 
   constructor() {
     super('KYUTXODatabase');
+
+    // v34: add the privacyAuditHistory table for the Privacy History timeline.
+    // Each completed audit appends a snapshot (score, grade, finding counts).
+    // Delta declaration — all other tables inherit unchanged from v33.
+    this.version(34).stores({
+      privacyAuditHistory: '++id, timestamp',
+    });
 
     // v33: wallet-fingerprinting fields on blockchainTransactions (nVersion,
     // nLockTime, hasRbf, isBip69Ordered, hasLowRSig, hasWitness,

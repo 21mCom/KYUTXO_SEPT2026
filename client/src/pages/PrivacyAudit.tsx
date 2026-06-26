@@ -34,6 +34,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import {
   BarChart,
   Bar,
+  LineChart,
+  Line,
   XAxis,
   YAxis,
   Tooltip,
@@ -42,8 +44,10 @@ import {
   ReferenceLine,
   Sankey,
 } from "recharts";
-import { beginBulkOperation, endBulkOperation } from "@/lib/database";
-import type { Record as DbRecord } from "@/lib/database";
+import { useLiveQuery } from "dexie-react-hooks";
+import { beginBulkOperation, endBulkOperation, db } from "@/lib/database";
+import type { Record as DbRecord, PrivacyAuditHistoryEntry } from "@/lib/database";
+import { addPrivacyAuditHistoryEntry, clearPrivacyAuditHistory } from "@/lib/data/privacy-history-crud";
 import { createTag } from "@/lib/data/vocabulary-crud";
 import { updateRecord, countRecordsByType, getRecordsPageByTypeIdReverseKeyset, getRecordsByInputStrings } from "@/lib/data/record-crud";
 import { getTransactionByTxid } from "@/lib/data/transaction-crud";
@@ -545,6 +549,244 @@ function CoinJoinFlowPanel({ txids }: { txids: string[] }) {
   );
 }
 
+// ─── Privacy history timeline ─────────────────────────────────────────────────
+
+function formatHistoryDate(ts: number): string {
+  return new Date(ts).toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function PrivacyHistoryCard() {
+  const history = useLiveQuery(
+    () => db.privacyAuditHistory.orderBy("timestamp").toArray(),
+  );
+  const { toast } = useToast();
+
+  const chartData = useMemo(
+    () =>
+      (history ?? []).map((h) => ({
+        ts: h.timestamp,
+        date: formatHistoryDate(h.timestamp),
+        score: h.score,
+        grade: h.grade,
+      })),
+    [history],
+  );
+
+  // Build the per-run rows (newest first) annotated with which finding types
+  // changed compared to the immediately preceding run.
+  const rows = useMemo(() => {
+    const list = history ?? [];
+    const out: {
+      entry: PrivacyAuditHistoryEntry;
+      scoreDelta: number | null;
+      changes: { type: string; from: number; to: number }[];
+    }[] = [];
+    for (let i = list.length - 1; i >= 0; i--) {
+      const entry = list[i];
+      const prev = i > 0 ? list[i - 1] : null;
+      const scoreDelta = prev ? entry.score - prev.score : null;
+      const changes: { type: string; from: number; to: number }[] = [];
+      if (prev) {
+        const types = Array.from(
+          new Set([
+            ...Object.keys(entry.findingTypeCounts ?? {}),
+            ...Object.keys(prev.findingTypeCounts ?? {}),
+          ]),
+        );
+        for (const type of types) {
+          const to = entry.findingTypeCounts?.[type] ?? 0;
+          const from = prev.findingTypeCounts?.[type] ?? 0;
+          if (to !== from) changes.push({ type, from, to });
+        }
+        changes.sort((a, b) => Math.abs(b.to - b.from) - Math.abs(a.to - a.from));
+      }
+      out.push({ entry, scoreDelta, changes });
+    }
+    return out;
+  }, [history]);
+
+  const handleClear = useCallback(async () => {
+    try {
+      await clearPrivacyAuditHistory();
+      toast({ title: "History Cleared", description: "All privacy audit history was removed." });
+    } catch (e) {
+      toast({
+        variant: "destructive",
+        title: "Clear Failed",
+        description: e instanceof Error ? e.message : "Could not clear history.",
+      });
+    }
+  }, [toast]);
+
+  if (!history || history.length === 0) return null;
+
+  const latest = history[history.length - 1];
+  const first = history[0];
+  const overallDelta = latest.score - first.score;
+
+  return (
+    <Card data-testid="container-privacy-history">
+      <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0">
+        <div className="space-y-1">
+          <CardTitle className="text-base flex items-center gap-2">
+            <Activity className="h-4 w-4" />
+            Privacy History
+          </CardTitle>
+          <CardDescription className="text-xs">
+            {history.length} audit{history.length === 1 ? "" : "s"} recorded
+            {history.length > 1 && (
+              <>
+                {" · "}
+                <span
+                  className={
+                    overallDelta > 0
+                      ? "text-green-600 dark:text-green-400"
+                      : overallDelta < 0
+                      ? "text-red-600 dark:text-red-400"
+                      : ""
+                  }
+                  data-testid="text-history-overall-delta"
+                >
+                  {overallDelta > 0 ? "+" : ""}
+                  {overallDelta} pts overall
+                </span>
+              </>
+            )}
+            {" · keeps last 30 runs"}
+          </CardDescription>
+        </div>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={handleClear}
+          data-testid="button-clear-history"
+        >
+          Clear
+        </Button>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {chartData.length > 1 ? (
+          <div data-testid="container-history-sparkline">
+            <ResponsiveContainer width="100%" height={160}>
+              <LineChart data={chartData} margin={{ top: 8, right: 8, left: -20, bottom: 0 }}>
+                <XAxis dataKey="date" tick={{ fontSize: 9 }} interval="preserveStartEnd" />
+                <YAxis domain={[0, 100]} tick={{ fontSize: 10 }} />
+                <Tooltip
+                  formatter={(value: number, _name, entry: { payload?: { grade: string } }) => [
+                    `${value}/100 (${entry.payload?.grade ?? ""})`,
+                    "Score",
+                  ]}
+                  contentStyle={{ fontSize: 11 }}
+                />
+                <ReferenceLine y={80} stroke="#22c55e" strokeDasharray="3 3" strokeOpacity={0.5} />
+                <ReferenceLine y={60} stroke="#eab308" strokeDasharray="3 3" strokeOpacity={0.5} />
+                <Line
+                  type="monotone"
+                  dataKey="score"
+                  stroke="hsl(var(--primary))"
+                  strokeWidth={2}
+                  dot={{ r: 2 }}
+                  activeDot={{ r: 4 }}
+                  isAnimationActive={false}
+                />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        ) : (
+          <p className="text-xs text-muted-foreground" data-testid="text-history-need-more">
+            Run the audit again over time to see your score trend appear here.
+          </p>
+        )}
+
+        <div className="space-y-2">
+          {rows.map(({ entry, scoreDelta, changes }) => (
+            <div
+              key={entry.id ?? entry.timestamp}
+              className="border rounded-md p-3 space-y-2"
+              data-testid={`row-history-${entry.id ?? entry.timestamp}`}
+            >
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-xs text-muted-foreground" data-testid="text-history-date">
+                    {formatHistoryDate(entry.timestamp)}
+                  </span>
+                  <Badge variant="outline" data-testid="badge-history-grade">
+                    {entry.grade}
+                  </Badge>
+                  <span className="text-sm font-medium" data-testid="text-history-score">
+                    {entry.score}/100
+                  </span>
+                  {scoreDelta !== null && scoreDelta !== 0 && (
+                    <span
+                      className={`text-xs font-mono ${
+                        scoreDelta > 0
+                          ? "text-green-600 dark:text-green-400"
+                          : "text-red-600 dark:text-red-400"
+                      }`}
+                      data-testid="text-history-delta"
+                    >
+                      {scoreDelta > 0 ? "+" : ""}
+                      {scoreDelta}
+                    </span>
+                  )}
+                </div>
+                <span className="text-xs text-muted-foreground">
+                  {entry.totalFindings} issue{entry.totalFindings === 1 ? "" : "s"}
+                  {(entry.owner || entry.walletName) && (
+                    <>
+                      {" · "}
+                      {[entry.owner, entry.walletName].filter(Boolean).join(" / ")}
+                    </>
+                  )}
+                </span>
+              </div>
+
+              {changes.length > 0 && (
+                <div className="flex flex-wrap gap-1" data-testid="container-history-changes">
+                  {changes.slice(0, 8).map((c) => {
+                    const improved = c.to < c.from;
+                    return (
+                      <Badge
+                        key={c.type}
+                        variant="secondary"
+                        className="text-xs"
+                        data-testid={`badge-history-change-${c.type.toLowerCase()}`}
+                      >
+                        <span
+                          className={
+                            improved
+                              ? "text-green-600 dark:text-green-400"
+                              : "text-red-600 dark:text-red-400"
+                          }
+                        >
+                          {improved ? "▾" : "▴"}
+                        </span>
+                        <span className="ml-1">
+                          {FINDING_TYPE_LABELS[c.type as PrivacyFindingType] ?? c.type}: {c.from}→{c.to}
+                        </span>
+                      </Badge>
+                    );
+                  })}
+                  {changes.length > 8 && (
+                    <span className="text-xs text-muted-foreground self-center">
+                      +{changes.length - 8} more
+                    </span>
+                  )}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 // ─── Main component ───────────────────────────────────────────────────────────
 
 export default function PrivacyAudit() {
@@ -608,6 +850,31 @@ export default function PrivacyAudit() {
       const auditResult = await runPrivacyAudit(userAddresses, (msg) => setStatusMessage(msg));
       setResult(auditResult);
       setScanState("complete");
+
+      // Persist a snapshot so users can track their score over time.
+      try {
+        const allItems = [...auditResult.findings, ...auditResult.warnings];
+        const severityCounts = { CRITICAL: 0, HIGH: 0, MEDIUM: 0, LOW: 0 };
+        const findingTypeCounts: { [type: string]: number } = {};
+        for (const f of allItems) {
+          severityCounts[f.severity] += 1;
+          findingTypeCounts[f.type] = (findingTypeCounts[f.type] ?? 0) + 1;
+        }
+        await addPrivacyAuditHistoryEntry({
+          timestamp: Date.now(),
+          score: auditResult.score,
+          grade: auditResult.grade,
+          totalFindings: allItems.length,
+          transactionsAnalyzed: auditResult.transactionsAnalyzed,
+          addressesScanned: auditResult.addressesScanned,
+          severityCounts,
+          findingTypeCounts,
+          owner: selectedOwner !== "all" ? selectedOwner : undefined,
+          walletName: selectedWallet !== "all" ? selectedWallet : undefined,
+        });
+      } catch (historyError) {
+        console.error("Failed to save privacy audit history:", historyError);
+      }
 
       toast({
         title: auditResult.isClean ? "All Clear" : "Audit Complete",
@@ -846,6 +1113,8 @@ export default function PrivacyAudit() {
             )}
           </CardContent>
         </Card>
+
+        <PrivacyHistoryCard />
 
         {result?.needsResync && (
           <Card className="border-amber-500/40 bg-amber-500/5" data-testid="banner-needs-resync">
