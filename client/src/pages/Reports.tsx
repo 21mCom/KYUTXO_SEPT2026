@@ -123,6 +123,25 @@ function buildPrintableReport(
     scope.wallet ? `Wallet: ${escapeHtml(scope.wallet)}` : "Wallet: All",
   ].join(" · ");
 
+  const waterfallHtml = result.scoreWaterfall.length > 0
+    ? `
+  <h2>Score Breakdown</h2>
+  <table class="waterfall-table">
+    <thead>
+      <tr><th>Category</th><th class="num">Count</th><th class="num">Delta</th><th class="num">Score</th></tr>
+    </thead>
+    <tbody>
+      ${result.scoreWaterfall.map(entry => `
+      <tr>
+        <td>${escapeHtml(entry.label)}</td>
+        <td class="num">${entry.count > 0 ? entry.count.toLocaleString() : "—"}</td>
+        <td class="num ${entry.delta < 0 ? "delta-neg" : entry.delta > 0 ? "delta-pos" : ""}">${entry.delta === 0 ? "—" : (entry.delta > 0 ? "+" : "") + entry.delta}</td>
+        <td class="num">${entry.runningScore}</td>
+      </tr>`).join("")}
+    </tbody>
+  </table>`
+    : "";
+
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -153,6 +172,12 @@ function buildPrintableReport(
   .citations-table { width: 100%; border-collapse: collapse; font-size: 11px; }
   .citations-table th { text-align: left; background: #f5f5f5; padding: 4px 6px; border: 1px solid #e2e2e2; }
   .citations-table td { padding: 4px 6px; border: 1px solid #e2e2e2; vertical-align: top; word-break: break-word; }
+  .waterfall-table { width: 100%; border-collapse: collapse; font-size: 12px; margin-bottom: 24px; page-break-inside: avoid; }
+  .waterfall-table th { text-align: left; background: #f5f5f5; padding: 6px 8px; border: 1px solid #e2e2e2; font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; color: #555; }
+  .waterfall-table td { padding: 6px 8px; border: 1px solid #e2e2e2; }
+  .waterfall-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+  .waterfall-table .delta-neg { color: #dc2626; }
+  .waterfall-table .delta-pos { color: #16a34a; }
   .mono { font-family: "JetBrains Mono", "Courier New", monospace; }
   .clean { color: #16a34a; font-size: 14px; }
   .footer { margin-top: 28px; padding-top: 12px; border-top: 1px solid #ddd; font-size: 11px; color: #777; }
@@ -177,7 +202,7 @@ function buildPrintableReport(
       : `<span class="sev-chip" style="background:#16a34a">Clean</span>`}
     ${result.needsResync ? `<div style="margin-top:6px;color:#b45309;">Fingerprint data ${Math.round(result.fingerprintCoverage * 100)}% — re-sync recommended for complete results.</div>` : ""}
   </div>
-
+  ${waterfallHtml}
   <h2>Findings &amp; Warnings (${allFindings.length})</h2>
   ${findingsHtml}
 
