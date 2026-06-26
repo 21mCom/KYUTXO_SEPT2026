@@ -1,7 +1,7 @@
 import { db } from "@/lib/database";
 import type { TransactionParticipant, BlockchainTransaction } from "@/lib/db-types";
 import { getParticipantsByAddresses } from "@/lib/data/record-queries";
-import { lookupEntities, ENTITY_CATEGORY_TAG_NAMES, ENTITY_CATEGORY_LABELS, type EntityCategory } from "@/lib/privacy-entity-list";
+import { lookupEntities, ENTITY_CATEGORY_TAG_NAMES, ENTITY_CATEGORY_LABELS, ENTITY_CATEGORY_COLORS, type EntityCategory } from "@/lib/privacy-entity-list";
 
 // ─── Severity ────────────────────────────────────────────────────────────────
 
@@ -48,7 +48,15 @@ export type PrivacyFindingType =
   | "FINGERPRINT_RBF"
   | "FINGERPRINT_BIP69"
   | "FINGERPRINT_LOW_R"
-  | "FINGERPRINT_WITNESS_INCONSISTENCY";
+  | "FINGERPRINT_WITNESS_INCONSISTENCY"
+  // New — Phase D (entity proximity)
+  | "PROXIMITY_EXCHANGE"
+  | "PROXIMITY_MIXER"
+  | "PROXIMITY_DARKNET"
+  | "PROXIMITY_MINING_POOL"
+  | "PROXIMITY_GAMBLING"
+  | "PROXIMITY_P2P"
+  | "PROXIMITY_SCAM";
 
 // ─── Interfaces ───────────────────────────────────────────────────────────────
 
@@ -1217,6 +1225,209 @@ function detectEntityContacts(ctx: AuditContext): PrivacyFinding[] {
   return findings;
 }
 
+// ─── Phase B2: Entity proximity (BFS) ────────────────────────────────────────
+
+/**
+ * Maximum number of transaction hops explored when searching for nearby entity
+ * addresses. Hop 1 = direct contact (already captured by detectEntityContacts).
+ * We report hops 2–MAX_PROXIMITY_HOPS as indirect-proximity findings.
+ */
+const MAX_PROXIMITY_HOPS = 4;
+
+/**
+ * Per-owned-address BFS node cap. Prevents runaway computation on very large
+ * vaults (thousands of addresses all connected through a busy exchange tx).
+ */
+const MAX_BFS_NODES_PER_ADDRESS = 800;
+
+/** Severity decreases as the hop-distance to the entity increases. */
+const PROXIMITY_HOP_SEVERITY: Record<number, PrivacySeverity> = {
+  2: "HIGH",
+  3: "MEDIUM",
+  4: "LOW",
+};
+
+const PROXIMITY_CATEGORY_FINDING_TYPE: Record<EntityCategory, PrivacyFindingType> = {
+  exchange: "PROXIMITY_EXCHANGE",
+  "payment-service": "PROXIMITY_EXCHANGE",
+  gambling: "PROXIMITY_GAMBLING",
+  scam: "PROXIMITY_SCAM",
+  darknet: "PROXIMITY_DARKNET",
+  "mining-pool": "PROXIMITY_MINING_POOL",
+  mixer: "PROXIMITY_MIXER",
+  "p2p-exchange": "PROXIMITY_P2P",
+};
+
+/**
+ * Run a bounded BFS from every owned address through the local transaction
+ * graph (`ctx.participantsByTxid`) to find the shortest hop-distance to any
+ * address in the active entity list. Operates entirely on in-memory data —
+ * zero network access.
+ *
+ * Emits one finding per (entity-category × hop-distance) pair so severity can
+ * scale correctly. Only indirect contacts (hop ≥ 2) are emitted; direct
+ * counterparties (hop 1) are already handled by detectEntityContacts.
+ */
+function detectEntityProximity(ctx: AuditContext): PrivacyFinding[] {
+  // Build address → [txid, …] index from the already-loaded participant map.
+  const addressToTxids = new Map<string, string[]>();
+  for (const [txid, parts] of ctx.participantsByTxid) {
+    for (const p of parts) {
+      if (!p.address) continue;
+      const list = addressToTxids.get(p.address);
+      if (list) list.push(txid);
+      else addressToTxids.set(p.address, [txid]);
+    }
+  }
+
+  // Which entity addresses exist somewhere in the local graph?
+  const allGraphAddresses = Array.from(addressToTxids.keys());
+  const entityInGraph = lookupEntities(allGraphAddresses);
+
+  if (entityInGraph.size === 0) return [];
+
+  // BFS per owned address → collect the nearest entity per category.
+  // key: `${category}::${hopDistance}`
+  const grouped = new Map<string, {
+    category: EntityCategory;
+    hopDistance: number;
+    entityNames: Set<string>;
+    entityAddresses: string[];
+    ownedAddresses: string[];
+  }>();
+
+  for (const ownedAddr of ctx.userAddresses) {
+    if (!addressToTxids.has(ownedAddr)) continue;
+
+    // BFS state
+    const visited = new Set<string>([ownedAddr]);
+    const visitedTxids = new Set<string>();
+    let frontier: string[] = [ownedAddr];
+
+    // Track the closest hop we found per category so we don't emit two
+    // distances for the same category from the same owned address.
+    const closestPerCategory = new Map<EntityCategory, number>();
+
+    for (let hop = 1; hop <= MAX_PROXIMITY_HOPS && frontier.length > 0; hop++) {
+      const nextFrontier: string[] = [];
+
+      for (const addr of frontier) {
+        const txids = addressToTxids.get(addr) ?? [];
+        for (const txid of txids) {
+          if (visitedTxids.has(txid)) continue;
+          visitedTxids.add(txid);
+          const parts = ctx.participantsByTxid.get(txid) ?? [];
+
+          for (const p of parts) {
+            if (!p.address || visited.has(p.address)) continue;
+            visited.add(p.address);
+
+            const entity = entityInGraph.get(p.address);
+            if (entity) {
+              // Only report indirect contacts; direct (hop 1) is detectEntityContacts.
+              if (hop >= 2 && !closestPerCategory.has(entity.category)) {
+                closestPerCategory.set(entity.category, hop);
+
+                const key = `${entity.category}::${hop}`;
+                const existing = grouped.get(key);
+                if (existing) {
+                  existing.entityNames.add(entity.name);
+                  if (!existing.entityAddresses.includes(p.address)) {
+                    existing.entityAddresses.push(p.address);
+                  }
+                  if (!existing.ownedAddresses.includes(ownedAddr)) {
+                    existing.ownedAddresses.push(ownedAddr);
+                  }
+                } else {
+                  grouped.set(key, {
+                    category: entity.category,
+                    hopDistance: hop,
+                    entityNames: new Set([entity.name]),
+                    entityAddresses: [p.address],
+                    ownedAddresses: [ownedAddr],
+                  });
+                }
+              }
+              // Don't explore through entity addresses (dead end for our purposes)
+            } else {
+              nextFrontier.push(p.address);
+            }
+          }
+        }
+      }
+
+      frontier = nextFrontier;
+      if (visited.size > MAX_BFS_NODES_PER_ADDRESS) break;
+    }
+  }
+
+  if (grouped.size === 0) return [];
+
+  const findings: PrivacyFinding[] = [];
+
+  for (const [, group] of grouped) {
+    const severity = PROXIMITY_HOP_SEVERITY[group.hopDistance] ?? "LOW";
+    const findingType = PROXIMITY_CATEGORY_FINDING_TYPE[group.category];
+    const categoryLabel = ENTITY_CATEGORY_LABELS[group.category];
+    const entityNames = Array.from(group.entityNames);
+    const nameSnippet =
+      entityNames.slice(0, 3).join(", ") +
+      (entityNames.length > 3 ? ` +${entityNames.length - 3} more` : "");
+
+    findings.push({
+      type: findingType,
+      severity,
+      description: `${group.ownedAddresses.length} address(es) are ${group.hopDistance} transaction hop(s) away from a known ${categoryLabel}: ${nameSnippet}. This indirect link is visible to blockchain analysts.`,
+      details: {
+        hopDistance: group.hopDistance,
+        entityCategory: group.category,
+        entityNames,
+        entityAddresses: group.entityAddresses,
+        isProximity: true,
+      },
+      correction:
+        group.category === "scam" || group.category === "darknet"
+          ? `An indirect on-chain link to a ${categoryLabel} address may attract scrutiny in a source-of-funds analysis. Review how funds flowed through the intermediate transactions.`
+          : `Indirect proximity to ${categoryLabel} entities creates on-chain linkage. Consider using Lightning or separate wallets to reduce on-chain traceability.`,
+      txids: [],
+      addresses: group.ownedAddresses,
+    });
+  }
+
+  return findings;
+}
+
+/**
+ * Build the `proximity:<category>-<n>hop` tag name for a proximity finding.
+ * Returns undefined for non-proximity finding types.
+ */
+export function getProximityTagName(finding: PrivacyFinding): string | undefined {
+  const details = finding.details as {
+    isProximity?: boolean;
+    entityCategory?: EntityCategory;
+    hopDistance?: number;
+  };
+  if (!details?.isProximity || !details.entityCategory || !details.hopDistance) return undefined;
+  return `proximity:${details.entityCategory}-${details.hopDistance}hop`;
+}
+
+/**
+ * Color for the proximity tag (mirrors entity category colors, slightly muted).
+ */
+export function getProximityTagColor(entityCategory: EntityCategory): string {
+  return ENTITY_CATEGORY_COLORS[entityCategory] ?? "#64748b";
+}
+
+export const PROXIMITY_FINDING_TYPES = new Set<PrivacyFindingType>([
+  "PROXIMITY_EXCHANGE",
+  "PROXIMITY_MIXER",
+  "PROXIMITY_DARKNET",
+  "PROXIMITY_MINING_POOL",
+  "PROXIMITY_GAMBLING",
+  "PROXIMITY_P2P",
+  "PROXIMITY_SCAM",
+]);
+
 // ─── Phase C: Wallet fingerprinting ──────────────────────────────────────────
 
 function detectFingerprintingIssues(ctx: AuditContext): {
@@ -1518,6 +1729,9 @@ export async function runPrivacyAudit(
   onProgress?.("Checking entity contacts...");
   const entityFindings = detectEntityContacts(ctx);
 
+  onProgress?.("Computing entity proximity (BFS)...");
+  const proximityFindings = detectEntityProximity(ctx);
+
   onProgress?.("Checking wallet fingerprinting...");
   const { findings: fpFindings, needsResync, fingerprintCoverage } = detectFingerprintingIssues(ctx);
 
@@ -1542,6 +1756,7 @@ export async function runPrivacyAudit(
     ...peelChain,
     ...postMix,
     ...entityFindings,
+    ...proximityFindings,
     ...fpFindings,
     ...multisigFindings,
     ...recurringPayments,
@@ -1654,6 +1869,13 @@ export const FINDING_TYPE_LABELS: Partial<Record<PrivacyFindingType, string>> = 
   ENTITY_GAMBLING: "Gambling Contact",
   ENTITY_P2P: "P2P Exchange Contact",
   ENTITY_SCAM: "Scam Address Contact",
+  PROXIMITY_EXCHANGE: "Exchange Proximity",
+  PROXIMITY_MIXER: "Mixer Proximity",
+  PROXIMITY_DARKNET: "Darknet Proximity",
+  PROXIMITY_MINING_POOL: "Mining Pool Proximity",
+  PROXIMITY_GAMBLING: "Gambling Proximity",
+  PROXIMITY_P2P: "P2P Exchange Proximity",
+  PROXIMITY_SCAM: "Scam Address Proximity",
   FINGERPRINT_NVERSION: "Wallet Fingerprint (nVersion)",
   FINGERPRINT_NLOCKTIME: "Wallet Fingerprint (nLockTime)",
   FINGERPRINT_RBF: "Wallet Fingerprint (RBF)",

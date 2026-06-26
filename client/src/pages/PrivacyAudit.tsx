@@ -74,6 +74,9 @@ import {
   PRIVACY_TAG_MAP,
   PRIVACY_TAG_NAMES,
   FINDING_TYPE_LABELS,
+  PROXIMITY_FINDING_TYPES,
+  getProximityTagName,
+  getProximityTagColor,
   type PrivacyAuditResult,
   type PrivacyFinding,
   type EntityCitation,
@@ -124,6 +127,13 @@ const FINDING_TYPE_ICONS: Record<string, typeof Shield> = {
   ENTITY_GAMBLING: Activity,
   ENTITY_P2P: ArrowRightLeft,
   ENTITY_SCAM: ShieldAlert,
+  PROXIMITY_EXCHANGE: Network,
+  PROXIMITY_MIXER: Network,
+  PROXIMITY_DARKNET: Network,
+  PROXIMITY_MINING_POOL: Network,
+  PROXIMITY_GAMBLING: Network,
+  PROXIMITY_P2P: Network,
+  PROXIMITY_SCAM: Network,
   FINGERPRINT_NVERSION: ScanSearch,
   FINGERPRINT_NLOCKTIME: ScanSearch,
   FINGERPRINT_RBF: ScanSearch,
@@ -1724,6 +1734,114 @@ export default function PrivacyAudit() {
     }
   }, [selectedOwner, selectedWallet, toast]);
 
+  const hasProximityFindings = useMemo(() => {
+    if (!result) return false;
+    return [...result.findings, ...result.warnings].some(f => PROXIMITY_FINDING_TYPES.has(f.type));
+  }, [result]);
+
+  const tagProximityFindings = useCallback(async () => {
+    if (!result) return;
+
+    // Collect proximity findings only
+    const proximityItems = [...result.findings, ...result.warnings].filter(f =>
+      PROXIMITY_FINDING_TYPES.has(f.type)
+    );
+
+    if (proximityItems.length === 0) {
+      toast({ title: "Nothing to Tag", description: "No proximity findings found." });
+      return;
+    }
+
+    // Map owned address → Set<proximity tag names>
+    const addressToProximityTags = new Map<string, Set<string>>();
+    for (const f of proximityItems) {
+      const tagName = getProximityTagName(f);
+      if (!tagName) continue;
+      for (const addr of f.addresses) {
+        const existing = addressToProximityTags.get(addr);
+        if (existing) existing.add(tagName);
+        else addressToProximityTags.set(addr, new Set([tagName]));
+      }
+    }
+
+    if (addressToProximityTags.size === 0) {
+      toast({ title: "Nothing to Tag", description: "No addresses found in proximity findings." });
+      return;
+    }
+
+    setScanState("tagging");
+    setTaggingProgress({ current: 0, total: addressToProximityTags.size });
+
+    try {
+      // Ensure all required proximity tags exist in the vocabulary
+      const existingTagNames = new Set(tags.map(t => t.name));
+      const allProximityTagNames = new Set<string>();
+      for (const tagSet of addressToProximityTags.values()) {
+        for (const t of tagSet) allProximityTagNames.add(t);
+      }
+      for (const tagName of allProximityTagNames) {
+        if (!existingTagNames.has(tagName)) {
+          // Derive category from the tag name: proximity:<category>-<n>hop
+          const match = tagName.match(/^proximity:([^-]+(?:-[^-]+)*)-(\d+)hop$/);
+          const color = match
+            ? getProximityTagColor(match[1] as Parameters<typeof getProximityTagColor>[0])
+            : "#64748b";
+          try {
+            await createTag(tagName, color);
+          } catch {
+            // Already exists — safe to ignore
+          }
+        }
+      }
+
+      const tagAddresses = Array.from(addressToProximityTags.keys());
+      const addressToRecord = new Map<string, DbRecord>();
+      for (let i = 0; i < tagAddresses.length; i += TAG_FETCH_BATCH) {
+        const slice = tagAddresses.slice(i, i + TAG_FETCH_BATCH);
+        const found = await getRecordsByInputStrings(slice);
+        for (const r of found) {
+          if (r.inputString) addressToRecord.set(r.inputString, r);
+        }
+      }
+
+      // Collect all proximity tag names for stripping old ones before re-applying
+      const proximityTagPrefix = "proximity:";
+
+      beginBulkOperation();
+      try {
+        const entries = Array.from(addressToProximityTags.entries());
+        for (let idx = 0; idx < entries.length; idx++) {
+          const [address, tagNames] = entries[idx];
+          const record = addressToRecord.get(address);
+          if (record?.id) {
+            const existingTags = (record.tags || []).filter(
+              (t: string) => !t.startsWith(proximityTagPrefix)
+            );
+            await updateRecord(record.id, { tags: [...existingTags, ...Array.from(tagNames)] });
+          }
+          setTaggingProgress({ current: idx + 1, total: entries.length });
+          if (idx % 10 === 9) await new Promise(r => setTimeout(r, 0));
+        }
+      } finally {
+        endBulkOperation();
+      }
+
+      setScanState("complete");
+      toast({
+        title: "Proximity Tags Applied",
+        description: `Applied proximity tags to ${addressToProximityTags.size} address record(s).`,
+      });
+    } catch (error) {
+      console.error("Proximity tagging failed:", error);
+      toast({
+        variant: "destructive",
+        title: "Tagging Failed",
+        description: error instanceof Error ? error.message : "An error occurred during proximity tagging.",
+      });
+      setScanState("complete");
+    }
+  }, [result, tags, toast]);
+
   const tagFindings = useCallback(async () => {
     if (!result) return;
 
@@ -2037,9 +2155,42 @@ export default function PrivacyAudit() {
               </CardContent>
             </Card>
 
+            {/* Proximity data-sparsity caveat — mandatory whenever the audit ran */}
+            <Card className="border-blue-500/30 bg-blue-500/5" data-testid="banner-proximity-caveat">
+              <CardContent className="p-3 flex items-start gap-3">
+                <Network className="h-4 w-4 text-blue-500 shrink-0 mt-0.5" />
+                <div>
+                  <p className="text-sm font-medium text-blue-700 dark:text-blue-400">
+                    Entity proximity is measured over locally synced data only
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    The proximity scores above reflect the shortest path to known entities
+                    <strong> through transactions already imported into KYUTXO</strong>. If an address
+                    has never been synced, no path to it can be found — "no proximity finding"
+                    means "not in your local data," not "safe."
+                  </p>
+                </div>
+              </CardContent>
+            </Card>
+
             {/* Actions */}
             {!result.isClean && (
-              <div className="flex justify-end">
+              <div className="flex flex-wrap justify-end gap-2">
+                {hasProximityFindings && (
+                  <Button
+                    variant="outline"
+                    onClick={tagProximityFindings}
+                    disabled={scanState === "tagging"}
+                    data-testid="button-tag-proximity-findings"
+                  >
+                    {scanState === "tagging" ? (
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    ) : (
+                      <Network className="mr-2 h-4 w-4" />
+                    )}
+                    Tag Proximity Findings
+                  </Button>
+                )}
                 <Button
                   variant="outline"
                   onClick={tagFindings}
