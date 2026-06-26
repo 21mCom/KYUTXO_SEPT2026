@@ -92,7 +92,7 @@ import {
   type EntityChange,
   type EntityOverride,
 } from "@/lib/data/entity-list-store";
-import { getBundledEntityCount, ENTITY_CATEGORY_LABELS, type EntityEntry } from "@/lib/privacy-entity-list";
+import { getBundledEntityCount, ENTITY_CATEGORY_LABELS, type EntityEntry, type EntityCategory } from "@/lib/privacy-entity-list";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { deriveKey, decrypt, base64ToBuffer, verifyPassword } from "@/lib/crypto";
 import { getVaultSettings, vaultDb } from "@/lib/vault";
@@ -383,6 +383,7 @@ export default function SettingsPage() {
   const [entityPreviewSource, setEntityPreviewSource] = useState<string | undefined>(undefined);
   const [showEntityDiff, setShowEntityDiff] = useState(false);
   const [entityDiffSearch, setEntityDiffSearch] = useState("");
+  const [entityDiffCategory, setEntityDiffCategory] = useState<EntityCategory | "all">("all");
   const [isApplyingEntities, setIsApplyingEntities] = useState(false);
   const [entityImportMode, setEntityImportMode] = useState<EntityListMode>("replace");
   const entityFileInputRef = useRef<HTMLInputElement>(null);
@@ -501,6 +502,7 @@ export default function SettingsPage() {
       setEntityPreviewSource(file.name);
       setShowEntityDiff(false);
       setEntityDiffSearch("");
+      setEntityDiffCategory("all");
       setEntityPreview(result.preview);
     } catch (error: any) {
       toast({
@@ -546,53 +548,64 @@ export default function SettingsPage() {
     setEntityPreview(null);
     setEntityPreviewSource(undefined);
     setEntityDiffSearch("");
+    setEntityDiffCategory("all");
   };
 
   const filteredAddedEntries = useMemo(() => {
     const q = entityDiffSearch.trim().toLowerCase();
     const entries = entityPreview?.addedEntries ?? [];
-    if (!q) return entries;
     return entries.filter(
       (e) =>
-        e.address.toLowerCase().includes(q) ||
-        e.name.toLowerCase().includes(q),
+        (entityDiffCategory === "all" || e.category === entityDiffCategory) &&
+        (!q ||
+          e.address.toLowerCase().includes(q) ||
+          e.name.toLowerCase().includes(q)),
     );
-  }, [entityPreview, entityDiffSearch]);
+  }, [entityPreview, entityDiffSearch, entityDiffCategory]);
 
   const filteredRemovedEntries = useMemo(() => {
     const q = entityDiffSearch.trim().toLowerCase();
     const entries = entityPreview?.removedEntries ?? [];
-    if (!q) return entries;
     return entries.filter(
       (e) =>
-        e.address.toLowerCase().includes(q) ||
-        e.name.toLowerCase().includes(q),
+        (entityDiffCategory === "all" || e.category === entityDiffCategory) &&
+        (!q ||
+          e.address.toLowerCase().includes(q) ||
+          e.name.toLowerCase().includes(q)),
     );
-  }, [entityPreview, entityDiffSearch]);
+  }, [entityPreview, entityDiffSearch, entityDiffCategory]);
 
   const filteredChangedEntries = useMemo(() => {
     const q = entityDiffSearch.trim().toLowerCase();
     const changes = entityPreview?.changedEntries ?? [];
-    if (!q) return changes;
     return changes.filter(
       (c) =>
-        c.address.toLowerCase().includes(q) ||
-        c.current.name.toLowerCase().includes(q) ||
-        c.incoming.name.toLowerCase().includes(q),
+        (entityDiffCategory === "all" ||
+          c.current.category === entityDiffCategory ||
+          c.incoming.category === entityDiffCategory) &&
+        (!q ||
+          c.address.toLowerCase().includes(q) ||
+          c.current.name.toLowerCase().includes(q) ||
+          c.incoming.name.toLowerCase().includes(q)),
     );
-  }, [entityPreview, entityDiffSearch]);
+  }, [entityPreview, entityDiffSearch, entityDiffCategory]);
 
   const filteredOverrides = useMemo(() => {
     const q = entityDiffSearch.trim().toLowerCase();
     const overrides = entityPreview?.overrides ?? [];
-    if (!q) return overrides;
     return overrides.filter(
       (o) =>
-        o.incoming.address.toLowerCase().includes(q) ||
-        o.incoming.name.toLowerCase().includes(q) ||
-        o.previous.name.toLowerCase().includes(q),
+        (entityDiffCategory === "all" ||
+          o.incoming.category === entityDiffCategory ||
+          o.previous.category === entityDiffCategory) &&
+        (!q ||
+          o.incoming.address.toLowerCase().includes(q) ||
+          o.incoming.name.toLowerCase().includes(q) ||
+          o.previous.name.toLowerCase().includes(q)),
     );
-  }, [entityPreview, entityDiffSearch]);
+  }, [entityPreview, entityDiffSearch, entityDiffCategory]);
+
+  const entityDiffFiltering = entityDiffSearch.trim().length > 0 || entityDiffCategory !== "all";
 
   const handleResetEntities = async () => {
     setIsResettingEntities(true);
@@ -2872,15 +2885,39 @@ export default function SettingsPage() {
 
                         {showEntityDiff && (
                           <Tabs defaultValue="overrides" className="mt-2">
-                            <div className="relative mb-2">
-                              <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
-                              <Input
-                                value={entityDiffSearch}
-                                onChange={(e) => setEntityDiffSearch(e.target.value)}
-                                placeholder="Filter by address or name..."
-                                className="pl-8"
-                                data-testid="input-entity-diff-search"
-                              />
+                            <div className="flex flex-wrap items-center gap-2 mb-2">
+                              <div className="relative flex-1 min-w-[12rem]">
+                                <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
+                                <Input
+                                  value={entityDiffSearch}
+                                  onChange={(e) => setEntityDiffSearch(e.target.value)}
+                                  placeholder="Filter by address or name..."
+                                  className="pl-8"
+                                  data-testid="input-entity-diff-search"
+                                />
+                              </div>
+                              <Select
+                                value={entityDiffCategory}
+                                onValueChange={(v) => setEntityDiffCategory(v as EntityCategory | "all")}
+                              >
+                                <SelectTrigger className="w-[12rem]" data-testid="select-entity-diff-category">
+                                  <SelectValue placeholder="All categories" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="all" data-testid="option-entity-diff-category-all">
+                                    All categories
+                                  </SelectItem>
+                                  {Object.entries(ENTITY_CATEGORY_LABELS).map(([value, label]) => (
+                                    <SelectItem
+                                      key={value}
+                                      value={value}
+                                      data-testid={`option-entity-diff-category-${value}`}
+                                    >
+                                      {label}
+                                    </SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
                             </div>
                             <TabsList className="grid w-full grid-cols-2">
                               <TabsTrigger value="overrides" data-testid="tab-entity-diff-overrides">
@@ -2894,7 +2931,7 @@ export default function SettingsPage() {
                               <EntityOverrideList
                                 overrides={filteredOverrides}
                                 emptyLabel={
-                                  entityDiffSearch.trim()
+                                  entityDiffFiltering
                                     ? "No overrides match your search."
                                     : "No bundled entries will be overridden."
                                 }
@@ -2904,7 +2941,7 @@ export default function SettingsPage() {
                               <EntityDiffList
                                 entries={filteredAddedEntries}
                                 emptyLabel={
-                                  entityDiffSearch.trim()
+                                  entityDiffFiltering
                                     ? "No brand-new entries match your search."
                                     : "No brand-new entries will be added."
                                 }
@@ -2934,15 +2971,39 @@ export default function SettingsPage() {
 
                         {showEntityDiff && (
                           <Tabs defaultValue="added" className="mt-2">
-                            <div className="relative mb-2">
-                              <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
-                              <Input
-                                value={entityDiffSearch}
-                                onChange={(e) => setEntityDiffSearch(e.target.value)}
-                                placeholder="Filter by address or name..."
-                                className="pl-8"
-                                data-testid="input-entity-diff-search"
-                              />
+                            <div className="flex flex-wrap items-center gap-2 mb-2">
+                              <div className="relative flex-1 min-w-[12rem]">
+                                <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
+                                <Input
+                                  value={entityDiffSearch}
+                                  onChange={(e) => setEntityDiffSearch(e.target.value)}
+                                  placeholder="Filter by address or name..."
+                                  className="pl-8"
+                                  data-testid="input-entity-diff-search"
+                                />
+                              </div>
+                              <Select
+                                value={entityDiffCategory}
+                                onValueChange={(v) => setEntityDiffCategory(v as EntityCategory | "all")}
+                              >
+                                <SelectTrigger className="w-[12rem]" data-testid="select-entity-diff-category">
+                                  <SelectValue placeholder="All categories" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="all" data-testid="option-entity-diff-category-all">
+                                    All categories
+                                  </SelectItem>
+                                  {Object.entries(ENTITY_CATEGORY_LABELS).map(([value, label]) => (
+                                    <SelectItem
+                                      key={value}
+                                      value={value}
+                                      data-testid={`option-entity-diff-category-${value}`}
+                                    >
+                                      {label}
+                                    </SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
                             </div>
                             <TabsList className="grid w-full grid-cols-3">
                               <TabsTrigger value="added" data-testid="tab-entity-diff-added">
@@ -2959,7 +3020,7 @@ export default function SettingsPage() {
                               <EntityDiffList
                                 entries={filteredAddedEntries}
                                 emptyLabel={
-                                  entityDiffSearch.trim()
+                                  entityDiffFiltering
                                     ? "No added entries match your search."
                                     : "No entries will be added."
                                 }
@@ -2970,7 +3031,7 @@ export default function SettingsPage() {
                               <ChangedEntityList
                                 changes={filteredChangedEntries}
                                 emptyLabel={
-                                  entityDiffSearch.trim()
+                                  entityDiffFiltering
                                     ? "No changed entries match your search."
                                     : "No entries changed name or category."
                                 }
@@ -2980,7 +3041,7 @@ export default function SettingsPage() {
                               <EntityDiffList
                                 entries={filteredRemovedEntries}
                                 emptyLabel={
-                                  entityDiffSearch.trim()
+                                  entityDiffFiltering
                                     ? "No removed entries match your search."
                                     : "No entries will be removed."
                                 }
