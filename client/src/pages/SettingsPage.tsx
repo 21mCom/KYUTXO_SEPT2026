@@ -2240,6 +2240,12 @@ export default function SettingsPage() {
             description:
               "Your existing data had already been cleared, so the vault is now empty. Run the restore again to recover your data.",
           });
+          // A cancel-after-clear can leave partially-written transaction records
+          // (missing on-chain data) behind. Reset the once-per-session
+          // orphan-check gate so the startup check re-evaluates after the reload,
+          // the same way a successful restore does. The check re-sets the gate on
+          // load, so this cannot loop.
+          resetOrphanCheckGate();
           setTimeout(() => {
             setRestoreDialogOpen(false);
             setRestoreFile(null);
@@ -2268,6 +2274,12 @@ export default function SettingsPage() {
           title: "Restore Interrupted",
           description: error.message,
         });
+        // The vault is in an unknown partial state that can include transaction
+        // records missing on-chain data. Reset the once-per-session orphan-check
+        // gate so the startup check re-evaluates after the reload, the same way a
+        // successful restore does. The check re-sets the gate on load, so this
+        // cannot loop.
+        resetOrphanCheckGate();
         setTimeout(() => {
           setRestoreDialogOpen(false);
           setRestoreFile(null);
