@@ -23,6 +23,7 @@ import {
   Network,
   ScanSearch,
   Info,
+  ExternalLink,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -78,6 +79,16 @@ type ScanState = "idle" | "analyzing" | "tagging" | "complete";
 
 const AUDIT_INPUT_BATCH = 1000;
 const TAG_FETCH_BATCH = 500;
+
+// Extracts the first http(s) URL from a source citation note, if present.
+// The URL is never fetched at load time — it is only opened externally on an
+// explicit user click (offline-first).
+function extractSourceUrl(note: string | undefined): string | null {
+  if (!note) return null;
+  const match = note.match(/https?:\/\/[^\s)]+/i);
+  if (!match) return null;
+  return match[0].replace(/[.,;]+$/, "");
+}
 
 // ─── Icon mapping ─────────────────────────────────────────────────────────────
 
@@ -1556,12 +1567,27 @@ function FindingCard({ finding }: { finding: PrivacyFinding }) {
                         {c.address}
                       </div>
                       {c.sourceNote && (
-                        <p
-                          className="text-[11px] text-muted-foreground mt-1 break-words"
-                          data-testid={`text-entity-source-${c.address}`}
-                        >
-                          {c.sourceNote}
-                        </p>
+                        <div className="flex items-start justify-between gap-2 mt-1">
+                          <p
+                            className="text-[11px] text-muted-foreground break-words"
+                            data-testid={`text-entity-source-${c.address}`}
+                          >
+                            {c.sourceNote}
+                          </p>
+                          {extractSourceUrl(c.sourceNote) && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-6 shrink-0 gap-1 px-2 text-[11px]"
+                              onClick={() => window.open(extractSourceUrl(c.sourceNote)!, "_blank", "noopener,noreferrer")}
+                              title={`Open ${extractSourceUrl(c.sourceNote)}`}
+                              data-testid={`button-open-source-${c.address}`}
+                            >
+                              <ExternalLink className="h-3 w-3" />
+                              Open source
+                            </Button>
+                          )}
+                        </div>
                       )}
                     </div>
                   ))}
