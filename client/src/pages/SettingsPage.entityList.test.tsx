@@ -17,8 +17,51 @@
 
 import "fake-indexeddb/auto";
 
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from "vitest";
 import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
+
+// @tanstack/react-virtual needs ResizeObserver and real element dimensions to
+// emit virtual rows. jsdom provides neither, so without these shims the
+// virtualized error list (used above ENTITY_ERROR_VIRTUALIZE_THRESHOLD errors)
+// would render zero rows and the row assertions could never run. Provide a
+// minimal ResizeObserver and non-zero layout so the virtualizer produces its
+// overscan window.
+const FAKE_RECT: DOMRect = {
+  width: 400,
+  height: 256,
+  top: 0,
+  left: 0,
+  right: 400,
+  bottom: 256,
+  x: 0,
+  y: 0,
+  toJSON() {},
+};
+
+beforeAll(() => {
+  // @tanstack/virtual-core sizes the scroll viewport from the element's
+  // offsetWidth/offsetHeight (see getRect), which jsdom always reports as 0.
+  Object.defineProperty(window.HTMLElement.prototype, "offsetWidth", {
+    configurable: true,
+    get() {
+      return 400;
+    },
+  });
+  Object.defineProperty(window.HTMLElement.prototype, "offsetHeight", {
+    configurable: true,
+    get() {
+      return 256;
+    },
+  });
+  (globalThis as any).ResizeObserver = class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  };
+  window.HTMLElement.prototype.getBoundingClientRect = function () {
+    return FAKE_RECT;
+  };
+});
 
 // useAuth throws outside an AuthProvider; the entity panel doesn't need it, so
 // stub it to a benign value.
@@ -242,6 +285,49 @@ describe("SettingsPage — Privacy Audit Entity List panel", () => {
     expect(errors).toBeTruthy();
     expect(screen.getByTestId("text-entity-error-0")).toBeTruthy();
     expect(screen.getByTestId("text-entity-error-1")).toBeTruthy();
+
+    // No preview dialog and nothing applied.
+    expect(screen.queryByTestId("text-preview-incoming")).toBeNull();
+    expect(getActiveEntitySource()).toBe("bundled");
+    const settings = await getSettings("default");
+    expect(settings?.entityListSnapshot).toBeUndefined();
+  });
+
+  it("stays responsive with hundreds of errors: virtualizes the list and applies nothing", async () => {
+    render(
+      <ActivityBusProvider>
+        <SettingsPage />
+      </ActivityBusProvider>,
+    );
+    await screen.findByTestId("badge-entity-source");
+
+    // Generate well over the virtualization threshold (100). Each entry has an
+    // invalid address, which yields exactly one per-entry error, so the error
+    // count equals the number of entries.
+    const ERROR_COUNT = 250;
+    const badEntries = Array.from({ length: ERROR_COUNT }, (_, i) => ({
+      address: `not-a-valid-address-${i}`,
+      name: `Bad ${i}`,
+      category: "exchange",
+    }));
+    await selectEntityFile("many-bad.json", JSON.stringify(badEntries));
+
+    // Error container appears with the full count (no cap).
+    const errors = await screen.findByTestId("container-entity-errors");
+    expect(errors.textContent).toContain(ERROR_COUNT.toLocaleString());
+
+    // The virtualized list renders only a window of rows, not all 250. The first
+    // rows are present (data-testid text-entity-error-0, -1, ...) while rows far
+    // outside the visible window are not yet mounted.
+    expect(screen.getByTestId("text-entity-error-0")).toBeTruthy();
+    expect(screen.getByTestId("text-entity-error-1")).toBeTruthy();
+    expect(screen.queryByTestId(`text-entity-error-${ERROR_COUNT - 1}`)).toBeNull();
+
+    // The number of mounted error rows is a small window, confirming the list
+    // is virtualized rather than rendering every row.
+    const mountedRows = screen.getAllByTestId(/^text-entity-error-\d+$/);
+    expect(mountedRows.length).toBeGreaterThan(0);
+    expect(mountedRows.length).toBeLessThan(ERROR_COUNT);
 
     // No preview dialog and nothing applied.
     expect(screen.queryByTestId("text-preview-incoming")).toBeNull();
