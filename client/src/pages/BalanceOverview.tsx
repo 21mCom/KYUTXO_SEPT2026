@@ -143,6 +143,8 @@ interface GroupAddressRowsProps {
   unresolvedByRecordId: Map<number, number>;
   /** recordIds currently running a targeted resolve. */
   resolvingRecordIds: Set<number>;
+  /** recordId -> { resolved, total } progress for an in-flight per-address resolve. */
+  resolveProgressByRecordId: Map<number, { resolved: number; total: number }>;
   onResolveAddress: (recordId: number, address: string) => void;
 }
 
@@ -154,6 +156,7 @@ function GroupAddressRows({
   onCopy,
   unresolvedByRecordId,
   resolvingRecordIds,
+  resolveProgressByRecordId,
   onResolveAddress,
 }: GroupAddressRowsProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -173,6 +176,7 @@ function GroupAddressRows({
           const addr = rows[vi.index];
           const pending = unresolvedByRecordId.get(addr.id) ?? 0;
           const isResolving = resolvingRecordIds.has(addr.id);
+          const resolveProgress = resolveProgressByRecordId.get(addr.id);
           return (
             <div
               key={addr.id}
@@ -235,7 +239,9 @@ function GroupAddressRows({
                         {isResolving ? (
                           <>
                             <Loader2 className="h-3 w-3 animate-spin mr-1.5" />
-                            Resolving…
+                            {resolveProgress && resolveProgress.total > 0
+                              ? `Resolving… ${resolveProgress.resolved.toLocaleString()}/${resolveProgress.total.toLocaleString()}`
+                              : "Resolving…"}
                           </>
                         ) : (
                           "Resolve"
@@ -294,6 +300,9 @@ export default function BalanceOverview() {
   // Per-group resolve progress: groupKey -> { resolved, total } as reported by
   // resolvePrevouts' onProgress callback, so the group card can show how far along it is.
   const [resolveProgressByGroup, setResolveProgressByGroup] = useState<Map<string, { resolved: number; total: number }>>(new Map());
+  // Per-address resolve progress: recordId -> { resolved, total } as reported by
+  // resolvePrevouts' onProgress callback, so the address row can show how far along it is.
+  const [resolveProgressByRecordId, setResolveProgressByRecordId] = useState<Map<number, { resolved: number; total: number }>>(new Map());
 
   // Re-run aggregation when the native read-engine flips to ready so the fast
   // path can take over from any Dexie fallback that ran first.
@@ -550,11 +559,25 @@ export default function BalanceOverview() {
     const before = unresolvedByRecordId.get(recordId) ?? 0;
     if (before <= 0) return;
     setResolvingRecordIds((prev) => new Set(prev).add(recordId));
+    setResolveProgressByRecordId((prev) => {
+      const next = new Map(prev);
+      next.set(recordId, { resolved: 0, total: 0 });
+      return next;
+    });
     try {
-      const result = await transactionSyncService.resolvePrevouts(undefined, {
-        recomputeOrigin: "user",
-        restrictToRecordIds: new Set([recordId]),
-      });
+      const result = await transactionSyncService.resolvePrevouts(
+        (resolved, total) => {
+          setResolveProgressByRecordId((prev) => {
+            const next = new Map(prev);
+            next.set(recordId, { resolved, total });
+            return next;
+          });
+        },
+        {
+          recomputeOrigin: "user",
+          restrictToRecordIds: new Set([recordId]),
+        },
+      );
       // Keep the top banner in sync. This address's row, its group note/badge,
       // and the balance refresh automatically because resolvePrevouts notifies
       // the 'records'/'transactionParticipants' scopes.
@@ -590,6 +613,12 @@ export default function BalanceOverview() {
     } finally {
       setResolvingRecordIds((prev) => {
         const next = new Set(prev);
+        next.delete(recordId);
+        return next;
+      });
+      setResolveProgressByRecordId((prev) => {
+        if (!prev.has(recordId)) return prev;
+        const next = new Map(prev);
         next.delete(recordId);
         return next;
       });
@@ -997,6 +1026,7 @@ export default function BalanceOverview() {
                           onCopy={copyAddress}
                           unresolvedByRecordId={unresolvedByRecordId}
                           resolvingRecordIds={resolvingRecordIds}
+                          resolveProgressByRecordId={resolveProgressByRecordId}
                           onResolveAddress={handleResolveAddress}
                         />
                       ) : (
