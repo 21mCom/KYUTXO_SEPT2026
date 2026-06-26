@@ -19,7 +19,7 @@ import {
   type PrivacySeverity,
   type EntityCitation,
 } from "@/lib/privacy-audit";
-import { buildPrivacyReport } from "@/lib/privacy-report-export";
+import { buildPrivacyReport, buildPrivacyTextReport } from "@/lib/privacy-report-export";
 import { getRecordsPageByTypeIdReverseKeyset } from "@/lib/data/record-crud";
 
 // ─── Privacy Audit Report ────────────────────────────────────────────────────
@@ -291,81 +291,12 @@ function PrivacyAuditReportPanel() {
 
   const exportText = useCallback(() => {
     if (!result) return;
-    const lines: string[] = [];
-    const sep = "=".repeat(60);
-    const sub = "-".repeat(60);
+    const text = buildPrivacyTextReport(result, {
+      owner: selectedOwner === "all" ? null : selectedOwner,
+      wallet: selectedWallet === "all" ? null : selectedWallet,
+    });
 
-    lines.push(sep);
-    lines.push("PRIVACY AUDIT REPORT");
-    lines.push(sep);
-    lines.push(`Generated: ${new Date().toLocaleString()}`);
-    lines.push("All analysis ran fully offline.");
-    lines.push(`Owner: ${selectedOwner === "all" ? "All" : selectedOwner}`);
-    lines.push(`Wallet: ${selectedWallet === "all" ? "All" : selectedWallet}`);
-    lines.push("");
-
-    lines.push(`Grade: ${result.grade}`);
-    lines.push(`Score: ${result.score}/100`);
-    lines.push(`Transactions Analyzed: ${result.transactionsAnalyzed.toLocaleString()}`);
-    lines.push(`Addresses Scanned: ${result.addressesScanned.toLocaleString()}`);
-    if (result.needsResync) {
-      lines.push(`Fingerprint Coverage: ${Math.round(result.fingerprintCoverage * 100)}% — re-sync recommended for complete results.`);
-    }
-    lines.push("");
-
-    const allFindings = [...result.findings, ...result.warnings];
-    const severityCounts = (["CRITICAL", "HIGH", "MEDIUM", "LOW"] as PrivacySeverity[])
-      .map(sev => ({ sev, count: allFindings.filter(f => f.severity === sev).length }))
-      .filter(x => x.count > 0);
-
-    lines.push(sub);
-    lines.push("SEVERITY BREAKDOWN");
-    lines.push(sub);
-    if (severityCounts.length > 0) {
-      for (const x of severityCounts) {
-        lines.push(`  ${severityLabel(x.sev)}: ${x.count}`);
-      }
-    } else {
-      lines.push("  Clean — no privacy findings.");
-    }
-    lines.push("");
-
-    lines.push(sub);
-    lines.push(`FINDINGS & WARNINGS (${allFindings.length})`);
-    lines.push(sub);
-    if (allFindings.length === 0) {
-      lines.push("No privacy findings — your transaction history is clean.");
-    } else {
-      allFindings.forEach((f, i) => {
-        const label = FINDING_TYPE_LABELS[f.type] ?? f.type;
-        lines.push(`${i + 1}. [${severityLabel(f.severity)}] ${label}`);
-        lines.push(`   ${f.description}`);
-        if (f.correction) lines.push(`   Fix: ${f.correction}`);
-        const meta: string[] = [];
-        if (f.addresses.length > 0) meta.push(`${f.addresses.length} address(es)`);
-        if (f.txids.length > 0) meta.push(`${f.txids.length} transaction(s)`);
-        if (meta.length > 0) lines.push(`   ${meta.join("  ·  ")}`);
-        if (f.type.startsWith("ENTITY_")) {
-          const citations = (f.details as { citations?: EntityCitation[] }).citations;
-          if (citations && citations.length > 0) {
-            lines.push("   Source Citations:");
-            for (const c of citations) {
-              lines.push(`     - ${c.name} (${c.categoryLabel})`);
-              lines.push(`       Address: ${c.address}`);
-              if (c.sourceNote) lines.push(`       Source: ${c.sourceNote}`);
-            }
-          }
-        }
-        lines.push("");
-      });
-    }
-
-    lines.push(sep);
-    lines.push("KYUTXO Privacy Audit · Offline-first compliance artifact.");
-    lines.push("Citation URLs are shown as plain text and are never fetched.");
-    lines.push(sep);
-
-    const blob = new Blob([lines.join("\n")], { type: "text/plain;charset=utf-8" });
+    const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;

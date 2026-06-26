@@ -89,7 +89,8 @@ import { runPrivacyAudit } from '../privacy-audit';
 // assemble the export, so these tests guard the real production shape — not a
 // copy. If the export adds, drops, or renames a top-level key, summary field,
 // or finding field, the assertions below catch it.
-import { mapFinding, buildPrivacyReport } from '../privacy-report-export';
+import { mapFinding, buildPrivacyReport, buildPrivacyTextReport } from '../privacy-report-export';
+import { FINDING_TYPE_LABELS } from '../privacy-audit';
 
 describe('privacy report export — entity citations', () => {
   beforeEach(() => {
@@ -346,5 +347,159 @@ describe('privacy report export — full report shape', () => {
     expect(entity!.label).not.toBe(entity!.type);
     expect(entity!.txids.length).toBeGreaterThan(0);
     expect(entity!.addresses.length).toBeGreaterThan(0);
+  });
+});
+
+// buildPrivacyTextReport is the SAME function Reports.tsx (exportText) uses to
+// assemble the plain-text (.txt) export, so these tests guard the real text
+// layout — not a copy. If the export drops the header, summary, scope, severity
+// breakdown, or any per-finding field, the assertions below catch it.
+describe('privacy report export — plain text', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  // A fixed timestamp keeps the header line deterministic in the test.
+  const FIXED_GENERATED_AT = 'Jan 1, 2026, 12:00:00 PM';
+
+  it('emits the header, offline note, and scope lines', async () => {
+    const result = await runPrivacyAudit([USER_ADDRESS]);
+    const text = buildPrivacyTextReport(
+      result,
+      { owner: 'Alice', wallet: 'Cold Storage' },
+      FIXED_GENERATED_AT,
+    );
+    const lines = text.split('\n');
+
+    expect(lines[0]).toBe('='.repeat(60));
+    expect(lines[1]).toBe('PRIVACY AUDIT REPORT');
+    expect(lines[2]).toBe('='.repeat(60));
+    expect(text).toContain(`Generated: ${FIXED_GENERATED_AT}`);
+    expect(text).toContain('All analysis ran fully offline.');
+    expect(text).toContain('Owner: Alice');
+    expect(text).toContain('Wallet: Cold Storage');
+
+    // Closing footer is present.
+    expect(text).toContain('KYUTXO Privacy Audit · Offline-first compliance artifact.');
+    expect(text).toContain('Citation URLs are shown as plain text and are never fetched.');
+    expect(lines[lines.length - 1]).toBe('='.repeat(60));
+  });
+
+  it('renders "All" for an unscoped (null owner/wallet) export', async () => {
+    const result = await runPrivacyAudit([USER_ADDRESS]);
+    const text = buildPrivacyTextReport(result, { owner: null, wallet: null }, FIXED_GENERATED_AT);
+
+    expect(text).toContain('Owner: All');
+    expect(text).toContain('Wallet: All');
+  });
+
+  it('emits the summary lines from the audit result', async () => {
+    const result = await runPrivacyAudit([USER_ADDRESS]);
+    const text = buildPrivacyTextReport(result, { owner: null, wallet: null }, FIXED_GENERATED_AT);
+
+    expect(text).toContain(`Grade: ${result.grade}`);
+    expect(text).toContain(`Score: ${result.score}/100`);
+    expect(text).toContain(
+      `Transactions Analyzed: ${result.transactionsAnalyzed.toLocaleString()}`,
+    );
+    expect(text).toContain(
+      `Addresses Scanned: ${result.addressesScanned.toLocaleString()}`,
+    );
+  });
+
+  it('renders the severity breakdown section with each present severity', async () => {
+    const result = await runPrivacyAudit([USER_ADDRESS]);
+    const text = buildPrivacyTextReport(result, { owner: null, wallet: null }, FIXED_GENERATED_AT);
+
+    expect(text).toContain('SEVERITY BREAKDOWN');
+
+    const allFindings = [...result.findings, ...result.warnings];
+    for (const sev of ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'] as const) {
+      const count = allFindings.filter((f) => f.severity === sev).length;
+      if (count > 0) {
+        const label = sev.charAt(0) + sev.slice(1).toLowerCase();
+        expect(text).toContain(`  ${label}: ${count}`);
+      }
+    }
+  });
+
+  it('lists every finding with its label, severity, description, and metadata', async () => {
+    const result = await runPrivacyAudit([USER_ADDRESS]);
+    const text = buildPrivacyTextReport(result, { owner: null, wallet: null }, FIXED_GENERATED_AT);
+
+    const allFindings = [...result.findings, ...result.warnings];
+    expect(allFindings.length).toBeGreaterThan(0);
+    expect(text).toContain(`FINDINGS & WARNINGS (${allFindings.length})`);
+
+    allFindings.forEach((f, i) => {
+      const label = FINDING_TYPE_LABELS[f.type] ?? f.type;
+      const sevLabel = f.severity.charAt(0) + f.severity.slice(1).toLowerCase();
+      // Numbered header line: "N. [Severity] Label"
+      expect(text).toContain(`${i + 1}. [${sevLabel}] ${label}`);
+      // Description line.
+      expect(text).toContain(`   ${f.description}`);
+      if (f.correction) {
+        expect(text).toContain(`   Fix: ${f.correction}`);
+      }
+      // Address/transaction metadata line.
+      const meta: string[] = [];
+      if (f.addresses.length > 0) meta.push(`${f.addresses.length} address(es)`);
+      if (f.txids.length > 0) meta.push(`${f.txids.length} transaction(s)`);
+      if (meta.length > 0) {
+        expect(text).toContain(`   ${meta.join('  ·  ')}`);
+      }
+    });
+  });
+
+  it('includes source citations (name, address, source URL) for entity findings', async () => {
+    const result = await runPrivacyAudit([USER_ADDRESS]);
+    const text = buildPrivacyTextReport(result, { owner: null, wallet: null }, FIXED_GENERATED_AT);
+
+    expect(text).toContain('Source Citations:');
+    // Scam entity citation block, with the URL passed through verbatim.
+    expect(text).toContain(`     - ${SCAM_ENTITY.name} (${SCAM_ENTITY.categoryLabel})`);
+    expect(text).toContain(`       Address: ${SCAM_ENTITY.address}`);
+    expect(text).toContain(`       Source: ${SCAM_ENTITY.sourceNote}`);
+    expect(text).toContain('https://www.treasury.gov/');
+
+    // Both distinct exchange entities are cited.
+    expect(text).toContain(`     - ${EXCHANGE_ENTITY.name} (${EXCHANGE_ENTITY.categoryLabel})`);
+    expect(text).toContain(`       Address: ${EXCHANGE_ENTITY.address}`);
+    expect(text).toContain(`     - ${COINBASE_ENTITY.name} (${COINBASE_ENTITY.categoryLabel})`);
+    expect(text).toContain(`       Address: ${COINBASE_ENTITY.address}`);
+  });
+
+  it('shows the re-sync notice only when fingerprint coverage is incomplete', async () => {
+    const result = await runPrivacyAudit([USER_ADDRESS]);
+    const text = buildPrivacyTextReport(result, { owner: null, wallet: null }, FIXED_GENERATED_AT);
+
+    if (result.needsResync) {
+      expect(text).toContain(
+        `Fingerprint Coverage: ${Math.round(result.fingerprintCoverage * 100)}% — re-sync recommended for complete results.`,
+      );
+    } else {
+      expect(text).not.toContain('re-sync recommended');
+    }
+  });
+
+  it('renders a clean report when there are no findings', () => {
+    const cleanResult = {
+      grade: 'A+',
+      score: 100,
+      transactionsAnalyzed: 0,
+      addressesScanned: 0,
+      isClean: true,
+      fingerprintCoverage: 1,
+      needsResync: false,
+      findings: [],
+      warnings: [],
+      scoreWaterfall: [],
+    } as unknown as PrivacyAuditResult;
+
+    const text = buildPrivacyTextReport(cleanResult, { owner: null, wallet: null }, FIXED_GENERATED_AT);
+
+    expect(text).toContain('Clean — no privacy findings.');
+    expect(text).toContain('FINDINGS & WARNINGS (0)');
+    expect(text).toContain('No privacy findings — your transaction history is clean.');
   });
 });
