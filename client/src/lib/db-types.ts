@@ -372,6 +372,9 @@ export interface Settings {
   // Persisted user preference for the Privacy Audit peel-chain view toggle.
   // Defaults to 'graph' for first-time users when unset.
   peelChainViewMode?: 'graph' | 'list';
+  // When true, the startup scan for transaction records missing on-chain data
+  // ("orphaned" txids) is skipped entirely. Defaults to false (check enabled).
+  disableOrphanCheck?: boolean;
   // Optional user-supplied offline snapshot for the Privacy Audit entity list.
   // When present it is applied to the active list at runtime; the bundled list
   // remains the fallback (cleared via "reset to bundled"). `mode` records how

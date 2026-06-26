@@ -16,6 +16,7 @@ import { Progress } from "@/components/ui/progress";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import {
   useSettings,
+  updateDisableOrphanCheck,
   useCustomFields,
   toggleFieldVisibility,
   addCustomField,
@@ -185,7 +186,7 @@ function EntityDiffList({
 }
 
 export default function SettingsPage() {
-  const { settings, fieldVisibility, cancelConfirmThreshold, isLoading: settingsLoading } = useSettings();
+  const { settings, fieldVisibility, cancelConfirmThreshold, disableOrphanCheck, isLoading: settingsLoading } = useSettings();
   const { customFields, isLoading: customFieldsLoading } = useCustomFields();
   const { toast } = useToast();
 
@@ -3048,6 +3049,25 @@ export default function SettingsPage() {
                   </>
                 )}
               </Button>
+            </div>
+
+            <Separator />
+
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <div>
+                <Label className="text-base">Startup Missing-Data Reminder</Label>
+                <p className="text-sm text-muted-foreground">
+                  Show a one-per-session reminder when transaction records are missing on-chain data. Turn this off if you knowingly keep records without on-chain data.
+                </p>
+              </div>
+              <Switch
+                checked={!disableOrphanCheck}
+                onCheckedChange={async (checked) => {
+                  await updateDisableOrphanCheck(!checked);
+                }}
+                disabled={settingsLoading}
+                data-testid="switch-orphan-check"
+              />
             </div>
 
             <Separator />

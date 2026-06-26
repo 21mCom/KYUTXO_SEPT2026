@@ -1056,6 +1056,7 @@ db.on('ready', async () => {
       theme: 'light',
       defaultView: 'table',
       cancelConfirmThreshold: 75,
+      disableOrphanCheck: false,
     });
   } else {
     // Migrations for existing settings

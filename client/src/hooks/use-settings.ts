@@ -50,6 +50,7 @@ export function useSettings() {
     fieldVisibility: settings?.fieldVisibility || defaultFieldVisibility,
     cancelConfirmThreshold: settings?.cancelConfirmThreshold ?? DEFAULT_CANCEL_CONFIRM_THRESHOLD,
     peelChainViewMode: settings?.peelChainViewMode ?? 'graph',
+    disableOrphanCheck: settings?.disableOrphanCheck ?? false,
     isLoading: settings === undefined,
   };
 }
@@ -126,6 +127,15 @@ export async function updatePeelChainViewMode(mode: 'graph' | 'list') {
   if (settings) {
     await updateStoredSettings('default', {
       peelChainViewMode: mode,
+    });
+  }
+}
+
+export async function updateDisableOrphanCheck(value: boolean) {
+  const settings = await getStoredSettings('default');
+  if (settings) {
+    await updateStoredSettings('default', {
+      disableOrphanCheck: value,
     });
   }
 }

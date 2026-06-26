@@ -137,6 +137,10 @@ function OrphanedTxNotifier() {
     let cancelled = false;
     (async () => {
       try {
+        const { getSettings } = await import("@/lib/data/settings-crud");
+        const settings = await getSettings("default");
+        if (cancelled || settings?.disableOrphanCheck) return;
+
         const { txids } = await detectOrphanedTxRecords();
         if (cancelled || txids.length === 0) return;
 
