@@ -47,3 +47,13 @@ export async function updateSettings(
     notifyDbChange('settings');
   }
 }
+
+export async function clearSettings(
+  options?: SettingsWriteOptions
+): Promise<void> {
+  await db.settings.clear();
+
+  if (!options?.skipNotification) {
+    notifyDbChange('settings');
+  }
+}

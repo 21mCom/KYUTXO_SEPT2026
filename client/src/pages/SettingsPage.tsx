@@ -72,7 +72,7 @@ import { clearCustomFields, addCustomField as addCustomFieldCrud, getCustomField
 import { clearAddressSyncState } from "@/lib/data/address-sync-crud";
 import { clearPriceData, addPriceData } from "@/lib/data/price-data-crud";
 import { clearNodeSettings, getNodeSettings } from "@/lib/data/node-settings-crud";
-import { restoreNodeSettingsRows } from "@/lib/backup/inline-tables";
+import { restoreNodeSettingsRows, restoreSettingsPreferences } from "@/lib/backup/inline-tables";
 import {
   restoreLegacyRecords,
   restoreLegacyAttachments,
@@ -2000,6 +2000,11 @@ export default function SettingsPage() {
       // so the legacy path and the v3 streaming path can never diverge in how
       // the nodeSettings singleton is restored (id preserved, `put` semantics).
       await restoreNodeSettingsRows(backupNodeSettings);
+
+      // Restore the small allow-list of portable settings preferences (e.g.
+      // disableOrphanCheck). Shared helper keeps the legacy and v3 paths from
+      // diverging; fields absent from older backups are left at their defaults.
+      await restoreSettingsPreferences(backupSettings);
 
       // Restore UTXO lineage data (v2.2.0+, not encrypted)
       if (utxoLineage && utxoLineage.length > 0) {

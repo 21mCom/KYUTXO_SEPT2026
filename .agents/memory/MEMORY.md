@@ -20,3 +20,4 @@
 - [useLiveQuery arity](use-livequery-arity.md) — this repo's dexie-react-hooks types accept only 1-2 args (no default-result 3rd arg) and infer `{}` for `?? []`; use 1 arg + handle undefined like the use-* hooks.
 - [Sync backfill of new tx fields](sync-backfill-new-fields.md) — backfilling new blockchainTransactions columns onto old rows must run in syncAddress's height-skip branch (it preempts the existing-tx lookup), or re-sync backfills nothing.
 - [Inline restore FK remap](inline-restore-fk-remap.md) — id-referencing inline tables (evidence→evidenceAttachments) get fresh ids on restore (clear() ≠ reset key gen); remap or links orphan; addX must honor restored createdAt.
+- [Settings restore allow-list](settings-restore-allowlist.md) — settings table is never wholesale restored (device-local survives); portable prefs round-trip only via restoreSettingsPreferences allow-list, type-checked so older backups keep defaults.

@@ -2,7 +2,9 @@
 // manifest (everything except the five streamed big tables and the records
 // table). Behaviour deliberately MIRRORS the legacy restore so v3 introduces no
 // regression for these tables:
-//   - `settings` is neither cleared nor restored (current app settings survive).
+//   - `settings` is not cleared and not wholesale restored (current app
+//     settings survive), but a small allow-list of portable preferences (e.g.
+//     `disableOrphanCheck`) is merged from the backup on restore.
 //   - `recordOrigins` is cleared but NOT re-added (legacy never restored it).
 // Records and the four record-dependent big tables are handled by the streaming
 // orchestrator (restore.ts), not here.
@@ -41,7 +43,7 @@ import {
   clearEvidenceAttachments,
 } from "@/lib/data/evidence-crud";
 import { getAllPriceData, addPriceData, clearPriceData } from "@/lib/data/price-data-crud";
-import { getAllSettings } from "@/lib/data/settings-crud";
+import { getAllSettings, getSettings, updateSettings } from "@/lib/data/settings-crud";
 import {
   getAllNodeSettings,
   putNodeSettings,
@@ -66,6 +68,35 @@ export async function restoreNodeSettingsRows(rows: any[]): Promise<void> {
     const row = { ...ns, id: ns.id ?? "default" };
     await putNodeSettings(row, { skipNotification: true });
   }
+}
+
+/**
+ * Restore the round-trippable preferences from the backup's `settings` rows.
+ *
+ * The `settings` table as a whole is intentionally NEITHER cleared NOR wholesale
+ * restored (see `clearInlineTables`) so device-local preferences (theme, column
+ * layout, etc.) survive a restore. A small allow-list of *portable* preferences,
+ * however, should follow the user across devices/backups. We merge those into
+ * the existing `default` settings row instead of replacing it.
+ *
+ * A field that is absent from the backup is left untouched, so restoring an
+ * older backup that predates a preference keeps that preference at its current
+ * (default) value.
+ */
+export async function restoreSettingsPreferences(rows: any[]): Promise<void> {
+  if (!Array.isArray(rows) || rows.length === 0) return;
+  const source = rows.find((r) => r && r.id === "default") ?? rows[0];
+  if (!source || typeof source !== "object") return;
+
+  const updates: Record<string, unknown> = {};
+  if (typeof source.disableOrphanCheck === "boolean") {
+    updates.disableOrphanCheck = source.disableOrphanCheck;
+  }
+  if (Object.keys(updates).length === 0) return;
+
+  const existing = await getSettings("default");
+  if (!existing) return;
+  await updateSettings("default", updates, { skipNotification: true });
 }
 
 export async function readInlineTables(): Promise<Record<string, unknown[]>> {
@@ -247,6 +278,7 @@ export async function restoreInlineTables(
   }
 
   await restoreNodeSettingsRows(arr("nodeSettings"));
+  await restoreSettingsPreferences(arr("settings"));
 
   // utxoLineage and custodySegments are streamed tables now, so NEW backups
   // carry them as NDJSON (handled by the restore orchestrator) and won't have
@@ -268,6 +300,8 @@ export async function restoreInlineTables(
     await bulkAddCustodySegments(segmentRows as any[], { skipNotification: true });
   }
 
-  // NOTE: recordOrigins and settings are intentionally NOT restored
-  // (matches legacy restore behaviour).
+  // NOTE: recordOrigins is intentionally NOT restored (matches legacy restore
+  // behaviour). The `settings` table is not wholesale restored either, but a
+  // small allow-list of portable preferences is merged via
+  // restoreSettingsPreferences above.
 }
