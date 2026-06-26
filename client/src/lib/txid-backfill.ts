@@ -29,6 +29,7 @@ import {
   getTransactionByTxid,
 } from './data/transaction-crud';
 import { getNodeSettings } from './data/node-settings-crud';
+import { recomputeAddressStats } from './data/address-stats';
 import type { BlockchainProvider, ParsedTransaction } from './blockchain-api';
 
 // ─── Public result types ────────────────────────────────────────────────────
@@ -493,13 +494,38 @@ async function resolveBackfillPrevouts(
   // Forward the shared core's fetch- and write-phase progress hooks so the
   // manual backfill UI can show a progress bar both while fetching missing
   // previous transactions over the network and during the final, cancellable
-  // write phase.
-  return resolveUnresolvedInputs(provider, unresolvedInputs, {
+  // write phase. Also collect the source addresses we attribute so we can
+  // recompute their cached stats afterward.
+  const resolvedAddresses = new Set<string>();
+  const resolved = await resolveUnresolvedInputs(provider, unresolvedInputs, {
     signal,
     concurrency,
     onFetchProgress,
     onWriteProgress,
+    resolvedAddressesOut: resolvedAddresses,
   });
+
+  // Recompute cached stats for every source address whose spend input we just
+  // attributed. Without this the repaired address's balance stays overstated —
+  // it still counts the output it received but not the spend we just linked —
+  // until a manual recompute. This mirrors transaction-sync.ts's resolvePrevouts.
+  // Local-only (reads IndexedDB participant rows); never hits the network.
+  // Errors here are non-fatal: the participant attribution above already stands.
+  if (resolved > 0 && resolvedAddresses.size > 0 && !signal?.aborted) {
+    try {
+      await recomputeAddressStats({
+        addresses: Array.from(resolvedAddresses),
+        origin: 'blockchain-sync',
+      });
+    } catch (err) {
+      console.warn(
+        '[TxidBackfill] Stats recompute after prevout resolution failed (non-fatal):',
+        err,
+      );
+    }
+  }
+
+  return resolved;
 }
 
 /**
@@ -524,9 +550,15 @@ async function resolveUnresolvedInputs(
     concurrency?: number;
     onFetchProgress?: (fetched: number, total: number) => void;
     onWriteProgress?: (written: number, total: number) => void;
+    /**
+     * If provided, populated with the set of source addresses whose blank input
+     * was attributed during this pass. Callers can recompute those addresses'
+     * cached stats so a newly-attributed spend drops the source balance.
+     */
+    resolvedAddressesOut?: Set<string>;
   } = {},
 ): Promise<number> {
-  const { signal, concurrency = 4, onFetchProgress, onWriteProgress } = options;
+  const { signal, concurrency = 4, onFetchProgress, onWriteProgress, resolvedAddressesOut } = options;
 
   if (unresolvedInputs.length === 0) return 0;
 
@@ -600,6 +632,9 @@ async function resolveUnresolvedInputs(
   for (const inp of unresolvedInputs) {
     const resolved = outputCache.get(`${inp.prevTxid}:${inp.prevVout}`);
     if (resolved?.address) resolvedAddresses.add(resolved.address);
+  }
+  if (resolvedAddressesOut) {
+    resolvedAddresses.forEach(addr => resolvedAddressesOut.add(addr));
   }
 
   const addressToRecordId = new Map<string, number>();

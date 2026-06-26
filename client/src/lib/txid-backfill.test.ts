@@ -32,6 +32,7 @@ class TestDb extends Dexie {
   blockchainTransactions!: Table<BlockchainTransaction, number>;
   transactionParticipants!: Table<TransactionParticipant, number>;
   nodeSettings!: Table<NodeSettings, string>;
+  addressSyncState!: Table<{ id?: number; address: string; recordId?: number; lastSyncedAt?: number }, number>;
   constructor(name: string) {
     super(name);
     this.version(1).stores({
@@ -43,6 +44,7 @@ class TestDb extends Dexie {
       transactionParticipants:
         "++id, [txid+role], txid, role, address, recordId, [prevTxid+prevVout]",
       nodeSettings: "id",
+      addressSyncState: "++id, &address, recordId, lastSyncedAt",
     });
   }
 }
@@ -249,6 +251,7 @@ beforeEach(async () => {
   await testDb.blockchainTransactions.clear();
   await testDb.transactionParticipants.clear();
   await testDb.nodeSettings.clear();
+  await testDb.addressSyncState.clear();
 });
 
 // ---- detectOrphanedTxRecords ----------------------------------------------
@@ -1225,6 +1228,88 @@ describe("runTxidBackfill (per-fetch prevout resilience)", () => {
 
     // prevoutsResolved counts only the two that succeeded.
     expect(result.prevoutsResolved).toBe(2);
+  });
+});
+
+// ---- runTxidBackfill (source balance recompute after repair) ---------------
+//
+// Resolving a blank input attributes a spend to its source address. Without a
+// follow-up stats recompute the source address's cached balance stays
+// overstated — it still counts the output it received but not the spend just
+// linked — until a manual recompute. resolveBackfillPrevouts now recomputes the
+// affected source addresses (local-only, no network) in the same run, mirroring
+// transaction-sync.ts's resolvePrevouts. These tests pin that behaviour.
+
+describe("runTxidBackfill (source balance recompute after repair)", () => {
+  it("drops the source address cached balance after a repaired blank input attributes its spend", async () => {
+    // The source address received 50000 in PREV_TXID; its cached balance
+    // currently reflects only that receipt (the spend is not yet attributed).
+    const srcRecId = await testDb.records.add(makeAddressRecord(PREV_ADDR));
+    await testDb.records.update(srcRecId, {
+      cachedBalanceSats: 50000,
+      cachedTxCount: 1,
+      cachedUtxoCount: 1,
+      statsComputedAt: Date.now(),
+    });
+
+    // PREV_TXID's output (PREV_ADDR receives 50000 at vout 0) is already held
+    // locally, so resolution finds the prevout without fetching.
+    await testDb.blockchainTransactions.add(
+      makeExistingTxRow(PREV_TXID) as BlockchainTransaction,
+    );
+    await testDb.transactionParticipants.add({
+      txid: PREV_TXID,
+      role: "output",
+      address: PREV_ADDR,
+      amount: 50000,
+      vout: 0,
+      recordId: srcRecId,
+      scriptType: "v0_p2wpkh",
+    } as unknown as TransactionParticipant);
+
+    // The orphan TXID_A spends PREV_TXID:0 but is written with a blank input.
+    const provider = makeProvider({
+      txs: new Map([[TXID_A, makeApiTxBlankInput(TXID_A, PREV_TXID, 0)]]),
+    });
+
+    const result = await runTxidBackfill(provider, [TXID_A]);
+    expect(result.rebuilt).toBe(1);
+    expect(result.prevoutsResolved).toBe(1);
+
+    // The blank input is now attributed to the source address.
+    const input = await testDb.transactionParticipants
+      .where("txid")
+      .equals(TXID_A)
+      .and((p) => p.role === "input")
+      .first();
+    expect(input?.address).toBe(PREV_ADDR);
+
+    // The recompute ran in the same backfill: 50000 received - 50000 spent = 0.
+    const srcRec = await testDb.records.get(srcRecId);
+    expect(srcRec?.cachedBalanceSats).toBe(0);
+    expect(srcRec?.cachedUtxoCount).toBe(0);
+  });
+
+  it("does not recompute when no blank input gets attributed", async () => {
+    // A source address with a cached balance but no spend to attribute. The
+    // orphan's input already carries its address, so nothing is resolved and the
+    // cached balance must be left untouched.
+    const srcRecId = await testDb.records.add(makeAddressRecord(ADDR_IN));
+    await testDb.records.update(srcRecId, {
+      cachedBalanceSats: 123456,
+      statsComputedAt: Date.now(),
+    });
+
+    // makeApiTx provides a fully-populated input (ADDR_IN) → no blank to resolve.
+    const provider = makeProvider({ txs: new Map([[TXID_A, makeApiTx(TXID_A)]]) });
+
+    const result = await runTxidBackfill(provider, [TXID_A]);
+    expect(result.rebuilt).toBe(1);
+    expect(result.prevoutsResolved).toBe(0);
+
+    // Untouched: the recompute never ran for this address.
+    const srcRec = await testDb.records.get(srcRecId);
+    expect(srcRec?.cachedBalanceSats).toBe(123456);
   });
 });
 
