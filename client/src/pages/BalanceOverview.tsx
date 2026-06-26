@@ -139,10 +139,23 @@ interface GroupAddressRowsProps {
   displayUnit: DisplayUnit;
   copiedAddress: string | null;
   onCopy: (address: string) => void;
+  /** recordId -> number of pending spends, for the per-address resolve action. */
+  unresolvedByRecordId: Map<number, number>;
+  /** recordIds currently running a targeted resolve. */
+  resolvingRecordIds: Set<number>;
+  onResolveAddress: (recordId: number, address: string) => void;
 }
 
 /** Virtualized list of a single expanded group's addresses (cached rows only). */
-function GroupAddressRows({ rows, displayUnit, copiedAddress, onCopy }: GroupAddressRowsProps) {
+function GroupAddressRows({
+  rows,
+  displayUnit,
+  copiedAddress,
+  onCopy,
+  unresolvedByRecordId,
+  resolvingRecordIds,
+  onResolveAddress,
+}: GroupAddressRowsProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
     count: rows.length,
@@ -158,6 +171,8 @@ function GroupAddressRows({ rows, displayUnit, copiedAddress, onCopy }: GroupAdd
       <div style={{ height: `${virtualizer.getTotalSize()}px`, position: "relative", width: "100%" }}>
         {virtualItems.map((vi) => {
           const addr = rows[vi.index];
+          const pending = unresolvedByRecordId.get(addr.id) ?? 0;
+          const isResolving = resolvingRecordIds.has(addr.id);
           return (
             <div
               key={addr.id}
@@ -195,6 +210,39 @@ function GroupAddressRows({ rows, displayUnit, copiedAddress, onCopy }: GroupAdd
                 </div>
 
                 <div className="flex-none flex items-center gap-2">
+                  {pending > 0 && (
+                    <>
+                      <Badge
+                        variant="outline"
+                        className="text-xs flex-none gap-1 border-yellow-400 dark:border-yellow-600 text-yellow-700 dark:text-yellow-300"
+                        title={`${pending.toLocaleString()} spend${pending !== 1 ? "s" : ""} pending attribution — balance may be too high`}
+                        data-testid={`badge-address-unresolved-${addr.address}`}
+                      >
+                        <AlertTriangle className="h-3 w-3" />
+                        {pending.toLocaleString()} pending
+                      </Badge>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onResolveAddress(addr.id, addr.address);
+                        }}
+                        disabled={isResolving}
+                        data-testid={`button-resolve-address-${addr.address}`}
+                        className="flex-none border-yellow-400 dark:border-yellow-600 text-yellow-800 dark:text-yellow-200"
+                      >
+                        {isResolving ? (
+                          <>
+                            <Loader2 className="h-3 w-3 animate-spin mr-1.5" />
+                            Resolving…
+                          </>
+                        ) : (
+                          "Resolve"
+                        )}
+                      </Button>
+                    </>
+                  )}
                   <span className="text-xs text-muted-foreground/50">
                     {addr.utxoCount} UTXO{addr.utxoCount !== 1 ? "s" : ""}
                   </span>
@@ -236,8 +284,13 @@ export default function BalanceOverview() {
   // groupKey -> source record ids whose spends are pending. Powers the per-wallet
   // "Resolve" action so it can scope resolution to just that group's records.
   const [unresolvedRecordIdsByGroup, setUnresolvedRecordIdsByGroup] = useState<Map<string, number[]>>(new Map());
+  // recordId -> number of pending spends. Powers the per-address "Resolve" action
+  // inside an expanded group, scoping resolution to that one source record.
+  const [unresolvedByRecordId, setUnresolvedByRecordId] = useState<Map<number, number>>(new Map());
   // Groups currently running a targeted resolve (one at a time per group).
   const [resolvingGroups, setResolvingGroups] = useState<Set<string>>(new Set());
+  // Source record ids currently running a targeted per-address resolve.
+  const [resolvingRecordIds, setResolvingRecordIds] = useState<Set<number>>(new Set());
 
   // Re-run aggregation when the native read-engine flips to ready so the fast
   // path can take over from any Dexie fallback that ran first.
@@ -390,8 +443,10 @@ export default function BalanceOverview() {
       if (byRecordId.size === 0) {
         setUnresolvedByGroup(new Map());
         setUnresolvedRecordIdsByGroup(new Map());
+        setUnresolvedByRecordId(new Map());
         return;
       }
+      setUnresolvedByRecordId(byRecordId);
       const records = await getRecordsByIds(Array.from(byRecordId.keys()));
       if (cancelled) return;
       const byGroup = new Map<string, number>();
@@ -467,6 +522,56 @@ export default function BalanceOverview() {
       });
     }
   }, [unresolvedRecordIdsByGroup, unresolvedByGroup, toast]);
+
+  const handleResolveAddress = useCallback(async (recordId: number, address: string) => {
+    const before = unresolvedByRecordId.get(recordId) ?? 0;
+    if (before <= 0) return;
+    setResolvingRecordIds((prev) => new Set(prev).add(recordId));
+    try {
+      const result = await transactionSyncService.resolvePrevouts(undefined, {
+        recomputeOrigin: "user",
+        restrictToRecordIds: new Set([recordId]),
+      });
+      // Keep the top banner in sync. This address's row, its group note/badge,
+      // and the balance refresh automatically because resolvePrevouts notifies
+      // the 'records'/'transactionParticipants' scopes.
+      const remaining = await countUnresolvedPrevoutInputs();
+      setUnresolvedPrevouts(remaining);
+      if (remaining === 0) setSpendWarningDismissed(false);
+
+      const stillPending = Math.max(before - result.resolved, 0);
+      if (result.resolved === 0) {
+        toast({
+          title: "Nothing to resolve",
+          description: `No spends for ${address} could be attributed to a known source. Its balance can't be corrected automatically.`,
+          variant: "destructive",
+        });
+      } else if (stillPending > 0) {
+        toast({
+          title: "Partially resolved",
+          description: `Resolved ${result.resolved.toLocaleString()} spend${result.resolved !== 1 ? "s" : ""} for ${address}. ${stillPending.toLocaleString()} still can't be attributed.`,
+        });
+      } else {
+        toast({
+          title: "Resolved",
+          description: `Resolved ${result.resolved.toLocaleString()} spend${result.resolved !== 1 ? "s" : ""} for ${address} and recomputed its balance.`,
+        });
+      }
+    } catch (err) {
+      console.warn("[BalanceOverview] Per-address prevout resolve failed:", err);
+      toast({
+        title: "Resolve failed",
+        description: "Could not resolve this address's pending spends. Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setResolvingRecordIds((prev) => {
+        const next = new Set(prev);
+        next.delete(recordId);
+        return next;
+      });
+    }
+  }, [unresolvedByRecordId, toast]);
 
   const handleFixPrevouts = useCallback(async () => {
     setFixingPrevouts(true);
@@ -862,6 +967,9 @@ export default function BalanceOverview() {
                           displayUnit={displayUnit}
                           copiedAddress={copiedAddress}
                           onCopy={copyAddress}
+                          unresolvedByRecordId={unresolvedByRecordId}
+                          resolvingRecordIds={resolvingRecordIds}
+                          onResolveAddress={handleResolveAddress}
                         />
                       ) : (
                         <div className="py-4 text-center text-sm text-muted-foreground">
