@@ -35,6 +35,7 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
+  DialogDescription,
   DialogFooter,
 } from "@/components/ui/dialog";
 import {
@@ -71,10 +72,12 @@ import { clearNodeSettings, putNodeSettings, getNodeSettings } from "@/lib/data/
 import { clearDerivationTemplates, addDerivationTemplate, getAllDerivationTemplates, type CreateDerivationTemplateData } from "@/lib/data/derivation-templates-crud";
 import { updateSettings } from "@/lib/data/settings-crud";
 import {
-  importEntitySnapshot,
+  prepareEntitySnapshot,
+  applyEntitySnapshot,
   resetEntitySnapshot,
   serializeActiveEntityList,
   type EntitySnapshotError,
+  type EntitySnapshotPreview,
 } from "@/lib/data/entity-list-store";
 import { getBundledEntityCount } from "@/lib/privacy-entity-list";
 import { deriveKey, decrypt, base64ToBuffer, verifyPassword } from "@/lib/crypto";
@@ -118,6 +121,9 @@ export default function SettingsPage() {
   const [isImportingEntities, setIsImportingEntities] = useState(false);
   const [isResettingEntities, setIsResettingEntities] = useState(false);
   const [entityImportErrors, setEntityImportErrors] = useState<EntitySnapshotError[] | null>(null);
+  const [entityPreview, setEntityPreview] = useState<EntitySnapshotPreview | null>(null);
+  const [entityPreviewSource, setEntityPreviewSource] = useState<string | undefined>(undefined);
+  const [isApplyingEntities, setIsApplyingEntities] = useState(false);
   const entityFileInputRef = useRef<HTMLInputElement>(null);
   
   const [newFieldName, setNewFieldName] = useState("");
@@ -202,6 +208,7 @@ export default function SettingsPage() {
     if (!file) return;
 
     setEntityImportErrors(null);
+    setEntityPreview(null);
     setIsImportingEntities(true);
     try {
       const text = await file.text();
@@ -212,8 +219,8 @@ export default function SettingsPage() {
         throw new Error("File is not valid JSON.");
       }
 
-      const result = await importEntitySnapshot(raw, file.name);
-      if (!result.valid) {
+      const result = prepareEntitySnapshot(raw);
+      if (!result.valid || !result.preview) {
         setEntityImportErrors(result.errors);
         toast({
           title: "Import failed",
@@ -223,10 +230,9 @@ export default function SettingsPage() {
         return;
       }
 
-      toast({
-        title: "Entity list updated",
-        description: `Now using ${result.count.toLocaleString()} imported entries for Privacy Audit.`,
-      });
+      // Valid — stage a preview and wait for explicit confirmation.
+      setEntityPreviewSource(file.name);
+      setEntityPreview(result.preview);
     } catch (error: any) {
       toast({
         title: "Import failed",
@@ -236,6 +242,33 @@ export default function SettingsPage() {
     } finally {
       setIsImportingEntities(false);
     }
+  };
+
+  const handleConfirmEntityImport = async () => {
+    if (!entityPreview) return;
+    setIsApplyingEntities(true);
+    try {
+      await applyEntitySnapshot(entityPreview.entries, entityPreviewSource);
+      toast({
+        title: "Entity list updated",
+        description: `Now using ${entityPreview.incomingCount.toLocaleString()} imported entries for Privacy Audit.`,
+      });
+      setEntityPreview(null);
+      setEntityPreviewSource(undefined);
+    } catch (error: any) {
+      toast({
+        title: "Import failed",
+        description: error?.message || "Could not apply the snapshot.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsApplyingEntities(false);
+    }
+  };
+
+  const handleCancelEntityImport = () => {
+    setEntityPreview(null);
+    setEntityPreviewSource(undefined);
   };
 
   const handleResetEntities = async () => {
@@ -2322,6 +2355,109 @@ export default function SettingsPage() {
             )}
           </CardContent>
         </Card>
+
+        <Dialog
+          open={!!entityPreview}
+          onOpenChange={(open) => {
+            if (!open && !isApplyingEntities) handleCancelEntityImport();
+          }}
+        >
+          <DialogContent className="max-w-lg">
+            <DialogHeader>
+              <DialogTitle>Confirm entity list import</DialogTitle>
+              <DialogDescription>
+                Review the snapshot{entityPreviewSource ? ` from "${entityPreviewSource}"` : ""} before it
+                replaces the current Privacy Audit list. Nothing changes until you confirm.
+              </DialogDescription>
+            </DialogHeader>
+
+            {entityPreview && (
+              <div className="space-y-4">
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="rounded-md border p-3">
+                    <p className="text-xs text-muted-foreground">New snapshot</p>
+                    <p className="text-2xl font-semibold" data-testid="text-preview-incoming">
+                      {entityPreview.incomingCount.toLocaleString()}
+                    </p>
+                    <p className="text-xs text-muted-foreground">entries</p>
+                  </div>
+                  <div className="rounded-md border p-3">
+                    <p className="text-xs text-muted-foreground">Current list</p>
+                    <p className="text-2xl font-semibold" data-testid="text-preview-current">
+                      {entityPreview.currentCount.toLocaleString()}
+                    </p>
+                    <p className="text-xs text-muted-foreground">entries</p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 flex-wrap text-sm">
+                  <Badge variant="default" data-testid="badge-preview-added">
+                    +{entityPreview.added.toLocaleString()} added
+                  </Badge>
+                  <Badge variant="destructive" data-testid="badge-preview-removed">
+                    −{entityPreview.removed.toLocaleString()} removed
+                  </Badge>
+                  <Badge variant="secondary" data-testid="badge-preview-unchanged">
+                    {entityPreview.unchanged.toLocaleString()} unchanged
+                  </Badge>
+                </div>
+
+                <div>
+                  <p className="text-sm font-medium mb-2">By category</p>
+                  <div className="rounded-md border divide-y max-h-64 overflow-y-auto">
+                    <div className="flex items-center justify-between gap-2 px-3 py-1.5 text-xs text-muted-foreground">
+                      <span>Category</span>
+                      <span className="flex items-center gap-4">
+                        <span className="w-16 text-right">Current</span>
+                        <span className="w-16 text-right">New</span>
+                      </span>
+                    </div>
+                    {entityPreview.categories.map((c) => (
+                      <div
+                        key={c.category}
+                        className="flex items-center justify-between gap-2 px-3 py-1.5 text-sm"
+                        data-testid={`row-preview-category-${c.category}`}
+                      >
+                        <span>{c.label}</span>
+                        <span className="flex items-center gap-4 tabular-nums">
+                          <span className="w-16 text-right text-muted-foreground">
+                            {c.current.toLocaleString()}
+                          </span>
+                          <span className="w-16 text-right font-medium">
+                            {c.incoming.toLocaleString()}
+                          </span>
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <DialogFooter>
+              <Button
+                variant="outline"
+                onClick={handleCancelEntityImport}
+                disabled={isApplyingEntities}
+                data-testid="button-cancel-entity-import"
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={handleConfirmEntityImport}
+                disabled={isApplyingEntities}
+                data-testid="button-confirm-entity-import"
+              >
+                {isApplyingEntities ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Upload className="h-4 w-4" />
+                )}
+                Replace list
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
         <Card>
           <CardHeader>

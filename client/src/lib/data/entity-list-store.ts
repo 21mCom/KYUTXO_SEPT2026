@@ -155,6 +155,130 @@ export interface ImportEntitySnapshotResult {
   errors: EntitySnapshotError[];
 }
 
+/** Per-category breakdown comparing an incoming snapshot to the current list. */
+export interface EntityCategoryDiff {
+  category: EntityCategory;
+  label: string;
+  /** Entry count for this category in the incoming snapshot. */
+  incoming: number;
+  /** Entry count for this category in the currently active list. */
+  current: number;
+}
+
+/**
+ * A validated, not-yet-applied snapshot together with a comparison against the
+ * currently active list. Built after validation succeeds so the UI can show a
+ * confirmation before anything is replaced.
+ */
+export interface EntitySnapshotPreview {
+  /** Normalized, validated entries ready to be applied on confirmation. */
+  entries: EntityEntry[];
+  /** Total entries in the incoming snapshot (== entries.length when valid). */
+  incomingCount: number;
+  /** Entry count in the currently active list. */
+  currentCount: number;
+  /** Addresses present in the incoming snapshot but not in the current list. */
+  added: number;
+  /** Addresses present in the current list but not in the incoming snapshot. */
+  removed: number;
+  /** Addresses present in both lists. */
+  unchanged: number;
+  /** Per-category breakdown (only categories with at least one entry on either side). */
+  categories: EntityCategoryDiff[];
+}
+
+/**
+ * Build a preview comparing a set of validated incoming entries against the
+ * currently active list. Pure computation — applies nothing.
+ */
+export function buildEntitySnapshotPreview(entries: EntityEntry[]): EntitySnapshotPreview {
+  const current = getActiveEntityList();
+  const currentAddrs = new Set(current.map((e) => e.address));
+  const incomingAddrs = new Set(entries.map((e) => e.address));
+
+  let added = 0;
+  incomingAddrs.forEach((addr) => {
+    if (!currentAddrs.has(addr)) added += 1;
+  });
+  let removed = 0;
+  currentAddrs.forEach((addr) => {
+    if (!incomingAddrs.has(addr)) removed += 1;
+  });
+  const unchanged = incomingAddrs.size - added;
+
+  const incomingByCat = new Map<EntityCategory, number>();
+  for (const e of entries) {
+    incomingByCat.set(e.category, (incomingByCat.get(e.category) ?? 0) + 1);
+  }
+  const currentByCat = new Map<EntityCategory, number>();
+  for (const e of current) {
+    currentByCat.set(e.category, (currentByCat.get(e.category) ?? 0) + 1);
+  }
+
+  const categories: EntityCategoryDiff[] = (Object.keys(ENTITY_CATEGORY_LABELS) as EntityCategory[])
+    .map((category) => ({
+      category,
+      label: ENTITY_CATEGORY_LABELS[category],
+      incoming: incomingByCat.get(category) ?? 0,
+      current: currentByCat.get(category) ?? 0,
+    }))
+    .filter((c) => c.incoming > 0 || c.current > 0);
+
+  return {
+    entries,
+    incomingCount: entries.length,
+    currentCount: current.length,
+    added,
+    removed,
+    unchanged,
+    categories,
+  };
+}
+
+export interface PrepareEntitySnapshotResult {
+  valid: boolean;
+  total: number;
+  errors: EntitySnapshotError[];
+  /** Only present when `valid` is true. */
+  preview?: EntitySnapshotPreview;
+}
+
+/**
+ * Validate a parsed snapshot and, when valid, build a preview comparing it to
+ * the active list. Nothing is applied — call `applyEntitySnapshot` after the
+ * user confirms. Invalid snapshots are reported back without any change.
+ */
+export function prepareEntitySnapshot(raw: unknown): PrepareEntitySnapshotResult {
+  const result = validateEntitySnapshot(raw);
+  if (!result.valid) {
+    return { valid: false, total: result.total, errors: result.errors };
+  }
+  return {
+    valid: true,
+    total: result.total,
+    errors: [],
+    preview: buildEntitySnapshotPreview(result.entries),
+  };
+}
+
+/**
+ * Apply a set of validated entries to the active entity list and persist them
+ * to the settings record. Use after the user confirms a previewed snapshot.
+ */
+export async function applyEntitySnapshot(
+  entries: EntityEntry[],
+  sourceLabel?: string,
+): Promise<void> {
+  setActiveEntityList(entries);
+  await updateSettings('default', {
+    entityListSnapshot: {
+      importedAt: Date.now(),
+      sourceLabel,
+      entries,
+    },
+  });
+}
+
 /**
  * Validate a parsed snapshot and, when valid, apply it to the active entity
  * list and persist it to the settings record. Invalid snapshots are reported
@@ -169,14 +293,7 @@ export async function importEntitySnapshot(
     return { valid: false, count: 0, total: result.total, errors: result.errors };
   }
 
-  setActiveEntityList(result.entries);
-  await updateSettings('default', {
-    entityListSnapshot: {
-      importedAt: Date.now(),
-      sourceLabel,
-      entries: result.entries,
-    },
-  });
+  await applyEntitySnapshot(result.entries, sourceLabel);
 
   return { valid: true, count: result.entries.length, total: result.total, errors: [] };
 }
