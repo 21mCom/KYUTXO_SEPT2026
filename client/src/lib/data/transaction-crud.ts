@@ -398,6 +398,50 @@ export async function getUnresolvedSpendsByRecordId(): Promise<Map<number, numbe
   return byRecordId;
 }
 
+/**
+ * Distinct source transaction ids (prevTxids) behind unattributable spends whose
+ * prevout OUTPUT is not stored locally. These are exactly the transactions that,
+ * once fetched and imported, make the spend's source address known — turning an
+ * unattributable spend into an attributable one so balances can self-correct.
+ *
+ * Spends whose source output IS locally known but maps to no tracked record are
+ * deliberately excluded: importing more history cannot help them (the source
+ * address simply isn't one we track), so there is nothing to fetch.
+ */
+export async function getMissingSourceTxids(): Promise<string[]> {
+  const unresolvedInputs = await db.transactionParticipants
+    .where('role').equals('input')
+    .filter(p => (!p.address || p.address.trim() === '') && p.prevTxid !== undefined && p.prevVout !== undefined)
+    .toArray();
+  if (unresolvedInputs.length === 0) return [];
+
+  // Batch-load the local OUTPUT participants for every referenced prevTxid so we
+  // can tell which prevouts are already stored locally and which are missing.
+  const prevTxids = new Set<string>();
+  for (const inp of unresolvedInputs) {
+    if (inp.prevTxid) prevTxids.add(inp.prevTxid);
+  }
+  const prevTxidArr = Array.from(prevTxids);
+  const localOutputKeys = new Set<string>();
+  for (let i = 0; i < prevTxidArr.length; i += 500) {
+    const batch = prevTxidArr.slice(i, i + 500);
+    const outputs = await db.transactionParticipants
+      .where('txid').anyOf(batch)
+      .and(p => p.role === 'output')
+      .toArray();
+    for (const o of outputs) {
+      if (o.vout !== undefined) localOutputKeys.add(`${o.txid}:${o.vout}`);
+    }
+  }
+
+  const missing = new Set<string>();
+  for (const inp of unresolvedInputs) {
+    const key = `${inp.prevTxid}:${inp.prevVout}`;
+    if (inp.prevTxid && !localOutputKeys.has(key)) missing.add(inp.prevTxid);
+  }
+  return Array.from(missing);
+}
+
 // =============================================================================
 // FRESHNESS FINGERPRINTS — compared against the native engine mirror before a
 // read is served from the engine. All reads below are index-only (count + the

@@ -12,8 +12,11 @@ import {
 import { engineGetBalanceGroupSummaries, subscribeEngineReadiness } from "@/lib/engine/engine-client";
 import { evaluateEngineFreshness } from "@/lib/engine/engine-freshness";
 import { recomputeAddressStats } from "@/lib/data/address-stats";
-import { countUnresolvedPrevoutInputs, getUnresolvedSpendBreakdown } from "@/lib/data/transaction-crud";
+import { countUnresolvedPrevoutInputs, getUnresolvedSpendBreakdown, getMissingSourceTxids } from "@/lib/data/transaction-crud";
 import { transactionSyncService } from "@/lib/transaction-sync";
+import { runTxidBackfill } from "@/lib/txid-backfill";
+import { createProviderFromSettings } from "@/lib/blockchain-api";
+import { getNodeSettings } from "@/lib/data/node-settings-crud";
 import {
   type GroupBy,
   type AddressBalanceRow,
@@ -34,6 +37,7 @@ import {
   Copy,
   Check,
   AlertTriangle,
+  Download,
   X,
 } from "lucide-react";
 import { SiBitcoin } from "react-icons/si";
@@ -279,6 +283,11 @@ export default function BalanceOverview() {
   const [unresolvedPrevouts, setUnresolvedPrevouts] = useState<number | null>(null);
   const [spendWarningDismissed, setSpendWarningDismissed] = useState(false);
   const [fixingPrevouts, setFixingPrevouts] = useState(false);
+  // True while fetching + importing the missing source transactions behind
+  // unattributable spends (the "Import missing history" banner action).
+  const [importingHistory, setImportingHistory] = useState(false);
+  // Fetch progress for the import action: { processed, total } source txs.
+  const [importProgress, setImportProgress] = useState<{ processed: number; total: number } | null>(null);
   // Unresolved spends that map to no tracked source record (prevout not locally
   // known, or its output belongs to no tracked address). These overstate the
   // overall balance but no single wallet card can reflect them.
@@ -649,6 +658,110 @@ export default function BalanceOverview() {
     }
   }, []);
 
+  // Fetch + import the source transactions behind unattributable spends, then
+  // attribute those spends locally. "Resolve & Recompute" can only attribute a
+  // spend whose prevout output is already stored locally; when the source
+  // transaction was never imported there is nothing local to resolve against.
+  // This action closes that gap: it pulls the missing source transactions from
+  // the configured blockchain provider, writes them into the vault, and then
+  // runs a resolve pass so the now-local prevouts attribute and balances drop.
+  const handleImportMissingHistory = useCallback(async () => {
+    setImportingHistory(true);
+    setImportProgress(null);
+    try {
+      const txids = await getMissingSourceTxids();
+      if (txids.length === 0) {
+        toast({
+          title: "Nothing to import",
+          description:
+            "These spends' source addresses aren't tracked, so importing more history can't tie them to a wallet.",
+        });
+        return;
+      }
+
+      const nodeSettings = await getNodeSettings("default");
+      if (!nodeSettings) {
+        toast({
+          title: "No blockchain provider configured",
+          description:
+            "Configure a provider in Settings to fetch the missing source transactions.",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      let provider: ReturnType<typeof createProviderFromSettings>;
+      try {
+        provider = createProviderFromSettings(nodeSettings);
+        await provider.getBlockHeight();
+      } catch (connErr) {
+        console.warn("[BalanceOverview] Provider unreachable for history import:", connErr);
+        toast({
+          title: "Can't reach the blockchain provider",
+          description:
+            "Check your connection or provider settings in Settings, then try again.",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      setImportProgress({ processed: 0, total: txids.length });
+      const result = await runTxidBackfill(provider, txids, {
+        onProgress: (p) => {
+          if (p.phase === "fetching") {
+            setImportProgress({ processed: p.processed, total: p.orphansFound });
+          }
+        },
+      });
+
+      // Importing the source transactions made their outputs locally known. Now
+      // attribute the original spends that referenced them (their inputs are
+      // still blank) and recompute the affected source balances.
+      setImportProgress(null);
+      if (result.rebuilt > 0) {
+        await transactionSyncService.resolvePrevouts(undefined, { recomputeOrigin: "user" });
+      }
+
+      const remaining = await countUnresolvedPrevoutInputs();
+      setUnresolvedPrevouts(remaining);
+      const { byRecordId, unattributable } = await getUnresolvedSpendBreakdown();
+      setUnattributableSpends(unattributable);
+      setUnresolvedByRecordId(byRecordId);
+      if (remaining === 0) setSpendWarningDismissed(false);
+
+      if (result.rebuilt === 0) {
+        toast({
+          title: "No history imported",
+          description:
+            result.failed > 0
+              ? `Could not fetch ${result.failed.toLocaleString()} source transaction${result.failed !== 1 ? "s" : ""}. Please try again.`
+              : "The source transactions could not be found on this provider.",
+          variant: result.failed > 0 ? "destructive" : "default",
+        });
+      } else if (unattributable === 0) {
+        toast({
+          title: "History imported",
+          description: `Imported ${result.rebuilt.toLocaleString()} source transaction${result.rebuilt !== 1 ? "s" : ""}. All spends are now attributed and balances corrected.`,
+        });
+      } else {
+        toast({
+          title: "History imported",
+          description: `Imported ${result.rebuilt.toLocaleString()} source transaction${result.rebuilt !== 1 ? "s" : ""}. ${unattributable.toLocaleString()} spend${unattributable !== 1 ? "s" : ""} still can't be attributed (their source addresses aren't tracked).`,
+        });
+      }
+    } catch (err) {
+      console.warn("[BalanceOverview] Import missing history failed:", err);
+      toast({
+        title: "Import failed",
+        description: "Could not import the missing source transactions. Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setImportingHistory(false);
+      setImportProgress(null);
+    }
+  }, [toast]);
+
   const ensureGroupRows = useCallback(async (name: string) => {
     if (groupRowsRef.current.has(name) || loadingGroupsRef.current.has(name)) return;
     setLoadingGroups((prev) => {
@@ -818,16 +931,40 @@ export default function BalanceOverview() {
                 data-testid="text-unattributable-spends"
               >
                 {unattributableSpends.toLocaleString()} of these can't yet be tied to any tracked wallet
-                {unattributableSpends === unresolvedPrevouts ? " — resolving needs more transaction history first." : "."}
+                {unattributableSpends === unresolvedPrevouts ? " — import their source history to attribute them." : "."}
               </p>
             )}
           </div>
-          <div className="flex items-center gap-2 flex-none">
+          <div className="flex items-center gap-2 flex-none flex-wrap justify-end">
+            {unattributableSpends > 0 && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={handleImportMissingHistory}
+                disabled={importingHistory || fixingPrevouts}
+                data-testid="button-import-missing-history"
+                className="border-yellow-400 dark:border-yellow-600 text-yellow-800 dark:text-yellow-200"
+              >
+                {importingHistory ? (
+                  <>
+                    <Loader2 className="h-3 w-3 animate-spin mr-1.5" />
+                    {importProgress
+                      ? `Importing ${importProgress.processed.toLocaleString()}/${importProgress.total.toLocaleString()}…`
+                      : "Importing…"}
+                  </>
+                ) : (
+                  <>
+                    <Download className="h-3 w-3 mr-1.5" />
+                    Import missing history
+                  </>
+                )}
+              </Button>
+            )}
             <Button
               size="sm"
               variant="outline"
               onClick={handleFixPrevouts}
-              disabled={fixingPrevouts}
+              disabled={fixingPrevouts || importingHistory}
               data-testid="button-fix-prevouts"
               className="border-yellow-400 dark:border-yellow-600 text-yellow-800 dark:text-yellow-200"
             >
