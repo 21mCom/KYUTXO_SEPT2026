@@ -1726,6 +1726,73 @@ describe("resolveAllBlankInputAddresses", () => {
     const resolvedCount = inputs.filter((p) => p.address === PREV_ADDR).length;
     expect(resolvedCount).toBe(200);
   });
+
+  it("emits 'recomputing' progress for committed inputs after a cancel", async () => {
+    // Same partial-cancel setup as above, but here we assert the progress
+    // stream: after the abort, the post-cancel balance recompute must still
+    // report 'recomputing' progress so the UI can show "Updating balances...".
+    const hex = (n: number) => n.toString(16).padStart(64, "0");
+
+    await testDb.records.add(makeAddressRecord(PREV_ADDR));
+    await testDb.addressSyncState.add({ address: PREV_ADDR } as unknown as {
+      address: string;
+    });
+
+    const TOTAL = 250;
+    for (let i = 0; i < TOTAL; i++) {
+      const prevTxid = hex(i + 1);
+      await addBlankInput(hex(1000 + i), prevTxid, 0);
+      await addOutputRow(prevTxid, 0, PREV_ADDR, 1000 + i, "v0_p2wpkh");
+    }
+
+    await testDb.nodeSettings.add({ id: "default" } as unknown as NodeSettings);
+    nextProvider = makeProvider();
+
+    const controller = new AbortController();
+    let updates = 0;
+    const onUpdate = () => {
+      updates += 1;
+      if (updates === 200) controller.abort();
+      return undefined;
+    };
+    testDb.transactionParticipants.hook("updating", onUpdate);
+
+    const phases: string[] = [];
+    const recomputingEvents: Array<{ processed?: number; total?: number }> = [];
+    let result;
+    try {
+      result = await resolveAllBlankInputAddresses({
+        signal: controller.signal,
+        onProgress: (p) => {
+          phases.push(p.phase);
+          if (p.phase === "recomputing") {
+            recomputingEvents.push({
+              processed: p.recomputeProcessed,
+              total: p.recomputeTotal,
+            });
+          }
+        },
+      });
+    } finally {
+      testDb.transactionParticipants.hook("updating").unsubscribe(onUpdate);
+    }
+
+    // The pass reports cancellation and committed some inputs before stopping.
+    // (The exact committed count depends on write-batch boundaries, so we only
+    // require that real work landed — what matters here is the progress stream.)
+    expect(result.cancelled).toBe(true);
+    expect(result.resolved).toBeGreaterThan(0);
+
+    // The post-cancel recompute reported progress: at least one 'recomputing'
+    // event fired, carrying a known total so the UI can render "X of Y".
+    expect(phases).toContain("recomputing");
+    expect(recomputingEvents.length).toBeGreaterThan(0);
+    expect(recomputingEvents.every((e) => (e.total ?? 0) > 0)).toBe(true);
+
+    // The terminal 'complete' phase still fires after the recompute so the
+    // cancel toast path is reached.
+    expect(phases[phases.length - 1]).toBe("complete");
+  });
 });
 
 // ---- detectAndBackfill (offline / deferral) --------------------------------
