@@ -19,6 +19,7 @@ import {
   type PrivacySeverity,
   type EntityCitation,
 } from "@/lib/privacy-audit";
+import { mapFinding } from "@/lib/privacy-report-export";
 import { getRecordsPageByTypeIdReverseKeyset } from "@/lib/data/record-crud";
 
 // ─── Privacy Audit Report ────────────────────────────────────────────────────
@@ -259,31 +260,9 @@ function PrivacyAuditReportPanel() {
 
   const exportJson = useCallback(() => {
     if (!result) return;
-    // Surface per-entity source citations (name, category label, sourceNote)
-    // as a clean top-level field on ENTITY_* findings so the citation travels
-    // with the exported report. URLs in sourceNote remain plain text — no fetch.
-    const extractCitations = (f: PrivacyFinding): EntityCitation[] | undefined => {
-      if (!f.type.startsWith("ENTITY_")) return undefined;
-      const citations = (f.details as { citations?: EntityCitation[] }).citations;
-      if (!citations || citations.length === 0) return undefined;
-      return citations.map(c => ({
-        name: c.name,
-        address: c.address,
-        categoryLabel: c.categoryLabel,
-        sourceNote: c.sourceNote,
-      }));
-    };
-    const mapFinding = (f: PrivacyFinding) => ({
-      type: f.type,
-      label: FINDING_TYPE_LABELS[f.type] ?? f.type,
-      severity: f.severity,
-      description: f.description,
-      correction: f.correction,
-      txids: f.txids,
-      addresses: f.addresses,
-      details: f.details,
-      citations: extractCitations(f),
-    });
+    // Per-entity source citations are surfaced as a clean top-level field on
+    // ENTITY_* findings via mapFinding (see lib/privacy-report-export). URLs in
+    // sourceNote remain plain text — never fetched (offline-first).
     const report = {
       generatedAt: new Date().toISOString(),
       scope: { owner: selectedOwner === "all" ? null : selectedOwner, wallet: selectedWallet === "all" ? null : selectedWallet },
