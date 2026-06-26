@@ -26,6 +26,7 @@ import {
   List,
   GitBranch,
   RotateCw,
+  Download,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -52,6 +53,7 @@ import { useLiveQuery } from "dexie-react-hooks";
 import { beginBulkOperation, endBulkOperation, db } from "@/lib/database";
 import type { Record as DbRecord, PrivacyAuditHistoryEntry, TransactionParticipant } from "@/lib/database";
 import { addPrivacyAuditHistoryEntry, clearPrivacyAuditHistory } from "@/lib/data/privacy-history-crud";
+import { buildPrivacyHistoryCsv } from "@/lib/privacy-history-export";
 import { createTag } from "@/lib/data/vocabulary-crud";
 import { updateRecord, countRecordsByType, getRecordsPageByTypeIdReverseKeyset, getRecordsByInputStrings } from "@/lib/data/record-crud";
 import { getTransactionByTxid } from "@/lib/data/transaction-crud";
@@ -1251,6 +1253,33 @@ function PrivacyHistoryCard() {
     }
   }, [toast]);
 
+  const handleExportCsv = useCallback(() => {
+    const list = history ?? [];
+    if (list.length === 0) return;
+    try {
+      const csv = buildPrivacyHistoryCsv(list);
+      const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `privacy-history-${new Date().toISOString().slice(0, 10)}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      toast({
+        title: "History Exported",
+        description: `${list.length} audit run${list.length === 1 ? "" : "s"} exported to CSV.`,
+      });
+    } catch (e) {
+      toast({
+        variant: "destructive",
+        title: "Export Failed",
+        description: e instanceof Error ? e.message : "Could not export history.",
+      });
+    }
+  }, [history, toast]);
+
   if (!history || history.length === 0) return null;
 
   const latest = history[history.length - 1];
@@ -1288,14 +1317,25 @@ function PrivacyHistoryCard() {
             {" · keeps last 30 runs"}
           </CardDescription>
         </div>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={handleClear}
-          data-testid="button-clear-history"
-        >
-          Clear
-        </Button>
+        <div className="flex items-center gap-1 flex-wrap">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleExportCsv}
+            data-testid="button-export-history-csv"
+          >
+            <Download className="h-4 w-4" />
+            Export CSV
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={handleClear}
+            data-testid="button-clear-history"
+          >
+            Clear
+          </Button>
+        </div>
       </CardHeader>
       <CardContent className="space-y-4">
         {chartData.length > 1 ? (
