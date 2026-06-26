@@ -24,6 +24,7 @@ import {
   deleteCustomField,
   updateCustomField,
   updateCancelConfirmThreshold,
+  updatePrivacyHistoryLimit,
 } from "@/hooks/use-settings";
 import {
   Select,
@@ -186,7 +187,7 @@ function EntityDiffList({
 }
 
 export default function SettingsPage() {
-  const { settings, fieldVisibility, cancelConfirmThreshold, disableOrphanCheck, isLoading: settingsLoading } = useSettings();
+  const { settings, fieldVisibility, cancelConfirmThreshold, privacyHistoryLimit, disableOrphanCheck, isLoading: settingsLoading } = useSettings();
   const { customFields, isLoading: customFieldsLoading } = useCustomFields();
   const { toast } = useToast();
 
@@ -571,6 +572,7 @@ export default function SettingsPage() {
         },
         customFieldColumns: {},
         cancelConfirmThreshold: 75,
+        privacyHistoryLimit: 30,
       });
 
       setClearDialogOpen(false);
@@ -2400,6 +2402,54 @@ export default function SettingsPage() {
                   <SelectItem value="50" data-testid="option-threshold-50">50%</SelectItem>
                   <SelectItem value="75" data-testid="option-threshold-75">75% (default)</SelectItem>
                   <SelectItem value="90" data-testid="option-threshold-90">90%</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Shield className="h-5 w-5" />
+              Privacy Audit History
+            </CardTitle>
+            <CardDescription>
+              Control how many past Privacy Audit runs are kept for trend tracking
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="flex items-center justify-between gap-4 flex-wrap">
+              <div>
+                <Label className="text-base">Runs to keep</Label>
+                <p className="text-sm text-muted-foreground">
+                  Older runs beyond this limit are removed automatically (oldest first)
+                </p>
+              </div>
+              <Select
+                value={String(privacyHistoryLimit)}
+                onValueChange={async (val) => {
+                  try {
+                    await updatePrivacyHistoryLimit(Number(val));
+                  } catch {
+                    toast({
+                      title: "Error",
+                      description: "Failed to update retention limit",
+                      variant: "destructive",
+                    });
+                  }
+                }}
+                disabled={settingsLoading}
+              >
+                <SelectTrigger className="w-[160px]" data-testid="select-privacy-history-limit">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="10" data-testid="option-history-limit-10">10 runs</SelectItem>
+                  <SelectItem value="30" data-testid="option-history-limit-30">30 runs (default)</SelectItem>
+                  <SelectItem value="50" data-testid="option-history-limit-50">50 runs</SelectItem>
+                  <SelectItem value="100" data-testid="option-history-limit-100">100 runs</SelectItem>
+                  <SelectItem value="250" data-testid="option-history-limit-250">250 runs</SelectItem>
                 </SelectContent>
               </Select>
             </div>

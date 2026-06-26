@@ -369,6 +369,9 @@ export interface Settings {
   theme: 'light' | 'dark';
   defaultView: 'table' | 'grid';
   cancelConfirmThreshold: number;
+  // Number of Privacy Audit history snapshots to retain (oldest trimmed first).
+  // When unset, defaults to DEFAULT_PRIVACY_HISTORY_LIMIT (30).
+  privacyHistoryLimit?: number;
   // Persisted user preference for the Privacy Audit peel-chain view toggle.
   // Defaults to 'graph' for first-time users when unset.
   peelChainViewMode?: 'graph' | 'list';

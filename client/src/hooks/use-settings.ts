@@ -39,6 +39,7 @@ const defaultFieldVisibility = {
 };
 
 import { DEFAULT_CANCEL_CONFIRM_THRESHOLD } from '@/lib/buildProgress';
+import { DEFAULT_PRIVACY_HISTORY_LIMIT } from '@/lib/data/privacy-history-crud';
 
 export function useSettings() {
   const settings = useLiveQuery(() => getStoredSettings('default'));
@@ -49,6 +50,7 @@ export function useSettings() {
     customFieldColumns: settings?.customFieldColumns || {},
     fieldVisibility: settings?.fieldVisibility || defaultFieldVisibility,
     cancelConfirmThreshold: settings?.cancelConfirmThreshold ?? DEFAULT_CANCEL_CONFIRM_THRESHOLD,
+    privacyHistoryLimit: settings?.privacyHistoryLimit ?? DEFAULT_PRIVACY_HISTORY_LIMIT,
     peelChainViewMode: settings?.peelChainViewMode ?? 'graph',
     disableOrphanCheck: settings?.disableOrphanCheck ?? false,
     isLoading: settings === undefined,
@@ -118,6 +120,15 @@ export async function updateCancelConfirmThreshold(value: number) {
   if (settings) {
     await updateStoredSettings('default', {
       cancelConfirmThreshold: value,
+    });
+  }
+}
+
+export async function updatePrivacyHistoryLimit(value: number) {
+  const settings = await getStoredSettings('default');
+  if (settings) {
+    await updateStoredSettings('default', {
+      privacyHistoryLimit: value,
     });
   }
 }

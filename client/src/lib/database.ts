@@ -1056,6 +1056,7 @@ db.on('ready', async () => {
       theme: 'light',
       defaultView: 'table',
       cancelConfirmThreshold: 75,
+      privacyHistoryLimit: 30,
       disableOrphanCheck: false,
     });
   } else {
@@ -1121,6 +1122,10 @@ db.on('ready', async () => {
 
     if ((settings as any).cancelConfirmThreshold === undefined) {
       updates.cancelConfirmThreshold = 75;
+    }
+
+    if ((settings as any).privacyHistoryLimit === undefined) {
+      updates.privacyHistoryLimit = 30;
     }
     
     if (Object.keys(updates).length > 0) {

@@ -1,7 +1,9 @@
 import { db, notifyDbChange, type PrivacyAuditHistoryEntry } from '../database';
+import { getSettings } from './settings-crud';
 
-// Keep only the most recent N audit snapshots to avoid unbounded growth.
-export const PRIVACY_HISTORY_LIMIT = 30;
+// Default number of audit snapshots to keep. Users can override this via
+// Settings > Privacy Audit (settings.privacyHistoryLimit).
+export const DEFAULT_PRIVACY_HISTORY_LIMIT = 30;
 
 export type CreatePrivacyAuditHistoryEntry = Omit<PrivacyAuditHistoryEntry, 'id'>;
 
@@ -10,8 +12,21 @@ export interface PrivacyHistoryWriteOptions {
 }
 
 /**
+ * Resolve the configured retention limit, falling back to the default when no
+ * (or an invalid) value is stored.
+ */
+async function getPrivacyHistoryLimit(): Promise<number> {
+  const settings = await getSettings('default');
+  const limit = settings?.privacyHistoryLimit;
+  if (typeof limit === 'number' && Number.isFinite(limit) && limit > 0) {
+    return Math.floor(limit);
+  }
+  return DEFAULT_PRIVACY_HISTORY_LIMIT;
+}
+
+/**
  * Append a new audit snapshot and trim the table to the most recent
- * PRIVACY_HISTORY_LIMIT entries (oldest removed first).
+ * configured number of entries (oldest removed first).
  */
 export async function addPrivacyAuditHistoryEntry(
   entry: CreatePrivacyAuditHistoryEntry,
@@ -20,9 +35,10 @@ export async function addPrivacyAuditHistoryEntry(
   const id = await db.privacyAuditHistory.add(entry as PrivacyAuditHistoryEntry);
 
   // Trim oldest entries beyond the retention limit.
+  const retentionLimit = await getPrivacyHistoryLimit();
   const total = await db.privacyAuditHistory.count();
-  if (total > PRIVACY_HISTORY_LIMIT) {
-    const excess = total - PRIVACY_HISTORY_LIMIT;
+  if (total > retentionLimit) {
+    const excess = total - retentionLimit;
     const oldestIds = await db.privacyAuditHistory
       .orderBy('timestamp')
       .limit(excess)
