@@ -337,7 +337,7 @@ export function PrivacyAuditReportPanel() {
                                 focusFindingsByType(entry.findingType as PrivacyFinding["type"]);
                               }
                             } : undefined}
-                            className={`scroll-mt-4 ${hasFindings ? "cursor-pointer hover-elevate" : ""} ${isHighlighted ? "bg-muted" : ""}`}
+                            className={`scroll-mt-4 ${hasFindings ? "cursor-pointer hover-elevate focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset" : ""} ${isHighlighted ? "bg-muted" : ""}`}
                           >
                             <td className="p-2">
                               <span>{entry.label}</span>
@@ -387,7 +387,7 @@ export function PrivacyAuditReportPanel() {
                           focusWaterfallByType(f.type);
                         }
                       }}
-                      className={`p-3 flex flex-wrap gap-2 items-start scroll-mt-4 transition-colors cursor-pointer hover-elevate ${
+                      className={`p-3 flex flex-wrap gap-2 items-start scroll-mt-4 transition-colors cursor-pointer hover-elevate focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset ${
                         highlightedType === f.type ? "bg-muted" : ""
                       }`}
                       data-testid={`row-privacy-finding-${i}`}
