@@ -14,6 +14,7 @@ import {
   resetEntitySnapshot,
   loadEntitySnapshotFromStorage,
   getEntityListStatus,
+  serializeActiveEntityList,
 } from "./entity-list-store";
 import {
   getActiveEntityList,
@@ -236,6 +237,49 @@ describe("loadEntitySnapshotFromStorage", () => {
     const status = await loadEntitySnapshotFromStorage();
     expect(status.source).toBe("bundled");
     expect(status.activeCount).toBe(getBundledEntityCount());
+  });
+});
+
+describe("serializeActiveEntityList round-trip", () => {
+  it("re-imports the exported bundled template cleanly", () => {
+    const json = serializeActiveEntityList();
+    const parsed = JSON.parse(json);
+
+    const result = validateEntitySnapshot(parsed);
+    expect(result.valid).toBe(true);
+    expect(result.errors).toEqual([]);
+    expect(result.entries).toHaveLength(getBundledEntityCount());
+  });
+
+  it("round-trips a previously imported list back through validation and import", async () => {
+    // Replace the active list with a small custom snapshot.
+    const custom = [
+      entry({ address: ADDR_A }),
+      entry({ address: ADDR_B }),
+      entry({ address: ADDR_C, sourceNote: "public" }),
+    ];
+    const imported = await importEntitySnapshot(custom, "first.json");
+    expect(imported.valid).toBe(true);
+    expect(imported.count).toBe(3);
+
+    // Export the now-active list and parse it back.
+    const json = serializeActiveEntityList();
+    const parsed = JSON.parse(json);
+
+    const result = validateEntitySnapshot(parsed);
+    expect(result.valid).toBe(true);
+    expect(result.errors).toEqual([]);
+    expect(result.total).toBe(3);
+    expect(result.entries).toHaveLength(3);
+    expect(result.entries).toEqual(getActiveEntityList());
+
+    // The round-tripped snapshot imports without errors.
+    updateSettingsMock.mockClear();
+    const reimported = await importEntitySnapshot(parsed, "second.json");
+    expect(reimported.valid).toBe(true);
+    expect(reimported.count).toBe(3);
+    expect(reimported.errors).toEqual([]);
+    expect(getActiveEntityList()).toEqual(custom);
   });
 });
 
