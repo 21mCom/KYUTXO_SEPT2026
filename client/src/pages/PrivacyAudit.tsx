@@ -1190,7 +1190,7 @@ function PeelChainGraph({ steps, coinjoinTxids }: { steps: PeelStep[]; coinjoinT
   );
 }
 
-function PeelChainView({ txids, changeAddresses, coinjoinTxids }: { txids: string[]; changeAddresses: string[]; coinjoinTxids: Set<string> }) {
+export function PeelChainView({ txids, changeAddresses, coinjoinTxids }: { txids: string[]; changeAddresses: string[]; coinjoinTxids: Set<string> }) {
   const [loading, setLoading] = useState(true);
   const [steps, setSteps] = useState<PeelStep[]>([]);
   const { peelChainViewMode } = useSettings();
