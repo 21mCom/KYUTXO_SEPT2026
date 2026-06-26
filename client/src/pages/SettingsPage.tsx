@@ -528,15 +528,84 @@ function groupEntityErrors(errors: EntitySnapshotError[]): EntityErrorGroup[] {
  * responsive.
  */
 function EntityErrorList({ errors }: { errors: EntitySnapshotError[] }) {
-  const groups = useMemo(() => groupEntityErrors(errors), [errors]);
-  // With a single group there's nothing to triage between, so open it
-  // immediately rather than making the user click to see the only problem.
-  const singleGroup = groups.length === 1;
+  const allGroups = useMemo(() => groupEntityErrors(errors), [errors]);
+  const [kindFilter, setKindFilter] = useState<EntitySnapshotErrorKind | "all">("all");
+  const [query, setQuery] = useState("");
+
+  const trimmed = query.trim();
+  // A purely-numeric query is treated as "jump to entry #N" (1-based, matching
+  // the row labels); anything else is a free-text match on the error message.
+  const entryNumber = /^\d+$/.test(trimmed) ? parseInt(trimmed, 10) : null;
+  const lowerQuery = trimmed.toLowerCase();
+  const filterActive = trimmed.length > 0 || kindFilter !== "all";
+
+  const groups = useMemo(() => {
+    return allGroups
+      .filter((group) => kindFilter === "all" || group.kind === kindFilter)
+      .map((group) => {
+        if (!trimmed) return group;
+        const matched = group.errors.filter((err) =>
+          entryNumber !== null
+            ? err.index + 1 === entryNumber
+            : err.message.toLowerCase().includes(lowerQuery),
+        );
+        return { ...group, errors: matched };
+      })
+      .filter((group) => group.errors.length > 0);
+  }, [allGroups, kindFilter, trimmed, entryNumber, lowerQuery]);
+
+  const totalMatches = useMemo(
+    () => groups.reduce((sum, group) => sum + group.errors.length, 0),
+    [groups],
+  );
+  // When the user is actively filtering, open every matching group so the
+  // results are visible without extra clicks; otherwise only auto-open a lone
+  // group (nothing to triage between).
+  const autoOpen = filterActive || groups.length === 1;
 
   return (
     <div className="space-y-2" data-testid="list-entity-errors">
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="relative flex-1 min-w-[12rem]">
+          <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
+          <Input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Jump to entry # or filter by reason…"
+            className="pl-8"
+            data-testid="input-entity-error-filter"
+          />
+        </div>
+        <Select
+          value={kindFilter}
+          onValueChange={(value) => setKindFilter(value as EntitySnapshotErrorKind | "all")}
+        >
+          <SelectTrigger className="w-[12rem]" data-testid="select-entity-error-kind">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All problem types</SelectItem>
+            {allGroups.map((group) => (
+              <SelectItem key={group.kind} value={group.kind}>
+                {group.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+      {filterActive && (
+        <p className="text-sm text-muted-foreground" data-testid="text-entity-error-match-count">
+          {totalMatches === 0
+            ? "No matching entries."
+            : `${totalMatches.toLocaleString()} matching ${totalMatches === 1 ? "entry" : "entries"}.`}
+        </p>
+      )}
       {groups.map((group) => (
-        <EntityErrorGroupItem key={group.kind} group={group} defaultOpen={singleGroup} />
+        <EntityErrorGroupItem
+          key={group.kind}
+          group={group}
+          defaultOpen={autoOpen}
+        />
       ))}
     </div>
   );
@@ -552,6 +621,11 @@ function EntityErrorGroupItem({
 }) {
   const [open, setOpen] = useState(defaultOpen);
   const { toast } = useToast();
+  // Re-open when filtering forces groups open (defaultOpen flips to true) so
+  // matched results appear without the user re-expanding each group by hand.
+  useEffect(() => {
+    if (defaultOpen) setOpen(true);
+  }, [defaultOpen]);
   const count = group.errors.length;
 
   // Copy actions operate on the full `group.errors` array, not just the rows
