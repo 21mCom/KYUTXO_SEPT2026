@@ -11,6 +11,8 @@ export interface BlockchainProvider {
 
 export interface ApiTransaction {
   txid: string;
+  version?: number;
+  locktime?: number;
   status: {
     confirmed: boolean;
     block_height?: number;
@@ -22,6 +24,8 @@ export interface ApiTransaction {
   vin: Array<{
     txid: string;
     vout: number;
+    sequence?: number;
+    witness?: string[];
     prevout?: {
       scriptpubkey?: string;
       scriptpubkey_asm?: string;
@@ -64,6 +68,19 @@ export interface ParsedTransaction {
   }>;
   hasOpReturn: boolean;
   opReturnData: OpReturnOutput[];
+  /** Wallet fingerprinting fields — populated when the API provides version/locktime/sequence */
+  nVersion?: number;
+  nLockTime?: number;
+  hasRbf?: boolean;
+  isBip69Ordered?: boolean;
+  hasWitness?: boolean;
+  hasCoinbaseInput?: boolean;
+  /** Whether at least one input uses a low-R DER signature (Bitcoin Core style) */
+  hasLowRSig?: boolean;
+  /** True when SOME inputs have SegWit witness data and SOME do not (mixed) */
+  hasMixedWitness?: boolean;
+  /** True when at least one fingerprint field was successfully captured */
+  rawFingerprintCaptured: boolean;
 }
 
 export const DEFAULT_RATE_LIMIT_DELAY = 250;

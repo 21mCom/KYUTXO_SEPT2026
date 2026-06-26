@@ -209,6 +209,67 @@ export function parseTransaction(tx: ApiTransaction): ParsedTransaction | null {
   const feeRate = tx.weight > 0 ? Math.round((tx.fee / tx.weight) * 4) : 0;
   const vsize = tx.weight > 0 ? Math.ceil(tx.weight / 4) : tx.size || 0;
 
+  // ── Wallet fingerprinting extraction ─────────────────────────────────────
+  // Fields available from the esplora/mempool API when present in the raw tx.
+  const hasCoinbaseInput = tx.vin.some(v => !v.txid || /^0{64}$/.test(v.txid));
+  const nVersion: number | undefined = tx.version;
+  const nLockTime: number | undefined = tx.locktime;
+  // hasRbf = true when ALL inputs signal RBF (nSequence < 0xFFFFFFFE).
+  // Bitcoin Core sets nSequence = 0xFFFFFFFD on ALL inputs by default, so
+  // a tx where every input is < 0xFFFFFFFE is a Bitcoin Core fingerprint.
+  // A tx where ANY input has nSequence >= 0xFFFFFFFE does not fully signal RBF.
+  const hasRbf: boolean | undefined =
+    tx.vin.some(v => v.sequence !== undefined)
+      ? tx.vin.every(v => typeof v.sequence === 'number' && v.sequence < 0xFFFFFFFE)
+      : undefined;
+
+  // Witness detection and mixed-witness fingerprinting
+  const witnessAvailable = tx.vin.some(v => v.witness !== undefined);
+  const hasWitness: boolean | undefined = witnessAvailable
+    ? tx.vin.some(v => Array.isArray(v.witness) && v.witness.length > 0)
+    : undefined;
+  // Mixed witness: some inputs have witness data, some do not → wallet fingerprint
+  const hasMixedWitness: boolean | undefined = witnessAvailable
+    ? tx.vin.some(v => Array.isArray(v.witness) && v.witness.length > 0) &&
+      tx.vin.some(v => !Array.isArray(v.witness) || v.witness.length === 0)
+    : undefined;
+
+  // Low-R DER signature detection from witness data.
+  // Bitcoin Core and privacy wallets use low-R grinding: R first byte < 0x80
+  // (no DER 0x00 padding prefix needed). Detectable from SegWit witness[0].
+  function isLowRDERSig(sigHex: string): boolean {
+    if (!sigHex || sigHex.length < 8) return false;
+    const bytes: number[] = [];
+    for (let i = 0; i + 1 < sigHex.length; i += 2) {
+      bytes.push(parseInt(sigHex.slice(i, i + 2), 16));
+    }
+    if (bytes.length < 6 || bytes[0] !== 0x30 || bytes[2] !== 0x02) return false;
+    const rStart = 4;
+    if (rStart >= bytes.length) return false;
+    return bytes[rStart] < 0x80; // high bit clear → low-R (no leading 0x00 padding)
+  }
+  const hasLowRSig: boolean | undefined = witnessAvailable
+    ? tx.vin.some(v => Array.isArray(v.witness) && v.witness.some(w => isLowRDERSig(w)))
+    : undefined;
+
+  // BIP69: inputs sorted by txid+vout lex, outputs sorted by value then scriptpubkey
+  let isBip69Ordered: boolean | undefined;
+  if (tx.vin.every(v => v.txid !== undefined && v.vout !== undefined)) {
+    const inputsSorted = [...tx.vin].sort((a, b) => {
+      const cmp = a.txid.localeCompare(b.txid);
+      return cmp !== 0 ? cmp : a.vout - b.vout;
+    });
+    const inputsBip69 = tx.vin.every((v, i) => v.txid === inputsSorted[i].txid && v.vout === inputsSorted[i].vout);
+    const outputsSorted = [...tx.vout].sort((a, b) => {
+      if (a.value !== b.value) return a.value - b.value;
+      return (a.scriptpubkey ?? '').localeCompare(b.scriptpubkey ?? '');
+    });
+    const outputsBip69 = tx.vout.every((v, i) => v.n === outputsSorted[i].n);
+    isBip69Ordered = inputsBip69 && outputsBip69;
+  }
+
+  const rawFingerprintCaptured = nVersion !== undefined || nLockTime !== undefined;
+
   return {
     txid: tx.txid,
     blockHeight: tx.status.block_height,
@@ -222,6 +283,15 @@ export function parseTransaction(tx: ApiTransaction): ParsedTransaction | null {
     outputs,
     hasOpReturn: opReturnData.length > 0,
     opReturnData,
+    nVersion,
+    nLockTime,
+    hasRbf,
+    isBip69Ordered,
+    hasWitness,
+    hasCoinbaseInput,
+    hasLowRSig,
+    hasMixedWitness,
+    rawFingerprintCaptured,
   };
 }
 

@@ -1,10 +1,255 @@
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { FileText, GitBranch, Search, Shield } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { FileText, GitBranch, Search, Shield, Eye, Loader2, Download } from "lucide-react";
 import { SourceOfFundsReport } from "@/components/reports/SourceOfFundsReport";
 import { HopPointReport } from "@/components/reports/HopPointReport";
 import { ContinuityCertificateReport } from "@/components/reports/ContinuityCertificateReport";
+import { useOwners } from "@/hooks/use-owners";
+import { useWalletNames } from "@/hooks/use-wallet-names";
+import { useToast } from "@/hooks/use-toast";
+import {
+  runPrivacyAudit,
+  FINDING_TYPE_LABELS,
+  type PrivacyAuditResult,
+  type PrivacySeverity,
+} from "@/lib/privacy-audit";
+import { getRecordsPageByTypeIdReverseKeyset } from "@/lib/data/record-crud";
+
+// ─── Privacy Audit Report ────────────────────────────────────────────────────
+
+function severityLabel(s: PrivacySeverity): string {
+  return s.charAt(0) + s.slice(1).toLowerCase();
+}
+
+function severityBadgeClass(s: PrivacySeverity): string {
+  switch (s) {
+    case "CRITICAL": return "bg-red-600 text-white no-default-hover-elevate no-default-active-elevate";
+    case "HIGH":     return "bg-orange-500 text-white no-default-hover-elevate no-default-active-elevate";
+    case "MEDIUM":   return "bg-yellow-500 text-black no-default-hover-elevate no-default-active-elevate";
+    case "LOW":      return "bg-blue-500 text-white no-default-hover-elevate no-default-active-elevate";
+    default:         return "";
+  }
+}
+
+function gradeColor(grade: string): string {
+  if (grade.startsWith("A")) return "text-green-600 dark:text-green-400";
+  if (grade.startsWith("B")) return "text-blue-600 dark:text-blue-400";
+  if (grade.startsWith("C")) return "text-yellow-600 dark:text-yellow-400";
+  if (grade.startsWith("D")) return "text-orange-600 dark:text-orange-400";
+  return "text-red-600 dark:text-red-400";
+}
+
+function PrivacyAuditReportPanel() {
+  const { owners } = useOwners();
+  const { walletNames } = useWalletNames();
+  const { toast } = useToast();
+
+  const [selectedOwner, setSelectedOwner] = useState("all");
+  const [selectedWallet, setSelectedWallet] = useState("all");
+  const [running, setRunning] = useState(false);
+  const [result, setResult] = useState<PrivacyAuditResult | null>(null);
+
+  const generate = useCallback(async () => {
+    setRunning(true);
+    setResult(null);
+    try {
+      const allAddresses: string[] = [];
+      let beforeId: number | undefined;
+      while (true) {
+        const page = await getRecordsPageByTypeIdReverseKeyset("address", { limit: 500, beforeIdExclusive: beforeId });
+        if (page.length === 0) break;
+        for (const r of page) {
+          if (!r.inputString) continue;
+          if (selectedOwner !== "all" && r.owner !== selectedOwner) continue;
+          if (selectedWallet !== "all" && r.walletName !== selectedWallet) continue;
+          allAddresses.push(r.inputString);
+        }
+        if (page.length < 500) break;
+        beforeId = page[page.length - 1].id;
+      }
+
+      if (allAddresses.length === 0) {
+        toast({ title: "No Addresses", description: "No address records match the selected filters." });
+        setRunning(false);
+        return;
+      }
+
+      const audit = await runPrivacyAudit(allAddresses);
+      setResult(audit);
+    } catch (err) {
+      toast({ variant: "destructive", title: "Report Failed", description: err instanceof Error ? err.message : "Unknown error." });
+    } finally {
+      setRunning(false);
+    }
+  }, [selectedOwner, selectedWallet, toast]);
+
+  const exportJson = useCallback(() => {
+    if (!result) return;
+    const report = {
+      generatedAt: new Date().toISOString(),
+      scope: { owner: selectedOwner === "all" ? null : selectedOwner, wallet: selectedWallet === "all" ? null : selectedWallet },
+      summary: {
+        score: result.score,
+        grade: result.grade,
+        transactionsAnalyzed: result.transactionsAnalyzed,
+        addressesScanned: result.addressesScanned,
+        isClean: result.isClean,
+        fingerprintCoverage: result.fingerprintCoverage,
+        needsResync: result.needsResync,
+        findingsCount: result.findings.length,
+        warningsCount: result.warnings.length,
+      },
+      scoreWaterfall: result.scoreWaterfall,
+      findings: result.findings.map(f => ({
+        type: f.type,
+        label: FINDING_TYPE_LABELS[f.type] ?? f.type,
+        severity: f.severity,
+        description: f.description,
+        correction: f.correction,
+        txids: f.txids,
+        addresses: f.addresses,
+        details: f.details,
+      })),
+      warnings: result.warnings.map(f => ({
+        type: f.type,
+        label: FINDING_TYPE_LABELS[f.type] ?? f.type,
+        severity: f.severity,
+        description: f.description,
+        correction: f.correction,
+        txids: f.txids,
+        addresses: f.addresses,
+        details: f.details,
+      })),
+    };
+    const blob = new Blob([JSON.stringify(report, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `privacy-audit-report-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [result, selectedOwner, selectedWallet]);
+
+  const countBySeverity = (sev: PrivacySeverity) =>
+    [...(result?.findings ?? []), ...(result?.warnings ?? [])].filter(f => f.severity === sev).length;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap gap-3 items-end">
+        <div className="space-y-1 min-w-[160px]">
+          <label className="text-xs text-muted-foreground">Owner</label>
+          <Select value={selectedOwner} onValueChange={setSelectedOwner}>
+            <SelectTrigger data-testid="select-privacy-report-owner">
+              <SelectValue placeholder="All Owners" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Owners</SelectItem>
+              {owners.map(o => <SelectItem key={o.name} value={o.name}>{o.name}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="space-y-1 min-w-[160px]">
+          <label className="text-xs text-muted-foreground">Wallet</label>
+          <Select value={selectedWallet} onValueChange={setSelectedWallet}>
+            <SelectTrigger data-testid="select-privacy-report-wallet">
+              <SelectValue placeholder="All Wallets" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Wallets</SelectItem>
+              {walletNames.map(w => <SelectItem key={w.name} value={w.name}>{w.name}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </div>
+        <Button onClick={generate} disabled={running} data-testid="button-generate-privacy-report">
+          {running ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Analyzing…</> : <><Eye className="mr-2 h-4 w-4" />Generate Report</>}
+        </Button>
+        {result && (
+          <Button variant="outline" onClick={exportJson} data-testid="button-export-privacy-report">
+            <Download className="mr-2 h-4 w-4" />Export JSON
+          </Button>
+        )}
+      </div>
+
+      {result && (
+        <div className="space-y-4">
+          {/* Score summary */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3" data-testid="container-privacy-report-summary">
+            <div className="rounded-md border p-3 text-center">
+              <div className={`text-3xl font-bold ${gradeColor(result.grade)}`} data-testid="text-privacy-report-grade">{result.grade}</div>
+              <div className="text-xs text-muted-foreground mt-1">Privacy Grade</div>
+            </div>
+            <div className="rounded-md border p-3 text-center">
+              <div className="text-3xl font-bold" data-testid="text-privacy-report-score">{result.score}<span className="text-base text-muted-foreground">/100</span></div>
+              <div className="text-xs text-muted-foreground mt-1">Privacy Score</div>
+            </div>
+            <div className="rounded-md border p-3 text-center">
+              <div className="text-2xl font-bold" data-testid="text-privacy-report-txs">{result.transactionsAnalyzed.toLocaleString()}</div>
+              <div className="text-xs text-muted-foreground mt-1">Txs Analyzed</div>
+            </div>
+            <div className="rounded-md border p-3 text-center">
+              <div className="text-2xl font-bold" data-testid="text-privacy-report-addrs">{result.addressesScanned.toLocaleString()}</div>
+              <div className="text-xs text-muted-foreground mt-1">Addresses</div>
+            </div>
+          </div>
+
+          {/* Severity breakdown */}
+          <div className="flex flex-wrap gap-2 items-center">
+            <span className="text-sm text-muted-foreground">Issues:</span>
+            {(["CRITICAL", "HIGH", "MEDIUM", "LOW"] as PrivacySeverity[]).map(sev => {
+              const count = countBySeverity(sev);
+              if (count === 0) return null;
+              return <Badge key={sev} className={severityBadgeClass(sev)}>{count} {severityLabel(sev)}</Badge>;
+            })}
+            {result.isClean && <Badge className="bg-green-500 text-white no-default-hover-elevate no-default-active-elevate">Clean</Badge>}
+            {result.needsResync && (
+              <Badge variant="outline" className="text-amber-600 border-amber-500 no-default-hover-elevate no-default-active-elevate">
+                Fingerprint data {Math.round(result.fingerprintCoverage * 100)}% — re-sync recommended
+              </Badge>
+            )}
+          </div>
+
+          {/* Findings table */}
+          {(result.findings.length + result.warnings.length) > 0 ? (
+            <div className="space-y-2">
+              <h3 className="text-sm font-medium">Findings &amp; Warnings</h3>
+              <div className="rounded-md border divide-y divide-border text-sm" data-testid="container-privacy-report-findings">
+                {[...result.findings, ...result.warnings].map((f, i) => (
+                  <div key={i} className="p-3 flex flex-wrap gap-2 items-start" data-testid={`row-privacy-finding-${i}`}>
+                    <Badge className={`shrink-0 ${severityBadgeClass(f.severity)}`}>{severityLabel(f.severity)}</Badge>
+                    <div className="flex-1 min-w-0">
+                      <div className="font-medium">{FINDING_TYPE_LABELS[f.type] ?? f.type}</div>
+                      <div className="text-xs text-muted-foreground mt-0.5 line-clamp-2">{f.description}</div>
+                      {f.correction && (
+                        <div className="text-xs text-muted-foreground mt-0.5 italic">Fix: {f.correction}</div>
+                      )}
+                      <div className="text-xs text-muted-foreground mt-0.5">
+                        {f.addresses.length > 0 && <span>{f.addresses.length} address(es)</span>}
+                        {f.txids.length > 0 && <span className="ml-2">{f.txids.length} tx(s)</span>}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground" data-testid="text-privacy-report-clean">No privacy findings — your transaction history is clean.</p>
+          )}
+
+          <p className="text-xs text-muted-foreground">
+            Report generated {new Date().toLocaleString()}. All analysis runs fully offline.
+            Use "Export JSON" to save a machine-readable copy for record-keeping or compliance purposes.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Reports page ─────────────────────────────────────────────────────────────
 
 export default function Reports() {
   const [activeTab, setActiveTab] = useState("source-of-funds");
@@ -20,7 +265,7 @@ export default function Reports() {
         </div>
 
         <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
-          <TabsList className="grid w-full grid-cols-3 max-w-xl">
+          <TabsList className="grid w-full grid-cols-4 max-w-2xl">
             <TabsTrigger value="source-of-funds" className="flex items-center gap-2" data-testid="tab-source-of-funds">
               <FileText className="h-4 w-4" />
               Source of Funds
@@ -32,6 +277,10 @@ export default function Reports() {
             <TabsTrigger value="continuity" className="flex items-center gap-2" data-testid="tab-continuity">
               <Shield className="h-4 w-4" />
               Continuity
+            </TabsTrigger>
+            <TabsTrigger value="privacy" className="flex items-center gap-2" data-testid="tab-privacy-report">
+              <Eye className="h-4 w-4" />
+              Privacy
             </TabsTrigger>
           </TabsList>
 
@@ -82,6 +331,24 @@ export default function Reports() {
               </CardHeader>
               <CardContent>
                 <ContinuityCertificateReport />
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="privacy" className="space-y-4">
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Eye className="h-5 w-5" />
+                  Privacy Audit Report
+                </CardTitle>
+                <CardDescription>
+                  Generate a privacy score and detailed findings report from on-chain heuristics, entity detection, wallet fingerprinting, and Boltzmann linkability analysis.
+                  All analysis runs fully offline. Export findings as JSON for record-keeping or compliance purposes.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <PrivacyAuditReportPanel />
               </CardContent>
             </Card>
           </TabsContent>

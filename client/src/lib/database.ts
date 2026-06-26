@@ -64,6 +64,16 @@ export class KYUTXODatabase extends Dexie {
   constructor() {
     super('KYUTXODatabase');
 
+    // v33: wallet-fingerprinting fields on blockchainTransactions (nVersion,
+    // nLockTime, hasRbf, isBip69Ordered, hasLowRSig, hasWitness,
+    // rawFingerprintCaptured). Delta declaration — only the changed table
+    // needs redeclaration; all others inherit unchanged from v32.
+    // Existing rows without these fields will have rawFingerprintCaptured=undefined
+    // (falsy), which the fingerprinting heuristics treat as "re-sync needed".
+    this.version(33).stores({
+      blockchainTransactions: '++id, &txid, blockHeight, blockTime, syncedAt, hasOpReturn, rawFingerprintCaptured',
+    });
+
     // v32: add the recoverable attachment "trash" table. Deleting a record or
     // attachment no longer unlinks the file — it archives metadata here while the
     // file stays on disk. Delta declaration: all other tables inherit from v31.

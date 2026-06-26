@@ -423,6 +423,30 @@ export interface BlockchainTransaction {
   // OP_RETURN data
   hasOpReturn?: boolean;  // Flag if transaction has OP_RETURN outputs
   opReturnData?: OpReturnOutput[]; // OP_RETURN output details
+  // === Wallet-fingerprinting fields (Phase C) ===
+  // These fields are only populated for transactions synced AFTER the
+  // fingerprinting feature was added. Check rawFingerprintCaptured before
+  // using any field below — if false/undefined, show "re-sync needed" rather
+  // than incorrect results.
+  //
+  // Whether raw fingerprint fields were captured during sync
+  rawFingerprintCaptured?: boolean;
+  // Bitcoin transaction version (1 or 2; 2 is required for BIP68)
+  nVersion?: number;
+  // nLockTime value; 0 = no lock; <500000000 = block height; else unix time
+  nLockTime?: number;
+  // Whether ALL inputs signal RBF (nSequence < 0xFFFFFFFE)
+  hasRbf?: boolean;
+  // Whether inputs and outputs follow BIP69 lexicographic ordering
+  isBip69Ordered?: boolean;
+  // Whether at least one input uses a low-R DER signature (Bitcoin Core style grinding)
+  hasLowRSig?: boolean;
+  // Whether the transaction has any segwit inputs (witness data present)
+  hasWitness?: boolean;
+  // Whether the tx mixes segwit and non-segwit inputs (partial witness = wallet fingerprint)
+  hasMixedWitness?: boolean;
+  // Whether any input in this transaction is a coinbase (block reward)
+  hasCoinbaseInput?: boolean;
 }
 
 // Transaction participant (input or output)
