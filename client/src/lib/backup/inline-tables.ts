@@ -71,59 +71,144 @@ export async function restoreNodeSettingsRows(rows: any[]): Promise<void> {
   }
 }
 
+// Single source of truth for the PORTABLE preferences allow-list. The `settings`
+// table as a whole is intentionally NEITHER cleared NOR wholesale restored (see
+// `clearInlineTables`) so device-local preferences (theme, column layout, etc.)
+// survive a restore. The fields below, however, should follow the user across
+// devices/backups, so they are merged into the existing `default` settings row
+// on restore.
+//
+// Each descriptor knows how to (a) validate+extract its value from a backup's
+// settings row (returning `undefined` when the backup has no usable value, so
+// the field is left untouched) and (b) format that value for the human-readable
+// pre-restore preview. Both `restoreSettingsPreferences` (which applies the
+// changes) and `previewSettingsPreferences` (which describes them to the user)
+// are driven by this one list, so the two can never drift apart.
+interface PortablePreferenceDescriptor {
+  key: string;
+  label: string;
+  // Returns the validated value to merge, or `undefined` to leave the current
+  // (device-local) value untouched.
+  extract: (source: any) => unknown | undefined;
+  // Human-readable rendering of an extracted value for the preview UI.
+  format: (value: unknown) => string;
+}
+
+const PORTABLE_PREFERENCES: PortablePreferenceDescriptor[] = [
+  {
+    key: "disableOrphanCheck",
+    label: "Missing transaction reminder",
+    extract: (s) =>
+      typeof s.disableOrphanCheck === "boolean" ? s.disableOrphanCheck : undefined,
+    // disableOrphanCheck=true means the reminder is OFF.
+    format: (v) => (v ? "Off" : "On"),
+  },
+  {
+    key: "cancelConfirmThreshold",
+    label: "Lineage cancel-confirmation threshold",
+    // Numeric prefs: only carry finite numbers so an older/malformed backup
+    // (missing field, NaN, etc.) leaves the current value untouched.
+    extract: (s) =>
+      typeof s.cancelConfirmThreshold === "number" && Number.isFinite(s.cancelConfirmThreshold)
+        ? s.cancelConfirmThreshold
+        : undefined,
+    format: (v) => (v === 0 ? "Always confirm" : `${v}%`),
+  },
+  {
+    key: "privacyHistoryLimit",
+    label: "Privacy Audit history limit",
+    extract: (s) =>
+      typeof s.privacyHistoryLimit === "number" && Number.isFinite(s.privacyHistoryLimit)
+        ? s.privacyHistoryLimit
+        : undefined,
+    format: (v) => `${v} runs`,
+  },
+  {
+    key: "entityListSnapshot",
+    label: "Custom Privacy Audit entity list",
+    // The entity-list snapshot is user data (not a device-local preference), so
+    // it must follow the user across devices/backups. Only carry it when the
+    // backup has a well-formed snapshot with at least one entry; anything else
+    // leaves the current value untouched (so older backups that predate the
+    // feature, or backups taken after a "revert to bundled", do not clobber a
+    // snapshot already present on this device).
+    extract: (s) => {
+      const snap = s.entityListSnapshot;
+      return snap &&
+        typeof snap === "object" &&
+        Array.isArray(snap.entries) &&
+        snap.entries.length > 0
+        ? snap
+        : undefined;
+    },
+    format: (v) => {
+      const n = (v as { entries: unknown[] }).entries.length;
+      return `${n} ${n === 1 ? "entry" : "entries"}`;
+    },
+  },
+];
+
+// Picks the settings row a restore would merge from: the `default` row if
+// present, otherwise the first row. Returns null when there is nothing usable.
+function pickSettingsSource(rows: any[]): any | null {
+  if (!Array.isArray(rows) || rows.length === 0) return null;
+  const source = rows.find((r) => r && r.id === "default") ?? rows[0];
+  if (!source || typeof source !== "object") return null;
+  return source;
+}
+
+// A per-field description of what a restore WOULD do to one portable
+// preference: whether the backup carries a usable value (and the formatted
+// value), or whether the current device value is left untouched.
+export interface PortablePreferencePreview {
+  key: string;
+  label: string;
+  fromBackup: boolean;
+  backupValue: string | null;
+}
+
+/**
+ * Describe — without changing anything — which portable preferences a backup's
+ * `settings` rows would carry over on restore. Every allow-listed preference is
+ * returned (so the UI can also show the ones left as device-local), each marked
+ * `fromBackup: true` with a formatted `backupValue` when the backup has a usable
+ * value, or `fromBackup: false` when the current device value would be kept.
+ */
+export function previewSettingsPreferences(rows: any[]): PortablePreferencePreview[] {
+  const source = pickSettingsSource(rows);
+  return PORTABLE_PREFERENCES.map((d) => {
+    const value = source ? d.extract(source) : undefined;
+    const fromBackup = value !== undefined;
+    return {
+      key: d.key,
+      label: d.label,
+      fromBackup,
+      backupValue: fromBackup ? d.format(value) : null,
+    };
+  });
+}
+
 /**
  * Restore the round-trippable preferences from the backup's `settings` rows.
  *
  * The `settings` table as a whole is intentionally NEITHER cleared NOR wholesale
  * restored (see `clearInlineTables`) so device-local preferences (theme, column
- * layout, etc.) survive a restore. A small allow-list of *portable* preferences,
- * however, should follow the user across devices/backups. We merge those into
- * the existing `default` settings row instead of replacing it.
+ * layout, etc.) survive a restore. A small allow-list of *portable* preferences
+ * (see `PORTABLE_PREFERENCES`) is merged into the existing `default` settings
+ * row instead of replacing it.
  *
- * A field that is absent from the backup is left untouched, so restoring an
- * older backup that predates a preference keeps that preference at its current
- * (default) value.
- *
- * The allow-list currently carries:
- *   - `disableOrphanCheck` (boolean preference),
- *   - `cancelConfirmThreshold` (lineage build cancel-confirmation threshold, a
- *     finite number),
- *   - `privacyHistoryLimit` (Privacy Audit history retention count, a finite
- *     number), and
- *   - `entityListSnapshot` (the user's custom Privacy Audit entity list, only
- *     when it is a well-formed, non-empty snapshot).
+ * A field that is absent from (or malformed in) the backup is left untouched, so
+ * restoring an older backup that predates a preference keeps that preference at
+ * its current (default) value.
  */
 export async function restoreSettingsPreferences(rows: any[]): Promise<void> {
-  if (!Array.isArray(rows) || rows.length === 0) return;
-  const source = rows.find((r) => r && r.id === "default") ?? rows[0];
-  if (!source || typeof source !== "object") return;
+  const source = pickSettingsSource(rows);
+  if (!source) return;
 
   const updates: Record<string, unknown> = {};
-  if (typeof source.disableOrphanCheck === "boolean") {
-    updates.disableOrphanCheck = source.disableOrphanCheck;
-  }
-  // Numeric user preferences: only carry finite numbers so an older/malformed
-  // backup (missing field, NaN, etc.) leaves the current value untouched.
-  if (typeof source.cancelConfirmThreshold === "number" && Number.isFinite(source.cancelConfirmThreshold)) {
-    updates.cancelConfirmThreshold = source.cancelConfirmThreshold;
-  }
-  if (typeof source.privacyHistoryLimit === "number" && Number.isFinite(source.privacyHistoryLimit)) {
-    updates.privacyHistoryLimit = source.privacyHistoryLimit;
-  }
-  // The Privacy Audit entity-list snapshot is user data (not a device-local
-  // preference), so it must follow the user across devices/backups. Only carry
-  // it when the backup has a well-formed snapshot with at least one entry;
-  // anything else leaves the current value untouched (so older backups that
-  // predate the feature, or backups taken after a "revert to bundled", do not
-  // clobber a snapshot already present on this device).
-  const snap = source.entityListSnapshot;
-  if (
-    snap &&
-    typeof snap === "object" &&
-    Array.isArray(snap.entries) &&
-    snap.entries.length > 0
-  ) {
-    updates.entityListSnapshot = snap;
+  for (const d of PORTABLE_PREFERENCES) {
+    const value = d.extract(source);
+    if (value !== undefined) updates[d.key] = value;
   }
   if (Object.keys(updates).length === 0) return;
 

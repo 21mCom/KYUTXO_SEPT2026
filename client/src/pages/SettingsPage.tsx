@@ -64,7 +64,12 @@ import { clearCustomFields } from "@/lib/data/custom-fields-crud";
 import { clearAddressSyncState } from "@/lib/data/address-sync-crud";
 import { clearPriceData, addPriceData } from "@/lib/data/price-data-crud";
 import { clearNodeSettings, getNodeSettings } from "@/lib/data/node-settings-crud";
-import { restoreNodeSettingsRows, restoreSettingsPreferences } from "@/lib/backup/inline-tables";
+import {
+  restoreNodeSettingsRows,
+  restoreSettingsPreferences,
+  previewSettingsPreferences,
+  type PortablePreferencePreview,
+} from "@/lib/backup/inline-tables";
 import {
   restoreLegacyRecords,
   restoreLegacyAttachments,
@@ -107,7 +112,7 @@ import JSZip from "jszip";
 import { peekManifest, restoreV3Backup, RestoreInterruptedError, type AttachmentFileWriter } from "@/lib/backup/restore";
 import { BackupCancelledError } from "@/lib/backup/sink";
 import { blobChunks } from "@/lib/backup/zip-stream";
-import { isV3Manifest } from "@/lib/backup/format";
+import { isV3Manifest, parseInline } from "@/lib/backup/format";
 import VocabularyManager from "@/components/VocabularyManager";
 import StripMarkersPanel from "@/components/StripMarkersPanel";
 import MigrationAuditPanel from "@/components/MigrationAuditPanel";
@@ -620,6 +625,12 @@ export default function SettingsPage() {
   // can no longer keep the existing vault, so we warn before allowing it.
   const [restoreCancellable, setRestoreCancellable] = useState(false);
   const [showCancelRestoreConfirm, setShowCancelRestoreConfirm] = useState(false);
+  // Two-stage restore for v3 backups: "configure" (pick file/password/mode) then
+  // "confirm" (review which portable preferences the backup will carry over,
+  // before the destructive restore runs). `prefPreview` is computed without
+  // touching the vault.
+  const [restoreStage, setRestoreStage] = useState<"configure" | "confirm">("configure");
+  const [prefPreview, setPrefPreview] = useState<PortablePreferencePreview[] | null>(null);
   const restoreAbortRef = useRef<AbortController | null>(null);
   const restoreClearedRef = useRef(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -1648,6 +1659,8 @@ export default function SettingsPage() {
 
     setRestoreFile(file);
     setBackupInfo(null);
+    setRestoreStage("configure");
+    setPrefPreview(null);
 
     try {
       // v3 streaming backups: read ONLY the manifest (first ZIP entry) via the
@@ -1688,6 +1701,71 @@ export default function SettingsPage() {
         description: "Could not read the backup file. Make sure it's a valid KYUTXO backup.",
       });
       setRestoreFile(null);
+    }
+  };
+
+  // First stage of restoring a v3 backup: read (without touching the vault)
+  // which portable preferences the backup will carry over, then move to the
+  // confirmation stage so the user can review them BEFORE the destructive
+  // restore runs. Legacy (pre-v3) backups have no preview step and restore
+  // directly. Nothing here clears or writes any data.
+  const handlePrepareRestore = async () => {
+    if (!restoreFile) {
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: "Please select a backup file.",
+      });
+      return;
+    }
+
+    try {
+      const manifestPeek = await peekManifest(blobChunks(restoreFile));
+      if (isV3Manifest(manifestPeek)) {
+        let key: CryptoKey | null = null;
+        if (manifestPeek.encrypted) {
+          if (!restorePassword) {
+            toast({
+              variant: "destructive",
+              title: "Password required",
+              description: "Enter the password used to encrypt this backup.",
+            });
+            return;
+          }
+          const salt = base64ToBuffer(manifestPeek.salt ?? "");
+          key = await deriveKey(restorePassword, salt);
+        }
+
+        let inline: Record<string, unknown>;
+        try {
+          inline = await parseInline(manifestPeek, key);
+        } catch {
+          // A wrong password (or corrupted inline data) fails here, BEFORE any
+          // destructive work — surface it and stay on the configure stage.
+          toast({
+            variant: "destructive",
+            title: "Could not read backup",
+            description: "The password may be incorrect, or the backup is corrupted.",
+          });
+          return;
+        }
+
+        const settingsRows = Array.isArray(inline.settings) ? (inline.settings as any[]) : [];
+        setPrefPreview(previewSettingsPreferences(settingsRows));
+        setRestoreStage("confirm");
+        return;
+      }
+
+      // Legacy backups: no portable-preferences preview; restore directly.
+      setPrefPreview(null);
+      await handleRestore();
+    } catch (error) {
+      console.error("Failed to prepare restore:", error);
+      toast({
+        variant: "destructive",
+        title: "Invalid Backup",
+        description: "Could not read the backup file. Make sure it's a valid KYUTXO backup.",
+      });
     }
   };
 
@@ -1831,6 +1909,8 @@ export default function SettingsPage() {
           setRestoreProgress(0);
           setRestoreMessage("");
           setBackupInfo(null);
+          setRestoreStage("configure");
+          setPrefPreview(null);
           window.location.reload();
         }, 1500);
         return;
@@ -3894,6 +3974,8 @@ export default function SettingsPage() {
           setRestoreProgress(0);
           setRestoreMessage("");
           setBackupInfo(null);
+          setRestoreStage("configure");
+          setPrefPreview(null);
         }
       }}>
         <DialogContent className="sm:max-w-lg">
@@ -3904,6 +3986,8 @@ export default function SettingsPage() {
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-4 py-4">
+            {restoreStage === "configure" && (
+            <>
             <div className="space-y-2">
               <Label>Select backup file</Label>
               <input
@@ -4011,6 +4095,48 @@ export default function SettingsPage() {
                 </div>
               </RadioGroup>
             </div>
+            </>
+            )}
+
+            {restoreStage === "confirm" && (
+              <div className="space-y-3" data-testid="restore-preferences-preview">
+                <div>
+                  <Label>Preferences this backup will restore</Label>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    These portable preferences travel with your backup. Anything
+                    marked "Kept (this device)" is left exactly as it is now.
+                    Other device-only settings — theme, column layout, node
+                    connection — are never touched by a restore.
+                  </p>
+                </div>
+                <div className="rounded-lg border bg-muted/40 divide-y">
+                  {(prefPreview ?? []).map((p) => (
+                    <div
+                      key={p.key}
+                      className="flex items-center justify-between gap-3 px-3 py-2 text-sm"
+                      data-testid={`pref-preview-${p.key}`}
+                    >
+                      <span className="font-medium">{p.label}</span>
+                      {p.fromBackup ? (
+                        <Badge variant="default" data-testid={`pref-status-${p.key}`}>
+                          From backup: {p.backupValue}
+                        </Badge>
+                      ) : (
+                        <Badge variant="secondary" data-testid={`pref-status-${p.key}`}>
+                          Kept (this device)
+                        </Badge>
+                      )}
+                    </div>
+                  ))}
+                </div>
+                {!isRestoring && prefPreview && !prefPreview.some((p) => p.fromBackup) && (
+                  <p className="text-xs text-muted-foreground" data-testid="text-no-prefs-carried">
+                    This backup doesn't change any of your portable preferences —
+                    they'll all stay as they are on this device.
+                  </p>
+                )}
+              </div>
+            )}
 
             {isRestoring && (
               <div className="space-y-2" data-testid="restore-progress">
@@ -4039,6 +4165,24 @@ export default function SettingsPage() {
               >
                 {restoreCancellable ? "Cancel Restore" : "Restoring..."}
               </Button>
+            ) : restoreStage === "confirm" ? (
+              <>
+                <Button
+                  variant="outline"
+                  onClick={() => setRestoreStage("configure")}
+                  data-testid="button-back-restore"
+                >
+                  Back
+                </Button>
+                <Button
+                  onClick={handleRestore}
+                  disabled={!restoreFile || (backupInfo?.encrypted && !restorePassword)}
+                  data-testid="button-confirm-restore"
+                >
+                  <Upload className="h-4 w-4 mr-2" />
+                  Restore Now
+                </Button>
+              </>
             ) : (
               <>
                 <Button variant="outline" onClick={() => {
@@ -4048,16 +4192,17 @@ export default function SettingsPage() {
                   setRestoreProgress(0);
                   setRestoreMessage("");
                   setBackupInfo(null);
+                  setRestoreStage("configure");
+                  setPrefPreview(null);
                 }}>
                   Cancel
                 </Button>
                 <Button
-                  onClick={handleRestore}
+                  onClick={handlePrepareRestore}
                   disabled={!restoreFile || (backupInfo?.encrypted && !restorePassword)}
-                  data-testid="button-confirm-restore"
+                  data-testid="button-continue-restore"
                 >
-                  <Upload className="h-4 w-4 mr-2" />
-                  Restore Backup
+                  Continue
                 </Button>
               </>
             )}

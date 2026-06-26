@@ -22,3 +22,4 @@
 - [Inline restore FK remap](inline-restore-fk-remap.md) — id-referencing inline tables (evidence→evidenceAttachments) get fresh ids on restore (clear() ≠ reset key gen); remap or links orphan; addX must honor restored createdAt.
 - [Settings restore allow-list](settings-restore-allowlist.md) — settings table is never wholesale restored (device-local survives); portable prefs round-trip only via restoreSettingsPreferences allow-list, type-checked so older backups keep defaults.
 - [Stale-report scratch store](stale-report-scratch-store.md) — stream unbounded scan results to a SEPARATE Dexie DB (++seq), read windows on demand; awaitable batch cb for backpressure; dodges CRUD-guards + memory cap.
+- [Portable-pref preview/restore parity](portable-pref-preview.md) — preview + restore of backup portable prefs must share one descriptor list; preview before vault clear so wrong-password fails non-destructively.
