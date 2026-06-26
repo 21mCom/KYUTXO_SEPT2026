@@ -364,6 +364,61 @@ describe("detectStaleCachedBalances", () => {
     expect(result.sampled).toBe(0);
     expect(result.staleCount).toBe(0);
   });
+
+  it("returns cancelled with a partial sampled count when aborted between sampling batches", async () => {
+    // Seed 250 synced, all-stale addresses so the scan spans more than one
+    // 200-record sampling batch. The internal loop reads 200 records, reports
+    // progress via onProgress(sampled), then re-checks the abort signal at the
+    // top of the next iteration. We abort the first time progress is reported
+    // (after the first batch), so the second batch is never sampled.
+    const COUNT = 250;
+    const records: DbRecord[] = [];
+    const participants: TransactionParticipant[] = [];
+    const txs: BlockchainTransaction[] = [];
+    for (let i = 1; i <= COUNT; i++) {
+      // Zero-pad so the id-ordered scan and the address strings line up.
+      const addr = `batch-addr-${String(i).padStart(4, "0")}`;
+      const txid = `batch-tx-${i}`;
+      records.push(
+        mkAddr({
+          id: i,
+          inputString: addr,
+          statsComputedAt: 5000,
+          // Cached 0 but computed 1000 → every address is stale.
+          cachedBalanceSats: 0,
+        }),
+      );
+      participants.push(mkOutput(addr, txid, 1000));
+      txs.push(mkTx(txid, 100 + i));
+    }
+    await testDb.records.bulkAdd(records);
+    await testDb.transactionParticipants.bulkAdd(participants);
+    await testDb.blockchainTransactions.bulkAdd(txs);
+
+    const controller = new AbortController();
+    const sampledReports: number[] = [];
+    // Abort the moment the first batch reports its progress. The scan checks
+    // isAborted() at the top of the next while-loop iteration and bails out.
+    const onProgress = vi.fn((sampled: number) => {
+      sampledReports.push(sampled);
+      if (!controller.signal.aborted) controller.abort();
+    });
+
+    const result = await detectStaleCachedBalances({
+      signal: controller.signal,
+      onProgress,
+    });
+
+    // Aborted between batches → cancelled, with only the first 200-record
+    // batch examined (not all 250 records).
+    expect(result.cancelled).toBe(true);
+    expect(result.sampled).toBe(200);
+    // staleCount reflects only the addresses examined before the abort. Every
+    // one of those 200 was stale, so the count matches the sampled count.
+    expect(result.staleCount).toBe(200);
+    // Only the first batch ever reported progress; the second never ran.
+    expect(sampledReports).toEqual([200]);
+  });
 });
 
 describe("recomputeAddressStats then re-check", () => {
