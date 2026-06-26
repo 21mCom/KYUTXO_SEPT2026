@@ -79,6 +79,7 @@ import {
   serializeActiveEntityList,
   type EntitySnapshotError,
   type EntitySnapshotPreview,
+  type EntityListMode,
 } from "@/lib/data/entity-list-store";
 import { getBundledEntityCount, ENTITY_CATEGORY_LABELS, type EntityEntry } from "@/lib/privacy-entity-list";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
@@ -198,6 +199,7 @@ export default function SettingsPage() {
   const [entityPreviewSource, setEntityPreviewSource] = useState<string | undefined>(undefined);
   const [showEntityDiff, setShowEntityDiff] = useState(false);
   const [isApplyingEntities, setIsApplyingEntities] = useState(false);
+  const [entityImportMode, setEntityImportMode] = useState<EntityListMode>("replace");
   const entityFileInputRef = useRef<HTMLInputElement>(null);
   
   const [newFieldName, setNewFieldName] = useState("");
@@ -323,10 +325,17 @@ export default function SettingsPage() {
     if (!entityPreview) return;
     setIsApplyingEntities(true);
     try {
-      await applyEntitySnapshot(entityPreview.entries, entityPreviewSource);
+      const activeCount = await applyEntitySnapshot(
+        entityPreview.entries,
+        entityPreviewSource,
+        entityImportMode,
+      );
       toast({
         title: "Entity list updated",
-        description: `Now using ${entityPreview.incomingCount.toLocaleString()} imported entries for Privacy Audit.`,
+        description:
+          entityImportMode === "merge"
+            ? `Merged ${entityPreview.incomingCount.toLocaleString()} imported entries with the bundled list — ${activeCount.toLocaleString()} entries now active for Privacy Audit.`
+            : `Now using ${entityPreview.incomingCount.toLocaleString()} imported entries for Privacy Audit.`,
       });
       setEntityPreview(null);
       setEntityPreviewSource(undefined);
@@ -2325,14 +2334,27 @@ export default function SettingsPage() {
                 <Label className="text-base">Current list</Label>
                 <p className="text-sm text-muted-foreground">
                   {entitySnapshot ? (
-                    <>
-                      Imported snapshot —{" "}
-                      <span data-testid="text-entity-count">
-                        {entitySnapshot.entries.length.toLocaleString()}
-                      </span>{" "}
-                      entries, loaded {new Date(entitySnapshot.importedAt).toLocaleString()}
-                      {entitySnapshot.sourceLabel ? ` from "${entitySnapshot.sourceLabel}"` : ""}.
-                    </>
+                    entitySnapshot.mode === "merge" ? (
+                      <>
+                        Imported snapshot merged with bundled —{" "}
+                        <span data-testid="text-entity-count">
+                          {entitySnapshot.entries.length.toLocaleString()}
+                        </span>{" "}
+                        imported {entitySnapshot.entries.length === 1 ? "entry" : "entries"} on top of{" "}
+                        {bundledEntityCount.toLocaleString()} bundled, loaded{" "}
+                        {new Date(entitySnapshot.importedAt).toLocaleString()}
+                        {entitySnapshot.sourceLabel ? ` from "${entitySnapshot.sourceLabel}"` : ""}.
+                      </>
+                    ) : (
+                      <>
+                        Imported snapshot —{" "}
+                        <span data-testid="text-entity-count">
+                          {entitySnapshot.entries.length.toLocaleString()}
+                        </span>{" "}
+                        entries, loaded {new Date(entitySnapshot.importedAt).toLocaleString()}
+                        {entitySnapshot.sourceLabel ? ` from "${entitySnapshot.sourceLabel}"` : ""}.
+                      </>
+                    )
                   ) : (
                     <>
                       Bundled default —{" "}
@@ -2366,6 +2388,41 @@ export default function SettingsPage() {
               onChange={handleEntityFileSelected}
               data-testid="input-entity-file"
             />
+
+            <div className="space-y-2">
+              <Label>Import mode</Label>
+              <RadioGroup
+                value={entityImportMode}
+                onValueChange={(value) => setEntityImportMode(value as EntityListMode)}
+                disabled={isImportingEntities}
+              >
+                <div className="flex items-start space-x-3 p-3 rounded-md border bg-background hover-elevate">
+                  <RadioGroupItem value="replace" id="entity-mode-replace" data-testid="radio-entity-replace" />
+                  <div className="space-y-1">
+                    <Label htmlFor="entity-mode-replace" className="font-medium cursor-pointer">
+                      Replace
+                    </Label>
+                    <p className="text-xs text-muted-foreground">
+                      Use only the imported entries. The bundled list stays available as a fallback
+                      via "Revert to bundled".
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-start space-x-3 p-3 rounded-md border bg-background hover-elevate">
+                  <RadioGroupItem value="merge" id="entity-mode-merge" data-testid="radio-entity-merge" />
+                  <div className="space-y-1">
+                    <Label htmlFor="entity-mode-merge" className="font-medium cursor-pointer">
+                      Merge with bundled
+                    </Label>
+                    <p className="text-xs text-muted-foreground">
+                      Add the imported entries on top of the {bundledEntityCount.toLocaleString()}{" "}
+                      bundled entries. Your entries win on duplicate addresses, so you can add new
+                      sanctions or markets without re-supplying the bundled defaults.
+                    </p>
+                  </div>
+                </div>
+              </RadioGroup>
+            </div>
 
             <div className="flex items-center gap-2 flex-wrap">
               <Button

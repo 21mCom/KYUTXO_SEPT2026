@@ -532,6 +532,25 @@
     return Array.from(_activeMap.values());
   }
 
+  /** Snapshot of the bundled (default) entries (e.g. for merging an import). */
+  export function getBundledEntityList(): EntityEntry[] {
+    return Array.from(_bundledMap.values());
+  }
+
+  /**
+   * Union the bundled list with a user-supplied snapshot, with the snapshot
+   * winning on duplicate addresses. Pure helper — does not touch the active
+   * list. Used by the "merge with bundled" import mode so users can add new
+   * entries on top of the bundled defaults without re-supplying all of them.
+   */
+  export function mergeWithBundled(snapshot: EntityEntry[]): EntityEntry[] {
+    const merged = new Map<string, EntityEntry>(_bundledMap);
+    for (const entry of snapshot) {
+      merged.set(entry.address, entry);
+    }
+    return Array.from(merged.values());
+  }
+
   /**
    * Replace the active list with a user-supplied snapshot. In-memory only;
    * persistence is handled by the caller (`data/entity-list-store.ts`).

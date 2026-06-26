@@ -1,6 +1,13 @@
 import { describe, it, expect } from "vitest";
 import * as bitcoin from "bitcoinjs-lib";
-import { ENTITY_LIST, type EntityCategory } from "./privacy-entity-list";
+import {
+  ENTITY_LIST,
+  getBundledEntityList,
+  getBundledEntityCount,
+  mergeWithBundled,
+  type EntityCategory,
+  type EntityEntry,
+} from "./privacy-entity-list";
 
 const VALID_CATEGORIES: ReadonlySet<EntityCategory> = new Set<EntityCategory>([
   "exchange",
@@ -62,5 +69,47 @@ describe("privacy-entity-list dataset integrity", () => {
       (entry) => !VALID_CATEGORIES.has(entry.category),
     ).map((entry) => `${entry.name} (${entry.address}): ${entry.category}`);
     expect(invalid, `Entries with unknown category:\n${invalid.join("\n")}`).toEqual([]);
+  });
+});
+
+describe("mergeWithBundled", () => {
+  // A brand-new address not present in the bundled list.
+  const NEW_ENTRY: EntityEntry = {
+    address: "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq",
+    name: "New Sanctioned Market",
+    category: "darknet",
+    sourceNote: "test",
+  };
+
+  it("adds new entries on top of the bundled list", () => {
+    const merged = mergeWithBundled([NEW_ENTRY]);
+    expect(merged.length).toBe(getBundledEntityCount() + 1);
+    expect(merged.find((e) => e.address === NEW_ENTRY.address)).toEqual(NEW_ENTRY);
+  });
+
+  it("lets the snapshot win on duplicate addresses", () => {
+    const bundledFirst = getBundledEntityList()[0];
+    const override: EntityEntry = {
+      address: bundledFirst.address,
+      name: "Overridden Name",
+      category: "mixer",
+      sourceNote: "override test",
+    };
+    const merged = mergeWithBundled([override]);
+    // No net size change because the address already existed.
+    expect(merged.length).toBe(getBundledEntityCount());
+    const result = merged.find((e) => e.address === bundledFirst.address);
+    expect(result).toEqual(override);
+  });
+
+  it("returns a copy equal to the bundled list when given no entries", () => {
+    const merged = mergeWithBundled([]);
+    expect(merged.length).toBe(getBundledEntityCount());
+  });
+
+  it("does not mutate the bundled list", () => {
+    const before = getBundledEntityCount();
+    mergeWithBundled([NEW_ENTRY]);
+    expect(getBundledEntityCount()).toBe(before);
   });
 });

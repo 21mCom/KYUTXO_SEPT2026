@@ -23,7 +23,17 @@ import {
   getActiveEntitySource,
   getBundledEntityCount,
   getActiveEntityList,
+  mergeWithBundled,
 } from '../privacy-entity-list';
+
+/**
+ * How an imported snapshot is applied to the active list:
+ *  - 'replace': the snapshot becomes the entire active list.
+ *  - 'merge': the snapshot is unioned on top of the bundled list, with the
+ *    snapshot winning on duplicate addresses. Only the user-supplied entries
+ *    are persisted, so bundled updates still flow through.
+ */
+export type EntityListMode = 'replace' | 'merge';
 
 const VALID_CATEGORIES = new Set<string>(Object.keys(ENTITY_CATEGORY_LABELS));
 
@@ -150,8 +160,12 @@ export function validateEntitySnapshot(raw: unknown): EntitySnapshotValidation {
 
 export interface ImportEntitySnapshotResult {
   valid: boolean;
+  /** Number of valid entries in the imported snapshot. */
   count: number;
+  /** Number of entries in the resulting active list (merged count for merge). */
+  activeCount: number;
   total: number;
+  mode: EntityListMode;
   errors: EntitySnapshotError[];
 }
 
@@ -270,34 +284,59 @@ export function prepareEntitySnapshot(raw: unknown): PrepareEntitySnapshotResult
 export async function applyEntitySnapshot(
   entries: EntityEntry[],
   sourceLabel?: string,
-): Promise<void> {
-  setActiveEntityList(entries);
+  mode: EntityListMode = 'replace',
+): Promise<number> {
+  const applied = mode === 'merge' ? mergeWithBundled(entries) : entries;
+  setActiveEntityList(applied);
   await updateSettings('default', {
     entityListSnapshot: {
       importedAt: Date.now(),
       sourceLabel,
+      mode,
       entries,
     },
   });
+  return applied.length;
 }
 
 /**
  * Validate a parsed snapshot and, when valid, apply it to the active entity
  * list and persist it to the settings record. Invalid snapshots are reported
  * back without applying any change.
+ *
+ * `mode` controls how the snapshot is applied:
+ *  - 'replace' (default): the snapshot becomes the entire active list.
+ *  - 'merge': the snapshot is unioned on top of the bundled list (snapshot wins
+ *    on duplicate addresses). Only the user-supplied entries are persisted so
+ *    future bundled updates still flow through.
  */
 export async function importEntitySnapshot(
   raw: unknown,
   sourceLabel?: string,
+  mode: EntityListMode = 'replace',
 ): Promise<ImportEntitySnapshotResult> {
   const result = validateEntitySnapshot(raw);
   if (!result.valid) {
-    return { valid: false, count: 0, total: result.total, errors: result.errors };
+    return {
+      valid: false,
+      count: 0,
+      activeCount: 0,
+      total: result.total,
+      mode,
+      errors: result.errors,
+    };
   }
 
-  await applyEntitySnapshot(result.entries, sourceLabel);
+  const activeCount = await applyEntitySnapshot(result.entries, sourceLabel, mode);
 
-  return { valid: true, count: result.entries.length, total: result.total, errors: [] };
+  return {
+    valid: true,
+    count: result.entries.length,
+    activeCount,
+    total: result.total,
+    mode,
+    errors: [],
+  };
 }
 
 /**
@@ -322,7 +361,12 @@ export async function loadEntitySnapshotFromStorage(): Promise<EntityListStatus>
     if (snap && Array.isArray(snap.entries) && snap.entries.length > 0) {
       const result = validateEntitySnapshot(snap.entries);
       if (result.valid) {
-        setActiveEntityList(result.entries);
+        // Re-apply with the same mode the snapshot was imported under so a
+        // merge stays merged across refreshes (default to 'replace' for
+        // snapshots persisted before merge support existed).
+        const applied =
+          snap.mode === 'merge' ? mergeWithBundled(result.entries) : result.entries;
+        setActiveEntityList(applied);
       } else {
         // Persisted snapshot is somehow corrupt — fall back to bundled.
         resetActiveEntityList();

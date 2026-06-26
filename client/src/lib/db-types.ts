@@ -370,11 +370,19 @@ export interface Settings {
   defaultView: 'table' | 'grid';
   cancelConfirmThreshold: number;
   // Optional user-supplied offline snapshot for the Privacy Audit entity list.
-  // When present it replaces the bundled list at runtime; the bundled list
-  // remains the fallback (cleared via "reset to bundled"). No network access.
+  // When present it is applied to the active list at runtime; the bundled list
+  // remains the fallback (cleared via "reset to bundled"). `mode` records how
+  // the snapshot was applied so startup re-applies it the same way:
+  //   - 'replace' (default): the snapshot entries are the entire active list.
+  //   - 'merge': the snapshot entries are unioned on top of the bundled list,
+  //     with the snapshot winning on duplicate addresses. Only the user-supplied
+  //     entries are stored (not the merged result), so bundled updates still
+  //     flow through and the user need not re-supply the bundled defaults.
+  // No network access.
   entityListSnapshot?: {
     importedAt: number;
     sourceLabel?: string;
+    mode?: 'replace' | 'merge';
     entries: EntityListSnapshotEntry[];
   };
 }
