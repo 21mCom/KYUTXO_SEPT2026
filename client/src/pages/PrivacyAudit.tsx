@@ -33,6 +33,9 @@ import {
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -1329,6 +1332,60 @@ function PrivacyHistoryCard() {
   );
   const { toast } = useToast();
 
+  // Per-run export selection. Keyed by entry.id (falling back to its
+  // timestamp). An empty set means "export everything" so the default keeps
+  // the original behaviour of exporting all stored runs.
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [fromDate, setFromDate] = useState("");
+  const [toDate, setToDate] = useState("");
+
+  const entryKey = useCallback(
+    (entry: PrivacyAuditHistoryEntry) => entry.id ?? entry.timestamp,
+    [],
+  );
+
+  // The runs that will actually be exported: the hand-picked selection when any
+  // run is checked, otherwise the full history (newest → oldest is applied by
+  // the export builders themselves).
+  const exportList = useMemo(() => {
+    const list = history ?? [];
+    if (selectedIds.size === 0) return list;
+    return list.filter((e) => selectedIds.has(e.id ?? e.timestamp));
+  }, [history, selectedIds]);
+
+  const toggleSelected = useCallback((key: number) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+      return next;
+    });
+  }, []);
+
+  const selectAll = useCallback(() => {
+    setSelectedIds(new Set((history ?? []).map((e) => e.id ?? e.timestamp)));
+  }, [history]);
+
+  const clearSelection = useCallback(() => setSelectedIds(new Set()), []);
+
+  // Convenience: check every run whose timestamp falls within the chosen date
+  // range (inclusive). Empty bounds are treated as open-ended.
+  const selectRange = useCallback(() => {
+    const list = history ?? [];
+    const fromTs = fromDate ? new Date(`${fromDate}T00:00:00`).getTime() : -Infinity;
+    const toTs = toDate ? new Date(`${toDate}T23:59:59.999`).getTime() : Infinity;
+    setSelectedIds(
+      new Set(
+        list
+          .filter((e) => e.timestamp >= fromTs && e.timestamp <= toTs)
+          .map((e) => e.id ?? e.timestamp),
+      ),
+    );
+  }, [history, fromDate, toDate]);
+
   const chartData = useMemo(
     () =>
       (history ?? []).map((h) => ({
@@ -1387,7 +1444,7 @@ function PrivacyHistoryCard() {
   }, [toast]);
 
   const handleExportCsv = useCallback(() => {
-    const list = history ?? [];
+    const list = exportList;
     if (list.length === 0) return;
     try {
       const csv = buildPrivacyHistoryCsv(list);
@@ -1411,10 +1468,10 @@ function PrivacyHistoryCard() {
         description: e instanceof Error ? e.message : "Could not export history.",
       });
     }
-  }, [history, toast]);
+  }, [exportList, toast]);
 
   const handleExportPdf = useCallback(async () => {
-    const list = history ?? [];
+    const list = exportList;
     if (list.length === 0) return;
     try {
       const blob = await buildPrivacyHistoryPdf(list);
@@ -1437,7 +1494,7 @@ function PrivacyHistoryCard() {
         description: e instanceof Error ? e.message : "Could not export history.",
       });
     }
-  }, [history, toast]);
+  }, [exportList, toast]);
 
   if (!history || history.length === 0) return null;
 
@@ -1474,6 +1531,14 @@ function PrivacyHistoryCard() {
               </>
             )}
             {" · keeps last 30 runs"}
+            {selectedIds.size > 0 && (
+              <>
+                {" · "}
+                <span className="font-medium" data-testid="text-history-selected-count">
+                  {selectedIds.size} selected for export
+                </span>
+              </>
+            )}
           </CardDescription>
         </div>
         <div className="flex items-center gap-1 flex-wrap">
@@ -1539,8 +1604,77 @@ function PrivacyHistoryCard() {
           </p>
         )}
 
+        <div
+          className="flex flex-wrap items-end gap-3 rounded-md border p-3"
+          data-testid="container-history-export-selection"
+        >
+          <div className="space-y-1">
+            <Label htmlFor="history-from-date" className="text-xs text-muted-foreground">
+              From
+            </Label>
+            <Input
+              id="history-from-date"
+              type="date"
+              value={fromDate}
+              onChange={(e) => setFromDate(e.target.value)}
+              className="h-9 w-[10.5rem]"
+              data-testid="input-history-from-date"
+            />
+          </div>
+          <div className="space-y-1">
+            <Label htmlFor="history-to-date" className="text-xs text-muted-foreground">
+              To
+            </Label>
+            <Input
+              id="history-to-date"
+              type="date"
+              value={toDate}
+              onChange={(e) => setToDate(e.target.value)}
+              className="h-9 w-[10.5rem]"
+              data-testid="input-history-to-date"
+            />
+          </div>
+          <div className="flex items-center gap-1 flex-wrap">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={selectRange}
+              disabled={!fromDate && !toDate}
+              data-testid="button-history-select-range"
+            >
+              Select range
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={selectAll}
+              data-testid="button-history-select-all"
+            >
+              Select all
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={clearSelection}
+              disabled={selectedIds.size === 0}
+              data-testid="button-history-clear-selection"
+            >
+              Clear selection
+            </Button>
+          </div>
+          <p className="w-full text-xs text-muted-foreground" data-testid="text-history-export-hint">
+            {selectedIds.size === 0
+              ? "No runs picked — exports will include all stored runs."
+              : `Exports will include ${selectedIds.size} selected run${
+                  selectedIds.size === 1 ? "" : "s"
+                }.`}
+          </p>
+        </div>
+
         <div className="space-y-2">
-          {rows.map(({ entry, scoreDelta, changes }) => (
+          {rows.map(({ entry, scoreDelta, changes }) => {
+            const key = entryKey(entry);
+            return (
             <div
               key={entry.id ?? entry.timestamp}
               className="border rounded-md p-3 space-y-2"
@@ -1548,6 +1682,12 @@ function PrivacyHistoryCard() {
             >
               <div className="flex items-center justify-between gap-2 flex-wrap">
                 <div className="flex items-center gap-2 flex-wrap">
+                  <Checkbox
+                    checked={selectedIds.has(key)}
+                    onCheckedChange={() => toggleSelected(key)}
+                    aria-label={`Select run from ${formatHistoryDate(entry.timestamp)} for export`}
+                    data-testid={`checkbox-history-select-${entry.id ?? entry.timestamp}`}
+                  />
                   <span className="text-xs text-muted-foreground" data-testid="text-history-date">
                     {formatHistoryDate(entry.timestamp)}
                   </span>
@@ -1616,7 +1756,8 @@ function PrivacyHistoryCard() {
                 </div>
               )}
             </div>
-          ))}
+            );
+          })}
         </div>
       </CardContent>
     </Card>
