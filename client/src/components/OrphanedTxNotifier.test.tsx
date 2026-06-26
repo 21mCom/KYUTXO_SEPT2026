@@ -22,8 +22,15 @@ vi.mock("@/lib/txid-backfill", () => ({
   detectOrphanedTxRecords: () => detectMock(),
 }));
 
+// Capture the DB-change listener so tests can simulate a nodeSettings write
+// later in the session (the post-configure re-check branch).
+let dbChangeListener: ((tables: string[]) => void) | null = null;
+const unsubscribeSpy = vi.fn();
 vi.mock("@/lib/database", () => ({
-  subscribeToDbChanges: () => () => {},
+  subscribeToDbChanges: (cb: (tables: string[]) => void) => {
+    dbChangeListener = cb;
+    return unsubscribeSpy;
+  },
 }));
 
 const getSettingsMock = vi.fn();
@@ -45,6 +52,8 @@ beforeEach(() => {
   detectMock.mockReset();
   getSettingsMock.mockReset();
   getNodeSettingsMock.mockReset();
+  dbChangeListener = null;
+  unsubscribeSpy.mockReset();
   // Sensible defaults: orphans exist, check not disabled.
   getSettingsMock.mockResolvedValue({ id: "default" });
   detectMock.mockResolvedValue({ txids: ["txa", "txb"], recordIds: new Map() });
@@ -138,5 +147,90 @@ describe("OrphanedTxNotifier startup check", () => {
     expect(arg.action.props["data-testid"]).toBe(
       "button-rebuild-missing-transactions",
     );
+  });
+});
+
+describe("OrphanedTxNotifier provider-configured re-check", () => {
+  it("re-prompts with 'Fix now' when a provider is configured mid-session", async () => {
+    // Startup: no provider configured → sets awaiting-provider gate + Configure
+    // toast. Re-check (after the nodeSettings change): provider now present.
+    getNodeSettingsMock
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValue({ id: "default" });
+
+    render(<OrphanedTxNotifier />);
+
+    await waitFor(() => expect(toastSpy).toHaveBeenCalledTimes(1));
+    expect(sessionStorage.getItem(ORPHANS_AWAITING_PROVIDER_KEY)).toBe("1");
+    expect(toastSpy.mock.calls[0][0].action.props["data-testid"]).toBe(
+      "button-configure-provider",
+    );
+
+    // The component subscribed to DB changes during mount.
+    expect(dbChangeListener).not.toBeNull();
+
+    // Simulate a nodeSettings write now that a provider is configured.
+    dbChangeListener!(["nodeSettings"]);
+
+    await waitFor(() => expect(toastSpy).toHaveBeenCalledTimes(2));
+
+    const arg = toastSpy.mock.calls[1][0];
+    expect(arg.title).toBe("Missing transaction data");
+    expect(arg.description).toContain("Rebuild");
+    expect(arg.action.props["data-testid"]).toBe(
+      "button-rebuild-missing-transactions",
+    );
+    expect(arg.action.props.children).toBe("Fix now");
+  });
+
+  it("consumes the awaiting-provider gate so a second nodeSettings change does not re-prompt", async () => {
+    getNodeSettingsMock
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValue({ id: "default" });
+
+    render(<OrphanedTxNotifier />);
+
+    await waitFor(() => expect(toastSpy).toHaveBeenCalledTimes(1));
+    expect(sessionStorage.getItem(ORPHANS_AWAITING_PROVIDER_KEY)).toBe("1");
+
+    // First nodeSettings change with a configured provider → one "Fix now".
+    dbChangeListener!(["nodeSettings"]);
+    await waitFor(() => expect(toastSpy).toHaveBeenCalledTimes(2));
+
+    // The gate must be consumed so later writes can't loop the prompt.
+    expect(sessionStorage.getItem(ORPHANS_AWAITING_PROVIDER_KEY)).toBeNull();
+
+    // A second nodeSettings change (e.g. a sync connection-status update) must
+    // not re-trigger the prompt.
+    dbChangeListener!(["nodeSettings"]);
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(toastSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("does nothing on a nodeSettings change when the awaiting-provider gate is not set", async () => {
+    // Startup finds no orphans, so the awaiting-provider gate is never set.
+    detectMock.mockResolvedValue({ txids: [], recordIds: new Map() });
+    getNodeSettingsMock.mockResolvedValue({ id: "default" });
+
+    render(<OrphanedTxNotifier />);
+
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(toastSpy).not.toHaveBeenCalled();
+    expect(sessionStorage.getItem(ORPHANS_AWAITING_PROVIDER_KEY)).toBeNull();
+
+    // A nodeSettings change with no gate set must be a no-op.
+    expect(dbChangeListener).not.toBeNull();
+    dbChangeListener!(["nodeSettings"]);
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(toastSpy).not.toHaveBeenCalled();
+    // getNodeSettings is never consulted by the re-check when the gate is unset.
+    expect(getNodeSettingsMock).not.toHaveBeenCalled();
   });
 });
