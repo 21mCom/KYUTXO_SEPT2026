@@ -303,6 +303,9 @@ export default function BalanceOverview() {
   // Per-address resolve progress: recordId -> { resolved, total } as reported by
   // resolvePrevouts' onProgress callback, so the address row can show how far along it is.
   const [resolveProgressByRecordId, setResolveProgressByRecordId] = useState<Map<number, { resolved: number; total: number }>>(new Map());
+  // Global resolve progress for the top banner's "Resolve & Recompute" pass, as
+  // reported by resolvePrevouts' onProgress callback.
+  const [resolveProgressGlobal, setResolveProgressGlobal] = useState<{ resolved: number; total: number } | null>(null);
 
   // Re-run aggregation when the native read-engine flips to ready so the fast
   // path can take over from any Dexie fallback that ran first.
@@ -627,10 +630,14 @@ export default function BalanceOverview() {
 
   const handleFixPrevouts = useCallback(async () => {
     setFixingPrevouts(true);
+    setResolveProgressGlobal({ resolved: 0, total: 0 });
     try {
       // resolvePrevouts now recomputes stats for every newly-resolved source
       // address itself (origin "user"), so we don't need a second pass here.
-      await transactionSyncService.resolvePrevouts(undefined, { recomputeOrigin: "user" });
+      await transactionSyncService.resolvePrevouts(
+        (resolved, total) => setResolveProgressGlobal({ resolved, total }),
+        { recomputeOrigin: "user" },
+      );
       const remaining = await countUnresolvedPrevoutInputs();
       setUnresolvedPrevouts(remaining);
       if (remaining === 0) setSpendWarningDismissed(false);
@@ -638,6 +645,7 @@ export default function BalanceOverview() {
       console.warn("[BalanceOverview] Prevout fix failed:", err);
     } finally {
       setFixingPrevouts(false);
+      setResolveProgressGlobal(null);
     }
   }, []);
 
@@ -826,7 +834,9 @@ export default function BalanceOverview() {
               {fixingPrevouts ? (
                 <>
                   <Loader2 className="h-3 w-3 animate-spin mr-1.5" />
-                  Resolving…
+                  {resolveProgressGlobal && resolveProgressGlobal.total > 0
+                    ? `Resolving… ${resolveProgressGlobal.resolved.toLocaleString()}/${resolveProgressGlobal.total.toLocaleString()}`
+                    : "Resolving…"}
                 </>
               ) : (
                 "Resolve & Recompute"
