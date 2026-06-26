@@ -5,7 +5,7 @@ import {
   type PrivacySeverity,
   type EntityCitation,
 } from "@/lib/privacy-audit";
-import type { ExportScope } from "@/lib/privacy-report-export";
+import { formatScoreDelta, type ExportScope } from "@/lib/privacy-report-export";
 
 export function severityLabel(s: PrivacySeverity): string {
   return s.charAt(0) + s.slice(1).toLowerCase();
@@ -76,11 +76,13 @@ export function buildPrintableReport(
   const renderFinding = (f: PrivacyFinding): string => {
     const label = (FINDING_TYPE_LABELS as Record<string, string>)[f.type] ?? f.type;
     const sevColor = PRINT_SEVERITY_COLORS[f.severity];
+    const scoreImpact = formatScoreDelta(f.scoreDelta);
     return `
       <div class="finding">
         <div class="finding-head">
           <span class="sev-badge" style="background:${sevColor}">${escapeHtml(severityLabel(f.severity))}</span>
           <span class="finding-title">${escapeHtml(label)}</span>
+          ${scoreImpact ? `<span class="finding-score">${escapeHtml(scoreImpact)}</span>` : ""}
         </div>
         <div class="finding-desc">${escapeHtml(f.description)}</div>
         ${f.correction ? `<div class="finding-fix"><strong>Fix:</strong> ${escapeHtml(f.correction)}</div>` : ""}
@@ -142,6 +144,7 @@ export function buildPrintableReport(
   .finding-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
   .sev-badge { color: #fff; border-radius: 4px; padding: 1px 8px; font-size: 11px; font-weight: 600; }
   .finding-title { font-weight: 600; font-size: 14px; }
+  .finding-score { margin-left: auto; font-size: 11px; font-weight: 600; color: #dc2626; font-family: "JetBrains Mono", "Courier New", monospace; white-space: nowrap; }
   .finding-desc { font-size: 13px; color: #333; }
   .finding-fix { font-size: 12px; color: #444; font-style: italic; margin-top: 4px; }
   .finding-meta { font-size: 11px; color: #777; margin-top: 4px; }

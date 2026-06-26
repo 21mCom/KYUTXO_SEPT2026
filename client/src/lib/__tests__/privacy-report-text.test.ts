@@ -22,6 +22,7 @@ const ENTITY_FINDING: PrivacyFinding = {
   correction: 'Avoid reusing funds linked to this counterparty.',
   txids: ['tx_scam'],
   addresses: ['134r8iHv69xdT6p5qVKTsHrcUEuBVZAYak'],
+  scoreDelta: -28,
   details: {
     citations: [
       {
@@ -43,6 +44,7 @@ const FINGERPRINT_WARNING: PrivacyFinding = {
   correction: 'Use a wallet with standard transaction construction.',
   txids: ['tx_fp'],
   addresses: [],
+  scoreDelta: -0.4,
   details: {},
 } as unknown as PrivacyFinding;
 
@@ -149,6 +151,27 @@ describe('plain-text report — sections present', () => {
     // Finding meta counts.
     expect(text).toContain('1 address(es)');
     expect(text).toContain('1 transaction(s)');
+  });
+
+  it('renders each finding\'s score impact (matching the in-app per-finding penalty)', () => {
+    const text = buildPrivacyTextReport(makeResult(), { owner: null, wallet: null }, FIXED_NOW);
+
+    // The scam finding's -28 penalty renders as a rounded "-28 pts".
+    expect(text).toContain('Score Impact: -28 pts');
+    // A sub-1-point penalty (the fingerprint warning's -0.4) renders as "<-1 pts".
+    expect(text).toContain('Score Impact: <-1 pts');
+  });
+
+  it('omits the score impact line for findings without a penalty', () => {
+    const text = buildPrivacyTextReport(
+      makeResult({
+        findings: [{ ...ENTITY_FINDING, scoreDelta: undefined } as unknown as PrivacyFinding],
+        warnings: [],
+      }),
+      { owner: null, wallet: null },
+      FIXED_NOW,
+    );
+    expect(text).not.toContain('Score Impact:');
   });
 
   it('renders source citations for ENTITY_* findings only', () => {

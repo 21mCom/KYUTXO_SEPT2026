@@ -23,6 +23,20 @@ export interface ExportedFinding {
   addresses: string[];
   details: Record<string, unknown>;
   citations?: EntityCitation[];
+  scoreDelta?: number;
+}
+
+/**
+ * Format a finding's score impact the same way the in-app Privacy Audit report
+ * does — e.g. "-3 pts", or "<-1 pts" for a sub-1-point penalty. Returns `null`
+ * for findings with no penalty (no scoreDelta, or a non-negative delta) so the
+ * caller can omit the impact entirely. This is the single source of truth for
+ * the per-finding score-impact label, shared by the HTML and text exports.
+ */
+export function formatScoreDelta(scoreDelta: number | undefined): string | null {
+  if (scoreDelta === undefined || scoreDelta >= 0) return null;
+  const value = scoreDelta > -1 ? "<-1" : String(Math.round(scoreDelta));
+  return `${value} pts`;
 }
 
 /**
@@ -57,6 +71,7 @@ export function mapFinding(f: PrivacyFinding): ExportedFinding {
     addresses: f.addresses,
     details: f.details,
     citations: extractCitations(f),
+    scoreDelta: f.scoreDelta,
   };
 }
 
@@ -188,6 +203,8 @@ export function buildPrivacyTextReport(
       lines.push(`${i + 1}. [${severityLabel(f.severity)}] ${label}`);
       lines.push(`   ${f.description}`);
       if (f.correction) lines.push(`   Fix: ${f.correction}`);
+      const scoreImpact = formatScoreDelta(f.scoreDelta);
+      if (scoreImpact) lines.push(`   Score Impact: ${scoreImpact}`);
       const meta: string[] = [];
       if (f.addresses.length > 0) meta.push(`${f.addresses.length} address(es)`);
       if (f.txids.length > 0) meta.push(`${f.txids.length} transaction(s)`);

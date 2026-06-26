@@ -342,6 +342,36 @@ describe('privacy report export — full report shape', () => {
     }
   });
 
+  it('carries the per-finding scoreDelta through to the JSON export', async () => {
+    const result = await runPrivacyAudit([USER_ADDRESS]);
+    const report = JSON.parse(
+      JSON.stringify(buildPrivacyReport(result, { owner: null, wallet: null })),
+    ) as {
+      findings: Array<Record<string, unknown>>;
+      warnings: Array<Record<string, unknown>>;
+    };
+
+    // Match the exported findings back to the audit result so we can assert the
+    // scoreDelta survives serialization unchanged for every penalised finding.
+    const audited = [...result.findings, ...result.warnings];
+    const exported = [...report.findings, ...report.warnings];
+
+    // Sanity: the audit produced at least one finding with a real penalty.
+    const penalised = audited.filter(
+      (f) => typeof f.scoreDelta === 'number' && f.scoreDelta < 0,
+    );
+    expect(penalised.length).toBeGreaterThan(0);
+
+    audited.forEach((f, i) => {
+      if (typeof f.scoreDelta === 'number') {
+        expect(exported[i].scoreDelta).toBe(f.scoreDelta);
+      } else {
+        // undefined deltas are dropped during JSON serialization.
+        expect('scoreDelta' in exported[i]).toBe(false);
+      }
+    });
+  });
+
   it('maps the human-readable label, not just the raw finding type', async () => {
     const result = await runPrivacyAudit([USER_ADDRESS]);
     const exported = [...result.findings, ...result.warnings].map(mapFinding);
