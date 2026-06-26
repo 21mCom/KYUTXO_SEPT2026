@@ -338,7 +338,7 @@ interface SankeyData {
 }
 
 /** Build a proportional fund-flow Sankey model from a tx's inputs/outputs. */
-function buildSankey(inputs: TransactionParticipant[], outputs: TransactionParticipant[]): SankeyData {
+export function buildSankey(inputs: TransactionParticipant[], outputs: TransactionParticipant[]): SankeyData {
   const nodes = [
     ...inputs.map((p, i) => ({ name: `In ${i + 1}\n${(p.amount / 1e8).toFixed(5)} BTC` })),
     ...outputs.map((p, i) => ({ name: `Out ${i + 1}\n${(p.amount / 1e8).toFixed(5)} BTC` })),
@@ -697,7 +697,7 @@ export function TransactionDeepDive({
 
 // ─── Per-finding deep-dive dialog ─────────────────────────────────────────────
 
-function DeepDiveDialog({
+export function DeepDiveDialog({
   txid,
   coinjoinTxids,
   open: controlledOpen,
