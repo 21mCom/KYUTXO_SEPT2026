@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useMemo } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { Link } from "wouter";
-import { Moon, Eye, Database, Plus, Trash2, Pencil, AlertTriangle, Upload, RefreshCw, Loader2, Paperclip, KeyRound, Shield, Download, Stethoscope, ChevronRight, ChevronDown, Wrench, Search } from "lucide-react";
+import { Moon, Eye, Database, Plus, Trash2, Pencil, AlertTriangle, Upload, RefreshCw, Loader2, Paperclip, KeyRound, Shield, Download, Stethoscope, ChevronRight, ChevronDown, Wrench, Search, ArrowRight } from "lucide-react";
 import { isElectron, getElectronAPI } from "@/lib/electron";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
@@ -84,6 +84,7 @@ import {
   type EntitySnapshotPreview,
   type EntityListMode,
   type EntityChange,
+  type EntityOverride,
 } from "@/lib/data/entity-list-store";
 import { getBundledEntityCount, ENTITY_CATEGORY_LABELS, type EntityEntry } from "@/lib/privacy-entity-list";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
@@ -118,6 +119,7 @@ import { createProviderFromSettings } from "@/lib/blockchain-api";
 const DELETE_CONFIRMATION_PHRASE = "DELETE ALL DATA";
 
 const ENTITY_DIFF_ROW_HEIGHT = 52;
+const ENTITY_OVERRIDE_ROW_HEIGHT = 60;
 
 /**
  * Virtualized list of entity entries (address + name + category) shown in the
@@ -277,6 +279,89 @@ function ChangedEntityList({
   );
 }
 
+/**
+ * Virtualized list of bundled entries a merge will overwrite, paired with the
+ * incoming entry that replaces each. Shows old → new (name + category), and
+ * flags identical re-imports as "no change".
+ */
+function EntityOverrideList({
+  overrides,
+  emptyLabel,
+}: {
+  overrides: EntityOverride[];
+  emptyLabel: string;
+}) {
+  const parentRef = useRef<HTMLDivElement>(null);
+  const virtualizer = useVirtualizer({
+    count: overrides.length,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => ENTITY_OVERRIDE_ROW_HEIGHT,
+    overscan: 8,
+  });
+
+  if (overrides.length === 0) {
+    return (
+      <p
+        className="text-sm text-muted-foreground px-3 py-6 text-center"
+        data-testid="text-entity-overrides-empty"
+      >
+        {emptyLabel}
+      </p>
+    );
+  }
+
+  return (
+    <div
+      ref={parentRef}
+      className="max-h-64 overflow-y-auto rounded-md border"
+      data-testid="list-entity-overrides"
+    >
+      <div style={{ height: `${virtualizer.getTotalSize()}px`, position: "relative", width: "100%" }}>
+        {virtualizer.getVirtualItems().map((virtualRow) => {
+          const { previous, incoming, changed } = overrides[virtualRow.index];
+          return (
+            <div
+              key={virtualRow.key}
+              className="absolute left-0 top-0 w-full border-b px-3 py-1.5 space-y-1"
+              style={{
+                height: `${virtualRow.size}px`,
+                transform: `translateY(${virtualRow.start}px)`,
+              }}
+              data-testid={`row-entity-override-${virtualRow.index}`}
+            >
+              <p className="text-xs font-mono text-muted-foreground truncate">{previous.address}</p>
+              <div className="flex items-center gap-2 text-sm min-w-0">
+                <span className="flex items-center gap-1.5 min-w-0">
+                  <span className="truncate text-muted-foreground line-through" title={previous.name}>
+                    {previous.name}
+                  </span>
+                  <Badge variant="outline" className="shrink-0">
+                    {ENTITY_CATEGORY_LABELS[previous.category]}
+                  </Badge>
+                </span>
+                <ArrowRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                <span className="flex items-center gap-1.5 min-w-0">
+                  <span className="truncate font-medium" title={incoming.name}>
+                    {incoming.name}
+                  </span>
+                  <Badge variant="secondary" className="shrink-0">
+                    {ENTITY_CATEGORY_LABELS[incoming.category]}
+                  </Badge>
+                </span>
+                {!changed && (
+                  <Badge variant="outline" className="shrink-0">
+                    no change
+                  </Badge>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 export default function SettingsPage() {
   const { settings, fieldVisibility, cancelConfirmThreshold, privacyHistoryLimit, disableOrphanCheck, isLoading: settingsLoading } = useSettings();
   const { customFields, isLoading: customFieldsLoading } = useCustomFields();
@@ -395,7 +480,7 @@ export default function SettingsPage() {
         throw new Error("File is not valid JSON.");
       }
 
-      const result = prepareEntitySnapshot(raw);
+      const result = prepareEntitySnapshot(raw, entityImportMode);
       if (!result.valid || !result.preview) {
         setEntityImportErrors(result.errors);
         toast({
@@ -488,6 +573,18 @@ export default function SettingsPage() {
         c.address.toLowerCase().includes(q) ||
         c.current.name.toLowerCase().includes(q) ||
         c.incoming.name.toLowerCase().includes(q),
+    );
+  }, [entityPreview, entityDiffSearch]);
+
+  const filteredOverrides = useMemo(() => {
+    const q = entityDiffSearch.trim().toLowerCase();
+    const overrides = entityPreview?.overrides ?? [];
+    if (!q) return overrides;
+    return overrides.filter(
+      (o) =>
+        o.incoming.address.toLowerCase().includes(q) ||
+        o.incoming.name.toLowerCase().includes(q) ||
+        o.previous.name.toLowerCase().includes(q),
     );
   }, [entityPreview, entityDiffSearch]);
 
@@ -2765,8 +2862,11 @@ export default function SettingsPage() {
             <DialogHeader>
               <DialogTitle>Confirm entity list import</DialogTitle>
               <DialogDescription>
-                Review the snapshot{entityPreviewSource ? ` from "${entityPreviewSource}"` : ""} before it
-                replaces the current Privacy Audit list. Nothing changes until you confirm.
+                Review the snapshot{entityPreviewSource ? ` from "${entityPreviewSource}"` : ""} before it{" "}
+                {entityPreview?.mode === "merge"
+                  ? "merges into the bundled Privacy Audit list"
+                  : "replaces the current Privacy Audit list"}
+                . Nothing changes until you confirm.
               </DialogDescription>
             </DialogHeader>
 
@@ -2781,28 +2881,56 @@ export default function SettingsPage() {
                     <p className="text-xs text-muted-foreground">entries</p>
                   </div>
                   <div className="rounded-md border p-3">
-                    <p className="text-xs text-muted-foreground">Current list</p>
-                    <p className="text-2xl font-semibold" data-testid="text-preview-current">
-                      {entityPreview.currentCount.toLocaleString()}
+                    <p className="text-xs text-muted-foreground">
+                      {entityPreview.mode === "merge" ? "After merge" : "Current list"}
                     </p>
-                    <p className="text-xs text-muted-foreground">entries</p>
+                    <p className="text-2xl font-semibold" data-testid="text-preview-current">
+                      {entityPreview.mode === "merge"
+                        ? entityPreview.resultingCount.toLocaleString()
+                        : entityPreview.currentCount.toLocaleString()}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      {entityPreview.mode === "merge"
+                        ? `entries (from ${entityPreview.currentCount.toLocaleString()} bundled)`
+                        : "entries"}
+                    </p>
                   </div>
                 </div>
 
-                <div className="flex items-center gap-2 flex-wrap text-sm">
-                  <Badge variant="default" data-testid="badge-preview-added">
-                    +{entityPreview.added.toLocaleString()} added
-                  </Badge>
-                  <Badge variant="destructive" data-testid="badge-preview-removed">
-                    −{entityPreview.removed.toLocaleString()} removed
-                  </Badge>
-                  <Badge variant="outline" data-testid="badge-preview-changed">
-                    {entityPreview.changed.toLocaleString()} changed
-                  </Badge>
-                  <Badge variant="secondary" data-testid="badge-preview-unchanged">
-                    {entityPreview.unchanged.toLocaleString()} unchanged
-                  </Badge>
-                </div>
+                {entityPreview.mode === "merge" ? (
+                  <div className="flex items-center gap-2 flex-wrap text-sm">
+                    <Badge variant="default" data-testid="badge-preview-added">
+                      +{entityPreview.added.toLocaleString()} brand-new
+                    </Badge>
+                    <Badge variant="destructive" data-testid="badge-preview-overridden">
+                      {entityPreview.overridden.toLocaleString()} override bundled
+                    </Badge>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2 flex-wrap text-sm">
+                    <Badge variant="default" data-testid="badge-preview-added">
+                      +{entityPreview.added.toLocaleString()} added
+                    </Badge>
+                    <Badge variant="destructive" data-testid="badge-preview-removed">
+                      −{entityPreview.removed.toLocaleString()} removed
+                    </Badge>
+                    <Badge variant="outline" data-testid="badge-preview-changed">
+                      {entityPreview.changed.toLocaleString()} changed
+                    </Badge>
+                    <Badge variant="secondary" data-testid="badge-preview-unchanged">
+                      {entityPreview.unchanged.toLocaleString()} unchanged
+                    </Badge>
+                  </div>
+                )}
+
+                {entityPreview.mode === "merge" && entityPreview.overridden > 0 && (
+                  <p className="text-xs text-muted-foreground" data-testid="text-merge-override-note">
+                    {entityPreview.overridden.toLocaleString()} imported{" "}
+                    {entityPreview.overridden === 1 ? "address" : "addresses"} already exist in the bundled
+                    list and will overwrite{" "}
+                    {entityPreview.overridden === 1 ? "that entry" : "those entries"}. Review them below.
+                  </p>
+                )}
 
                 <div>
                   <p className="text-sm font-medium mb-2">By category</p>
@@ -2810,7 +2938,9 @@ export default function SettingsPage() {
                     <div className="flex items-center justify-between gap-2 px-3 py-1.5 text-xs text-muted-foreground">
                       <span>Category</span>
                       <span className="flex items-center gap-4">
-                        <span className="w-16 text-right">Current</span>
+                        <span className="w-16 text-right">
+                          {entityPreview.mode === "merge" ? "Bundled" : "Current"}
+                        </span>
                         <span className="w-16 text-right">New</span>
                       </span>
                     </div>
@@ -2834,82 +2964,145 @@ export default function SettingsPage() {
                   </div>
                 </div>
 
-                {(entityPreview.added > 0 || entityPreview.removed > 0 || entityPreview.changed > 0) && (
-                  <div>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="px-2"
-                      onClick={() => setShowEntityDiff((v) => !v)}
-                      data-testid="button-toggle-entity-diff"
-                    >
-                      {showEntityDiff ? (
-                        <ChevronDown className="h-4 w-4" />
-                      ) : (
-                        <ChevronRight className="h-4 w-4" />
-                      )}
-                      {showEntityDiff ? "Hide changed entries" : "Show changed entries"}
-                    </Button>
+                {entityPreview.mode === "merge"
+                  ? (entityPreview.added > 0 || entityPreview.overridden > 0) && (
+                      <div>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="px-2"
+                          onClick={() => setShowEntityDiff((v) => !v)}
+                          data-testid="button-toggle-entity-diff"
+                        >
+                          {showEntityDiff ? (
+                            <ChevronDown className="h-4 w-4" />
+                          ) : (
+                            <ChevronRight className="h-4 w-4" />
+                          )}
+                          {showEntityDiff ? "Hide affected entries" : "Show affected entries"}
+                        </Button>
 
-                    {showEntityDiff && (
-                      <Tabs defaultValue="added" className="mt-2">
-                        <div className="relative mb-2">
-                          <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
-                          <Input
-                            value={entityDiffSearch}
-                            onChange={(e) => setEntityDiffSearch(e.target.value)}
-                            placeholder="Filter by address or name..."
-                            className="pl-8"
-                            data-testid="input-entity-diff-search"
-                          />
-                        </div>
-                        <TabsList className="grid w-full grid-cols-3">
-                          <TabsTrigger value="added" data-testid="tab-entity-diff-added">
-                            Added ({filteredAddedEntries.length.toLocaleString()})
-                          </TabsTrigger>
-                          <TabsTrigger value="changed" data-testid="tab-entity-diff-changed">
-                            Changed ({filteredChangedEntries.length.toLocaleString()})
-                          </TabsTrigger>
-                          <TabsTrigger value="removed" data-testid="tab-entity-diff-removed">
-                            Removed ({filteredRemovedEntries.length.toLocaleString()})
-                          </TabsTrigger>
-                        </TabsList>
-                        <TabsContent value="added" className="mt-2">
-                          <EntityDiffList
-                            entries={filteredAddedEntries}
-                            emptyLabel={
-                              entityDiffSearch.trim()
-                                ? "No added entries match your search."
-                                : "No entries will be added."
-                            }
-                            variant="added"
-                          />
-                        </TabsContent>
-                        <TabsContent value="changed" className="mt-2">
-                          <ChangedEntityList
-                            changes={filteredChangedEntries}
-                            emptyLabel={
-                              entityDiffSearch.trim()
-                                ? "No changed entries match your search."
-                                : "No entries changed name or category."
-                            }
-                          />
-                        </TabsContent>
-                        <TabsContent value="removed" className="mt-2">
-                          <EntityDiffList
-                            entries={filteredRemovedEntries}
-                            emptyLabel={
-                              entityDiffSearch.trim()
-                                ? "No removed entries match your search."
-                                : "No entries will be removed."
-                            }
-                            variant="removed"
-                          />
-                        </TabsContent>
-                      </Tabs>
+                        {showEntityDiff && (
+                          <Tabs defaultValue="overrides" className="mt-2">
+                            <div className="relative mb-2">
+                              <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
+                              <Input
+                                value={entityDiffSearch}
+                                onChange={(e) => setEntityDiffSearch(e.target.value)}
+                                placeholder="Filter by address or name..."
+                                className="pl-8"
+                                data-testid="input-entity-diff-search"
+                              />
+                            </div>
+                            <TabsList className="grid w-full grid-cols-2">
+                              <TabsTrigger value="overrides" data-testid="tab-entity-diff-overrides">
+                                Overrides ({filteredOverrides.length.toLocaleString()})
+                              </TabsTrigger>
+                              <TabsTrigger value="added" data-testid="tab-entity-diff-added">
+                                Brand-new ({filteredAddedEntries.length.toLocaleString()})
+                              </TabsTrigger>
+                            </TabsList>
+                            <TabsContent value="overrides" className="mt-2">
+                              <EntityOverrideList
+                                overrides={filteredOverrides}
+                                emptyLabel={
+                                  entityDiffSearch.trim()
+                                    ? "No overrides match your search."
+                                    : "No bundled entries will be overridden."
+                                }
+                              />
+                            </TabsContent>
+                            <TabsContent value="added" className="mt-2">
+                              <EntityDiffList
+                                entries={filteredAddedEntries}
+                                emptyLabel={
+                                  entityDiffSearch.trim()
+                                    ? "No brand-new entries match your search."
+                                    : "No brand-new entries will be added."
+                                }
+                                variant="added"
+                              />
+                            </TabsContent>
+                          </Tabs>
+                        )}
+                      </div>
+                    )
+                  : (entityPreview.added > 0 || entityPreview.removed > 0 || entityPreview.changed > 0) && (
+                      <div>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="px-2"
+                          onClick={() => setShowEntityDiff((v) => !v)}
+                          data-testid="button-toggle-entity-diff"
+                        >
+                          {showEntityDiff ? (
+                            <ChevronDown className="h-4 w-4" />
+                          ) : (
+                            <ChevronRight className="h-4 w-4" />
+                          )}
+                          {showEntityDiff ? "Hide changed entries" : "Show changed entries"}
+                        </Button>
+
+                        {showEntityDiff && (
+                          <Tabs defaultValue="added" className="mt-2">
+                            <div className="relative mb-2">
+                              <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
+                              <Input
+                                value={entityDiffSearch}
+                                onChange={(e) => setEntityDiffSearch(e.target.value)}
+                                placeholder="Filter by address or name..."
+                                className="pl-8"
+                                data-testid="input-entity-diff-search"
+                              />
+                            </div>
+                            <TabsList className="grid w-full grid-cols-3">
+                              <TabsTrigger value="added" data-testid="tab-entity-diff-added">
+                                Added ({filteredAddedEntries.length.toLocaleString()})
+                              </TabsTrigger>
+                              <TabsTrigger value="changed" data-testid="tab-entity-diff-changed">
+                                Changed ({filteredChangedEntries.length.toLocaleString()})
+                              </TabsTrigger>
+                              <TabsTrigger value="removed" data-testid="tab-entity-diff-removed">
+                                Removed ({filteredRemovedEntries.length.toLocaleString()})
+                              </TabsTrigger>
+                            </TabsList>
+                            <TabsContent value="added" className="mt-2">
+                              <EntityDiffList
+                                entries={filteredAddedEntries}
+                                emptyLabel={
+                                  entityDiffSearch.trim()
+                                    ? "No added entries match your search."
+                                    : "No entries will be added."
+                                }
+                                variant="added"
+                              />
+                            </TabsContent>
+                            <TabsContent value="changed" className="mt-2">
+                              <ChangedEntityList
+                                changes={filteredChangedEntries}
+                                emptyLabel={
+                                  entityDiffSearch.trim()
+                                    ? "No changed entries match your search."
+                                    : "No entries changed name or category."
+                                }
+                              />
+                            </TabsContent>
+                            <TabsContent value="removed" className="mt-2">
+                              <EntityDiffList
+                                entries={filteredRemovedEntries}
+                                emptyLabel={
+                                  entityDiffSearch.trim()
+                                    ? "No removed entries match your search."
+                                    : "No entries will be removed."
+                                }
+                                variant="removed"
+                              />
+                            </TabsContent>
+                          </Tabs>
+                        )}
+                      </div>
                     )}
-                  </div>
-                )}
               </div>
             )}
 

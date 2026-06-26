@@ -23,6 +23,7 @@ import {
   getActiveEntitySource,
   getBundledEntityCount,
   getActiveEntityList,
+  getBundledEntityList,
   mergeWithBundled,
 } from '../privacy-entity-list';
 
@@ -197,71 +198,128 @@ export interface EntityChange {
 }
 
 /**
+ * A bundled entry that an incoming merge snapshot will overwrite, paired with
+ * the incoming entry that replaces it. Only populated for merge previews.
+ */
+export interface EntityOverride {
+  /** The existing bundled entry that will be overwritten. */
+  previous: EntityEntry;
+  /** The incoming entry that wins on this duplicate address. */
+  incoming: EntityEntry;
+  /**
+   * True when the incoming entry actually differs from the bundled one
+   * (name, category, or sourceNote). Identical re-imports are no-ops.
+   */
+  changed: boolean;
+}
+
+/**
  * A validated, not-yet-applied snapshot together with a comparison against the
- * currently active list. Built after validation succeeds so the UI can show a
- * confirmation before anything is replaced.
+ * baseline list. Built after validation succeeds so the UI can show a
+ * confirmation before anything changes.
+ *
+ * The baseline depends on `mode`:
+ *  - 'replace': compared against the currently active list (added/removed/unchanged).
+ *  - 'merge': compared against the bundled list, since a merge always unions on
+ *    top of the bundled defaults. Merge never removes; instead some incoming
+ *    addresses *override* existing bundled entries (see `overrides`).
  */
 export interface EntitySnapshotPreview {
+  /** Which import mode this preview was computed for. */
+  mode: EntityListMode;
   /** Normalized, validated entries ready to be applied on confirmation. */
   entries: EntityEntry[];
   /** Total entries in the incoming snapshot (== entries.length when valid). */
   incomingCount: number;
-  /** Entry count in the currently active list. */
+  /** Entry count in the baseline list (active for replace, bundled for merge). */
   currentCount: number;
-  /** Addresses present in the incoming snapshot but not in the current list. */
+  /** Entry count in the active list after applying (== incomingCount for replace). */
+  resultingCount: number;
+  /** Addresses present in the incoming snapshot but not in the baseline list. */
   added: number;
-  /** Addresses present in the current list but not in the incoming snapshot. */
+  /** Addresses present in the baseline but not in the incoming snapshot (replace only; 0 for merge). */
   removed: number;
   /** Addresses present in both lists with identical name and category. */
   unchanged: number;
-  /** Addresses present in both lists whose name and/or category differs. */
+  /** Addresses present in both lists whose name and/or category differs (replace only). */
   changed: number;
+  /** Incoming addresses that overwrite an existing bundled entry (merge only; 0 for replace). */
+  overridden: number;
   /** Per-category breakdown (only categories with at least one entry on either side). */
   categories: EntityCategoryDiff[];
-  /** The actual entries being added (incoming addresses not in the current list). */
+  /** The actual entries being added (incoming addresses not in the baseline list). */
   addedEntries: EntityEntry[];
-  /** The actual entries being removed (current addresses not in the incoming snapshot). */
+  /** The actual entries being removed (baseline addresses not in the incoming snapshot; replace only). */
   removedEntries: EntityEntry[];
-  /** Entries present in both lists whose name and/or category changed. */
+  /** Entries present in both lists whose name and/or category changed (replace only). */
   changedEntries: EntityChange[];
+  /** The bundled entries being overwritten, paired with their replacements (merge only). */
+  overrides: EntityOverride[];
 }
 
 /**
  * Build a preview comparing a set of validated incoming entries against the
- * currently active list. Pure computation — applies nothing.
+ * relevant baseline. Pure computation — applies nothing.
+ *
+ * For 'merge' the baseline is the bundled list (a merge always unions onto the
+ * bundled defaults), so the preview reports brand-new entries vs. entries that
+ * will overwrite existing bundled ones. For 'replace' the baseline is the
+ * currently active list, reported as added/removed/unchanged.
  */
-export function buildEntitySnapshotPreview(entries: EntityEntry[]): EntitySnapshotPreview {
-  const current = getActiveEntityList();
+export function buildEntitySnapshotPreview(
+  entries: EntityEntry[],
+  mode: EntityListMode = 'replace',
+): EntitySnapshotPreview {
+  const current = mode === 'merge' ? getBundledEntityList() : getActiveEntityList();
   const currentByAddr = new Map(current.map((e) => [e.address, e]));
   const incomingAddrs = new Set(entries.map((e) => e.address));
 
   const addedEntries = entries.filter((e) => !currentByAddr.has(e.address));
-  const removedEntries = current.filter((e) => !incomingAddrs.has(e.address));
   const added = addedEntries.length;
-  const removed = removedEntries.length;
 
-  // Addresses present in both lists: split into truly unchanged vs. changed
-  // (same address but a different name and/or category).
+  // Incoming addresses that already exist in the baseline.
+  const overlapping = entries.filter((e) => currentByAddr.has(e.address));
+
+  let removed = 0;
+  let removedEntries: EntityEntry[] = [];
+  let overridden = 0;
+  let overrides: EntityOverride[] = [];
+  let changed = 0;
   const changedEntries: EntityChange[] = [];
   let unchanged = 0;
-  for (const inc of entries) {
-    const cur = currentByAddr.get(inc.address);
-    if (!cur) continue;
-    const nameChanged = cur.name !== inc.name;
-    const categoryChanged = cur.category !== inc.category;
-    if (nameChanged || categoryChanged) {
-      changedEntries.push({
-        address: inc.address,
-        current: cur,
-        incoming: inc,
-        nameChanged,
-        categoryChanged,
-      });
-    } else {
-      unchanged += 1;
+
+  if (mode === 'merge') {
+    // A merge never removes bundled entries; overlapping addresses overwrite.
+    overrides = overlapping.map((incoming) => {
+      const previous = currentByAddr.get(incoming.address)!;
+      return { previous, incoming, changed: !entriesEqual(previous, incoming) };
+    });
+    overridden = overrides.length;
+    unchanged = overlapping.length;
+  } else {
+    removedEntries = current.filter((e) => !incomingAddrs.has(e.address));
+    removed = removedEntries.length;
+
+    // Addresses present in both lists: split into truly unchanged vs. changed
+    // (same address but a different name and/or category).
+    for (const inc of overlapping) {
+      const cur = currentByAddr.get(inc.address)!;
+      const nameChanged = cur.name !== inc.name;
+      const categoryChanged = cur.category !== inc.category;
+      if (nameChanged || categoryChanged) {
+        changedEntries.push({
+          address: inc.address,
+          current: cur,
+          incoming: inc,
+          nameChanged,
+          categoryChanged,
+        });
+      } else {
+        unchanged += 1;
+      }
     }
+    changed = changedEntries.length;
   }
-  const changed = changedEntries.length;
 
   const incomingByCat = new Map<EntityCategory, number>();
   for (const e of entries) {
@@ -281,19 +339,35 @@ export function buildEntitySnapshotPreview(entries: EntityEntry[]): EntitySnapsh
     }))
     .filter((c) => c.incoming > 0 || c.current > 0);
 
+  const resultingCount = mode === 'merge' ? current.length + added : entries.length;
+
   return {
+    mode,
     entries,
     incomingCount: entries.length,
     currentCount: current.length,
+    resultingCount,
     added,
     removed,
     unchanged,
     changed,
+    overridden,
     categories,
     addedEntries,
     removedEntries,
     changedEntries,
+    overrides,
   };
+}
+
+/** Shallow equality of the meaningful fields of two entity entries. */
+function entriesEqual(a: EntityEntry, b: EntityEntry): boolean {
+  return (
+    a.address === b.address &&
+    a.name === b.name &&
+    a.category === b.category &&
+    (a.sourceNote ?? '') === (b.sourceNote ?? '')
+  );
 }
 
 export interface PrepareEntitySnapshotResult {
@@ -306,10 +380,13 @@ export interface PrepareEntitySnapshotResult {
 
 /**
  * Validate a parsed snapshot and, when valid, build a preview comparing it to
- * the active list. Nothing is applied — call `applyEntitySnapshot` after the
- * user confirms. Invalid snapshots are reported back without any change.
+ * the baseline for `mode`. Nothing is applied — call `applyEntitySnapshot`
+ * after the user confirms. Invalid snapshots are reported back without change.
  */
-export function prepareEntitySnapshot(raw: unknown): PrepareEntitySnapshotResult {
+export function prepareEntitySnapshot(
+  raw: unknown,
+  mode: EntityListMode = 'replace',
+): PrepareEntitySnapshotResult {
   const result = validateEntitySnapshot(raw);
   if (!result.valid) {
     return { valid: false, total: result.total, errors: result.errors };
@@ -318,7 +395,7 @@ export function prepareEntitySnapshot(raw: unknown): PrepareEntitySnapshotResult
     valid: true,
     total: result.total,
     errors: [],
-    preview: buildEntitySnapshotPreview(result.entries),
+    preview: buildEntitySnapshotPreview(result.entries, mode),
   };
 }
 

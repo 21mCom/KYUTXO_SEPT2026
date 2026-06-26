@@ -646,6 +646,15 @@ describe("buildEntitySnapshotPreview", () => {
     expect(preview.unchanged).toBe(2);
   });
 
+  it("defaults to replace mode and reports it on the preview", () => {
+    setActiveEntityList([addrEntry(ADDR.binance, "exchange")]);
+    const preview = buildEntitySnapshotPreview([addrEntry(ADDR.gambling1, "gambling")]);
+    expect(preview.mode).toBe("replace");
+    expect(preview.overridden).toBe(0);
+    expect(preview.overrides).toEqual([]);
+    expect(preview.resultingCount).toBe(1);
+  });
+
   it("produces a per-category breakdown only for categories present on either side", () => {
     setActiveEntityList([
       addrEntry(ADDR.binance, "exchange"),
@@ -678,6 +687,80 @@ describe("buildEntitySnapshotPreview", () => {
     // Categories with no entries on either side are excluded.
     expect(preview.categories).toHaveLength(2);
     expect(byCategory.mixer).toBeUndefined();
+  });
+});
+
+describe("buildEntitySnapshotPreview (merge mode)", () => {
+  afterEach(() => {
+    resetActiveEntityList();
+  });
+
+  it("compares against the bundled list regardless of the active list", () => {
+    // Active list is some unrelated import; merge should ignore it and use bundled.
+    setActiveEntityList([addrEntry(ADDR.gambling1, "gambling")]);
+    const NEW_ADDR = "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq";
+
+    const preview = buildEntitySnapshotPreview(
+      [addrEntry(NEW_ADDR, "darknet", "New Market")],
+      "merge",
+    );
+
+    expect(preview.mode).toBe("merge");
+    expect(preview.currentCount).toBe(getBundledEntityCount());
+    expect(preview.added).toBe(1);
+    expect(preview.overridden).toBe(0);
+    expect(preview.removed).toBe(0);
+    expect(preview.resultingCount).toBe(getBundledEntityCount() + 1);
+  });
+
+  it("flags incoming addresses that overwrite a bundled entry", () => {
+    // ADDR.binance is in the bundled list (as an exchange). Importing it with a
+    // different name/category should be reported as an override, not removal.
+    const preview = buildEntitySnapshotPreview(
+      [addrEntry(ADDR.binance, "mixer", "Overridden Name")],
+      "merge",
+    );
+
+    expect(preview.added).toBe(0);
+    expect(preview.overridden).toBe(1);
+    expect(preview.removed).toBe(0);
+    expect(preview.removedEntries).toEqual([]);
+    expect(preview.resultingCount).toBe(getBundledEntityCount());
+
+    expect(preview.overrides).toHaveLength(1);
+    const ov = preview.overrides[0];
+    expect(ov.previous.address).toBe(ADDR.binance);
+    expect(ov.previous.category).toBe("exchange");
+    expect(ov.incoming).toEqual(addrEntry(ADDR.binance, "mixer", "Overridden Name"));
+    expect(ov.changed).toBe(true);
+  });
+
+  it("marks an override as unchanged when the incoming entry is identical", () => {
+    // Re-import a bundled entry exactly as it already is.
+    const json = serializeActiveEntityList();
+    const bundled = (JSON.parse(json).entries as EntityEntry[])[0];
+
+    const preview = buildEntitySnapshotPreview([bundled], "merge");
+
+    expect(preview.overridden).toBe(1);
+    expect(preview.overrides[0].changed).toBe(false);
+  });
+
+  it("splits a mixed snapshot into brand-new and overriding entries", () => {
+    const NEW_ADDR = "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq";
+    const preview = buildEntitySnapshotPreview(
+      [
+        addrEntry(ADDR.binance, "exchange", "Binance"), // exists in bundled → override
+        addrEntry(NEW_ADDR, "darknet", "New Market"), // brand-new
+      ],
+      "merge",
+    );
+
+    expect(preview.added).toBe(1);
+    expect(preview.overridden).toBe(1);
+    expect(preview.addedEntries.map((e) => e.address)).toEqual([NEW_ADDR]);
+    expect(preview.overrides.map((o) => o.incoming.address)).toEqual([ADDR.binance]);
+    expect(preview.resultingCount).toBe(getBundledEntityCount() + 1);
   });
 });
 
