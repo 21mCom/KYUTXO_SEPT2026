@@ -533,6 +533,107 @@ describe("buildEntitySnapshotPreview", () => {
     expect(preview.unchanged).toBe(2);
   });
 
+  it("returns every incoming entry in addedEntries when the current list is empty", () => {
+    setActiveEntityList([]);
+    const incoming = [
+      addrEntry(ADDR.binance, "exchange", "Binance"),
+      addrEntry(ADDR.gambling1, "gambling", "Casino"),
+    ];
+
+    const preview = buildEntitySnapshotPreview(incoming);
+
+    expect(preview.added).toBe(2);
+    expect(preview.removed).toBe(0);
+    expect(preview.addedEntries).toEqual(incoming);
+    expect(preview.removedEntries).toEqual([]);
+  });
+
+  it("returns every current entry in removedEntries when the incoming list is empty", () => {
+    const current = [
+      addrEntry(ADDR.binance, "exchange", "Binance"),
+      addrEntry(ADDR.gambling1, "gambling", "Casino"),
+    ];
+    setActiveEntityList(current);
+
+    const preview = buildEntitySnapshotPreview([]);
+
+    expect(preview.added).toBe(0);
+    expect(preview.removed).toBe(2);
+    expect(preview.addedEntries).toEqual([]);
+    expect(preview.removedEntries).toEqual(current);
+  });
+
+  it("returns empty added/removed entry arrays when both lists are empty", () => {
+    setActiveEntityList([]);
+
+    const preview = buildEntitySnapshotPreview([]);
+
+    expect(preview.added).toBe(0);
+    expect(preview.removed).toBe(0);
+    expect(preview.unchanged).toBe(0);
+    expect(preview.addedEntries).toEqual([]);
+    expect(preview.removedEntries).toEqual([]);
+  });
+
+  it("classifies entries only in incoming as added and only in current as removed", () => {
+    const binanceCurrent = addrEntry(ADDR.binance, "exchange", "Binance");
+    const binanceColdRemoved = addrEntry(ADDR.binanceCold, "exchange", "Binance Cold");
+    const bitstampCurrent = addrEntry(ADDR.bitstamp, "exchange", "Bitstamp");
+    setActiveEntityList([binanceCurrent, binanceColdRemoved, bitstampCurrent]);
+
+    const binanceIncoming = addrEntry(ADDR.binance, "exchange", "Binance");
+    const bitstampIncoming = addrEntry(ADDR.bitstamp, "exchange", "Bitstamp");
+    const gamblingAdded = addrEntry(ADDR.gambling1, "gambling", "Casino");
+    const incoming = [binanceIncoming, bitstampIncoming, gamblingAdded];
+
+    const preview = buildEntitySnapshotPreview(incoming);
+
+    // Added = incoming addresses not in current (gambling1 only).
+    expect(preview.added).toBe(1);
+    expect(preview.addedEntries).toEqual([gamblingAdded]);
+
+    // Removed = current addresses not in incoming (binanceCold only).
+    expect(preview.removed).toBe(1);
+    expect(preview.removedEntries).toEqual([binanceColdRemoved]);
+
+    // Shared addresses are unchanged and appear in neither array.
+    expect(preview.unchanged).toBe(2);
+  });
+
+  it("uses the current list's entry objects (not the incoming ones) for removedEntries", () => {
+    // Same addresses, different metadata, to prove which side each array sources from.
+    const currentBinance = addrEntry(ADDR.binance, "exchange", "Current Binance");
+    setActiveEntityList([currentBinance]);
+
+    const incomingBinance = addrEntry(ADDR.binance, "mixer", "Incoming Binance");
+    const incomingGambling = addrEntry(ADDR.gambling1, "gambling", "Casino");
+
+    const preview = buildEntitySnapshotPreview([incomingBinance, incomingGambling]);
+
+    // binance is in both lists → unchanged, so it appears in neither array.
+    expect(preview.unchanged).toBe(1);
+    expect(preview.removedEntries).toEqual([]);
+    // Only gambling1 is genuinely new, and it comes from the incoming list.
+    expect(preview.addedEntries).toEqual([incomingGambling]);
+  });
+
+  it("reports empty added/removed entry arrays for an identical list", () => {
+    const list = [
+      addrEntry(ADDR.binance, "exchange", "Binance"),
+      addrEntry(ADDR.gambling1, "gambling", "Casino"),
+    ];
+    setActiveEntityList(list);
+
+    const preview = buildEntitySnapshotPreview([
+      addrEntry(ADDR.binance, "exchange", "Binance"),
+      addrEntry(ADDR.gambling1, "gambling", "Casino"),
+    ]);
+
+    expect(preview.addedEntries).toEqual([]);
+    expect(preview.removedEntries).toEqual([]);
+    expect(preview.unchanged).toBe(2);
+  });
+
   it("produces a per-category breakdown only for categories present on either side", () => {
     setActiveEntityList([
       addrEntry(ADDR.binance, "exchange"),
