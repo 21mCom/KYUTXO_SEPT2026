@@ -1274,6 +1274,19 @@ export default function SettingsPage() {
                 ? `Resolving addresses... fetched ${p.fetched.toLocaleString()} of ${p.totalToFetch.toLocaleString()} prior transactions`
                 : "Resolving addresses from local data...",
             );
+          } else if (p.phase === "recomputing") {
+            if (p.recomputeTotal && p.recomputeTotal > 0) {
+              const pct = Math.round(
+                (p.recomputeProcessed ?? 0) / p.recomputeTotal * 100,
+              );
+              setResolveInputsProgress(pct);
+              setResolveInputsMessage(
+                `Updating balances... ${(p.recomputeProcessed ?? 0).toLocaleString()} of ${p.recomputeTotal.toLocaleString()} addresses`,
+              );
+            } else {
+              setResolveInputsProgress(99);
+              setResolveInputsMessage("Updating balances...");
+            }
           } else if (p.phase === "complete") {
             setResolveInputsProgress(100);
             setResolveInputsMessage("Done.");
@@ -1298,9 +1311,13 @@ export default function SettingsPage() {
           description: "All transaction inputs already have resolved addresses.",
         });
       } else {
+        const recomputeNote =
+          result.recomputed > 0
+            ? ` Updated balances for ${result.recomputed.toLocaleString()} address${result.recomputed !== 1 ? "es" : ""}.`
+            : "";
         toast({
           title: "Input Addresses Resolved",
-          description: `Resolved ${result.resolved.toLocaleString()} of ${result.unresolvedFound.toLocaleString()} blank input address${result.unresolvedFound !== 1 ? "es" : ""}.`,
+          description: `Resolved ${result.resolved.toLocaleString()} of ${result.unresolvedFound.toLocaleString()} blank input address${result.unresolvedFound !== 1 ? "es" : ""}.${recomputeNote}`,
         });
       }
     } catch (err) {

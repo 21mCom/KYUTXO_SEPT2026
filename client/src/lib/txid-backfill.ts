@@ -494,15 +494,13 @@ async function resolveBackfillPrevouts(
   // Forward the shared core's fetch- and write-phase progress hooks so the
   // manual backfill UI can show a progress bar both while fetching missing
   // previous transactions over the network and during the final, cancellable
-  // write phase. Also collect the source addresses we attribute so we can
-  // recompute their cached stats afterward.
-  const resolvedAddresses = new Set<string>();
-  const resolved = await resolveUnresolvedInputs(provider, unresolvedInputs, {
+  // write phase. The shared core returns the source addresses we attributed so
+  // we can recompute their cached stats afterward.
+  const { written, resolvedAddresses } = await resolveUnresolvedInputs(provider, unresolvedInputs, {
     signal,
     concurrency,
     onFetchProgress,
     onWriteProgress,
-    resolvedAddressesOut: resolvedAddresses,
   });
 
   // Recompute cached stats for every source address whose spend input we just
@@ -511,10 +509,10 @@ async function resolveBackfillPrevouts(
   // until a manual recompute. This mirrors transaction-sync.ts's resolvePrevouts.
   // Local-only (reads IndexedDB participant rows); never hits the network.
   // Errors here are non-fatal: the participant attribution above already stands.
-  if (resolved > 0 && resolvedAddresses.size > 0 && !signal?.aborted) {
+  if (written > 0 && resolvedAddresses.length > 0 && !signal?.aborted) {
     try {
       await recomputeAddressStats({
-        addresses: Array.from(resolvedAddresses),
+        addresses: resolvedAddresses,
         origin: 'blockchain-sync',
       });
     } catch (err) {
@@ -525,7 +523,7 @@ async function resolveBackfillPrevouts(
     }
   }
 
-  return resolved;
+  return written;
 }
 
 /**
@@ -557,10 +555,10 @@ async function resolveUnresolvedInputs(
      */
     resolvedAddressesOut?: Set<string>;
   } = {},
-): Promise<number> {
+): Promise<{ written: number; resolvedAddresses: string[] }> {
   const { signal, concurrency = 4, onFetchProgress, onWriteProgress, resolvedAddressesOut } = options;
 
-  if (unresolvedInputs.length === 0) return 0;
+  if (unresolvedInputs.length === 0) return { written: 0, resolvedAddresses: [] };
 
   // Build a cache of previous outputs from participant rows we already have.
   const outputCache = new Map<string, { address: string; amount: number; scriptType?: ScriptType }>();
@@ -570,7 +568,7 @@ async function resolveUnresolvedInputs(
   }
   const prevTxidArr = Array.from(prevTxids);
   for (let i = 0; i < prevTxidArr.length; i += 500) {
-    if (signal?.aborted) return 0;
+    if (signal?.aborted) return { written: 0, resolvedAddresses: [] };
     const batch = prevTxidArr.slice(i, i + 500);
     const outputs = await db.transactionParticipants
       .where('txid')
@@ -667,38 +665,51 @@ async function resolveUnresolvedInputs(
     }
   }
 
-  if (updated.length === 0) return 0;
+  if (updated.length === 0) return { written: 0, resolvedAddresses: [] };
 
   // Final bulk-write phase. This can take a while for large backfills, so we
   // check the abort signal between batches (prompt cancellation) and report
   // incremental progress. Each completed batch is committed, so stopping early
   // leaves the DB consistent — a re-run resumes from the still-unresolved rows.
+  // Track the addresses of rows we actually committed so the caller can
+  // recompute only their cached stats (the spending address's balance changes
+  // once its previously-blank spend input gets an address + amount).
   const total = updated.length;
   let written = 0;
+  const writtenAddresses = new Set<string>();
   onWriteProgress?.(written, total);
   for (let i = 0; i < updated.length; i += 200) {
-    if (signal?.aborted) return written;
+    if (signal?.aborted) {
+      return { written, resolvedAddresses: Array.from(writtenAddresses) };
+    }
     const batch = updated.slice(i, i + 200);
     await bulkPutParticipants(batch, { skipNotification: true });
+    for (const row of batch) {
+      if (row.address) writtenAddresses.add(row.address);
+    }
     written += batch.length;
     onWriteProgress?.(written, total);
     // Yield between batches so cancellation and the UI stay responsive.
     await new Promise(resolve => setTimeout(resolve, 0));
   }
 
-  return written;
+  return { written, resolvedAddresses: Array.from(writtenAddresses) };
 }
 
 // ─── Whole-database blank-input resolution ───────────────────────────────────
 
 export interface ResolveAllInputsProgress {
-  phase: 'scanning' | 'resolving' | 'complete';
+  phase: 'scanning' | 'resolving' | 'recomputing' | 'complete';
   /** Unresolved blank inputs discovered so far (or total once scanning ends). */
   unresolvedFound: number;
   /** Previous transactions fetched from the provider so far. */
   fetched: number;
   /** Total previous transactions that need fetching (known after scanning). */
   totalToFetch: number;
+  /** During the 'recomputing' phase: address records whose stats are recomputed so far. */
+  recomputeProcessed?: number;
+  /** During the 'recomputing' phase: total address records to recompute. */
+  recomputeTotal?: number;
 }
 
 export type ResolveAllInputsProgressCallback = (progress: ResolveAllInputsProgress) => void;
@@ -708,6 +719,8 @@ export interface ResolveAllInputsResult {
   unresolvedFound: number;
   /** Number of inputs whose address was actually filled in. */
   resolved: number;
+  /** Number of address records whose cached stats were recomputed afterwards. */
+  recomputed: number;
   deferred: boolean;
   deferReason?: string;
   errors: string[];
@@ -731,7 +744,7 @@ export interface ResolveAllInputsOptions {
 async function resolveAllBlankPrevouts(
   provider: BlockchainProvider,
   options: ResolveAllInputsOptions = {},
-): Promise<{ unresolvedFound: number; resolved: number }> {
+): Promise<{ unresolvedFound: number; resolved: number; resolvedAddresses: string[] }> {
   const { signal, onProgress, concurrency = 4 } = options;
 
   // Scan every input participant by id keyset, collecting only those that are
@@ -775,10 +788,10 @@ async function resolveAllBlankPrevouts(
   }
 
   if (signal?.aborted || unresolvedInputs.length === 0) {
-    return { unresolvedFound: unresolvedInputs.length, resolved: 0 };
+    return { unresolvedFound: unresolvedInputs.length, resolved: 0, resolvedAddresses: [] };
   }
 
-  const resolved = await resolveUnresolvedInputs(provider, unresolvedInputs, {
+  const { written, resolvedAddresses } = await resolveUnresolvedInputs(provider, unresolvedInputs, {
     signal,
     concurrency,
     onFetchProgress: (fetched, total) => {
@@ -791,7 +804,7 @@ async function resolveAllBlankPrevouts(
     },
   });
 
-  return { unresolvedFound: unresolvedInputs.length, resolved };
+  return { unresolvedFound: unresolvedInputs.length, resolved: written, resolvedAddresses };
 }
 
 /**
@@ -813,6 +826,7 @@ export async function resolveAllBlankInputAddresses(
       return {
         unresolvedFound: 0,
         resolved: 0,
+        recomputed: 0,
         deferred: true,
         deferReason: 'No node settings configured. Configure a blockchain provider in Settings to resolve input addresses.',
         errors: [],
@@ -827,6 +841,7 @@ export async function resolveAllBlankInputAddresses(
     return {
       unresolvedFound: 0,
       resolved: 0,
+      recomputed: 0,
       deferred: true,
       deferReason: `Could not connect to blockchain provider: ${msg}. Try again when a blockchain node is reachable.`,
       errors: [],
@@ -834,23 +849,56 @@ export async function resolveAllBlankInputAddresses(
   }
 
   if (signal?.aborted) {
-    return { unresolvedFound: 0, resolved: 0, deferred: false, errors: [] };
+    return { unresolvedFound: 0, resolved: 0, recomputed: 0, deferred: false, errors: [] };
   }
 
   const errors: string[] = [];
   try {
-    const { unresolvedFound, resolved } = await resolveAllBlankPrevouts(provider, options);
+    const { unresolvedFound, resolved, resolvedAddresses } = await resolveAllBlankPrevouts(provider, options);
+
+    // Recompute cached stats for every spending address we just attributed. A
+    // resolved input gives the spending address a known spend amount, so its
+    // cached balance/stats are now stale. We only touch the affected addresses
+    // (not the whole vault) to stay fast on large databases. This is a local-
+    // only compute that never hits the network. Errors are non-fatal — the
+    // inputs are already resolved, so a failed recompute just leaves stats to
+    // be refreshed by a later manual "Recompute Address Stats" run.
+    let recomputed = 0;
+    if (resolvedAddresses.length > 0 && !signal?.aborted) {
+      try {
+        const recomputeResult = await recomputeAddressStats({
+          addresses: resolvedAddresses,
+          origin: 'input-resolution',
+          signal,
+          onProgress: ({ processed, total }) => {
+            onProgress?.({
+              phase: 'recomputing',
+              unresolvedFound,
+              fetched: 0,
+              totalToFetch: 0,
+              recomputeProcessed: processed,
+              recomputeTotal: total,
+            });
+          },
+        });
+        recomputed = recomputeResult.updated;
+      } catch (recomputeErr) {
+        const msg = recomputeErr instanceof Error ? recomputeErr.message : String(recomputeErr);
+        errors.push(`stats recompute: ${msg}`);
+      }
+    }
+
     onProgress?.({
       phase: 'complete',
       unresolvedFound,
       fetched: 0,
       totalToFetch: 0,
     });
-    return { unresolvedFound, resolved, deferred: false, errors };
+    return { unresolvedFound, resolved, recomputed, deferred: false, errors };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     errors.push(msg);
-    return { unresolvedFound: 0, resolved: 0, deferred: false, errors };
+    return { unresolvedFound: 0, resolved: 0, recomputed: 0, deferred: false, errors };
   }
 }
 
