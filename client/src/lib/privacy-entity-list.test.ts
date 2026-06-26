@@ -70,6 +70,32 @@ describe("privacy-entity-list dataset integrity", () => {
     ).map((entry) => `${entry.name} (${entry.address}): ${entry.category}`);
     expect(invalid, `Entries with unknown category:\n${invalid.join("\n")}`).toEqual([]);
   });
+
+  it("every sourceNote address citation matches the entry's own address", () => {
+    // WalletExplorer-style citations embed the cited address in the URL path,
+    // e.g. https://www.walletexplorer.com/address/<addr>. A row duplicated by
+    // copy/paste but never re-pointed will cite a different address than its
+    // own `address` field — catch that silent breakage here.
+    const citationRe = /address\/([a-zA-HJ-NP-Za-km-z1-9]+)/gi;
+    const mismatched: string[] = [];
+    for (const entry of ENTITY_LIST) {
+      if (!entry.sourceNote) continue;
+      let match: RegExpExecArray | null;
+      citationRe.lastIndex = 0;
+      while ((match = citationRe.exec(entry.sourceNote)) !== null) {
+        const cited = match[1];
+        if (cited !== entry.address) {
+          mismatched.push(
+            `${entry.name} (${entry.address}) cites ${cited} in sourceNote`,
+          );
+        }
+      }
+    }
+    expect(
+      mismatched,
+      `sourceNote cites a different address than the entry:\n${mismatched.join("\n")}`,
+    ).toEqual([]);
+  });
 });
 
 describe("mergeWithBundled", () => {
