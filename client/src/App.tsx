@@ -140,8 +140,39 @@ function OrphanedTxNotifier() {
         const { txids } = await detectOrphanedTxRecords();
         if (cancelled || txids.length === 0) return;
 
+        // Rebuilding missing transaction data requires a connected blockchain
+        // provider. If none is configured, an auto-triggered backfill would
+        // immediately defer with a "no node configured" message — a dead end.
+        // Detect that case up front and guide the user to configure a provider
+        // first instead of kicking off a backfill that can only defer.
+        const { getNodeSettings } = await import("@/lib/data/node-settings-crud");
+        const nodeSettings = await getNodeSettings("default");
+        if (cancelled) return;
+        const hasNode = !!nodeSettings;
+
         const count = txids.length;
         const plural = count !== 1;
+
+        if (!hasNode) {
+          toast({
+            title: "Missing transaction data",
+            description: `${count.toLocaleString()} transaction${plural ? "s" : ""} ${plural ? "are" : "is"} missing on-chain data. Configure a blockchain provider in Settings to rebuild ${plural ? "them" : "it"}.`,
+            duration: 15000,
+            action: (
+              <ToastAction
+                altText="Open Settings to configure a blockchain provider"
+                onClick={() => {
+                  setLocation("/settings");
+                }}
+                data-testid="button-configure-provider"
+              >
+                Configure
+              </ToastAction>
+            ),
+          });
+          return;
+        }
+
         toast({
           title: "Missing transaction data",
           description: `${count.toLocaleString()} transaction${plural ? "s" : ""} ${plural ? "are" : "is"} missing on-chain data. Rebuild ${plural ? "them" : "it"} from Settings.`,
