@@ -56,7 +56,7 @@ import { renderSourceNote } from "@/lib/renderSourceNote";
 import { beginBulkOperation, endBulkOperation, db } from "@/lib/database";
 import type { Record as DbRecord, PrivacyAuditHistoryEntry, TransactionParticipant } from "@/lib/database";
 import { addPrivacyAuditHistoryEntry, clearPrivacyAuditHistory } from "@/lib/data/privacy-history-crud";
-import { buildPrivacyHistoryCsv } from "@/lib/privacy-history-export";
+import { buildPrivacyHistoryCsv, buildPrivacyHistoryPdf } from "@/lib/privacy-history-export";
 import { createTag } from "@/lib/data/vocabulary-crud";
 import { updateRecord, countRecordsByType, getRecordsPageByTypeIdReverseKeyset, getRecordsByInputStrings } from "@/lib/data/record-crud";
 import { getTransactionByTxid } from "@/lib/data/transaction-crud";
@@ -1403,6 +1403,32 @@ function PrivacyHistoryCard() {
     }
   }, [history, toast]);
 
+  const handleExportPdf = useCallback(async () => {
+    const list = history ?? [];
+    if (list.length === 0) return;
+    try {
+      const blob = await buildPrivacyHistoryPdf(list);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `privacy-history-${new Date().toISOString().slice(0, 10)}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      toast({
+        title: "History Exported",
+        description: `${list.length} audit run${list.length === 1 ? "" : "s"} exported to PDF.`,
+      });
+    } catch (e) {
+      toast({
+        variant: "destructive",
+        title: "Export Failed",
+        description: e instanceof Error ? e.message : "Could not export history.",
+      });
+    }
+  }, [history, toast]);
+
   if (!history || history.length === 0) return null;
 
   const latest = history[history.length - 1];
@@ -1449,6 +1475,15 @@ function PrivacyHistoryCard() {
           >
             <Download className="h-4 w-4" />
             Export CSV
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleExportPdf}
+            data-testid="button-export-history-pdf"
+          >
+            <Download className="h-4 w-4" />
+            Export PDF
           </Button>
           <Button
             variant="ghost"
