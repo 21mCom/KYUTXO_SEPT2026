@@ -698,6 +698,7 @@ export function CopyAddressButton({ address }: { address: string }) {
         .then(() => {
           setCopied(true);
           setTimeout(() => setCopied(false), 2000);
+          toast({ description: "Address copied" });
         })
         .catch(notifyFailure);
     } catch {

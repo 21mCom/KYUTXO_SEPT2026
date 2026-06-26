@@ -172,6 +172,7 @@ export function AddressFinderRow({ addr, onSelect, satsToBtcDisplay, formatDate,
         .then(() => {
           setCopied(true);
           setTimeout(() => setCopied(false), 2000);
+          toast({ description: "Address copied" });
         })
         .catch(notifyFailure);
     } catch {
