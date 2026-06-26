@@ -56,6 +56,7 @@ import { createTag } from "@/lib/data/vocabulary-crud";
 import { updateRecord, countRecordsByType, getRecordsPageByTypeIdReverseKeyset, getRecordsByInputStrings } from "@/lib/data/record-crud";
 import { getTransactionByTxid } from "@/lib/data/transaction-crud";
 import { getParticipantsByTxids } from "@/lib/data/record-queries";
+import { useSettings, updatePeelChainViewMode } from "@/hooks/use-settings";
 import { useTags } from "@/hooks/use-tags";
 import { useOwners } from "@/hooks/use-owners";
 import { useWalletNames } from "@/hooks/use-wallet-names";
@@ -977,7 +978,11 @@ function PeelChainGraph({ steps }: { steps: PeelStep[] }) {
 function PeelChainView({ txids, changeAddresses, coinjoinTxids }: { txids: string[]; changeAddresses: string[]; coinjoinTxids: Set<string> }) {
   const [loading, setLoading] = useState(true);
   const [steps, setSteps] = useState<PeelStep[]>([]);
-  const [viewMode, setViewMode] = useState<"graph" | "list">("graph");
+  const { peelChainViewMode } = useSettings();
+  const viewMode = peelChainViewMode;
+  const setViewMode = (mode: "graph" | "list") => {
+    void updatePeelChainViewMode(mode);
+  };
 
   useEffect(() => {
     let cancelled = false;

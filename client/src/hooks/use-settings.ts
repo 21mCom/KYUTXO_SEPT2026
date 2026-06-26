@@ -49,6 +49,7 @@ export function useSettings() {
     customFieldColumns: settings?.customFieldColumns || {},
     fieldVisibility: settings?.fieldVisibility || defaultFieldVisibility,
     cancelConfirmThreshold: settings?.cancelConfirmThreshold ?? DEFAULT_CANCEL_CONFIRM_THRESHOLD,
+    peelChainViewMode: settings?.peelChainViewMode ?? 'graph',
     isLoading: settings === undefined,
   };
 }
@@ -116,6 +117,15 @@ export async function updateCancelConfirmThreshold(value: number) {
   if (settings) {
     await updateStoredSettings('default', {
       cancelConfirmThreshold: value,
+    });
+  }
+}
+
+export async function updatePeelChainViewMode(mode: 'graph' | 'list') {
+  const settings = await getStoredSettings('default');
+  if (settings) {
+    await updateStoredSettings('default', {
+      peelChainViewMode: mode,
     });
   }
 }

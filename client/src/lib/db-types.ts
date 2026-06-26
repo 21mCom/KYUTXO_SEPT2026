@@ -369,6 +369,9 @@ export interface Settings {
   theme: 'light' | 'dark';
   defaultView: 'table' | 'grid';
   cancelConfirmThreshold: number;
+  // Persisted user preference for the Privacy Audit peel-chain view toggle.
+  // Defaults to 'graph' for first-time users when unset.
+  peelChainViewMode?: 'graph' | 'list';
   // Optional user-supplied offline snapshot for the Privacy Audit entity list.
   // When present it is applied to the active list at runtime; the bundled list
   // remains the fallback (cleared via "reset to bundled"). `mode` records how
