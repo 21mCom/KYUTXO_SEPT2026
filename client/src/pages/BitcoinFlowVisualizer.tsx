@@ -24,8 +24,8 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { useFlowData, type FlowNode } from "@/hooks/use-flow-data";
 import { usePageShortcuts } from "@/hooks/use-page-shortcuts";
 import { HopPathExplorer } from "@/components/HopPathExplorer";
-import { RecordDetailPanel } from "@/components/RecordDetailPanel";
-import { db, type ChainType, type AddressImportance, type VaultMetadata, type FlowType, type AcquisitionMethod, type DispositionType, type CounterpartyType } from "@/lib/database";
+import { useRecordPreview } from "@/contexts/RecordPreviewContext";
+import { db } from "@/lib/database";
 import { getParticipantsByAddresses } from "@/lib/dataFacade";
 import { useOwners } from "@/hooks/use-owners";
 import { useWalletNames } from "@/hooks/use-wallet-names";
@@ -40,36 +40,6 @@ interface FilteredAddress {
   balanceSats: number;
   lastTxDate: number;
   txCount: number;
-}
-
-interface RecordViewData {
-  id: string;
-  type: "address" | "transaction" | "other";
-  inputString: string;
-  label: string;
-  notes?: string;
-  tags: string[];
-  categories: string[];
-  seedName?: string;
-  walletSoftware?: string;
-  owner?: string;
-  walletName?: string;
-  privateKeyStatus?: string;
-  source?: string;
-  derivationPath?: string;
-  chainType?: ChainType;
-  vault?: VaultMetadata;
-  addressImportance?: AddressImportance;
-  customFields?: { [key: string]: string };
-  syncDepth?: number;
-  maxSyncedDepth?: number;
-  discoveredInTxid?: string;
-  discoveredFromRecordId?: number;
-  flowType?: FlowType;
-  acquisitionMethod?: AcquisitionMethod;
-  dispositionType?: DispositionType;
-  costBasisUsd?: number;
-  counterpartyType?: CounterpartyType;
 }
 
 interface FlowPathNode {
@@ -326,9 +296,7 @@ export default function BitcoinFlowVisualizer() {
   }, [flowData, searchAddress]);
   
   const [hoveredNode, setHoveredNode] = useState<FlowPathNode | null>(null);
-  const [recordPanelOpen, setRecordPanelOpen] = useState(false);
-  const [selectedRecord, setSelectedRecord] = useState<RecordViewData | null>(null);
-  const [loadingRecord, setLoadingRecord] = useState(false);
+  const { openRecordPreviewByAddress } = useRecordPreview();
 
   const { owners, isLoading: ownersLoading } = useOwners();
   const { walletNames, isLoading: walletsLoading } = useWalletNames();
@@ -463,66 +431,10 @@ export default function BitcoinFlowVisualizer() {
     return new Date(unixSeconds * 1000).toLocaleDateString();
   };
 
-  const handleNodeClick = useCallback(async (address: string) => {
+  const handleNodeClick = useCallback((address: string) => {
     if (!address) return;
-    
-    setLoadingRecord(true);
-    
-    try {
-      const dbRecord = await db.records
-        .where('inputString')
-        .equals(address)
-        .first();
-      
-      if (dbRecord) {
-        const converted: RecordViewData = {
-          id: String(dbRecord.id),
-          type: dbRecord.type as "address" | "transaction" | "other",
-          inputString: dbRecord.inputString,
-          label: dbRecord.label || "",
-          notes: dbRecord.notes,
-          tags: dbRecord.tags || [],
-          categories: dbRecord.categories || [],
-          seedName: dbRecord.seedName,
-          walletSoftware: dbRecord.walletSoftware,
-          owner: dbRecord.owner,
-          walletName: dbRecord.walletName,
-          privateKeyStatus: dbRecord.privateKeyStatus,
-          source: dbRecord.source,
-          derivationPath: dbRecord.derivationPath,
-          chainType: dbRecord.chainType as ChainType | undefined,
-          vault: dbRecord.vault as VaultMetadata | undefined,
-          addressImportance: dbRecord.addressImportance as AddressImportance | undefined,
-          customFields: dbRecord.customFields as { [key: string]: string } | undefined,
-          syncDepth: dbRecord.syncDepth,
-          maxSyncedDepth: dbRecord.maxSyncedDepth,
-          discoveredInTxid: dbRecord.discoveredInTxid,
-          discoveredFromRecordId: dbRecord.discoveredFromRecordId,
-          flowType: dbRecord.flowType as FlowType | undefined,
-          acquisitionMethod: dbRecord.acquisitionMethod as AcquisitionMethod | undefined,
-          dispositionType: dbRecord.dispositionType as DispositionType | undefined,
-          costBasisUsd: dbRecord.costBasisUsd,
-          counterpartyType: dbRecord.counterpartyType as CounterpartyType | undefined,
-        };
-        setSelectedRecord(converted);
-        setRecordPanelOpen(true);
-      } else {
-        navigate(`/records?search=${encodeURIComponent(address)}`);
-      }
-    } catch (err) {
-      console.error('[FlowVisualizer] Error loading record:', err);
-      navigate(`/records?search=${encodeURIComponent(address)}`);
-    } finally {
-      setLoadingRecord(false);
-    }
-  }, [navigate]);
-
-  const handleEditRecord = () => {
-    if (selectedRecord) {
-      setRecordPanelOpen(false);
-      navigate(`/records?id=${selectedRecord.id}`);
-    }
-  };
+    void openRecordPreviewByAddress(address);
+  }, [openRecordPreviewByAddress]);
 
   const handleSearch = () => {
     if (!searchAddress.trim()) return;
@@ -844,7 +756,21 @@ export default function BitcoinFlowVisualizer() {
                         const height = Math.max(20, Math.min(40, node.amount * 80));
                         const isOwned = node.isLabeled || !!node.owner;
                         return (
-                          <g key={node.id} className="cursor-pointer" onClick={() => handleNodeClick(node.address)} data-testid={`sankey-input-${node.id}`}>
+                          <g
+                            key={node.id}
+                            role="button"
+                            tabIndex={0}
+                            aria-label={`Address ${node.address} — view record`}
+                            className="cursor-pointer outline-none transition-opacity hover:opacity-80 focus-visible:opacity-80"
+                            onClick={() => handleNodeClick(node.address)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter" || e.key === " ") {
+                                e.preventDefault();
+                                handleNodeClick(node.address);
+                              }
+                            }}
+                            data-testid={`sankey-input-${node.id}`}
+                          >
                             <path
                               d={`M 120 ${y} C 250 ${y}, 280 200, 350 ${180 + (i - totalNodes/2) * 20}`}
                               fill="none"
@@ -885,7 +811,20 @@ export default function BitcoinFlowVisualizer() {
                       })}
 
                       {selectedFlowNode && (
-                        <g className="cursor-pointer" onClick={() => handleNodeClick(selectedFlowNode.address)} data-testid="sankey-selected-node">
+                        <g
+                          role="button"
+                          tabIndex={0}
+                          aria-label={`Address ${selectedFlowNode.address} — view record`}
+                          className="cursor-pointer outline-none transition-opacity hover:opacity-80 focus-visible:opacity-80"
+                          onClick={() => handleNodeClick(selectedFlowNode.address)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" || e.key === " ") {
+                              e.preventDefault();
+                              handleNodeClick(selectedFlowNode.address);
+                            }
+                          }}
+                          data-testid="sankey-selected-node"
+                        >
                           <rect
                             x="350"
                             y="150"
@@ -912,7 +851,21 @@ export default function BitcoinFlowVisualizer() {
                         const height = Math.max(20, Math.min(40, node.amount * 80));
                         const isOwned = node.isLabeled || !!node.owner;
                         return (
-                          <g key={node.id} className="cursor-pointer" onClick={() => handleNodeClick(node.address)} data-testid={`sankey-output-${node.id}`}>
+                          <g
+                            key={node.id}
+                            role="button"
+                            tabIndex={0}
+                            aria-label={`Address ${node.address} — view record`}
+                            className="cursor-pointer outline-none transition-opacity hover:opacity-80 focus-visible:opacity-80"
+                            onClick={() => handleNodeClick(node.address)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter" || e.key === " ") {
+                                e.preventDefault();
+                                handleNodeClick(node.address);
+                              }
+                            }}
+                            data-testid={`sankey-output-${node.id}`}
+                          >
                             <path
                               d={`M 450 ${200 + (i - totalNodes/2) * 20} C 520 ${200 + (i - totalNodes/2) * 20}, 550 ${y}, 680 ${y}`}
                               fill="none"
@@ -1210,10 +1163,19 @@ export default function BitcoinFlowVisualizer() {
                                     fill={fillColor}
                                     stroke={node.type === "selected" ? "hsl(var(--primary-foreground))" : isHovered ? "hsl(var(--foreground))" : "transparent"}
                                     strokeWidth={2}
-                                    className="cursor-pointer transition-all duration-200"
+                                    role="button"
+                                    tabIndex={0}
+                                    aria-label={`Address ${node.address} — view record`}
+                                    className="cursor-pointer transition-all duration-200 outline-none focus-visible:opacity-80"
                                     onMouseEnter={() => setHoveredNode(node)}
                                     onMouseLeave={() => setHoveredNode(null)}
                                     onClick={() => handleNodeClick(node.address)}
+                                    onKeyDown={(e) => {
+                                      if (e.key === "Enter" || e.key === " ") {
+                                        e.preventDefault();
+                                        handleNodeClick(node.address);
+                                      }
+                                    }}
                                     data-testid={`flow-node-${node.id}`}
                                   />
                                 </TooltipTrigger>
@@ -1365,13 +1327,6 @@ export default function BitcoinFlowVisualizer() {
         )}
       </div>
     </ScrollArea>
-      
-    <RecordDetailPanel
-      open={recordPanelOpen}
-      record={selectedRecord || undefined}
-      onClose={() => setRecordPanelOpen(false)}
-      onEdit={handleEditRecord}
-    />
     </>
   );
 }

@@ -28,6 +28,8 @@ import {
   getParticipantsByTxids,
 } from "@/lib/dataFacade";
 import type { Record as KRecord, TransactionParticipant } from "@/lib/db-types";
+import { useRecordPreview } from "@/contexts/RecordPreviewContext";
+import { createGraphNodeActivation } from "@/lib/graph-node-interaction";
 import {
   buildNetworkGraph,
   MAX_NODES,
@@ -68,6 +70,7 @@ type FilterMode = "all" | "user-only" | "by-owner" | "by-wallet";
 
 export default function NetworkAnalysis() {
   const { toast } = useToast();
+  const { openRecordPreviewByAddress } = useRecordPreview();
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [progress, setProgress] = useState("");
   const [graph, setGraph] = useState<NetworkGraph | null>(null);
@@ -565,12 +568,16 @@ export default function NetworkAnalysis() {
                         key={node.id}
                         data-graph-node="true"
                         data-testid={`node-address-${node.id.slice(0, 8)}`}
+                        role="button"
+                        tabIndex={0}
+                        aria-label={`Address ${node.id} — open record; click again to inspect connections`}
+                        className="outline-none focus-visible:opacity-100"
                         style={{ cursor: 'pointer' }}
-                        onClick={(e) => {
-                          e.stopPropagation();
+                        {...createGraphNodeActivation<SVGGElement>(() => {
                           const gNode = graph.nodes.find(n => n.id === node.id);
                           setSelectedNode(prev => prev?.id === node.id ? null : gNode || null);
-                        }}
+                          void openRecordPreviewByAddress(node.id);
+                        })}
                         onMouseEnter={() => setHoveredNode(node.id)}
                         onMouseLeave={() => setHoveredNode(null)}
                       >
@@ -623,6 +630,7 @@ export default function NetworkAnalysis() {
                   stats={graph.stats}
                   edges={graph.edges}
                   onClose={() => setSelectedNode(null)}
+                  onOpenRecord={openRecordPreviewByAddress}
                 />
               )}
               <CommunityLegend communities={graph.communities} />
@@ -696,11 +704,13 @@ function NodeDetail({
   stats,
   edges,
   onClose,
+  onOpenRecord,
 }: {
   node: GraphNode;
   stats: GraphStats;
   edges: GraphEdge[];
   onClose: () => void;
+  onOpenRecord: (address: string) => void;
 }) {
   const connectedEdges = edges.filter(e => e.source === node.id || e.target === node.id);
   const totalTxs = new Set(connectedEdges.flatMap(e => e.txids)).size;
@@ -718,7 +728,22 @@ function NodeDetail({
         <div className="flex items-start gap-1">
           <div className="min-w-0 flex-1">
             <span className="text-muted-foreground">Address: </span>
-            <span className="font-mono break-all" data-testid="text-selected-address">{node.id}</span>
+            <span
+              role="button"
+              tabIndex={0}
+              onClick={() => onOpenRecord(node.id)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  onOpenRecord(node.id);
+                }
+              }}
+              className="font-mono break-all text-primary underline underline-offset-2 cursor-pointer hover:opacity-80 outline-none focus-visible:opacity-80"
+              title="Click to view this address record"
+              data-testid="text-selected-address"
+            >
+              {node.id}
+            </span>
           </div>
           <CopyAddressButton address={node.id} />
         </div>

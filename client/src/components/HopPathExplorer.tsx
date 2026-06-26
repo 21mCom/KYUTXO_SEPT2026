@@ -206,11 +206,20 @@ export function HopPathExplorer({
     return (
       <div
         key={node.id}
-        className={`flex items-center gap-2 py-2 px-3 rounded-lg cursor-pointer transition-colors select-none ${
+        role="button"
+        tabIndex={0}
+        aria-label={`Address ${node.fullAddress} — view record`}
+        className={`flex items-center gap-2 py-2 px-3 rounded-lg cursor-pointer transition-colors select-none outline-none focus-visible:ring-1 focus-visible:ring-primary ${
           isSelected ? "bg-primary/10 ring-1 ring-primary" : "hover-elevate"
         }`}
         style={{ marginLeft: `${indent}px` }}
         onClick={() => handleNodeRowClick(node)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            handleNodeRowClick(node);
+          }
+        }}
         data-testid={`hop-node-${node.id}`}
       >
         <Circle className={`h-3 w-3 fill-current ${getNodeDotColor(node)}`} />
