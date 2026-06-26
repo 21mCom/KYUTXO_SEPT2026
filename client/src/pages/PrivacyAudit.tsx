@@ -87,7 +87,7 @@ const TAG_FETCH_BATCH = 500;
 // (window.open) — URLs are never fetched at load time, preserving offline-first
 // behavior. Notes without a URL render as plain text. Used for source citation
 // notes, finding descriptions, and remediation text.
-function renderSourceNote(note: string): React.ReactNode {
+export function renderSourceNote(note: string): React.ReactNode {
   const urlRegex = /https?:\/\/[^\s)]+/gi;
   const parts: React.ReactNode[] = [];
   let lastIndex = 0;
