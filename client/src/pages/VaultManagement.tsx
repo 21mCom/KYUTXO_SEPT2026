@@ -17,6 +17,7 @@ import { getAddressRecordsByImportanceTiersFiltered } from "@/lib/data/record-cr
 import { engineGetVaultSummaries, subscribeEngineReadiness } from "@/lib/engine/engine-client";
 import { evaluateEngineFreshness } from "@/lib/engine/engine-freshness";
 import { searchPendingClass } from "@/lib/search-pending-class";
+import { renderSourceNote } from "@/lib/renderSourceNote";
 
 const VAULT_TIERS: AddressImportance[] = ['xpub-derived', 'verified'];
 
@@ -418,8 +419,8 @@ export default function VaultManagement() {
                               )}
                             </div>
                             {cosigner.notes && (
-                              <p className="text-xs text-muted-foreground" data-testid={`text-cosigner-notes-${idx}-${cIdx}`}>
-                                {cosigner.notes}
+                              <p className="text-xs text-muted-foreground whitespace-pre-wrap" data-testid={`text-cosigner-notes-${idx}-${cIdx}`}>
+                                {renderSourceNote(cosigner.notes)}
                               </p>
                             )}
                           </div>
@@ -485,7 +486,9 @@ export default function VaultManagement() {
                             onClick={() => startEditingNotes(vault)}
                             data-testid={`text-vault-notes-${idx}`}
                           >
-                            {vault.userNotes}
+                            <span onClick={(e) => e.stopPropagation()}>
+                              {renderSourceNote(vault.userNotes)}
+                            </span>
                           </p>
                         ) : (
                           <p
