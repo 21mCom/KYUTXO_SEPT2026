@@ -87,6 +87,14 @@ export interface EntitySnapshotWarning {
   /** Zero-based index of the entry within the parsed array. */
   index: number;
   message: string;
+  /** The entry's own address (the one the citation should have matched). */
+  address?: string;
+  /**
+   * The distinct cited addresses that differ from the entry's own address.
+   * Surfaced separately from `message` so the UI can render each as a
+   * clickable link (copy / navigate). Works for base58 and bech32 alike.
+   */
+  citedAddresses?: string[];
 }
 
 export interface EntitySnapshotValidation {
@@ -237,6 +245,8 @@ export function validateEntitySnapshot(raw: unknown): EntitySnapshotValidation {
           warnings.push({
             index,
             message: `Source note for "${address}" cites a different address (${unique.join(', ')}).`,
+            address,
+            citedAddresses: unique,
           });
         }
       }

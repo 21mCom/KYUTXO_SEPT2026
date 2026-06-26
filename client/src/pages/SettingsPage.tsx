@@ -115,6 +115,7 @@ import { BackupCancelledError } from "@/lib/backup/sink";
 import { blobChunks } from "@/lib/backup/zip-stream";
 import { isV3Manifest, parseInline } from "@/lib/backup/format";
 import VocabularyManager from "@/components/VocabularyManager";
+import { AddressLink } from "@/components/AddressLink";
 import StripMarkersPanel from "@/components/StripMarkersPanel";
 import MigrationAuditPanel from "@/components/MigrationAuditPanel";
 import LegacyRecoveryPanel from "@/components/LegacyRecoveryPanel";
@@ -3056,14 +3057,34 @@ export default function SettingsPage() {
                       The source note links to a different address than the entry itself — usually a
                       copy/paste mistake. You can still import, but review these attributions first.
                     </p>
-                    <ul className="space-y-1 max-h-32 overflow-y-auto text-xs">
+                    <ul className="space-y-1.5 max-h-40 overflow-y-auto text-xs">
                       {entityImportWarnings.map((w, i) => (
                         <li
                           key={`${w.index}-${i}`}
                           className="text-yellow-700 dark:text-yellow-400 break-words"
                           data-testid={`text-entity-warning-${i}`}
                         >
-                          {w.message}
+                          {w.citedAddresses && w.citedAddresses.length > 0 ? (
+                            <span className="flex flex-wrap items-center gap-1">
+                              <span>
+                                Source note for{" "}
+                                {w.address && (
+                                  <span className="font-mono break-all">"{w.address}"</span>
+                                )}{" "}
+                                cites a different address
+                                {w.citedAddresses.length > 1 ? "es" : ""}:
+                              </span>
+                              {w.citedAddresses.map((addr) => (
+                                <AddressLink
+                                  key={addr}
+                                  address={addr}
+                                  showMetadataIndicator={false}
+                                />
+                              ))}
+                            </span>
+                          ) : (
+                            w.message
+                          )}
                         </li>
                       ))}
                     </ul>

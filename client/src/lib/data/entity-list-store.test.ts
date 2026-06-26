@@ -233,6 +233,9 @@ describe("validateEntitySnapshot citation warnings", () => {
     expect(result.warnings[0].index).toBe(0);
     expect(result.warnings[0].message).toContain(ADDR_A);
     expect(result.warnings[0].message).toContain(ADDR_B);
+    // Structured fields let the UI render each cited address as a clickable link.
+    expect(result.warnings[0].address).toBe(ADDR_A);
+    expect(result.warnings[0].citedAddresses).toEqual([ADDR_B]);
   });
 
   it("shows the full bech32 cited address in the warning message", () => {
@@ -246,6 +249,8 @@ describe("validateEntitySnapshot citation warnings", () => {
     expect(result.warnings).toHaveLength(1);
     // The complete bech32 address (with its 0) is present, not just "bc1qw5".
     expect(result.warnings[0].message).toContain(ADDR_BECH32);
+    // The full bech32 address is also surfaced structurally for the clickable link.
+    expect(result.warnings[0].citedAddresses).toEqual([ADDR_BECH32]);
   });
 
   it("does not warn when the citation matches the entry's address", () => {
