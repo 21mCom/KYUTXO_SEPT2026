@@ -1,6 +1,11 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, waitFor } from "@testing-library/react";
+import { render, waitFor, fireEvent } from "@testing-library/react";
+import {
+  ToastProvider,
+  Toast,
+  ToastViewport,
+} from "@/components/ui/toast";
 import {
   ORPHAN_CHECK_DONE_KEY,
   ORPHANS_AWAITING_PROVIDER_KEY,
@@ -232,5 +237,61 @@ describe("OrphanedTxNotifier provider-configured re-check", () => {
     expect(toastSpy).not.toHaveBeenCalled();
     // getNodeSettings is never consulted by the re-check when the gate is unset.
     expect(getNodeSettingsMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("OrphanedTxNotifier toast action buttons", () => {
+  // Renders the toast's action element inside a minimal Radix Toast context so
+  // the real onClick handler runs when the button is clicked. These exercise
+  // the navigation + autoBackfill side effects the handlers actually carry.
+  const renderAction = (action: React.ReactElement) =>
+    render(
+      <ToastProvider>
+        <Toast open>{action}</Toast>
+        <ToastViewport />
+      </ToastProvider>,
+    );
+
+  it("'Fix now' sets the autoBackfill flag and navigates to /settings when clicked", async () => {
+    getNodeSettingsMock.mockResolvedValue({ id: "default" });
+
+    render(<OrphanedTxNotifier />);
+    await waitFor(() => expect(toastSpy).toHaveBeenCalledTimes(1));
+
+    const action = toastSpy.mock.calls[0][0].action as React.ReactElement;
+    expect(action.props["data-testid"]).toBe(
+      "button-rebuild-missing-transactions",
+    );
+
+    const { getByTestId } = renderAction(action);
+
+    // Pre-condition: neither side effect has happened yet.
+    expect(sessionStorage.getItem("kyutxo:autoBackfill")).toBeNull();
+    expect(setLocationSpy).not.toHaveBeenCalled();
+
+    fireEvent.click(getByTestId("button-rebuild-missing-transactions"));
+
+    expect(sessionStorage.getItem("kyutxo:autoBackfill")).toBe("1");
+    expect(setLocationSpy).toHaveBeenCalledWith("/settings");
+  });
+
+  it("'Configure' navigates to /settings without setting the autoBackfill flag", async () => {
+    getNodeSettingsMock.mockResolvedValue(undefined);
+
+    render(<OrphanedTxNotifier />);
+    await waitFor(() => expect(toastSpy).toHaveBeenCalledTimes(1));
+
+    const action = toastSpy.mock.calls[0][0].action as React.ReactElement;
+    expect(action.props["data-testid"]).toBe("button-configure-provider");
+
+    const { getByTestId } = renderAction(action);
+
+    expect(setLocationSpy).not.toHaveBeenCalled();
+
+    fireEvent.click(getByTestId("button-configure-provider"));
+
+    expect(setLocationSpy).toHaveBeenCalledWith("/settings");
+    // The Configure handler must never arm the auto-backfill path.
+    expect(sessionStorage.getItem("kyutxo:autoBackfill")).toBeNull();
   });
 });
