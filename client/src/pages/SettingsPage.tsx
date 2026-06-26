@@ -57,13 +57,13 @@ import { clearAllRecords } from "@/lib/data/record-crud";
 import { getPrivacyAuditHistoryCount } from "@/lib/data/privacy-history-crud";
 import { recomputeAddressStats } from "@/lib/data/address-stats";
 import { clearTransactions, clearParticipants } from "@/lib/data/transaction-crud";
-import { addUtxoLineage, addCustodySegment, clearUtxoLineage, clearCustodySegments } from "@/lib/data/lineage-crud";
+import { clearUtxoLineage, clearCustodySegments } from "@/lib/data/lineage-crud";
 import { clearEvidence, clearEvidenceAttachments } from "@/lib/data/evidence-crud";
 import { clearAttachments } from "@/lib/data/attachments-crud";
 import { clearRecordOrigins } from "@/lib/data/record-origins-crud";
 import { clearCustomFields } from "@/lib/data/custom-fields-crud";
 import { clearAddressSyncState } from "@/lib/data/address-sync-crud";
-import { clearPriceData, addPriceData } from "@/lib/data/price-data-crud";
+import { clearPriceData } from "@/lib/data/price-data-crud";
 import { clearNodeSettings, getNodeSettings } from "@/lib/data/node-settings-crud";
 import {
   restoreNodeSettingsRows,
@@ -82,6 +82,8 @@ import {
   restoreLegacyCustomFields,
   restoreLegacyDerivationTemplates,
   restoreLegacyEvidence,
+  restoreLegacyPriceData,
+  restoreLegacyLineage,
 } from "@/lib/backup/legacy-restore-misc";
 import { clearDerivationTemplates } from "@/lib/data/derivation-templates-crud";
 import { updateSettings } from "@/lib/data/settings-crud";
@@ -2328,9 +2330,6 @@ export default function SettingsPage() {
       setRestoreProgress(97);
       setRestoreMessage("Restoring evidence and additional data...");
 
-      let priceDataAdded = 0;
-      let lineageDataAdded = 0;
-
       // Restore evidence documents and their attachments. Evidence rows get
       // fresh auto-increment ids on restore (clear() does NOT reset IndexedDB
       // key generation), so the attachments' evidenceId must be remapped to the
@@ -2344,14 +2343,10 @@ export default function SettingsPage() {
       const evidenceAdded = evidenceResult.evidenceAdded;
       const evidenceAttachmentsAdded = evidenceResult.evidenceAttachmentsAdded;
 
-      // Restore price data (v2.2.0+, not encrypted)
-      if (priceData && priceData.length > 0) {
-        for (const pd of priceData) {
-          const { id, ...pdData } = pd;
-          await addPriceData(pdData, { skipNotification: true });
-          priceDataAdded++;
-        }
-      }
+      // Restore price data (v2.2.0+, not encrypted): append-only, no de-dup or
+      // id remapping (replace mode cleared the table above). Shared with tests
+      // via the legacy-restore-misc helpers.
+      const priceDataAdded = await restoreLegacyPriceData(priceData);
 
       // Restore node settings (v2.2.0+, not encrypted). Uses the shared helper
       // so the legacy path and the v3 streaming path can never diverge in how
@@ -2363,22 +2358,13 @@ export default function SettingsPage() {
       // diverging; fields absent from older backups are left at their defaults.
       await restoreSettingsPreferences(backupSettings);
 
-      // Restore UTXO lineage data (v2.2.0+, not encrypted)
-      if (utxoLineage && utxoLineage.length > 0) {
-        for (const ul of utxoLineage) {
-          const { id, ...ulData } = ul;
-          await addUtxoLineage(ulData, { skipNotification: true });
-          lineageDataAdded++;
-        }
-      }
-
-      // Restore custody segments (v2.2.0+, not encrypted)
-      if (custodySegments && custodySegments.length > 0) {
-        for (const cs of custodySegments) {
-          const { id, ...csData } = cs;
-          await addCustodySegment(csData, { skipNotification: true });
-        }
-      }
+      // Restore UTXO lineage data and custody segments (v2.2.0+, not encrypted):
+      // append-only, no de-dup or id remapping (replace mode cleared the tables
+      // above). Custody segments have a unique `segmentId` index, so the legacy
+      // path relies on replace having cleared first. Shared with tests via the
+      // legacy-restore-misc helpers; only lineage rows are surfaced to the user.
+      const lineageResult = await restoreLegacyLineage(utxoLineage, custodySegments);
+      const lineageDataAdded = lineageResult.lineageAdded;
 
       // Restore blockchain transaction data (v2.2.0+, not encrypted): confirmed
       // transactions, their input/output participants, and per-address sync

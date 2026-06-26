@@ -1,9 +1,10 @@
-// Shared helpers for the LEGACY (pre-v3) backup restore path's LOWER-RISK
+// Shared helpers for the LEGACY (pre-v3) backup restore path's append-only
 // inline branches: vocabulary (tags/categories/owners/walletNames/seedNames/
-// walletSoftware), custom fields, derivation templates, and evidence (+ evidence
-// attachments). These used to live inline inside SettingsPage's ~1000-line
-// `handleRestore` with no automated coverage, so a regression in their
-// merge-vs-replace de-duplication or id handling could silently break a restore.
+// walletSoftware), custom fields, derivation templates, evidence (+ evidence
+// attachments), price data, and UTXO lineage + custody segments. These used to
+// live inline inside SettingsPage's ~1000-line `handleRestore` with no automated
+// coverage, so a regression in their merge-vs-replace de-duplication or id
+// handling could silently break a restore.
 //
 // This module mirrors `./legacy-restore` (the high-risk, id-remapping tables):
 // it extracts the inline logic VERBATIM — same de-dup keys, same field defaults,
@@ -22,9 +23,20 @@
 //     restore, so each backup evidence id is mapped to its new live id and the
 //     attachments' `evidenceId` is remapped through that map; without this an old
 //     backup would orphan/mislink every evidence file (mirrors the v3 path).
-// Every guarded table (evidence, evidenceAttachments) is touched only through
-// its CRUD module; the vocabulary tables are not guarded and are read/written
-// through the vocabulary CRUD module too.
+//   - price data: no de-dup and no id/FK remapping in either mode — every row is
+//     added with a fresh autoincrement id (the backup id is stripped). The
+//     legacy path relies on `replace` mode having cleared the table first to
+//     avoid duplicates on the non-unique `[date+currency+asset]` index.
+//   - utxo lineage + custody segments: no de-dup and no id/FK remapping in
+//     either mode — every row is added with a fresh autoincrement id. Custody
+//     segments carry a UNIQUE `segmentId` index, so a backup with two rows
+//     sharing a segmentId (or a merge over an existing one) would throw; the
+//     legacy path never guarded this and relies on `replace` having cleared
+//     first. Only utxoLineage is counted for the user ("lineage").
+// Every guarded table (evidence, evidenceAttachments, utxoLineage,
+// custodySegments) is touched only through its CRUD module; the vocabulary and
+// priceData tables are not guarded and are read/written through their CRUD
+// module too.
 
 import type { Evidence } from "@/lib/database";
 import {
@@ -54,6 +66,16 @@ import {
   bulkAddEvidence,
   addEvidenceAttachment,
 } from "@/lib/data/evidence-crud";
+import {
+  addPriceData,
+  type CreatePriceData,
+} from "@/lib/data/price-data-crud";
+import {
+  addUtxoLineage,
+  addCustodySegment,
+  type CreateUtxoLineageData,
+  type CreateCustodySegmentData,
+} from "@/lib/data/lineage-crud";
 
 export type RestoreMode = "merge" | "replace";
 
@@ -300,4 +322,64 @@ export async function restoreLegacyEvidence(
   }
 
   return { evidenceAdded, evidenceAttachmentsAdded };
+}
+
+/**
+ * Restore daily price data rows. The legacy path does NOT de-dup in either mode
+ * and does NOT remap any id/FK: every row is added with a fresh autoincrement id
+ * (the backup id is stripped). The `[date+currency+asset]` index is NOT unique,
+ * so duplicates would not throw — `replace` mode relies on the table having been
+ * cleared first to avoid re-adding the same rows. Returns the number added (the
+ * "prices" count surfaced to the user).
+ */
+export async function restoreLegacyPriceData(
+  priceData: any[] | undefined,
+): Promise<number> {
+  let priceDataAdded = 0;
+  if (!priceData || priceData.length === 0) return priceDataAdded;
+
+  for (const pd of priceData) {
+    const { id, ...pdData } = pd;
+    await addPriceData(pdData as CreatePriceData, { skipNotification: true });
+    priceDataAdded++;
+  }
+
+  return priceDataAdded;
+}
+
+/**
+ * Restore UTXO lineage rows and custody segments. The legacy path does NOT
+ * de-dup either table in either mode and does NOT remap any id/FK: every row is
+ * added with a fresh autoincrement id (the backup id is stripped). Custody
+ * segments carry a UNIQUE `segmentId` index, so two backup rows sharing a
+ * segmentId (or a merge over an already-present segmentId) would throw — the
+ * legacy path never guarded this and relies on `replace` mode having cleared the
+ * table first. Only `utxoLineage` rows are counted for the user (the "lineage"
+ * count); custody segments are restored but not separately reported, matching
+ * the original inline statistics.
+ */
+export async function restoreLegacyLineage(
+  utxoLineage: any[] | undefined,
+  custodySegments: any[] | undefined,
+): Promise<{ lineageAdded: number; segmentsAdded: number }> {
+  let lineageAdded = 0;
+  let segmentsAdded = 0;
+
+  if (utxoLineage && utxoLineage.length > 0) {
+    for (const ul of utxoLineage) {
+      const { id, ...ulData } = ul;
+      await addUtxoLineage(ulData as CreateUtxoLineageData, { skipNotification: true });
+      lineageAdded++;
+    }
+  }
+
+  if (custodySegments && custodySegments.length > 0) {
+    for (const cs of custodySegments) {
+      const { id, ...csData } = cs;
+      await addCustodySegment(csData as CreateCustodySegmentData, { skipNotification: true });
+      segmentsAdded++;
+    }
+  }
+
+  return { lineageAdded, segmentsAdded };
 }
