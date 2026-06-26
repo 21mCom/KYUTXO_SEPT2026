@@ -56,6 +56,9 @@ const ADDR = {
   binanceCold: "1NDyJtNTjmwk5xPNhjgAMu4HDHigtobu1s",
   bitstamp: "12cgpFdJViXbwHbhrA3TuW1EGnL25Zqc3P",
   gambling1: "18WsHUKZ3D6DPTjWcDGS99E1uL2xYaxDaW",
+  // A valid mainnet address that is NOT in the bundled list, so a merge that
+  // includes it grows the active list by exactly one beyond the bundled count.
+  notBundled: "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq",
 } as const;
 
 function entry(
@@ -162,6 +165,57 @@ describe("importEntitySnapshot", () => {
     const settings = await getSettings("default");
     expect(settings?.entityListSnapshot).toBeUndefined();
   });
+
+  it("replace mode persists mode='replace' and sets the active list to exactly the imported entries", async () => {
+    const raw = [
+      { address: ADDR.binance, name: "Binance", category: "exchange" },
+      { address: ADDR.gambling1, name: "Casino", category: "gambling" },
+    ];
+
+    const result = await importEntitySnapshot(raw, "replace.json", "replace");
+
+    expect(result.valid).toBe(true);
+    expect(result.mode).toBe("replace");
+    expect(result.count).toBe(2);
+    expect(result.activeCount).toBe(2);
+
+    // Active list is exactly the imported entries — nothing from the bundled list.
+    expect(getActiveEntitySource()).toBe("imported");
+    const active = new Set(getActiveEntityList().map((e) => e.address));
+    expect(active).toEqual(new Set([ADDR.binance, ADDR.gambling1]));
+
+    // Persisted with mode='replace' and exactly the imported entries.
+    const settings = await getSettings("default");
+    expect(settings!.entityListSnapshot!.mode).toBe("replace");
+    expect(settings!.entityListSnapshot!.entries).toHaveLength(2);
+  });
+
+  it("merge mode persists only the user entries plus mode='merge'", async () => {
+    const raw = [
+      { address: ADDR.notBundled, name: "New Market", category: "darknet" },
+    ];
+
+    const result = await importEntitySnapshot(raw, "merge.json", "merge");
+
+    expect(result.valid).toBe(true);
+    expect(result.mode).toBe("merge");
+    // The snapshot itself only contains the single user entry...
+    expect(result.count).toBe(1);
+    // ...but the active list is the bundled list unioned with that entry.
+    expect(result.activeCount).toBe(getBundledEntityCount() + 1);
+
+    expect(getActiveEntitySource()).toBe("imported");
+    expect(getActiveEntityList()).toHaveLength(getBundledEntityCount() + 1);
+    const active = new Set(getActiveEntityList().map((e) => e.address));
+    expect(active.has(ADDR.notBundled)).toBe(true);
+
+    // Only the user-supplied entry is persisted (not the merged result), so
+    // future bundled updates still flow through.
+    const settings = await getSettings("default");
+    expect(settings!.entityListSnapshot!.mode).toBe("merge");
+    expect(settings!.entityListSnapshot!.entries).toHaveLength(1);
+    expect(settings!.entityListSnapshot!.entries[0].address).toBe(ADDR.notBundled);
+  });
 });
 
 describe("resetEntitySnapshot", () => {
@@ -197,6 +251,66 @@ describe("loadEntitySnapshotFromStorage", () => {
     expect(status.source).toBe("imported");
     expect(getActiveEntitySource()).toBe("imported");
     expect(getActiveEntityList()).toHaveLength(2);
+  });
+
+  it("re-merges a mode='merge' snapshot onto the bundled list at startup", async () => {
+    // Persist a merge import (only the user entry is stored), then simulate a
+    // fresh start.
+    await importEntitySnapshot(
+      [{ address: ADDR.notBundled, name: "New Market", category: "darknet" }],
+      "merge.json",
+      "merge",
+    );
+    resetActiveEntityList();
+    expect(getActiveEntitySource()).toBe("bundled");
+
+    const status = await loadEntitySnapshotFromStorage();
+
+    // Re-merged: bundled list plus the single persisted user entry.
+    expect(status.source).toBe("imported");
+    expect(getActiveEntityList()).toHaveLength(getBundledEntityCount() + 1);
+    const active = new Set(getActiveEntityList().map((e) => e.address));
+    expect(active.has(ADDR.notBundled)).toBe(true);
+  });
+
+  it("replaces with exactly the persisted entries for a mode='replace' snapshot", async () => {
+    await importEntitySnapshot(
+      [{ address: ADDR.binance, name: "Binance", category: "exchange" }],
+      "replace.json",
+      "replace",
+    );
+    resetActiveEntityList();
+
+    const status = await loadEntitySnapshotFromStorage();
+
+    // Replaced: exactly the persisted entry, not unioned with the bundled list.
+    expect(status.source).toBe("imported");
+    expect(getActiveEntityList()).toHaveLength(1);
+    expect(getActiveEntityList()[0].address).toBe(ADDR.binance);
+  });
+
+  it("replaces (not merges) a legacy snapshot persisted without a mode", async () => {
+    // Snapshots written before merge support existed have no `mode` field; they
+    // must be treated as 'replace' so they re-apply exactly as imported.
+    await putSettings(
+      {
+        id: "default",
+        entityListSnapshot: {
+          importedAt: Date.now(),
+          sourceLabel: "legacy.json",
+          entries: [
+            { address: ADDR.binance, name: "Binance", category: "exchange" },
+          ],
+        },
+      } as Settings,
+      { skipNotification: true },
+    );
+
+    const status = await loadEntitySnapshotFromStorage();
+
+    expect(status.source).toBe("imported");
+    expect(getActiveEntityList()).toHaveLength(1);
+    expect(getActiveEntityList()[0].address).toBe(ADDR.binance);
   });
 
   it("falls back to the bundled list when no snapshot is persisted", async () => {
