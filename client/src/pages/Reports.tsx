@@ -44,7 +44,7 @@ function gradeColor(grade: string): string {
   return "text-red-600 dark:text-red-400";
 }
 
-function PrivacyAuditReportPanel() {
+export function PrivacyAuditReportPanel() {
   const { owners } = useOwners();
   const { walletNames } = useWalletNames();
   const { toast } = useToast();
