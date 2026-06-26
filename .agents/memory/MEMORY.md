@@ -18,3 +18,4 @@
 - [Electron readFile Buffer pool over IPC](electron-readfile-buffer-pool.md) — never return a Node Buffer's .buffer over IPC; it's a pooled view, slice to byteOffset/byteLength or you leak/corrupt neighboring bytes.
 - [Attachment pointer drift repair](attachment-pointer-drift-repair.md) — relink drifted DB pointers to orphaned hashed/opaque files only (never plaintext); claim each file to avoid double-link; repair never moves/copies/deletes bytes.
 - [useLiveQuery arity](use-livequery-arity.md) — this repo's dexie-react-hooks types accept only 1-2 args (no default-result 3rd arg) and infer `{}` for `?? []`; use 1 arg + handle undefined like the use-* hooks.
+- [Sync backfill of new tx fields](sync-backfill-new-fields.md) — backfilling new blockchainTransactions columns onto old rows must run in syncAddress's height-skip branch (it preempts the existing-tx lookup), or re-sync backfills nothing.

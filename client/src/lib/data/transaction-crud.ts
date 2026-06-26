@@ -20,6 +20,18 @@ export async function addTransaction(
   return id as number;
 }
 
+export async function updateTransaction(
+  id: number,
+  changes: Partial<CreateTransactionData>,
+  options?: TransactionWriteOptions
+): Promise<void> {
+  await db.blockchainTransactions.update(id, changes);
+
+  if (!options?.skipNotification) {
+    notifyDbChange('blockchainTransactions');
+  }
+}
+
 export async function bulkAddTransactions(
   transactions: CreateTransactionData[],
   options?: TransactionWriteOptions

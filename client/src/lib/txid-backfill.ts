@@ -159,6 +159,16 @@ async function writeOnChainData(
     vsize: parsed.vsize,
     hasOpReturn: parsed.hasOpReturn,
     opReturnData: parsed.opReturnData.length > 0 ? parsed.opReturnData : undefined,
+    // Wallet fingerprinting fields (populated when the API returns version/locktime/sequence)
+    rawFingerprintCaptured: parsed.rawFingerprintCaptured,
+    nVersion: parsed.nVersion,
+    nLockTime: parsed.nLockTime,
+    hasRbf: parsed.hasRbf,
+    isBip69Ordered: parsed.isBip69Ordered,
+    hasWitness: parsed.hasWitness,
+    hasCoinbaseInput: parsed.hasCoinbaseInput,
+    hasLowRSig: parsed.hasLowRSig,
+    hasMixedWitness: parsed.hasMixedWitness,
   }, { skipNotification: true });
 
   // Build participant rows. For each address, look up an existing record by

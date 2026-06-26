@@ -9,6 +9,7 @@ import {
   createRecordOrigin,
   updateRecord,
   addTransaction,
+  updateTransaction,
   bulkAddParticipants,
   bulkPutParticipants,
   addSkippedAddress,
@@ -1361,6 +1362,40 @@ export class TransactionSyncService {
     return result;
   }
 
+  // Builds the wallet-fingerprinting field subset from a parsed transaction.
+  // Shared by the new-import path and the re-sync backfill path so both stay
+  // in lockstep when fields are added.
+  private fingerprintFields(parsed: ParsedTransaction): Partial<BlockchainTransaction> {
+    return {
+      rawFingerprintCaptured: parsed.rawFingerprintCaptured,
+      nVersion: parsed.nVersion,
+      nLockTime: parsed.nLockTime,
+      hasRbf: parsed.hasRbf,
+      isBip69Ordered: parsed.isBip69Ordered,
+      hasWitness: parsed.hasWitness,
+      hasCoinbaseInput: parsed.hasCoinbaseInput,
+      hasLowRSig: parsed.hasLowRSig,
+      hasMixedWitness: parsed.hasMixedWitness,
+    };
+  }
+
+  // Populates fingerprint fields on a transaction row that was synced before
+  // fingerprint capture existed. Returns true when a write was performed.
+  // Defers the blockchainTransactions notification so the UI refreshes once
+  // at the end of the run.
+  private async backfillFingerprint(
+    existingTx: BlockchainTransaction | undefined,
+    parsed: ParsedTransaction
+  ): Promise<boolean> {
+    if (!existingTx || existingTx.id === undefined) return false;
+    if (existingTx.rawFingerprintCaptured) return false;
+    if (!parsed.rawFingerprintCaptured) return false;
+
+    await updateTransaction(existingTx.id, this.fingerprintFields(parsed), { skipNotification: true });
+    this.deferNotification('blockchainTransactions');
+    return true;
+  }
+
   private async syncAddress(
     address: string,
     recordId: number,
@@ -1400,6 +1435,16 @@ export class TransactionSyncService {
       }
 
       if (syncState && parsed.blockHeight <= syncState.lastSyncedHeight) {
+        // Already-synced height: don't re-import, but backfill wallet
+        // fingerprint data onto rows that were synced before fingerprint
+        // capture existed, so Privacy Audit stops showing "re-sync needed".
+        if (parsed.rawFingerprintCaptured) {
+          const existingTx = await db.blockchainTransactions.where('txid').equals(parsed.txid).first();
+          if (await this.backfillFingerprint(existingTx, parsed)) {
+            this.statsTouchedAddresses.add(address);
+            stats.updated++;
+          }
+        }
         stats.skippedAlreadySynced++;
         continue;
       }
@@ -1407,6 +1452,11 @@ export class TransactionSyncService {
       const existingTx = await db.blockchainTransactions.where('txid').equals(parsed.txid).first();
 
       if (existingTx) {
+        // Tx already imported (e.g. seen via another address): backfill
+        // fingerprint fields if this row predates fingerprint capture.
+        if (await this.backfillFingerprint(existingTx, parsed)) {
+          this.statsTouchedAddresses.add(address);
+        }
         stats.updated++;
         continue;
       }
@@ -1424,15 +1474,7 @@ export class TransactionSyncService {
         hasOpReturn: parsed.hasOpReturn,
         opReturnData: parsed.opReturnData.length > 0 ? parsed.opReturnData : undefined,
         // Wallet fingerprinting fields (populated when the API returns version/locktime/sequence)
-        rawFingerprintCaptured: parsed.rawFingerprintCaptured,
-        nVersion: parsed.nVersion,
-        nLockTime: parsed.nLockTime,
-        hasRbf: parsed.hasRbf,
-        isBip69Ordered: parsed.isBip69Ordered,
-        hasWitness: parsed.hasWitness,
-        hasCoinbaseInput: parsed.hasCoinbaseInput,
-        hasLowRSig: parsed.hasLowRSig,
-        hasMixedWitness: parsed.hasMixedWitness,
+        ...this.fingerprintFields(parsed),
       }, { skipNotification: true });
       stats.imported++;
 
