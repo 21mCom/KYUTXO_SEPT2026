@@ -19,6 +19,7 @@ import {
   Circle,
   Copy,
   Check,
+  ExternalLink,
 } from "lucide-react";
 import {
   getRecordsByType,
@@ -29,7 +30,6 @@ import {
 } from "@/lib/dataFacade";
 import type { Record as KRecord, TransactionParticipant } from "@/lib/db-types";
 import { useRecordPreview } from "@/contexts/RecordPreviewContext";
-import { createGraphNodeActivation } from "@/lib/graph-node-interaction";
 import {
   buildNetworkGraph,
   MAX_NODES,
@@ -570,14 +570,28 @@ export default function NetworkAnalysis() {
                         data-testid={`node-address-${node.id.slice(0, 8)}`}
                         role="button"
                         tabIndex={0}
-                        aria-label={`Address ${node.id} — open record; click again to inspect connections`}
+                        aria-label={`Address ${node.id} — click to highlight connections; double-click to open record`}
                         className="outline-none focus-visible:opacity-100"
                         style={{ cursor: 'pointer' }}
-                        {...createGraphNodeActivation<SVGGElement>(() => {
+                        onClick={(e) => {
+                          e.stopPropagation();
                           const gNode = graph.nodes.find(n => n.id === node.id);
                           setSelectedNode(prev => prev?.id === node.id ? null : gNode || null);
+                        }}
+                        onDoubleClick={(e) => {
+                          e.stopPropagation();
+                          const gNode = graph.nodes.find(n => n.id === node.id);
+                          setSelectedNode(gNode || null);
                           void openRecordPreviewByAddress(node.id);
-                        })}
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            const gNode = graph.nodes.find(n => n.id === node.id);
+                            setSelectedNode(prev => prev?.id === node.id ? null : gNode || null);
+                          }
+                        }}
                         onMouseEnter={() => setHoveredNode(node.id)}
                         onMouseLeave={() => setHoveredNode(null)}
                       >
@@ -724,6 +738,16 @@ function NodeDetail({
           <span className="text-xs">&times;</span>
         </Button>
       </div>
+      <Button
+        size="sm"
+        variant="default"
+        className="w-full"
+        onClick={() => onOpenRecord(node.id)}
+        data-testid="button-view-record"
+      >
+        <ExternalLink className="h-3 w-3" />
+        View record
+      </Button>
       <div className="space-y-1.5 text-xs">
         <div className="flex items-start gap-1">
           <div className="min-w-0 flex-1">
