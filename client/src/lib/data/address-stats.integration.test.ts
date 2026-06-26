@@ -566,4 +566,43 @@ describe("recomputeAddressStats not-synced reset path", () => {
     expect(zeroed?.statsComputedAt).toBeTypeOf("number");
     expect(zeroed?.statsComputedAt).not.toBe(9000);
   });
+
+  it("uses the computed balance (not zero) when an address has BOTH participants AND sync state", async () => {
+    // The address has real participant data (computed balance 6000) AND an
+    // addressSyncState entry, but its cache is stale (123). The hasData branch
+    // must prefer the freshly computed stats over the syncedSet zero fallback,
+    // so the cache becomes the computed non-zero value, never 0.
+    await testDb.records.add(
+      mkAddr({
+        id: 1,
+        inputString: "addr-both",
+        statsComputedAt: 9000,
+        cachedBalanceSats: 123,
+        cachedTxCount: 0,
+        cachedLastActivityTime: 0,
+        cachedUtxoCount: 0,
+      }),
+    );
+    await testDb.transactionParticipants.add(mkOutput("addr-both", "tx-both", 6000));
+    await testDb.blockchainTransactions.add(mkTx("tx-both", 555));
+    await testDb.addressSyncState.add({
+      address: "addr-both",
+      recordId: 1,
+      lastSyncedAt: 1000,
+    } as unknown as AddressSyncState);
+
+    const recompute = await recomputeAddressStats({ addresses: ["addr-both"] });
+    expect(recompute.cancelled).toBe(false);
+    expect(recompute.updated).toBe(1);
+
+    const fixed = await testDb.records.get(1);
+    expect(fixed).toBeDefined();
+    // Computed stats win over the syncedSet fallback: non-zero, never 0.
+    expect(fixed?.cachedBalanceSats).toBe(6000);
+    expect(fixed?.cachedTxCount).toBe(1);
+    expect(fixed?.cachedLastActivityTime).toBe(555);
+    expect(fixed?.cachedUtxoCount).toBe(1);
+    expect(fixed?.statsComputedAt).toBeTypeOf("number");
+    expect(fixed?.statsComputedAt).not.toBe(9000);
+  });
 });
