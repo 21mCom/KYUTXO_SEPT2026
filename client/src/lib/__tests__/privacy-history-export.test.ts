@@ -14,6 +14,29 @@ vi.mock('jspdf-autotable', () => ({
   },
 }));
 
+// jsPDF assigns `text` as an own property on each instance (not the prototype),
+// so it can't be spied via the prototype. Instead we wrap the jsPDF constructor
+// to record every doc.text(...) call while still delegating to the real
+// implementation, so the produced Blob stays valid.
+const { textCalls } = vi.hoisted(() => ({
+  textCalls: [] as unknown[][],
+}));
+vi.mock('jspdf', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('jspdf')>();
+  const RealJsPDF = actual.jsPDF;
+  function Wrapped(...args: unknown[]) {
+    const doc = new (RealJsPDF as new (...a: unknown[]) => InstanceType<typeof RealJsPDF>)(...args);
+    const realText = doc.text.bind(doc);
+    doc.text = ((...targs: unknown[]) => {
+      textCalls.push(targs);
+      return (realText as (...a: unknown[]) => unknown)(...targs);
+    }) as typeof doc.text;
+    return doc;
+  }
+  (Wrapped as unknown as { API: unknown }).API = RealJsPDF.API;
+  return { ...actual, default: Wrapped, jsPDF: Wrapped };
+});
+
 function makeEntry(overrides: Partial<PrivacyAuditHistoryEntry> = {}): PrivacyAuditHistoryEntry {
   return {
     id: 1,
@@ -230,5 +253,55 @@ describe('buildPrivacyHistoryPdf', () => {
       makeEntry({ id: 2, timestamp: Date.UTC(2026, 0, 2), findingTypeCounts: {} }),
     ]);
     expect(autoTableCalls).toHaveLength(1); // runs table only
+  });
+});
+
+// The summary line ("N audit runs | +X pts overall | latest S/100 (grade)") is
+// drawn directly via doc.text(), not through autotable, so it is verified by
+// reading back the recorded doc.text(...) calls (see the jspdf wrapper above)
+// and picking the string drawn at the summary anchor (x=14, y=27).
+describe('buildPrivacyHistoryPdf summary line', () => {
+  beforeEach(() => {
+    textCalls.length = 0;
+  });
+
+  /** The summary string drawn at the summary anchor (x=14, y=27). */
+  function summaryText(): string | undefined {
+    const call = textCalls.find((args) => args[1] === 14 && args[2] === 27);
+    return call?.[0] as string | undefined;
+  }
+
+  it('single run: uses the singular "audit run", omits the delta, shows the latest score', async () => {
+    await buildPrivacyHistoryPdf([makeEntry({ score: 85, grade: 'A' })]);
+    expect(summaryText()).toBe('1 audit run  |  latest 85/100 (A)');
+  });
+
+  it('multi-run improving: plural runs, signed positive delta, latest score', async () => {
+    const older = makeEntry({ id: 1, timestamp: Date.UTC(2026, 0, 1), score: 50, grade: 'C' });
+    const newer = makeEntry({ id: 2, timestamp: Date.UTC(2026, 0, 2), score: 90, grade: 'A' });
+    await buildPrivacyHistoryPdf([older, newer]);
+    expect(summaryText()).toBe('2 audit runs  |  +40 pts overall  |  latest 90/100 (A)');
+  });
+
+  it('multi-run declining: plural runs, negative delta keeps its minus sign, latest score', async () => {
+    const older = makeEntry({ id: 1, timestamp: Date.UTC(2026, 0, 1), score: 90, grade: 'A' });
+    const newer = makeEntry({ id: 2, timestamp: Date.UTC(2026, 0, 2), score: 75, grade: 'B' });
+    await buildPrivacyHistoryPdf([older, newer]);
+    expect(summaryText()).toBe('2 audit runs  |  -15 pts overall  |  latest 75/100 (B)');
+  });
+
+  it('computes the delta chronologically regardless of input order', async () => {
+    const older = makeEntry({ id: 1, timestamp: Date.UTC(2026, 0, 1), score: 50, grade: 'C' });
+    const newer = makeEntry({ id: 2, timestamp: Date.UTC(2026, 0, 2), score: 90, grade: 'A' });
+    // Pass newest-first to ensure the builder sorts before computing the delta.
+    await buildPrivacyHistoryPdf([newer, older]);
+    expect(summaryText()).toBe('2 audit runs  |  +40 pts overall  |  latest 90/100 (A)');
+  });
+
+  it('multi-run with no net change shows an unsigned zero delta', async () => {
+    const older = makeEntry({ id: 1, timestamp: Date.UTC(2026, 0, 1), score: 80, grade: 'A' });
+    const newer = makeEntry({ id: 2, timestamp: Date.UTC(2026, 0, 2), score: 80, grade: 'A' });
+    await buildPrivacyHistoryPdf([older, newer]);
+    expect(summaryText()).toBe('2 audit runs  |  0 pts overall  |  latest 80/100 (A)');
   });
 });
