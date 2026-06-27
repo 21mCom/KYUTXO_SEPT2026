@@ -72,7 +72,14 @@ vi.mock("@/lib/data/address-stats", () => ({
 // Wrap the real exportStaleReport so a test can hold it open and observe the
 // "Exporting…" disabled state; otherwise it runs the genuine implementation
 // against the same fake-indexeddb scratch store the card just populated.
-const exportGate = vi.hoisted(() => ({ pending: null as null | Promise<void> }));
+// `rejectWith` forces the export to throw (simulating a streamed-read failure)
+// and `forceEmpty` makes it resolve with rowCount === 0 (an empty scratch store)
+// without going near the real implementation — both are reset between tests.
+const exportGate = vi.hoisted(() => ({
+  pending: null as null | Promise<void>,
+  rejectWith: null as null | Error,
+  forceEmpty: false,
+}));
 vi.mock("@/lib/data/stale-balance-report-store", async (importActual) => {
   const actual =
     await importActual<typeof import("@/lib/data/stale-balance-report-store")>();
@@ -83,6 +90,18 @@ vi.mock("@/lib/data/stale-balance-report-store", async (importActual) => {
       onProgress?: (written: number, total: number) => void,
     ) => {
       if (exportGate.pending) await exportGate.pending;
+      if (exportGate.rejectWith) throw exportGate.rejectWith;
+      if (exportGate.forceEmpty) {
+        return {
+          blob: new Blob([], {
+            type:
+              format === "csv"
+                ? "text/csv;charset=utf-8"
+                : "application/json;charset=utf-8",
+          }),
+          rowCount: 0,
+        };
+      }
       return actual.exportStaleReport(format, onProgress);
     },
   };
@@ -100,6 +119,8 @@ let clickSpy: ReturnType<typeof vi.spyOn>;
 beforeEach(() => {
   toastSpy.mockClear();
   exportGate.pending = null;
+  exportGate.rejectWith = null;
+  exportGate.forceEmpty = false;
   clickedDownloads = [];
   createObjectURL = vi.fn(() => "blob:mock-url");
   revokeObjectURL = vi.fn();
@@ -210,5 +231,65 @@ describe("BalanceIntegrityCard — stale-address export buttons", () => {
     expect(jsonBtn.disabled).toBe(false);
     expect(createObjectURL).toHaveBeenCalledTimes(1);
     expect(clickedDownloads).toEqual([expect.stringMatching(CSV_NAME)]);
+  });
+
+  it("shows a destructive 'Export failed' toast and fires no download when the export throws", async () => {
+    await renderWithStaleRows();
+
+    // Make the streamed read reject mid-export.
+    exportGate.rejectWith = new Error("stream blew up");
+
+    const csvBtn = screen.getByTestId("button-export-stale-csv") as HTMLButtonElement;
+    fireEvent.click(csvBtn);
+
+    // A destructive "Export failed" toast surfaces the failure.
+    await waitFor(() =>
+      expect(toastSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          variant: "destructive",
+          title: "Export failed",
+        }),
+      ),
+    );
+
+    // Nothing was downloaded and no object URL was ever created/revoked.
+    expect(createObjectURL).not.toHaveBeenCalled();
+    expect(revokeObjectURL).not.toHaveBeenCalled();
+    expect(clickedDownloads).toHaveLength(0);
+
+    // The exporting state resets so both buttons re-enable after the failure.
+    await waitFor(() => expect(csvBtn.disabled).toBe(false));
+    expect(
+      (screen.getByTestId("button-export-stale-json") as HTMLButtonElement).disabled,
+    ).toBe(false);
+  });
+
+  it("fires no download and creates no object URL when the report is empty", async () => {
+    await renderWithStaleRows();
+
+    // Simulate an empty scratch store: export resolves with rowCount === 0.
+    exportGate.forceEmpty = true;
+
+    const csvBtn = screen.getByTestId("button-export-stale-csv") as HTMLButtonElement;
+    fireEvent.click(csvBtn);
+
+    // The export runs (button disables) and then re-enables once it resolves.
+    await waitFor(() => expect(csvBtn.disabled).toBe(true));
+    await waitFor(() => expect(csvBtn.disabled).toBe(false));
+
+    // No object URL was created and no anchor download fired for the empty set.
+    expect(createObjectURL).not.toHaveBeenCalled();
+    expect(revokeObjectURL).not.toHaveBeenCalled();
+    expect(clickedDownloads).toHaveLength(0);
+
+    // An empty export is not a failure — no destructive toast is shown.
+    expect(toastSpy).not.toHaveBeenCalledWith(
+      expect.objectContaining({ variant: "destructive" }),
+    );
+
+    // Both buttons remain enabled afterward.
+    expect(
+      (screen.getByTestId("button-export-stale-json") as HTMLButtonElement).disabled,
+    ).toBe(false);
   });
 });
