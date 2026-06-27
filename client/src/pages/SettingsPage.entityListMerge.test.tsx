@@ -432,6 +432,39 @@ describe("SettingsPage — entity list import (merge mode) diff filters", () => 
     expect(screen.queryByText("Qwizzle Mixer")).toBeNull();
   });
 
+  it("composes the category dropdown and search box on the Brand-new tab: an intersecting combo leaves exactly one row, a disjoint combo leaves none", async () => {
+    await openMergeDiff();
+
+    // Baseline: both brand-new entries (Qwizzle Mixer / Zorptast Exchange).
+    expect(addedTabText()).toContain("Brand-new (2)");
+
+    // Category + search that agree on a single entry: the "mixer" category
+    // matches only Qwizzle Mixer, and the "qwizzle" token matches that same
+    // entry — so the intersection (not just each filter alone) is one row. The
+    // exchange entry is excluded by BOTH the category and the search.
+    setCategory("mixer");
+    typeSearch("qwizzle");
+    await waitFor(() => expect(addedTabText()).toContain("Brand-new (1)"));
+
+    openAddedTab();
+    const onlyRow = await screen.findByTestId("row-entity-diff-added-0");
+    expect(within(onlyRow).getByText("Qwizzle Mixer")).toBeTruthy();
+    // No second row, and the exchange entry is nowhere on screen.
+    expect(screen.queryByTestId("row-entity-diff-added-1")).toBeNull();
+    expect(screen.queryByText("Zorptast Exchange")).toBeNull();
+
+    // Make the two filters disagree: keep the "mixer" category but search a
+    // token unique to the *exchange* entry. The category excludes Zorptast and
+    // the search excludes Qwizzle, so the intersection is empty — the label
+    // drops to 0 and the brand-new empty (search) label shows.
+    typeSearch("zorptast");
+    await waitFor(() => expect(addedTabText()).toContain("Brand-new (0)"));
+    expect(screen.queryByTestId("row-entity-diff-added-0")).toBeNull();
+    expect(
+      (await screen.findByTestId("text-entity-diff-empty-added")).textContent,
+    ).toContain("No brand-new entries match your search.");
+  });
+
   it("shows the empty-search labels on both tabs when nothing matches", async () => {
     await openMergeDiff();
 
