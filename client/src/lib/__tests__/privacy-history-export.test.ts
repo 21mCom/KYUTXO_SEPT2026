@@ -131,6 +131,46 @@ describe('buildPrivacyHistoryCsv', () => {
     expect(rows[1][12]).toBe('All');
   });
 
+  it('reflects each run scope (owner-only, wallet-only, both, neither) in the Owner/Wallet columns', () => {
+    // One run per scope combination so a reviewer of the exported file can tell
+    // a filtered run apart from a full-vault run — the same disambiguation the
+    // on-screen scope badge provides.
+    const cases = [
+      { entry: makeEntry({ id: 1, owner: 'Alice' }), owner: 'Alice', wallet: 'All' }, // owner-only
+      { entry: makeEntry({ id: 2, walletName: 'Cold Storage' }), owner: 'All', wallet: 'Cold Storage' }, // wallet-only
+      { entry: makeEntry({ id: 3, owner: 'Bob', walletName: 'Trading' }), owner: 'Bob', wallet: 'Trading' }, // both
+      { entry: makeEntry({ id: 4 }), owner: 'All', wallet: 'All' }, // neither (full-vault)
+    ];
+    for (const { entry, owner, wallet } of cases) {
+      const rows = parse(buildPrivacyHistoryCsv([entry]));
+      expect(rows[1][11]).toBe(owner);
+      expect(rows[1][12]).toBe(wallet);
+    }
+  });
+
+  it('keeps each run scope on its own row in a single multi-run export', () => {
+    // All four scope variants in ONE export call guards against cross-row
+    // contamination (one run's scope bleeding into another row).
+    const rows = parse(
+      buildPrivacyHistoryCsv([
+        makeEntry({ id: 1, owner: 'Alice' }), // owner-only
+        makeEntry({ id: 2, walletName: 'Cold Storage' }), // wallet-only
+        makeEntry({ id: 3, owner: 'Bob', walletName: 'Trading' }), // both
+        makeEntry({ id: 4 }), // neither (full-vault)
+      ]),
+    );
+    const pairs = rows.slice(1).map((r) => [r[11], r[12]]);
+    expect(pairs).toHaveLength(4);
+    expect(pairs).toEqual(
+      expect.arrayContaining([
+        ['Alice', 'All'],
+        ['All', 'Cold Storage'],
+        ['Bob', 'Trading'],
+        ['All', 'All'],
+      ]),
+    );
+  });
+
   it('creates a union column for every finding type and zero-fills missing ones', () => {
     const csv = buildPrivacyHistoryCsv([
       makeEntry({ id: 1, findingTypeCounts: { ADDRESS_REUSE: 2 } }),
@@ -259,6 +299,45 @@ describe('buildPrivacyHistoryPdf', () => {
     const row = autoTableCalls[0].body[0] as string[];
     expect(row[10]).toBe('All');
     expect(row[11]).toBe('All');
+  });
+
+  it('reflects each run scope (owner-only, wallet-only, both, neither) in the runs table', async () => {
+    // Mirror the CSV scope coverage: every combination must surface in the PDF
+    // runs table so an exported audit can't be mistaken for a full-vault run.
+    const cases = [
+      { entry: makeEntry({ id: 1, owner: 'Alice' }), owner: 'Alice', wallet: 'All' }, // owner-only
+      { entry: makeEntry({ id: 2, walletName: 'Cold Storage' }), owner: 'All', wallet: 'Cold Storage' }, // wallet-only
+      { entry: makeEntry({ id: 3, owner: 'Bob', walletName: 'Trading' }), owner: 'Bob', wallet: 'Trading' }, // both
+      { entry: makeEntry({ id: 4 }), owner: 'All', wallet: 'All' }, // neither (full-vault)
+    ];
+    for (const { entry, owner, wallet } of cases) {
+      autoTableCalls.length = 0;
+      await buildPrivacyHistoryPdf([entry]);
+      const row = autoTableCalls[0].body[0] as string[];
+      expect(row[10]).toBe(owner);
+      expect(row[11]).toBe(wallet);
+    }
+  });
+
+  it('keeps each run scope on its own runs-table row in a single multi-run export', async () => {
+    // All four scope variants in ONE export call guards against cross-row
+    // contamination in the PDF runs table.
+    await buildPrivacyHistoryPdf([
+      makeEntry({ id: 1, owner: 'Alice' }), // owner-only
+      makeEntry({ id: 2, walletName: 'Cold Storage' }), // wallet-only
+      makeEntry({ id: 3, owner: 'Bob', walletName: 'Trading' }), // both
+      makeEntry({ id: 4 }), // neither (full-vault)
+    ]);
+    const pairs = (autoTableCalls[0].body as string[][]).map((r) => [r[10], r[11]]);
+    expect(pairs).toHaveLength(4);
+    expect(pairs).toEqual(
+      expect.arrayContaining([
+        ['Alice', 'All'],
+        ['All', 'Cold Storage'],
+        ['Bob', 'Trading'],
+        ['All', 'All'],
+      ]),
+    );
   });
 
   it('adds a findings-by-type table with a column per type, zero-filled', async () => {
