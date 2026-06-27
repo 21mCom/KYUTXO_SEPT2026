@@ -118,13 +118,13 @@ export function sourceOfFundsCapWarning(cap: SourceOfFundsCapInfo): string | nul
   // ceil(limit/2) oldest + the remaining newest. Describe which slice was kept so
   // a reader knows the original provenance and most recent activity are present
   // and only the middle of the history was omitted. When the cap is so small that
-  // the newest half rounds to zero, only the earliest funding is retained, so the
+  // the newest half rounds to zero, only the oldest funding is retained, so the
   // wording must not promise recent activity that was not included.
   const keptNewest = cap.shownTxCount - Math.ceil(cap.shownTxCount / 2) > 0;
   const strategy = keptNewest
-    ? `the earliest and most recent funding events were retained, and ` +
+    ? `the oldest and newest funding events were retained, and ` +
       `intermediate funding was omitted for performance`
-    : `the earliest funding events were retained, and later funding was ` +
+    : `the oldest funding events were retained, and later funding was ` +
       `omitted for performance`;
   return (
     `WARNING: This Source of Funds report is incomplete. Because this address ` +
