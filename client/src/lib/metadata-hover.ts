@@ -263,6 +263,35 @@ export function invalidateCachedRecord(identifier: string): void {
 }
 
 /**
+ * Drop the cached entries for many identifiers at once after a bulk write (e.g.
+ * a Bulk Editor run). Re-resolves only the identifiers that are currently
+ * subscribed (i.e. visible on screen) so a huge bulk run can't fire thousands
+ * of immediate DB re-resolves — off-screen identifiers are simply cleared and
+ * resolve lazily on the next hover/preload.
+ */
+export function invalidateCachedRecords(identifiers: string[]): void {
+  for (const id of identifiers) {
+    if (!id) continue;
+    invalidateCachedRecord(id);
+  }
+}
+
+/**
+ * Clear the entire hover-metadata cache. Used after a full wipe of the records
+ * table (clearAllRecords) so no orange FileText indicator / tooltip lingers for
+ * up to the cache TTL. Drops every cache entry and any in-flight resolution,
+ * then notifies any visible subscribers that their identifier now resolves to
+ * null (no record) so the indicator clears within a render.
+ */
+export function clearCachedRecords(): void {
+  _cache.clear();
+  _inFlight.clear();
+  for (const key of Array.from(_subscribers.keys())) {
+    notifySubscribers(key, null);
+  }
+}
+
+/**
  * Batch-preload cache entries for a list of identifiers. Uses a single DB
  * query per batch (up to 50 identifiers) instead of one query per identifier.
  * Identifiers already cached or in-flight are skipped. Notifies any

@@ -18,6 +18,30 @@ function invalidateHoverCache(identifier: string): void {
     .catch(() => {});
 }
 
+/**
+ * Bulk variant of {@link invalidateHoverCache} for write paths that touch many
+ * records at once (e.g. the Bulk Editor). Re-resolution stays bounded because
+ * the underlying invalidateCachedRecords only re-resolves identifiers that are
+ * currently subscribed (visible on screen); off-screen ones are cleared and
+ * resolve lazily on the next hover/preload.
+ */
+function invalidateHoverCacheMany(identifiers: string[]): void {
+  if (identifiers.length === 0) return;
+  void import('../metadata-hover')
+    .then((m) => m.invalidateCachedRecords(identifiers))
+    .catch(() => {});
+}
+
+/**
+ * Drop the entire hover-metadata cache after a full wipe of the records table
+ * so no orange FileText indicator / tooltip lingers for up to the cache TTL.
+ */
+function clearHoverCache(): void {
+  void import('../metadata-hover')
+    .then((m) => m.clearCachedRecords())
+    .catch(() => {});
+}
+
 async function syncRecordVocabulary(
   data: Partial<Record>
 ): Promise<void> {
@@ -298,6 +322,12 @@ export async function bulkUpdateRecords(
     
     const recordsToSave: Record[] = [];
     const allChanges: Partial<Record>[] = [];
+    // Identifiers whose hover-metadata cache must be dropped so the orange
+    // FileText indicator / tooltip on any visible AddressLink/TxidLink refreshes
+    // immediately. Collect both the old inputString and (when it changes) the
+    // new one. Deduplicated via a Set so a large run doesn't queue redundant
+    // re-resolves.
+    const identifiersToInvalidate = new Set<string>();
     let errorCount = 0;
     
     for (const { id, changes } of updates) {
@@ -321,6 +351,11 @@ export async function bulkUpdateRecords(
       
       recordsToSave.push(updated);
       allChanges.push(changes);
+
+      if (existing.inputString) identifiersToInvalidate.add(existing.inputString);
+      if (changes.inputString && changes.inputString !== existing.inputString) {
+        identifiersToInvalidate.add(changes.inputString);
+      }
     }
     
     await db.transaction('rw', db.records, async () => {
@@ -355,6 +390,11 @@ export async function bulkUpdateRecords(
       });
     }
     
+    // Drop the hover-metadata cache for every changed identifier so the orange
+    // FileText indicator / tooltip on visible AddressLink/TxidLinks refreshes
+    // immediately instead of lingering for up to the cache TTL.
+    invalidateHoverCacheMany(Array.from(identifiersToInvalidate));
+
     if (!options?.skipNotification) {
       notifyDbChange('records');
     }
@@ -430,6 +470,13 @@ export async function bulkUpdateAddressStats(
     await db.records.bulkPut(toSave);
   });
 
+  // NOTE: intentionally no hover-cache invalidation here. This path only writes
+  // the per-address stats cache fields (cachedBalanceSats, cachedTxCount,
+  // cachedLastActivityTime, cachedUtxoCount, statsComputedAt), none of which
+  // feed the orange FileText indicator / hover tooltip (label, owner, wallet,
+  // seed, software, categories, tags, key status, notes). Invalidating here
+  // would needlessly re-resolve identifiers on every stats refresh.
+
   if (!options?.skipNotification) {
     notifyDbChange('records', options?.origin ? { origin: options.origin } : undefined);
   }
@@ -479,6 +526,10 @@ export interface ClearAllRecordsOptions {
 
 export async function clearAllRecords(options?: ClearAllRecordsOptions): Promise<void> {
   await db.records.clear();
+
+  // Wipe the entire hover-metadata cache so no orange FileText indicator /
+  // tooltip lingers for up to the cache TTL after every record is gone.
+  clearHoverCache();
 
   if (!options?.skipNotification) {
     notifyDbChange('records');
