@@ -26,3 +26,4 @@
 - [Force-graph testid collisions](force-graph-testid-collision.md) — node testid is id.slice(0,8); fixtures sharing first 8 chars collide → getByTestId-in-waitFor times out (looks like a render hang); graph colours are index.css theme tokens.
 - [jsdom location.reload mock](jsdom-location-reload-mock.md) — reload is non-configurable; defineProperty/Proxy both fail; replace window.location wholesale with a plain object carrying a reload spy.
 - [Test provider harness](test-provider-harness.md) — wrap Tooltip/AddressLink-capable tests in full stack via `@/test/testProviders`; conditional tooltips hide the fragility; settingsTestProviders is now an alias.
+- [Copy-button toast guard tests](copy-button-toast-tests.md) — assert clipboard+toast: mockClear right before the click (setup toasts pollute), stub execCommand for the failure path, don't duplicate already-covered buttons.

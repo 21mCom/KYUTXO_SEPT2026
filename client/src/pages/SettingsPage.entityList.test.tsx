@@ -80,6 +80,12 @@ vi.mock("@/contexts/AuthContext", () => ({
   }),
 }));
 
+// The entity-error copy buttons fire a success / destructive toast alongside
+// the clipboard write (Task #538). Capture toast() so we can assert the exact
+// "Copied to clipboard" / "Copy failed" feedback, not just the clipboard call.
+const { toastMock } = vi.hoisted(() => ({ toastMock: vi.fn() }));
+vi.mock("@/hooks/use-toast", () => ({ useToast: () => ({ toast: toastMock }) }));
+
 // Unrelated heavy sibling panels (own DB queries / auth) — stub so they don't
 // interfere with the entity-list panel under test.
 vi.mock("@/components/VocabularyManager", () => ({ default: () => null }));
@@ -184,6 +190,7 @@ beforeEach(async () => {
   // row, so this also clears any entityListSnapshot left by a prior test.
   await putSettings({ id: "default" } as Settings, { skipNotification: true });
   resetActiveEntityList();
+  toastMock.mockClear();
 });
 
 afterEach(() => {
@@ -574,6 +581,95 @@ describe("SettingsPage — Privacy Audit Entity List panel", () => {
       expect(lines[0]).toContain("Entry 1:");
       expect(lines[0]).toContain("bad-0");
     } finally {
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: originalClipboard,
+      });
+    }
+  });
+
+  it("fires a success toast when an entity-error copy succeeds", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    const originalClipboard = navigator.clipboard;
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+
+    try {
+      renderSettingsPage();
+      await screen.findByTestId("badge-entity-source");
+
+      const badSnapshot = JSON.stringify([
+        { address: "bad-0", name: "A", category: "exchange" },
+      ]);
+      await selectEntityFile("bad.json", badSnapshot);
+      await screen.findByTestId("container-entity-errors");
+
+      // Importing the bad snapshot itself raises a validation toast; clear it so
+      // the assertions only see the copy button's own toast.
+      toastMock.mockClear();
+      fireEvent.click(screen.getByTestId("button-copy-entity-error-numbers-invalid-address"));
+      await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+
+      // The clipboard write must be paired with the success toast.
+      await waitFor(() =>
+        expect(toastMock).toHaveBeenCalledWith(
+          expect.objectContaining({ title: "Copied to clipboard" }),
+        ),
+      );
+      expect(toastMock).not.toHaveBeenCalledWith(
+        expect.objectContaining({ variant: "destructive" }),
+      );
+    } finally {
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: originalClipboard,
+      });
+    }
+  });
+
+  it("fires a destructive 'Copy failed' toast when the clipboard write fails", async () => {
+    const writeText = vi.fn().mockRejectedValue(new Error("denied"));
+    const originalClipboard = navigator.clipboard;
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    // copyTextToClipboard falls back to document.execCommand("copy") when
+    // writeText rejects; force that to fail too so the handler reports failure.
+    const originalExec = document.execCommand;
+    document.execCommand = vi.fn().mockReturnValue(false);
+
+    try {
+      renderSettingsPage();
+      await screen.findByTestId("badge-entity-source");
+
+      const badSnapshot = JSON.stringify([
+        { address: "bad-0", name: "A", category: "exchange" },
+      ]);
+      await selectEntityFile("bad.json", badSnapshot);
+      await screen.findByTestId("container-entity-errors");
+
+      // Importing the bad snapshot itself raises a validation toast; clear it so
+      // the assertions only see the copy button's own toast.
+      toastMock.mockClear();
+      fireEvent.click(screen.getByTestId("button-copy-entity-error-numbers-invalid-address"));
+      await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+
+      await waitFor(() =>
+        expect(toastMock).toHaveBeenCalledWith(
+          expect.objectContaining({
+            title: "Copy failed",
+            variant: "destructive",
+          }),
+        ),
+      );
+      expect(toastMock).not.toHaveBeenCalledWith(
+        expect.objectContaining({ title: "Copied to clipboard" }),
+      );
+    } finally {
+      document.execCommand = originalExec;
       Object.defineProperty(navigator, "clipboard", {
         configurable: true,
         value: originalClipboard,
