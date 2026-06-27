@@ -27,3 +27,4 @@
 - [jsdom location.reload mock](jsdom-location-reload-mock.md) — reload is non-configurable; defineProperty/Proxy both fail; replace window.location wholesale with a plain object carrying a reload spy.
 - [Test provider harness](test-provider-harness.md) — wrap Tooltip/AddressLink-capable tests in full stack via `@/test/testProviders`; conditional tooltips hide the fragility; settingsTestProviders is now an alias.
 - [Copy-button toast guard tests](copy-button-toast-tests.md) — assert clipboard+toast: mockClear right before the click (setup toasts pollute), stub execCommand for the failure path, don't duplicate already-covered buttons.
+- [Browser-seed privacy audit](browser-seed-privacy-audit.md) — real-browser layout checks: seed via Vite-singleton dynamic imports; active entity list is in-memory (reload wipes it); one combined snippet avoids runTest timeouts.
