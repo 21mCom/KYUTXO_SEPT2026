@@ -15,7 +15,7 @@ export function describeResolveError(err: unknown): string {
     err instanceof Error ? err.message : typeof err === "string" ? err : "";
   const lower = message.toLowerCase();
   const looksLikeConnectivity =
-    /\b(node|network|connection|connect|unreachable|offline|timed?\s*out|timeout|fetch|proxy|tor|socket|econn|enotfound|etimedout|dns)\b/.test(
+    /\b(node|network|connection|connect|unreachable|offline|timed?\s*out|timeout|fetch|proxy|tor|socket|econn|econnrefused|econnreset|econnaborted|enotfound|etimedout|dns)\b/.test(
       lower,
     );
   if (looksLikeConnectivity) {

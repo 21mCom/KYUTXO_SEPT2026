@@ -161,9 +161,12 @@ interface GroupAddressRowsProps {
   unresolvedByRecordId: Map<number, number>;
   /** recordIds currently running a targeted resolve. */
   resolvingRecordIds: Set<number>;
+  /** recordIds whose in-flight per-address resolve has been requested to stop. */
+  cancellingRecordIds: Set<number>;
   /** recordId -> { resolved, total } progress for an in-flight per-address resolve. */
   resolveProgressByRecordId: Map<number, { resolved: number; total: number }>;
   onResolveAddress: (recordId: number, address: string) => void;
+  onCancelResolveAddress: (recordId: number) => void;
 }
 
 /** Virtualized list of a single expanded group's addresses (cached rows only). */
@@ -174,8 +177,10 @@ function GroupAddressRows({
   onCopy,
   unresolvedByRecordId,
   resolvingRecordIds,
+  cancellingRecordIds,
   resolveProgressByRecordId,
   onResolveAddress,
+  onCancelResolveAddress,
 }: GroupAddressRowsProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
@@ -257,14 +262,31 @@ function GroupAddressRows({
                         {isResolving ? (
                           <>
                             <Loader2 className="h-3 w-3 animate-spin mr-1.5" />
-                            {resolveProgress && resolveProgress.total > 0
-                              ? `Resolving… ${resolveProgress.resolved.toLocaleString()}/${resolveProgress.total.toLocaleString()}`
-                              : "Resolving…"}
+                            {cancellingRecordIds.has(addr.id)
+                              ? "Stopping…"
+                              : resolveProgress && resolveProgress.total > 0
+                                ? `Resolving… ${resolveProgress.resolved.toLocaleString()}/${resolveProgress.total.toLocaleString()}`
+                                : "Resolving…"}
                           </>
                         ) : (
                           "Resolve"
                         )}
                       </Button>
+                      {isResolving && !cancellingRecordIds.has(addr.id) && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onCancelResolveAddress(addr.id);
+                          }}
+                          data-testid={`button-stop-resolve-address-${addr.address}`}
+                          className="flex-none text-muted-foreground"
+                        >
+                          <StopCircle className="h-3 w-3 mr-1" />
+                          Stop
+                        </Button>
+                      )}
                     </>
                   )}
                   <span className="text-xs text-muted-foreground/50">
@@ -343,6 +365,10 @@ export default function BalanceOverview() {
   // banner can cancel a long-running resolve without rolling back partial work.
   const fixPrevoutsAbortRef = useRef<AbortController | null>(null);
   const [cancellingFixPrevouts, setCancellingFixPrevouts] = useState(false);
+  const resolveAbortByGroupRef = useRef<Map<string, AbortController>>(new Map());
+  const resolveAbortByRecordRef = useRef<Map<number, AbortController>>(new Map());
+  const [cancellingGroups, setCancellingGroups] = useState<Set<string>>(new Set());
+  const [cancellingRecordIds, setCancellingRecordIds] = useState<Set<number>>(new Set());
 
   // Re-run aggregation when the native read-engine flips to ready so the fast
   // path can take over from any Dexie fallback that ran first.
@@ -528,6 +554,8 @@ export default function BalanceOverview() {
     const recordIds = unresolvedRecordIdsByGroup.get(name);
     if (!recordIds || recordIds.length === 0) return;
     const before = unresolvedByGroup.get(name) ?? 0;
+    const abort = new AbortController();
+    resolveAbortByGroupRef.current.set(name, abort);
     setResolvingGroups((prev) => new Set(prev).add(name));
     setResolveProgressByGroup((prev) => {
       const next = new Map(prev);
@@ -546,6 +574,7 @@ export default function BalanceOverview() {
         {
           recomputeOrigin: "user",
           restrictToRecordIds: new Set(recordIds),
+          signal: abort.signal,
         },
       );
       // Refresh the global count so the top banner stays in sync. The per-group
@@ -555,23 +584,33 @@ export default function BalanceOverview() {
       setUnresolvedPrevouts(remaining);
       if (remaining === 0) setSpendWarningDismissed(false);
 
-      const stillPending = Math.max(before - result.resolved, 0);
-      if (result.resolved === 0) {
+      if (result.cancelled) {
         toast({
-          title: "Nothing to resolve",
-          description: `No spends in "${name}" could be attributed to a known source. Their balances can't be corrected automatically.`,
-          variant: "destructive",
-        });
-      } else if (stillPending > 0) {
-        toast({
-          title: "Partially resolved",
-          description: `Resolved ${result.resolved.toLocaleString()} spend${result.resolved !== 1 ? "s" : ""} in "${name}". ${stillPending.toLocaleString()} still can't be attributed.`,
+          title: "Resolve stopped",
+          description:
+            result.resolved > 0
+              ? `Stopped after resolving ${result.resolved.toLocaleString()} spend${result.resolved !== 1 ? "s" : ""} in "${name}".`
+              : `Stopped before any spends in "${name}" were resolved.`,
         });
       } else {
-        toast({
-          title: "Resolved",
-          description: `Resolved ${result.resolved.toLocaleString()} spend${result.resolved !== 1 ? "s" : ""} in "${name}" and recomputed its balance.`,
-        });
+        const stillPending = Math.max(before - result.resolved, 0);
+        if (result.resolved === 0) {
+          toast({
+            title: "Nothing to resolve",
+            description: `No spends in "${name}" could be attributed to a known source. Their balances can't be corrected automatically.`,
+            variant: "destructive",
+          });
+        } else if (stillPending > 0) {
+          toast({
+            title: "Partially resolved",
+            description: `Resolved ${result.resolved.toLocaleString()} spend${result.resolved !== 1 ? "s" : ""} in "${name}". ${stillPending.toLocaleString()} still can't be attributed.`,
+          });
+        } else {
+          toast({
+            title: "Resolved",
+            description: `Resolved ${result.resolved.toLocaleString()} spend${result.resolved !== 1 ? "s" : ""} in "${name}" and recomputed its balance.`,
+          });
+        }
       }
     } catch (err) {
       console.warn("[BalanceOverview] Per-group prevout resolve failed:", err);
@@ -581,7 +620,13 @@ export default function BalanceOverview() {
         variant: "destructive",
       });
     } finally {
+      resolveAbortByGroupRef.current.delete(name);
       setResolvingGroups((prev) => {
+        const next = new Set(prev);
+        next.delete(name);
+        return next;
+      });
+      setCancellingGroups((prev) => {
         const next = new Set(prev);
         next.delete(name);
         return next;
@@ -595,9 +640,19 @@ export default function BalanceOverview() {
     }
   }, [unresolvedRecordIdsByGroup, unresolvedByGroup, toast]);
 
+  const handleCancelResolveGroup = useCallback((name: string) => {
+    const abort = resolveAbortByGroupRef.current.get(name);
+    if (abort) {
+      setCancellingGroups((prev) => new Set(prev).add(name));
+      abort.abort();
+    }
+  }, []);
+
   const handleResolveAddress = useCallback(async (recordId: number, address: string) => {
     const before = unresolvedByRecordId.get(recordId) ?? 0;
     if (before <= 0) return;
+    const abort = new AbortController();
+    resolveAbortByRecordRef.current.set(recordId, abort);
     setResolvingRecordIds((prev) => new Set(prev).add(recordId));
     setResolveProgressByRecordId((prev) => {
       const next = new Map(prev);
@@ -616,6 +671,7 @@ export default function BalanceOverview() {
         {
           recomputeOrigin: "user",
           restrictToRecordIds: new Set([recordId]),
+          signal: abort.signal,
         },
       );
       // Keep the top banner in sync. This address's row, its group note/badge,
@@ -625,23 +681,33 @@ export default function BalanceOverview() {
       setUnresolvedPrevouts(remaining);
       if (remaining === 0) setSpendWarningDismissed(false);
 
-      const stillPending = Math.max(before - result.resolved, 0);
-      if (result.resolved === 0) {
+      if (result.cancelled) {
         toast({
-          title: "Nothing to resolve",
-          description: `No spends for ${address} could be attributed to a known source. Its balance can't be corrected automatically.`,
-          variant: "destructive",
-        });
-      } else if (stillPending > 0) {
-        toast({
-          title: "Partially resolved",
-          description: `Resolved ${result.resolved.toLocaleString()} spend${result.resolved !== 1 ? "s" : ""} for ${address}. ${stillPending.toLocaleString()} still can't be attributed.`,
+          title: "Resolve stopped",
+          description:
+            result.resolved > 0
+              ? `Stopped after resolving ${result.resolved.toLocaleString()} spend${result.resolved !== 1 ? "s" : ""} for ${address}.`
+              : `Stopped before any spends for ${address} were resolved.`,
         });
       } else {
-        toast({
-          title: "Resolved",
-          description: `Resolved ${result.resolved.toLocaleString()} spend${result.resolved !== 1 ? "s" : ""} for ${address} and recomputed its balance.`,
-        });
+        const stillPending = Math.max(before - result.resolved, 0);
+        if (result.resolved === 0) {
+          toast({
+            title: "Nothing to resolve",
+            description: `No spends for ${address} could be attributed to a known source. Its balance can't be corrected automatically.`,
+            variant: "destructive",
+          });
+        } else if (stillPending > 0) {
+          toast({
+            title: "Partially resolved",
+            description: `Resolved ${result.resolved.toLocaleString()} spend${result.resolved !== 1 ? "s" : ""} for ${address}. ${stillPending.toLocaleString()} still can't be attributed.`,
+          });
+        } else {
+          toast({
+            title: "Resolved",
+            description: `Resolved ${result.resolved.toLocaleString()} spend${result.resolved !== 1 ? "s" : ""} for ${address} and recomputed its balance.`,
+          });
+        }
       }
     } catch (err) {
       console.warn("[BalanceOverview] Per-address prevout resolve failed:", err);
@@ -651,7 +717,13 @@ export default function BalanceOverview() {
         variant: "destructive",
       });
     } finally {
+      resolveAbortByRecordRef.current.delete(recordId);
       setResolvingRecordIds((prev) => {
+        const next = new Set(prev);
+        next.delete(recordId);
+        return next;
+      });
+      setCancellingRecordIds((prev) => {
         const next = new Set(prev);
         next.delete(recordId);
         return next;
@@ -664,6 +736,14 @@ export default function BalanceOverview() {
       });
     }
   }, [unresolvedByRecordId, toast]);
+
+  const handleCancelResolveAddress = useCallback((recordId: number) => {
+    const abort = resolveAbortByRecordRef.current.get(recordId);
+    if (abort) {
+      setCancellingRecordIds((prev) => new Set(prev).add(recordId));
+      abort.abort();
+    }
+  }, []);
 
   const handleFixPrevouts = useCallback(async () => {
     const controller = new AbortController();
@@ -839,8 +919,8 @@ export default function BalanceOverview() {
           title: "No history imported",
           description:
             result.failed > 0
-              ? `Could not fetch ${result.failed.toLocaleString()} source transaction${result.failed !== 1 ? "s" : ""}. Please try again.`
-              : "The source transactions could not be found on this provider.",
+              ? `${result.failed.toLocaleString()} source transaction${result.failed !== 1 ? "s" : ""} couldn't be fetched — check your node connection and try again.`
+              : "These source transactions weren't found on this provider — they may not be indexed here yet.",
           variant: result.failed > 0 ? "destructive" : "default",
         });
       } else if (resolveNote) {
@@ -1487,17 +1567,34 @@ export default function BalanceOverview() {
                             {resolvingGroups.has(group.name) ? (
                               <>
                                 <Loader2 className="h-3 w-3 animate-spin mr-1.5" />
-                                {(() => {
-                                  const prog = resolveProgressByGroup.get(group.name);
-                                  return prog && prog.total > 0
-                                    ? `Resolving… ${prog.resolved.toLocaleString()}/${prog.total.toLocaleString()}`
-                                    : "Resolving…";
-                                })()}
+                                {cancellingGroups.has(group.name)
+                                  ? "Stopping…"
+                                  : (() => {
+                                      const prog = resolveProgressByGroup.get(group.name);
+                                      return prog && prog.total > 0
+                                        ? `Resolving… ${prog.resolved.toLocaleString()}/${prog.total.toLocaleString()}`
+                                        : "Resolving…";
+                                    })()}
                               </>
                             ) : (
                               "Resolve"
                             )}
                           </Button>
+                          {resolvingGroups.has(group.name) && !cancellingGroups.has(group.name) && (
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleCancelResolveGroup(group.name);
+                              }}
+                              data-testid={`button-stop-resolve-${group.name}`}
+                              className="flex-none text-muted-foreground"
+                            >
+                              <StopCircle className="h-3 w-3 mr-1" />
+                              Stop
+                            </Button>
+                          )}
                         </div>
                       )}
                       {rowsLoading && !rows ? (
@@ -1513,8 +1610,10 @@ export default function BalanceOverview() {
                           onCopy={copyAddress}
                           unresolvedByRecordId={unresolvedByRecordId}
                           resolvingRecordIds={resolvingRecordIds}
+                          cancellingRecordIds={cancellingRecordIds}
                           resolveProgressByRecordId={resolveProgressByRecordId}
                           onResolveAddress={handleResolveAddress}
+                          onCancelResolveAddress={handleCancelResolveAddress}
                         />
                       ) : (
                         <div className="py-4 text-center text-sm text-muted-foreground">

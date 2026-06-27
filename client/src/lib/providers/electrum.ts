@@ -137,7 +137,9 @@ export class ElectrumProvider implements BlockchainProvider {
     return historyResult.history.length;
   }
 
-  async getTransaction(txid: string): Promise<ApiTransaction | null> {
+  async getTransaction(txid: string, signal?: AbortSignal): Promise<ApiTransaction | null> {
+    // Bail out before making an IPC call if the caller has already stopped.
+    if (signal?.aborted) throw new Error('Sync cancelled');
     this.ensureElectron();
     
     if (this.transactionCache.has(txid)) {

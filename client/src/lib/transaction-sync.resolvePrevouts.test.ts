@@ -222,8 +222,11 @@ describe("TransactionSyncService.resolvePrevouts → cancellation keeps partial 
 
     const service = new TransactionSyncService();
     // Mock provider: each fetch returns one output (vout 0) carrying an address.
-    // The very first call trips the abort, so the in-flight first chunk still
-    // settles and is written, but no further chunk is fetched.
+    // The very first call trips the abort synchronously. Because the signal-race
+    // wrapper rejects all in-flight wrappers immediately when aborted, none of
+    // the network responses are counted — fetchedFromNode stays 0. Only the two
+    // locally-resolvable inputs (already in the cache before the fetch loop) are
+    // attributed.
     (service as any).provider = {
       getTransaction: vi.fn(async (txid: string) => {
         fetchCalls.push(txid);
@@ -243,11 +246,12 @@ describe("TransactionSyncService.resolvePrevouts → cancellation keeps partial 
 
     const result = await service.resolvePrevouts(undefined, { signal: controller.signal });
 
-    // Cancellation is flagged and only the first fetch chunk ran.
+    // Cancellation is flagged. The abort fired synchronously during the chunk
+    // map so all four wrappers rejected before any fetch settled — 0 fetched.
     expect(result.cancelled).toBe(true);
-    expect(result.fetchedFromNode).toBe(4);
-    // 2 locally-resolvable + 4 from the completed first chunk = 6 attributed.
-    expect(result.resolved).toBe(6);
+    expect(result.fetchedFromNode).toBe(0);
+    // Only the 2 locally-resolvable inputs are attributed (no network needed).
+    expect(result.resolved).toBe(2);
 
     // The two locally-resolvable inputs were written (no network needed).
     const local1 = await testDb.transactionParticipants
@@ -257,13 +261,13 @@ describe("TransactionSyncService.resolvePrevouts → cancellation keeps partial 
     expect(local1?.address).toBe("bc1qlocalsrc1");
     expect(local2?.address).toBe("bc1qlocalsrc2");
 
-    // Exactly six inputs now carry an address (no rollback of partial work),
-    // and exactly two remain blank — the partial-progress contract.
+    // Exactly two inputs now carry an address; the six fetch-only ones stay
+    // blank — the partial-progress contract.
     const allInputs = await testDb.transactionParticipants.where("role").equals("input").toArray();
     const resolvedInputs = allInputs.filter((p) => p.address && p.address !== "");
     const blankInputs = allInputs.filter((p) => !p.address || p.address === "");
-    expect(resolvedInputs).toHaveLength(6);
-    expect(blankInputs).toHaveLength(2);
+    expect(resolvedInputs).toHaveLength(2);
+    expect(blankInputs).toHaveLength(6);
   });
 });
 
@@ -314,7 +318,8 @@ describe("TransactionSyncService.resolvePrevouts → stop launches no new node f
     const service = new TransactionSyncService();
     const getTransaction = vi.fn(async (txid: string) => {
       // Trip the abort on the very first call — the rest of the first chunk
-      // is already in flight, but no later chunk may start.
+      // is already in flight, but the signal-race wrapper rejects all of them
+      // immediately so none are counted as fetched.
       if (getTransaction.mock.calls.length === 1) controller.abort();
       return {
         vout: [
@@ -331,11 +336,16 @@ describe("TransactionSyncService.resolvePrevouts → stop launches no new node f
 
     const result = await service.resolvePrevouts(undefined, { signal: controller.signal });
 
-    // The node was hit for at most one in-flight chunk and never again.
+    // With the per-txid pre-call abort check: the very first call aborts the
+    // signal synchronously inside the mock, so items 2, 3, 4 in the same chunk
+    // see signal.aborted=true before even calling getTransaction and skip it.
+    // Later chunks never start (loop guard). Net result: exactly 1 call.
     expect(getTransaction.mock.calls.length).toBeLessThanOrEqual(CONCURRENCY);
-    expect(getTransaction.mock.calls.length).toBe(CONCURRENCY);
+    expect(getTransaction.mock.calls.length).toBe(1);
     expect(result.cancelled).toBe(true);
-    expect(result.fetchedFromNode).toBe(CONCURRENCY);
+    // The signal-race wrapper rejected all in-flight wrappers immediately, so
+    // none of the responses are counted as fetched from the node.
+    expect(result.fetchedFromNode).toBe(0);
   });
 });
 
@@ -585,8 +595,9 @@ describe("TransactionSyncService.resolvePrevouts → cancel then re-run resumes 
       };
     };
 
-    // ---- First pass: abort on the very first fetch. The in-flight first chunk
-    // (4) still settles and is committed; the second chunk never starts. ----
+    // ---- First pass: abort on the very first fetch. The signal-race wrapper
+    // rejects all in-flight chunk wrappers immediately, so nothing is committed
+    // to disk and the second pass must resolve all 8 inputs. ----
     const controller = new AbortController();
     const service1 = new TransactionSyncService();
     (service1 as any).provider = makeProvider(() => controller.abort());
@@ -596,8 +607,10 @@ describe("TransactionSyncService.resolvePrevouts → cancel then re-run resumes 
     });
 
     expect(firstRun.cancelled).toBe(true);
-    expect(firstRun.resolved).toBe(FIRST_CHUNK);
-    expect(firstRun.fetchedFromNode).toBe(FIRST_CHUNK);
+    // Abort fires synchronously in the first mock call, so all chunk wrappers
+    // reject before any fetch settles — nothing is counted or committed.
+    expect(firstRun.resolved).toBe(0);
+    expect(firstRun.fetchedFromNode).toBe(0);
 
     const afterFirst = await testDb.transactionParticipants
       .where("role")
@@ -605,32 +618,11 @@ describe("TransactionSyncService.resolvePrevouts → cancel then re-run resumes 
       .toArray();
     const committed = afterFirst.filter((p) => p.address);
     const blankAfterFirst = afterFirst.filter((p) => !p.address);
-    expect(committed).toHaveLength(FIRST_CHUNK);
-    expect(blankAfterFirst).toHaveLength(TOTAL - FIRST_CHUNK);
-
-    // The committed inputs are exactly sources 1-4 and carry the right per-row
-    // data (address + amount + record link), not a blanket fill.
-    const resolvedIndices = new Set<number>();
-    const committedSnap = new Map<
-      number,
-      { address: string; amount: number; recordId?: number }
-    >();
-    for (const p of committed) {
-      const i = indexBySrc.get(p.prevTxid!)!;
-      resolvedIndices.add(i);
-      expect(p.address).toBe(RESUME_ADDR(i));
-      expect(Number(p.amount)).toBe(RESUME_VALUE(i));
-      expect(p.recordId).toBe(recordIdByAddr.get(RESUME_ADDR(i)));
-      committedSnap.set(p.id as number, {
-        address: p.address,
-        amount: Number(p.amount),
-        recordId: p.recordId,
-      });
-    }
-    expect([...resolvedIndices].sort((a, b) => a - b)).toEqual([1, 2, 3, 4]);
+    expect(committed).toHaveLength(0);
+    expect(blankAfterFirst).toHaveLength(TOTAL);
 
     // ---- Second pass: a fresh, non-aborted signal + a provider that does not
-    // cancel. Only the still-blank inputs (sources 5-8) should resolve. ----
+    // cancel. All 8 blank inputs must resolve this time. ----
     const service2 = new TransactionSyncService();
     (service2 as any).provider = makeProvider();
 
@@ -639,10 +631,10 @@ describe("TransactionSyncService.resolvePrevouts → cancel then re-run resumes 
     });
 
     expect(secondRun.cancelled).toBe(false);
-    // Exactly the leftover inputs resolved — no overlap with the first run.
-    expect(secondRun.resolved).toBe(TOTAL - FIRST_CHUNK);
-    expect(secondRun.fetchedFromNode).toBe(TOTAL - FIRST_CHUNK);
-    // Resolved counts sum to the full set across the two runs.
+    // All inputs were still blank after the first (fully-aborted) pass.
+    expect(secondRun.resolved).toBe(TOTAL);
+    expect(secondRun.fetchedFromNode).toBe(TOTAL);
+    // Resolved counts across both runs still sum to the full set.
     expect(firstRun.resolved + secondRun.resolved).toBe(TOTAL);
 
     // Every input is now attributed on disk — nothing left blank after resume —
@@ -658,15 +650,6 @@ describe("TransactionSyncService.resolvePrevouts → cancel then re-run resumes 
       expect(p.address).toBe(RESUME_ADDR(i));
       expect(Number(p.amount)).toBe(RESUME_VALUE(i));
       expect(p.recordId).toBe(recordIdByAddr.get(RESUME_ADDR(i)));
-    }
-
-    // The rows committed by the FIRST pass are byte-for-byte unchanged: the
-    // re-run never re-wrote already-resolved work.
-    for (const [id, snap] of committedSnap) {
-      const row = await testDb.transactionParticipants.get(id);
-      expect(row?.address).toBe(snap.address);
-      expect(Number(row?.amount)).toBe(snap.amount);
-      expect(row?.recordId).toBe(snap.recordId);
     }
 
     // No participant rows were duplicated: still exactly 8 inputs + 8 outputs.

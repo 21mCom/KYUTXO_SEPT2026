@@ -1020,11 +1020,18 @@ export function BalanceIntegrityCard() {
         onProgress: ({ processed, total }) => setState({ status: "recomputing", processed, total }),
       });
     } catch (err) {
+      // If the user cancelled while recomputeAddressStats was running, it may
+      // reject instead of returning { cancelled: true }. Treat an aborted
+      // signal as a clean cancellation, not an error.
+      if (abort.signal.aborted) {
+        setState({ status: "idle" });
+        return;
+      }
       setState({ status: "error", message: err instanceof Error ? err.message : String(err) });
       return;
     }
 
-    if (recomputeResult.cancelled) {
+    if (abort.signal.aborted || recomputeResult?.cancelled) {
       setState({ status: "idle" });
       return;
     }

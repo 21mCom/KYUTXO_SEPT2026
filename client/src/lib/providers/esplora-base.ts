@@ -21,7 +21,7 @@ export abstract class EsploraProvider implements BlockchainProvider {
     this.trustedLocalHosts = trustedLocalHosts;
   }
 
-  protected async rateLimitedFetch(url: string): Promise<Response> {
+  protected async rateLimitedFetch(url: string, externalSignal?: AbortSignal): Promise<Response> {
     const now = Date.now();
     const timeSinceLastRequest = now - this.lastRequestTime;
     
@@ -32,19 +32,34 @@ export abstract class EsploraProvider implements BlockchainProvider {
     this.lastRequestTime = Date.now();
     
     if (this.useTor) {
-      return this.torProxiedFetch(url);
+      return this.torProxiedFetch(url, externalSignal);
     }
     
     if (isElectron() && isLocalOrPrivateUrl(url)) {
-      return this.torProxiedFetch(url);
+      return this.torProxiedFetch(url, externalSignal);
     }
     
+    // Combine the caller's abort signal with the per-request timeout signal so
+    // either a user-initiated stop OR a timeout cancels the in-flight request.
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+    let onExternalAbort: (() => void) | undefined;
+    if (externalSignal) {
+      if (externalSignal.aborted) {
+        clearTimeout(timeoutId);
+        controller.abort();
+      } else {
+        onExternalAbort = () => controller.abort(externalSignal.reason);
+        externalSignal.addEventListener('abort', onExternalAbort, { once: true });
+      }
+    }
     
     try {
       const response = await fetch(url, { signal: controller.signal });
       clearTimeout(timeoutId);
+      if (onExternalAbort && externalSignal) {
+        externalSignal.removeEventListener('abort', onExternalAbort);
+      }
       
       if (!response.ok) {
         if (response.status === 429) {
@@ -55,14 +70,24 @@ export abstract class EsploraProvider implements BlockchainProvider {
       return response;
     } catch (error) {
       clearTimeout(timeoutId);
+      if (onExternalAbort && externalSignal) {
+        externalSignal.removeEventListener('abort', onExternalAbort);
+      }
       if (error instanceof Error && error.name === 'AbortError') {
+        // Distinguish user-cancelled abort from a timeout abort.
+        if (externalSignal?.aborted) {
+          throw new Error('Sync cancelled');
+        }
         throw new Error(`Request timed out after ${this.timeout / 1000}s. Try increasing the timeout for slow connections.`);
       }
       throw error;
     }
   }
 
-  protected async torProxiedFetch(url: string): Promise<Response> {
+  protected async torProxiedFetch(url: string, externalSignal?: AbortSignal): Promise<Response> {
+    // Bail out immediately if already cancelled before launching any IPC/fetch.
+    if (externalSignal?.aborted) throw new Error('Sync cancelled');
+
     let result: {
       success: boolean;
       status?: number;
@@ -78,7 +103,9 @@ export abstract class EsploraProvider implements BlockchainProvider {
     if (isElectron()) {
       const electronAPI = getElectronAPI();
       console.log(`[KYUTXO] [${new Date().toISOString()}] Calling Electron IPC torRequest...`);
-      result = await electronAPI.torRequest({
+      // Electron IPC cannot be aborted mid-flight, so we race the call against
+      // the external signal to stop waiting for its result on cancellation.
+      const ipcPromise = electronAPI.torRequest({
         url,
         method: 'GET',
         timeout: this.timeout,
@@ -86,8 +113,22 @@ export abstract class EsploraProvider implements BlockchainProvider {
         allowedHost: this.baseUrl,
         trustedLocalHosts: this.trustedLocalHosts,
       });
+      if (externalSignal) {
+        result = await new Promise<typeof result>((resolve, reject) => {
+          const onAbort = () => reject(new Error('Sync cancelled'));
+          externalSignal.addEventListener('abort', onAbort, { once: true });
+          ipcPromise.then(
+            (v) => { externalSignal.removeEventListener('abort', onAbort); resolve(v); },
+            (e) => { externalSignal.removeEventListener('abort', onAbort); reject(e); },
+          );
+        });
+      } else {
+        result = await ipcPromise;
+      }
       console.log(`[KYUTXO] [${new Date().toISOString()}] Electron IPC returned - success: ${result.success}, elapsed: ${Date.now() - startTime}ms`);
     } else {
+      // Browser proxy path: pass the external signal so the connection to our
+      // local proxy server is aborted when the user stops the resolve.
       const proxyResponse = await fetch('/api/tor/request', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -99,6 +140,7 @@ export abstract class EsploraProvider implements BlockchainProvider {
           allowedHost: this.baseUrl,
           trustedLocalHosts: this.trustedLocalHosts,
         }),
+        signal: externalSignal,
       });
       result = await proxyResponse.json();
     }
@@ -162,9 +204,9 @@ export abstract class EsploraProvider implements BlockchainProvider {
     return (data.chain_stats?.tx_count ?? 0) + (data.mempool_stats?.tx_count ?? 0);
   }
 
-  async getTransaction(txid: string): Promise<ApiTransaction | null> {
+  async getTransaction(txid: string, signal?: AbortSignal): Promise<ApiTransaction | null> {
     try {
-      const response = await this.rateLimitedFetch(`${this.baseUrl}/tx/${txid}`);
+      const response = await this.rateLimitedFetch(`${this.baseUrl}/tx/${txid}`, signal);
       return response.json();
     } catch (error) {
       if (error instanceof Error && error.message.includes('404')) {

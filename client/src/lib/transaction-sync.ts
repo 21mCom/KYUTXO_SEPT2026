@@ -1667,7 +1667,26 @@ export class TransactionSyncService {
         }
         const chunk = fetchArr.slice(i, i + CONCURRENCY);
         const results = await Promise.allSettled(
-          chunk.map(txid => this.provider.getTransaction(txid).then(apiTx => ({ txid, apiTx })))
+          chunk.map((txid) => {
+            // Skip this fetch entirely if the signal is already aborted — avoids
+            // launching additional IPC/HTTP calls after the first abort fires in
+            // the same chunk.
+            if (signal?.aborted) return Promise.reject(new Error('Sync cancelled'));
+            const fetchPromise = this.provider.getTransaction(txid, signal).then(apiTx => ({ txid, apiTx }));
+            if (!signal) return fetchPromise;
+            // Wrap each fetch so an abort signal rejection short-circuits the
+            // in-flight request immediately rather than waiting for the HTTP
+            // response to time out.
+            return new Promise<{ txid: string; apiTx: ApiTransaction | null }>((resolve, reject) => {
+              if (signal.aborted) { reject(new Error('Sync cancelled')); return; }
+              const onAbort = () => reject(new Error('Sync cancelled'));
+              signal.addEventListener('abort', onAbort, { once: true });
+              fetchPromise.then(
+                (v) => { signal.removeEventListener('abort', onAbort); resolve(v); },
+                (e) => { signal.removeEventListener('abort', onAbort); reject(e); },
+              );
+            });
+          })
         );
         for (const r of results) {
           if (r.status === 'fulfilled' && r.value.apiTx) {
@@ -1683,7 +1702,11 @@ export class TransactionSyncService {
             }
             stats.fetchedFromNode++;
           } else if (r.status === 'rejected') {
-            stats.errors++;
+            // Don't count abort-triggered rejections as errors — those are
+            // intentional cancellations, not node/network failures.
+            if (!signal?.aborted) {
+              stats.errors++;
+            }
           }
         }
 
