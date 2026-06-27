@@ -1,11 +1,15 @@
 import { useMemo } from "react";
+import { classifyBehavior, type BehaviorProfile } from "@/lib/behavior-profile";
 
 export interface AddressStats {
   balanceSats: number;
   lastTxDate: number;
   txCount: number;
+  utxoCount: number;
   /** Whether this address has had its stats computed from fetched tx data. */
   synced: boolean;
+  /** Deterministic behavioral classification derived from the cached stats. */
+  behaviorProfile: BehaviorProfile;
 }
 
 type StatsRecord = {
@@ -15,6 +19,7 @@ type StatsRecord = {
   cachedBalanceSats?: number;
   cachedTxCount?: number;
   cachedLastActivityTime?: number;
+  cachedUtxoCount?: number;
   statsComputedAt?: number;
 };
 
@@ -45,11 +50,24 @@ export function useAddressStatsWithLoading(
     for (const record of records) {
       if (record.type !== 'address' || !record.inputString || record.id == null) continue;
       const synced = record.statsComputedAt != null;
-      result.set(String(record.id), {
-        balanceSats: record.cachedBalanceSats ?? 0,
-        lastTxDate: record.cachedLastActivityTime ?? 0,
-        txCount: record.cachedTxCount ?? 0,
+      const balanceSats = record.cachedBalanceSats ?? 0;
+      const lastTxDate = record.cachedLastActivityTime ?? 0;
+      const txCount = record.cachedTxCount ?? 0;
+      const utxoCount = record.cachedUtxoCount ?? 0;
+      const behaviorProfile = classifyBehavior({
         synced,
+        balanceSats,
+        txCount,
+        utxoCount,
+        lastActivityTime: lastTxDate,
+      });
+      result.set(String(record.id), {
+        balanceSats,
+        lastTxDate,
+        txCount,
+        utxoCount,
+        synced,
+        behaviorProfile,
       });
     }
     return result;

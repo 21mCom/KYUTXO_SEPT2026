@@ -1,4 +1,5 @@
-import { Edit, Paperclip, Wallet as WalletIcon, User, Users, Upload, QrCode, Key, GitBranch, ArrowDownLeft, ArrowUpRight, Shield, ChevronDown, ChevronRight, Link2, Layers, FileInput, ExternalLink, AlertCircle, Network, Clock, Copy, Check } from "lucide-react";
+import { Edit, Paperclip, Wallet as WalletIcon, User, Users, Upload, QrCode, Key, GitBranch, ArrowDownLeft, ArrowUpRight, Shield, ChevronDown, ChevronRight, Link2, Layers, FileInput, ExternalLink, AlertCircle, Network, Clock, Copy, Check, Activity } from "lucide-react";
+import { classifyBehavior, BEHAVIOR_LABEL_DISPLAY } from "@/lib/behavior-profile";
 import { formatBTC } from "@/lib/bitcoin";
 import DiscoveryTreeDialog from "./DiscoveryTreeDialog";
 import { useLocation } from "wouter";
@@ -95,6 +96,12 @@ interface RecordDetailPanelProps {
     costBasisUsd?: number;
     // Address metadata
     counterpartyType?: CounterpartyType;
+    // Cached address stats (populated after sync/recompute)
+    cachedBalanceSats?: number;
+    cachedTxCount?: number;
+    cachedLastActivityTime?: number;
+    cachedUtxoCount?: number;
+    statsComputedAt?: number;
   };
   attachments?: Attachment[];
   onAttachmentsChange?: () => void;
@@ -531,7 +538,7 @@ export function RecordDetailPanel({
           setConflictCount(0);
           return;
         }
-        const conflicts = detectSingularFieldConflicts(record, origins);
+        const conflicts = detectSingularFieldConflicts(record as unknown as Parameters<typeof detectSingularFieldConflicts>[0], origins);
         setConflictCount(conflicts.length);
       } catch (error) {
         console.error("Failed to check conflicts:", error);
@@ -620,6 +627,21 @@ export function RecordDetailPanel({
                     {conflictCount} Conflict{conflictCount > 1 ? 's' : ''}
                   </Badge>
                 )}
+                {record.type === 'address' && (() => {
+                  const bp = classifyBehavior({
+                    synced: record.statsComputedAt != null,
+                    balanceSats: record.cachedBalanceSats ?? 0,
+                    txCount: record.cachedTxCount ?? 0,
+                    utxoCount: record.cachedUtxoCount ?? 0,
+                    lastActivityTime: record.cachedLastActivityTime ?? 0,
+                  });
+                  return (
+                    <Badge variant="secondary" data-testid="badge-behavior-profile">
+                      <Activity className="h-3 w-3 mr-1" />
+                      {BEHAVIOR_LABEL_DISPLAY[bp.label]}
+                    </Badge>
+                  );
+                })()}
               </div>
             </div>
             <div className="flex gap-1">
@@ -650,6 +672,39 @@ export function RecordDetailPanel({
               </div>
               <BitcoinAddressDisplay address={record.inputString} truncate={false} />
             </div>
+
+            {record.type === 'address' && (() => {
+              const bp = classifyBehavior({
+                synced: record.statsComputedAt != null,
+                balanceSats: record.cachedBalanceSats ?? 0,
+                txCount: record.cachedTxCount ?? 0,
+                utxoCount: record.cachedUtxoCount ?? 0,
+                lastActivityTime: record.cachedLastActivityTime ?? 0,
+              });
+              return (
+                <div className="p-3 bg-muted/40 rounded-lg space-y-1.5" data-testid="section-behavior-profile">
+                  <div className="flex items-center gap-2">
+                    <Activity className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                    <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Behavior</span>
+                    <Badge variant="secondary" className="text-xs" data-testid="badge-behavior-label">
+                      {BEHAVIOR_LABEL_DISPLAY[bp.label]}
+                    </Badge>
+                  </div>
+                  <p className="text-xs text-muted-foreground leading-relaxed" data-testid="text-behavior-summary">
+                    {bp.summarySentence}
+                  </p>
+                  {bp.reasons.length > 0 && (
+                    <ul className="flex flex-wrap gap-x-3 gap-y-0.5 mt-0.5">
+                      {bp.reasons.map((r, i) => (
+                        <li key={i} className="text-xs text-muted-foreground/70" data-testid={`text-behavior-reason-${i}`}>
+                          · {r}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              );
+            })()}
 
             {record.notes && (
               <div>

@@ -11,6 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { MoreVertical, ArrowUp, ArrowDown, ArrowUpDown, Settings2, Paperclip, Key, RefreshCw } from "lucide-react";
+import { classifyBehavior, BEHAVIOR_LABEL_DISPLAY } from "@/lib/behavior-profile";
 import { BitcoinAddressDisplay } from "./BitcoinAddressDisplay";
 import { RecordTypeBadge } from "./RecordTypeBadge";
 import {
@@ -36,11 +37,15 @@ import { formatBTC } from "@/lib/bitcoin";
 type SortDirection = "asc" | "desc" | null;
 type SortColumn = "type" | "label" | "inputString" | "tags" | "categories" | "walletSoftware" | "seedName" | "privateKeyStatus" | "attachments" | "source" | "owner" | "balance" | "lastTxDate" | "txCount" | string;
 
+import type { BehaviorProfile } from "@/lib/behavior-profile";
+
 interface AddressStats {
   balanceSats: number;
   lastTxDate: number;
   txCount: number;
+  utxoCount: number;
   synced: boolean;
+  behaviorProfile: BehaviorProfile;
 }
 
 // Format Unix timestamp (seconds) to human-readable date
@@ -99,6 +104,7 @@ interface Record {
   cachedBalanceSats?: number;
   cachedTxCount?: number;
   cachedLastActivityTime?: number;
+  cachedUtxoCount?: number;
   statsComputedAt?: number;
 }
 
@@ -182,20 +188,39 @@ export function RecordTable({
 
   // Address stats are read directly from the per-record cache (computed locally
   // during sync / manual recompute). No participant scan or network access here.
+  // behaviorProfile is derived deterministically from the same cached fields.
   const localAddressStats = useMemo(() => {
     const result = new Map<string, AddressStats>();
     for (const record of records) {
       if (record.type !== 'address' || !record.inputString || record.id == null) continue;
+      const synced = record.statsComputedAt != null;
+      const balanceSats = record.cachedBalanceSats ?? 0;
+      const txCount = record.cachedTxCount ?? 0;
+      const utxoCount = record.cachedUtxoCount ?? 0;
+      const lastTxDate = record.cachedLastActivityTime ?? 0;
       result.set(String(record.id), {
-        balanceSats: record.cachedBalanceSats ?? 0,
-        lastTxDate: record.cachedLastActivityTime ?? 0,
-        txCount: record.cachedTxCount ?? 0,
-        synced: record.statsComputedAt != null,
+        balanceSats,
+        lastTxDate,
+        txCount,
+        utxoCount,
+        synced,
+        behaviorProfile: classifyBehavior({
+          synced,
+          balanceSats,
+          txCount,
+          utxoCount,
+          lastActivityTime: lastTxDate,
+        }),
       });
     }
     return result;
   }, [records]);
-  const addressStats = precomputedAddressStats || localAddressStats;
+  // Use precomputedAddressStats only if non-empty; an empty Map (returned when
+  // stats columns are toggled off in Dashboard) is truthy but useless — fall
+  // back to localAddressStats so behavior badges always render.
+  const addressStats = (precomputedAddressStats && precomputedAddressStats.size > 0)
+    ? precomputedAddressStats
+    : localAddressStats;
   const statsLoading = precomputedAddressStats ? (externalStatsLoading ?? false) : false;
 
   useEffect(() => {
@@ -599,8 +624,24 @@ export function RecordTable({
                 <TableCell>
                   <RecordTypeBadge type={record.type} />
                 </TableCell>
-                <TableCell className="font-medium" data-testid={`text-label-${record.id}`}>
-                  {record.label}
+                <TableCell data-testid={`text-label-${record.id}`}>
+                  <div className="flex flex-col gap-1">
+                    <span className="font-medium">{record.label}</span>
+                    {record.type === 'address' && (() => {
+                      const bp = addressStats.get(record.id)?.behaviorProfile;
+                      if (!bp) return null;
+                      return (
+                        <Badge
+                          variant={bp.label === 'not-enough-data' ? 'outline' : 'secondary'}
+                          className="text-xs w-fit"
+                          title={bp.summarySentence}
+                          data-testid={`badge-behavior-${record.id}`}
+                        >
+                          {BEHAVIOR_LABEL_DISPLAY[bp.label]}
+                        </Badge>
+                      );
+                    })()}
+                  </div>
                 </TableCell>
                 <TableCell>
                   <BitcoinAddressDisplay address={record.inputString} />
