@@ -1825,15 +1825,39 @@ export function PrivacyHistoryCard() {
                       {scoreDelta}
                     </span>
                   )}
+                  {entry.owner || entry.walletName ? (
+                    <>
+                      {entry.owner && (
+                        <Badge
+                          variant="secondary"
+                          className="text-xs"
+                          data-testid="badge-history-scope-owner"
+                        >
+                          Owner: {entry.owner}
+                        </Badge>
+                      )}
+                      {entry.walletName && (
+                        <Badge
+                          variant="secondary"
+                          className="text-xs"
+                          data-testid="badge-history-scope-wallet"
+                        >
+                          Wallet: {entry.walletName}
+                        </Badge>
+                      )}
+                    </>
+                  ) : (
+                    <Badge
+                      variant="secondary"
+                      className="text-xs"
+                      data-testid="badge-history-scope-all"
+                    >
+                      All
+                    </Badge>
+                  )}
                 </div>
                 <span className="text-xs text-muted-foreground">
                   {entry.totalFindings} issue{entry.totalFindings === 1 ? "" : "s"}
-                  {(entry.owner || entry.walletName) && (
-                    <>
-                      {" · "}
-                      {[entry.owner, entry.walletName].filter(Boolean).join(" / ")}
-                    </>
-                  )}
                 </span>
               </div>
 
