@@ -13,6 +13,15 @@ function csvCell(value: string | number): string {
   return s;
 }
 
+/**
+ * Strip embedded line breaks from a string value so it is safe to embed
+ * in a single-line preamble comment or label without scrambling the CSV row
+ * structure. Replaces CR, LF, and CRLF sequences with a single space.
+ */
+function stripLineBreaks(s: string): string {
+  return s.replace(/\r\n|\r|\n/g, " ");
+}
+
 /** Human-friendly label for a finding type column header. */
 function findingTypeLabel(type: string): string {
   return FINDING_TYPE_LABELS[type as PrivacyFindingType] ?? type;
@@ -44,8 +53,10 @@ export function computePrivacyHistoryScopeLabel(
     }
   }
   const parts: string[] = [];
-  if (owner) parts.push(`Owner = ${owner}`);
-  if (wallet) parts.push(`Wallet = ${wallet}`);
+  // Strip embedded line breaks so the label can never straddle two CSV rows
+  // when used as a preamble line in the exported file.
+  if (owner) parts.push(`Owner = ${stripLineBreaks(owner)}`);
+  if (wallet) parts.push(`Wallet = ${stripLineBreaks(wallet)}`);
   return `Scope: ${parts.length ? parts.join(", ") : "All addresses"}`;
 }
 
@@ -93,6 +104,11 @@ export function buildPrivacyHistoryCsv(entries: PrivacyAuditHistoryEntry[]): str
 
   const rows = ordered.map((e) => {
     const sev = e.severityCounts ?? { CRITICAL: 0, HIGH: 0, MEDIUM: 0, LOW: 0 };
+    // Strip embedded line breaks from free-text owner/walletName values so a
+    // name containing CR/LF can't break a CSV row across multiple lines and
+    // corrupt every subsequent row in the file.
+    const ownerCell = e.owner ? stripLineBreaks(e.owner) : "All";
+    const walletCell = e.walletName ? stripLineBreaks(e.walletName) : "All";
     return [
       new Date(e.timestamp).toISOString(),
       new Date(e.timestamp).toLocaleString(),
@@ -105,8 +121,8 @@ export function buildPrivacyHistoryCsv(entries: PrivacyAuditHistoryEntry[]): str
       sev.HIGH ?? 0,
       sev.MEDIUM ?? 0,
       sev.LOW ?? 0,
-      e.owner ?? "All",
-      e.walletName ?? "All",
+      ownerCell,
+      walletCell,
       ...sortedTypes.map((type) => e.findingTypeCounts?.[type] ?? 0),
     ];
   });

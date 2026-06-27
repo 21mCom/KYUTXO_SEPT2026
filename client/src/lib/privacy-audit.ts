@@ -1437,9 +1437,35 @@ export function detectEntityProximity(ctx: AuditContext): PrivacyFinding[] {
 
   if (grouped.size === 0) return [];
 
+  // De-duplicate entity addresses across hop distances: if the same risky
+  // address was reached at hop 2 from one owned address AND at hop 3 from
+  // another, it must appear only in the closer-hop finding. Sort groups by
+  // ascending hop distance so closer hops claim their entity addresses first,
+  // then strip already-claimed addresses from farther hops.
+  const sortedGroups = Array.from(grouped.values()).sort(
+    (a, b) => a.hopDistance - b.hopDistance,
+  );
+  const claimedEntityAddresses = new Set<string>();
+  for (const group of sortedGroups) {
+    // Remove entity addresses already reported at a closer hop.
+    group.entityAddresses = group.entityAddresses.filter(
+      (addr) => !claimedEntityAddresses.has(addr),
+    );
+    group.citations = group.citations.filter(
+      (c) => !claimedEntityAddresses.has(c.address),
+    );
+    // Rebuild entityNames from the surviving citations.
+    group.entityNames = new Set(group.citations.map((c) => c.name));
+    // Claim the survivors so farther hops don't repeat them.
+    for (const addr of group.entityAddresses) claimedEntityAddresses.add(addr);
+  }
+
   const findings: PrivacyFinding[] = [];
 
-  for (const [, group] of grouped) {
+  for (const group of sortedGroups) {
+    // Skip a group that had all its entity addresses claimed by a closer hop.
+    if (group.entityAddresses.length === 0) continue;
+
     const severity = PROXIMITY_HOP_SEVERITY[group.hopDistance] ?? "LOW";
     const findingType = PROXIMITY_CATEGORY_FINDING_TYPE[group.category];
     const categoryLabel = ENTITY_CATEGORY_LABELS[group.category];

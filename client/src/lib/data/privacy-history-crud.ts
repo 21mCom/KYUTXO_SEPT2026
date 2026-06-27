@@ -66,21 +66,43 @@ export async function trimPrivacyAuditHistory(
 /**
  * Append a new audit snapshot and trim the table to the most recent
  * configured number of entries (oldest removed first).
+ *
+ * The add and trim are executed inside a single Dexie read-write transaction
+ * so the table can never transiently exceed the retention limit — even if two
+ * tabs run an audit simultaneously, the isolation guarantee of IndexedDB means
+ * one transaction commits first and the other sees the already-trimmed state.
  */
 export async function addPrivacyAuditHistoryEntry(
   entry: CreatePrivacyAuditHistoryEntry,
   options?: PrivacyHistoryWriteOptions
 ): Promise<number> {
-  const id = await db.privacyAuditHistory.add(entry as PrivacyAuditHistoryEntry);
+  // Resolve the limit outside the transaction (reads are cheaper outside and
+  // the limit itself rarely changes mid-operation).
+  const limit = await getPrivacyHistoryLimit();
 
-  // Trim oldest entries beyond the retention limit.
-  await trimPrivacyAuditHistory(undefined, { skipNotification: true });
+  let newId: number;
+  await db.transaction('rw', db.privacyAuditHistory, async () => {
+    newId = (await db.privacyAuditHistory.add(entry as PrivacyAuditHistoryEntry)) as number;
+
+    // Trim within the same transaction so add + delete are atomic.
+    const total = await db.privacyAuditHistory.count();
+    if (total > limit) {
+      const excess = total - limit;
+      const oldestIds = await db.privacyAuditHistory
+        .orderBy('timestamp')
+        .limit(excess)
+        .primaryKeys();
+      if (oldestIds.length > 0) {
+        await db.privacyAuditHistory.bulkDelete(oldestIds as number[]);
+      }
+    }
+  });
 
   if (!options?.skipNotification) {
     notifyDbChange('privacyAuditHistory');
   }
 
-  return id as number;
+  return newId!;
 }
 
 /**

@@ -91,7 +91,6 @@ export function SourceOfFundsReport() {
       } else {
         inputTxids = allInputTxids;
       }
-
       let totalReceivedSats = 0;
       let currentBalanceSats = 0;
       const fundingSources: FundingSource[] = [];
@@ -151,6 +150,11 @@ export function SourceOfFundsReport() {
       }
 
       fundingSources.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+      // shownTxCount reflects how many txids were actually enriched into
+      // fundingSources (some txids may be skipped when tx or myOutput is
+      // missing), so the exported counts match what's actually listed.
+      const shownTxCount = fundingSources.length;
 
       const today = new Date().toISOString().split('T')[0];
       const currentPrice = await getLatestPriceOnOrBefore(today, currency, 'BTC');
