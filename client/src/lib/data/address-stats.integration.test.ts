@@ -52,6 +52,7 @@ vi.mock("@/lib/database", async () => {
 const { detectStaleCachedBalances, recomputeAddressStats } = await import(
   "./address-stats"
 );
+type StaleAddressDetail = import("./address-stats").StaleAddressDetail;
 
 // ---- Fixture helpers --------------------------------------------------------
 
@@ -526,6 +527,82 @@ describe("detectStaleCachedBalances", () => {
     expect(sampledReports).toEqual([200, 250]);
     // No checkAll → no denominator is ever computed or reported.
     expect(totalReports).toEqual([undefined, undefined]);
+  });
+
+  it("delivers only the pre-abort batches via onStaleBatch when a streaming full-table scan is stopped early", async () => {
+    // Seed 250 synced, all-stale addresses so a checkAll scan spans more than
+    // one 200-record batch. In streaming mode each batch of found stale
+    // addresses is handed to onStaleBatch (awaited) BEFORE onProgress fires and
+    // before the abort signal is re-checked at the top of the next iteration.
+    // We abort the moment the first batch is streamed, so the second batch is
+    // never gathered or streamed — the caller keeps exactly the partial findings
+    // it already spooled to durable storage.
+    const COUNT = 250;
+    const records: DbRecord[] = [];
+    const participants: TransactionParticipant[] = [];
+    const txs: BlockchainTransaction[] = [];
+    for (let i = 1; i <= COUNT; i++) {
+      // Zero-pad so the id-ordered scan and the address strings line up.
+      const addr = `stream-addr-${String(i).padStart(4, "0")}`;
+      const txid = `stream-tx-${i}`;
+      records.push(
+        mkAddr({
+          id: i,
+          inputString: addr,
+          statsComputedAt: 5000,
+          // Cached 0 but computed 1000 → every address is stale.
+          cachedBalanceSats: 0,
+        }),
+      );
+      participants.push(mkOutput(addr, txid, 1000));
+      txs.push(mkTx(txid, 100 + i));
+    }
+    await testDb.records.bulkAdd(records);
+    await testDb.transactionParticipants.bulkAdd(participants);
+    await testDb.blockchainTransactions.bulkAdd(txs);
+
+    const controller = new AbortController();
+    // Each streamed batch is spooled here (the "durable storage" stand-in).
+    const spooled: StaleAddressDetail[] = [];
+    // Abort the first time a batch is streamed. The scan awaits this callback,
+    // then reports progress, then re-checks isAborted() at the top of the next
+    // while-loop iteration and bails out before reading the second batch.
+    const onStaleBatch = vi.fn((batch: StaleAddressDetail[]) => {
+      spooled.push(...batch);
+      if (!controller.signal.aborted) controller.abort();
+    });
+
+    const result = await detectStaleCachedBalances({
+      checkAll: true,
+      collectDetails: true,
+      signal: controller.signal,
+      onStaleBatch,
+    });
+
+    // Aborted mid-scan → cancelled, with only the first 200-record batch
+    // examined (not all 250 records).
+    expect(result.cancelled).toBe(true);
+    expect(result.sampled).toBe(200);
+    expect(result.checkedAll).toBe(true);
+    // Streaming mode never accumulates details in the result; the caller owns
+    // the full (partial) set.
+    expect(result.staleAddresses).toHaveLength(0);
+    // staleCount reflects only the addresses examined before the abort. Every
+    // one of those 200 was stale, so the count matches the sampled count.
+    expect(result.staleCount).toBe(200);
+
+    // Exactly one batch was streamed before the abort short-circuited the scan.
+    expect(onStaleBatch).toHaveBeenCalledTimes(1);
+    expect(spooled).toHaveLength(200);
+    // The streamed batch is precisely the first 200 records by id — none of the
+    // post-abort addresses leaked through.
+    expect(spooled.map((d) => d.recordId)).toEqual(
+      Array.from({ length: 200 }, (_, i) => i + 1),
+    );
+    const addresses = spooled.map((d) => d.address);
+    expect(addresses[0]).toBe("stream-addr-0001");
+    expect(addresses[199]).toBe("stream-addr-0200");
+    expect(addresses).not.toContain("stream-addr-0201");
   });
 });
 
