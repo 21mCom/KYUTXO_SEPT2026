@@ -149,7 +149,6 @@ const ALWAYS_ALLOWED_FILES = new Set([
   path.resolve(ROOT, 'client/src/pages/PrivacyAudit.peelGraph.coinjoin.test.tsx'),
   path.resolve(ROOT, 'client/src/pages/PrivacyAudit.peelGraphContrast.test.tsx'),
   path.resolve(ROOT, 'client/src/pages/PrivacyAudit.peelList.test.tsx'),
-  path.resolve(ROOT, 'client/src/pages/Reports.privacyCitationRenderEndToEnd.test.tsx'),
   path.resolve(ROOT, 'client/src/pages/Reports.privacyCitationWarningSeverity.test.tsx'),
   path.resolve(ROOT, 'client/src/pages/Reports.privacyCitationImportedList.test.tsx'),
   path.resolve(ROOT, 'client/src/pages/Reports.privacyMismatchedCitationImport.test.tsx'),
