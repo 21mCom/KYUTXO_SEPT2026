@@ -54,6 +54,10 @@ vi.mock("@/lib/database", async () => {
 // genuine index path, but we can count every actual DB hit. metadata-hover
 // imports this binding, so the wrapper observes exactly the queries it fires.
 const queryLog: string[] = [];
+// Optional per-identifier query override. When set, getRecordsByInputString
+// returns the override's promise instead of hitting testDb, letting a test take
+// precise control of resolution timing to reproduce a write/hover race.
+const queryOverrides = new Map<string, () => Promise<DbRecord[]>>();
 vi.mock("@/lib/data/record-crud", async () => {
   const actual =
     await vi.importActual<typeof import("@/lib/data/record-crud")>("@/lib/data/record-crud");
@@ -61,14 +65,15 @@ vi.mock("@/lib/data/record-crud", async () => {
     ...actual,
     getRecordsByInputString: async (inputString: string) => {
       queryLog.push(inputString);
+      const override = queryOverrides.get(inputString);
+      if (override) return override();
       return actual.getRecordsByInputString(inputString);
     },
   };
 });
 
-const { resolveIdentifier, getCachedRecord, invalidateCachedRecord } = await import(
-  "./metadata-hover"
-);
+const { resolveIdentifier, getCachedRecord, invalidateCachedRecord, subscribeCacheEntry } =
+  await import("./metadata-hover");
 
 const VAULT_SIZE = 12_000;
 const addrAt = (i: number) => `addr-${i.toString().padStart(6, "0")}`;
@@ -107,6 +112,7 @@ afterAll(async () => {
 
 beforeEach(() => {
   queryLog.length = 0;
+  queryOverrides.clear();
 });
 
 describe("resolveIdentifier query-storm guard (12k-record vault)", () => {
@@ -194,5 +200,59 @@ describe("resolveIdentifier query-storm guard (12k-record vault)", () => {
     // Generous ceiling: catches a catastrophic O(n) degradation while staying
     // robust on slow CI. An indexed lookup over 12k rows is typically <10ms.
     expect(maxMs).toBeLessThan(250);
+  });
+
+  // Race: a resolution started just before a write commits reads pre-write data.
+  // If it finishes AFTER invalidateCachedRecord's fresh re-resolution, it must
+  // not overwrite the cache with stale data and leave the note icon wrong until
+  // the next hover. A per-key generation guard prevents the stale write.
+  it("a stale in-flight resolution cannot overwrite a fresh post-write one", async () => {
+    const addr = addrAt(404);
+    const staleRecord = { id: 1, inputString: addr, label: "Old" } as DbRecord;
+    const freshRecord = { id: 1, inputString: addr, label: "New" } as DbRecord;
+
+    // Manually-controlled deferreds so we can decide resolution order.
+    let resolveStale!: (r: DbRecord[]) => void;
+    const stalePromise = new Promise<DbRecord[]>((res) => {
+      resolveStale = res;
+    });
+    let resolveFresh!: (r: DbRecord[]) => void;
+    const freshPromise = new Promise<DbRecord[]>((res) => {
+      resolveFresh = res;
+    });
+
+    let calls = 0;
+    queryOverrides.set(addr, () => {
+      calls += 1;
+      return calls === 1 ? stalePromise : freshPromise;
+    });
+
+    // Start clean and keep a subscriber attached so invalidate re-resolves for a
+    // "visible" link rather than just clearing.
+    invalidateCachedRecord(addr);
+    const unsub = subscribeCacheEntry(addr, () => {});
+
+    // (1) Hover starts a resolution that reads the DB *before* the write commits.
+    const stalePending = resolveIdentifier(addr);
+
+    // (2) A record edit commits and invalidates the cache. Because a subscriber
+    // is attached, this kicks off a fresh re-resolution (query #2).
+    invalidateCachedRecord(addr);
+
+    // (3) The fresh re-resolution completes first and populates the cache.
+    resolveFresh([freshRecord]);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(getCachedRecord(addr)?.label).toBe("New");
+
+    // (4) The original (stale) resolution finishes LATE. It must NOT clobber the
+    // fresh cache entry.
+    resolveStale([staleRecord]);
+    await stalePending;
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(getCachedRecord(addr)?.label).toBe("New");
+
+    unsub();
+    invalidateCachedRecord(addr);
   });
 });

@@ -147,6 +147,22 @@ interface CacheEntry {
 const _cache = new Map<string, CacheEntry>();
 const _inFlight = new Map<string, Promise<DbRecord | null>>();
 
+/**
+ * Per-key generation counter. Bumped every time invalidateCachedRecord runs.
+ * A resolution captures the current generation when it *starts* (before its DB
+ * read) and only commits its result if the generation is still unchanged when
+ * the read completes. This closes a narrow race: a resolution started just
+ * before a write commits would read pre-write data, and if it finished after
+ * invalidateCachedRecord's fresh re-resolution it would otherwise overwrite the
+ * cache with stale data, leaving a note icon / tooltip wrong until the next
+ * hover.
+ */
+const _generation = new Map<string, number>();
+
+function currentGeneration(key: string): number {
+  return _generation.get(key) ?? 0;
+}
+
 const CACHE_TTL_MS = 5 * 60 * 1000;
 /**
  * Maximum number of entries the hover-metadata cache may hold. When a new
@@ -223,18 +239,27 @@ export async function resolveIdentifier(identifier: string): Promise<DbRecord | 
 
   if (_inFlight.has(key)) return _inFlight.get(key)!;
 
-  const promise = (async (): Promise<DbRecord | null> => {
+  const startGeneration = currentGeneration(key);
+  let promise!: Promise<DbRecord | null>;
+  promise = (async (): Promise<DbRecord | null> => {
     try {
       const records = await getRecordsByInputString(identifier);
       const best = records.length > 0 ? selectBestRecord(records) : null;
-      if (_cache.size >= MAX_CACHE_SIZE) evictOldestEntries();
-      _cache.set(key, { record: best, resolvedAt: Date.now() });
-      notifySubscribers(key, best);
+      // Only commit if no invalidation happened while we were resolving. A
+      // stale in-flight result (read before a write committed) must never
+      // overwrite a newer, post-write resolution.
+      if (currentGeneration(key) === startGeneration) {
+        if (_cache.size >= MAX_CACHE_SIZE) evictOldestEntries();
+        _cache.set(key, { record: best, resolvedAt: Date.now() });
+        notifySubscribers(key, best);
+      }
       return best;
     } catch {
       return null;
     } finally {
-      _inFlight.delete(key);
+      // Only clear our own in-flight slot; a fresh re-resolution may have
+      // replaced it after invalidateCachedRecord dropped ours.
+      if (_inFlight.get(key) === promise) _inFlight.delete(key);
     }
   })();
 
@@ -256,6 +281,10 @@ export function invalidateCachedRecord(identifier: string): void {
   // A concurrent in-flight resolution would have read the DB *before* this
   // write committed, so drop it too and let resolveIdentifier start fresh.
   _inFlight.delete(key);
+  // Bump the generation BEFORE starting the fresh re-resolution so the now-orphaned
+  // in-flight resolution sees a generation mismatch and won't overwrite the cache
+  // with stale (pre-write) data, even if it resolves after the fresh one.
+  _generation.set(key, currentGeneration(key) + 1);
   const subs = _subscribers.get(key);
   if (subs && subs.size > 0) {
     void resolveIdentifier(identifier);
@@ -322,6 +351,8 @@ export function batchPreloadIdentifiers(identifiers: string[]): void {
 async function _runBatchFetch(ids: string[]): Promise<void> {
   type Resolver = (r: DbRecord | null) => void;
   const resolvers = new Map<string, Resolver>();
+  const ownPromises = new Map<string, Promise<DbRecord | null>>();
+  const startGenerations = new Map<string, number>();
   const validIds: string[] = [];
 
   for (const id of ids) {
@@ -332,6 +363,8 @@ async function _runBatchFetch(ids: string[]): Promise<void> {
       resolvers.set(key, resolve);
     });
     _inFlight.set(key, p);
+    ownPromises.set(key, p);
+    startGenerations.set(key, currentGeneration(key));
     validIds.push(id);
   }
 
@@ -352,9 +385,14 @@ async function _runBatchFetch(ids: string[]): Promise<void> {
       const key = id.toLowerCase();
       const recs = byKey.get(key) ?? [];
       const best = recs.length > 0 ? selectBestRecord(recs) : null;
-      if (_cache.size >= MAX_CACHE_SIZE) evictOldestEntries();
-      _cache.set(key, { record: best, resolvedAt: Date.now() });
-      notifySubscribers(key, best);
+      // Skip cache/notify if this key was invalidated mid-flight; a fresh
+      // re-resolution already owns the cache and must not be overwritten with
+      // this stale (pre-write) batch result. Still resolve awaiters.
+      if (currentGeneration(key) === startGenerations.get(key)) {
+        if (_cache.size >= MAX_CACHE_SIZE) evictOldestEntries();
+        _cache.set(key, { record: best, resolvedAt: Date.now() });
+        notifySubscribers(key, best);
+      }
       resolvers.get(key)?.(best);
     }
   } catch {
@@ -363,7 +401,10 @@ async function _runBatchFetch(ids: string[]): Promise<void> {
     }
   } finally {
     for (const id of validIds) {
-      _inFlight.delete(id.toLowerCase());
+      const key = id.toLowerCase();
+      // Only clear our own in-flight slot; invalidateCachedRecord may have
+      // dropped ours and a fresh resolution replaced it.
+      if (_inFlight.get(key) === ownPromises.get(key)) _inFlight.delete(key);
     }
   }
 }
