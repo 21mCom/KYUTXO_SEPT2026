@@ -73,12 +73,11 @@ vi.mock("@/lib/database", async () => {
   };
 });
 
-const { computeOneHop, getAddressesForGroup } = await import(
+const { computeOneHop, getAddressesForGroup, formatBtc } = await import(
   "./fund-trail-engine"
 );
-const { buildFundTrailSnapshot, buildFundTrailCsv, flowPath } = await import(
-  "./fund-trail-export"
-);
+const { buildFundTrailSnapshot, buildFundTrailCsv, buildFundTrailPdf, flowPath } =
+  await import("./fund-trail-export");
 
 // ---- Fixtures --------------------------------------------------------------
 //
@@ -226,6 +225,65 @@ function parseCsv(csv: string): string[][] {
   return rows;
 }
 
+// ---- PDF text extraction (mirrors fund-trail-export.dateFilter.test.ts) -----
+
+function unescapePdfLiteral(raw: string): string {
+  let out = "";
+  for (let i = 0; i < raw.length; i++) {
+    const c = raw[i];
+    if (c !== "\\") {
+      out += c;
+      continue;
+    }
+    const next = raw[i + 1];
+    if (next === undefined) break;
+    if (next >= "0" && next <= "7") {
+      let oct = next;
+      i++;
+      for (let k = 0; k < 2; k++) {
+        const d = raw[i + 1];
+        if (d >= "0" && d <= "7") {
+          oct += d;
+          i++;
+        } else {
+          break;
+        }
+      }
+      out += String.fromCharCode(parseInt(oct, 8));
+    } else {
+      const escapes: Record<string, string> = {
+        n: "\n",
+        r: "\r",
+        t: "\t",
+        b: "\b",
+        f: "\f",
+      };
+      out += escapes[next] ?? next;
+      i++;
+    }
+  }
+  return out;
+}
+
+function decodePdfBytes(bytes: string): string {
+  if (!bytes.includes("\u0000")) return bytes;
+  let out = "";
+  for (let i = 0; i + 1 < bytes.length; i += 2) {
+    out += String.fromCharCode(
+      (bytes.charCodeAt(i) << 8) | bytes.charCodeAt(i + 1),
+    );
+  }
+  return out;
+}
+
+async function extractPdfText(blob: Blob): Promise<string> {
+  const latin1 = Buffer.from(await blob.arrayBuffer()).toString("latin1");
+  const literals = latin1.match(/\((?:[^()\\]|\\.)*\)/g) ?? [];
+  return literals
+    .map((lit) => decodePdfBytes(unescapePdfLiteral(lit.slice(1, -1))))
+    .join("\n");
+}
+
 // ---- Lifecycle -------------------------------------------------------------
 
 beforeEach(async () => {
@@ -366,5 +424,26 @@ describe("Fund Trail export — expanded hops also drop out-of-window data", () 
     const allTimeSub =
       (AMT.subInside + AMT.subBefore + AMT.subAfter) / 1e8;
     expect(sumSubBtc).not.toBeCloseTo(allTimeSub, 12);
+  });
+
+  it("detailed PDF keeps only in-window expanded children and their amounts", async () => {
+    const snapshot = await snapshotWithExpandedExchange(WINDOW);
+    const pdf = await buildFundTrailPdf(snapshot, { detailed: true });
+    const text = await extractPdfText(pdf);
+
+    // The expanded Exchange node and its in-window sub-source render...
+    expect(text).toContain(EXCHANGE_LABEL);
+    expect(text).toContain("SubInside");
+    // ...the out-of-window expanded children do not.
+    expect(text).not.toContain("SubBefore");
+    expect(text).not.toContain("SubAfter");
+
+    // The in-window expanded child's amount appears; the out-of-window amounts
+    // and their all-time sum never do.
+    expect(text).toContain(formatBtc(AMT.subInside));
+    expect(text).not.toContain(formatBtc(AMT.subBefore));
+    expect(text).not.toContain(formatBtc(AMT.subAfter));
+    const allTimeSub = AMT.subInside + AMT.subBefore + AMT.subAfter;
+    expect(text).not.toContain(formatBtc(allTimeSub));
   });
 });
