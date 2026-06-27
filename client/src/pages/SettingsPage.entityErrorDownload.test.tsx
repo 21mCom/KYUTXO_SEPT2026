@@ -23,9 +23,10 @@ import { screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
 
 // @tanstack/react-virtual needs ResizeObserver and real element dimensions to
 // emit virtual rows. jsdom provides neither, so without these shims a
-// virtualized error list would render zero rows. These tests stay below the
-// virtualization threshold, but the Settings page still mounts components that
-// observe layout, so provide minimal shims to keep them from throwing.
+// virtualized error list would render zero rows. The large-group download test
+// below crosses the virtualization threshold and relies on these to produce a
+// real overscan window; the smaller tests stay below it but the Settings page
+// still mounts layout-observing components, so the shims keep them from throwing.
 const FAKE_RECT: DOMRect = {
   width: 400,
   height: 256,
@@ -278,6 +279,54 @@ describe("SettingsPage — entity-list import error 'Download entries (JSON)'", 
     // The two downloads used distinct, kind-stamped filenames — no collision.
     expect("entity-import-errors-invalid-address.json").not.toBe(
       "entity-import-errors-unknown-category.json",
+    );
+  });
+
+  it("downloads every offending entry of a large virtual-scrolled group, not just the mounted window", async () => {
+    renderPage();
+    await screen.findByTestId("badge-entity-source");
+
+    // Well over ENTITY_ERROR_VIRTUALIZE_THRESHOLD (100) entries that all fail the
+    // same way (invalid address) so they land in a single "invalid-address" group
+    // that auto-opens (sole group). Each entry-level error carries a rawEntry, so
+    // the download button renders and its file should hold every offending entry.
+    const ERROR_COUNT = 250;
+    const offending = Array.from({ length: ERROR_COUNT }, (_, i) => ({
+      address: `not-a-valid-address-${i}`,
+      name: `Bad ${i}`,
+      category: "exchange",
+    }));
+    selectEntityFile("many-bad.json", JSON.stringify(offending));
+
+    await screen.findByTestId("container-entity-errors");
+
+    // The list virtualizes: only a window of rows is mounted in the DOM, never
+    // all 250. This is exactly the case where a regression could drop the
+    // unmounted entries from the downloaded file.
+    const mountedRows = screen.getAllByTestId(/^text-entity-error-\d+$/);
+    expect(mountedRows.length).toBeGreaterThan(0);
+    expect(mountedRows.length).toBeLessThan(ERROR_COUNT);
+
+    const downloadBtn = await screen.findByTestId(
+      "button-download-entity-error-json-invalid-address",
+    );
+    fireEvent.click(downloadBtn);
+
+    await waitFor(() => expect(createObjectURL).toHaveBeenCalledTimes(1));
+    const blob = createObjectURL.mock.calls[0][0] as Blob;
+    expect(blob).toBeInstanceOf(Blob);
+    expect(blob.type).toBe("application/json");
+
+    // The downloaded file holds the FULL error count — every offending entry,
+    // including the ones never mounted in the virtualized window — not just the
+    // visible rows.
+    const parsed = JSON.parse(await blob.text());
+    expect(Array.isArray(parsed)).toBe(true);
+    expect(parsed).toHaveLength(ERROR_COUNT);
+    expect(parsed).toEqual(offending);
+
+    expect(createdAnchor!.download).toBe(
+      "entity-import-errors-invalid-address.json",
     );
   });
 
