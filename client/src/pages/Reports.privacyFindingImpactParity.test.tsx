@@ -1,24 +1,26 @@
 // @vitest-environment jsdom
 //
 // Parity coverage for the per-finding "score impact" label (formatScoreDelta).
-// The same impact is rendered in three places and must never drift apart:
+// The same impact is rendered in FOUR places and must never drift apart:
 //   - the in-app report panel (PrivacyAuditReportPanel in Reports.tsx,
 //     text-privacy-finding-impact-*),
+//   - the Privacy Audit FindingCard (PrivacyAudit.tsx, text-score-delta),
 //   - the Print/PDF HTML export (finding-score span in buildPrintableReport), and
 //   - the plain-text export ("Score Impact:" line in buildPrivacyTextReport).
 //
-// This test renders the real panel and, for each finding, asserts that the
-// displayed impact label matches what each exporter produces for the SAME audit
-// result. The exporters are left REAL so the comparison is against production
-// output; only the data-fetching chain (owners/wallets hooks, the address page
-// query, toast) and runPrivacyAudit are stubbed.
+// This test renders the real panel and the real FindingCard and, for each
+// finding, asserts that the displayed impact label matches what each exporter
+// produces for the SAME audit result. The exporters are left REAL so the
+// comparison is against production output; only the data-fetching chain
+// (owners/wallets hooks, the address page query, the record lookups) and
+// runPrivacyAudit are stubbed.
 //
 // The fixture deliberately exercises the formatScoreDelta edge cases shared
 // across all surfaces:
 //   - a sub-1-point penalty renders "<-1 pts",
-//   - a normal penalty rounds (e.g. -12.4 → "-12 pts"), and
+//   - a normal penalty rounds (e.g. -28.4 → "-28 pts"), and
 //   - findings with no penalty (no/non-negative scoreDelta) omit the impact in
-//     HTML/text while showing "0 pts" in-app.
+//     the FindingCard/HTML/text while showing "0 pts" in the in-app report row.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, fireEvent, cleanup, waitFor } from "@testing-library/react";
@@ -43,15 +45,19 @@ vi.mock("@/lib/data/record-crud", () => ({
   getRecordsPageByTypeIdReverseKeyset: vi.fn(async () => [
     { id: 1, inputString: "bc1qexampleaddress", owner: undefined, walletName: undefined },
   ]),
+  // FindingCard runs a useLiveQuery over getRecordsByInputStrings to map flagged
+  // addresses to behavior profiles. The score-impact label doesn't depend on it,
+  // but the lookup must resolve so the card renders cleanly.
+  getRecordsByInputStrings: vi.fn(async () => []),
 }));
 
 // Findings fixture covering every shared formatScoreDelta branch. The in-app
 // panel, HTML export, and text export all iterate [...findings, ...warnings] in
 // this exact order, so the rows line up index-for-index across surfaces.
-//   0. ADDRESS_REUSE   delta -12.4 → rounds to "-12 pts"
+//   0. ADDRESS_REUSE   delta -28.4 → rounds to "-28 pts"
 //   1. DUST            delta -0.4  → sub-1-point penalty "<-1 pts"
-//   2. ROUND_AMOUNT    delta  0    → no penalty (omit in HTML/text, "0 pts" in-app)
-//   3. HIGH_ACTIVITY   delta undef → no penalty (omit in HTML/text, "0 pts" in-app)
+//   2. ROUND_AMOUNT    delta  0    → no penalty (omit in card/HTML/text, "0 pts" in-app)
+//   3. HIGH_ACTIVITY   delta undef → no penalty (omit in card/HTML/text, "0 pts" in-app)
 function makeFinding(overrides: Record<string, unknown>) {
   return {
     severity: "MEDIUM",
@@ -66,7 +72,7 @@ function makeFinding(overrides: Record<string, unknown>) {
 
 const mockResult = {
   findings: [
-    makeFinding({ type: "ADDRESS_REUSE", severity: "HIGH", scoreDelta: -12.4 }),
+    makeFinding({ type: "ADDRESS_REUSE", severity: "HIGH", scoreDelta: -28.4 }),
     makeFinding({ type: "DUST", severity: "LOW", scoreDelta: -0.4 }),
     makeFinding({ type: "ROUND_AMOUNT", severity: "LOW", scoreDelta: 0 }),
   ],
@@ -93,6 +99,7 @@ vi.mock("@/lib/privacy-audit", async (importOriginal) => {
 });
 
 const { PrivacyAuditReportPanel } = await import("./Reports");
+const { FindingCard } = await import("./PrivacyAudit");
 
 // The in-app panel defaults to the All / All scope; the exporters are invoked
 // with the matching scope so every surface describes the same audit.
@@ -108,6 +115,27 @@ function readInAppImpacts(container: HTMLElement): string[] {
     );
     expect(el, `in-app impact row ${i} should render`).not.toBeNull();
     return el!.textContent!.trim();
+  });
+}
+
+/**
+ * Render each finding's FindingCard (the Privacy Audit page surface) and pull
+ * its impact label. Findings with no penalty omit the `text-score-delta` span
+ * entirely, which maps to `null` so the array lines up index-for-index with the
+ * other surfaces. Each card is rendered and unmounted in isolation because they
+ * all share the same `text-score-delta` testid.
+ */
+function readFindingCardImpacts(): (string | null)[] {
+  return orderedFindings.map((f) => {
+    const { container, unmount } = render(
+      <FindingCard finding={f as never} coinjoinTxids={new Set<string>()} />,
+    );
+    const el = container.querySelector<HTMLElement>(
+      '[data-testid="text-score-delta"]',
+    );
+    const value = el ? el.textContent!.trim() : null;
+    unmount();
+    return value;
   });
 }
 
@@ -170,6 +198,7 @@ describe("PrivacyAuditReportPanel — per-finding score impact parity across sur
 
     const count = orderedFindings.length;
     const inApp = readInAppImpacts(container);
+    const card = readFindingCardImpacts();
     const html = readHtmlImpacts(buildPrintableReport(mockResult as never, SCOPE));
     const text = readTextImpacts(
       buildPrivacyTextReport(mockResult as never, SCOPE, "fixed"),
@@ -178,15 +207,17 @@ describe("PrivacyAuditReportPanel — per-finding score impact parity across sur
 
     // Every surface produced one entry per finding.
     expect(inApp).toHaveLength(count);
+    expect(card).toHaveLength(count);
     expect(html).toHaveLength(count);
     expect(text).toHaveLength(count);
 
     // For each finding, derive the canonical label from formatScoreDelta (the
-    // single source of truth) and assert all three surfaces agree:
-    //   - penalty findings: HTML/text show the exact label; in-app shows it too.
-    //   - no-penalty findings: HTML/text omit it (null); in-app shows "0 pts".
+    // single source of truth) and assert all four surfaces agree:
+    //   - penalty findings: card/HTML/text show the exact label; in-app shows it too.
+    //   - no-penalty findings: card/HTML/text omit it (null); in-app shows "0 pts".
     orderedFindings.forEach((f, i) => {
       const canonical = formatScoreDelta(f.scoreDelta as number | undefined);
+      expect(card[i]).toBe(canonical);
       expect(html[i]).toBe(canonical);
       expect(text[i]).toBe(canonical);
       expect(inApp[i]).toBe(canonical ?? "0 pts");
@@ -197,30 +228,35 @@ describe("PrivacyAuditReportPanel — per-finding score impact parity across sur
     const { container } = await renderWithResult();
 
     const inApp = readInAppImpacts(container);
+    const card = readFindingCardImpacts();
     const html = readHtmlImpacts(buildPrintableReport(mockResult as never, SCOPE));
     const text = readTextImpacts(
       buildPrivacyTextReport(mockResult as never, SCOPE, "fixed"),
       orderedFindings.length,
     );
 
-    // 0. ADDRESS_REUSE: a fractional penalty (-12.4) rounds to "-12 pts".
-    expect(inApp[0]).toBe("-12 pts");
-    expect(html[0]).toBe("-12 pts");
-    expect(text[0]).toBe("-12 pts");
+    // 0. ADDRESS_REUSE: a fractional penalty (-28.4) rounds to "-28 pts".
+    expect(inApp[0]).toBe("-28 pts");
+    expect(card[0]).toBe("-28 pts");
+    expect(html[0]).toBe("-28 pts");
+    expect(text[0]).toBe("-28 pts");
 
     // 1. DUST: a sub-1-point penalty (-0.4) renders "<-1 pts".
     expect(inApp[1]).toBe("<-1 pts");
+    expect(card[1]).toBe("<-1 pts");
     expect(html[1]).toBe("<-1 pts");
     expect(text[1]).toBe("<-1 pts");
 
-    // 2. ROUND_AMOUNT: an explicit zero delta is no penalty — HTML/text omit the
-    //    impact, the in-app panel shows "0 pts".
+    // 2. ROUND_AMOUNT: an explicit zero delta is no penalty — the card/HTML/text
+    //    omit the impact, the in-app panel shows "0 pts".
     expect(inApp[2]).toBe("0 pts");
+    expect(card[2]).toBeNull();
     expect(html[2]).toBeNull();
     expect(text[2]).toBeNull();
 
     // 3. HIGH_ACTIVITY: an undefined delta is likewise no penalty.
     expect(inApp[3]).toBe("0 pts");
+    expect(card[3]).toBeNull();
     expect(html[3]).toBeNull();
     expect(text[3]).toBeNull();
   });
