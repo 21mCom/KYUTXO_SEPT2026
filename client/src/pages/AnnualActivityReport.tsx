@@ -1,5 +1,5 @@
 import { useState, useMemo, useRef, useCallback } from "react";
-import { Loader2, ChevronDown, ChevronRight, AlertCircle, CalendarRange, FileDown } from "lucide-react";
+import { Loader2, ChevronDown, ChevronRight, AlertCircle, CalendarRange, FileDown, FileText } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -573,6 +573,201 @@ export default function AnnualActivityReport() {
     }
   }, [reportData, usedAddresses]);
 
+  const exportPdf = useCallback(async () => {
+    if (!reportData) return;
+    try {
+      const jsPDFModule = await import("jspdf");
+      const autoTableModule = await import("jspdf-autotable");
+      const jsPDF = jsPDFModule.default;
+      const autoTable = autoTableModule.default;
+
+      const generatedAt = new Date();
+      const doc = new jsPDF();
+      const pageWidth = doc.internal.pageSize.getWidth();
+
+      doc.setFontSize(18);
+      doc.text("KYUTXO Annual Activity Report", 14, 20);
+
+      doc.setFontSize(10);
+      const addressesWithData = reportData.perAddress.filter((p) => p.hasData).length;
+      const subtitle = `${usedAddresses.length} address${usedAddresses.length !== 1 ? "es" : ""} analyzed | ${addressesWithData} with data`;
+      doc.text(subtitle, 14, 28);
+
+      // ── Combined Annual Activity ─────────────────────────────────────────
+      doc.setFontSize(13);
+      doc.text("Combined Annual Activity", 14, 40);
+
+      if (reportData.combinedYearRows.length === 0) {
+        doc.setFontSize(9);
+        doc.text(
+          "No synced transaction data for any of the provided addresses.",
+          14,
+          47,
+        );
+      } else {
+        const combinedBody = reportData.combinedYearRows.map((r) => [
+          String(r.year),
+          r.txCount.toLocaleString(),
+          formatBTC(r.receivedSats),
+          formatBTC(r.spentSats),
+        ]);
+        const total = sumYearRows(reportData.combinedYearRows);
+        combinedBody.push([
+          "All Time",
+          total.txCount.toLocaleString(),
+          formatBTC(total.receivedSats),
+          formatBTC(total.spentSats),
+        ]);
+        autoTable(doc, {
+          startY: 44,
+          head: [["Year", "Transactions", "BTC Received", "BTC Spent"]],
+          body: combinedBody,
+          styles: { fontSize: 8, cellPadding: 2 },
+          headStyles: { fillColor: [41, 128, 185] },
+        });
+      }
+
+      // ── Per-Address Breakdown ────────────────────────────────────────────
+      const getLastY = (): number => {
+        const d = doc as unknown as { lastAutoTable?: { finalY: number } };
+        return d.lastAutoTable?.finalY ?? 50;
+      };
+
+      let cursorY = getLastY() + 12;
+
+      const ensureSpace = (needed: number) => {
+        const pageHeight = doc.internal.pageSize.getHeight();
+        if (cursorY + needed > pageHeight - 15) {
+          doc.addPage();
+          cursorY = 20;
+        }
+      };
+
+      ensureSpace(20);
+      doc.setFontSize(13);
+      doc.text("Per-Address Breakdown", 14, cursorY);
+      cursorY += 4;
+
+      for (const pa of reportData.perAddress) {
+        ensureSpace(16);
+        cursorY += 6;
+        doc.setFontSize(9);
+        doc.setFont("courier", "normal");
+        const addrLines = doc.splitTextToSize(pa.address, pageWidth - 28) as string[];
+        doc.text(addrLines, 14, cursorY);
+        cursorY += addrLines.length * 4;
+        doc.setFont("helvetica", "normal");
+
+        if (!pa.hasData || pa.yearRows.length === 0) {
+          doc.setFontSize(8);
+          doc.text("No locally synced data.", 14, cursorY + 4);
+          cursorY += 8;
+          continue;
+        }
+
+        const body = pa.yearRows.map((r) => [
+          String(r.year),
+          r.txCount.toLocaleString(),
+          formatBTC(r.receivedSats),
+          formatBTC(r.spentSats),
+        ]);
+        const total = sumYearRows(pa.yearRows);
+        body.push([
+          "All Time",
+          total.txCount.toLocaleString(),
+          formatBTC(total.receivedSats),
+          formatBTC(total.spentSats),
+        ]);
+        autoTable(doc, {
+          startY: cursorY + 2,
+          head: [["Year", "Transactions", "BTC Received", "BTC Spent"]],
+          body,
+          styles: { fontSize: 8, cellPadding: 2 },
+          headStyles: { fillColor: [41, 128, 185] },
+          margin: { left: 14, right: 14 },
+        });
+        cursorY = getLastY() + 4;
+      }
+
+      // ── Counterparty lists ───────────────────────────────────────────────
+      const counterpartySection = (
+        title: string,
+        entries: CounterpartyEntry[],
+        unresolvedCount: number,
+      ) => {
+        cursorY += 10;
+        ensureSpace(20);
+        doc.setFontSize(13);
+        doc.text(title, 14, cursorY);
+        cursorY += 2;
+
+        if (unresolvedCount > 0) {
+          cursorY += 5;
+          doc.setFontSize(8);
+          const note = doc.splitTextToSize(
+            `${unresolvedCount.toLocaleString()} transaction${unresolvedCount !== 1 ? "s" : ""} had input sources that could not be resolved to an address (omitted below).`,
+            pageWidth - 28,
+          ) as string[];
+          doc.text(note, 14, cursorY);
+          cursorY += note.length * 4;
+        }
+
+        if (entries.length === 0) {
+          cursorY += 5;
+          doc.setFontSize(8);
+          doc.text("No counterparties.", 14, cursorY);
+          return;
+        }
+
+        autoTable(doc, {
+          startY: cursorY + 4,
+          head: [["Address", "Transactions"]],
+          body: entries.map((e) => [e.address, e.txCount.toLocaleString()]),
+          styles: { fontSize: 8, cellPadding: 2 },
+          headStyles: { fillColor: [41, 128, 185] },
+          margin: { left: 14, right: 14 },
+        });
+        cursorY = getLastY();
+      };
+
+      counterpartySection(
+        "Received From (counterparties)",
+        reportData.receivedFrom,
+        reportData.unresolvedReceivedFromCount,
+      );
+      counterpartySection(
+        "Sent To (counterparties)",
+        reportData.sentTo,
+        reportData.unresolvedSentToCount,
+      );
+
+      // ── Generation timestamp footer on every page ────────────────────────
+      const pageHeight = doc.internal.pageSize.getHeight();
+      const totalPages = doc.getNumberOfPages();
+      for (let i = 1; i <= totalPages; i++) {
+        doc.setPage(i);
+        doc.setFontSize(8);
+        doc.text(`Generated: ${generatedAt.toLocaleString()}`, 14, pageHeight - 10);
+        doc.text(`Page ${i} of ${totalPages}`, pageWidth - 14, pageHeight - 10, {
+          align: "right",
+        });
+      }
+
+      const stamp = generatedAt.toISOString().slice(0, 10);
+      const pdfBlob = doc.output("blob");
+      const url = URL.createObjectURL(pdfBlob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `kyutxo-annual-activity-${stamp}.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error("Failed to export annual activity report PDF:", err);
+    }
+  }, [reportData, usedAddresses]);
+
   const toggleAddress = useCallback((addr: string) => {
     setExpandedAddresses((prev) => {
       const next = new Set(prev);
@@ -825,7 +1020,7 @@ export default function AnnualActivityReport() {
 
         {reportData && (
           <>
-            <div className="flex items-center justify-end">
+            <div className="flex flex-wrap items-center justify-end gap-2">
               <Button
                 variant="outline"
                 onClick={exportCsv}
@@ -833,6 +1028,14 @@ export default function AnnualActivityReport() {
               >
                 <FileDown className="h-4 w-4 mr-2" />
                 Export CSV
+              </Button>
+              <Button
+                variant="outline"
+                onClick={exportPdf}
+                data-testid="button-export-pdf"
+              >
+                <FileText className="h-4 w-4 mr-2" />
+                Export PDF
               </Button>
             </div>
 
