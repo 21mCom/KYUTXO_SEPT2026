@@ -53,6 +53,10 @@ args = "typecheck"
 task = "workflow.run"
 args = "note-rendering"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "test-providers"
+
 [[workflows.workflow]]
 name = "Start application"
 author = "agent"
@@ -124,6 +128,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-note-rendering.js"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "test-providers"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-test-providers.js"
 
 [workflows.workflow.metadata]
 isValidation = true
