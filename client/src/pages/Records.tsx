@@ -803,6 +803,7 @@ export default function Records() {
   }, [vocabTags, vocabCategories, vocabOwners, vocabWalletNames, vocabSeedNames, vocabWalletSoftware]);
 
   const [directLoadedRecord, setDirectLoadedRecord] = useState<ConvertedRecord | null>(null);
+  const [syncRefreshedRecord, setSyncRefreshedRecord] = useState<ConvertedRecord | null>(null);
   
   useEffect(() => {
     if (!selectedRecordId || isLoading) return;
@@ -825,9 +826,25 @@ export default function Records() {
     
     loadRecord();
   }, [selectedRecordId, records, isLoading]);
+
+  useEffect(() => {
+    setSyncRefreshedRecord(null);
+  }, [selectedRecordId]);
+
+  const handleSyncComplete = useCallback(async () => {
+    if (!selectedRecordId) return;
+    try {
+      const fresh = await getRecord(parseInt(selectedRecordId));
+      if (fresh) setSyncRefreshedRecord(convertRecord(fresh));
+    } catch (error) {
+      console.error('[Records] Failed to refresh record after sync:', error);
+    }
+  }, [selectedRecordId]);
   
   const selectedRecord = selectedRecordId 
-    ? (records.find(r => r.id === selectedRecordId) || directLoadedRecord)
+    ? (syncRefreshedRecord?.id === selectedRecordId
+        ? syncRefreshedRecord
+        : records.find(r => r.id === selectedRecordId) || directLoadedRecord)
     : null;
 
   useEffect(() => {
@@ -986,6 +1003,7 @@ export default function Records() {
             open={true}
             record={selectedRecord}
             onClose={() => navigate("/records")}
+            onSyncComplete={handleSyncComplete}
             customFieldDefs={customFieldDefs}
           />
         </div>
@@ -1292,6 +1310,7 @@ export default function Records() {
                 open={true}
                 record={selectedRecord}
                 onClose={() => setSelectedRecordId(null)}
+                onSyncComplete={handleSyncComplete}
                 customFieldDefs={customFieldDefs}
               />
             </div>

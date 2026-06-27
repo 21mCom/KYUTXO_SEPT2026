@@ -1,4 +1,4 @@
-import { Edit, Paperclip, Wallet as WalletIcon, User, Users, Upload, QrCode, Key, GitBranch, ArrowDownLeft, ArrowUpRight, Shield, ChevronDown, ChevronRight, Link2, Layers, FileInput, ExternalLink, AlertCircle, Network, Clock, Copy, Check, Activity } from "lucide-react";
+import { Edit, Paperclip, Wallet as WalletIcon, User, Users, Upload, QrCode, Key, GitBranch, ArrowDownLeft, ArrowUpRight, Shield, ChevronDown, ChevronRight, Link2, Layers, FileInput, ExternalLink, AlertCircle, Network, Clock, Copy, Check, Activity, RefreshCw, Loader2 } from "lucide-react";
 import { classifyBehavior, BEHAVIOR_LABEL_DISPLAY } from "@/lib/behavior-profile";
 import { formatBTC } from "@/lib/bitcoin";
 import DiscoveryTreeDialog from "./DiscoveryTreeDialog";
@@ -6,7 +6,10 @@ import { useLocation } from "wouter";
 import { getRecordOrigins, getParticipantsByAddress, getParticipantsByTxid, getTransactionByTxid, getTransactionsByTxids } from "@/lib/dataFacade";
 import { detectSingularFieldConflicts } from "@/lib/conflict-detection";
 import { Link } from "wouter";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
+import { useToast } from "@/hooks/use-toast";
+import { useNodeSettings } from "@/hooks/use-node-settings";
+import { transactionSyncService } from "@/lib/transaction-sync";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
@@ -66,6 +69,7 @@ interface RecordDetailPanelProps {
   open: boolean;
   onClose: () => void;
   onEdit?: () => void;
+  onSyncComplete?: () => void;
   record?: {
     id: string;
     type: "address" | "transaction" | "other";
@@ -287,7 +291,7 @@ interface TxHistoryEntry {
   netAmount: number;
 }
 
-export function TransactionHistorySection({ address }: { address: string }) {
+export function TransactionHistorySection({ address, refreshTrigger }: { address: string; refreshTrigger?: number }) {
   const [isOpen, setIsOpen] = useState(false);
   const [entries, setEntries] = useState<TxHistoryEntry[]>([]);
   const [loading, setLoading] = useState(false);
@@ -299,7 +303,7 @@ export function TransactionHistorySection({ address }: { address: string }) {
     setEntries([]);
     setLoaded(false);
     setExpandedTxid(null);
-  }, [address]);
+  }, [address, refreshTrigger]);
 
   useEffect(() => {
     if (!isOpen || loaded) return;
@@ -483,13 +487,16 @@ export function TransactionHistorySection({ address }: { address: string }) {
 export function RecordDetailPanel({ 
   open, 
   onClose, 
-  onEdit, 
+  onEdit,
+  onSyncComplete,
   record, 
   attachments = [], 
   onAttachmentsChange,
   customFieldDefs = [],
 }: RecordDetailPanelProps) {
   const [, navigate] = useLocation();
+  const { toast } = useToast();
+  const { nodeSettings } = useNodeSettings();
   const [showUpload, setShowUpload] = useState(false);
   const [qrDialogOpen, setQrDialogOpen] = useState(false);
   const [discoveryTreeOpen, setDiscoveryTreeOpen] = useState(false);
@@ -497,6 +504,39 @@ export function RecordDetailPanel({
   const [technicalOpen, setTechnicalOpen] = useState(false);
   const [conflictCount, setConflictCount] = useState(0);
   const [blockchainTx, setBlockchainTx] = useState<BlockchainTransaction | null>(null);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [txHistoryRefreshTrigger, setTxHistoryRefreshTrigger] = useState(0);
+
+  const handleSyncNow = useCallback(async () => {
+    if (!record || record.type !== 'address' || isSyncing) return;
+    setIsSyncing(true);
+    transactionSyncService.updateProvider(nodeSettings);
+    try {
+      const result = await transactionSyncService.syncSingleAddress(record.inputString);
+      if (result.success) {
+        toast({
+          title: "Sync Complete",
+          description: `Found ${result.transactionsImported} new transaction${result.transactionsImported === 1 ? '' : 's'}.`,
+        });
+        setTxHistoryRefreshTrigger(t => t + 1);
+        onSyncComplete?.();
+      } else {
+        toast({
+          title: "Sync Failed",
+          description: result.errors[0] || "Unknown error",
+          variant: "destructive",
+        });
+      }
+    } catch (error) {
+      toast({
+        title: "Sync Failed",
+        description: error instanceof Error ? error.message : "An error occurred",
+        variant: "destructive",
+      });
+    } finally {
+      setIsSyncing(false);
+    }
+  }, [record, isSyncing, nodeSettings, toast]);
 
   useEffect(() => {
     if (qrDialogOpen && record?.inputString) {
@@ -883,7 +923,24 @@ export function RecordDetailPanel({
             {record.type === 'address' && (
               <>
                 <Separator />
-                <TransactionHistorySection address={record.inputString} />
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-medium">Transactions</span>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={handleSyncNow}
+                    disabled={isSyncing}
+                    data-testid="button-sync-now"
+                  >
+                    {isSyncing ? (
+                      <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
+                    ) : (
+                      <RefreshCw className="h-3.5 w-3.5 mr-1.5" />
+                    )}
+                    {isSyncing ? "Syncing…" : "Sync Now"}
+                  </Button>
+                </div>
+                <TransactionHistorySection address={record.inputString} refreshTrigger={txHistoryRefreshTrigger} />
               </>
             )}
 
