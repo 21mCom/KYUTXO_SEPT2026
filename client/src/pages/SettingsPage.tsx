@@ -3351,6 +3351,50 @@ export default function SettingsPage() {
                         </span>
                       </div>
                     ))}
+                    {(() => {
+                      const totalCurrent = entityPreview.currentCount;
+                      const totalIncoming = entityPreview.incomingCount;
+                      const totalDelta =
+                        entityPreview.resultingCount - entityPreview.currentCount;
+                      return (
+                        <div
+                          className="flex items-center justify-between gap-2 px-3 py-1.5 text-sm font-medium bg-muted/50"
+                          data-testid="row-preview-total"
+                        >
+                          <span data-testid="text-preview-total-label">Total</span>
+                          <span className="flex items-center gap-4 tabular-nums">
+                            <span
+                              className="w-16 text-right text-muted-foreground"
+                              data-testid="text-preview-total-current"
+                            >
+                              {totalCurrent.toLocaleString()}
+                            </span>
+                            <span
+                              className="w-16 text-right"
+                              data-testid="text-preview-total-incoming"
+                            >
+                              {totalIncoming.toLocaleString()}
+                            </span>
+                            <span
+                              className={`w-14 text-right ${
+                                totalDelta > 0
+                                  ? "text-green-600 dark:text-green-400"
+                                  : totalDelta < 0
+                                    ? "text-red-600 dark:text-red-400"
+                                    : "text-muted-foreground"
+                              }`}
+                              data-testid="text-preview-total-delta"
+                            >
+                              {totalDelta > 0
+                                ? `+${totalDelta.toLocaleString()}`
+                                : totalDelta < 0
+                                  ? `\u2212${Math.abs(totalDelta).toLocaleString()}`
+                                  : "0"}
+                            </span>
+                          </span>
+                        </div>
+                      );
+                    })()}
                   </div>
                 </div>
 
