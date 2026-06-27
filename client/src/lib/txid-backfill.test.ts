@@ -1882,6 +1882,125 @@ describe("resolveAllBlankInputAddresses", () => {
     expect(seen).toContain(PREV_1);
     expect(seen).not.toContain(PREV_2);
   });
+
+  it("resumes from the still-blank inputs on a re-run after a cancel, without double-writing committed work", async () => {
+    // This is the end-to-end proof of the cancellation contract's resume
+    // promise: cancel mid-write (after the first committed 200-row batch), then
+    // run the pass AGAIN with a fresh (non-aborted) signal and assert that the
+    // second pass picks up exactly the inputs the first one left blank — the
+    // already-committed rows are skipped by the scan (never re-written), every
+    // remaining blank input is now resolved, and the resolved counts across the
+    // two runs sum to the full set with no overlap and no double-counting.
+    const hex = (n: number) => n.toString(16).padStart(64, "0");
+
+    const recId = await testDb.records.add(makeAddressRecord(PREV_ADDR));
+    // Mark the source address as synced so the recompute writes a balance.
+    await testDb.addressSyncState.add({ address: PREV_ADDR } as unknown as {
+      address: string;
+    });
+
+    // 250 blank inputs, all resolvable from local output rows (no network
+    // fetch), each spending a distinct prevout for a distinct amount so a
+    // committed row can be identified unambiguously by its amount.
+    const TOTAL = 250;
+    const inputIds: number[] = [];
+    for (let i = 0; i < TOTAL; i++) {
+      const prevTxid = hex(i + 1);
+      inputIds.push(await addBlankInput(hex(1000 + i), prevTxid, 0));
+      await addOutputRow(prevTxid, 0, PREV_ADDR, 1000 + i, "v0_p2wpkh");
+    }
+
+    await testDb.nodeSettings.add({ id: "default" } as unknown as NodeSettings);
+    nextProvider = makeProvider();
+
+    // ---- First pass: cancel once the first 200-row write batch has committed.
+    const controller = new AbortController();
+    let updates = 0;
+    const onUpdate = () => {
+      updates += 1;
+      if (updates === 200) controller.abort();
+      return undefined;
+    };
+    testDb.transactionParticipants.hook("updating", onUpdate);
+
+    let firstRun;
+    try {
+      firstRun = await resolveAllBlankInputAddresses({ signal: controller.signal });
+    } finally {
+      testDb.transactionParticipants.hook("updating").unsubscribe(onUpdate);
+    }
+
+    // The first pass cancelled after committing a whole batch, leaving real
+    // work behind for the re-run (resolved some, but strictly fewer than all).
+    expect(firstRun.cancelled).toBe(true);
+    expect(firstRun.resolved).toBeGreaterThan(0);
+    expect(firstRun.resolved).toBeLessThan(TOTAL);
+
+    // Snapshot the rows committed by the first pass so we can prove the re-run
+    // leaves them byte-for-byte unchanged (no double-write/corruption).
+    const committedAfterFirst = new Map<
+      number,
+      { address: string; amount: number; recordId?: number }
+    >();
+    for (const id of inputIds) {
+      const row = await testDb.transactionParticipants.get(id);
+      if (row && row.address) {
+        committedAfterFirst.set(id, {
+          address: row.address,
+          amount: Number(row.amount),
+          recordId: row.recordId,
+        });
+      }
+    }
+    // The committed snapshot count matches what the first run reported.
+    expect(committedAfterFirst.size).toBe(firstRun.resolved);
+
+    // ---- Second pass: a fresh, non-aborted signal resumes the leftover work.
+    const secondRun = await resolveAllBlankInputAddresses({
+      signal: new AbortController().signal,
+    });
+
+    // The re-run completed cleanly (nothing deferred, nothing cancelled) and
+    // only saw the inputs the first pass left blank.
+    expect(secondRun.deferred).toBe(false);
+    expect(secondRun.cancelled).toBe(false);
+    expect(secondRun.unresolvedFound).toBe(TOTAL - firstRun.resolved);
+    expect(secondRun.resolved).toBe(TOTAL - firstRun.resolved);
+    // It recomputed the one source address whose remaining spends it attributed.
+    expect(secondRun.recomputed).toBe(1);
+
+    // The two runs together resolved the full set with no overlap: their
+    // resolved counts sum to exactly TOTAL — no row was resolved twice.
+    expect(firstRun.resolved + secondRun.resolved).toBe(TOTAL);
+
+    // Every input is now attributed to the source address on disk — nothing
+    // left blank after the resume.
+    const allInputs = await testDb.transactionParticipants
+      .where("role")
+      .equals("input")
+      .toArray();
+    expect(allInputs).toHaveLength(TOTAL);
+    expect(allInputs.every((p) => p.address === PREV_ADDR)).toBe(true);
+
+    // Each resolved input carries the amount of the distinct prevout it spends
+    // (1000 + i) and is linked to the source record — proving the resume wrote
+    // the leftover rows with correct, per-row data rather than a blanket fill.
+    for (let i = 0; i < TOTAL; i++) {
+      const row = await testDb.transactionParticipants.get(inputIds[i]);
+      expect(row?.address).toBe(PREV_ADDR);
+      expect(Number(row?.amount)).toBe(1000 + i);
+      expect(row?.recordId).toBe(recId);
+    }
+
+    // The rows committed by the FIRST pass are completely unchanged by the
+    // re-run: same address, amount, and record link — never re-written.
+    for (const [id, snap] of committedAfterFirst) {
+      const row = await testDb.transactionParticipants.get(id);
+      expect(row?.address).toBe(snap.address);
+      expect(Number(row?.amount)).toBe(snap.amount);
+      expect(row?.recordId).toBe(snap.recordId);
+    }
+  });
 });
 
 // ---- detectAndBackfill (offline / deferral) --------------------------------
