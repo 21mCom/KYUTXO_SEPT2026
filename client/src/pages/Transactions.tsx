@@ -54,7 +54,7 @@ import {
   Info
 } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { getParticipantsByTxids } from "@/lib/participant-repo";
+import { fetchParticipantsByTxids } from "@/lib/participant-repo";
 import { AddressLink } from "@/components/AddressLink";
 import { TxidLink } from "@/components/TxidLink";
 import { searchPendingClass } from "@/lib/search-pending-class";
@@ -390,7 +390,7 @@ function VirtualizedTransactionList({
 
     (async () => {
       try {
-        const participants = await getParticipantsByTxids(txidsToLoad);
+        const participants = await fetchParticipantsByTxids(txidsToLoad);
         if (cancelled) return;
 
         for (const txid of txidsToLoad) {
@@ -778,7 +778,7 @@ export default function Transactions() {
       if (!needsParticipants) {
         if (addressRecordMap.size > 0) {
           const txids = filtered.map(tx => tx.txid);
-          const participants = await getParticipantsByTxids(txids);
+          const participants = await fetchParticipantsByTxids(txids);
           checkAbort(signal);
           for (const p of participants) {
             if (addressRecordMap.has(p.address)) {
@@ -790,7 +790,7 @@ export default function Transactions() {
       }
 
       const txids = filtered.map(tx => tx.txid);
-      const participants = await getParticipantsByTxids(txids);
+      const participants = await fetchParticipantsByTxids(txids);
       checkAbort(signal);
 
       const partMap = new Map<string, TransactionParticipant[]>();
@@ -962,7 +962,7 @@ export default function Transactions() {
     for (let i = 0; i < txidsToLoad.length; i += batchSize) {
       checkAbort(signal);
       const batch = txidsToLoad.slice(i, i + batchSize);
-      const batchParts = await getParticipantsByTxids(batch);
+      const batchParts = await fetchParticipantsByTxids(batch);
       allParticipants.push(...batchParts);
       if (i + batchSize < txidsToLoad.length) await yieldToUI();
     }
@@ -1037,7 +1037,7 @@ export default function Transactions() {
       }
       const missingTxids = txids.filter(t => !map.has(t));
       if (missingTxids.length > 0) {
-        const extra = await getParticipantsByTxids(missingTxids);
+        const extra = await fetchParticipantsByTxids(missingTxids);
         checkAbort(signal);
         for (const p of extra) {
           const existing = map.get(p.txid) || [];
@@ -1048,7 +1048,7 @@ export default function Transactions() {
       return map;
     }
     
-    const loaded = await getParticipantsByTxids(txids);
+    const loaded = await fetchParticipantsByTxids(txids);
     checkAbort(signal);
     const map = new Map<string, TransactionParticipant[]>();
     for (const p of loaded) {
@@ -1201,7 +1201,7 @@ export default function Transactions() {
     for (let i = 0; i < txids.length; i += BATCH_SIZE) {
       checkAbort(signal);
       const batch = txids.slice(i, i + BATCH_SIZE);
-      const participants = await getParticipantsByTxids(batch);
+      const participants = await fetchParticipantsByTxids(batch);
       checkAbort(signal);
       for (const p of participants) {
         if (p.role === 'output') {

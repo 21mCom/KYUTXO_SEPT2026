@@ -39,6 +39,7 @@ const ALLOWED_FILES = new Set([
   path.resolve(ROOT, 'client/src/components/__tests__/copy-button-toast.test.tsx'),
   path.resolve(ROOT, 'client/src/components/__tests__/copy-button-toast-extra.test.tsx'),
   path.resolve(ROOT, 'client/src/components/__tests__/copy-txid-confirmation.test.tsx'),
+  path.resolve(ROOT, 'client/src/components/__tests__/hover-label-indicator.test.tsx'),
 ]);
 
 // Matches an inline JSX opening tag, e.g. `<TooltipProvider>` or

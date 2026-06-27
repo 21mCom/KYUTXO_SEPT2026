@@ -37,7 +37,13 @@ function logBenchmark(
   );
 }
 
-export async function getParticipantsByTxids(
+/**
+ * Routing-layer variant: dispatches to Dexie or SQLite depending on the
+ * active backend. Distinct from the CRUD-layer `getParticipantsByTxids`
+ * exported by `transaction-crud.ts` (and re-exported by `dataFacade.ts`) to
+ * ensure the two names never collide in the facade barrel.
+ */
+export async function fetchParticipantsByTxids(
   txids: string[]
 ): Promise<TransactionParticipant[]> {
   if (getActiveBackend() !== 'sqlite') {
@@ -56,7 +62,13 @@ export async function getParticipantsByTxids(
   return sqliteRes;
 }
 
-export async function getParticipantsByAddresses(
+/**
+ * Routing-layer variant: dispatches to Dexie or SQLite depending on the
+ * active backend. Distinct from the CRUD-layer `getParticipantsByAddresses`
+ * exported by `transaction-crud.ts` (and re-exported by `dataFacade.ts`) to
+ * ensure the two names never collide in the facade barrel.
+ */
+export async function fetchParticipantsByAddresses(
   addresses: string[],
   signal?: AbortSignal
 ): Promise<TransactionParticipant[]> {
