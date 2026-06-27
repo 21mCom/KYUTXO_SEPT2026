@@ -22,7 +22,10 @@ const SRC_A = "cccc000000000000000000000000000000000000000000000000000000000003"
 const SRC_B = "dddd000000000000000000000000000000000000000000000000000000000004";
 
 const MINE = "bc1qmine0000000000000000000000000000000000";
+const MINE_A = "bc1qmineaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const MINE_B = "bc1qminebbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const EXT_Y = "bc1qexternalyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy";
+const EXT_Z = "bc1qexternalzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz";
 
 // 2023-06-01T00:00:00Z and 2024-06-01T00:00:00Z
 const TIME_2023 = Math.floor(Date.UTC(2023, 5, 1) / 1000);
@@ -230,5 +233,109 @@ describe("computeAnnualActivity — address both sends and receives in one tx", 
     expect(row.spentSats).toBe(80_000); // resolved from prevout, not 0
     expect(row.receivedSats).toBe(70_000);
     expect(row.txCount).toBe(1);
+  });
+});
+
+describe("computeAnnualActivity — two pasted addresses trade in one tx", () => {
+  it("sums A's spend and B's receipt without listing either as the other's counterparty", () => {
+    // SELF tx: pasted address MINE_A is an input (spends 100k) and pasted
+    // address MINE_B is an output (receives 90k); 10k goes to fee. Because BOTH
+    // addresses belong to the user's own set, the combined totals must add A's
+    // spend and B's receipt, the per-address rows must split cleanly, and NEITHER
+    // address may show up as the other's counterparty.
+    const participants = [
+      mkInput(SELF, MINE_A, 100_000, SRC_A, 0, 1),
+      mkOutput(SELF, MINE_B, 90_000, 0, 2),
+    ];
+
+    const result = computeAnnualActivity({
+      addresses: [MINE_A, MINE_B],
+      txids: [SELF],
+      txMap: new Map([[SELF, mkTx(SELF, TIME_2023)]]),
+      allTxParticipants: participantMap(participants),
+      spendingTxids: new Set(),
+      spentOutputAmounts: new Map(),
+      outputAmountLookup: new Map(),
+    });
+
+    // Combined: one 2023 row counted exactly once, totals add both sides.
+    expect(result.combinedYearRows).toHaveLength(1);
+    const row = result.combinedYearRows[0];
+    expect(row.year).toBe(2023);
+    expect(row.receivedSats).toBe(90_000); // B's receipt
+    expect(row.spentSats).toBe(100_000); // A's spend
+    expect(row.txCount).toBe(1);
+
+    // Per-address split: A spent only, B received only.
+    const a = result.perAddress.find((p) => p.address === MINE_A)!;
+    const b = result.perAddress.find((p) => p.address === MINE_B)!;
+    expect(a.hasData).toBe(true);
+    expect(b.hasData).toBe(true);
+    expect(a.yearRows).toHaveLength(1);
+    expect(b.yearRows).toHaveLength(1);
+    expect(a.yearRows[0]).toMatchObject({
+      year: 2023,
+      txCount: 1,
+      receivedSats: 0,
+      spentSats: 100_000,
+    });
+    expect(b.yearRows[0]).toMatchObject({
+      year: 2023,
+      txCount: 1,
+      receivedSats: 90_000,
+      spentSats: 0,
+    });
+
+    // Neither pasted address appears as the other's counterparty.
+    const sentToAddrs = result.sentTo.map((e) => e.address);
+    const receivedFromAddrs = result.receivedFrom.map((e) => e.address);
+    expect(sentToAddrs).not.toContain(MINE_A);
+    expect(sentToAddrs).not.toContain(MINE_B);
+    expect(receivedFromAddrs).not.toContain(MINE_A);
+    expect(receivedFromAddrs).not.toContain(MINE_B);
+    // With only owned addresses on both sides, there are no counterparties.
+    expect(result.sentTo).toHaveLength(0);
+    expect(result.receivedFrom).toHaveLength(0);
+  });
+
+  it("still records genuine external counterparties alongside the A→B internal move", () => {
+    // SELF tx: MINE_A spends 100k. Outputs: 90k to MINE_B (internal), 8k to an
+    // external EXT_Z (a real payment). EXT_Y is an additional external co-input so
+    // a "received from" entry exists for B's receipt. The internal owned addresses
+    // must never appear, but the real external parties must.
+    const participants = [
+      mkInput(SELF, MINE_A, 100_000, SRC_A, 0, 1),
+      mkInput(SELF, EXT_Y, 10_000, SRC_B, 0, 2), // external co-input
+      mkOutput(SELF, MINE_B, 90_000, 0, 3), // internal move to owned addr
+      mkOutput(SELF, EXT_Z, 8_000, 1, 4), // real external payment
+    ];
+
+    const result = computeAnnualActivity({
+      addresses: [MINE_A, MINE_B],
+      txids: [SELF],
+      txMap: new Map([[SELF, mkTx(SELF, TIME_2023)]]),
+      allTxParticipants: participantMap(participants),
+      spendingTxids: new Set(),
+      spentOutputAmounts: new Map(),
+      outputAmountLookup: new Map(),
+    });
+
+    // Combined totals: only the pasted addresses' own legs are counted.
+    const row = result.combinedYearRows[0];
+    expect(row.receivedSats).toBe(90_000); // B received
+    expect(row.spentSats).toBe(100_000); // A spent (EXT_Y's 10k is not ours)
+    expect(row.txCount).toBe(1);
+
+    const sentToAddrs = result.sentTo.map((e) => e.address);
+    const receivedFromAddrs = result.receivedFrom.map((e) => e.address);
+
+    // Real external counterparties are present...
+    expect(sentToAddrs).toContain(EXT_Z); // B/A's tx sent to external
+    expect(receivedFromAddrs).toContain(EXT_Y); // external funded B's receipt
+    // ...but the owned addresses never list each other (or themselves).
+    expect(sentToAddrs).not.toContain(MINE_A);
+    expect(sentToAddrs).not.toContain(MINE_B);
+    expect(receivedFromAddrs).not.toContain(MINE_A);
+    expect(receivedFromAddrs).not.toContain(MINE_B);
   });
 });
