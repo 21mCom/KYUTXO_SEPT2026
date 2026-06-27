@@ -866,3 +866,137 @@ describe('privacy report export — printable HTML', () => {
     );
   });
 });
+
+// The printable HTML report escapes HTML-special characters so attacker-supplied
+// entity names can't break out of the markup. The JSON export takes the opposite
+// (and equally important) contract: it must carry the user/data-controlled
+// strings VERBATIM. JSON has its own escaping needs — quotes, backslashes — and a
+// regression that double-escaped, stripped, or otherwise mangled those values
+// would silently corrupt the exported compliance artifact. These tests build the
+// report with buildPrivacyReport (the SAME function Reports.tsx uses) from a
+// finding/citation payload stuffed with quotes, backslashes, and angle brackets,
+// then prove every field survives a JSON.stringify + JSON.parse round-trip byte
+// for byte.
+describe('privacy report export — JSON preserves malicious entity strings verbatim', () => {
+  // Every nasty character JSON itself has to escape or that an HTML-minded
+  // regression might try to neutralise: double/single quotes, backslashes,
+  // angle brackets, ampersands, newlines, tabs, and a literal backslash-quote.
+  const NASTY = String.raw`Evil"Corp\Inc <b>x</b> & 'co' ` + '\n\ttab \\" end';
+  const NASTY_URL = String.raw`https://example.com/p?a=1&b=2&q="<x>"\z`;
+
+  // A direct ENTITY_* finding whose every text field — description, correction,
+  // and each citation field — is the nasty payload.
+  const ENTITY_FINDING = {
+    type: 'ENTITY_SCAM',
+    severity: 'CRITICAL',
+    description: `desc ${NASTY}`,
+    correction: `fix ${NASTY}`,
+    txids: ['tx_scam'],
+    addresses: [`addr ${NASTY}`],
+    scoreDelta: -28,
+    details: {
+      citations: [
+        {
+          name: `name ${NASTY}`,
+          address: `caddr ${NASTY}`,
+          categoryLabel: `cat ${NASTY}`,
+          sourceNote: NASTY_URL,
+        },
+      ],
+    },
+  } as unknown as PrivacyFinding;
+
+  // A non-entity warning (no citations) whose description/correction also carry
+  // the payload, so both the `findings` and `warnings` arrays are covered.
+  const FINGERPRINT_WARNING = {
+    type: 'FINGERPRINT_NVERSION',
+    severity: 'LOW',
+    description: `warn desc ${NASTY}`,
+    correction: `warn fix ${NASTY}`,
+    txids: ['tx_fp'],
+    addresses: [],
+    scoreDelta: -0.4,
+    details: {},
+  } as unknown as PrivacyFinding;
+
+  const maliciousResult = {
+    grade: 'C+',
+    score: 72,
+    transactionsAnalyzed: 1234,
+    addressesScanned: 56,
+    isClean: false,
+    fingerprintCoverage: 1,
+    needsResync: false,
+    findings: [ENTITY_FINDING],
+    warnings: [FINGERPRINT_WARNING],
+    scoreWaterfall: [
+      { label: 'Base Score', findingType: 'BASE', delta: 0, runningScore: 100, count: 0 },
+      { label: 'Known Scam', findingType: 'ENTITY_SCAM', delta: -28, runningScore: 72, count: 1 },
+    ],
+  } as unknown as PrivacyAuditResult;
+
+  function roundTrip() {
+    return JSON.parse(
+      JSON.stringify(buildPrivacyReport(maliciousResult, { owner: null, wallet: null })),
+    ) as {
+      findings: Array<Record<string, unknown>>;
+      warnings: Array<Record<string, unknown>>;
+    };
+  }
+
+  it('preserves entity finding description, correction, addresses verbatim after a JSON round-trip', () => {
+    const report = roundTrip();
+    const finding = report.findings.find((f) => f.type === 'ENTITY_SCAM');
+    expect(finding).toBeDefined();
+
+    expect(finding!.description).toBe(`desc ${NASTY}`);
+    expect(finding!.correction).toBe(`fix ${NASTY}`);
+    expect(finding!.addresses).toEqual([`addr ${NASTY}`]);
+  });
+
+  it('preserves every citation field verbatim after a JSON round-trip', () => {
+    const report = roundTrip();
+    const finding = report.findings.find((f) => f.type === 'ENTITY_SCAM');
+    const citations = finding!.citations as Array<Record<string, unknown>>;
+
+    expect(citations).toHaveLength(1);
+    expect(citations[0]).toEqual({
+      name: `name ${NASTY}`,
+      address: `caddr ${NASTY}`,
+      categoryLabel: `cat ${NASTY}`,
+      sourceNote: NASTY_URL,
+    });
+    // The source URL's quotes, ampersands, angle brackets, and backslash survive
+    // untouched — never HTML-escaped, percent-encoded, or otherwise mangled.
+    expect(citations[0].sourceNote).toBe(NASTY_URL);
+  });
+
+  it('preserves warning description and correction verbatim after a JSON round-trip', () => {
+    const report = roundTrip();
+    const warning = report.warnings.find((f) => f.type === 'FINGERPRINT_NVERSION');
+    expect(warning).toBeDefined();
+
+    expect(warning!.description).toBe(`warn desc ${NASTY}`);
+    expect(warning!.correction).toBe(`warn fix ${NASTY}`);
+  });
+
+  it('does not HTML-escape any field — the raw special characters are present', () => {
+    const report = roundTrip();
+    const finding = report.findings.find((f) => f.type === 'ENTITY_SCAM');
+    const citations = finding!.citations as Array<Record<string, unknown>>;
+
+    // A regression that ran the JSON values through the HTML escaper would turn
+    // these into &lt; / &quot; / &amp; entities. Assert the raw characters remain.
+    expect(finding!.description).toContain('<b>');
+    expect(finding!.description).toContain('"');
+    expect(finding!.description).toContain('\\');
+    expect(citations[0].name).toContain('<b>');
+    expect(citations[0].categoryLabel).toContain('&');
+
+    const serialized = JSON.stringify(report);
+    // No HTML entities leaked into the serialized artifact.
+    expect(serialized).not.toContain('&lt;');
+    expect(serialized).not.toContain('&quot;');
+    expect(serialized).not.toContain('&amp;');
+  });
+});
