@@ -1205,6 +1205,66 @@ describe("SettingsPage — entity list import (merge mode) only-changed filter",
     expect(screen.getByText("no change")).toBeTruthy();
     expect(screen.queryByTestId("text-entity-overrides-empty")).toBeNull();
   });
+
+  // Apply→re-import lifecycle: a reviewer who turns the toggle ON, *applies* the
+  // merge (handleConfirmEntityImport → applyEntitySnapshot), then immediately
+  // starts another merge import must NOT inherit the ON state. The reset lives
+  // in the fresh-preview staging path (handleEntityFileSelected), which runs on
+  // every preview including the one after an apply — handleConfirmEntityImport
+  // itself clears entityPreview but not the toggle, so a refactor that bypasses
+  // the staging reset would silently hide identical re-imports in the second
+  // preview.
+  it("resets 'Only show changed' to OFF after the import is applied and a fresh merge preview is opened", async () => {
+    const { CHANGED_NAME } = await openChangedPlusIdenticalDiff();
+
+    // Turn the toggle ON: only the lone changed override remains visible.
+    toggleOnlyChanged();
+    await waitFor(() => expect(overrideRows()).toHaveLength(1));
+    expect(screen.getByText(CHANGED_NAME)).toBeTruthy();
+    expect(toggleState()).toBe("checked");
+
+    // Apply the import (button-confirm-entity-import → handleConfirmEntityImport
+    // → applyEntitySnapshot). The preview dialog tears down on success.
+    fireEvent.click(screen.getByTestId("button-confirm-entity-import"));
+    await waitFor(() =>
+      expect(screen.queryByTestId("text-preview-incoming")).toBeNull(),
+    );
+
+    // Start a fresh merge preview (the import mode is still "merge" after an
+    // apply). The applied snapshot above re-categorised the exchange entry to
+    // gambling and merged a brand-new mixer entry in, but the *bundled* fallback
+    // entries the diff compares against are unchanged, so re-using two bundled
+    // entries again yields a changed override + an identical "no change"
+    // re-import in the second preview.
+    const list = getBundledEntityList();
+    const changedBase = list.find((e) => e.category === "exchange");
+    const identicalBase = list.find((e) => e.category === "mixer");
+    expect(changedBase).toBeTruthy();
+    expect(identicalBase).toBeTruthy();
+
+    const SECOND_CHANGED_NAME = "Zorptast Reapplied Override";
+    const snapshot = JSON.stringify([
+      { address: changedBase!.address, name: SECOND_CHANGED_NAME, category: "gambling" },
+      identical(identicalBase!),
+    ]);
+    await selectEntityFile("merge-only-changed-reapply.json", snapshot);
+
+    await screen.findByTestId("text-preview-incoming");
+    fireEvent.click(screen.getByTestId("button-toggle-entity-diff"));
+    await screen.findByTestId("tab-entity-diff-overrides");
+
+    // The toggle must have reset to OFF on the new dialog — the previous ON
+    // state does NOT carry over across an apply.
+    expect(toggleState()).toBe("unchecked");
+
+    // Because the filter reset, the full override list is shown: both the
+    // changed override and the identical "no change" re-import are visible, with
+    // no stale changed-only filtering carried over from the applied import.
+    expect(overrideRows()).toHaveLength(2);
+    expect(screen.getByText(SECOND_CHANGED_NAME)).toBeTruthy();
+    expect(screen.getByText("no change")).toBeTruthy();
+    expect(screen.queryByTestId("text-entity-overrides-empty")).toBeNull();
+  });
 });
 
 describe("SettingsPage — entity list import (merge mode) source-note diff", () => {
