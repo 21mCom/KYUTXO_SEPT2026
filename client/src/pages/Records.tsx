@@ -39,6 +39,7 @@ import { getTransactionsByTxidStartsWith } from "@/lib/data/transaction-crud";
 import { recomputeAddressStats } from "@/lib/data/address-stats";
 import { RecordTable } from "@/components/RecordTable";
 import { RecordDetailPanel } from "@/components/RecordDetailPanel";
+import { useRecordPreview } from "@/contexts/RecordPreviewContext";
 import { TxidLink } from "@/components/TxidLink";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { RecordFilters, ColumnFilter } from "@/components/RecordFilters";
@@ -185,6 +186,7 @@ function matchesColumnFilter(record: DbRecord, filter: ColumnFilter): boolean {
 
 export default function Records() {
   const [location, navigate] = useLocation();
+  const { openRecordEdit } = useRecordPreview();
   
   const PAGE_SIZE = 50;
   const [currentPage, setCurrentPage] = useState(1);
@@ -1005,6 +1007,7 @@ export default function Records() {
             open={true}
             record={selectedRecord}
             onClose={() => navigate("/records")}
+            onEdit={selectedRecord ? () => openRecordEdit(Number(selectedRecord.id)) : undefined}
             onSyncComplete={handleSyncComplete}
             customFieldDefs={customFieldDefs}
           />
@@ -1312,6 +1315,7 @@ export default function Records() {
                 open={true}
                 record={selectedRecord}
                 onClose={() => setSelectedRecordId(null)}
+                onEdit={selectedRecord ? () => openRecordEdit(Number(selectedRecord.id)) : undefined}
                 onSyncComplete={handleSyncComplete}
                 customFieldDefs={customFieldDefs}
               />
