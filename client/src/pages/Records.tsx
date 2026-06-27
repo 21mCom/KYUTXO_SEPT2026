@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { ArrowLeft, Search as SearchIcon, Database, Hash, ExternalLink, AlertCircle, Trash2, X, ChevronLeft, ChevronRight, Loader2, RefreshCw } from "lucide-react";
+import { ArrowLeft, Search as SearchIcon, Database, Hash, AlertCircle, Trash2, X, ChevronLeft, ChevronRight, Loader2, RefreshCw } from "lucide-react";
 import { BlockchainToggle } from "@/components/BlockchainToggle";
 import { type Record as DbRecord, type VaultMetadata, type AddressImportance, type ChainType, type CustomField, type BlockchainTransaction, type TransactionParticipant, USER_CURATED_TIERS } from "@/lib/database";
 import { useDbChangeSignal } from "@/hooks/use-db-change-signal";
@@ -39,7 +39,7 @@ import { getTransactionsByTxidStartsWith } from "@/lib/data/transaction-crud";
 import { recomputeAddressStats } from "@/lib/data/address-stats";
 import { RecordTable } from "@/components/RecordTable";
 import { RecordDetailPanel } from "@/components/RecordDetailPanel";
-import { ClickableAddress } from "@/components/ClickableAddress";
+import { TxidLink } from "@/components/TxidLink";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { RecordFilters, ColumnFilter } from "@/components/RecordFilters";
 import { BehaviorFilter } from "@/components/BehaviorFilter";
@@ -1082,24 +1082,16 @@ export default function Records() {
                   data-testid={`tx-result-${tx.txid.slice(0, 8)}`}
                 >
                   <div className="flex items-center justify-between gap-2 mb-2">
-                    <ClickableAddress 
-                      address={tx.txid}
-                      className="flex-1 min-w-0"
-                    />
+                    <div className="flex-1 min-w-0" onClick={(e) => e.stopPropagation()}>
+                      <TxidLink
+                        txid={tx.txid}
+                        showExternalLink={true}
+                      />
+                    </div>
                     <div className="flex items-center gap-2">
                       <Badge variant="secondary" className="text-xs">
                         Block {tx.blockHeight.toLocaleString()}
                       </Badge>
-                      <a
-                        href={`https://mempool.space/tx/${tx.txid}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        onClick={(e) => e.stopPropagation()}
-                        className="text-muted-foreground hover:text-primary"
-                        data-testid={`tx-explorer-${tx.txid.slice(0, 8)}`}
-                      >
-                        <ExternalLink className="h-3 w-3" />
-                      </a>
                     </div>
                   </div>
                   <div className="text-xs text-muted-foreground">

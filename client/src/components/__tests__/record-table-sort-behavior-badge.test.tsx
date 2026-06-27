@@ -9,7 +9,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, cleanup, fireEvent } from "@testing-library/react";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { TestProviders } from "@/test/testProviders";
 
 vi.mock("@/lib/dataFacade", () => ({
   getRecordOrigins: vi.fn(async () => []),
@@ -109,9 +109,9 @@ const EXPECTED_LABEL: Record<string, string> = {
 
 function renderTable() {
   return render(
-    <TooltipProvider>
+    <TestProviders>
       <RecordTable records={RECORDS} />
-    </TooltipProvider>,
+    </TestProviders>,
   );
 }
 

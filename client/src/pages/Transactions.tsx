@@ -41,7 +41,6 @@ import {
   Search,
   ArrowDownLeft,
   ArrowUpRight,
-  ExternalLink,
   Clock,
   Hash,
   Zap,
@@ -56,7 +55,8 @@ import {
 } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { getParticipantsByTxids } from "@/lib/participant-repo";
-import { ClickableAddress } from "@/components/ClickableAddress";
+import { AddressLink } from "@/components/AddressLink";
+import { TxidLink } from "@/components/TxidLink";
 import { searchPendingClass } from "@/lib/search-pending-class";
 import {
   engineCountTransactions,
@@ -127,20 +127,12 @@ function TransactionCard({
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2">
                   <Hash className="h-4 w-4 text-muted-foreground flex-shrink-0" />
-                  <ClickableAddress
-                    address={tx.txid}
-                    className="flex-1 min-w-0"
-                  />
-                  <a
-                    href={`https://mempool.space/tx/${tx.txid}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    onClick={(e) => e.stopPropagation()}
-                    className="text-muted-foreground hover:text-primary"
-                    data-testid={`link-explorer-${tx.txid.slice(0, 8)}`}
-                  >
-                    <ExternalLink className="h-3 w-3" />
-                  </a>
+                  <div className="flex-1 min-w-0" onClick={(e) => e.stopPropagation()}>
+                    <TxidLink
+                      txid={tx.txid}
+                      showExternalLink={true}
+                    />
+                  </div>
                 </div>
                 <div className="flex items-center gap-4 mt-2 text-sm text-muted-foreground flex-wrap">
                   <span className="flex items-center gap-1">
@@ -212,10 +204,12 @@ function TransactionCard({
                             data-testid={`participant-input-${idx}`}
                           >
                             <div className="flex items-center justify-between gap-2">
-                              <ClickableAddress
-                                address={input.address}
-                                className="text-xs truncate flex-1"
-                              />
+                              <div className="min-w-0 flex-1">
+                                <AddressLink
+                                  address={input.address}
+                                  recordId={linkedRecord?.id}
+                                />
+                              </div>
                               <span className="font-mono text-xs font-medium whitespace-nowrap">
                                 {formatSats(input.amount)}
                               </span>
@@ -249,10 +243,12 @@ function TransactionCard({
                             data-testid={`participant-output-${idx}`}
                           >
                             <div className="flex items-center justify-between gap-2">
-                              <ClickableAddress
-                                address={output.address}
-                                className="text-xs truncate flex-1"
-                              />
+                              <div className="min-w-0 flex-1">
+                                <AddressLink
+                                  address={output.address}
+                                  recordId={linkedRecord?.id}
+                                />
+                              </div>
                               <span className="font-mono text-xs font-medium whitespace-nowrap">
                                 {formatSats(output.amount)}
                               </span>

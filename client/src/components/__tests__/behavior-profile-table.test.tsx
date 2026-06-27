@@ -6,7 +6,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, cleanup } from "@testing-library/react";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { TestProviders } from "@/test/testProviders";
 
 vi.mock("@/lib/dataFacade", () => ({
   getRecordOrigins: vi.fn(async () => []),
@@ -61,7 +61,7 @@ function makeRecord(overrides: Record<string, unknown> = {}) {
 
 function renderTable(record: ReturnType<typeof makeRecord>, extraProps: Record<string, unknown> = {}) {
   return render(
-    <TooltipProvider>
+    <TestProviders>
       <RecordTable
         records={[record]}
         onRecordClick={() => {}}
@@ -69,7 +69,7 @@ function renderTable(record: ReturnType<typeof makeRecord>, extraProps: Record<s
         onRecordDelete={() => {}}
         {...extraProps}
       />
-    </TooltipProvider>,
+    </TestProviders>,
   );
 }
 

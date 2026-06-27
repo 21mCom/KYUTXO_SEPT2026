@@ -43,7 +43,6 @@ import {
   CalendarIcon,
   Coins,
   RefreshCw,
-  ExternalLink,
   AlertCircle,
   X,
   ArrowUpDown,
@@ -63,7 +62,8 @@ import { SiBitcoin } from "react-icons/si";
 import { getOwners, getWalletNames, getTags, getCategories, getParticipantsByAddresses } from "@/lib/dataFacade";
 import { cn } from "@/lib/utils";
 import { UTXODetailPanel } from "@/components/UTXODetailPanel";
-import { ClickableAddress } from "@/components/ClickableAddress";
+import { AddressLink } from "@/components/AddressLink";
+import { TxidLink } from "@/components/TxidLink";
 import { ScrollPositionIndicator } from "@/components/ScrollPositionIndicator";
 import { searchPendingClass } from "@/lib/search-pending-class";
 
@@ -116,15 +116,6 @@ function saveSettings(settings: Partial<UTXOSettings>) {
 
 function satsToBtc(sats: number): string {
   return (sats / 100_000_000).toFixed(8);
-}
-
-function truncateAddress(addr: string): string {
-  if (addr.length <= 16) return addr;
-  return `${addr.slice(0, 8)}...${addr.slice(-8)}`;
-}
-
-function truncateTxid(txid: string): string {
-  return `${txid.slice(0, 8)}...${txid.slice(-8)}`;
 }
 
 function formatUsdValue(value: number | undefined): string {
@@ -1578,11 +1569,11 @@ export default function UTXOs() {
                                 <ChevronRightIcon className="h-4 w-4" />
                               )}
                             </TableCell>
-                            <TableCell>
+                            <TableCell onClick={(e) => e.stopPropagation()}>
                               <div className="flex flex-col gap-1">
-                                <ClickableAddress 
-                                  address={group.address} 
-                                  className="text-sm"
+                                <AddressLink
+                                  address={group.address}
+                                  recordId={group.recordId}
                                 />
                                 {group.label && (
                                   <span className="text-xs text-muted-foreground">{group.label}</span>
@@ -1647,21 +1638,14 @@ export default function UTXOs() {
                             data-testid={`row-utxo-${utxo.id}`}
                           >
                             <TableCell></TableCell>
-                            <TableCell colSpan={2} className="font-mono text-sm">
+                            <TableCell colSpan={2} className="font-mono text-sm" onClick={(e) => e.stopPropagation()}>
                               <div className="flex items-center gap-2 pl-4">
                                 <span className="text-muted-foreground text-xs">{idx + 1}.</span>
-                                <span title={utxo.txid}>{truncateTxid(utxo.txid)}:{utxo.vout}</span>
-                                <CopyTxidButton txid={utxo.txid} />
-                                <a
-                                  href={`https://mempool.space/tx/${utxo.txid}`}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="text-muted-foreground hover:text-primary"
-                                  onClick={(e) => e.stopPropagation()}
-                                  data-testid={`link-external-${utxo.txid.slice(0, 8)}`}
-                                >
-                                  <ExternalLink className="h-3 w-3" />
-                                </a>
+                                <TxidLink
+                                  txid={utxo.txid}
+                                  showExternalLink={true}
+                                />
+                                <span className="text-muted-foreground text-xs">:{utxo.vout}</span>
                                 <span className="ml-2">
                                   {displayUnit === "btc" ? (
                                     <span>{satsToBtc(utxo.amountSats)} BTC</span>

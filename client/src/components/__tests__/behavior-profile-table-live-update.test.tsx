@@ -11,7 +11,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, cleanup } from "@testing-library/react";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { TestProviders } from "@/test/testProviders";
 
 vi.mock("@/lib/dataFacade", () => ({
   getRecordOrigins: vi.fn(async () => []),
@@ -68,9 +68,9 @@ function makeRecord(overrides: Record<string, unknown> = {}) {
 
 function renderTable(record: ReturnType<typeof makeRecord>, extraProps: Record<string, unknown> = {}) {
   return render(
-    <TooltipProvider>
+    <TestProviders>
       <RecordTable records={[record]} {...extraProps} />
-    </TooltipProvider>,
+    </TestProviders>,
   );
 }
 
@@ -96,7 +96,7 @@ describe("RecordTable behavior badge live update", () => {
     // 2. Stats are recomputed: a new records array carries the cached fields.
     //    txCount=10, utxoCount=5, balance>0 → utxoTxRatio=0.5 ≥ 0.4 → Accumulator
     rerender(
-      <TooltipProvider>
+      <TestProviders>
         <RecordTable
           records={[
             makeRecord({
@@ -108,7 +108,7 @@ describe("RecordTable behavior badge live update", () => {
             }),
           ]}
         />
-      </TooltipProvider>,
+      </TestProviders>,
     );
 
     // 3. The same badge element now shows the recomputed label, no stale text.
@@ -130,7 +130,7 @@ describe("RecordTable behavior badge live update", () => {
 
     // A completed sync writes a high tx count (≥ 50) and recent activity.
     rerender(
-      <TooltipProvider>
+      <TestProviders>
         <RecordTable
           records={[
             makeRecord({
@@ -143,7 +143,7 @@ describe("RecordTable behavior badge live update", () => {
           ]}
           precomputedAddressStats={new Map()}
         />
-      </TooltipProvider>,
+      </TestProviders>,
     );
 
     const updated = getByTestId("badge-behavior-7");

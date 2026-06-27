@@ -12,7 +12,8 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { MoreVertical, ArrowUp, ArrowDown, ArrowUpDown, Settings2, Paperclip, Key, RefreshCw } from "lucide-react";
 import { classifyBehavior, BEHAVIOR_LABEL_DISPLAY } from "@/lib/behavior-profile";
-import { BitcoinAddressDisplay } from "./BitcoinAddressDisplay";
+import { AddressLink } from "./AddressLink";
+import { TxidLink } from "./TxidLink";
 import { RecordTypeBadge } from "./RecordTypeBadge";
 import {
   DropdownMenu,
@@ -643,8 +644,18 @@ export function RecordTable({
                     })()}
                   </div>
                 </TableCell>
-                <TableCell>
-                  <BitcoinAddressDisplay address={record.inputString} />
+                <TableCell onClick={(e) => e.stopPropagation()}>
+                  {record.type === 'transaction' ? (
+                    <TxidLink
+                      txid={record.inputString}
+                      recordId={Number(record.id)}
+                    />
+                  ) : (
+                    <AddressLink
+                      address={record.inputString}
+                      recordId={Number(record.id)}
+                    />
+                  )}
                 </TableCell>
                 {tableColumns.tags && (
                   <TableCell>
