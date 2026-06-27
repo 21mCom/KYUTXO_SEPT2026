@@ -48,6 +48,29 @@ export interface TrailHop {
   destinations: GroupFlow[];
 }
 
+/**
+ * Optional date-range filter for fund-trail computation.
+ * Both bounds are Unix timestamps in seconds (matching blockTime). Either may
+ * be omitted for an open-ended window; `undefined`/no range means "all time".
+ */
+export interface DateRange {
+  start?: number;
+  end?: number;
+}
+
+/**
+ * Returns true when the given blockTime falls within the (inclusive) range.
+ * A flow detail with an unknown blockTime (0/falsy) is excluded whenever a
+ * range is active, since it cannot be confidently placed inside the window.
+ */
+function isBlockTimeInRange(blockTime: number, range?: DateRange): boolean {
+  if (!range || (range.start == null && range.end == null)) return true;
+  if (!blockTime) return false;
+  if (range.start != null && blockTime < range.start) return false;
+  if (range.end != null && blockTime > range.end) return false;
+  return true;
+}
+
 // ---------------------------------------------------------------------------
 // Entity grouping helpers
 // ---------------------------------------------------------------------------
@@ -136,6 +159,7 @@ export async function computeOneHop(
   groupAddresses: string[],
   dimension: GroupingDimension,
   selfGroupLabel: string | null,
+  dateRange?: DateRange,
   signal?: AbortSignal
 ): Promise<TrailHop> {
   if (groupAddresses.length === 0) return { sources: [], destinations: [] };
@@ -240,6 +264,9 @@ export async function computeOneHop(
     // If same group as self, treat as internal movement
     if (label && selfGroupLabel && label === selfGroupLabel) continue;
 
+    const detailBlockTime = blockTimes.get(l.consumingTxid) ?? l.blockTime;
+    if (!isBlockTimeInRange(detailBlockTime, dateRange)) continue;
+
     const groupKey = label ?? UNKNOWN_SOURCE_LABEL;
     ensureFlow(sourceMap, groupKey, dimension, !label);
     const flow = sourceMap.get(groupKey)!;
@@ -248,7 +275,7 @@ export async function computeOneHop(
       address: l.spentAddress,
       txid: l.consumingTxid,
       amount: l.spentAmount,
-      blockTime: blockTimes.get(l.consumingTxid) ?? l.blockTime,
+      blockTime: detailBlockTime,
       recordId: record?.id,
     });
     if (!label) {
@@ -273,6 +300,9 @@ export async function computeOneHop(
       const label = getGroupLabel(record, dimension);
       if (label && selfGroupLabel && label === selfGroupLabel) continue;
 
+      const detailBlockTime = blockTimes.get(txid) ?? 0;
+      if (!isBlockTimeInRange(detailBlockTime, dateRange)) continue;
+
       const groupKey = label ?? UNKNOWN_SOURCE_LABEL;
       ensureFlow(sourceMap, groupKey, dimension, !label);
       const flow = sourceMap.get(groupKey)!;
@@ -281,7 +311,7 @@ export async function computeOneHop(
         address: inp.address,
         txid,
         amount: inp.amount,
-        blockTime: blockTimes.get(txid) ?? 0,
+        blockTime: detailBlockTime,
         recordId: record?.id,
       });
       if (!label) {
@@ -307,6 +337,9 @@ export async function computeOneHop(
     const label = getGroupLabel(record, dimension);
     if (label && selfGroupLabel && label === selfGroupLabel) continue;
 
+    const detailBlockTime = blockTimes.get(l.consumingTxid) ?? l.blockTime;
+    if (!isBlockTimeInRange(detailBlockTime, dateRange)) continue;
+
     const groupKey = label ?? UNKNOWN_DEST_LABEL;
     ensureFlow(destMap, groupKey, dimension, !label);
     const flow = destMap.get(groupKey)!;
@@ -315,7 +348,7 @@ export async function computeOneHop(
       address: l.createdAddress,
       txid: l.consumingTxid,
       amount: l.createdAmount,
-      blockTime: blockTimes.get(l.consumingTxid) ?? l.blockTime,
+      blockTime: detailBlockTime,
       recordId: record?.id,
     });
     if (!label) {
@@ -340,6 +373,9 @@ export async function computeOneHop(
       const label = getGroupLabel(record, dimension);
       if (label && selfGroupLabel && label === selfGroupLabel) continue;
 
+      const detailBlockTime = blockTimes.get(txid) ?? 0;
+      if (!isBlockTimeInRange(detailBlockTime, dateRange)) continue;
+
       const groupKey = label ?? UNKNOWN_DEST_LABEL;
       ensureFlow(destMap, groupKey, dimension, !label);
       const flow = destMap.get(groupKey)!;
@@ -348,7 +384,7 @@ export async function computeOneHop(
         address: out.address,
         txid,
         amount: out.amount,
-        blockTime: blockTimes.get(txid) ?? 0,
+        blockTime: detailBlockTime,
         recordId: record?.id,
       });
       if (!label) {

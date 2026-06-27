@@ -8,6 +8,7 @@ import {
   Loader2,
   Info,
   ChevronsLeftRight,
+  X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -23,6 +24,7 @@ import {
   type GroupingDimension,
   type GroupFlow,
   type TrailHop,
+  type DateRange,
   listGroupValues,
   getAddressesForGroup,
   computeOneHop,
@@ -115,12 +117,14 @@ function FlowCard({
   dimension,
   depth,
   visitedLabels,
+  dateRange,
 }: {
   flow: GroupFlow;
   direction: "source" | "dest";
   dimension: GroupingDimension;
   depth: number;
   visitedLabels: Set<string>;
+  dateRange?: DateRange;
 }) {
   const [showDetails, setShowDetails] = useState(false);
   const [isExpanding, setIsExpanding] = useState(false);
@@ -165,7 +169,7 @@ function FlowCard({
       // Mark this group as visited before computing to prevent cycles
       branchVisited.add(flow.groupLabel);
 
-      const hop = await computeOneHop(addresses, dimension, selfLabel);
+      const hop = await computeOneHop(addresses, dimension, selfLabel, dateRange);
       setExpandedHop(hop);
     } catch (err) {
       console.error('[FundTrail] expand error', err);
@@ -173,7 +177,7 @@ function FlowCard({
     } finally {
       setIsExpanding(false);
     }
-  }, [isExpanded, flow, dimension, unknownAddresses, branchVisited]);
+  }, [isExpanded, flow, dimension, unknownAddresses, branchVisited, dateRange]);
 
   // The next level's visited set includes everything visited so far + this node
   const nextVisited = new Set(branchVisited);
@@ -276,6 +280,7 @@ function FlowCard({
                       dimension={dimension}
                       depth={depth + 1}
                       visitedLabels={nextVisited}
+                      dateRange={dateRange}
                     />
                   ))}
                 </div>
@@ -299,6 +304,7 @@ function FlowCard({
                       dimension={dimension}
                       depth={depth + 1}
                       visitedLabels={nextVisited}
+                      dateRange={dateRange}
                     />
                   ))}
                 </div>
@@ -315,9 +321,30 @@ function FlowCard({
 // Main Page
 // ---------------------------------------------------------------------------
 
+/** Convert yyyy-mm-dd start/end strings into a DateRange in Unix seconds (local). */
+function toDateRange(startDate: string, endDate: string): DateRange | undefined {
+  let start: number | undefined;
+  let end: number | undefined;
+  if (startDate) {
+    const d = new Date(`${startDate}T00:00:00`);
+    if (!isNaN(d.getTime())) start = Math.floor(d.getTime() / 1000);
+  }
+  if (endDate) {
+    const d = new Date(`${endDate}T23:59:59`);
+    if (!isNaN(d.getTime())) end = Math.floor(d.getTime() / 1000);
+  }
+  if (start == null && end == null) return undefined;
+  return { start, end };
+}
+
 export default function FundTrail() {
   const [dimension, setDimension] = useState<GroupingDimension>("walletName");
   const [selectedGroup, setSelectedGroup] = useState<string>("");
+  const [startDate, setStartDate] = useState<string>("");
+  const [endDate, setEndDate] = useState<string>("");
+
+  const dateRange = toDateRange(startDate, endDate);
+  const hasDateFilter = !!dateRange;
 
   const handleDimensionChange = useCallback((val: string) => {
     setDimension(val as GroupingDimension);
@@ -328,6 +355,11 @@ export default function FundTrail() {
     setSelectedGroup(val);
   }, []);
 
+  const handleClearDates = useCallback(() => {
+    setStartDate("");
+    setEndDate("");
+  }, []);
+
   // --- Group value list ---
   const { data: groupValues = [], isLoading: isLoadingGroups } = useQuery({
     queryKey: ["fund-trail-groups", dimension],
@@ -336,14 +368,20 @@ export default function FundTrail() {
 
   // --- Center node hop ---
   const { data: centerHop, isLoading: isLoadingCenter } = useQuery<TrailHop>({
-    queryKey: ["fund-trail-center", dimension, selectedGroup],
+    queryKey: [
+      "fund-trail-center",
+      dimension,
+      selectedGroup,
+      dateRange?.start ?? null,
+      dateRange?.end ?? null,
+    ],
     enabled: !!selectedGroup,
     queryFn: async () => {
       const records = await getAddressesForGroup(dimension, selectedGroup);
       const addresses = records
         .map(r => r.inputString)
         .filter((s): s is string => !!s);
-      return computeOneHop(addresses, dimension, selectedGroup);
+      return computeOneHop(addresses, dimension, selectedGroup, dateRange);
     },
   });
 
@@ -414,6 +452,53 @@ export default function FundTrail() {
             </Select>
           )}
         </div>
+
+        <div className="flex flex-col gap-1">
+          <label className="text-xs text-muted-foreground font-medium">
+            From
+          </label>
+          <input
+            type="date"
+            value={startDate}
+            max={endDate || undefined}
+            onChange={e => setStartDate(e.target.value)}
+            data-testid="fund-trail-start-date"
+            className="flex h-9 w-40 rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          />
+        </div>
+
+        <div className="flex flex-col gap-1">
+          <label className="text-xs text-muted-foreground font-medium">
+            To
+          </label>
+          <input
+            type="date"
+            value={endDate}
+            min={startDate || undefined}
+            onChange={e => setEndDate(e.target.value)}
+            data-testid="fund-trail-end-date"
+            className="flex h-9 w-40 rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          />
+        </div>
+
+        {hasDateFilter ? (
+          <Button
+            size="default"
+            variant="outline"
+            onClick={handleClearDates}
+            data-testid="fund-trail-clear-dates"
+          >
+            <X className="h-4 w-4 mr-1" />
+            All time
+          </Button>
+        ) : (
+          <span
+            className="text-xs text-muted-foreground italic pb-2.5"
+            data-testid="fund-trail-date-status"
+          >
+            Showing all time
+          </span>
+        )}
       </div>
 
       {/* Body */}
@@ -429,6 +514,7 @@ export default function FundTrail() {
           centerLabel={selectedGroup}
           dimension={dimension}
           centerHop={centerHop ?? { sources: [], destinations: [] }}
+          dateRange={dateRange}
         />
       )}
     </div>
@@ -443,10 +529,12 @@ function TrailLayout({
   centerLabel,
   dimension,
   centerHop,
+  dateRange,
 }: {
   centerLabel: string;
   dimension: GroupingDimension;
   centerHop: TrailHop;
+  dateRange?: DateRange;
 }) {
   const hasSources = centerHop.sources.length > 0;
   const hasDests = centerHop.destinations.length > 0;
@@ -486,6 +574,7 @@ function TrailLayout({
             dimension={dimension}
             depth={0}
             visitedLabels={rootVisited}
+            dateRange={dateRange}
           />
         ))}
       </div>
@@ -550,6 +639,7 @@ function TrailLayout({
             dimension={dimension}
             depth={0}
             visitedLabels={rootVisited}
+            dateRange={dateRange}
           />
         ))}
       </div>
