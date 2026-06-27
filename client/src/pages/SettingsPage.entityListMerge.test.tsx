@@ -793,6 +793,90 @@ describe("SettingsPage — entity list import (merge mode) only-changed filter",
     expect(empty.textContent).not.toContain("No overrides match your search.");
     expect(overrideRows()).toHaveLength(0);
   });
+
+  it("composes a search that matches BOTH a changed and an identical override with the toggle, narrowing the '(N changed)' label and leaving only the changed match", async () => {
+    renderPage();
+    await screen.findByTestId("badge-entity-source");
+
+    // The shared search token is a real word lifted from a bundled entry's name.
+    // That same word is then embedded in one changed override's *new* name so a
+    // single search term matches both that changed override and the identical
+    // re-import of the source entry — exercising the two filters composing, not
+    // just narrowing to a lone row as the existing single-match tests do.
+    const list = getBundledEntityList();
+    const identicalBase = list.find(
+      (e) => e.name.trim().split(/\s+/)[0].length >= 4,
+    );
+    expect(identicalBase).toBeTruthy();
+    const sharedToken = identicalBase!.name.trim().split(/\s+/)[0];
+    const tokenLower = sharedToken.toLowerCase();
+
+    const mentionsToken = (e: { name: string; address: string }) =>
+      e.name.toLowerCase().includes(tokenLower) ||
+      e.address.toLowerCase().includes(tokenLower);
+
+    // Two further distinct bundled entries drive real changes. The second one
+    // (changedB) must NOT itself mention the shared token via its bundled
+    // name/address, or it would survive the search and break the narrowing.
+    const others = list.filter(
+      (e) => e.address !== identicalBase!.address && !mentionsToken(e),
+    );
+    expect(others.length).toBeGreaterThanOrEqual(2);
+    const changedA = others[0];
+    const changedB = others[1];
+
+    fireEvent.click(screen.getByTestId("radio-entity-merge"));
+
+    const CHANGED_A_NAME = `${sharedToken} Qwizzle Changed A`;
+    const CHANGED_B_NAME = "Zorptast Changed B";
+    // changedB's new name must not accidentally carry the shared token either.
+    expect(CHANGED_B_NAME.toLowerCase()).not.toContain(tokenLower);
+
+    const snapshot = JSON.stringify([
+      // Changed AND matches the shared-token search (via its new name).
+      { address: changedA.address, name: CHANGED_A_NAME, category: "gambling" },
+      // Changed but does NOT match the shared-token search.
+      { address: changedB.address, name: CHANGED_B_NAME, category: "gambling" },
+      // Identical re-import (changed: false) that DOES match the search via its
+      // bundled name.
+      identical(identicalBase!),
+    ]);
+    await selectEntityFile("merge-search-plus-only-changed.json", snapshot);
+
+    await screen.findByTestId("text-preview-incoming");
+    fireEvent.click(screen.getByTestId("button-toggle-entity-diff"));
+    await screen.findByTestId("tab-entity-diff-overrides");
+
+    // Baseline (no search): 3 overrides, 2 of which actually change.
+    expect(overridesTabText()).toContain("Overrides (3, 2 changed)");
+    expect(overrideRows()).toHaveLength(3);
+
+    // Search the shared token: matches changedA (new name) and the identical
+    // re-import (bundled name), but not changedB. The tab label's total AND its
+    // "(N changed)" portion must reflect the search-narrowed subset (2, 1) — not
+    // the full override count (3, 2).
+    typeSearch(sharedToken);
+    await waitFor(() =>
+      expect(overridesTabText()).toContain("Overrides (2, 1 changed)"),
+    );
+    expect(overrideRows()).toHaveLength(2);
+    expect(screen.getByText(CHANGED_A_NAME)).toBeTruthy();
+    expect(screen.getByText("no change")).toBeTruthy();
+    expect(screen.queryByText(CHANGED_B_NAME)).toBeNull();
+
+    // Toggle "Only show changed" ON: of the two search matches only changedA
+    // changes, so the identical re-import drops and exactly one row remains. No
+    // empty label appears because a real changed override still matches.
+    toggleOnlyChanged();
+    await waitFor(() => expect(overrideRows()).toHaveLength(1));
+    expect(screen.getByText(CHANGED_A_NAME)).toBeTruthy();
+    expect(screen.queryByText("no change")).toBeNull();
+    expect(screen.queryByTestId("text-entity-overrides-empty")).toBeNull();
+
+    // The view-only toggle does not change the tab label: it still reports the
+    // search-narrowed subset.
+    expect(overridesTabText()).toContain("Overrides (2, 1 changed)");
+  });
 });
 
 describe("SettingsPage — entity list import (merge mode) source-note diff", () => {
