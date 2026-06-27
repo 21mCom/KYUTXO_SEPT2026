@@ -91,6 +91,19 @@ async function driveResult(result: BoltzmannResult) {
   });
 }
 
+// Wait until the auto-run effect has posted to the worker, then crash the
+// Boltzmann calculation by firing the worker's onerror callback — the same way
+// the real worker reports an uncaught failure inside the calculation.
+async function driveError(message: string) {
+  await waitFor(() => {
+    expect(lastWorker).not.toBeNull();
+    expect(lastWorker!.postMessage).toHaveBeenCalled();
+  });
+  act(() => {
+    lastWorker!.onerror!({ message } as { message: string });
+  });
+}
+
 beforeEach(() => {
   lastWorker = null;
   vi.stubGlobal("Worker", MockWorker as unknown as typeof Worker);
@@ -206,5 +219,48 @@ describe("TransactionDeepDive auto-run — opened from a stale finding", () => {
     expect(screen.queryByTestId("container-boltzmann-result")).toBeNull();
     expect(screen.queryByTestId("container-boltzmann-heatmap")).toBeNull();
     expect(await screen.findByTestId("button-retry-deep-dive")).toBeTruthy();
+  });
+});
+
+describe("TransactionDeepDive auto-run — the calculation itself fails", () => {
+  it("shows the calculation-failure message, a Retry button, and a show/hide error-detail toggle (no heatmap) when the worker errors", async () => {
+    // Participants load fine, but the Boltzmann calculation crashes inside the
+    // worker (worker.onerror). The user should land on a clear failure message
+    // with a retry affordance and an expandable detail — not a blank panel.
+    render(<TransactionDeepDive txids={[TXID]} coinjoinTxids={new Set<string>()} autoAnalyse />);
+
+    // The auto-run posts to the worker, then the worker reports a crash.
+    await driveError("RangeError: too many interpretations");
+
+    // The participant load still succeeded exactly once and reached the worker.
+    expect(mockedGetParticipants).toHaveBeenCalledTimes(1);
+    expect(lastWorker!.postMessage).toHaveBeenCalledTimes(1);
+
+    // The calculation-failure message is shown.
+    const message = await screen.findByTestId("text-deep-dive-message");
+    expect(message.textContent).toContain(
+      "Couldn't analyse this transaction — the calculation failed unexpectedly.",
+    );
+
+    // A crashed calculation is retryable, so the Retry button is offered.
+    expect(await screen.findByTestId("button-retry-deep-dive")).toBeTruthy();
+
+    // The error detail is collapsed by default and expands/collapses via the toggle.
+    expect(screen.queryByTestId("text-deep-dive-error-detail")).toBeNull();
+    const toggle = screen.getByTestId("button-toggle-deep-dive-detail");
+
+    act(() => {
+      toggle.click();
+    });
+    expect(screen.getByTestId("text-deep-dive-error-detail")).toBeTruthy();
+
+    act(() => {
+      toggle.click();
+    });
+    expect(screen.queryByTestId("text-deep-dive-error-detail")).toBeNull();
+
+    // The calculation never produced a result, so no heatmap or results render.
+    expect(screen.queryByTestId("container-boltzmann-result")).toBeNull();
+    expect(screen.queryByTestId("container-boltzmann-heatmap")).toBeNull();
   });
 });
