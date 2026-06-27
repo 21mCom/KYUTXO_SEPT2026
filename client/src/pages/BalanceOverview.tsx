@@ -17,6 +17,7 @@ import { transactionSyncService } from "@/lib/transaction-sync";
 import { runTxidBackfill } from "@/lib/txid-backfill";
 import { createProviderFromSettings } from "@/lib/blockchain-api";
 import { getNodeSettings } from "@/lib/data/node-settings-crud";
+import { describeResolveError } from "@/lib/resolve-error";
 import {
   type GroupBy,
   type AddressBalanceRow,
@@ -86,30 +87,6 @@ function formatUsd(amount: number): string {
   return "$" + amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-/**
- * Turn a caught "Resolve & Recompute" error into a short, user-meaningful
- * reason. Resolving a spend can fail two ways the user can act on:
- *  - Connectivity: the resolver had to reach a Bitcoin node (or Tor proxy) for a
- *    missing source transaction and couldn't — a timeout, a refused/unreachable
- *    connection, an offline node, etc. Retrying once the node is reachable helps.
- *  - Internal: an unexpected engine/database error. Retrying usually won't help
- *    on its own, so we tell the user it was an internal error.
- * This stays offline-first: it only inspects the error text already produced
- * locally and never makes a network call.
- */
-function describeResolveError(err: unknown): string {
-  const message =
-    err instanceof Error ? err.message : typeof err === "string" ? err : "";
-  const lower = message.toLowerCase();
-  const looksLikeConnectivity =
-    /\b(node|network|connection|connect|unreachable|offline|timed?\s*out|timeout|fetch|proxy|tor|socket|econn|enotfound|etimedout|dns)\b/.test(
-      lower,
-    );
-  if (looksLikeConnectivity) {
-    return "Couldn't reach your Bitcoin node to look up a source transaction. Check that your node is online and reachable, then try again.";
-  }
-  return "An internal error stopped the resolve. Retrying may not help — see the console for details.";
-}
 
 /**
  * Phase 1 aggregation: page through every address record by id-keyset, reading
@@ -865,7 +842,7 @@ export default function BalanceOverview() {
       console.warn("[BalanceOverview] Import missing history failed:", err);
       toast({
         title: "Import failed",
-        description: "Could not import the missing source transactions. Please try again.",
+        description: `Couldn't import the missing source transactions. ${describeResolveError(err)}`,
         variant: "destructive",
       });
     } finally {

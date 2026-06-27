@@ -131,6 +131,7 @@ import {
 } from "@/config/debounce";
 import { useActivityBus } from "@/lib/activity-bus";
 import { detectAndBackfill, detectOrphanedTxRecords, runTxidBackfill, resolveAllBlankInputAddresses, type BackfillResult } from "@/lib/txid-backfill";
+import { describeResolveError } from "@/lib/resolve-error";
 import { resetOrphanCheckGate } from "@/lib/orphan-check-session";
 import { createProviderFromSettings } from "@/lib/blockchain-api";
 
@@ -1850,10 +1851,11 @@ export default function SettingsPage() {
         });
       }
     } catch (err) {
+      console.warn("[SettingsPage] Resolve input addresses failed:", err);
       toast({
         variant: "destructive",
         title: "Resolution Failed",
-        description: err instanceof Error ? err.message : "An error occurred.",
+        description: describeResolveError(err),
       });
     } finally {
       resolveInputsAbortRef.current = null;
