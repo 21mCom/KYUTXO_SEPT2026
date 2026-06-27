@@ -604,6 +604,134 @@ describe("detectStaleCachedBalances", () => {
     expect(addresses[199]).toBe("stream-addr-0200");
     expect(addresses).not.toContain("stream-addr-0201");
   });
+
+  it("samples only the synced records when synced rows are sparse across pages, reporting progress once per synced-containing batch", async () => {
+    // Real large vaults hold mostly unsynced addresses (no statsComputedAt).
+    // Here every 50th record is synced (and stale) while the rest are unsynced,
+    // so the synced rows are spread thinly across four DB pages. The scan must
+    // page through all 650 records but only sample (and report progress for) the
+    // 13 synced ones, never tripping over the unsynced majority.
+    const COUNT = 650;
+    const records: DbRecord[] = [];
+    const participants: TransactionParticipant[] = [];
+    const txs: BlockchainTransaction[] = [];
+    const syncedIds: number[] = [];
+    for (let i = 1; i <= COUNT; i++) {
+      const addr = `sparse-addr-${String(i).padStart(4, "0")}`;
+      const isSynced = i % 50 === 0;
+      if (isSynced) {
+        syncedIds.push(i);
+        const txid = `sparse-tx-${i}`;
+        participants.push(mkOutput(addr, txid, 1000));
+        txs.push(mkTx(txid, 100 + i));
+      }
+      records.push(
+        mkAddr({
+          id: i,
+          inputString: addr,
+          // Only the every-50th rows are synced; the rest never were.
+          ...(isSynced
+            ? { statsComputedAt: 5000, cachedBalanceSats: 0 }
+            : {}),
+        }),
+      );
+    }
+    await testDb.records.bulkAdd(records);
+    await testDb.transactionParticipants.bulkAdd(participants);
+    await testDb.blockchainTransactions.bulkAdd(txs);
+
+    const sampledReports: number[] = [];
+    const totalReports: Array<number | undefined> = [];
+    const onProgress = vi.fn((sampled: number, total?: number) => {
+      sampledReports.push(sampled);
+      totalReports.push(total);
+    });
+
+    const result = await detectStaleCachedBalances({ checkAll: true, onProgress });
+
+    // Every synced row was sampled (13 of them: ids 50,100,…,650); the 637
+    // unsynced rows were paged over but never counted.
+    expect(result.cancelled).toBe(false);
+    expect(result.sampled).toBe(syncedIds.length);
+    expect(result.sampled).toBe(13);
+    expect(result.staleCount).toBe(13);
+    expect(result.checkedAll).toBe(true);
+
+    // Four DB pages (200/200/200/50) each carried four synced rows except the
+    // last (one), so progress is reported once per page with a running count.
+    expect(onProgress).toHaveBeenCalledTimes(4);
+    expect(sampledReports).toEqual([4, 8, 12, 13]);
+    // checkAll reports the full address-table denominator on every call.
+    expect(totalReports).toEqual([COUNT, COUNT, COUNT, COUNT]);
+  });
+
+  it("skips fully-unsynced pages without reporting progress, then samples the lone synced page", async () => {
+    // Many entire 200-record pages of unsynced records sit in front of a single
+    // page that holds the synced rows, with more unsynced pages trailing behind.
+    // The unsynced pages map to zero sampling work: the scan must page over them
+    // WITHOUT firing onProgress (the running `sampled` count never moves there),
+    // yet still run to completion and sample the synced page when it reaches it.
+    //
+    // This locks the current contract for a no-synced full page: it advances the
+    // scan but reports NO progress. The matching yield (a setTimeout(0) macrotask
+    // handed back to the event loop between pages, mirroring a sampled batch) is
+    // exercised here across many empty pages so the scan can never starve the UI;
+    // changing either half should be a deliberate decision that updates this test.
+    const COUNT = 1400; // seven 200-record DB pages
+    const SYNCED_FROM = 801; // synced rows live entirely on the fifth page
+    const SYNCED_TO = 810;
+    const records: DbRecord[] = [];
+    const participants: TransactionParticipant[] = [];
+    const txs: BlockchainTransaction[] = [];
+    for (let i = 1; i <= COUNT; i++) {
+      const addr = `gap-addr-${String(i).padStart(4, "0")}`;
+      const isSynced = i >= SYNCED_FROM && i <= SYNCED_TO;
+      if (isSynced) {
+        const txid = `gap-tx-${i}`;
+        participants.push(mkOutput(addr, txid, 1000));
+        txs.push(mkTx(txid, 100 + i));
+      }
+      records.push(
+        mkAddr({
+          id: i,
+          inputString: addr,
+          // Synced rows are stale (cached 0 vs computed 1000); the rest were
+          // never synced (no statsComputedAt) and must be skipped entirely.
+          ...(isSynced
+            ? { statsComputedAt: 5000, cachedBalanceSats: 0 }
+            : {}),
+        }),
+      );
+    }
+    await testDb.records.bulkAdd(records);
+    await testDb.transactionParticipants.bulkAdd(participants);
+    await testDb.blockchainTransactions.bulkAdd(txs);
+
+    const sampledReports: number[] = [];
+    const totalReports: Array<number | undefined> = [];
+    const onProgress = vi.fn((sampled: number, total?: number) => {
+      sampledReports.push(sampled);
+      totalReports.push(total);
+    });
+
+    const result = await detectStaleCachedBalances({ checkAll: true, onProgress });
+
+    // The scan ran to completion across all seven pages and sampled only the 10
+    // synced rows on the fifth page; the 1390 unsynced rows were paged over but
+    // never counted.
+    expect(result.cancelled).toBe(false);
+    expect(result.sampled).toBe(SYNCED_TO - SYNCED_FROM + 1);
+    expect(result.sampled).toBe(10);
+    expect(result.staleCount).toBe(10);
+    expect(result.checkedAll).toBe(true);
+
+    // Progress is reported ONLY for the one page that actually sampled rows. The
+    // four leading and two trailing fully-unsynced pages report nothing, so the
+    // UI never sees a no-op progress tick for a page that skipped everything.
+    expect(onProgress).toHaveBeenCalledTimes(1);
+    expect(sampledReports).toEqual([10]);
+    expect(totalReports).toEqual([COUNT]);
+  });
 });
 
 describe("recomputeAddressStats then re-check", () => {

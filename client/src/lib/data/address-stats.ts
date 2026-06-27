@@ -145,6 +145,12 @@ export async function detectStaleCachedBalances(opts: {
     const synced = batch.filter(r => r.statsComputedAt != null && r.inputString && r.id != null);
     if (synced.length === 0) {
       if (batch.length < BATCH) break;
+      // On large vaults many records are unsynced, so a full 200-record page can
+      // map to zero sampling work. Without a yield here, a long run of such
+      // pages would loop tightly and starve the UI. We still don't report
+      // progress (the running `sampled` count hasn't moved), but we hand control
+      // back to the event loop between pages just like a sampled batch does.
+      await new Promise(resolve => setTimeout(resolve, 0));
       continue;
     }
 
