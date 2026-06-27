@@ -421,4 +421,47 @@ describe("SettingsPage — Privacy Audit History retention guard", () => {
     // History is intact since the trim rejected.
     expect(await getPrivacyAuditHistoryCount()).toBe(60);
   });
+
+  it("surfaces a destructive error toast (and reports no removal) when the underlying data-layer trim rejects (Task #868)", async () => {
+    // 25 runs, default limit 30. Lowering to 10 removes only 15 (<=20), so the
+    // guard skips the confirm dialog and applies the trim directly. Unlike the
+    // Task #857 tests above (which mock updatePrivacyHistoryLimit itself), this
+    // spies the data-layer trimPrivacyAuditHistory so the REAL
+    // updatePrivacyHistoryLimit runs and must propagate the failure up to the
+    // user — never silently doing nothing and never falsely reporting a removal.
+    await seedRuns(25);
+
+    // updatePrivacyHistoryLimit (in use-settings) calls trimPrivacyAuditHistory
+    // as a live-binding named import from this same module, so spying on the
+    // namespace makes that call reject. One-time rejection is enough.
+    const trimSpy = vi
+      .spyOn(privacyHistoryCrud, "trimPrivacyAuditHistory")
+      .mockRejectedValueOnce(new Error("trim failed"));
+
+    renderWithSettingsProviders(<SettingsPage />);
+
+    await lowerLimitTo("10");
+
+    // The trim was attempted and rejected.
+    await waitFor(() => expect(trimSpy).toHaveBeenCalled());
+
+    // No confirmation dialog for a small batch.
+    expect(screen.queryByTestId("button-confirm-history-trim")).toBeNull();
+
+    // The destructive error toast fires...
+    await waitFor(() => expect(toastSpy).toHaveBeenCalled());
+    const errorCall = toastSpy.mock.calls.find(
+      (c) => c[0]?.variant === "destructive",
+    );
+    expect(errorCall).toBeTruthy();
+    expect(errorCall?.[0]?.description).toMatch(/retention limit/i);
+
+    // ...and no toast ever claims runs were removed.
+    const titles = toastSpy.mock.calls.map((c) => c[0]?.title ?? "");
+    expect(titles.some((t) => /removed/i.test(t))).toBe(false);
+
+    // The data is untouched: a failed trim must not delete any runs. (Use the
+    // real count helper — the destructured ref points at the original impl.)
+    expect(await getPrivacyAuditHistoryCount()).toBe(25);
+  });
 });
