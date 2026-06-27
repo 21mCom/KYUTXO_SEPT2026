@@ -199,6 +199,10 @@ export interface RestoreResult {
     // Number of attachment files whose owning record was absent and were
     // routed to the Needs Review folder (never linked to any DB row).
     orphanedAttachmentFiles: number;
+    // Subset of orphanedAttachmentFiles whose writeReview() failed, so their
+    // bytes could NOT be saved anywhere and were lost. Counted separately so
+    // the UI can warn the user about actual data loss.
+    orphanedAttachmentFilesLost: number;
   };
 }
 
@@ -258,6 +262,7 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
     custodySegments: 0,
     attachmentFiles: 0,
     orphanedAttachmentFiles: 0,
+    orphanedAttachmentFilesLost: 0,
   };
 
   // Becomes true once the destructive clear has run. After this point the
@@ -530,11 +535,14 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
               // under the original filename instead of the normal attachment
               // pool, so no hidden duplicate is left behind. Best-effort: a
               // writeReview failure is swallowed so it cannot abort the restore
-              // — the orphan is still counted for the UI notification.
+              // — the orphan is still counted for the UI notification, and the
+              // failure is tallied separately so the user can be warned that
+              // those bytes could not be saved anywhere.
               try {
                 await opts.attachmentWriter.writeReview?.(orphanFilename, ab);
               } catch {
                 // intentionally swallowed — best-effort routing
+                counts.orphanedAttachmentFilesLost += 1;
               }
               counts.orphanedAttachmentFiles += 1;
               processed += 1;

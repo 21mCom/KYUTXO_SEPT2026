@@ -484,6 +484,47 @@ describe("v3 restore: orphaned attachment files routed to review, never to norma
     expect(reviewCalls).toHaveLength(2);
     expect(reviewCalls.every((f) => f === "report.pdf")).toBe(true);
   });
+
+  it("a failing writeReview is swallowed but tallied as a lost orphan file", async () => {
+    // Two orphaned files: one writeReview succeeds, one throws. The throw must
+    // NOT abort the restore, both must still be counted as orphans, and exactly
+    // one must be tallied as lost so the UI can warn about the missing bytes.
+    await seedVault();
+    const blob = await exportPlain();
+    await clearEverything();
+
+    const reviewFiles = new Map<string, string>();
+    const writerWithReview: AttachmentFileWriter = {
+      async write() {},
+      async writeReview(filename, data) {
+        if (filename === "fails.pdf") {
+          throw new Error("disk full");
+        }
+        reviewFiles.set(filename, String(new Uint8Array(data).length));
+      },
+    };
+
+    const zip = await JSZip.loadAsync(await blob.arrayBuffer());
+    zip.file("tables/records.ndjson", "");
+    const twoOrphans = [
+      JSON.stringify([{ id: 1, recordId: 99990, filename: "ok.pdf", mimeType: "application/pdf", size: 4, objectStoragePath: "ab/cd/file-0.bin" }]),
+      JSON.stringify([{ id: 2, recordId: 99991, filename: "fails.pdf", mimeType: "application/pdf", size: 4, objectStoragePath: "ab/cd/file-1.bin" }]),
+    ].join("\n");
+    zip.file("tables/attachments.ndjson", twoOrphans + "\n");
+
+    const tampered = new Blob([await zip.generateAsync({ type: "uint8array" })]);
+
+    const result = await restoreV3Backup({
+      source: blobChunks(tampered),
+      attachmentWriter: writerWithReview,
+    });
+
+    // Both orphans counted; the successful one is in review, the failing one lost.
+    expect(result.counts.orphanedAttachmentFiles).toBe(2);
+    expect(result.counts.orphanedAttachmentFilesLost).toBe(1);
+    expect(reviewFiles.has("ok.pdf")).toBe(true);
+    expect(reviewFiles.has("fails.pdf")).toBe(false);
+  });
 });
 
 describe("a failing attachment write surfaces a specific error after clear", () => {

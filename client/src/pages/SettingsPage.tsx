@@ -2305,9 +2305,12 @@ export default function SettingsPage() {
             const v3OrphanMsg = result.counts.orphanedAttachmentFiles > 0
               ? ` ${result.counts.orphanedAttachmentFiles} attachment file${result.counts.orphanedAttachmentFiles !== 1 ? "s" : ""} could not be re-linked (owning record absent) — find them in the "Needs Review" section of Settings to re-attach or delete them.`
               : "";
+            const v3LostMsg = result.counts.orphanedAttachmentFilesLost > 0
+              ? ` Warning: ${result.counts.orphanedAttachmentFilesLost} of those file${result.counts.orphanedAttachmentFilesLost !== 1 ? "s" : ""} could not be saved to Needs Review and ${result.counts.orphanedAttachmentFilesLost !== 1 ? "their" : "its"} contents were lost.`
+              : "";
             toast({
               title: "Restore Successful",
-              description: `Restored ${result.counts.records} records, ${result.counts.blockchainTransactions} transactions, ${result.counts.transactionParticipants} participants, ${result.counts.attachmentFiles} attachment files.${backfillSummary}${v3OrphanMsg}`,
+              description: `Restored ${result.counts.records} records, ${result.counts.blockchainTransactions} transactions, ${result.counts.transactionParticipants} participants, ${result.counts.attachmentFiles} attachment files.${backfillSummary}${v3OrphanMsg}${v3LostMsg}`,
               ...(result.counts.orphanedAttachmentFiles > 0 && isElectron() ? {
                 action: (
                   <button
@@ -2323,9 +2326,12 @@ export default function SettingsPage() {
             const v3OrphanMsg = result.counts.orphanedAttachmentFiles > 0
               ? ` ${result.counts.orphanedAttachmentFiles} attachment file${result.counts.orphanedAttachmentFiles !== 1 ? "s" : ""} could not be re-linked — find them in the "Needs Review" section of Settings to re-attach or delete them.`
               : "";
+            const v3LostMsg = result.counts.orphanedAttachmentFilesLost > 0
+              ? ` Warning: ${result.counts.orphanedAttachmentFilesLost} of those file${result.counts.orphanedAttachmentFilesLost !== 1 ? "s" : ""} could not be saved to Needs Review and ${result.counts.orphanedAttachmentFilesLost !== 1 ? "their" : "its"} contents were lost.`
+              : "";
             toast({
               title: "Restore Successful",
-              description: `Restored ${result.counts.records} records, ${result.counts.blockchainTransactions} transactions, ${result.counts.transactionParticipants} participants, ${result.counts.attachmentFiles} attachment files. Existing data was replaced.${v3OrphanMsg}`,
+              description: `Restored ${result.counts.records} records, ${result.counts.blockchainTransactions} transactions, ${result.counts.transactionParticipants} participants, ${result.counts.attachmentFiles} attachment files. Existing data was replaced.${v3OrphanMsg}${v3LostMsg}`,
               ...(result.counts.orphanedAttachmentFiles > 0 && isElectron() ? {
                 action: (
                   <button
