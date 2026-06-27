@@ -3,6 +3,9 @@ import Dexie, { type Table } from 'dexie';
 // Re-export all types and constants from db-types
 export * from './db-types';
 
+// Value import: used at runtime to seed the default settings row.
+import { createDefaultSettings } from './db-types';
+
 // Import types needed for the class definition
 import type {
   Record, Attachment, Tag, Category, Owner, WalletName, SeedName, WalletSoftware,
@@ -1027,39 +1030,7 @@ export const db = new KYUTXODatabase();
 db.on('ready', async () => {
   const settings = await db.settings.get('default');
   if (!settings) {
-    await db.settings.add({
-      id: 'default',
-      fieldVisibility: {
-        seedName: true,
-        walletSoftware: true,
-        privateKeyStatus: false,
-        owner: true,
-        walletName: true,
-        source: true,
-      },
-      tableColumns: {
-        tags: true,
-        categories: false,
-        walletSoftware: false,
-        seedName: false,
-        privateKeyStatus: false,
-        hasAttachments: true,
-        owner: false,
-        walletName: false,
-        source: false,
-        firstSeen: true,
-        balance: false,
-        lastTxDate: false,
-        txCount: false,
-      },
-      customFieldColumns: {},
-      theme: 'light',
-      defaultView: 'table',
-      cancelConfirmThreshold: 75,
-      privacyHistoryLimit: 30,
-      disableOrphanCheck: false,
-      fundTrailTxLimit: 2000,
-    });
+    await db.settings.add(createDefaultSettings('default'));
   } else {
     // Migrations for existing settings
     const updates: Partial<Settings> = {};

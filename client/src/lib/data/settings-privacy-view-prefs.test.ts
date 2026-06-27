@@ -51,7 +51,9 @@ const { getSettings } = await import("./settings-crud");
 beforeEach(async () => {
   testDb = new TestDb(`KYUTXO-privacy-view-prefs-${Date.now()}-${Math.random()}`);
   await testDb.open();
-  // A default settings row must exist; the update helpers are no-ops without it.
+  // Seed a default settings row for the round-trip cases. The missing-row case
+  // is exercised explicitly by clearing it; the update helpers create it on
+  // demand rather than silently no-op'ing.
   await testDb.settings.put({ id: "default" } as Settings);
 });
 
@@ -72,10 +74,14 @@ describe("updatePeelChainViewMode", () => {
     expect(reread?.peelChainViewMode).toBe("graph");
   });
 
-  it("does nothing when no settings row exists", async () => {
+  it("creates the default row on demand when none exists", async () => {
     await testDb.settings.clear();
     await updatePeelChainViewMode("list");
-    expect(await getSettings("default")).toBeUndefined();
+    const stored = await getSettings("default");
+    // The change must persist (not silently no-op) so the user isn't left
+    // thinking it applied when it didn't.
+    expect(stored).toBeDefined();
+    expect(stored?.peelChainViewMode).toBe("list");
   });
 });
 
@@ -91,10 +97,14 @@ describe("updateShowScoreBreakdown", () => {
     expect(reread?.showScoreBreakdown).toBe(false);
   });
 
-  it("does nothing when no settings row exists", async () => {
+  it("creates the default row on demand when none exists", async () => {
     await testDb.settings.clear();
     await updateShowScoreBreakdown(true);
-    expect(await getSettings("default")).toBeUndefined();
+    const stored = await getSettings("default");
+    // The change must persist (not silently no-op) so the user isn't left
+    // thinking it applied when it didn't.
+    expect(stored).toBeDefined();
+    expect(stored?.showScoreBreakdown).toBe(true);
   });
 });
 

@@ -1,4 +1,4 @@
-import { db, notifyDbChange, type Settings } from '../database';
+import { db, notifyDbChange, createDefaultSettings, type Settings } from '../database';
 
 export interface SettingsWriteOptions {
   skipNotification?: boolean;
@@ -6,6 +6,27 @@ export interface SettingsWriteOptions {
 
 export async function getSettings(id: string = 'default'): Promise<Settings | undefined> {
   return db.settings.get(id);
+}
+
+// Return the settings row, creating a canonical default row first if it is
+// missing. Use this in mutators so a settings change never silently no-ops just
+// because the 'default' row hasn't been initialized (e.g. mid-restore). `put` is
+// idempotent, so a concurrent creator simply overwrites with the same defaults.
+export async function ensureSettings(
+  id: string = 'default',
+  options?: SettingsWriteOptions
+): Promise<Settings> {
+  const existing = await db.settings.get(id);
+  if (existing) return existing;
+
+  const created = createDefaultSettings(id);
+  await db.settings.put(created);
+
+  if (!options?.skipNotification) {
+    notifyDbChange('settings');
+  }
+
+  return created;
 }
 
 export async function getAllSettings(): Promise<Settings[]> {

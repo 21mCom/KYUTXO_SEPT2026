@@ -430,6 +430,47 @@ export interface Settings {
   };
 }
 
+// Canonical shape of a freshly-created 'default' settings row. This is the single
+// source of truth used both when the database is first initialized and when a
+// settings mutator has to create the row on demand (so a missing row never makes
+// a settings change silently no-op). Keep this in sync with the read-time
+// fallbacks in `useSettings`.
+export function createDefaultSettings(id: string = 'default'): Settings {
+  return {
+    id,
+    fieldVisibility: {
+      seedName: true,
+      walletSoftware: true,
+      privateKeyStatus: false,
+      owner: true,
+      walletName: true,
+      source: true,
+    },
+    tableColumns: {
+      tags: true,
+      categories: false,
+      walletSoftware: false,
+      seedName: false,
+      privateKeyStatus: false,
+      hasAttachments: true,
+      owner: false,
+      walletName: false,
+      source: false,
+      firstSeen: true,
+      balance: false,
+      lastTxDate: false,
+      txCount: false,
+    },
+    customFieldColumns: {},
+    theme: 'light',
+    defaultView: 'table',
+    cancelConfirmThreshold: 75,
+    privacyHistoryLimit: 30,
+    disableOrphanCheck: false,
+    fundTrailTxLimit: 2000,
+  };
+}
+
 // Mirrors `EntityEntry` from privacy-entity-list.ts. Defined locally so the
 // Settings type does not pull the large bundled dataset module into type files.
 export interface EntityListSnapshotEntry {

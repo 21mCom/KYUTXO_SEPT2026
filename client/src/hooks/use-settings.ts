@@ -3,6 +3,7 @@ import { db, type Settings, type CustomField } from '@/lib/database';
 import {
   getSettings as getStoredSettings,
   updateSettings as updateStoredSettings,
+  ensureSettings as ensureStoredSettings,
 } from '@/lib/data/settings-crud';
 import {
   addCustomField as addStoredCustomField,
@@ -70,15 +71,13 @@ export function useSettings() {
 export async function updateHoverTooltipPrefs(
   changes: Partial<HoverTooltipPrefs>
 ): Promise<void> {
-  const settings = await getStoredSettings('default');
-  if (settings) {
-    const current = settings.hoverTooltipPrefs
-      ? { ...DEFAULT_HOVER_TOOLTIP_PREFS, ...settings.hoverTooltipPrefs }
-      : { ...DEFAULT_HOVER_TOOLTIP_PREFS };
-    await updateStoredSettings('default', {
-      hoverTooltipPrefs: { ...current, ...changes },
-    });
-  }
+  const settings = await ensureStoredSettings('default');
+  const current = settings.hoverTooltipPrefs
+    ? { ...DEFAULT_HOVER_TOOLTIP_PREFS, ...settings.hoverTooltipPrefs }
+    : { ...DEFAULT_HOVER_TOOLTIP_PREFS };
+  await updateStoredSettings('default', {
+    hoverTooltipPrefs: { ...current, ...changes },
+  });
 }
 
 export function useCustomFields() {
@@ -92,60 +91,50 @@ export function useCustomFields() {
 }
 
 export async function updateFieldVisibility(fields: Partial<Settings['fieldVisibility']>) {
-  const settings = await getStoredSettings('default');
-  if (settings) {
-    await updateStoredSettings('default', {
-      fieldVisibility: {
-        ...settings.fieldVisibility,
-        ...fields,
-      },
-    });
-  }
+  const settings = await ensureStoredSettings('default');
+  await updateStoredSettings('default', {
+    fieldVisibility: {
+      ...settings.fieldVisibility,
+      ...fields,
+    },
+  });
 }
 
 export async function toggleFieldVisibility(field: keyof Settings['fieldVisibility']) {
-  const settings = await getStoredSettings('default');
-  if (settings && settings.fieldVisibility) {
-    await updateStoredSettings('default', {
-      fieldVisibility: {
-        ...settings.fieldVisibility,
-        [field]: !settings.fieldVisibility[field],
-      },
-    });
-  }
+  const settings = await ensureStoredSettings('default');
+  await updateStoredSettings('default', {
+    fieldVisibility: {
+      ...settings.fieldVisibility,
+      [field]: !settings.fieldVisibility[field],
+    },
+  });
 }
 
 export async function updateTableColumns(columns: Partial<Settings['tableColumns']>) {
-  const settings = await getStoredSettings('default');
-  if (settings) {
-    await updateStoredSettings('default', {
-      tableColumns: {
-        ...settings.tableColumns,
-        ...columns,
-      },
-    });
-  }
+  const settings = await ensureStoredSettings('default');
+  await updateStoredSettings('default', {
+    tableColumns: {
+      ...settings.tableColumns,
+      ...columns,
+    },
+  });
 }
 
 export async function toggleTableColumn(column: keyof Settings['tableColumns']) {
-  const settings = await getStoredSettings('default');
-  if (settings && settings.tableColumns) {
-    await updateStoredSettings('default', {
-      tableColumns: {
-        ...settings.tableColumns,
-        [column]: !settings.tableColumns[column],
-      },
-    });
-  }
+  const settings = await ensureStoredSettings('default');
+  await updateStoredSettings('default', {
+    tableColumns: {
+      ...settings.tableColumns,
+      [column]: !settings.tableColumns[column],
+    },
+  });
 }
 
 export async function updateCancelConfirmThreshold(value: number) {
-  const settings = await getStoredSettings('default');
-  if (settings) {
-    await updateStoredSettings('default', {
-      cancelConfirmThreshold: value,
-    });
-  }
+  await ensureStoredSettings('default');
+  await updateStoredSettings('default', {
+    cancelConfirmThreshold: value,
+  });
 }
 
 export async function updatePrivacyHistoryLimit(value: number): Promise<number> {
@@ -178,52 +167,42 @@ export async function updatePrivacyHistoryLimit(value: number): Promise<number> 
 }
 
 export async function updatePeelChainViewMode(mode: 'graph' | 'list') {
-  const settings = await getStoredSettings('default');
-  if (settings) {
-    await updateStoredSettings('default', {
-      peelChainViewMode: mode,
-    });
-  }
+  await ensureStoredSettings('default');
+  await updateStoredSettings('default', {
+    peelChainViewMode: mode,
+  });
 }
 
 export async function updateShowScoreBreakdown(value: boolean) {
-  const settings = await getStoredSettings('default');
-  if (settings) {
-    await updateStoredSettings('default', {
-      showScoreBreakdown: value,
-    });
-  }
+  await ensureStoredSettings('default');
+  await updateStoredSettings('default', {
+    showScoreBreakdown: value,
+  });
 }
 
 export async function updateDisableOrphanCheck(value: boolean) {
-  const settings = await getStoredSettings('default');
-  if (settings) {
-    await updateStoredSettings('default', {
-      disableOrphanCheck: value,
-    });
-  }
+  await ensureStoredSettings('default');
+  await updateStoredSettings('default', {
+    disableOrphanCheck: value,
+  });
 }
 
 export async function updateFundTrailTxLimit(value: number) {
-  const settings = await getStoredSettings('default');
-  if (settings) {
-    await updateStoredSettings('default', {
-      fundTrailTxLimit: value,
-    });
-  }
+  await ensureStoredSettings('default');
+  await updateStoredSettings('default', {
+    fundTrailTxLimit: value,
+  });
 }
 
 export async function toggleCustomFieldColumn(slug: string) {
-  const settings = await getStoredSettings('default');
-  if (settings) {
-    const currentColumns = settings.customFieldColumns || {};
-    await updateStoredSettings('default', {
-      customFieldColumns: {
-        ...currentColumns,
-        [slug]: !currentColumns[slug],
-      },
-    });
-  }
+  const settings = await ensureStoredSettings('default');
+  const currentColumns = settings.customFieldColumns || {};
+  await updateStoredSettings('default', {
+    customFieldColumns: {
+      ...currentColumns,
+      [slug]: !currentColumns[slug],
+    },
+  });
 }
 
 // Generate slug from field name
