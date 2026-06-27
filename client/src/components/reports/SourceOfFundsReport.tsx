@@ -23,6 +23,7 @@ import { Separator } from "@/components/ui/separator";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { AlertCircle, AlertTriangle, ArrowRight, Check, Download, ExternalLink, RefreshCw, Wallet } from "lucide-react";
 import { formatBTC, truncateAddress } from "@/lib/bitcoin";
+import { AddressLink } from "@/components/AddressLink";
 
 export function SourceOfFundsReport() {
   const [selectedAddress, setSelectedAddress] = useState<string>("");
@@ -143,6 +144,7 @@ export function SourceOfFundsReport() {
           fromAddress: primaryInput?.input.address || 'Unknown',
           fromLabel: primaryInput?.record?.label || (inputs.length > 1 ? `(${inputs.length} inputs)` : undefined),
           fromOwner: primaryInput?.record?.owner,
+          fromRecordId: primaryInput?.record?.id,
           isInternalTransfer: !!isInternalTransfer,
           priceAtTime: priceData?.close,
           costBasisUSD,
@@ -388,8 +390,17 @@ export function SourceOfFundsReport() {
                       <TableRow key={`${source.txid}-${idx}`} data-testid={`row-funding-source-${idx}`}>
                         <TableCell className="font-mono text-sm">{source.date}</TableCell>
                         <TableCell>
-                          <div className="flex flex-col">
-                            <span className="font-medium">{source.fromLabel || truncateAddress(source.fromAddress, 8, 8)}</span>
+                          <div className="flex flex-col gap-1 items-start">
+                            {source.fromAddress === 'Unknown' ? (
+                              <span className="font-medium">{source.fromLabel || 'Unknown'}</span>
+                            ) : (
+                              <AddressLink
+                                address={source.fromAddress}
+                                label={source.fromLabel}
+                                recordId={source.fromRecordId}
+                                showCopy={false}
+                              />
+                            )}
                             {source.fromOwner && (
                               <span className="text-xs text-muted-foreground">{source.fromOwner}</span>
                             )}

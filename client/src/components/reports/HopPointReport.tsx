@@ -14,6 +14,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { AlertCircle, ArrowLeftRight, Check, ExternalLink, GitBranch, RefreshCw, Search, Tag, UserCheck } from "lucide-react";
 import { truncateAddress } from "@/lib/bitcoin";
 import { IMPORTANCE_TIERS } from "@/lib/provenance";
+import { AddressLink } from "@/components/AddressLink";
 
 interface HopPoint {
   address: string;
@@ -33,8 +34,10 @@ interface HopPoint {
 interface ConnectionContext {
   fromAddress: string;
   fromLabel?: string;
+  fromRecordId?: number;
   toAddress: string;
   toLabel?: string;
+  toRecordId?: number;
   txid: string;
   direction: 'incoming' | 'outgoing';
 }
@@ -194,8 +197,10 @@ export function HopPointReport() {
             connectionList.push({
               fromAddress: input.address,
               fromLabel: hopPoint.label,
+              fromRecordId: hopPoint.recordId,
               toAddress: output.address,
               toLabel: toRecord?.label,
+              toRecordId: toRecord?.id,
               txid,
               direction: 'outgoing',
             });
@@ -205,8 +210,10 @@ export function HopPointReport() {
             connectionList.push({
               fromAddress: input.address,
               fromLabel: fromRecord?.label,
+              fromRecordId: fromRecord?.id,
               toAddress: output.address,
               toLabel: hopPoint.label,
+              toRecordId: hopPoint.recordId,
               txid,
               direction: 'incoming',
             });
@@ -452,11 +459,19 @@ export function HopPointReport() {
                                 <ExternalLink className="h-3 w-3" />
                               </a>
                             </div>
-                            <div className="flex items-center gap-2 text-muted-foreground">
-                              <span className="font-mono">{truncateAddress(conn.fromAddress, 6, 6)}</span>
+                            <div className="flex items-center gap-2 text-muted-foreground flex-wrap">
+                              <AddressLink
+                                address={conn.fromAddress}
+                                recordId={conn.fromRecordId}
+                                showCopy={false}
+                              />
                               {conn.fromLabel && <span className="text-xs">({conn.fromLabel})</span>}
                               <GitBranch className="h-3 w-3" />
-                              <span className="font-mono">{truncateAddress(conn.toAddress, 6, 6)}</span>
+                              <AddressLink
+                                address={conn.toAddress}
+                                recordId={conn.toRecordId}
+                                showCopy={false}
+                              />
                               {conn.toLabel && <span className="text-xs">({conn.toLabel})</span>}
                             </div>
                           </div>

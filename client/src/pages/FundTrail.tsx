@@ -63,6 +63,7 @@ import {
   triggerDownload,
   flowPath,
 } from "@/lib/data/fund-trail-export";
+import { AddressLink } from "@/components/AddressLink";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -152,23 +153,16 @@ function DetailRow({
   blockTime: number;
   recordId?: number;
 }) {
-  const { openRecordPreview, openRecordPreviewByAddress } = useRecordPreview();
+  const { openRecordPreviewByAddress } = useRecordPreview();
 
   return (
     <div className="flex flex-col gap-0.5 py-1 border-t border-border/40 first:border-t-0 text-xs">
       <div className="flex items-center gap-2 flex-wrap">
-        <button
-          onClick={() =>
-            recordId != null
-              ? openRecordPreview(recordId)
-              : openRecordPreviewByAddress(address)
-          }
-          className="font-mono text-primary hover:underline truncate max-w-[220px] text-left"
-          title={address}
-          data-testid={`fund-trail-address-${address.slice(0, 12)}`}
-        >
-          {address.slice(0, 16)}…{address.slice(-8)}
-        </button>
+        <AddressLink
+          address={address}
+          recordId={recordId}
+          showCopy={false}
+        />
         <span className="text-muted-foreground">{formatBtc(amount)}</span>
         {blockTime > 0 && (
           <span className="text-muted-foreground">{formatDate(blockTime)}</span>

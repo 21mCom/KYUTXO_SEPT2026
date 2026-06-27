@@ -23,6 +23,7 @@ export interface FundingSource {
   fromAddress: string;
   fromLabel?: string;
   fromOwner?: string;
+  fromRecordId?: number;
   isInternalTransfer: boolean;
   priceAtTime?: number;
   costBasisUSD?: number;
