@@ -90,7 +90,7 @@ import { runPrivacyAudit } from '../privacy-audit';
 // copy. If the export adds, drops, or renames a top-level key, summary field,
 // or finding field, the assertions below catch it.
 import { mapFinding, buildPrivacyReport, buildPrivacyTextReport } from '../privacy-report-export';
-import { FINDING_TYPE_LABELS, type PrivacyAuditResult } from '../privacy-audit';
+import { FINDING_TYPE_LABELS, type PrivacyAuditResult, type PrivacyFinding } from '../privacy-audit';
 // buildPrintableReport is the SAME function Reports.tsx (exportPdf) feeds into the
 // print window, so these tests guard the real printable HTML — not a copy. If the
 // HTML drops the header, summary, severity chips, scope, or any per-finding field,
@@ -998,5 +998,181 @@ describe('privacy report export — JSON preserves malicious entity strings verb
     expect(serialized).not.toContain('&lt;');
     expect(serialized).not.toContain('&quot;');
     expect(serialized).not.toContain('&amp;');
+  });
+});
+
+// The plain-text (.txt) report is line-based: every section marker, header, and
+// per-finding field is pushed as its own line and joined with "\n". Like the JSON
+// export it must carry user/data-controlled strings VERBATIM (it never escapes),
+// but it has a layout contract the other exports don't: an attacker-supplied
+// field that contains quotes, backslashes, angle brackets, ampersands — or, most
+// dangerously, an embedded newline — must not corrupt the surrounding structure
+// (e.g. an injected newline shifting subsequent lines or forging a section
+// marker). These tests build the report with buildPrivacyTextReport (the SAME
+// function Reports.tsx uses) from a finding/citation payload stuffed with those
+// characters and prove (a) each field's text survives verbatim and (b) the fixed
+// header/severity/score/findings/citation/footer scaffolding stays intact.
+describe('privacy report export — plain text preserves malicious entity strings without corrupting layout', () => {
+  // Every special character: double/single quotes, backslashes, angle brackets,
+  // ampersands, a tab, a literal backslash-quote, AND embedded newlines — the
+  // line-based layout's worst case, since a stray "\n" would shift later lines.
+  const NASTY =
+    String.raw`Evil"Corp\Inc <b>x</b> & 'co' ` + '\n\ttab \\" end\nINJECTED LINE';
+  const NASTY_URL = String.raw`https://example.com/p?a=1&b=2&q="<x>"\z`;
+
+  // A direct ENTITY_* finding (so it carries a Source Citations block) whose
+  // every text field — description, correction, address, and each citation
+  // field — is the nasty payload.
+  const ENTITY_FINDING = {
+    type: 'ENTITY_SCAM',
+    severity: 'CRITICAL',
+    description: `desc ${NASTY}`,
+    correction: `fix ${NASTY}`,
+    txids: ['tx_scam'],
+    addresses: [`addr ${NASTY}`],
+    scoreDelta: -28,
+    details: {
+      citations: [
+        {
+          name: `name ${NASTY}`,
+          address: `caddr ${NASTY}`,
+          categoryLabel: `cat ${NASTY}`,
+          sourceNote: NASTY_URL,
+        },
+      ],
+    },
+  } as unknown as PrivacyFinding;
+
+  // A non-entity warning (no citations) whose description/correction also carry
+  // the payload, so both the `findings` and `warnings` paths are covered.
+  const FINGERPRINT_WARNING = {
+    type: 'FINGERPRINT_NVERSION',
+    severity: 'LOW',
+    description: `warn desc ${NASTY}`,
+    correction: `warn fix ${NASTY}`,
+    txids: ['tx_fp'],
+    addresses: [],
+    scoreDelta: -0.4,
+    details: {},
+  } as unknown as PrivacyFinding;
+
+  const maliciousResult = {
+    grade: 'C+',
+    score: 72,
+    transactionsAnalyzed: 1234,
+    addressesScanned: 56,
+    isClean: false,
+    fingerprintCoverage: 1,
+    needsResync: false,
+    findings: [ENTITY_FINDING],
+    warnings: [FINGERPRINT_WARNING],
+    scoreWaterfall: [
+      { label: 'Base Score', findingType: 'BASE', delta: 0, runningScore: 100, count: 0 },
+      { label: 'Known Scam', findingType: 'ENTITY_SCAM', delta: -28, runningScore: 72, count: 1 },
+    ],
+  } as unknown as PrivacyAuditResult;
+
+  const FIXED_GENERATED_AT = 'Jan 1, 2026, 12:00:00 PM';
+
+  function build() {
+    return buildPrivacyTextReport(
+      maliciousResult,
+      { owner: null, wallet: null },
+      FIXED_GENERATED_AT,
+    );
+  }
+
+  it('passes the entity finding description, correction, and address through verbatim', () => {
+    const text = build();
+    // Each field — newlines, quotes, backslashes, angle brackets and all — is
+    // present byte-for-byte. No escaping, stripping, or newline-flattening.
+    expect(text).toContain(`desc ${NASTY}`);
+    expect(text).toContain(`fix ${NASTY}`);
+    expect(text).toContain(`addr ${NASTY}`);
+  });
+
+  it('passes every citation field through verbatim, URL included', () => {
+    const text = build();
+    expect(text).toContain(`name ${NASTY}`);
+    expect(text).toContain(`cat ${NASTY}`);
+    expect(text).toContain(`caddr ${NASTY}`);
+    // The source URL's quotes, ampersands, angle brackets and backslash survive
+    // untouched — never HTML-escaped, percent-encoded, or otherwise mangled.
+    expect(text).toContain(NASTY_URL);
+  });
+
+  it('passes the warning description and correction through verbatim', () => {
+    const text = build();
+    expect(text).toContain(`warn desc ${NASTY}`);
+    expect(text).toContain(`warn fix ${NASTY}`);
+  });
+
+  it('does not HTML-escape any field — the raw special characters remain', () => {
+    const text = build();
+    // A regression that ran the text values through the HTML escaper would turn
+    // these into &lt; / &quot; / &amp; entities. Assert the raw characters remain
+    // and no HTML entity leaked into the plain-text artifact.
+    expect(text).toContain('<b>');
+    expect(text).toContain('"');
+    expect(text).toContain('\\');
+    expect(text).toContain('&');
+    expect(text).not.toContain('&lt;');
+    expect(text).not.toContain('&quot;');
+    expect(text).not.toContain('&amp;');
+  });
+
+  it('keeps the fixed section scaffolding intact as whole lines despite injected newlines', () => {
+    const text = build();
+    const lines = text.split('\n');
+    const sep = '='.repeat(60);
+    const sub = '-'.repeat(60);
+
+    // Header block: the two separator rules bracket the title, in order, as exact
+    // whole lines — an injected "\n…" inside a field cannot forge or displace them.
+    expect(lines[0]).toBe(sep);
+    expect(lines[1]).toBe('PRIVACY AUDIT REPORT');
+    expect(lines[2]).toBe(sep);
+    expect(lines[3]).toBe(`Generated: ${FIXED_GENERATED_AT}`);
+
+    // Every fixed section marker still exists as its own untouched whole line.
+    for (const marker of [
+      'SEVERITY BREAKDOWN',
+      'SCORE BREAKDOWN',
+      `FINDINGS & WARNINGS (2)`,
+      '   Source Citations:',
+      'KYUTXO Privacy Audit · Offline-first compliance artifact.',
+      'Citation URLs are shown as plain text and are never fetched.',
+    ]) {
+      expect(lines).toContain(marker);
+    }
+    // The separator rule appears as a whole line the expected number of times
+    // (two header + section dividers + footer), proving the injected payload did
+    // not introduce or swallow any structural rule.
+    expect(lines.filter((l) => l === sep).length).toBeGreaterThanOrEqual(3);
+    expect(lines.filter((l) => l === sub).length).toBeGreaterThanOrEqual(3);
+
+    // The numbered finding/warning headers are still well-formed whole lines,
+    // not merged into a neighbouring field by a stray newline.
+    expect(lines).toContain('1. [Critical] Scam Address Contact');
+    expect(lines).toContain('2. [Low] Wallet Fingerprint (nVersion)');
+
+    // The closing footer separator is the final line — proof nothing after the
+    // payload shifted the document's end.
+    expect(lines[lines.length - 1]).toBe(sep);
+  });
+
+  it('emits the attacker-injected newline as an extra body line but never as a forged section marker', () => {
+    const text = build();
+    const lines = text.split('\n');
+    // The payload's embedded "INJECTED LINE" does appear (verbatim pass-through),
+    // but only ever as ordinary indented body content — it never collides with or
+    // impersonates a real structural marker line.
+    expect(text).toContain('INJECTED LINE');
+    expect(lines).not.toContain('PRIVACY AUDIT REPORT INJECTED LINE');
+    // No structural marker line was corrupted into carrying the injected text.
+    const markerLines = ['PRIVACY AUDIT REPORT', 'SEVERITY BREAKDOWN', 'SCORE BREAKDOWN'];
+    for (const m of markerLines) {
+      expect(lines.filter((l) => l === m)).toHaveLength(1);
+    }
   });
 });
