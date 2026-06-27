@@ -13,6 +13,7 @@ import {
 } from './database';
 import { getParticipantsByTxid, bulkAddUtxoLineage, addCustodySegment } from './dataFacade';
 import { getActivityBus } from './activity-bus';
+import { format } from 'date-fns';
 
 // Generate a simple UUID for segment IDs
 function generateSegmentId(): string {
@@ -966,6 +967,17 @@ async function generateIntegrityHash(bundle: EvidenceBundle): Promise<string> {
   const hashBuffer = await crypto.subtle.digest('SHA-256', data);
   const hashArray = Array.from(new Uint8Array(hashBuffer));
   return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+// Build the dated download filename for an evidence bundle / continuity
+// certificate export. The date stamp is an ISO-style YYYY-MM-DD (date only),
+// never a raw epoch or a full ISO timestamp carrying the time portion.
+export function evidenceBundleFilename(
+  ext: 'json' | 'pdf',
+  options: { partial?: boolean; date?: Date } = {}
+): string {
+  const dateStr = format(options.date ?? new Date(), 'yyyy-MM-dd');
+  return `evidence-bundle${options.partial ? '-partial' : ''}-${dateStr}.${ext}`;
 }
 
 // Export evidence bundle to file

@@ -6,6 +6,7 @@ import {
   generateEvidenceBundle, 
   downloadEvidenceBundle,
   downloadEvidenceBundlePdf,
+  evidenceBundleFilename,
   PartialBundleError,
   type EvidenceBundle,
   type EvidenceBundleOptions,
@@ -236,7 +237,6 @@ export function ContinuityCertificateReport() {
       };
       
       const bundle = await generateEvidenceBundle(options, handleProgress, controller.signal);
-      const dateStr = format(new Date(), 'yyyy-MM-dd');
 
       if (controller.signal.aborted) {
         if (bundle.isPartial && bundle.summary.totalSegments > 0) {
@@ -261,9 +261,9 @@ export function ContinuityCertificateReport() {
       }
       
       if (exportFormat === 'pdf') {
-        await downloadEvidenceBundlePdf(bundle, `evidence-bundle-${dateStr}.pdf`);
+        await downloadEvidenceBundlePdf(bundle, evidenceBundleFilename('pdf'));
       } else {
-        downloadEvidenceBundle(bundle, `evidence-bundle-${dateStr}.json`);
+        downloadEvidenceBundle(bundle, evidenceBundleFilename('json'));
       }
       await clearPartialBundle(selectedSegmentIds);
       setExportProgress(null);
@@ -290,11 +290,10 @@ export function ContinuityCertificateReport() {
   const downloadPartialBundle = async (bundle: EvidenceBundle, exportFormat: 'json' | 'pdf') => {
     setIsDownloadingPartial(true);
     try {
-      const dateStr = format(new Date(), 'yyyy-MM-dd');
       if (exportFormat === 'pdf') {
-        await downloadEvidenceBundlePdf(bundle, `evidence-bundle-partial-${dateStr}.pdf`);
+        await downloadEvidenceBundlePdf(bundle, evidenceBundleFilename('pdf', { partial: true }));
       } else {
-        downloadEvidenceBundle(bundle, `evidence-bundle-partial-${dateStr}.json`);
+        downloadEvidenceBundle(bundle, evidenceBundleFilename('json', { partial: true }));
       }
       toast({
         title: "Partial download complete",
