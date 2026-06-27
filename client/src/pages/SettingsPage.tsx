@@ -2583,6 +2583,7 @@ export default function SettingsPage() {
       let attachmentFilesRestored = 0;
       let attachmentFilesErrors = 0;
       let legacyOrphanedFilesRouted = 0;
+      let legacyOrphanedFilesLost = 0;
       const attachmentsFolder = zip.folder("attachments");
       if (attachmentsFolder) {
         const filePromises: Promise<void>[] = [];
@@ -2597,14 +2598,27 @@ export default function SettingsPage() {
                 // owning record). If so, route to the Needs Review folder.
                 const orphanFilename = legacyOrphanedRelPaths.get(relativePath);
                 if (orphanFilename !== undefined) {
+                  // Best-effort: a single Needs Review write failure must not
+                  // abort the restore. Track lost bytes separately so the
+                  // post-restore toast can warn the user instead of silently
+                  // dropping recovered evidence.
                   if (isElectron()) {
-                    const api = getElectronAPI();
-                    const result = await api.writeNeedsReview(orphanFilename, fileData);
-                    if (!result.success) {
-                      throw new Error(result.error ?? `Failed to write ${orphanFilename} to Needs Review folder`);
+                    try {
+                      const api = getElectronAPI();
+                      const result = await api.writeNeedsReview(orphanFilename, fileData);
+                      if (!result.success) {
+                        throw new Error(result.error ?? `Failed to write ${orphanFilename} to Needs Review folder`);
+                      }
+                      legacyOrphanedFilesRouted++;
+                    } catch (err) {
+                      console.error(`Failed to route orphaned attachment file ${relativePath} to Needs Review:`, err);
+                      legacyOrphanedFilesLost++;
                     }
+                  } else {
+                    // Web mode has no Needs Review folder (the write is a no-op),
+                    // mirroring the v3 restore path which counts these as routed.
+                    legacyOrphanedFilesRouted++;
                   }
-                  legacyOrphanedFilesRouted++;
                   return;
                 }
 
@@ -2814,9 +2828,12 @@ export default function SettingsPage() {
       const legacyOrphanSuffix = legacyOrphanCount > 0
         ? ` ${legacyOrphanCount} attachment file${legacyOrphanCount !== 1 ? "s" : ""} could not be re-linked (owning record absent) — find them in the "Needs Review" section of Settings to re-attach or delete them.`
         : "";
+      const legacyOrphanLostSuffix = legacyOrphanedFilesLost > 0
+        ? ` Warning: ${legacyOrphanedFilesLost} recovered attachment file${legacyOrphanedFilesLost !== 1 ? "s" : ""} could not be saved to Needs Review and ${legacyOrphanedFilesLost !== 1 ? "their" : "its"} contents were lost.`
+        : "";
       toast({
         title: "Restore Successful",
-        description: baseMessage + backfillSuffix + legacyOrphanSuffix,
+        description: baseMessage + backfillSuffix + legacyOrphanSuffix + legacyOrphanLostSuffix,
         ...(legacyOrphanCount > 0 && isElectron() ? {
           action: (
             <button
