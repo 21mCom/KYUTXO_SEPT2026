@@ -477,3 +477,209 @@ describe("TransactionSyncService.resolvePrevouts → cancelled run still recompu
     expect(sAfter?.statsComputedAt).toBeTruthy();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Task #970: the full address-sync flow shares the same "cancel at a committed
+// batch boundary, re-run resumes the remainder" contract that #871 proved for
+// the scoped orphan rebuild (runTxidBackfill) and #695 for the whole-DB pass
+// (resolveAllBlankInputAddresses). This is the missing end-to-end equivalent
+// for resolvePrevouts — the prevout-resolution step the address sync drives.
+//
+// A regression here would silently leave input addresses blank after a
+// paused/resumed sync. The test proves a cancel mid prevout-resolution (after
+// at least one committed fetch chunk) followed by a fresh re-run:
+//   - resolves exactly the inputs the first pass left blank,
+//   - leaves the previously-committed inputs and blockchain rows untouched,
+//   - sums resolved counts correctly across the two runs, and
+//   - never duplicates a participant row.
+// ---------------------------------------------------------------------------
+
+const RESUME_SPEND = (n: number) => `7${n}`.padEnd(64, "c").slice(0, 64);
+const RESUME_SRC = (n: number) => `6${n}`.padEnd(64, "d").slice(0, 64);
+const RESUME_ADDR = (n: number) => `bc1qresumesrc${n}`;
+const RESUME_VALUE = (n: number) => 50000 + n;
+
+describe("TransactionSyncService.resolvePrevouts → cancel then re-run resumes the remainder", () => {
+  beforeEach(async () => {
+    await testDb.records.clear();
+    await testDb.blockchainTransactions.clear();
+    await testDb.transactionParticipants.clear();
+    await testDb.addressSyncState.clear();
+  });
+
+  it("re-running after a mid-fetch cancel resolves only the leftover blank inputs, never re-touching committed rows or double-writing", async () => {
+    const TOTAL = 8;
+    const FIRST_CHUNK = 4; // mirrors resolvePrevouts' fetch CONCURRENCY
+
+    // Source-tx → {address, value} lookup the fake provider serves, plus the
+    // reverse prevTxid → index map used to verify per-row data on disk.
+    const srcByTxid = new Map<string, { address: string; value: number }>();
+    const indexBySrc = new Map<string, number>();
+    for (let i = 1; i <= TOTAL; i++) {
+      srcByTxid.set(RESUME_SRC(i), { address: RESUME_ADDR(i), value: RESUME_VALUE(i) });
+      indexBySrc.set(RESUME_SRC(i), i);
+    }
+
+    // An address record per source so each resolved input links back to a
+    // record id — lets us prove committed rows keep their full per-row data.
+    const recordIdByAddr = new Map<string, number>();
+    for (let i = 1; i <= TOTAL; i++) {
+      const id = (await testDb.records.add(addrRecord(RESUME_ADDR(i)))) as number;
+      recordIdByAddr.set(RESUME_ADDR(i), id);
+    }
+
+    // A blockchain row per spend tx — resolvePrevouts must never touch these.
+    await testDb.blockchainTransactions.bulkAdd(
+      Array.from({ length: TOTAL }, (_, k) => ({
+        txid: RESUME_SPEND(k + 1),
+        blockHeight: 100 + k,
+        blockTime: 1000 + k,
+        syncedAt: Date.now(),
+      } as BlockchainTransaction)),
+    );
+
+    // Eight fetch-only spend inputs (blank address, distinct fetchable prevTxid)
+    // each with one output, so the txids look realistic. Inputs are added before
+    // outputs so they sort ahead by primary key, keeping fetch order
+    // deterministic: fetch chunk 0 = sources 1-4, chunk 1 = sources 5-8.
+    const inputs: TransactionParticipant[] = [];
+    const outputs: TransactionParticipant[] = [];
+    for (let i = 1; i <= TOTAL; i++) {
+      inputs.push({
+        txid: RESUME_SPEND(i),
+        role: "input",
+        address: "",
+        amount: 0,
+        prevTxid: RESUME_SRC(i),
+        prevVout: 0,
+      } as TransactionParticipant);
+      outputs.push({
+        txid: RESUME_SPEND(i),
+        role: "output",
+        vout: 0,
+        address: `bc1qdest${i}`,
+        amount: 10000,
+      } as TransactionParticipant);
+    }
+    await testDb.transactionParticipants.bulkAdd(inputs);
+    await testDb.transactionParticipants.bulkAdd(outputs);
+
+    const makeProvider = (onFirstCall?: () => void) => {
+      let calls = 0;
+      return {
+        getTransaction: vi.fn(async (txid: string) => {
+          calls++;
+          if (calls === 1) onFirstCall?.();
+          const src = srcByTxid.get(txid);
+          return {
+            vout: [
+              {
+                n: 0,
+                value: src?.value ?? 0,
+                scriptpubkey_address: src?.address ?? "",
+                scriptpubkey_type: "v0_p2wpkh",
+              },
+            ],
+          };
+        }),
+      };
+    };
+
+    // ---- First pass: abort on the very first fetch. The in-flight first chunk
+    // (4) still settles and is committed; the second chunk never starts. ----
+    const controller = new AbortController();
+    const service1 = new TransactionSyncService();
+    (service1 as any).provider = makeProvider(() => controller.abort());
+
+    const firstRun = await service1.resolvePrevouts(undefined, {
+      signal: controller.signal,
+    });
+
+    expect(firstRun.cancelled).toBe(true);
+    expect(firstRun.resolved).toBe(FIRST_CHUNK);
+    expect(firstRun.fetchedFromNode).toBe(FIRST_CHUNK);
+
+    const afterFirst = await testDb.transactionParticipants
+      .where("role")
+      .equals("input")
+      .toArray();
+    const committed = afterFirst.filter((p) => p.address);
+    const blankAfterFirst = afterFirst.filter((p) => !p.address);
+    expect(committed).toHaveLength(FIRST_CHUNK);
+    expect(blankAfterFirst).toHaveLength(TOTAL - FIRST_CHUNK);
+
+    // The committed inputs are exactly sources 1-4 and carry the right per-row
+    // data (address + amount + record link), not a blanket fill.
+    const resolvedIndices = new Set<number>();
+    const committedSnap = new Map<
+      number,
+      { address: string; amount: number; recordId?: number }
+    >();
+    for (const p of committed) {
+      const i = indexBySrc.get(p.prevTxid!)!;
+      resolvedIndices.add(i);
+      expect(p.address).toBe(RESUME_ADDR(i));
+      expect(Number(p.amount)).toBe(RESUME_VALUE(i));
+      expect(p.recordId).toBe(recordIdByAddr.get(RESUME_ADDR(i)));
+      committedSnap.set(p.id as number, {
+        address: p.address,
+        amount: Number(p.amount),
+        recordId: p.recordId,
+      });
+    }
+    expect([...resolvedIndices].sort((a, b) => a - b)).toEqual([1, 2, 3, 4]);
+
+    // ---- Second pass: a fresh, non-aborted signal + a provider that does not
+    // cancel. Only the still-blank inputs (sources 5-8) should resolve. ----
+    const service2 = new TransactionSyncService();
+    (service2 as any).provider = makeProvider();
+
+    const secondRun = await service2.resolvePrevouts(undefined, {
+      signal: new AbortController().signal,
+    });
+
+    expect(secondRun.cancelled).toBe(false);
+    // Exactly the leftover inputs resolved — no overlap with the first run.
+    expect(secondRun.resolved).toBe(TOTAL - FIRST_CHUNK);
+    expect(secondRun.fetchedFromNode).toBe(TOTAL - FIRST_CHUNK);
+    // Resolved counts sum to the full set across the two runs.
+    expect(firstRun.resolved + secondRun.resolved).toBe(TOTAL);
+
+    // Every input is now attributed on disk — nothing left blank after resume —
+    // and each carries the distinct data of the source output it spends.
+    const afterSecond = await testDb.transactionParticipants
+      .where("role")
+      .equals("input")
+      .toArray();
+    expect(afterSecond).toHaveLength(TOTAL);
+    expect(afterSecond.every((p) => p.address)).toBe(true);
+    for (const p of afterSecond) {
+      const i = indexBySrc.get(p.prevTxid!)!;
+      expect(p.address).toBe(RESUME_ADDR(i));
+      expect(Number(p.amount)).toBe(RESUME_VALUE(i));
+      expect(p.recordId).toBe(recordIdByAddr.get(RESUME_ADDR(i)));
+    }
+
+    // The rows committed by the FIRST pass are byte-for-byte unchanged: the
+    // re-run never re-wrote already-resolved work.
+    for (const [id, snap] of committedSnap) {
+      const row = await testDb.transactionParticipants.get(id);
+      expect(row?.address).toBe(snap.address);
+      expect(Number(row?.amount)).toBe(snap.amount);
+      expect(row?.recordId).toBe(snap.recordId);
+    }
+
+    // No participant rows were duplicated: still exactly 8 inputs + 8 outputs.
+    expect(await testDb.transactionParticipants.count()).toBe(TOTAL * 2);
+
+    // Blockchain rows are untouched by prevout resolution across both passes.
+    expect(await testDb.blockchainTransactions.count()).toBe(TOTAL);
+    for (let i = 1; i <= TOTAL; i++) {
+      const row = await testDb.blockchainTransactions
+        .where("txid")
+        .equals(RESUME_SPEND(i))
+        .first();
+      expect(row?.blockHeight).toBe(100 + (i - 1));
+    }
+  });
+});
