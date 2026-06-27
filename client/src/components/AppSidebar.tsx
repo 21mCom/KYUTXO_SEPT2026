@@ -39,7 +39,8 @@ import {
   Eye,
   GitBranch,
   FlaskConical,
-  ChevronsLeftRight
+  ChevronsLeftRight,
+  CalendarRange
 } from "lucide-react";
 import logoUrl from "@/assets/foot_1764929618997.png";
 import { version as APP_VERSION } from "../../../package.json";
@@ -115,6 +116,7 @@ const navGroups: NavGroup[] = [
       { title: "Quantum Risk", url: "/quantum-risk", icon: ShieldAlert },
       { title: "Reports", url: "/reports", icon: ClipboardList },
       { title: "Statement", url: "/statement", icon: FileText },
+      { title: "Annual Activity", url: "/annual-activity", icon: CalendarRange },
       { title: "Lightning", url: "/lightning-speculator", icon: Zap },
     ]
   },

@@ -65,6 +65,7 @@ import NetworkAnalysis from "@/pages/NetworkAnalysis";
 import FundTrail from "@/pages/FundTrail";
 import EngineDiagnostics from "@/pages/EngineDiagnostics";
 import DatabaseDoctor from "@/pages/DatabaseDoctor";
+import AnnualActivityReport from "@/pages/AnnualActivityReport";
 import NotFound from "@/pages/not-found";
 
 function AppRoutes() {
@@ -118,6 +119,7 @@ function AppRoutes() {
       <Route path="/fund-trail" component={FundTrail} />
       <Route path="/engine-diagnostics" component={EngineDiagnostics} />
       <Route path="/database-doctor" component={DatabaseDoctor} />
+      <Route path="/annual-activity" component={AnnualActivityReport} />
       <Route component={NotFound} />
     </Switch>
   );
