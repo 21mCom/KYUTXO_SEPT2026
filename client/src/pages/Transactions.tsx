@@ -315,7 +315,7 @@ export function TransactionCard({
   );
 }
 
-function VirtualizedTransactionList({
+export function VirtualizedTransactionList({
   transactions,
   expandedTxs,
   toggleExpanded,
