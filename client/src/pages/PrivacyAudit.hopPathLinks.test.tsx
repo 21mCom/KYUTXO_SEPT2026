@@ -385,4 +385,43 @@ describe("FindingCard proximity hop-path deep-dive interaction", () => {
     expect(efficiency.textContent).toBe("—");
     expect(efficiency.textContent).not.toBe("0%");
   });
+
+  it("surfaces a visible error and Retry affordance (not a stuck loading state) when the worker errors", async () => {
+    const hopPath = ["bc1qhopA", "bc1qhopB", "bc1qhopC"];
+    const hopTxids = [TX(1), TX(2)]; // one per pair → 2
+
+    renderCard(proximityFinding({ details: { hopPath, hopTxids } }));
+    fireEvent.click(screen.getByTestId("button-toggle-details"));
+
+    // Open the deep-dive for the second hop's txid.
+    const second8 = TX(2).slice(0, 8);
+    fireEvent.click(screen.getByTestId(`button-deep-dive-${second8}`));
+
+    const dialog = await screen.findByTestId("dialog-deep-dive");
+    expect(within(dialog).getByText(TX(2))).toBeTruthy();
+
+    // The dialog auto-runs analysis: data loads and the worker is posted to.
+    await waitFor(() => {
+      expect(lastWorker).not.toBeNull();
+      expect(lastWorker!.postMessage).toHaveBeenCalled();
+    });
+
+    // Drive the worker's failure path instead of onmessage — the calculation
+    // crashed (e.g. the worker threw and reported via onerror).
+    act(() => {
+      lastWorker!.onerror!({ message: "Boltzmann worker crashed: out of memory" });
+    });
+
+    // The user sees a clear error notice rather than an empty/hung dialog…
+    const message = await within(dialog).findByTestId("text-deep-dive-message");
+    expect(message.textContent).toMatch(/couldn't analyse this transaction/i);
+
+    // …and is offered a Retry affordance to try again.
+    expect(within(dialog).getByTestId("button-retry-deep-dive")).toBeTruthy();
+
+    // The dialog is no longer stuck loading: neither the inline loading status
+    // nor the spinning Analyse button remain, and no results were rendered.
+    expect(within(dialog).queryByTestId("status-deep-dive-loading")).toBeNull();
+    expect(within(dialog).queryByTestId("container-boltzmann-result")).toBeNull();
+  });
 });
