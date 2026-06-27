@@ -11,7 +11,7 @@
 // export builders, and assert exactly which runs are handed to them.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, cleanup, waitFor, within } from "@testing-library/react";
 
 // The card reads its runs through useLiveQuery; feed it a fixed fixture so the
 // test never touches IndexedDB.
@@ -271,5 +271,103 @@ describe("PrivacyHistoryCard export download plumbing", () => {
     expect(URL.revokeObjectURL).toHaveBeenCalledTimes(1);
     expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:fake");
     expect(capturedAnchor!.isConnected).toBe(false);
+  });
+});
+
+describe("PrivacyHistoryCard scope badges", () => {
+  // Four runs covering every scope combination so each row's badge can be
+  // asserted independently. A run is "scoped" when it carries an owner and/or a
+  // walletName; an unscoped (full-vault) run carries neither and shows "All".
+  const RUN_OWNER_ONLY: PrivacyAuditHistoryEntry = {
+    ...makeRun(10, TS_JAN, 70),
+    owner: "Alice",
+  };
+  const RUN_WALLET_ONLY: PrivacyAuditHistoryEntry = {
+    ...makeRun(11, TS_MAR, 75),
+    walletName: "Cold Storage",
+  };
+  const RUN_BOTH: PrivacyAuditHistoryEntry = {
+    ...makeRun(12, TS_JUN, 80),
+    owner: "Bob",
+    walletName: "Hot Wallet",
+  };
+  const RUN_NEITHER: PrivacyAuditHistoryEntry = makeRun(13, TS_JUN + 1000, 85);
+
+  /** Scope the badge queries to a single history row by entry id. */
+  function row(id: number): ReturnType<typeof within> {
+    return within(screen.getByTestId(`row-history-${id}`));
+  }
+
+  it("shows an Owner badge (and no wallet/all badges) for an owner-only run", () => {
+    renderCard([RUN_OWNER_ONLY]);
+
+    const r = row(10);
+    expect(r.getByTestId("badge-history-scope-owner").textContent).toContain(
+      "Owner: Alice",
+    );
+    expect(r.queryByTestId("badge-history-scope-wallet")).toBeNull();
+    expect(r.queryByTestId("badge-history-scope-all")).toBeNull();
+  });
+
+  it("shows a Wallet badge (and no owner/all badges) for a wallet-only run", () => {
+    renderCard([RUN_WALLET_ONLY]);
+
+    const r = row(11);
+    expect(r.getByTestId("badge-history-scope-wallet").textContent).toContain(
+      "Wallet: Cold Storage",
+    );
+    expect(r.queryByTestId("badge-history-scope-owner")).toBeNull();
+    expect(r.queryByTestId("badge-history-scope-all")).toBeNull();
+  });
+
+  it("shows both Owner and Wallet badges (and no all badge) when both are set", () => {
+    renderCard([RUN_BOTH]);
+
+    const r = row(12);
+    expect(r.getByTestId("badge-history-scope-owner").textContent).toContain(
+      "Owner: Bob",
+    );
+    expect(r.getByTestId("badge-history-scope-wallet").textContent).toContain(
+      "Wallet: Hot Wallet",
+    );
+    expect(r.queryByTestId("badge-history-scope-all")).toBeNull();
+  });
+
+  it("shows the All badge (and no scope badges) for an unscoped full-vault run", () => {
+    renderCard([RUN_NEITHER]);
+
+    const r = row(13);
+    expect(r.getByTestId("badge-history-scope-all").textContent).toContain("All");
+    expect(r.queryByTestId("badge-history-scope-owner")).toBeNull();
+    expect(r.queryByTestId("badge-history-scope-wallet")).toBeNull();
+  });
+
+  it("labels each row independently when all scope kinds are present at once", () => {
+    renderCard([RUN_OWNER_ONLY, RUN_WALLET_ONLY, RUN_BOTH, RUN_NEITHER]);
+
+    // Owner-only row
+    expect(row(10).getByTestId("badge-history-scope-owner").textContent).toContain(
+      "Owner: Alice",
+    );
+    expect(row(10).queryByTestId("badge-history-scope-all")).toBeNull();
+
+    // Wallet-only row
+    expect(row(11).getByTestId("badge-history-scope-wallet").textContent).toContain(
+      "Wallet: Cold Storage",
+    );
+    expect(row(11).queryByTestId("badge-history-scope-all")).toBeNull();
+
+    // Both row
+    expect(row(12).getByTestId("badge-history-scope-owner").textContent).toContain(
+      "Owner: Bob",
+    );
+    expect(row(12).getByTestId("badge-history-scope-wallet").textContent).toContain(
+      "Wallet: Hot Wallet",
+    );
+
+    // Unscoped row
+    expect(row(13).getByTestId("badge-history-scope-all").textContent).toContain("All");
+    expect(row(13).queryByTestId("badge-history-scope-owner")).toBeNull();
+    expect(row(13).queryByTestId("badge-history-scope-wallet")).toBeNull();
   });
 });
