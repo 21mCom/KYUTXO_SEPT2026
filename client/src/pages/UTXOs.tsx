@@ -129,7 +129,7 @@ function formatUsdValue(value: number | undefined): string {
   }).format(value);
 }
 
-interface UTXO {
+export interface UTXO {
   id: string;
   txid: string;
   vout: number;
@@ -147,7 +147,7 @@ interface UTXO {
   priceAtReceipt?: number;
 }
 
-interface AddressGroup {
+export interface AddressGroup {
   address: string;
   totalSats: number;
   utxos: UTXO[];
@@ -191,6 +191,148 @@ export function CopyTxidButton({ txid }: { txid: string }) {
         <Copy className="h-3 w-3" />
       )}
     </Button>
+  );
+}
+
+export type FlatUtxoRow =
+  | { kind: 'group'; group: AddressGroup }
+  | { kind: 'utxo'; utxo: UTXO; index: number };
+
+// Presentational row renderer for the UTXOs table. Extracted as a pure-props
+// component so the AddressLink / TxidLink metadata-indicator wiring can be
+// regression-tested in isolation, without rendering the whole (engine-backed,
+// virtualized) page. AddressLink/TxidLink only pass `recordId` (no
+// `hasMetadata`), so the orange FileText indicator only appears once the hover
+// tooltip resolves a metadata-rich record.
+export function UtxoTableRow({
+  row,
+  isExpanded = false,
+  displayUnit,
+  onToggleGroup,
+  onOpenUtxo,
+  measureRef,
+  dataIndex,
+}: {
+  row: FlatUtxoRow;
+  isExpanded?: boolean;
+  displayUnit: "btc" | "sats";
+  onToggleGroup: (address: string) => void;
+  onOpenUtxo: (utxo: UTXO) => void;
+  measureRef?: (el: HTMLElement | null) => void;
+  dataIndex?: number;
+}) {
+  if (row.kind === 'group') {
+    const group = row.group;
+    return (
+      <TableRow
+        ref={measureRef}
+        data-index={dataIndex}
+        className="cursor-pointer hover-elevate"
+        onClick={() => onToggleGroup(group.address)}
+        data-testid={`row-address-${group.address.slice(0, 8)}`}
+      >
+        <TableCell className="w-8">
+          {isExpanded ? (
+            <ChevronDown className="h-4 w-4" />
+          ) : (
+            <ChevronRightIcon className="h-4 w-4" />
+          )}
+        </TableCell>
+        <TableCell onClick={(e) => e.stopPropagation()}>
+          <div className="flex flex-col gap-1">
+            <AddressLink
+              address={group.address}
+              recordId={group.recordId}
+            />
+            {group.label && (
+              <span className="text-xs text-muted-foreground">{group.label}</span>
+            )}
+            {group.utxos.length > 1 && (
+              <Badge variant="secondary" className="w-fit text-xs">
+                {group.utxos.length} UTXOs
+              </Badge>
+            )}
+          </div>
+        </TableCell>
+        <TableCell className="font-mono">
+          {displayUnit === "btc" ? (
+            <span>{satsToBtc(group.totalSats)} BTC</span>
+          ) : (
+            <span>{group.totalSats.toLocaleString()} sats</span>
+          )}
+        </TableCell>
+        <TableCell className="text-sm">
+          <div className="flex flex-col">
+            <span>{format(new Date(group.latestDate * 1000), "MMM d, yyyy")}</span>
+            {group.earliestDate !== group.latestDate && (
+              <span className="text-xs text-muted-foreground">
+                From {format(new Date(group.earliestDate * 1000), "MMM d, yyyy")}
+              </span>
+            )}
+          </div>
+        </TableCell>
+        <TableCell>
+          {formatUsdValue(group.totalValueAtReceipt)}
+        </TableCell>
+        <TableCell>
+          {formatUsdValue(group.totalCurrentValue)}
+        </TableCell>
+        <TableCell>
+          {group.gain !== undefined ? (
+            <div className={cn(
+              "flex items-center gap-1",
+              group.gain > 0 ? "text-green-600 dark:text-green-400" : group.gain < 0 ? "text-red-600 dark:text-red-400" : ""
+            )}>
+              {group.gain > 0 ? <TrendingUp className="h-3 w-3" /> : group.gain < 0 ? <TrendingDown className="h-3 w-3" /> : null}
+              <span>{formatUsdValue(group.gain)}</span>
+              {group.gainPercent !== undefined && (
+                <span className="text-xs">({group.gainPercent > 0 ? '+' : ''}{group.gainPercent.toFixed(1)}%)</span>
+              )}
+            </div>
+          ) : (
+            <span className="text-muted-foreground">-</span>
+          )}
+        </TableCell>
+      </TableRow>
+    );
+  }
+
+  const { utxo, index: idx } = row;
+  return (
+    <TableRow
+      ref={measureRef}
+      data-index={dataIndex}
+      className="bg-muted/30 cursor-pointer hover-elevate"
+      onClick={() => onOpenUtxo(utxo)}
+      data-testid={`row-utxo-${utxo.id}`}
+    >
+      <TableCell></TableCell>
+      <TableCell colSpan={2} className="font-mono text-sm" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center gap-2 pl-4">
+          <span className="text-muted-foreground text-xs">{idx + 1}.</span>
+          <TxidLink
+            txid={utxo.txid}
+            showExternalLink={true}
+          />
+          <span className="text-muted-foreground text-xs">:{utxo.vout}</span>
+          <span className="ml-2">
+            {displayUnit === "btc" ? (
+              <span>{satsToBtc(utxo.amountSats)} BTC</span>
+            ) : (
+              <span>{utxo.amountSats.toLocaleString()} sats</span>
+            )}
+          </span>
+        </div>
+      </TableCell>
+      <TableCell className="text-sm text-muted-foreground">
+        {format(new Date(utxo.blockTime * 1000), "MMM d, yyyy")}
+      </TableCell>
+      <TableCell className="text-muted-foreground">
+        {formatUsdValue(utxo.valueAtReceipt)}
+      </TableCell>
+      <TableCell></TableCell>
+      <TableCell></TableCell>
+    </TableRow>
   );
 }
 
@@ -1028,10 +1170,6 @@ export default function UTXOs() {
     return sorted;
   }, [filteredGroups, sortColumn, sortDirection]);
 
-  type FlatUtxoRow =
-    | { kind: 'group'; group: AddressGroup }
-    | { kind: 'utxo'; utxo: UTXO; index: number };
-
   const flattenedRows = useMemo((): FlatUtxoRow[] => {
     const rows: FlatUtxoRow[] = [];
     for (const group of sortedGroups) {
@@ -1540,122 +1678,21 @@ export default function UTXOs() {
                     )}
                     {utxoVirtualizer.getVirtualItems().map(virtualRow => {
                       const row = flattenedRows[virtualRow.index];
-                      if (row.kind === 'group') {
-                        const group = row.group;
-                        const isExpanded = expandedAddresses.has(group.address);
-                        return (
-                          <TableRow 
-                            key={`group-${group.address}`} 
-                            ref={utxoVirtualizer.measureElement}
-                            data-index={virtualRow.index}
-                            className="cursor-pointer hover-elevate" 
-                            onClick={() => toggleExpanded(group.address)}
-                            data-testid={`row-address-${group.address.slice(0, 8)}`}
-                          >
-                            <TableCell className="w-8">
-                              {isExpanded ? (
-                                <ChevronDown className="h-4 w-4" />
-                              ) : (
-                                <ChevronRightIcon className="h-4 w-4" />
-                              )}
-                            </TableCell>
-                            <TableCell onClick={(e) => e.stopPropagation()}>
-                              <div className="flex flex-col gap-1">
-                                <AddressLink
-                                  address={group.address}
-                                  recordId={group.recordId}
-                                />
-                                {group.label && (
-                                  <span className="text-xs text-muted-foreground">{group.label}</span>
-                                )}
-                                {group.utxos.length > 1 && (
-                                  <Badge variant="secondary" className="w-fit text-xs">
-                                    {group.utxos.length} UTXOs
-                                  </Badge>
-                                )}
-                              </div>
-                            </TableCell>
-                            <TableCell className="font-mono">
-                              {displayUnit === "btc" ? (
-                                <span>{satsToBtc(group.totalSats)} BTC</span>
-                              ) : (
-                                <span>{group.totalSats.toLocaleString()} sats</span>
-                              )}
-                            </TableCell>
-                            <TableCell className="text-sm">
-                              <div className="flex flex-col">
-                                <span>{format(new Date(group.latestDate * 1000), "MMM d, yyyy")}</span>
-                                {group.earliestDate !== group.latestDate && (
-                                  <span className="text-xs text-muted-foreground">
-                                    From {format(new Date(group.earliestDate * 1000), "MMM d, yyyy")}
-                                  </span>
-                                )}
-                              </div>
-                            </TableCell>
-                            <TableCell>
-                              {formatUsdValue(group.totalValueAtReceipt)}
-                            </TableCell>
-                            <TableCell>
-                              {formatUsdValue(group.totalCurrentValue)}
-                            </TableCell>
-                            <TableCell>
-                              {group.gain !== undefined ? (
-                                <div className={cn(
-                                  "flex items-center gap-1",
-                                  group.gain > 0 ? "text-green-600 dark:text-green-400" : group.gain < 0 ? "text-red-600 dark:text-red-400" : ""
-                                )}>
-                                  {group.gain > 0 ? <TrendingUp className="h-3 w-3" /> : group.gain < 0 ? <TrendingDown className="h-3 w-3" /> : null}
-                                  <span>{formatUsdValue(group.gain)}</span>
-                                  {group.gainPercent !== undefined && (
-                                    <span className="text-xs">({group.gainPercent > 0 ? '+' : ''}{group.gainPercent.toFixed(1)}%)</span>
-                                  )}
-                                </div>
-                              ) : (
-                                <span className="text-muted-foreground">-</span>
-                              )}
-                            </TableCell>
-                          </TableRow>
-                        );
-                      } else {
-                        const { utxo, index: idx } = row;
-                        return (
-                          <TableRow 
-                            key={`utxo-${utxo.id}`} 
-                            ref={utxoVirtualizer.measureElement}
-                            data-index={virtualRow.index}
-                            className="bg-muted/30 cursor-pointer hover-elevate" 
-                            onClick={() => openUtxoDetail(utxo)}
-                            data-testid={`row-utxo-${utxo.id}`}
-                          >
-                            <TableCell></TableCell>
-                            <TableCell colSpan={2} className="font-mono text-sm" onClick={(e) => e.stopPropagation()}>
-                              <div className="flex items-center gap-2 pl-4">
-                                <span className="text-muted-foreground text-xs">{idx + 1}.</span>
-                                <TxidLink
-                                  txid={utxo.txid}
-                                  showExternalLink={true}
-                                />
-                                <span className="text-muted-foreground text-xs">:{utxo.vout}</span>
-                                <span className="ml-2">
-                                  {displayUnit === "btc" ? (
-                                    <span>{satsToBtc(utxo.amountSats)} BTC</span>
-                                  ) : (
-                                    <span>{utxo.amountSats.toLocaleString()} sats</span>
-                                  )}
-                                </span>
-                              </div>
-                            </TableCell>
-                            <TableCell className="text-sm text-muted-foreground">
-                              {format(new Date(utxo.blockTime * 1000), "MMM d, yyyy")}
-                            </TableCell>
-                            <TableCell className="text-muted-foreground">
-                              {formatUsdValue(utxo.valueAtReceipt)}
-                            </TableCell>
-                            <TableCell></TableCell>
-                            <TableCell></TableCell>
-                          </TableRow>
-                        );
-                      }
+                      const key = row.kind === 'group'
+                        ? `group-${row.group.address}`
+                        : `utxo-${row.utxo.id}`;
+                      return (
+                        <UtxoTableRow
+                          key={key}
+                          row={row}
+                          isExpanded={row.kind === 'group' && expandedAddresses.has(row.group.address)}
+                          displayUnit={displayUnit}
+                          onToggleGroup={toggleExpanded}
+                          onOpenUtxo={openUtxoDetail}
+                          measureRef={utxoVirtualizer.measureElement}
+                          dataIndex={virtualRow.index}
+                        />
+                      );
                     })}
                     {utxoVirtualizer.getVirtualItems().length > 0 && (() => {
                       const lastItem = utxoVirtualizer.getVirtualItems().at(-1)!;
