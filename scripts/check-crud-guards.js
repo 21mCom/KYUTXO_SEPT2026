@@ -155,6 +155,7 @@ const ALWAYS_ALLOWED_FILES = new Set([
   path.resolve(ROOT, 'client/src/pages/Reports.privacyEntityGamblingMixerP2PCitationEndToEnd.test.tsx'),
   path.resolve(ROOT, 'client/src/pages/Reports.privacyMismatchedCitationImport.test.tsx'),
   path.resolve(ROOT, 'client/src/pages/__tests__/balance-import-history-cancel.test.tsx'),
+  path.resolve(ROOT, 'client/src/pages/__tests__/balance-import-history-complete.test.tsx'),
   path.resolve(ROOT, 'client/src/lib/privacy-audit.ts'),
   path.resolve(ROOT, 'client/src/lib/data/record-queries.ts'),
   path.resolve(ROOT, 'client/src/lib/data/address-stats.ts'),
