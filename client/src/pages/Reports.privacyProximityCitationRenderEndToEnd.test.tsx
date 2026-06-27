@@ -48,6 +48,7 @@ import {
 } from "@/lib/privacy-entity-list";
 import {
   buildPrivacyReport,
+  buildPrivacyTextReport,
   type ExportScope,
   type ExportedFinding,
 } from "@/lib/privacy-report-export";
@@ -286,6 +287,29 @@ describe("PROXIMITY_* citations render end-to-end from the real audit", () => {
     ]);
     // The URL survives serialization verbatim — JSON is data, not markup.
     expect(exported!.citations![0].sourceNote).toContain(SOURCE_URL);
+  });
+
+  it("emits the hop-4 proximity citation in the plain-text (Copy / .txt) report", async () => {
+    const result = await runPrivacyAudit([OWNED_FAR, MID_A, MID_B, MID_C]);
+
+    // Sanity: the real audit produced the LOW hop-4 finding with its citation.
+    findHop4Proximity(result.findings);
+
+    // This is the surface behind both "Copy report" and "Download .txt".
+    const text = buildPrivacyTextReport(result, SCOPE, FIXED_NOW.toLocaleString());
+
+    // Every citation field reaches the plain-text report.
+    expect(text).toContain(ENTITY_NAME);
+    expect(text).toContain(ENTITY_CATEGORY_LABEL);
+    expect(text).toContain(ENTITY_ADDR);
+    expect(text).toContain(SOURCE_NOTE);
+
+    // The URL appears verbatim as plain text (offline-first — never fetched).
+    expect(text).toContain(SOURCE_URL);
+
+    // It is surfaced under a Source Citations block, not just incidentally
+    // present somewhere in the report body.
+    expect(text).toContain("Source Citations:");
   });
 
   it("renders the proximity citation into the printable PDF/HTML export with the URL as plain text", async () => {
