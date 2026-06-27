@@ -47,7 +47,7 @@ export async function updateSkippedAddress(
 export async function dismissAllSkippedAddresses(
   options?: SyncProtectionWriteOptions
 ): Promise<void> {
-  await db.skippedAddresses.where('dismissed').equals(0).modify({ dismissed: true });
+  await db.skippedAddresses.toCollection().modify({ dismissed: 1 });
 
   if (!options?.skipNotification) {
     notifyDbChange('skippedAddresses');
@@ -61,7 +61,7 @@ export async function getSkippedAddressesByRun(
 }
 
 export async function getActiveSkippedAddresses(): Promise<SkippedAddress[]> {
-  return db.skippedAddresses.where('dismissed').equals(0).toArray();
+  return db.skippedAddresses.filter(r => !r.dismissed).toArray();
 }
 
 // Address blacklist

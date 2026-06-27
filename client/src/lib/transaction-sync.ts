@@ -335,7 +335,7 @@ export class TransactionSyncService {
       syncRunTimestamp,
       discoveredFromRecordId: opts?.discoveredFromRecordId,
       syncDepth: opts?.syncDepth,
-      dismissed: false,
+      dismissed: 0,
     });
   }
 
@@ -560,7 +560,7 @@ export class TransactionSyncService {
   }
 
   async dismissSkippedAddress(id: number): Promise<void> {
-    await updateSkippedAddress(id, { dismissed: true });
+    await updateSkippedAddress(id, { dismissed: 1 });
   }
 
   async dismissAllSkipped(): Promise<void> {

@@ -880,7 +880,7 @@ export interface SkippedAddress {
   syncRunTimestamp: number;
   discoveredFromRecordId?: number;
   syncDepth?: number;
-  dismissed: boolean;
+  dismissed: 0 | 1;
   createdAt: number;
 }
 
