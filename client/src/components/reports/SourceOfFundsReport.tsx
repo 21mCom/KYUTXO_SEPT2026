@@ -91,7 +91,6 @@ export function SourceOfFundsReport() {
       } else {
         inputTxids = allInputTxids;
       }
-      const shownTxCount = inputTxids.length;
 
       let totalReceivedSats = 0;
       let currentBalanceSats = 0;
@@ -181,7 +180,7 @@ export function SourceOfFundsReport() {
         unrealizedGainUSD,
         internalTransferCount: fundingSources.filter(s => s.isInternalTransfer).length,
         externalFundingCount: fundingSources.filter(s => !s.isInternalTransfer).length,
-        cap: { capped: isCapped, shownTxCount, totalTxCount },
+        cap: { capped: isCapped, shownTxCount: fundingSources.length, totalTxCount },
       });
 
     } catch (error) {
