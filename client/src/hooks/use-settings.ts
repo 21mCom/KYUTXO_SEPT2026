@@ -1,5 +1,5 @@
 import { useLiveQuery } from 'dexie-react-hooks';
-import { type Settings, type CustomField } from '@/lib/database';
+import { db, type Settings, type CustomField } from '@/lib/database';
 import {
   getSettings as getStoredSettings,
   updateSettings as updateStoredSettings,
@@ -156,12 +156,25 @@ export async function updatePrivacyHistoryLimit(value: number): Promise<number> 
     // callers warn the user instead of falsely reporting success (or nothing).
     throw new Error('Cannot save retention limit: settings are unavailable');
   }
-  await updateStoredSettings('default', {
-    privacyHistoryLimit: value,
-  });
-  // Immediately remove any runs beyond the new limit (oldest first) so
-  // lowering the limit takes effect right away rather than on next audit.
-  return await trimPrivacyAuditHistory(value);
+  // Persist the new limit and trim older runs in a single atomic transaction.
+  // The SettingsPage error toast tells the user the update "failed" when this
+  // rejects, so the persisted state must match that promise: if the trim throws
+  // the limit write is rolled back too, never leaving the limit saved while the
+  // on-disk history stays oversized (or vice-versa). Either both apply or
+  // neither does.
+  return await db.transaction(
+    'rw',
+    db.settings,
+    db.privacyAuditHistory,
+    async () => {
+      await updateStoredSettings('default', {
+        privacyHistoryLimit: value,
+      });
+      // Immediately remove any runs beyond the new limit (oldest first) so
+      // lowering the limit takes effect right away rather than on next audit.
+      return await trimPrivacyAuditHistory(value);
+    }
+  );
 }
 
 export async function updatePeelChainViewMode(mode: 'graph' | 'list') {

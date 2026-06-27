@@ -572,4 +572,50 @@ describe("SettingsPage — Privacy Audit History retention guard", () => {
     // real count helper — the destructured ref points at the original impl.)
     expect(await getPrivacyAuditHistoryCount()).toBe(25);
   });
+
+  it("rolls the saved limit back when the data-layer trim fails, so persisted state matches the 'failed' toast (Task #959)", async () => {
+    // 25 runs, default limit 30. Lowering to 10 removes only 15 (<=20), so the
+    // guard skips the confirm dialog and applies the trim directly through the
+    // REAL updatePrivacyHistoryLimit. updatePrivacyHistoryLimit persists the new
+    // limit and trims in one atomic transaction: when the trim throws, the limit
+    // write must roll back too. Otherwise the user is told the update "failed"
+    // while privacyHistoryLimit is silently saved as 10 and the on-disk history
+    // stays at 25 — the persisted state and the toast would disagree.
+    await seedRuns(25);
+
+    // No limit is persisted yet (beforeEach seeds a bare 'default' row), so the
+    // effective limit is the default of 30.
+    expect((await getSettings("default"))?.privacyHistoryLimit).toBeUndefined();
+
+    // Make the data-layer trim reject once, after updatePrivacyHistoryLimit has
+    // already written the new limit inside the transaction.
+    const trimSpy = vi
+      .spyOn(privacyHistoryCrud, "trimPrivacyAuditHistory")
+      .mockRejectedValueOnce(new Error("trim failed"));
+
+    renderWithSettingsProviders(<SettingsPage />);
+
+    await lowerLimitTo("10");
+
+    // The trim was attempted and rejected.
+    await waitFor(() => expect(trimSpy).toHaveBeenCalled());
+
+    // The destructive error toast tells the user the update failed.
+    await waitFor(() => {
+      const destructive = toastSpy.mock.calls.find(
+        (c) => c[0]?.variant === "destructive",
+      );
+      expect(destructive?.[0]?.description).toMatch(/retention limit/i);
+    });
+
+    // CONTRACT: the failed trim rolled the limit write back, so the persisted
+    // state matches the "failed" toast — privacyHistoryLimit is NOT left saved
+    // as the rejected value (10); it stays unset (the default of 30 applies).
+    expect((await getSettings("default"))?.privacyHistoryLimit).toBeUndefined();
+
+    // And the history is intact: nothing was removed.
+    expect(await getPrivacyAuditHistoryCount()).toBe(25);
+    const titles = toastSpy.mock.calls.map((c) => c[0]?.title ?? "");
+    expect(titles.some((t) => /removed/i.test(t))).toBe(false);
+  });
 });
