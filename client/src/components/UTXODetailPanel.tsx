@@ -3,8 +3,6 @@ import { format } from "date-fns";
 import { Link } from "wouter";
 import { 
   ExternalLink, 
-  Copy, 
-  Check, 
   User, 
   Wallet as WalletIcon,
   Tag,
@@ -35,7 +33,8 @@ import {
 import { Record as DbRecord, TransactionParticipant, BlockchainTransaction, PriceData } from "@/lib/database";
 import { getParticipantsByTxid, getTransactionByTxid, getRecordsByType } from "@/lib/dataFacade";
 import { cn } from "@/lib/utils";
-import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
+import { AddressLink } from "@/components/AddressLink";
+import { TxidLink } from "@/components/TxidLink";
 
 interface UTXO {
   id: string;
@@ -88,7 +87,6 @@ function truncateAddress(addr: string): string {
 }
 
 export function UTXODetailPanel({ open, onClose, utxo, latestPrice }: UTXODetailPanelProps) {
-  const { copy, copiedKey: copiedValue } = useCopyToClipboard();
   const [fundingInputs, setFundingInputs] = useState<FundingInput[]>([]);
   const [fundingTx, setFundingTx] = useState<BlockchainTransaction | null>(null);
   const [fundingOpen, setFundingOpen] = useState(true);
@@ -138,10 +136,6 @@ export function UTXODetailPanel({ open, onClose, utxo, latestPrice }: UTXODetail
     loadFundingTransaction();
   }, [open, utxo]);
 
-  const copyToClipboard = (value: string, label: string = "Value") => {
-    copy(value, { label });
-  };
-
   const currentValue = useMemo(() => {
     if (!utxo || !latestPrice) return undefined;
     const btcAmount = utxo.amountSats / 100_000_000;
@@ -187,30 +181,12 @@ export function UTXODetailPanel({ open, onClose, utxo, latestPrice }: UTXODetail
               <div className="space-y-3">
                 <div>
                   <span className="text-xs text-muted-foreground">Transaction ID</span>
-                  <div className="flex items-center gap-2 mt-1">
-                    <span className="font-mono text-sm break-all" data-testid="text-txid">{utxo.txid}</span>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-6 w-6 flex-shrink-0"
-                      onClick={() => copyToClipboard(utxo.txid, "Transaction ID")}
-                      data-testid="button-copy-txid"
-                    >
-                      {copiedValue === utxo.txid ? (
-                        <Check className="h-3 w-3 text-green-500" />
-                      ) : (
-                        <Copy className="h-3 w-3" />
-                      )}
-                    </Button>
-                    <a
-                      href={`https://mempool.space/tx/${utxo.txid}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-muted-foreground hover:text-primary flex-shrink-0"
-                      data-testid="link-mempool"
-                    >
-                      <ExternalLink className="h-3 w-3" />
-                    </a>
+                  <div className="flex items-center gap-2 mt-1" data-testid="text-txid">
+                    <TxidLink
+                      txid={utxo.txid}
+                      truncate={false}
+                      showExternalLink={true}
+                    />
                   </div>
                 </div>
                 <div className="grid grid-cols-2 gap-4">
@@ -302,21 +278,12 @@ export function UTXODetailPanel({ open, onClose, utxo, latestPrice }: UTXODetail
               <div className="space-y-3">
                 <div>
                   <span className="text-xs text-muted-foreground">Address</span>
-                  <div className="flex items-center gap-2 mt-1">
-                    <span className="font-mono text-sm break-all" data-testid="text-address">{utxo.address}</span>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-6 w-6 flex-shrink-0"
-                      onClick={() => copyToClipboard(utxo.address, "Address")}
-                      data-testid="button-copy-address"
-                    >
-                      {copiedValue === utxo.address ? (
-                        <Check className="h-3 w-3 text-green-500" />
-                      ) : (
-                        <Copy className="h-3 w-3" />
-                      )}
-                    </Button>
+                  <div className="flex items-center gap-2 mt-1" data-testid="text-address">
+                    <AddressLink
+                      address={utxo.address}
+                      recordId={utxo.recordId}
+                      truncate={false}
+                    />
                   </div>
                 </div>
                 {utxo.label && (

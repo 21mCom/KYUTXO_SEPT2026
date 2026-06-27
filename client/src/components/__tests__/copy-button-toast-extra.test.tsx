@@ -91,7 +91,7 @@ describe("UTXODetailPanel copy buttons toast", () => {
       <UTXODetailPanel open utxo={UTXO} onClose={() => {}} />,
     );
     await flush();
-    fireEvent.click(screen.getByTestId("button-copy-txid"));
+    fireEvent.click(screen.getByTestId(`button-copy-txid-${TXID.slice(0, 8)}`));
     await flush();
 
     expect(writeText).toHaveBeenCalledWith(TXID);
@@ -103,7 +103,7 @@ describe("UTXODetailPanel copy buttons toast", () => {
       <UTXODetailPanel open utxo={UTXO} onClose={() => {}} />,
     );
     await flush();
-    fireEvent.click(screen.getByTestId("button-copy-address"));
+    fireEvent.click(screen.getByTestId(`button-copy-address-${ADDRESS.slice(0, 8)}`));
     await flush();
 
     expect(writeText).toHaveBeenCalledWith(ADDRESS);
@@ -116,7 +116,7 @@ describe("UTXODetailPanel copy buttons toast", () => {
       <UTXODetailPanel open utxo={UTXO} onClose={() => {}} />,
     );
     await flush();
-    fireEvent.click(screen.getByTestId("button-copy-txid"));
+    fireEvent.click(screen.getByTestId(`button-copy-txid-${TXID.slice(0, 8)}`));
     await flush();
 
     expect(toastMock).toHaveBeenCalledWith(
