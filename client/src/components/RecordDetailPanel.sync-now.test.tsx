@@ -16,18 +16,26 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { cleanup, fireEvent, waitFor } from "@testing-library/react";
 import { renderWithProviders } from "@/test/testProviders";
 
-const { toastSpy, updateProviderSpy, syncSingleAddressSpy } = vi.hoisted(() => ({
+const {
+  toastSpy,
+  updateProviderSpy,
+  syncSingleAddressSpy,
+  getParticipantsByAddressSpy,
+  getTransactionsByTxidsSpy,
+} = vi.hoisted(() => ({
   toastSpy: vi.fn(),
   updateProviderSpy: vi.fn(),
   syncSingleAddressSpy: vi.fn(),
+  getParticipantsByAddressSpy: vi.fn(async () => [] as unknown[]),
+  getTransactionsByTxidsSpy: vi.fn(async () => [] as unknown[]),
 }));
 
 vi.mock("@/lib/dataFacade", () => ({
   getRecordOrigins: vi.fn(async () => []),
-  getParticipantsByAddress: vi.fn(async () => []),
+  getParticipantsByAddress: getParticipantsByAddressSpy,
   getParticipantsByTxid: vi.fn(async () => []),
   getTransactionByTxid: vi.fn(async () => null),
-  getTransactionsByTxids: vi.fn(async () => []),
+  getTransactionsByTxids: getTransactionsByTxidsSpy,
 }));
 
 vi.mock("@/hooks/use-toast", () => ({
@@ -90,6 +98,10 @@ describe("RecordDetailPanel Sync Now button", () => {
     toastSpy.mockClear();
     updateProviderSpy.mockClear();
     syncSingleAddressSpy.mockReset();
+    getParticipantsByAddressSpy.mockReset();
+    getParticipantsByAddressSpy.mockResolvedValue([]);
+    getTransactionsByTxidsSpy.mockReset();
+    getTransactionsByTxidsSpy.mockResolvedValue([]);
   });
 
   afterEach(() => {
@@ -146,7 +158,10 @@ describe("RecordDetailPanel Sync Now button", () => {
 
     await waitFor(() => expect(toastSpy).toHaveBeenCalledTimes(1));
     expect(updateProviderSpy).toHaveBeenCalledTimes(1);
-    expect(syncSingleAddressSpy).toHaveBeenCalledWith("bc1qexampleaddress");
+    expect(syncSingleAddressSpy).toHaveBeenCalledWith(
+      "bc1qexampleaddress",
+      expect.any(Function),
+    );
     expect(toastSpy).toHaveBeenCalledWith(
       expect.objectContaining({
         title: "Sync Complete",
@@ -192,6 +207,47 @@ describe("RecordDetailPanel Sync Now button", () => {
       }),
     );
     expect(onSyncComplete).not.toHaveBeenCalled();
+  });
+
+  it("reloads the Transaction History list and renders newly imported transactions after a successful sync", async () => {
+    // Before the sync, the data layer reports no participants for this address,
+    // so the Transaction History section shows its empty state.
+    getParticipantsByAddressSpy.mockResolvedValue([]);
+    getTransactionsByTxidsSpy.mockResolvedValue([]);
+    syncSingleAddressSpy.mockResolvedValue(makeSyncResult({ transactionsImported: 1 }));
+
+    const { getByTestId, findByTestId } = renderPanel(baseRecord());
+
+    // Open the Transaction History section so the initial (empty) load runs.
+    fireEvent.click(getByTestId("button-toggle-tx-history"));
+    await findByTestId("tx-history-empty");
+
+    // Simulate the sync importing a new transaction: the data layer now returns
+    // a freshly imported participant + its transaction record.
+    const newTxid = "a".repeat(64);
+    getParticipantsByAddressSpy.mockResolvedValue([
+      { txid: newTxid, role: "output", vout: 0, amount: 100000 },
+    ]);
+    getTransactionsByTxidsSpy.mockResolvedValue([
+      { txid: newTxid, blockTime: 1_700_000_000 },
+    ]);
+
+    // The empty state was rendered without any participant lookups yet beyond
+    // the initial load; capture that baseline before syncing.
+    const callsBeforeSync = getParticipantsByAddressSpy.mock.calls.length;
+
+    fireEvent.click(getByTestId("button-sync-now"));
+
+    // The refresh trigger must flow through to TransactionHistorySection, causing
+    // it to re-fetch and render the newly available transaction row.
+    const row = await findByTestId(`tx-history-row-${newTxid.slice(0, 8)}`);
+    expect(row).toBeTruthy();
+
+    // Confirm the list actually re-fetched (didn't just show stale data).
+    expect(getParticipantsByAddressSpy.mock.calls.length).toBeGreaterThan(callsBeforeSync);
+
+    // The imported amount renders as a receive (positive) entry.
+    expect(getByTestId(`text-tx-amount-${newTxid.slice(0, 8)}`).textContent).toContain("+");
   });
 
   it("shows a destructive toast and clears the spinner when the sync throws", async () => {
