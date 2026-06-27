@@ -171,6 +171,47 @@ describe("FindingCard address behavior badges", () => {
     expect(screen.queryByTestId(`badge-behavior-${ADDR_NO_RECORD}`)).toBeNull();
   });
 
+  it("hides behavior badges for addresses beyond the first 10 until expanded, and explains the subset", async () => {
+    // 12 synced high-activity addresses → all would carry a badge, but only the
+    // first 10 render until the user expands the full list.
+    const addrs = Array.from({ length: 12 }, (_, i) =>
+      `bc1qmany${String(i).padStart(24, "0")}`,
+    );
+    mockedGetRecords.mockResolvedValue(
+      addrs.map((a) =>
+        addressRecord(a, {
+          statsComputedAt: Date.now(),
+          cachedTxCount: 75,
+          cachedBalanceSats: 120_000,
+          cachedUtxoCount: 4,
+          cachedLastActivityTime: Math.floor(Date.now() / 1000) - 10 * 24 * 3600,
+        }),
+      ) as any,
+    );
+
+    renderCard(finding({ addresses: addrs }));
+    fireEvent.click(screen.getByTestId("button-toggle-details"));
+
+    // First 10 show badges; the 11th and 12th do not (collapsed).
+    await waitFor(() => {
+      expect(screen.getByTestId(`badge-behavior-${addrs[0]}`)).toBeTruthy();
+    });
+    expect(screen.getByTestId(`badge-behavior-${addrs[9]}`)).toBeTruthy();
+    expect(screen.queryByTestId(`badge-behavior-${addrs[10]}`)).toBeNull();
+    expect(screen.queryByTestId(`badge-behavior-${addrs[11]}`)).toBeNull();
+
+    // The subset is clearly communicated.
+    expect(screen.getByTestId("text-behavior-subset-note")).toBeTruthy();
+
+    // Expanding reveals badges for all addresses and removes the subset note.
+    fireEvent.click(screen.getByTestId("button-toggle-all-addresses"));
+    await waitFor(() => {
+      expect(screen.getByTestId(`badge-behavior-${addrs[10]}`)).toBeTruthy();
+    });
+    expect(screen.getByTestId(`badge-behavior-${addrs[11]}`)).toBeTruthy();
+    expect(screen.queryByTestId("text-behavior-subset-note")).toBeNull();
+  });
+
   it("renders no behavior badges at all when none of the flagged addresses are backed by records", async () => {
     mockedGetRecords.mockResolvedValue([] as any);
 

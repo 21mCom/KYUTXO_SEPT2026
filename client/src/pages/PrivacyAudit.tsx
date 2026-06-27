@@ -2744,6 +2744,7 @@ function getSeverityBadgePropsLocal(severity: PrivacySeverity) {
 
 export function FindingCard({ finding, coinjoinTxids }: { finding: PrivacyFinding; coinjoinTxids: Set<string> }) {
   const [expanded, setExpanded] = useState(false);
+  const [showAllAddresses, setShowAllAddresses] = useState(false);
   const citations = (finding.details?.citations as EntityCitation[] | undefined) ?? [];
   const hopPath = (finding.details?.hopPath as string[] | undefined) ?? [];
   const hopTxids = (finding.details?.hopTxids as string[] | undefined) ?? [];
@@ -2866,7 +2867,7 @@ export function FindingCard({ finding, coinjoinTxids }: { finding: PrivacyFindin
               <div>
                 <span className="text-xs font-medium text-muted-foreground">Addresses:</span>
                 <div className="flex flex-wrap gap-x-2 gap-y-1 mt-1">
-                  {finding.addresses.slice(0, 10).map((addr) => {
+                  {(showAllAddresses ? finding.addresses : finding.addresses.slice(0, 10)).map((addr) => {
                     const bp = addressBehaviors?.get(addr);
                     return (
                       <span key={addr} className="inline-flex items-center gap-1">
@@ -2885,11 +2886,24 @@ export function FindingCard({ finding, coinjoinTxids }: { finding: PrivacyFindin
                     );
                   })}
                   {finding.addresses.length > 10 && (
-                    <span className="text-xs text-muted-foreground">
-                      +{finding.addresses.length - 10} more
-                    </span>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="text-xs text-muted-foreground"
+                      onClick={() => setShowAllAddresses((v) => !v)}
+                      data-testid="button-toggle-all-addresses"
+                    >
+                      {showAllAddresses
+                        ? "Show fewer"
+                        : `Show all ${finding.addresses.length} (with behavior)`}
+                    </Button>
                   )}
                 </div>
+                {finding.addresses.length > 10 && !showAllAddresses && (
+                  <p className="text-xs text-muted-foreground mt-1" data-testid="text-behavior-subset-note">
+                    Behavior badges shown reflect only the first 10 addresses. Show all to see behavior for every flagged address.
+                  </p>
+                )}
               </div>
             )}
 
