@@ -1051,7 +1051,7 @@ function PeelChainGraph({ steps, coinjoinTxids }: { steps: PeelStep[]; coinjoinT
                   textAnchor="middle"
                   className="font-mono"
                   fontSize={9}
-                  fill={PEEL_PAYMENT_COLOR}
+                  fill="hsl(var(--foreground))"
                 >
                   {fmt(step.payment)}
                 </text>
@@ -1070,7 +1070,7 @@ function PeelChainGraph({ steps, coinjoinTxids }: { steps: PeelStep[]; coinjoinT
                   y={(ty + 20 + cy - 10) / 2 + 3}
                   className="font-mono"
                   fontSize={9}
-                  fill={PEEL_CHANGE_COLOR}
+                  fill="hsl(var(--foreground))"
                 >
                   {fmt(step.change)}
                 </text>
