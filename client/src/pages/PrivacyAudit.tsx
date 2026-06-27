@@ -2745,6 +2745,7 @@ function getSeverityBadgePropsLocal(severity: PrivacySeverity) {
 export function FindingCard({ finding, coinjoinTxids }: { finding: PrivacyFinding; coinjoinTxids: Set<string> }) {
   const [expanded, setExpanded] = useState(false);
   const [showAllAddresses, setShowAllAddresses] = useState(false);
+  const [showAllTxids, setShowAllTxids] = useState(false);
   const citations = (finding.details?.citations as EntityCitation[] | undefined) ?? [];
   const hopPath = (finding.details?.hopPath as string[] | undefined) ?? [];
   const hopTxids = (finding.details?.hopTxids as string[] | undefined) ?? [];
@@ -2801,16 +2802,24 @@ export function FindingCard({ finding, coinjoinTxids }: { finding: PrivacyFindin
               <div>
                 <span className="text-xs font-medium text-muted-foreground">Transactions:</span>
                 <div className="flex flex-wrap gap-x-2 gap-y-1 mt-1">
-                  {finding.txids.slice(0, 10).map((txid) => (
+                  {(showAllTxids ? finding.txids : finding.txids.slice(0, 10)).map((txid) => (
                     <span key={txid} className="inline-flex items-center gap-0.5">
                       <TxidLink txid={txid} />
                       <DeepDiveDialog txid={txid} coinjoinTxids={coinjoinTxids} />
                     </span>
                   ))}
                   {finding.txids.length > 10 && (
-                    <span className="text-xs text-muted-foreground">
-                      +{finding.txids.length - 10} more
-                    </span>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="text-xs text-muted-foreground"
+                      onClick={() => setShowAllTxids((v) => !v)}
+                      data-testid="button-toggle-all-txids"
+                    >
+                      {showAllTxids
+                        ? "Show fewer"
+                        : `Show all ${finding.txids.length}`}
+                    </Button>
                   )}
                 </div>
               </div>
