@@ -129,7 +129,9 @@ vi.mock("@/components/ui/select", async () => {
   };
 });
 
-const SettingsPage = (await import("./SettingsPage")).default;
+const SettingsPageModule = await import("./SettingsPage");
+const SettingsPage = SettingsPageModule.default;
+const { resetEntityErrorOpenState } = SettingsPageModule;
 const { renderWithSettingsProviders } = await import(
   "@/test/settingsTestProviders"
 );
@@ -190,6 +192,9 @@ beforeEach(async () => {
   // row, so this also clears any entityListSnapshot left by a prior test.
   await putSettings({ id: "default" } as Settings, { skipNotification: true });
   resetActiveEntityList();
+  // Module-level triage state persists across mounts within a JS session; clear
+  // it between tests so a prior test's expand/collapse choices never leak in.
+  resetEntityErrorOpenState();
   toastMock.mockClear();
 });
 
@@ -1434,6 +1439,96 @@ describe("SettingsPage — Privacy Audit Entity List panel", () => {
     );
     // The group that was only ever auto-expanded by the filter re-collapses to
     // the baseline (Task #822 behavior preserved).
+    expect(
+      screen
+        .getByTestId("button-entity-error-group-unknown-category")
+        .getAttribute("aria-expanded"),
+    ).toBe("false");
+
+    // Triage only — nothing was applied.
+    expect(screen.queryByTestId("text-preview-incoming")).toBeNull();
+    expect(getActiveEntitySource()).toBe("bundled");
+    expect((await getSettings("default"))?.entityListSnapshot).toBeUndefined();
+  });
+
+  it("remembers a manually-expanded group after the panel unmounts and remounts (same import session), and a brand-new import starts collapsed", async () => {
+    // Two distinct groups so the baseline is collapsed (nothing auto-opens):
+    //   - invalid-address  × 1 (entry 1)  → the user MANUALLY expands this
+    //   - unknown-category × 1 (entry 2)  → left collapsed
+    const mixed = JSON.stringify([
+      { address: "totally-invalid-a", name: "Bad One", category: "exchange" },
+      { address: ADDR.a, name: "Bogus", category: "not-a-category" },
+    ]);
+
+    // --- First visit: import, manually expand one group. ---
+    const first = renderSettingsPage();
+    await first.findByTestId("badge-entity-source");
+    await selectEntityFile("messy-paste.json", mixed);
+    await screen.findByTestId("container-entity-errors");
+
+    // Baseline: both groups collapsed.
+    expect(
+      screen
+        .getByTestId("button-entity-error-group-invalid-address")
+        .getAttribute("aria-expanded"),
+    ).toBe("false");
+    expect(
+      screen
+        .getByTestId("button-entity-error-group-unknown-category")
+        .getAttribute("aria-expanded"),
+    ).toBe("false");
+
+    // The user manually expands the invalid-address group.
+    fireEvent.click(
+      screen.getByTestId("button-entity-error-group-invalid-address"),
+    );
+    expect(
+      screen
+        .getByTestId("button-entity-error-group-invalid-address")
+        .getAttribute("aria-expanded"),
+    ).toBe("true");
+
+    // --- Leave Settings entirely: unmount the whole page (and the panel). ---
+    first.unmount();
+    expect(screen.queryByTestId("list-entity-errors")).toBeNull();
+
+    // --- Return to Settings and re-import the SAME file (same session). The
+    // manually-expanded group must come back already open, while the untouched
+    // group stays collapsed. ---
+    const second = renderSettingsPage();
+    await second.findByTestId("badge-entity-source");
+    await selectEntityFile("messy-paste.json", mixed);
+    await screen.findByTestId("container-entity-errors");
+
+    await waitFor(() =>
+      expect(
+        screen
+          .getByTestId("button-entity-error-group-invalid-address")
+          .getAttribute("aria-expanded"),
+      ).toBe("true"),
+    );
+    expect(
+      screen
+        .getByTestId("button-entity-error-group-unknown-category")
+        .getAttribute("aria-expanded"),
+    ).toBe("false");
+
+    // --- A brand-new (different) import starts from the clean collapsed
+    // baseline rather than inheriting the prior import's triage state. ---
+    const fresh = JSON.stringify([
+      { address: "different-bad-x", name: "Other One", category: "exchange" },
+      { address: ADDR.b, name: "Other Two", category: "still-not-a-category" },
+    ]);
+    await selectEntityFile("other-paste.json", fresh);
+    await screen.findByTestId("container-entity-errors");
+
+    await waitFor(() =>
+      expect(
+        screen
+          .getByTestId("button-entity-error-group-invalid-address")
+          .getAttribute("aria-expanded"),
+      ).toBe("false"),
+    );
     expect(
       screen
         .getByTestId("button-entity-error-group-unknown-category")

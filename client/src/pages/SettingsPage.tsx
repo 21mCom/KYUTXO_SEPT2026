@@ -526,6 +526,41 @@ function groupEntityErrors(errors: EntitySnapshotError[]): EntityErrorGroup[] {
 }
 
 /**
+ * Triage open/closed state persisted *outside* the EntityErrorList component so
+ * a user's manual expand/collapse choices survive the panel unmounting and
+ * remounting (navigating away from Settings, re-running the import that
+ * re-renders the list) within the same import session. It is module-level
+ * (not localStorage/settings) on purpose: it resets on a full page reload, so a
+ * brand-new app session never inherits stale triage state, while still keeping
+ * choices stable across mounts within one session. Keyed by a content signature
+ * of the import so a *different* import starts from the clean collapsed
+ * baseline, while re-selecting the same file restores exactly what was open.
+ */
+const entityErrorOpenStateBySignature = new Map<string, Record<string, boolean>>();
+
+/** Test seam: clears all remembered triage state so tests don't leak it. */
+export function resetEntityErrorOpenState() {
+  entityErrorOpenStateBySignature.clear();
+}
+
+/**
+ * A stable signature of an import's errors so the same import maps to the same
+ * remembered triage state while a different import (different offending entries
+ * or reasons) gets a fresh key. A djb2 hash over each error's kind+position+
+ * message keeps the key short even for thousands of errors.
+ */
+function entityErrorsSignature(errors: EntitySnapshotError[]): string {
+  let hash = 5381;
+  for (const err of errors) {
+    const s = `${err.kind}\u0000${err.index}\u0000${err.message}`;
+    for (let i = 0; i < s.length; i++) {
+      hash = ((hash << 5) + hash) ^ s.charCodeAt(i);
+    }
+  }
+  return `${errors.length}:${(hash >>> 0).toString(36)}`;
+}
+
+/**
  * Validation errors shown when a hand-edited entity-list import fails, grouped
  * by problem type (e.g. "Unknown category", "Invalid Bitcoin address") with a
  * per-group count. Each group collapses by default so a file with many similar
@@ -570,12 +605,28 @@ function EntityErrorList({ errors }: { errors: EntitySnapshotError[] }) {
   // group (nothing to triage between).
   const autoOpen = filterActive || groups.length === 1;
 
+  // A content signature of the import identifies this exact set of errors, so
+  // remembered triage state is restored on a remount of the SAME import but a
+  // brand-new import (different signature) starts collapsed.
+  const signature = useMemo(() => entityErrorsSignature(errors), [errors]);
+
   // Open state lives here (not in each group) so a user's manual expand/collapse
   // survives a group being filtered out of the DOM and brought back. `openMap`
   // is the current visible state per kind; `userSetOpenRef` remembers only the
   // choices the user made by hand, separate from the auto-open intent.
   const [openMap, setOpenMap] = useState<Record<string, boolean>>({});
   const userSetOpenRef = useRef<Record<string, boolean>>({});
+  // Reseed the user-choice ref from module-level storage whenever the import
+  // (signature) changes — including the first mount. Done during render (before
+  // the effect below) so the restored choices are in place when openMap is
+  // computed. This is what lets a manual expand/collapse survive the panel
+  // unmounting/remounting within a session, while a new import (no stored
+  // state) falls back to the clean collapsed baseline.
+  const loadedSignatureRef = useRef<string | null>(null);
+  if (loadedSignatureRef.current !== signature) {
+    loadedSignatureRef.current = signature;
+    userSetOpenRef.current = { ...(entityErrorOpenStateBySignature.get(signature) ?? {}) };
+  }
   useEffect(() => {
     setOpenMap((prev) => {
       const next: Record<string, boolean> = { ...prev };
@@ -592,11 +643,13 @@ function EntityErrorList({ errors }: { errors: EntitySnapshotError[] }) {
     });
   }, [autoOpen, allGroups]);
   const toggleGroup = (kind: string) => {
-    setOpenMap((prev) => {
-      const next = !prev[kind];
-      userSetOpenRef.current[kind] = next;
-      return { ...prev, [kind]: next };
-    });
+    // Toggle off the currently-visible state so collapsing an auto-opened group
+    // works too. Persist the user's choices to module-level storage keyed by
+    // this import's signature so they outlive the panel's lifecycle.
+    const next = !openMap[kind];
+    userSetOpenRef.current = { ...userSetOpenRef.current, [kind]: next };
+    entityErrorOpenStateBySignature.set(signature, { ...userSetOpenRef.current });
+    setOpenMap((prev) => ({ ...prev, [kind]: next }));
   };
 
   return (
