@@ -26,6 +26,7 @@ import {
   cleanup,
   within,
   waitFor,
+  act,
 } from "@testing-library/react";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { PrivacyFinding } from "@/lib/privacy-audit";
@@ -61,12 +62,18 @@ const mockedGetTx = vi.mocked(getTransactionByTxid);
 const mockedGetParticipants = vi.mocked(getParticipantsByTxids);
 
 // A minimal Worker stub so the deep-dive's lazy Boltzmann worker can be created
-// under jsdom without loading the real module worker.
+// under jsdom without loading the real module worker. A captured handle to the
+// most recently constructed worker lets a test drive worker.onmessage by hand.
+let lastWorker: MockWorker | null = null;
+
 class MockWorker {
   onmessage: ((e: MessageEvent) => void) | null = null;
   onerror: ((e: { message: string }) => void) | null = null;
   postMessage = vi.fn();
   terminate = vi.fn();
+  constructor() {
+    lastWorker = this;
+  }
 }
 
 // Distinct 64-hex txids whose first 8 chars differ so every link/button gets a
@@ -187,6 +194,7 @@ describe("FindingCard proximity hop-path deep-dive interaction", () => {
   beforeEach(() => {
     // The dialog auto-runs analysis on open; resolve the loaders and provide a
     // Worker so nothing throws while we assert the dialog itself opened.
+    lastWorker = null;
     mockedGetTx.mockResolvedValue({ txid: TX(2), fee: 1_000 } as any);
     mockedGetParticipants.mockResolvedValue([
       { txid: TX(2), role: "input", address: "bc1qin", amount: 100_000, vout: 0 },
@@ -223,5 +231,46 @@ describe("FindingCard proximity hop-path deep-dive interaction", () => {
       expect(mockedGetTx).toHaveBeenCalledWith(TX(2));
     });
     expect(mockedGetTx).not.toHaveBeenCalledWith(TX(1));
+  });
+
+  it("renders the deep-dive results once the worker returns for the clicked hop's txid", async () => {
+    const hopPath = ["bc1qhopA", "bc1qhopB", "bc1qhopC"];
+    const hopTxids = [TX(1), TX(2)]; // one per pair → 2
+
+    renderCard(proximityFinding({ details: { hopPath, hopTxids } }));
+    fireEvent.click(screen.getByTestId("button-toggle-details"));
+
+    // Open the deep-dive for the second hop's txid.
+    const second8 = TX(2).slice(0, 8);
+    fireEvent.click(screen.getByTestId(`button-deep-dive-${second8}`));
+
+    const dialog = await screen.findByTestId("dialog-deep-dive");
+    expect(within(dialog).getByText(TX(2))).toBeTruthy();
+
+    // The dialog auto-runs analysis: data loads and the worker is posted to.
+    await waitFor(() => {
+      expect(lastWorker).not.toBeNull();
+      expect(lastWorker!.postMessage).toHaveBeenCalled();
+    });
+
+    // Drive a valid worker result back using the id from the latest postMessage
+    // so the handler's pendingIdRef guard accepts it.
+    const calls = lastWorker!.postMessage.mock.calls;
+    const { id } = calls[calls.length - 1][0] as { id: string };
+    act(() => {
+      lastWorker!.onmessage!({
+        data: { id, result: { tooComplex: true } },
+      } as MessageEvent);
+    });
+
+    // The user actually sees results inside the dialog: both the summary and the
+    // Boltzmann result render for the clicked hop's txid.
+    const summary = await within(dialog).findByTestId("container-deep-dive-summary");
+    expect(summary).toBeTruthy();
+    expect(within(dialog).getByTestId("container-boltzmann-result")).toBeTruthy();
+
+    // The summary reflects the loaded participants (1 input, 1 output).
+    expect(within(dialog).getByTestId("text-deep-dive-inputs").textContent).toBe("1");
+    expect(within(dialog).getByTestId("text-deep-dive-outputs").textContent).toBe("1");
   });
 });
