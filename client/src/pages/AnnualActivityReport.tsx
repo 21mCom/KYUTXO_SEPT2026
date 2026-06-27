@@ -1,5 +1,5 @@
 import { useState, useMemo, useRef, useCallback } from "react";
-import { Loader2, ChevronDown, ChevronRight, AlertCircle, CalendarRange } from "lucide-react";
+import { Loader2, ChevronDown, ChevronRight, AlertCircle, CalendarRange, FileDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -33,7 +33,7 @@ interface CounterpartyEntry {
   txCount: number;
 }
 
-interface ReportData {
+export interface ReportData {
   combinedYearRows: YearRow[];
   perAddress: AddressActivity[];
   receivedFrom: CounterpartyEntry[];
@@ -69,6 +69,117 @@ function buildYearRowsFromMaps(
   return Array.from(byYear.entries())
     .map(([year, data]) => ({ year, ...data }))
     .sort((a, b) => a.year - b.year);
+}
+
+function csvEscape(value: string): string {
+  if (/[",\r\n]/.test(value)) {
+    return `"${value.replace(/"/g, '""')}"`;
+  }
+  return value;
+}
+
+function csvRow(cells: (string | number)[]): string {
+  return cells.map((c) => csvEscape(String(c))).join(",");
+}
+
+function sumYearRows(rows: YearRow[]): { txCount: number; receivedSats: number; spentSats: number } {
+  return rows.reduce(
+    (acc, r) => ({
+      txCount: acc.txCount + r.txCount,
+      receivedSats: acc.receivedSats + r.receivedSats,
+      spentSats: acc.spentSats + r.spentSats,
+    }),
+    { txCount: 0, receivedSats: 0, spentSats: 0 },
+  );
+}
+
+/**
+ * Serialise the full Annual Activity Report to a single CSV string with labelled
+ * sections: the combined annual table, the per-address breakdown, and the full
+ * (unfiltered) counterparty lists with their transaction counts. Pure (no DOM,
+ * no DB) so it works fully offline and is testable in isolation.
+ */
+export function buildAnnualActivityCsv(data: ReportData, addresses: string[], generatedAt: Date): string {
+  const lines: string[] = [];
+
+  lines.push(csvRow(["KYUTXO Annual Activity Report"]));
+  lines.push(csvRow(["Generated", generatedAt.toISOString()]));
+  lines.push(csvRow(["Addresses analyzed", addresses.length]));
+  lines.push(
+    csvRow(["Addresses with data", data.perAddress.filter((p) => p.hasData).length]),
+  );
+  lines.push("");
+
+  lines.push(csvRow(["Combined Annual Activity"]));
+  lines.push(csvRow(["Year", "Transactions", "BTC Received", "BTC Spent"]));
+  if (data.combinedYearRows.length === 0) {
+    lines.push(csvRow(["No synced transaction data for any of the provided addresses."]));
+  } else {
+    for (const r of data.combinedYearRows) {
+      lines.push(csvRow([r.year, r.txCount, formatBTC(r.receivedSats), formatBTC(r.spentSats)]));
+    }
+    const total = sumYearRows(data.combinedYearRows);
+    lines.push(
+      csvRow(["All Time", total.txCount, formatBTC(total.receivedSats), formatBTC(total.spentSats)]),
+    );
+  }
+  lines.push("");
+
+  lines.push(csvRow(["Per-Address Breakdown"]));
+  lines.push(csvRow(["Address", "Year", "Transactions", "BTC Received", "BTC Spent"]));
+  for (const pa of data.perAddress) {
+    if (!pa.hasData || pa.yearRows.length === 0) {
+      lines.push(csvRow([pa.address, "No data", 0, formatBTC(0), formatBTC(0)]));
+      continue;
+    }
+    for (const r of pa.yearRows) {
+      lines.push(
+        csvRow([pa.address, r.year, r.txCount, formatBTC(r.receivedSats), formatBTC(r.spentSats)]),
+      );
+    }
+    const total = sumYearRows(pa.yearRows);
+    lines.push(
+      csvRow([pa.address, "All Time", total.txCount, formatBTC(total.receivedSats), formatBTC(total.spentSats)]),
+    );
+  }
+  lines.push("");
+
+  lines.push(csvRow(["Received From (counterparties)"]));
+  if (data.unresolvedReceivedFromCount > 0) {
+    lines.push(
+      csvRow([
+        `${data.unresolvedReceivedFromCount} transaction(s) had input sources that could not be resolved to an address (omitted below).`,
+      ]),
+    );
+  }
+  lines.push(csvRow(["Address", "Transactions"]));
+  if (data.receivedFrom.length === 0) {
+    lines.push(csvRow(["No counterparties."]));
+  } else {
+    for (const e of data.receivedFrom) {
+      lines.push(csvRow([e.address, e.txCount]));
+    }
+  }
+  lines.push("");
+
+  lines.push(csvRow(["Sent To (counterparties)"]));
+  if (data.unresolvedSentToCount > 0) {
+    lines.push(
+      csvRow([
+        `${data.unresolvedSentToCount} transaction(s) had input sources that could not be resolved to an address (omitted below).`,
+      ]),
+    );
+  }
+  lines.push(csvRow(["Address", "Transactions"]));
+  if (data.sentTo.length === 0) {
+    lines.push(csvRow(["No counterparties."]));
+  } else {
+    for (const e of data.sentTo) {
+      lines.push(csvRow([e.address, e.txCount]));
+    }
+  }
+
+  return lines.join("\r\n");
 }
 
 function TotalsRow({ rows }: { rows: YearRow[] }) {
@@ -212,6 +323,27 @@ export default function AnnualActivityReport() {
   const [expandedAddresses, setExpandedAddresses] = useState<Set<string>>(new Set());
   const abortRef = useRef<AbortController | null>(null);
 
+  const [usedAddresses, setUsedAddresses] = useState<string[]>([]);
+
+  const exportCsv = useCallback(() => {
+    if (!reportData) return;
+    try {
+      const generatedAt = new Date();
+      const content = buildAnnualActivityCsv(reportData, usedAddresses, generatedAt);
+      const stamp = generatedAt.toISOString().slice(0, 10);
+      const filename = `kyutxo-annual-activity-${stamp}.csv`;
+      const blob = new Blob([content], { type: "text/csv;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error("Failed to export annual activity report:", err);
+    }
+  }, [reportData, usedAddresses]);
+
   const toggleAddress = useCallback((addr: string) => {
     setExpandedAddresses((prev) => {
       const next = new Set(prev);
@@ -234,12 +366,14 @@ export default function AnnualActivityReport() {
     if (addresses.length === 0) {
       setHasGenerated(true);
       setReportData(null);
+      setUsedAddresses([]);
       return;
     }
 
     setIsGenerating(true);
     setHasGenerated(false);
     setExpandedAddresses(new Set());
+    setUsedAddresses(addresses);
 
     try {
       const addressSet = new Set(addresses);
@@ -647,6 +781,17 @@ export default function AnnualActivityReport() {
 
         {reportData && (
           <>
+            <div className="flex items-center justify-end">
+              <Button
+                variant="outline"
+                onClick={exportCsv}
+                data-testid="button-export-csv"
+              >
+                <FileDown className="h-4 w-4 mr-2" />
+                Export CSV
+              </Button>
+            </div>
+
             {reportData.noDataAddresses.length > 0 && (
               <div
                 className="flex items-start gap-2 rounded-md border border-amber-500/50 bg-amber-500/10 p-3 text-sm text-amber-700 dark:text-amber-400"
