@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, waitFor } from "@testing-library/react";
+import { waitFor } from "@testing-library/react";
+import { renderWithProviders } from "@/test/testProviders";
 
 const mockAttachmentsToArray = vi.fn(() => Promise.resolve([]));
 
@@ -77,7 +78,7 @@ describe("RecordTable stats columns (cached values)", () => {
       },
     ];
 
-    const { container } = render(<RecordTable records={records} />);
+    const { container } = renderWithProviders(<RecordTable records={records} />);
 
     await waitFor(() => {
       const row1 = container.querySelector('[data-testid="row-record-1"]')!;
@@ -98,7 +99,7 @@ describe("RecordTable stats columns (cached values)", () => {
       { id: "2", type: "address" as const, inputString: "bc1addr2", label: "Addr 2", tags: [] },
     ];
 
-    const { container } = render(<RecordTable records={records} />);
+    const { container } = renderWithProviders(<RecordTable records={records} />);
 
     await waitFor(() => {
       const row2 = container.querySelector('[data-testid="row-record-2"]')!;
@@ -114,7 +115,7 @@ describe("RecordTable stats columns (cached values)", () => {
       { id: "10", type: "transaction" as const, inputString: "txid_abc", label: "TX", tags: [] },
     ];
 
-    const { container } = render(<RecordTable records={records} />);
+    const { container } = renderWithProviders(<RecordTable records={records} />);
 
     await waitFor(() => {
       const row = container.querySelector('[data-testid="row-record-10"]')!;

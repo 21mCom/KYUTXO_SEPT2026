@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, afterEach, vi } from "vitest";
-import { render, fireEvent, cleanup } from "@testing-library/react";
+import { fireEvent, cleanup } from "@testing-library/react";
+import { renderWithProviders } from "@/test/testProviders";
 import { HopPathExplorer } from "./HopPathExplorer";
 import type { FlowNode } from "@/hooks/use-flow-data";
 
@@ -46,7 +47,7 @@ const nodes: FlowNode[] = [
 describe("HopPathExplorer node interaction", () => {
   it("opens the record in one step on a mouse click (no intermediate panel)", () => {
     const onNodeClick = vi.fn();
-    const { getByTestId } = render(
+    const { getByTestId } = renderWithProviders(
       <HopPathExplorer
         nodes={nodes}
         links={[]}
@@ -63,7 +64,7 @@ describe("HopPathExplorer node interaction", () => {
 
   it("opens the record when Enter is pressed on a focused node", () => {
     const onNodeClick = vi.fn();
-    const { getByTestId } = render(
+    const { getByTestId } = renderWithProviders(
       <HopPathExplorer
         nodes={nodes}
         links={[]}
@@ -80,7 +81,7 @@ describe("HopPathExplorer node interaction", () => {
 
   it("opens the record when Space is pressed on a focused node", () => {
     const onNodeClick = vi.fn();
-    const { getByTestId } = render(
+    const { getByTestId } = renderWithProviders(
       <HopPathExplorer
         nodes={nodes}
         links={[]}
@@ -97,7 +98,7 @@ describe("HopPathExplorer node interaction", () => {
 
   it("does not open the record for other keys", () => {
     const onNodeClick = vi.fn();
-    const { getByTestId } = render(
+    const { getByTestId } = renderWithProviders(
       <HopPathExplorer
         nodes={nodes}
         links={[]}
@@ -112,7 +113,7 @@ describe("HopPathExplorer node interaction", () => {
   });
 
   it("exposes a button role and tab focus for keyboard users", () => {
-    const { getByTestId } = render(
+    const { getByTestId } = renderWithProviders(
       <HopPathExplorer nodes={nodes} links={[]} centerAddress={CENTER} />,
     );
 
