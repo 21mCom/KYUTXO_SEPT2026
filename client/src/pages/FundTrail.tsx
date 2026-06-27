@@ -48,6 +48,7 @@ import {
   computeOneHop,
   formatBtc,
   formatDate,
+  formatDateRange,
   deduplicateDetails,
   UNKNOWN_SOURCE_LABEL,
   UNKNOWN_DEST_LABEL,
@@ -693,9 +694,22 @@ function TrailLayout({
     [centerLabel, dimension, centerHop, toast],
   );
 
+  const dateRangeLabel = formatDateRange(dateRange);
+
   return (
     <ExpandedHopContext.Provider value={hopRegistry}>
     <div className="flex flex-col flex-1 min-h-0 overflow-auto">
+      {dateRangeLabel && (
+        <div className="sticky top-0 z-50 flex justify-center px-6 pt-4">
+          <Badge
+            variant="secondary"
+            className="text-xs shadow-sm"
+            data-testid="fund-trail-active-range"
+          >
+            {dateRangeLabel}
+          </Badge>
+        </div>
+      )}
       {centerHop.isCapped && (
         <div className="px-6 pt-4">
           <CapNotice

@@ -600,6 +600,26 @@ export function formatDate(blockTime: number): string {
 }
 
 /**
+ * Build a human-readable description of an active date filter window,
+ * e.g. "Showing Oct 1 – Dec 31, 2023", "Showing from Oct 1, 2023", or
+ * "Showing through Dec 31, 2023". Returns null when no range is active.
+ */
+export function formatDateRange(range?: DateRange | null): string | null {
+  if (!range) return null;
+  const { start, end } = range;
+  if (start != null && end != null) {
+    return `Showing ${formatDate(start)} – ${formatDate(end)}`;
+  }
+  if (start != null) {
+    return `Showing from ${formatDate(start)}`;
+  }
+  if (end != null) {
+    return `Showing through ${formatDate(end)}`;
+  }
+  return null;
+}
+
+/**
  * Deduplicate flow details by address+txid pair.
  */
 export function deduplicateDetails(
