@@ -97,7 +97,7 @@ interface VirtualizedLoadedStats {
   loadedTxCount: number;
 }
 
-function TransactionCard({
+export function TransactionCard({
   tx,
   inputs,
   outputs,
