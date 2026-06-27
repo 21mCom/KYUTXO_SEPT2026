@@ -37,6 +37,19 @@ describe("renderSourceNote parsing rules", () => {
     expect(container.textContent).toBe(note);
   });
 
+  it("marks the link with break-all so very long unbroken URLs wrap instead of overflowing", () => {
+    const longUrl =
+      "https://example.com/" + "a".repeat(400) + "/some-resource";
+    render(<div data-testid="note">{renderSourceNote(`See ${longUrl} here`)}</div>);
+
+    const container = screen.getByTestId("note");
+    const link = within(container).getByRole("link");
+    expect(link.getAttribute("href")).toBe(longUrl);
+    // Every surface that renders renderSourceNote output relies on this class to
+    // keep long URLs contained; assert it directly on the shared helper.
+    expect(link.classList.contains("break-all")).toBe(true);
+  });
+
   it("keeps a closing paren and trailing period out of the href when a URL ends a sentence inside parentheses", () => {
     const note = "Source: (see https://example.com/x).";
     render(<div data-testid="note">{renderSourceNote(note)}</div>);

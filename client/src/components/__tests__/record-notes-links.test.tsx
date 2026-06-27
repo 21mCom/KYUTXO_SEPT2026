@@ -105,4 +105,20 @@ describe("record notes link rendering (offline-first)", () => {
     expect(notes.textContent).toBe(plain);
     expect(within(notes).queryByRole("link")).toBeNull();
   });
+
+  it("wraps a very long unbroken URL (break-all) so it can't break the record layout", () => {
+    const longUrl =
+      "https://example.com/" + "a".repeat(400) + "/proof-of-ownership";
+    renderPanel(baseRecord({ notes: `Reference ${longUrl} attached` }));
+
+    const notes = screen.getByTestId("text-notes-detail");
+    const link = within(notes).getByRole("link");
+    expect(link.getAttribute("href")).toBe(longUrl);
+    // The anchor must carry break-all so the unbroken URL wraps instead of
+    // overflowing the detail panel.
+    expect(link.classList.contains("break-all")).toBe(true);
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(openSpy).not.toHaveBeenCalled();
+  });
 });

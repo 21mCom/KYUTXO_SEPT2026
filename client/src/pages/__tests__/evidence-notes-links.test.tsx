@@ -180,6 +180,23 @@ describe("evidence notes link rendering (offline-first)", () => {
     expect(within(card).queryByRole("link")).toBeNull();
   });
 
+  it("wraps a very long unbroken URL (break-all) so it can't break the evidence layout", async () => {
+    const longUrl =
+      "https://example.com/" + "a".repeat(400) + "/evidence-record";
+    await renderEvidence([
+      makeEvidence({ id: 1, notes: `Stored at ${longUrl} now` }),
+    ]);
+
+    const card = screen.getByTestId("card-evidence-1");
+    const link = within(card).getByRole("link");
+    expect(link.getAttribute("href")).toBe(longUrl);
+    // The anchor must carry break-all so the unbroken URL wraps instead of
+    // overflowing the evidence card.
+    expect(link.classList.contains("break-all")).toBe(true);
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
   it("renders the note URL as a link in the quick-view preview dialog too", async () => {
     const url = "https://blockstream.info/tx/def456";
     await renderEvidence([makeEvidence({ id: 1, notes: url })]);
