@@ -206,3 +206,94 @@ describe("BalanceIntegrityCard - error state", () => {
     expect(banner.textContent).toContain("recompute blew up");
   });
 });
+
+describe("BalanceIntegrityCard - check all addresses (full scan)", () => {
+  it("shows the full-scan progress wording and a 'synced' done verdict", async () => {
+    // Hold the detect call in flight so we can observe the checking progress.
+    const detectGate = deferred<StaleBalanceCheckResult>();
+    detectMock.mockImplementation(async (opts) => {
+      // Report progress with a total so the optional "of <total>" appears.
+      opts.onProgress?.(120, 500);
+      return detectGate.promise;
+    });
+
+    render(<BalanceIntegrityCard />);
+
+    fireEvent.click(screen.getByTestId("button-check-all-balances"));
+
+    // While the scan runs, the full-scan wording (with "of <total>") shows.
+    const progress = await screen.findByTestId("text-balance-progress");
+    expect(progress.textContent).toContain("Checking all addresses…");
+    expect(progress.textContent).toContain("120 of 500 scanned so far.");
+
+    // The scan was launched in full-table mode.
+    expect(detectMock).toHaveBeenCalledTimes(1);
+    expect(detectMock.mock.calls[0][0].checkAll).toBe(true);
+
+    // Finish the scan: a clean, full-table result (checkedAll: true).
+    detectGate.resolve({
+      sampled: 500,
+      staleCount: 0,
+      staleAddresses: [],
+      checkedAll: true,
+      cancelled: false,
+    });
+
+    // The done verdict uses "synced" wording (not "sampled") for a full scan.
+    await waitFor(() => {
+      const verdict = screen.getByTestId("text-balance-verdict");
+      expect(verdict.textContent).toContain("All 500 synced addresses");
+      expect(verdict.textContent).not.toContain("sampled");
+    });
+  });
+
+  it("re-runs the post-recompute check with checkAll=true (same scope picked)", async () => {
+    // First full scan finds a stale row; the re-check after recompute is clean.
+    detectMock
+      .mockImplementationOnce(async (opts) => {
+        if (opts.onStaleBatch) await opts.onStaleBatch([makeStaleRow(1)]);
+        return {
+          sampled: 500,
+          staleCount: 1,
+          staleAddresses: [],
+          checkedAll: true,
+          cancelled: false,
+        } satisfies StaleBalanceCheckResult;
+      })
+      .mockImplementationOnce(async () => {
+        return {
+          sampled: 500,
+          staleCount: 0,
+          staleAddresses: [],
+          checkedAll: true,
+          cancelled: false,
+        } satisfies StaleBalanceCheckResult;
+      });
+    getWindowMock.mockResolvedValue([makeStaleRow(1)]);
+    recomputeMock.mockResolvedValue({ updated: 1, cancelled: false });
+
+    render(<BalanceIntegrityCard />);
+
+    fireEvent.click(screen.getByTestId("button-check-all-balances"));
+
+    // The first full scan reports the stale verdict in "synced" wording.
+    await waitFor(() => {
+      const verdict = screen.getByTestId("text-balance-verdict");
+      expect(verdict.textContent).toContain("1 of 500 synced addresses");
+    });
+
+    fireEvent.click(await screen.findByTestId("button-recompute-balances"));
+
+    // After recompute, the re-check flips the verdict to clean (still "synced").
+    await waitFor(() => {
+      const verdict = screen.getByTestId("text-balance-verdict");
+      expect(verdict.textContent).toContain("up-to-date cached balances");
+    });
+
+    // The check ran twice and the re-check used the full-table scope (checkAll=true).
+    expect(detectMock).toHaveBeenCalledTimes(2);
+    expect(detectMock.mock.calls[0][0].checkAll).toBe(true);
+    expect(detectMock.mock.calls[1][0].checkAll).toBe(true);
+    expect(recomputeMock).toHaveBeenCalledTimes(1);
+  });
+});
