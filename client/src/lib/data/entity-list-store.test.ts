@@ -562,6 +562,58 @@ describe("loadEntitySnapshotFromStorage", () => {
     expect(getActiveEntityList().find((e) => e.address === NEW_ADDR)).toBeDefined();
   });
 
+  it("re-applies a persisted merge whose entry overrides a bundled address", async () => {
+    // A merge snapshot that both adds a brand-new address AND overrides a
+    // bundled entry (ADDR_A / Binance). After a refresh the override winner must
+    // still win — not silently revert to the bundled value.
+    const NEW_ADDR = "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq";
+    const bundledList = getBundledEntityList();
+    const bundledCount = bundledList.length;
+    // A bundled default the snapshot leaves untouched, to confirm defaults still
+    // flow through after re-hydration.
+    const untouched = bundledList.find((e) => e.address !== ADDR_A)!;
+    expect(untouched).toBeDefined();
+    // Sanity: the bundled value for ADDR_A is NOT the override we will assert.
+    const bundledForA = bundledList.find((e) => e.address === ADDR_A)!;
+    expect(bundledForA).toBeDefined();
+    expect(bundledForA.name).not.toBe("Overridden Binance");
+
+    getSettingsMock.mockResolvedValue({
+      id: "default",
+      entityListSnapshot: {
+        importedAt: 123,
+        mode: "merge",
+        entries: [
+          { address: NEW_ADDR, name: "New Market", category: "darknet" },
+          { address: ADDR_A, name: "Overridden Binance", category: "mixer" },
+        ],
+      },
+    });
+
+    const status = await loadEntitySnapshotFromStorage();
+    expect(status.source).toBe("imported");
+    // Re-applied as a merge: bundled defaults + the one brand-new address (the
+    // override replaces in place and does not grow the list).
+    expect(status.activeCount).toBe(bundledCount + 1);
+
+    const active = getActiveEntityList();
+    expect(active).toHaveLength(bundledCount + 1);
+    // Untouched bundled default still flows through.
+    expect(active.find((e) => e.address === untouched.address)).toEqual(untouched);
+    // Brand-new address was added.
+    expect(active.find((e) => e.address === NEW_ADDR)).toEqual({
+      address: NEW_ADDR,
+      name: "New Market",
+      category: "darknet",
+    });
+    // The override winner survives the refresh (not the bundled value).
+    expect(active.find((e) => e.address === ADDR_A)).toEqual({
+      address: ADDR_A,
+      name: "Overridden Binance",
+      category: "mixer",
+    });
+  });
+
   it("replaces with a persisted snapshot that has no mode (legacy)", async () => {
     getSettingsMock.mockResolvedValue({
       id: "default",
