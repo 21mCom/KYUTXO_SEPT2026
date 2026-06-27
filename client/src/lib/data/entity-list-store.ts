@@ -602,9 +602,13 @@ export async function importEntitySnapshot(
  * snapshot from the settings record.
  */
 export async function resetEntitySnapshot(): Promise<void> {
-  resetActiveEntityList();
+  // Persist the removal FIRST, then mutate the in-memory active list. If the
+  // settings write rejects, the runtime list is left exactly as it was so the
+  // user can be told the revert failed without their active list silently
+  // changing (and re-appearing as imported on the next refresh).
   // Setting the field to undefined deletes it from the stored record (Dexie).
   await updateSettings('default', { entityListSnapshot: undefined });
+  resetActiveEntityList();
 }
 
 /**
