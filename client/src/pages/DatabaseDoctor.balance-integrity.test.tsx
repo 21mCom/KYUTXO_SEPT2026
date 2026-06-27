@@ -512,6 +512,83 @@ describe("BalanceIntegrityCard - cancelling a selected-rows recompute", () => {
     expect(screen.queryByTestId("text-balance-recompute-progress")).toBeNull();
     expect(screen.queryByTestId("button-recompute-selected")).toBeNull();
   });
+
+  it("returns to idle and shows NO error banner when the cancelled selected-rows recompute's promise REJECTS", async () => {
+    // A small stale set that fully fits in one virtualized window so the row
+    // checkboxes render and can be ticked.
+    const rows = [makeStaleRow(1), makeStaleRow(2), makeStaleRow(3)];
+    detectMock.mockImplementation(async (opts) => {
+      if (opts.onStaleBatch) await opts.onStaleBatch(rows);
+      return {
+        sampled: 2000,
+        staleCount: rows.length,
+        staleAddresses: [],
+        checkedAll: false,
+        cancelled: false,
+      } satisfies StaleBalanceCheckResult;
+    });
+    getWindowMock.mockImplementation(async (offset: number, limit: number) =>
+      rows.slice(offset, offset + limit),
+    );
+
+    // Hold the recompute mid-flight, then REJECT it after the user cancels
+    // (e.g. an AbortError bubbling out of the engine). The card must treat a
+    // post-cancel rejection as a user cancellation, not a real failure: it
+    // returns to idle, never shows banner-balance-error, and never re-checks.
+    const recomputeGate = deferred<void>();
+    recomputeMock.mockImplementation(async (options) => {
+      options?.onProgress?.({ processed: 2, total: 2 });
+      await recomputeGate.promise;
+      return { updated: 2, cancelled: false };
+    });
+
+    render(<BalanceIntegrityCard />);
+
+    fireEvent.click(screen.getByTestId("button-run-balance-check"));
+
+    // The stale list mounts once the (mocked) check resolves.
+    await screen.findByTestId("list-stale-addresses");
+    expect(detectMock).toHaveBeenCalledTimes(1);
+
+    // Tick two of the three stale rows (ids 1 and 2).
+    fireEvent.click(await screen.findByTestId("checkbox-stale-1"));
+    fireEvent.click(screen.getByTestId("checkbox-stale-2"));
+
+    // The selected-rows recompute action appears with the running count.
+    const recomputeSelectedBtn = await screen.findByTestId("button-recompute-selected");
+    expect(recomputeSelectedBtn.textContent).toContain("Recompute selected (2)");
+
+    fireEvent.click(recomputeSelectedBtn);
+
+    // The recompute is in flight: progress shows and Cancel is offered.
+    await screen.findByTestId("text-balance-recompute-progress");
+    const cancelBtn = await screen.findByTestId("button-cancel-balance-check");
+
+    // The recompute targeted exactly the ticked record ids — not every address.
+    expect(recomputeMock).toHaveBeenCalledTimes(1);
+    const recomputeArgs = recomputeMock.mock.calls[0][0];
+    expect([...(recomputeArgs?.recordIds ?? [])].sort((a, b) => a - b)).toEqual([1, 2]);
+
+    fireEvent.click(cancelBtn);
+
+    // Cancel resets the card to idle immediately.
+    await screen.findByTestId("text-balance-idle");
+
+    // The aborted recompute now REJECTS rather than resolving.
+    recomputeGate.reject(new Error("aborted"));
+
+    // The rejection must NOT flip the card into the error state, and the check
+    // must NOT be re-run after a cancellation.
+    await waitFor(() => {
+      expect(screen.getByTestId("text-balance-idle")).toBeTruthy();
+    });
+    expect(screen.queryByTestId("banner-balance-error")).toBeNull();
+    expect(screen.queryByTestId("text-balance-recompute-progress")).toBeNull();
+    expect(screen.queryByTestId("text-balance-verdict")).toBeNull();
+    expect(screen.queryByTestId("banner-balance-result")).toBeNull();
+    // Only the initial check ran; the post-recompute re-check was skipped.
+    expect(detectMock).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("BalanceIntegrityCard - error state", () => {
