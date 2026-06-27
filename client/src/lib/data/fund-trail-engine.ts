@@ -237,7 +237,6 @@ export async function computeOneHop(
     ...incomingTxidsFromParticipants,
     ...outgoingTxidsFromParticipants,
   ]);
-  const totalTxCount = candidateTxids.size;
   const txLimit = options?.txLimit ?? DEFAULT_TX_LIMIT;
 
   const blockTimes = await loadBlockTimes([...candidateTxids]);
@@ -252,12 +251,25 @@ export async function computeOneHop(
 
   if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
 
+  // When a date range is active, restrict the recency cap to the txids whose
+  // blockTime actually falls in the window. Otherwise, on a wallet with more
+  // than `txLimit` transactions, newer out-of-window txids could consume the
+  // cap and silently drop older in-window flows before steps 4/5 ever filter
+  // by date. Scoping the candidate set here keeps totalTxCount/shownTxCount/
+  // isCapped meaningful relative to the chosen window.
+  const rangeActive = !!dateRange && (dateRange.start != null || dateRange.end != null);
+  const cappableTxids = rangeActive
+    ? [...candidateTxids].filter(t => isBlockTimeInRange(blockTimes.get(t) ?? 0, dateRange))
+    : [...candidateTxids];
+
+  const totalTxCount = cappableTxids.length;
+
   let isCapped = false;
   let shownTxCount = totalTxCount;
   if (totalTxCount > txLimit) {
     isCapped = true;
     const keptTxids = new Set(
-      [...candidateTxids]
+      cappableTxids
         .sort((a, b) => (blockTimes.get(b) ?? 0) - (blockTimes.get(a) ?? 0))
         .slice(0, txLimit)
     );

@@ -296,4 +296,72 @@ describe("computeOneHop date-range filtering", () => {
     expect(mixed.details[0].blockTime).toBe(2500);
     expect(mixed.totalSats).toBe(40);
   });
+
+  it("does not let newer out-of-window txids consume the recency cap and drop older in-window flows", async () => {
+    // Busy-wallet regression: more than txLimit transactions exist, and the
+    // NEWEST ones all fall OUTSIDE the chosen date window while the OLDER ones
+    // fall INSIDE it. With a small txLimit, a recency cap applied before the
+    // date filter would keep only the newest (out-of-window) txids and silently
+    // drop every in-window flow. The cap must be scoped to in-window txids.
+    const txLimit = 3;
+
+    // 5 newer flows, all AFTER the window [1000, 2000] — these must not eat the cap.
+    for (let i = 0; i < 5; i++) {
+      await addFlow({
+        direction: "in",
+        path: "lineage",
+        label: `NewOut${i}`,
+        time: 5000 + i,
+      });
+    }
+    // 2 older flows, both INSIDE the window — these must survive.
+    await addFlow({ direction: "in", path: "lineage", label: "OldIn0", time: 1200 });
+    await addFlow({ direction: "in", path: "participant", label: "OldIn1", time: 1500 });
+
+    const hop = await computeOneHop(
+      [GROUP_ADDR],
+      "walletName",
+      SELF_LABEL,
+      { start: 1000, end: 2000 },
+      undefined,
+      { txLimit },
+    );
+
+    // Both in-window flows appear; none of the out-of-window ones do.
+    expect(labelsOf(hop.sources)).toEqual(["OldIn0", "OldIn1"]);
+
+    // Counts are meaningful relative to the active window: only the 2 in-window
+    // txids are candidates, so nothing is capped.
+    expect(hop.totalTxCount).toBe(2);
+    expect(hop.shownTxCount).toBe(2);
+    expect(hop.isCapped).toBe(false);
+  });
+
+  it("reports isCapped relative to the window when in-window txids exceed the cap", async () => {
+    const txLimit = 2;
+
+    // 3 in-window flows (window [1000, 2000]) — more than the cap.
+    await addFlow({ direction: "in", path: "lineage", label: "In0", time: 1100 });
+    await addFlow({ direction: "in", path: "lineage", label: "In1", time: 1500 });
+    await addFlow({ direction: "in", path: "lineage", label: "In2", time: 1900 });
+    // Plus a newer out-of-window flow that must never displace an in-window one.
+    await addFlow({ direction: "in", path: "lineage", label: "Out", time: 9000 });
+
+    const hop = await computeOneHop(
+      [GROUP_ADDR],
+      "walletName",
+      SELF_LABEL,
+      { start: 1000, end: 2000 },
+      undefined,
+      { txLimit },
+    );
+
+    // totalTxCount counts only in-window candidates; shown is capped to txLimit.
+    expect(hop.totalTxCount).toBe(3);
+    expect(hop.shownTxCount).toBe(2);
+    expect(hop.isCapped).toBe(true);
+    // The out-of-window flow never appears, and the kept flows are the newest
+    // in-window ones (In1 @1500, In2 @1900).
+    expect(labelsOf(hop.sources)).toEqual(["In1", "In2"]);
+  });
 });
