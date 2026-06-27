@@ -317,4 +317,101 @@ describe("v3 backup full pipeline: evidence files survive export -> wipe -> rest
       expect(actualBytes).toBe(expectedBytesByTitle.get(linkedTitle!));
     }
   });
+
+  // Companion to the happy path above: a single attachment file's write can fail
+  // for real-world reasons (disk full, permission denied, a path the backend
+  // rejects). When that happens, restore MUST surface the failure — never finish
+  // as if every file landed — because the inline DB tables are already restored
+  // and now hold links pointing at a file that was never written. A swallowed
+  // write error leaves the user with a document that looks present in the list
+  // but cannot be opened. This asserts `restoreV3Backup` propagates the per-file
+  // failure and that the missing file is genuinely unreadable afterwards.
+  it("propagates a per-file attachment write failure instead of silently skipping it", async () => {
+    // 1. Put REAL files on disk for the evidence we will back up.
+    const plan = [
+      { title: "Coinbase Receipt 2021", filename: "receipt.txt", bytes: "RECEIPT-BYTES-COINBASE" },
+      { title: "Bank Wire Confirmation", filename: "wire.txt", bytes: "WIRE-BYTES-BANK" },
+      { title: "Cold Storage Photo", filename: "photo.txt", bytes: "PHOTO-BYTES-COLDSTORAGE" },
+    ];
+    const pathByTitle = new Map<string, string>();
+    for (const p of plan) {
+      const storagePath = await uploadFile(fileWithBytes(p.filename, "text/plain", p.bytes));
+      pathByTitle.set(p.title, storagePath);
+    }
+
+    // 2. Seed evidence + attachments so a real export walks them.
+    await evidenceCrud.bulkAddEvidence(
+      plan.map((p) => ({ title: p.title, documentType: "receipt", tags: [], partiesInvolved: [] } as any)),
+      { skipNotification: true },
+    );
+    const seeded = await evidenceCrud.getAllEvidence();
+    const idByTitle = new Map(seeded.map((e) => [e.title, e.id as number]));
+    for (const p of plan) {
+      await evidenceCrud.addEvidenceAttachment(
+        {
+          evidenceId: idByTitle.get(p.title)!,
+          filename: p.filename,
+          mimeType: "text/plain",
+          size: p.bytes.length,
+          objectStoragePath: pathByTitle.get(p.title)!,
+        } as any,
+        { skipNotification: true },
+      );
+    }
+
+    // 3. Export a real, full v3 backup to a Blob.
+    const sink = new MemorySink();
+    await exportBackup({
+      sink: sink as any,
+      encrypted: false,
+      batchSize: 50,
+      attachmentIO,
+    });
+    const blob = sink.blob as Blob;
+    expect(blob.size).toBeGreaterThan(0);
+
+    // 4. WIPE everything: DB tables AND on-disk files.
+    await clearDbVault();
+    await wipeDiskFiles();
+
+    // 5. Restore with a writer that fails on exactly ONE evidence file (the bank
+    //    wire), identified by its distinct bytes, and otherwise writes for real.
+    const failingTitle = "Bank Wire Confirmation";
+    const failingBytes = "WIRE-BYTES-BANK";
+    const writeError = "simulated disk-full: attachment write rejected";
+    let attemptedFailingWrite = false;
+    const flakyWriter = {
+      async write(relativePath: string, fileData: ArrayBuffer): Promise<void> {
+        const text = new TextDecoder().decode(new Uint8Array(fileData));
+        if (text === failingBytes) {
+          attemptedFailingWrite = true;
+          throw new Error(writeError);
+        }
+        return attachmentWriter.write(relativePath, fileData);
+      },
+    };
+
+    // 6. The restore must REJECT — the write failure is propagated, not swallowed.
+    await expect(
+      restoreV3Backup({ source: blobChunks(blob), attachmentWriter: flakyWriter }),
+    ).rejects.toThrow(writeError);
+    expect(attemptedFailingWrite).toBe(true);
+
+    // 7. The inline DB tables were already restored before the file write phase,
+    //    so the bank-wire evidence + its attachment link now exist — but the file
+    //    they point at was never written. Confirm the failing document is
+    //    genuinely unreadable (it does NOT open), proving the failure was not
+    //    misreported as a successful restore.
+    const allEvidence = await evidenceCrud.getAllEvidence();
+    const failingEvidence = allEvidence.find((e) => e.title === failingTitle);
+    expect(failingEvidence).toBeTruthy();
+    const allAttachments = await evidenceCrud.getAllEvidenceAttachments();
+    const failingAttachment = allAttachments.find(
+      (a) => a.evidenceId === failingEvidence!.id,
+    );
+    expect(failingAttachment).toBeTruthy();
+    await expect(
+      fetchBytesViaPath(failingAttachment!.objectStoragePath, failingAttachment!.mimeType),
+    ).rejects.toThrow();
+  });
 });
