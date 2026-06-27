@@ -36,6 +36,7 @@ import {
 } from "@/lib/database";
 import { exportBackup, type AttachmentFileIO } from "./export";
 import { restoreV3Backup, type AttachmentFileWriter } from "./restore";
+import { restoreInlineTables } from "./inline-tables";
 import { MemorySink, type BackupSink } from "./sink";
 import { blobChunks } from "./zip-stream";
 
@@ -49,6 +50,10 @@ import { clearAddressSyncState } from "@/lib/data/address-sync-crud";
 import {
   clearUtxoLineage,
   clearCustodySegments,
+  bulkAddUtxoLineage,
+  bulkAddCustodySegments,
+  getAllUtxoLineage,
+  getAllCustodySegments,
 } from "@/lib/data/lineage-crud";
 import { clearNodeSettings } from "@/lib/data/node-settings-crud";
 import {
@@ -389,5 +394,174 @@ describe("inline tables backup round-trip", () => {
     expect(await getAllEvidence()).toHaveLength(0);
     expect(await getAllEvidenceAttachments()).toHaveLength(0);
     expect(await getAllPriceData()).toHaveLength(0);
+  });
+});
+
+// ---- inline lineage / custody-segment merge de-dup ------------------------
+//
+// OLDER v3 backups stored utxoLineage and custodySegments INLINE inside the
+// manifest (new backups stream them as NDJSON). The merge-restore fix for the
+// unique custody `segmentId` index was mirrored into `restoreInlineTables` so
+// the inline branch also skips a segment whose `segmentId` (or a lineage edge
+// whose identity) is already present, instead of letting the unique index abort
+// the whole restore mid-way. The legacy helper has direct coverage
+// (legacy-restore-extra.runtime.test.ts); these tests drive the INLINE merge
+// branch directly over a vault that already contains a custody segment.
+
+// A minimal valid backup custody segment. `id` is the BACKUP id (stripped on
+// restore); `segmentId` is unique in the schema.
+function inlineSegment(id: number, segmentId: string, extra: any = {}) {
+  return {
+    id,
+    segmentId,
+    originTxid: `origin-${segmentId}`,
+    originVout: 0,
+    originAddress: "addr-origin",
+    originDate: 1_700_000_000,
+    originAmount: 100000,
+    currentAmount: 100000,
+    status: "active",
+    hopCount: 0,
+    evidenceTxids: [],
+    createdAt: 1_700_000_000,
+    updatedAt: 1_700_000_000,
+    ...extra,
+  };
+}
+
+// A minimal valid backup utxoLineage row. `id` is the BACKUP id (stripped).
+function inlineLineage(id: number, consumingTxid: string, extra: any = {}) {
+  return {
+    id,
+    spentTxid: `spent-${consumingTxid}`,
+    spentVout: 0,
+    spentAddress: "addr-spent",
+    spentAmount: 100000,
+    consumingTxid,
+    createdTxid: consumingTxid,
+    createdVout: 1,
+    createdAddress: "addr-created",
+    createdAmount: 99000,
+    spentOwned: true,
+    createdOwned: false,
+    isChange: false,
+    confidence: "high",
+    blockTime: 1_700_000_000,
+    blockHeight: 800000,
+    createdAt: 1_700_000_000,
+    ...extra,
+  };
+}
+
+describe("restoreInlineTables merge mode (inline lineage / custody segments)", () => {
+  beforeEach(async () => {
+    await clearEverything();
+  });
+
+  it("skips an already-present custody segment and adds the new one without throwing", async () => {
+    // Seed the vault with an existing segment (as a prior restore/merge would).
+    await bulkAddCustodySegments(
+      [inlineSegment(800, "seg-existing")] as any,
+      { skipNotification: true },
+    );
+    expect(await getAllCustodySegments()).toHaveLength(1);
+
+    // A merge whose inline backup re-includes that segmentId (plus a brand-new
+    // one) must complete WITHOUT throwing on the unique index: the already-
+    // present segment is skipped and only the new one is added.
+    await expect(
+      restoreInlineTables(
+        {
+          custodySegments: [
+            inlineSegment(801, "seg-existing", { currentAmount: 555 }),
+            inlineSegment(802, "seg-new"),
+          ],
+        },
+        "merge",
+      ),
+    ).resolves.toBeUndefined();
+
+    const liveSegments = await getAllCustodySegments();
+    expect(liveSegments).toHaveLength(2);
+    expect(new Set(liveSegments.map((s) => s.segmentId))).toEqual(
+      new Set(["seg-existing", "seg-new"]),
+    );
+    // The pre-existing segment is untouched — the overlapping backup row was
+    // skipped, not applied (its original currentAmount survives).
+    expect(
+      liveSegments.find((s) => s.segmentId === "seg-existing")!.currentAmount,
+    ).toBe(100000);
+  });
+
+  it("skips a lineage edge that already exists and adds the new one", async () => {
+    // Seed an existing lineage edge.
+    await bulkAddUtxoLineage(
+      [inlineLineage(900, "tx-dup")] as any,
+      { skipNotification: true },
+    );
+    expect(await getAllUtxoLineage()).toHaveLength(1);
+
+    await restoreInlineTables(
+      {
+        utxoLineage: [
+          inlineLineage(901, "tx-dup"),
+          inlineLineage(902, "tx-fresh"),
+        ],
+      },
+      "merge",
+    );
+
+    const liveLineage = await getAllUtxoLineage();
+    expect(liveLineage).toHaveLength(2);
+    expect(new Set(liveLineage.map((l) => l.consumingTxid))).toEqual(
+      new Set(["tx-dup", "tx-fresh"]),
+    );
+  });
+
+  it("dedups custody segments and lineage edges duplicated WITHIN one backup", async () => {
+    await restoreInlineTables(
+      {
+        custodySegments: [
+          inlineSegment(810, "dup-merge"),
+          inlineSegment(811, "dup-merge"),
+        ],
+        utxoLineage: [
+          inlineLineage(820, "tx-int-dup"),
+          inlineLineage(821, "tx-int-dup"),
+        ],
+      },
+      "merge",
+    );
+
+    expect(await getAllCustodySegments()).toHaveLength(1);
+    expect(await getAllUtxoLineage()).toHaveLength(1);
+  });
+
+  it("replace mode (default) appends inline rows as-is into a cleared vault", async () => {
+    // Mirrors production: the v3 orchestrator clears these tables first, so
+    // replace mode adds every distinct row without de-dup against the vault.
+    await restoreInlineTables({
+      custodySegments: [
+        inlineSegment(830, "seg-a"),
+        inlineSegment(831, "seg-b"),
+      ],
+      utxoLineage: [
+        inlineLineage(840, "tx-a"),
+        inlineLineage(841, "tx-b"),
+      ],
+    });
+
+    const liveSegments = await getAllCustodySegments();
+    expect(new Set(liveSegments.map((s) => s.segmentId))).toEqual(
+      new Set(["seg-a", "seg-b"]),
+    );
+    // Backup ids are stripped — every row gets a fresh autoincrement id.
+    expect(liveSegments.every((s) => s.id !== 830 && s.id !== 831)).toBe(true);
+
+    const liveLineage = await getAllUtxoLineage();
+    expect(new Set(liveLineage.map((l) => l.consumingTxid))).toEqual(
+      new Set(["tx-a", "tx-b"]),
+    );
+    expect(liveLineage.every((l) => l.id !== 840 && l.id !== 841)).toBe(true);
   });
 });
