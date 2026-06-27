@@ -5,6 +5,23 @@ import { countRecordsByType } from '@/lib/data/record-crud';
 import { materializeBehaviorTally } from '@/lib/data/address-stats';
 import type { BehaviorTallyCounts } from '@/lib/behavior-profile';
 
+/**
+ * Maximum age a persisted tally may reach before it is treated as stale and a
+ * background recompute is triggered. The tally embeds time-relative behavior
+ * labels (e.g. Dormant vs Active) frozen as of `computedAt`; as wall-clock time
+ * advances, addresses silently cross the dormancy threshold but the persisted
+ * counts do not move until the next recompute. Re-materializing roughly once a
+ * day keeps those time-driven label transitions reflected without churn.
+ */
+export const BEHAVIOR_TALLY_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * How often a mounted hook re-evaluates the age-based staleness so a
+ * long-running session (no settings/address changes to re-render it) still
+ * notices the tally has aged past `BEHAVIOR_TALLY_MAX_AGE_MS`.
+ */
+const STALENESS_CHECK_INTERVAL_MS = 60 * 60 * 1000;
+
 export interface UseBehaviorTallyResult {
   /** Per-label totals across the whole vault, or null until first computed. */
   counts: BehaviorTallyCounts | null;
@@ -35,13 +52,27 @@ export function useBehaviorTally(enabled: boolean = true): UseBehaviorTallyResul
   const [computing, setComputing] = useState(false);
   const inFlightRef = useRef(false);
 
+  // A ticking clock so a long-running mount re-evaluates age-based staleness even
+  // when nothing else (settings/address count) changes to re-render the hook.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!enabled) return;
+    const id = setInterval(() => setNow(Date.now()), STALENESS_CHECK_INTERVAL_MS);
+    return () => clearInterval(id);
+  }, [enabled]);
+
   const persisted = settings?.behaviorTally ?? null;
   const settingsLoaded = settings !== undefined;
   const countLoaded = liveAddressCount !== undefined;
+  // The persisted tally freezes time-relative labels at `computedAt`; once it
+  // ages past the window, addresses may have crossed the dormancy threshold, so
+  // treat it as stale to pick up those time-driven transitions.
+  const aged =
+    persisted != null && now - persisted.computedAt > BEHAVIOR_TALLY_MAX_AGE_MS;
   const stale =
     settingsLoaded &&
     countLoaded &&
-    (persisted == null || persisted.addressCount !== liveAddressCount);
+    (persisted == null || persisted.addressCount !== liveAddressCount || aged);
 
   useEffect(() => {
     if (!enabled) return;
@@ -68,7 +99,7 @@ export function useBehaviorTally(enabled: boolean = true): UseBehaviorTallyResul
     return () => {
       controller.abort();
     };
-    // `stale` already folds in addressCount + persisted fingerprint changes.
+    // `stale` already folds in addressCount, persisted fingerprint, and age.
   }, [enabled, stale]);
 
   return {
