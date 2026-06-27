@@ -43,6 +43,9 @@ const { toastSpy, writerInvokedSpy } = vi.hoisted(() => ({
 // it failed — surfaced verbatim in the attachment-specific toast.
 const FAILED_REL_PATH = "attachments/doc.pdf";
 const FILES_WRITTEN_BEFORE = 2;
+// A distinctive, NON-disk-full underlying cause so we can prove the real reason
+// (not just the generic disk-full guidance) reaches the user-facing toast.
+const WRITE_FAILURE_REASON = "EACCES: permission denied, open 'doc.pdf'";
 
 vi.mock("@/hooks/use-toast", () => ({
   useToast: () => ({ toast: toastSpy, dismiss: vi.fn(), toasts: [] }),
@@ -196,11 +199,13 @@ beforeEach(() => {
   });
 
   // The web attachment writer POSTs to /api/attachments/write; make it fail so
-  // the injected writer throws "mid-restore".
+  // the injected writer throws "mid-restore". Use a distinctive, NON-disk-full
+  // reason so we can prove the real underlying cause (not just the generic
+  // disk-full guess) reaches the user-facing toast.
   fetchSpy = vi.fn(async () => ({
     ok: false,
     statusText: "Internal Server Error",
-    json: async () => ({ error: "disk full" }),
+    json: async () => ({ error: WRITE_FAILURE_REASON }),
   }));
   vi.stubGlobal("fetch", fetchSpy);
 });
@@ -235,6 +240,9 @@ describe("SettingsPage — failed v3 restore on a bad attachment (AttachmentWrit
       expect(call![0].description).toContain(FAILED_REL_PATH);
       expect(call![0].description).toMatch(/2 attachment files were saved before/i);
       expect(call![0].description).toMatch(/run the restore again/i);
+      // The REAL underlying cause must reach the user — not just the generic
+      // disk-full guess — so they can self-diagnose (here: a permission error).
+      expect(call![0].description).toContain(WRITE_FAILURE_REASON);
     });
 
     // It must NOT fall through to the generic "Restore Interrupted" toast.

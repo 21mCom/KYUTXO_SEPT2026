@@ -2900,12 +2900,24 @@ export default function SettingsPage() {
           writtenBefore === 1
             ? "1 attachment file was saved before the failure."
             : `${writtenBefore} attachment files were saved before the failure.`;
+        // Surface the underlying cause so the user can self-diagnose (corrupt
+        // bytes, permission denied, endpoint offline, etc.) instead of being
+        // pointed only at the disk-full guess. Prefer the original cause's
+        // message, falling back to the AttachmentWriteError's own message.
+        const rawReason =
+          attachmentWriteFailure.cause instanceof Error
+            ? attachmentWriteFailure.cause.message
+            : attachmentWriteFailure.cause !== undefined
+              ? String(attachmentWriteFailure.cause)
+              : attachmentWriteFailure.message;
+        const reason = rawReason?.trim();
+        const reasonMsg = reason ? `Reason: ${reason}. ` : "";
         toast({
           variant: "destructive",
           title: "Restore Failed — Couldn't Write Attachment",
           description:
-            `Restore failed while saving the attachment file "${attachmentWriteFailure.relPath}" — your disk may be full or the file was rejected. ` +
-            `${filesSavedMsg} The vault was reset to empty, so no partial data was left behind. Free up some disk space, then run the restore again.`,
+            `Restore failed while saving the attachment file "${attachmentWriteFailure.relPath}" — your disk may be full, the file was rejected, or the write failed for another reason. ` +
+            `${reasonMsg}${filesSavedMsg} The vault was reset to empty, so no partial data was left behind. Check the reason above (free up disk space, fix file permissions, or reconnect the storage), then run the restore again.`,
         });
         // The reset-to-empty contract clears everything, so re-evaluate the
         // once-per-session orphan check after reload, the same as other paths.
