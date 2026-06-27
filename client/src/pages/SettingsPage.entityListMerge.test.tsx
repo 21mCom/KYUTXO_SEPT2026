@@ -308,6 +308,38 @@ describe("SettingsPage — entity list import (merge mode) diff filters", () => 
     return { bundled };
   }
 
+  // A merge whose preview has TWO overrides in distinct categories (an exchange
+  // entry renamed in-place and a mixer entry renamed in-place), each with a
+  // search-distinct name. This lets us drive the order-of-operations edge where
+  // a search term valid for one category's override lingers after switching to
+  // a different category whose override the term no longer matches.
+  async function openTwoCategoryOverrideDiff() {
+    renderPage();
+    await screen.findByTestId("badge-entity-source");
+
+    const list = getBundledEntityList();
+    const exchangeBase = list.find((e) => e.category === "exchange");
+    const mixerBase = list.find((e) => e.category === "mixer");
+    expect(exchangeBase).toBeTruthy();
+    expect(mixerBase).toBeTruthy();
+    expect(exchangeBase!.address).not.toBe(mixerBase!.address);
+
+    fireEvent.click(screen.getByTestId("radio-entity-merge"));
+
+    const snapshot = JSON.stringify([
+      // Override A: an exchange entry renamed, kept in the exchange category.
+      { address: exchangeBase!.address, name: "Qwizzle Override Alpha", category: "exchange" },
+      // Override B: a mixer entry renamed, kept in the mixer category.
+      { address: mixerBase!.address, name: "Zorptast Override Beta", category: "mixer" },
+    ]);
+    await selectEntityFile("merge-two-category-overrides.json", snapshot);
+
+    await screen.findByTestId("text-preview-incoming");
+    fireEvent.click(screen.getByTestId("button-toggle-entity-diff"));
+    await screen.findByTestId("tab-entity-diff-overrides");
+    return { exchangeBase: exchangeBase!, mixerBase: mixerBase! };
+  }
+
   function overridesTabText() {
     return screen.getByTestId("tab-entity-diff-overrides").textContent ?? "";
   }
@@ -418,6 +450,45 @@ describe("SettingsPage — entity list import (merge mode) diff filters", () => 
     expect(
       (await screen.findByTestId("text-entity-diff-empty-added")).textContent,
     ).toContain("No brand-new entries match your search.");
+  });
+
+  // Order-of-operations edge: the search box, category dropdown, and override
+  // list are independent state. A reviewer types a search term that is valid
+  // for the currently-shown override, then switches the category to one whose
+  // own override the stale search term no longer matches. The combined result
+  // silently empties even though that category DOES have an override — which
+  // could fool a reviewer into thinking the category has no overrides. Once the
+  // stale search is cleared, the category's override must re-appear.
+  it("empties the Overrides tab when a stale search term no longer matches the newly-selected category, then re-shows it once the search is cleared", async () => {
+    await openTwoCategoryOverrideDiff();
+
+    // Baseline: two overrides (one exchange, one mixer), both shown.
+    expect(overridesTabText()).toContain("Overrides (2)");
+
+    // Type a token unique to the exchange override. With the category still
+    // "all" this narrows the Overrides tab to that single, matching override.
+    typeSearch("qwizzle");
+    await waitFor(() => expect(overridesTabText()).toContain("Overrides (1)"));
+    expect(screen.getByTestId("row-entity-override-0")).toBeTruthy();
+    expect(screen.getByText("Qwizzle Override Alpha")).toBeTruthy();
+
+    // Now switch the category to "mixer". The mixer category has its own
+    // override ("Zorptast Override Beta"), but the lingering "qwizzle" search
+    // term does NOT match it — so the combined result is empty.
+    setCategory("mixer");
+    await waitFor(() => expect(overridesTabText()).toContain("Overrides (0)"));
+    const empty = await screen.findByTestId("text-entity-overrides-empty");
+    expect(empty.textContent).toContain("No overrides match your search.");
+    expect(screen.queryByTestId("row-entity-override-0")).toBeNull();
+
+    // Clearing the stale search must reveal the mixer category's override — it
+    // was there all along, only hidden by the no-longer-valid search term.
+    typeSearch("");
+    await waitFor(() => expect(overridesTabText()).toContain("Overrides (1)"));
+    expect(screen.getByTestId("row-entity-override-0")).toBeTruthy();
+    expect(screen.getByText("Zorptast Override Beta")).toBeTruthy();
+    expect(screen.queryByText("Qwizzle Override Alpha")).toBeNull();
+    expect(screen.queryByTestId("text-entity-overrides-empty")).toBeNull();
   });
 });
 
