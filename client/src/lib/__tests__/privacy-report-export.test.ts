@@ -428,6 +428,27 @@ describe('privacy report export — plain text', () => {
     expect(text).toContain('Wallet: All');
   });
 
+  it('uses the human-readable locale format for the default "Generated" timestamp, not epoch/ISO', async () => {
+    // When no generatedAt override is passed, the report stamps `new Date()` via
+    // toLocaleString(). Pin the wall clock so the default branch is deterministic
+    // and lock the format: a regression that swapped it for an ISO string or a
+    // raw epoch number would no longer match.
+    const result = await runPrivacyAudit([USER_ADDRESS]);
+    const fixedNow = new Date(Date.UTC(2026, 5, 27, 9, 30, 0));
+    vi.useFakeTimers();
+    vi.setSystemTime(fixedNow);
+    let text: string;
+    try {
+      text = buildPrivacyTextReport(result, { owner: null, wallet: null });
+    } finally {
+      vi.useRealTimers();
+    }
+    const line = text.split('\n').find((l) => l.startsWith('Generated: '));
+    expect(line).toBe(`Generated: ${fixedNow.toLocaleString()}`);
+    expect(line).not.toBe(`Generated: ${fixedNow.toISOString()}`);
+    expect(line).not.toBe(`Generated: ${fixedNow.getTime()}`);
+  });
+
   it('emits the summary lines from the audit result', async () => {
     const result = await runPrivacyAudit([USER_ADDRESS]);
     const text = buildPrivacyTextReport(result, { owner: null, wallet: null }, FIXED_GENERATED_AT);
@@ -624,6 +645,17 @@ describe('privacy report export — printable HTML', () => {
 
     expect(html).toContain('Owner: All');
     expect(html).toContain('Wallet: All');
+  });
+
+  it('renders the "Generated" line in locale format, never the raw epoch or a second ISO copy', async () => {
+    const result = await runPrivacyAudit([USER_ADDRESS]);
+    const html = buildPrintableReport(result, { owner: null, wallet: null }, FIXED_NOW);
+
+    // The <title> legitimately carries an ISO *date* (YYYY-MM-DD); the body
+    // "Generated …" subtitle must be the human-readable locale string instead.
+    expect(html).toContain(`Generated ${escapeHtml(FIXED_NOW.toLocaleString())}`);
+    expect(html).not.toContain(`Generated ${FIXED_NOW.toISOString()}`);
+    expect(html).not.toContain(`Generated ${FIXED_NOW.getTime()}`);
   });
 
   it('renders the summary boxes from the audit result', async () => {
