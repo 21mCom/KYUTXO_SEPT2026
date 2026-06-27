@@ -161,6 +161,22 @@ describe('buildPrivacyHistoryCsv', () => {
     const rows = parse(buildPrivacyHistoryCsv([makeEntry({ owner: 'Smith, John "JB"' })]));
     expect(rows[1][11]).toBe('Smith, John "JB"');
   });
+
+  it('renders the "Date" cell in the human-readable locale format, not epoch/ISO', () => {
+    const ts = Date.UTC(2026, 0, 1, 12, 0, 0);
+    const rows = parse(buildPrivacyHistoryCsv([makeEntry({ timestamp: ts })]));
+    const isoCell = rows[1][0];
+    const dateCell = rows[1][1];
+    const expected = new Date(ts).toLocaleString();
+    // The "Date" column is the formatted timestamp, never a raw epoch or ISO string.
+    expect(dateCell).toBe(expected);
+    expect(dateCell).not.toBe(String(ts));
+    expect(dateCell).not.toBe(new Date(ts).toISOString());
+    // The "Timestamp (ISO)" column stays the ISO string, so the two columns
+    // can't silently collapse to the same value.
+    expect(isoCell).toBe(new Date(ts).toISOString());
+    expect(isoCell).not.toBe(dateCell);
+  });
 });
 
 describe('buildPrivacyHistoryPdf', () => {
