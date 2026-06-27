@@ -489,6 +489,49 @@ describe("FindingCard proximity hop-path deep-dive interaction", () => {
     expect(lastWorker).toBeNull();
   });
 
+  // A third, distinct outcome: the transaction loads fine but has no input or
+  // output participant data (e.g. it was discovered but never fully synced). The
+  // analyse function short-circuits with guidance to re-sync — and crucially does
+  // NOT offer Retry, because retrying won't help until the address is re-synced.
+  it("tells the user to re-sync (and offers no Retry) when the transaction has no inputs or outputs", async () => {
+    // The transaction record loads, but its participants come back empty.
+    mockedGetParticipants.mockResolvedValue([] as any);
+
+    const hopPath = ["bc1qhopA", "bc1qhopB", "bc1qhopC"];
+    const hopTxids = [TX(1), TX(2)]; // one per pair → 2
+
+    renderCard(proximityFinding({ details: { hopPath, hopTxids } }));
+    fireEvent.click(screen.getByTestId("button-toggle-details"));
+
+    // Open the deep-dive for the second hop's txid.
+    const second8 = TX(2).slice(0, 8);
+    fireEvent.click(screen.getByTestId(`button-deep-dive-${second8}`));
+
+    const dialog = await screen.findByTestId("dialog-deep-dive");
+    expect(within(dialog).getByText(TX(2))).toBeTruthy();
+
+    // Both loaders are consulted before the branch decides there's nothing to show.
+    await waitFor(() => {
+      expect(mockedGetParticipants).toHaveBeenCalledWith([TX(2)]);
+    });
+
+    // The user sees the re-sync guidance, not an empty/hung dialog.
+    const message = await within(dialog).findByTestId("text-deep-dive-message");
+    expect(message.textContent).toMatch(/no participant data available/i);
+    expect(message.textContent).toMatch(/re-sync the address/i);
+
+    // The dialog is not stuck loading and no Boltzmann results were rendered.
+    expect(within(dialog).queryByTestId("status-deep-dive-loading")).toBeNull();
+    expect(within(dialog).queryByTestId("container-boltzmann-result")).toBeNull();
+    expect(within(dialog).queryByTestId("container-deep-dive-summary")).toBeNull();
+
+    // This branch must NOT offer Retry — retrying is pointless until a re-sync.
+    expect(within(dialog).queryByTestId("button-retry-deep-dive")).toBeNull();
+
+    // No worker is ever spun up for this short-circuit path.
+    expect(lastWorker).toBeNull();
+  });
+
   // A single failure shows the error + Retry. But if the analysis keeps failing
   // (failCount >= 2), the dialog escalates to extra recovery guidance ("try
   // re-syncing the address…") and offers an expandable "Show details" panel with
