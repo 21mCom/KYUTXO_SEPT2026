@@ -127,9 +127,21 @@ vi.mock("@/lib/balance-grouping", () => ({
 // A positive unresolved count makes the spend-warning banner render, which is
 // what carries the global "Resolve & Recompute" button. unattributable is 0 so
 // the import/missing buttons stay hidden — only the global resolve is in play.
+//
+// The success-path tests need the unresolved count to *change* across the
+// resolve: it must be positive at mount (so the banner renders) and then take a
+// configurable follow-up value once handleFixPrevouts re-reads it after
+// resolvePrevouts succeeds. We gate on the `resolveCalled` flag (flipped inside
+// the resolvePrevouts mock) so the mount-time count effect always sees the
+// positive value and only the post-resolve re-read sees followUpUnresolvedCount.
 const UNRESOLVED_COUNT = 5;
+let resolveCalled = false;
+let followUpUnresolvedCount = UNRESOLVED_COUNT;
+const countUnresolvedPrevoutInputs = vi.fn(() =>
+  Promise.resolve(resolveCalled ? followUpUnresolvedCount : UNRESOLVED_COUNT),
+);
 vi.mock("@/lib/data/transaction-crud", () => ({
-  countUnresolvedPrevoutInputs: vi.fn(() => Promise.resolve(UNRESOLVED_COUNT)),
+  countUnresolvedPrevoutInputs,
   getUnresolvedSpendBreakdown: vi.fn(() =>
     Promise.resolve({ byRecordId: new Map(), unattributable: 0 }),
   ),
@@ -149,7 +161,11 @@ let resolveHeld: {
   promise: Promise<unknown>;
   settle: (value: unknown) => void;
 } | null;
+// The success path returns a configurable { resolved, cancelled } payload so each
+// of handleFixPrevouts' four success branches can be exercised in turn.
+let resolveResult: { resolved: number; cancelled: boolean };
 const resolvePrevouts = vi.fn(() => {
+  resolveCalled = true;
   if (resolveShouldReject) {
     return Promise.reject(resolveRejectError ?? new Error("node unreachable"));
   }
@@ -157,11 +173,11 @@ const resolvePrevouts = vi.fn(() => {
     return resolveHeld.promise;
   }
   return Promise.resolve({
-    resolved: 0,
+    resolved: resolveResult.resolved,
     fetchedFromNode: 0,
     errors: 0,
     resolvedAddresses: [],
-    cancelled: false,
+    cancelled: resolveResult.cancelled,
   });
 });
 vi.mock("@/lib/transaction-sync", () => ({
@@ -177,10 +193,6 @@ function makeHeldResolve() {
   return resolveHeld;
 }
 
-// Pull the mocked unresolved-count helper so the cancel test can change the
-// value the banner refreshes to once the stopped pass completes.
-const { countUnresolvedPrevoutInputs } = await import("@/lib/data/transaction-crud");
-
 const BalanceOverview = (await import("./BalanceOverview")).default;
 
 async function renderAndShowGlobalResolve() {
@@ -193,14 +205,16 @@ async function renderAndShowGlobalResolve() {
 beforeEach(() => {
   toastCalls.length = 0;
   resolvePrevouts.mockClear();
+  countUnresolvedPrevoutInputs.mockClear();
   resolveShouldReject = false;
   resolveRejectError = undefined;
   resolveHeld = null;
-  // Restore the default unresolved count; the cancel test overrides it after
-  // mount to assert the banner refreshes to the new value.
-  (countUnresolvedPrevoutInputs as ReturnType<typeof vi.fn>).mockResolvedValue(
-    UNRESOLVED_COUNT,
-  );
+  resolveCalled = false;
+  // Restore the default unresolved count; tests override followUpUnresolvedCount
+  // after mount to assert the banner refreshes to the new value once the pass
+  // (cancelled or completed) re-reads the count.
+  followUpUnresolvedCount = UNRESOLVED_COUNT;
+  resolveResult = { resolved: 0, cancelled: false };
 });
 
 afterEach(() => {
@@ -297,11 +311,10 @@ describe("BalanceOverview global Resolve & Recompute", () => {
     );
 
     // The stopped pass refreshes the unresolved count to a new, lower value:
-    // spends resolved before the abort are kept, so fewer remain pending.
+    // spends resolved before the abort are kept, so fewer remain pending. The
+    // gated count mock returns this once the pass has started (resolveCalled).
     const REMAINING_AFTER_CANCEL = 3;
-    (countUnresolvedPrevoutInputs as ReturnType<typeof vi.fn>).mockResolvedValue(
-      REMAINING_AFTER_CANCEL,
-    );
+    followUpUnresolvedCount = REMAINING_AFTER_CANCEL;
 
     // Settle the held resolve as cancelled, reporting the spends resolved before
     // the user stopped (these are kept — no rollback).
@@ -340,5 +353,110 @@ describe("BalanceOverview global Resolve & Recompute", () => {
     expect(screen.getByTestId("banner-spend-warning").textContent).toContain(
       `${REMAINING_AFTER_CANCEL} spends`,
     );
+  });
+
+  // -------------------------------------------------------------------------
+  // SUCCESS paths. After resolvePrevouts resolves, handleFixPrevouts re-reads
+  // countUnresolvedPrevoutInputs and picks one of four toasts based on
+  // { cancelled, resolved } and the fresh remaining count. We drive each branch
+  // and confirm the re-check actually happened (the follow-up count read) plus
+  // that the spend-warning banner clears only when the count reaches 0.
+  // -------------------------------------------------------------------------
+
+  it("re-checks the unresolved count and toasts 'Resolve stopped' when the pass was cancelled", async () => {
+    resolveResult = { resolved: 2, cancelled: true };
+    followUpUnresolvedCount = 3;
+    await renderAndShowGlobalResolve();
+
+    fireEvent.click(screen.getByTestId("button-fix-prevouts"));
+
+    await waitFor(() => expect(resolvePrevouts).toHaveBeenCalledTimes(1));
+    // The success branch must re-read the unresolved count: once on mount, then
+    // again after resolvePrevouts resolves.
+    await waitFor(() =>
+      expect(countUnresolvedPrevoutInputs.mock.calls.length).toBeGreaterThanOrEqual(2),
+    );
+
+    await waitFor(() => expect(toastCalls.length).toBeGreaterThan(0));
+    expect(toastCalls[0].title).toBe("Resolve stopped");
+    expect(toastCalls[0].variant).toBeUndefined();
+    expect(toastCalls[0].description).toContain("2");
+    expect(toastCalls[0].description).toContain("3");
+
+    // 3 still pending → banner stays up showing the refreshed count.
+    await waitFor(() => {
+      const banner = screen.getByTestId("banner-spend-warning");
+      expect(banner.textContent).toContain("3 spends");
+    });
+  });
+
+  it("re-checks the count and toasts a destructive 'Nothing to resolve' when nothing resolved", async () => {
+    resolveResult = { resolved: 0, cancelled: false };
+    followUpUnresolvedCount = UNRESOLVED_COUNT;
+    await renderAndShowGlobalResolve();
+
+    fireEvent.click(screen.getByTestId("button-fix-prevouts"));
+
+    await waitFor(() => expect(resolvePrevouts).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(countUnresolvedPrevoutInputs.mock.calls.length).toBeGreaterThanOrEqual(2),
+    );
+
+    await waitFor(() => expect(toastCalls.length).toBeGreaterThan(0));
+    expect(toastCalls[0].title).toBe("Nothing to resolve");
+    expect(toastCalls[0].variant).toBe("destructive");
+
+    // Nothing changed, so the banner is still present.
+    expect(screen.queryByTestId("banner-spend-warning")).not.toBeNull();
+  });
+
+  it("re-checks the count and toasts 'Partially resolved' when some spends remain", async () => {
+    resolveResult = { resolved: 4, cancelled: false };
+    followUpUnresolvedCount = 1;
+    await renderAndShowGlobalResolve();
+
+    fireEvent.click(screen.getByTestId("button-fix-prevouts"));
+
+    await waitFor(() => expect(resolvePrevouts).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(countUnresolvedPrevoutInputs.mock.calls.length).toBeGreaterThanOrEqual(2),
+    );
+
+    await waitFor(() => expect(toastCalls.length).toBeGreaterThan(0));
+    expect(toastCalls[0].title).toBe("Partially resolved");
+    expect(toastCalls[0].variant).toBeUndefined();
+    expect(toastCalls[0].description).toContain("4");
+    expect(toastCalls[0].description).toContain("1");
+
+    // 1 still unattributable → banner stays up with the refreshed count.
+    await waitFor(() => {
+      const banner = screen.getByTestId("banner-spend-warning");
+      expect(banner.textContent).toContain("1 spend");
+    });
+  });
+
+  it("re-checks the count, toasts 'Resolved', and clears the banner when none remain", async () => {
+    resolveResult = { resolved: 5, cancelled: false };
+    followUpUnresolvedCount = 0;
+    await renderAndShowGlobalResolve();
+
+    fireEvent.click(screen.getByTestId("button-fix-prevouts"));
+
+    await waitFor(() => expect(resolvePrevouts).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(countUnresolvedPrevoutInputs.mock.calls.length).toBeGreaterThanOrEqual(2),
+    );
+
+    await waitFor(() => expect(toastCalls.length).toBeGreaterThan(0));
+    expect(toastCalls[0].title).toBe("Resolved");
+    expect(toastCalls[0].variant).toBeUndefined();
+    expect(toastCalls[0].description).toContain("5");
+
+    // Count reached 0 → the spend-warning banner (and its global resolve
+    // button) must disappear.
+    await waitFor(() => {
+      expect(screen.queryByTestId("banner-spend-warning")).toBeNull();
+      expect(screen.queryByTestId("button-fix-prevouts")).toBeNull();
+    });
   });
 });
