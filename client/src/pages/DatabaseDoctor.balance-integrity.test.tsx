@@ -165,6 +165,86 @@ describe("BalanceIntegrityCard - recompute and re-check", () => {
   });
 });
 
+describe("BalanceIntegrityCard - cancelling an in-flight check", () => {
+  it("returns to the idle state without a verdict when a sample check is cancelled mid-flight", async () => {
+    // Hold the detect call in flight so Cancel is clicked while it is pending.
+    const detectGate = deferred<StaleBalanceCheckResult>();
+    detectMock.mockImplementation(async (opts) => {
+      opts.onProgress?.(50, 2000);
+      return detectGate.promise;
+    });
+
+    render(<BalanceIntegrityCard />);
+
+    fireEvent.click(screen.getByTestId("button-run-balance-check"));
+
+    // The scan is running: the Cancel button appears while detect is pending.
+    const cancelBtn = await screen.findByTestId("button-cancel-balance-check");
+    expect(screen.queryByTestId("text-balance-idle")).toBeNull();
+
+    fireEvent.click(cancelBtn);
+
+    // Cancel immediately resets the card to idle.
+    await screen.findByTestId("text-balance-idle");
+    expect(screen.queryByTestId("text-balance-verdict")).toBeNull();
+    expect(screen.queryByTestId("banner-balance-result")).toBeNull();
+    expect(screen.queryByTestId("text-balance-progress")).toBeNull();
+
+    // Even when the now-aborted scan resolves, no stale verdict leaks through.
+    detectGate.resolve({
+      sampled: 2000,
+      staleCount: 7,
+      staleAddresses: [],
+      checkedAll: false,
+      cancelled: true,
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("text-balance-idle")).toBeTruthy();
+    });
+    expect(screen.queryByTestId("text-balance-verdict")).toBeNull();
+    expect(screen.queryByTestId("banner-balance-result")).toBeNull();
+    expect(screen.queryByTestId("button-recompute-balances")).toBeNull();
+  });
+
+  it("returns to the idle state without a verdict when a full scan is cancelled mid-flight", async () => {
+    const detectGate = deferred<StaleBalanceCheckResult>();
+    detectMock.mockImplementation(async (opts) => {
+      opts.onProgress?.(120, 500);
+      return detectGate.promise;
+    });
+
+    render(<BalanceIntegrityCard />);
+
+    fireEvent.click(screen.getByTestId("button-check-all-balances"));
+
+    const cancelBtn = await screen.findByTestId("button-cancel-balance-check");
+    expect(detectMock.mock.calls[0][0].checkAll).toBe(true);
+
+    fireEvent.click(cancelBtn);
+
+    await screen.findByTestId("text-balance-idle");
+    expect(screen.queryByTestId("text-balance-verdict")).toBeNull();
+    expect(screen.queryByTestId("banner-balance-result")).toBeNull();
+    expect(screen.queryByTestId("text-balance-progress")).toBeNull();
+
+    // Resolving the aborted full scan must not surface a verdict either.
+    detectGate.resolve({
+      sampled: 500,
+      staleCount: 3,
+      staleAddresses: [],
+      checkedAll: true,
+      cancelled: true,
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("text-balance-idle")).toBeTruthy();
+    });
+    expect(screen.queryByTestId("text-balance-verdict")).toBeNull();
+    expect(screen.queryByTestId("banner-balance-result")).toBeNull();
+  });
+});
+
 describe("BalanceIntegrityCard - error state", () => {
   it("shows the error banner with the message when the balance check throws", async () => {
     detectMock.mockRejectedValue(new Error("scan engine exploded"));
