@@ -199,8 +199,8 @@ describe("BalanceOverview per-address Resolve", () => {
 
     await waitFor(() => expect(resolvePrevouts).toHaveBeenCalledTimes(1));
     const [onProgress, options] = resolvePrevouts.mock.calls[0] as unknown as [unknown, any];
-    // Per-address resolve passes no progress callback.
-    expect(onProgress).toBeUndefined();
+    // Per-address resolve passes a progress callback (it shows in-row progress).
+    expect(typeof onProgress).toBe("function");
     expect(options.recomputeOrigin).toBe("user");
     expect(options.restrictToRecordIds).toBeInstanceOf(Set);
     expect(Array.from(options.restrictToRecordIds as Set<number>)).toEqual([PENDING_RECORD_ID]);
