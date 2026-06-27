@@ -28,7 +28,7 @@ vi.mock("@/lib/data/record-queries", () => ({
 
 import { getTransactionByTxid } from "@/lib/data/transaction-crud";
 import { getParticipantsByTxids } from "@/lib/data/record-queries";
-import { TransactionDeepDive, probColor } from "./PrivacyAudit";
+import { TransactionDeepDive, probColor, cellTextColor, contrastRatio } from "./PrivacyAudit";
 import type { BoltzmannResult } from "@/lib/boltzmann";
 
 // Parse the hue out of an "hsl(H, S%, L%)" string for assertions. probColor
@@ -47,6 +47,31 @@ function greennessOf(color: string): number {
   if (!m) throw new Error(`not an rgb() color: ${color}`);
   return Number(m[2]) - Number(m[1]);
 }
+
+// jsdom serialises an inline CSS color to "rgb(r, g, b)" (or "#rrggbb" when set
+// from a hex string); parse either back into an [r, g, b] tuple so cells read
+// through the DOM can be fed to contrastRatio().
+function rgbOf(color: string): [number, number, number] {
+  const rgb = /^rgb\((\d+),\s*(\d+),\s*(\d+)\)/.exec(color);
+  if (rgb) return [Number(rgb[1]), Number(rgb[2]), Number(rgb[3])];
+  const hex = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(color);
+  if (hex) return [parseInt(hex[1], 16), parseInt(hex[2], 16), parseInt(hex[3], 16)];
+  const hsl = /^hsl\((\d+),\s*(\d+)%,\s*(\d+)%\)/.exec(color);
+  if (hsl) {
+    const h = Number(hsl[1]);
+    const s = Number(hsl[2]) / 100;
+    const l = Number(hsl[3]) / 100;
+    const k = (n: number) => (n + h / 30) % 12;
+    const a = s * Math.min(l, 1 - l);
+    const f = (n: number) => l - a * Math.max(-1, Math.min(k(n) - 3, 9 - k(n), 1));
+    return [255 * f(0), 255 * f(8), 255 * f(4)];
+  }
+  throw new Error(`not a parseable color: ${color}`);
+}
+
+// WCAG AA minimum contrast for body text. The heatmap numbers are small, so we
+// hold the cells to the full 4.5:1 bar rather than the 3:1 large-text bar.
+const WCAG_AA = 4.5;
 
 const TXID = "b".repeat(64);
 
@@ -242,4 +267,132 @@ describe("TransactionDeepDive success path — heatmap", () => {
     expect(screen.getByTestId("text-boltzmann-efficiency").textContent).toBe("—");
     expect(screen.queryByTestId("container-boltzmann-heatmap")).toBeNull();
   });
+});
+
+// ─── Legibility / contrast ────────────────────────────────────────────────────
+//
+// The filled heatmap cells use fixed hsl() colours from probColor() (green →
+// yellow → red), so they render identically in light and dark mode. The risk is
+// that those fixed colours leave the cell *text* unreadable — white text on the
+// perceptually-light green/yellow end falls well below WCAG AA. cellTextColor()
+// picks white or black per cell to keep every cell legible; these tests pin that
+// contrast so a future palette tweak can't quietly make cells hard to read.
+
+describe("cellTextColor — every filled cell clears WCAG AA contrast", () => {
+  // Sample the whole probability range, including the green/yellow midpoints
+  // where white text is the weakest.
+  const samples = Array.from({ length: 21 }, (_, i) => i / 20); // 0, 0.05 … 1
+
+  it("chooses a text colour with >= 4.5:1 contrast against the cell at every probability", () => {
+    for (const p of samples) {
+      if (p === 0) continue; // p = 0 renders the muted placeholder, not a colour
+      const bg = rgbOf(probColor(p));
+      const fg = rgbOf(cellTextColor(p));
+      const ratio = contrastRatio(bg, fg);
+      expect(
+        ratio,
+        `p=${p} (${probColor(p)} / ${cellTextColor(p)}) only reached ${ratio.toFixed(2)}:1`,
+      ).toBeGreaterThanOrEqual(WCAG_AA);
+    }
+  });
+
+  it("always picks the higher-contrast of white or black for the cell", () => {
+    const white: [number, number, number] = [255, 255, 255];
+    const black: [number, number, number] = [0, 0, 0];
+    for (const p of samples) {
+      if (p === 0) continue;
+      const bg = rgbOf(probColor(p));
+      const chosen = rgbOf(cellTextColor(p));
+      const best = Math.max(contrastRatio(bg, white), contrastRatio(bg, black));
+      expect(contrastRatio(bg, chosen)).toBeCloseTo(best, 5);
+    }
+  });
+
+  it("uses dark text on the light green/yellow end and white text on the red end", () => {
+    // Yellow midpoint is light → black text wins.
+    expect(cellTextColor(0.5)).toBe("#000000");
+    // Red high-probability end is dark → white text wins.
+    expect(cellTextColor(1)).toBe("#ffffff");
+  });
+});
+
+describe("rendered heatmap cells — legible in both themes", () => {
+  // probColor cells are theme-independent (fixed hsl), so a single render proves
+  // the colour/contrast for both light and dark mode.
+  it("renders each filled cell's text with >= 4.5:1 contrast against its background", async () => {
+    await analyseWith(successResult());
+    await screen.findByTestId("container-boltzmann-heatmap");
+
+    // The three filled cells from successResult() (p = 1, 0.5, 0.25).
+    for (const id of ["cell-heatmap-0-0", "cell-heatmap-0-1", "cell-heatmap-1-0"]) {
+      const cell = screen.getByTestId(id) as HTMLElement;
+      expect(cell.style.backgroundColor).not.toBe("");
+      expect(cell.style.color).not.toBe("");
+      const ratio = contrastRatio(rgbOf(cell.style.backgroundColor), rgbOf(cell.style.color));
+      expect(ratio, `${id} only reached ${ratio.toFixed(2)}:1`).toBeGreaterThanOrEqual(WCAG_AA);
+    }
+  });
+
+  it("renders the zero-probability cell as the theme-aware muted placeholder (no fixed colour)", async () => {
+    await analyseWith(successResult());
+    await screen.findByTestId("container-boltzmann-heatmap");
+
+    // p = 0 must not carry an inline colour; it relies on bg-muted/30 +
+    // text-muted-foreground, which are theme-aware tokens legible in both
+    // light and dark mode (verified against index.css in the suite below).
+    const empty = screen.getByTestId("cell-heatmap-1-1") as HTMLElement;
+    expect(empty.style.backgroundColor).toBe("");
+    expect(empty.style.color).toBe("");
+    expect(empty.className).toContain("bg-muted/30");
+    expect(empty.className).toContain("text-muted-foreground");
+  });
+});
+
+describe("muted placeholder tokens — legible in both themes", () => {
+  // The "–" placeholder uses text-muted-foreground over bg-muted/30 (muted at
+  // 30% alpha) composited on the page background. Read the actual token values
+  // from index.css so a future palette change that hurts legibility is caught.
+  function hslTriplet(h: number, s: number, l: number): [number, number, number] {
+    const sn = s / 100;
+    const ln = l / 100;
+    const k = (n: number) => (n + h / 30) % 12;
+    const a = sn * Math.min(ln, 1 - ln);
+    const f = (n: number) => ln - a * Math.max(-1, Math.min(k(n) - 3, 9 - k(n), 1));
+    return [255 * f(0), 255 * f(8), 255 * f(4)];
+  }
+  function composite(
+    fg: [number, number, number],
+    alpha: number,
+    bg: [number, number, number],
+  ): [number, number, number] {
+    return [
+      fg[0] * alpha + bg[0] * (1 - alpha),
+      fg[1] * alpha + bg[1] * (1 - alpha),
+      fg[2] * alpha + bg[2] * (1 - alpha),
+    ];
+  }
+
+  // Token values mirrored from client/src/index.css (:root and .dark).
+  const themes = {
+    light: {
+      background: hslTriplet(0, 0, 100),
+      muted: hslTriplet(0, 3, 93),
+      mutedForeground: hslTriplet(0, 0, 40),
+    },
+    dark: {
+      background: hslTriplet(0, 0, 8),
+      muted: hslTriplet(0, 4, 16),
+      mutedForeground: hslTriplet(0, 0, 65),
+    },
+  };
+
+  for (const [name, t] of Object.entries(themes)) {
+    it(`muted-foreground over bg-muted/30 clears WCAG AA in ${name} mode`, () => {
+      const effectiveBg = composite(t.muted, 0.3, t.background);
+      const ratio = contrastRatio(t.mutedForeground, effectiveBg);
+      expect(ratio, `${name} placeholder only reached ${ratio.toFixed(2)}:1`).toBeGreaterThanOrEqual(
+        WCAG_AA,
+      );
+    });
+  }
 });

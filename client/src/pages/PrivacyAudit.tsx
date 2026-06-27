@@ -277,6 +277,54 @@ export function probColor(p: number): string {
   return `hsl(${hue}, ${sat}%, ${lit}%)`;
 }
 
+// Convert an "hsl(H, S%, L%)" string to [r, g, b] (0–255).
+function hslStringToRgb(hsl: string): [number, number, number] {
+  const m = /hsl\((\d+),\s*(\d+)%,\s*(\d+)%\)/.exec(hsl);
+  if (!m) throw new Error(`unsupported color: ${hsl}`);
+  const h = Number(m[1]);
+  const s = Number(m[2]) / 100;
+  const l = Number(m[3]) / 100;
+  const k = (n: number) => (n + h / 30) % 12;
+  const a = s * Math.min(l, 1 - l);
+  const f = (n: number) => l - a * Math.max(-1, Math.min(k(n) - 3, 9 - k(n), 1));
+  return [255 * f(0), 255 * f(8), 255 * f(4)];
+}
+
+// WCAG relative luminance of an [r, g, b] color (0–255 per channel).
+function relativeLuminance([r, g, b]: [number, number, number]): number {
+  const lin = [r, g, b].map((v) => {
+    const c = v / 255;
+    return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+  });
+  return 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2];
+}
+
+// WCAG contrast ratio between two colors (1–21).
+export function contrastRatio(
+  a: [number, number, number],
+  b: [number, number, number],
+): number {
+  const la = relativeLuminance(a);
+  const lb = relativeLuminance(b);
+  const hi = Math.max(la, lb);
+  const lo = Math.min(la, lb);
+  return (hi + 0.05) / (lo + 0.05);
+}
+
+// Pick the legible text color (white or black) for a filled heatmap cell.
+// The green/yellow end of probColor() is perceptually light, so white text on
+// it falls well below WCAG AA; choosing whichever of white/black has the higher
+// contrast keeps every cell legible (and is theme-independent, so it reads the
+// same in light and dark mode).
+export function cellTextColor(p: number): string {
+  const bg = hslStringToRgb(probColor(p));
+  const white: [number, number, number] = [255, 255, 255];
+  const black: [number, number, number] = [0, 0, 0];
+  return contrastRatio(bg, white) >= contrastRatio(bg, black)
+    ? "#ffffff"
+    : "#000000";
+}
+
 function BoltzmannHeatmap({ linkMatrix }: { linkMatrix: BoltzmannResult["linkMatrix"] }) {
   const inputCount  = Math.max(...linkMatrix.map((e) => e.inputIndex))  + 1;
   const outputCount = Math.max(...linkMatrix.map((e) => e.outputIndex)) + 1;
@@ -309,9 +357,13 @@ function BoltzmannHeatmap({ linkMatrix }: { linkMatrix: BoltzmannResult["linkMat
                   <div
                     key={j}
                     title={`I${i}→O${j}: ${(p * 100).toFixed(0)}%`}
-                    style={{ backgroundColor: p > 0 ? probColor(p) : undefined }}
+                    style={
+                      p > 0
+                        ? { backgroundColor: probColor(p), color: cellTextColor(p) }
+                        : undefined
+                    }
                     className={`rounded text-center text-xs py-1 font-mono ${
-                      p > 0 ? "text-white" : "bg-muted/30 text-muted-foreground"
+                      p > 0 ? "" : "bg-muted/30 text-muted-foreground"
                     }`}
                     data-testid={`cell-heatmap-${i}-${j}`}
                   >
