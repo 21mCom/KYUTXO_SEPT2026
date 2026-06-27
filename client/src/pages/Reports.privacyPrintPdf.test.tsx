@@ -128,6 +128,21 @@ vi.mock("@/lib/privacy-audit", async (importOriginal) => {
 
 const { PrivacyAuditReportPanel } = await import("./Reports");
 const { getRecordsPageByTypeIdReverseKeyset } = await import("@/lib/data/record-crud");
+// buildPrintableReport is the single source of truth for the printable HTML.
+// We import it REAL to prove the document written into the print window is
+// byte-for-byte what the builder produces for this result + scope (the only
+// non-deterministic part — the generated-at timestamp — is normalized out).
+const { buildPrintableReport } = await import("@/lib/privacy-report-html");
+
+// The printable HTML embeds the generation time in two spots (the <title> date
+// and the "Generated …" subtitle). Normalize both so an exact-match comparison
+// isn't defeated by sub-second clock drift between the component's render and
+// the test's own builder call.
+function normalizeReportDates(html: string): string {
+  return html
+    .replace(/<title>Privacy Audit Report — [^<]*<\/title>/, "<title>Privacy Audit Report — DATE</title>")
+    .replace(/Generated [^·]*·/, "Generated DATE ·");
+}
 
 // ── Fake print window ────────────────────────────────────────────────────────
 // exportPdf opens a window, writes the printable HTML, then wires the in-window
@@ -246,6 +261,23 @@ describe("PrivacyAuditReportPanel — Print / PDF", () => {
     // After a short layout delay the print dialog is invoked so users can
     // "Save as PDF". The 250ms setTimeout fires on real timers within waitFor.
     await waitFor(() => expect(fake.win.print).toHaveBeenCalledTimes(1));
+  });
+
+  it("writes the exact buildPrintableReport output for the result and scope", async () => {
+    const fake = makeFakeWindow();
+    vi.spyOn(window, "open").mockReturnValue(fake.win);
+
+    const { getByTestId } = await renderWithResult();
+    fireEvent.click(getByTestId("button-print-privacy-report"));
+
+    // The default scope is "all" owners / "all" wallets, which exportPdf maps to
+    // null/null before calling buildPrintableReport. Rebuilding with the same
+    // result + scope must reproduce the document written into the print window
+    // byte-for-byte (timestamps normalized), proving no partial drift between
+    // the page glue and the single-source-of-truth builder.
+    const written = fake.getWritten();
+    const expected = buildPrintableReport(mockResult as any, { owner: null, wallet: null });
+    expect(normalizeReportDates(written)).toBe(normalizeReportDates(expected));
   });
 
   it("shows a destructive toast and does not write/print when the pop-up is blocked (window.open returns null)", async () => {
