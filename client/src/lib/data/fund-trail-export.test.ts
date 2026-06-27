@@ -792,3 +792,110 @@ describe("buildFundTrailPdf with very long values", () => {
     expect(normalized).toContain(longTxid);
   });
 });
+
+// ---------------------------------------------------------------------------
+// PDF builder at depth — beyond many top-level groups, the detailed export also
+// recurses through expanded hops (children) and indents each level. A user who
+// expands many hops deep produces deeply nested detail sub-tables whose indent
+// (`"    ".repeat(depth)`) and left margins grow with depth. The document must
+// still paginate cleanly and not overflow horizontally as depth increases.
+// ---------------------------------------------------------------------------
+
+/**
+ * Build a snapshot whose single top-level source group expands into a straight
+ * chain of `depth` further hops (Level 0 → Level 1 → … → Level depth), each
+ * carrying `detailsPerNode` unique detail rows, by registering each hop under
+ * the path the FlowCard tree would use. This drives `buildNode`'s recursion and
+ * forces `flattenNodes` to assign one increasing depth per level.
+ */
+function deepChainSnapshot(depth: number, detailsPerNode: number) {
+  const makeDetails = (level: number): GroupFlowDetail[] => {
+    const details: GroupFlowDetail[] = [];
+    for (let d = 0; d < detailsPerNode; d++) {
+      details.push(
+        detail({
+          address: `bc1qlevel${level}addr${d}`,
+          txid: `txid-${level}-${d}`,
+          amount: 1_000_000 + d,
+          blockTime: 1_700_000_000 + level * 1000 + d,
+        }),
+      );
+    }
+    return details;
+  };
+
+  const center: TrailHop = {
+    sources: [
+      flow({ groupLabel: "Level 0", details: makeDetails(0) }),
+    ],
+    destinations: [],
+  };
+
+  // Walk the path the FlowCard tree registers expanded hops under, hanging one
+  // deeper single-group hop off each level so the chain is `depth` levels deep.
+  const registry = new Map<string, TrailHop>();
+  let path = flowPath("", "source", "Level 0");
+  for (let level = 1; level <= depth; level++) {
+    const label = `Level ${level}`;
+    registry.set(path, {
+      sources: [flow({ groupLabel: label, details: makeDetails(level) })],
+      destinations: [],
+    });
+    path = flowPath(path, "source", label);
+  }
+
+  return buildFundTrailSnapshot("Deep Wallet", "walletName", center, registry);
+}
+
+describe("buildFundTrailPdf at depth", () => {
+  it("paginates a deeply nested detailed snapshot into a valid multi-page Blob", async () => {
+    // A 12-level-deep chain (Level 0 → … → Level 12), each with detail rows, so
+    // the detailed export recurses through deep indentation and many sub-tables.
+    const depth = 12;
+    const snapshot = deepChainSnapshot(depth, 20);
+
+    // The flattened tree must assign one strictly increasing depth per level,
+    // proving the deep nodes are reached in order before they reach the PDF.
+    const flat: { depth: number; node: ExportFlowNode }[] = [];
+    flattenNodes(snapshot.sources, 0, flat);
+    expect(flat.map((r) => [r.node.groupLabel, r.depth])).toEqual(
+      Array.from({ length: depth + 1 }, (_, level) => [`Level ${level}`, level]),
+    );
+
+    const blob = await buildFundTrailPdf(snapshot, { detailed: true });
+
+    // A real, non-trivial PDF (not blank/corrupt) produced without throwing.
+    expect(blob).toBeInstanceOf(Blob);
+    expect(blob.type).toBe("application/pdf");
+    expect(blob.size).toBeGreaterThan(0);
+
+    const text = await blob.text();
+    expect(text.slice(0, 5)).toBe("%PDF-");
+    // It must end cleanly with the EOF marker, proving the document closed.
+    expect(text.trimEnd().endsWith("%%EOF")).toBe(true);
+
+    // The deep detail tables must span more than a single page.
+    expect(pdfPageCount(text)).toBeGreaterThan(1);
+
+    // The deepest level must survive into the rendered document — its label is
+    // indented (with "↳"), forcing jspdf to emit a UTF-16 run.
+    const rendered = await extractPdfText(blob);
+    expect(rendered).toContain(`Level ${depth}`);
+    expect(rendered).toContain("Level 0");
+  });
+
+  it("keeps deep indented detail rows from overflowing the page horizontally", async () => {
+    // Long addresses/txids at deep indentation are the horizontal-overflow risk;
+    // the detail sub-tables wrap (overflow: linebreak) and stay within margins.
+    const snapshot = deepChainSnapshot(15, 5);
+
+    const blob = await buildFundTrailPdf(snapshot, { detailed: true });
+    expect(blob.type).toBe("application/pdf");
+
+    const text = await blob.text();
+    expect(text.slice(0, 5)).toBe("%PDF-");
+    expect(text.trimEnd().endsWith("%%EOF")).toBe(true);
+    // Multiple pages, never a single overflowing page.
+    expect(pdfPageCount(text)).toBeGreaterThan(1);
+  });
+});
