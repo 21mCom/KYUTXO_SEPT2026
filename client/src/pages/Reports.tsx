@@ -20,7 +20,7 @@ import {
   type EntityCitation,
 } from "@/lib/privacy-audit";
 import { renderSourceNote } from "@/lib/renderSourceNote";
-import { buildPrivacyReport, buildPrivacyTextReport, copyPrivacyReportText, downloadPrivacyTextReport, formatScoreDelta, extractCitations } from "@/lib/privacy-report-export";
+import { buildPrivacyReport, buildPrivacyTextReport, computeExportScopeLabel, copyPrivacyReportText, downloadPrivacyTextReport, formatScoreDelta, extractCitations } from "@/lib/privacy-report-export";
 import { buildPrintableReport, severityLabel, wireReportCopyButton } from "@/lib/privacy-report-html";
 import { getRecordsPageByTypeIdReverseKeyset } from "@/lib/data/record-crud";
 
@@ -280,6 +280,14 @@ export function PrivacyAuditReportPanel() {
 
       {result && (
         <div className="space-y-4">
+          {/* Report-wide scope caption — matches the history exporter wording so
+              the user sees exactly what the export will say before exporting. */}
+          <div className="text-sm font-medium" data-testid="text-privacy-report-scope">
+            {computeExportScopeLabel({
+              owner: selectedOwner === "all" ? null : selectedOwner,
+              wallet: selectedWallet === "all" ? null : selectedWallet,
+            })}
+          </div>
           {/* Score summary */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3" data-testid="container-privacy-report-summary">
             <div className="rounded-md border p-3 text-center">

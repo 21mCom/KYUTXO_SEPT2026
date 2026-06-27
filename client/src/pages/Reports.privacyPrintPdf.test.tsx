@@ -319,6 +319,8 @@ describe("PrivacyAuditReportPanel — Print / PDF", () => {
     // Default scope (no owner/wallet selected) is reflected in the report.
     expect(html).toContain("Owner: All");
     expect(html).toContain("Wallet: All");
+    // The report-wide scope caption matches the history exporter wording.
+    expect(html).toContain("Scope: All addresses");
 
     // After a short layout delay the print dialog is invoked so users can
     // "Save as PDF". The 250ms setTimeout fires on real timers within waitFor.
@@ -493,6 +495,9 @@ describe("PrivacyAuditReportPanel — Print / PDF", () => {
     expect(html).toContain("Wallet: Cold Storage");
     expect(html).not.toContain("Owner: All");
     expect(html).not.toContain("Wallet: All");
+    // The report-wide scope caption matches the history exporter wording.
+    expect(html).toContain("Scope: Owner = Alice, Wallet = Cold Storage");
+    expect(html).not.toContain("Scope: All addresses");
   });
 
   it("carries the selected owner/wallet scope into the in-window copied report", async () => {

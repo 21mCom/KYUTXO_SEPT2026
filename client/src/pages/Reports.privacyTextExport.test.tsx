@@ -303,6 +303,15 @@ describe("PrivacyAuditReportPanel — scope flows into the report", () => {
     const text = await (createObjectURL.mock.calls[0][0] as Blob).text();
     expect(text).toContain("Owner: All");
     expect(text).toContain("Wallet: All");
+    // The report-wide scope caption matches the history exporter wording.
+    expect(text).toContain("Scope: All addresses");
+  });
+
+  it("shows the report-wide scope caption on screen before export", async () => {
+    const { getByTestId } = await renderWithResult();
+    expect(getByTestId("text-privacy-report-scope").textContent).toContain(
+      "Scope: All addresses",
+    );
   });
 
   it("carries the selected owner/wallet scope into the copied report", async () => {
@@ -328,5 +337,7 @@ describe("PrivacyAuditReportPanel — scope flows into the report", () => {
     const copied = writeText.mock.calls[0][0] as string;
     expect(copied).toContain("Owner: Alice");
     expect(copied).toContain("Wallet: Cold Storage");
+    // The report-wide scope caption matches the history exporter wording.
+    expect(copied).toContain("Scope: Owner = Alice, Wallet = Cold Storage");
   });
 });

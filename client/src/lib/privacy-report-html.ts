@@ -6,6 +6,7 @@ import {
 } from "@/lib/privacy-audit";
 import {
   type ExportScope,
+  computeExportScopeLabel,
   extractCitations,
   findingsOfType,
   formatFindingLocator,
@@ -158,6 +159,7 @@ export function buildPrintableReport(
     ? allFindings.map(renderFinding).join("")
     : `<p class="clean">No privacy findings — your transaction history is clean.</p>`;
 
+  const scopeLabel = computeExportScopeLabel(scope);
   const scopeText = [
     scope.owner ? `Owner: ${escapeHtml(scope.owner)}` : "Owner: All",
     scope.wallet ? `Wallet: ${escapeHtml(scope.wallet)}` : "Wallet: All",
@@ -209,6 +211,7 @@ export function buildPrintableReport(
   body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; color: #1a1a1a; margin: 0; padding: 32px; line-height: 1.5; }
   h1 { font-size: 22px; margin: 0 0 4px; }
   .subtitle { color: #555; font-size: 13px; margin: 0 0 2px; }
+  .scope-label { color: #1a1a1a; font-size: 13px; font-weight: 600; margin: 0 0 2px; }
   .scope { color: #555; font-size: 12px; margin: 0 0 24px; }
   .summary { display: flex; flex-wrap: wrap; gap: 16px; margin-bottom: 20px; }
   .summary-box { border: 1px solid #ddd; border-radius: 6px; padding: 12px 16px; min-width: 110px; text-align: center; }
@@ -252,6 +255,7 @@ export function buildPrintableReport(
 <body>
   <h1>Privacy Audit Report</h1>
   <p class="subtitle">Generated ${escapeHtml(generatedAt)} · All analysis ran fully offline.</p>
+  <p class="scope-label">${escapeHtml(scopeLabel)}</p>
   <p class="scope">${scopeText}</p>
 
   <div class="toolbar no-print">

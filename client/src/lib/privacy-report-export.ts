@@ -120,6 +120,25 @@ export interface ExportScope {
   wallet: string | null;
 }
 
+/**
+ * Compute the single report-wide scope caption for a single-run Privacy Report,
+ * matching the wording the history exporter uses (computePrivacyHistoryScopeLabel):
+ *   - "Scope: Owner = Alice"
+ *   - "Scope: Wallet = Cold Storage"
+ *   - "Scope: Owner = Bob, Wallet = Trading"
+ *   - "Scope: All addresses"   (no owner/wallet filter — full vault)
+ * Empty strings are treated the same as unset so a blank owner/wallet never
+ * reads as a distinct filter. This is the single source of truth for the
+ * per-audit scope caption, shared by the HTML, text, and on-screen surfaces so
+ * they cannot drift.
+ */
+export function computeExportScopeLabel(scope: ExportScope): string {
+  const parts: string[] = [];
+  if (scope.owner) parts.push(`Owner = ${scope.owner}`);
+  if (scope.wallet) parts.push(`Wallet = ${scope.wallet}`);
+  return `Scope: ${parts.length ? parts.join(", ") : "All addresses"}`;
+}
+
 /** Condensed audit summary block carried at the top of the exported report. */
 export interface ExportedSummary {
   score: number;
@@ -240,6 +259,7 @@ export function buildPrivacyTextReport(
   lines.push(sep);
   lines.push(`Generated: ${generatedAt}`);
   lines.push("All analysis ran fully offline.");
+  lines.push(computeExportScopeLabel(scope));
   lines.push(`Owner: ${scope.owner ?? "All"}`);
   lines.push(`Wallet: ${scope.wallet ?? "All"}`);
   lines.push("");
