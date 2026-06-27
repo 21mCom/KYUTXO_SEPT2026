@@ -14,6 +14,14 @@
 // access (x.notes.length), conditionals (x.notes && (...)) and anything already
 // wrapped in renderSourceNote(...) are intentionally not flagged.
 //
+// Privacy Audit / Reports finding text uses the generic field names
+// `.description` and `.correction` (remediation). Those embed user-controlled
+// text from the imported entity-list snapshot (entity names, source notes), so
+// they must also route through renderSourceNote(...). Because `.description`
+// appears widely as static config (CardDescription, option lists, etc.), the
+// finding-field scan is scoped to the specific files that render finding text
+// (see FINDING_FILES) rather than scanning generically.
+//
 // Run `node scripts/check-note-rendering.js` to verify.
 
 import fs from 'fs';
@@ -28,13 +36,29 @@ const SCAN_DIR = path.resolve(ROOT, 'client/src');
 // Free-text note fields whose values can contain user-supplied URLs.
 const NOTE_FIELDS = ['notes', 'sourceNote'];
 
-// A brace group whose entire content is a bare member access ending in a note
-// field, optionally with a string fallback (`?? "(none)"`). The presence of any
-// "(" inside the group means it is either a function call (renderSourceNote(...),
-// .slice(...)) or a method access, so such groups are never flagged.
-const PURE_RENDER = new RegExp(
-  `^[\\w.\\[\\]'" ]*\\.(${NOTE_FIELDS.join('|')})\\s*(\\?\\?\\s*["'][^"']*["'])?$`,
-);
+// Privacy Audit / Reports finding-text fields. These are scoped to FINDING_FILES
+// because the generic names (`description` especially) are used widely as static
+// config elsewhere (CardDescription, option lists), which would cause false
+// positives if scanned across every file.
+const FINDING_FIELDS = ['description', 'correction'];
+const FINDING_FILES = new Set([
+  'client/src/pages/PrivacyAudit.tsx',
+  'client/src/pages/Reports.tsx',
+]);
+
+// Builds a regex matching a brace group whose entire content is a bare member
+// access ending in one of `fields`, optionally with a string fallback
+// (`?? "(none)"`). The presence of any "(" inside the group means it is either a
+// function call (renderSourceNote(...), .slice(...)) or a method access, so such
+// groups are never flagged.
+function pureRenderRegex(fields) {
+  return new RegExp(
+    `^[\\w.\\[\\]'" ]*\\.(${fields.join('|')})\\s*(\\?\\?\\s*["'][^"']*["'])?$`,
+  );
+}
+
+const NOTE_RENDER = pureRenderRegex(NOTE_FIELDS);
+const FINDING_RENDER = pureRenderRegex(FINDING_FIELDS);
 
 function collectFiles(dir, files = []) {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -58,27 +82,35 @@ function prevNonSpaceChar(line, index) {
   return '';
 }
 
+// Scans one line for raw (unwrapped) JSX-child renders of any field matched by
+// `renderRegex`, pushing violations. Returns nothing.
+function scanLine(line, lineNo, relFile, renderRegex, out) {
+  // Find every brace group on the line that contains no nested braces, then
+  // check whether it is a raw render of a guarded field.
+  const braceGroup = /\{([^{}]*)\}/g;
+  let m;
+  while ((m = braceGroup.exec(line)) !== null) {
+    const content = m[1].trim();
+    if (!renderRegex.test(content)) continue;
+    // Skip attribute values (foo={...}) and function arguments ((x.notes)).
+    const before = prevNonSpaceChar(line, m.index);
+    if (before === '=' || before === '(' || before === ',') continue;
+    out.push({ file: relFile, line: lineNo + 1, text: line.trim() });
+  }
+}
+
 const violations = [];
 
 for (const file of collectFiles(SCAN_DIR)) {
+  const relFile = path.relative(ROOT, file);
   const lines = fs.readFileSync(file, 'utf-8').split('\n');
+  const scanFindings = FINDING_FILES.has(relFile);
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    // Find every brace group on the line that contains a note field and no
-    // nested braces, then check whether it is a raw (unwrapped) render.
-    const braceGroup = /\{([^{}]*)\}/g;
-    let m;
-    while ((m = braceGroup.exec(line)) !== null) {
-      const content = m[1].trim();
-      if (!PURE_RENDER.test(content)) continue;
-      // Skip attribute values (foo={...}) and function arguments ((x.notes)).
-      const before = prevNonSpaceChar(line, m.index);
-      if (before === '=' || before === '(' || before === ',') continue;
-      violations.push({
-        file: path.relative(ROOT, file),
-        line: i + 1,
-        text: line.trim(),
-      });
+    scanLine(line, i, relFile, NOTE_RENDER, violations);
+    // Finding-text fields are only scanned in the files that render findings.
+    if (scanFindings) {
+      scanLine(line, i, relFile, FINDING_RENDER, violations);
     }
   }
 }
@@ -97,6 +129,6 @@ if (violations.length > 0) {
 } else {
   console.log(
     '\x1b[32m%s\x1b[0m',
-    'All note renders route through renderSourceNote (no raw .notes/.sourceNote JSX children).',
+    'All note renders route through renderSourceNote (no raw .notes/.sourceNote, or finding .description/.correction, JSX children).',
   );
 }
