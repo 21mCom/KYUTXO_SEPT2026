@@ -468,7 +468,7 @@ export function PrivacyAuditReportPanel() {
                       <Badge className={`shrink-0 ${severityBadgeClass(f.severity)}`} data-testid={`text-privacy-finding-severity-${i}`}>{severityLabel(f.severity)}</Badge>
                       <div className="flex-1 min-w-0">
                         <div className="font-medium" data-testid={`text-privacy-finding-type-${i}`}>{FINDING_TYPE_LABELS[f.type] ?? f.type}</div>
-                        <div className="text-xs text-muted-foreground mt-0.5 line-clamp-2">{renderSourceNote(f.description)}</div>
+                        <div className="text-xs text-muted-foreground mt-0.5 line-clamp-2" data-testid={`text-privacy-finding-desc-${i}`}>{renderSourceNote(f.description)}</div>
                         {f.correction && (
                           <div className="text-xs text-muted-foreground mt-0.5 italic">Fix: {renderSourceNote(f.correction)}</div>
                         )}
