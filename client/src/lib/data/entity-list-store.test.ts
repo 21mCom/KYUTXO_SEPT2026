@@ -1243,6 +1243,57 @@ describe("prepareEntitySnapshot", () => {
     expect(result.preview!.unchanged).toBe(0);
   });
 
+  it("threads merge mode from a bare-array snapshot into the preview", () => {
+    // A brand-new address (not in the bundled list) plus an address that
+    // overwrites a bundled entry. Merge compares against the bundled list, so
+    // the single-entry active list set in beforeEach must be ignored.
+    const NEW_ADDR = "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq";
+    const raw = [
+      { address: NEW_ADDR, name: "New Market", category: "darknet" },
+      { address: ADDR.binance, name: "Overridden Name", category: "mixer" },
+    ];
+
+    const result = prepareEntitySnapshot(raw, "merge");
+
+    expect(result.valid).toBe(true);
+    expect(result.total).toBe(2);
+    expect(result.errors).toEqual([]);
+    expect(result.preview).toBeDefined();
+
+    const preview = result.preview!;
+    expect(preview.mode).toBe("merge");
+    expect(preview.currentCount).toBe(getBundledEntityCount());
+    expect(preview.added).toBe(1); // NEW_ADDR
+    expect(preview.overridden).toBe(1); // binance overwrites a bundled entry
+    expect(preview.removed).toBe(0); // a merge never removes
+    expect(preview.resultingCount).toBe(getBundledEntityCount() + 1);
+
+    expect(preview.addedEntries.map((e) => e.address)).toEqual([NEW_ADDR]);
+    expect(preview.overrides.map((o) => o.incoming.address)).toEqual([ADDR.binance]);
+  });
+
+  it("threads merge mode from a wrapped { entries: [...] } snapshot into the preview", () => {
+    const NEW_ADDR = "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq";
+    const raw = {
+      entries: [
+        { address: NEW_ADDR, name: "New Market", category: "darknet" },
+        { address: ADDR.binance, name: "Overridden Name", category: "mixer" },
+      ],
+    };
+
+    const result = prepareEntitySnapshot(raw, "merge");
+
+    expect(result.valid).toBe(true);
+    expect(result.preview).toBeDefined();
+
+    const preview = result.preview!;
+    expect(preview.mode).toBe("merge");
+    expect(preview.added).toBe(1);
+    expect(preview.overridden).toBe(1);
+    expect(preview.removed).toBe(0);
+    expect(preview.resultingCount).toBe(getBundledEntityCount() + 1);
+  });
+
   it("returns errors and no preview for an invalid snapshot", () => {
     const raw = [
       { address: "not-a-valid-address", name: "Bad", category: "exchange" },
