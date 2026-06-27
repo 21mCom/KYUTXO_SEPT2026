@@ -423,6 +423,121 @@ describe("SettingsPage — entity list import (merge mode) diff filters", () => 
   });
 });
 
+describe("SettingsPage — entity list import (merge mode) only-changed filter", () => {
+  // Build an incoming snapshot entry that is byte-for-byte identical to a
+  // bundled entry, so the merge surfaces it as a "no change" override
+  // (changed: false). entriesEqual compares address/name/category/sourceNote,
+  // so the source note must be replicated when present.
+  function identical(e: { address: string; name: string; category: string; sourceNote?: string }) {
+    const out: Record<string, string> = {
+      address: e.address,
+      name: e.name,
+      category: e.category,
+    };
+    if (e.sourceNote != null) out.sourceNote = e.sourceNote;
+    return out;
+  }
+
+  function overrideRows() {
+    return screen.queryAllByTestId(/^row-entity-override-\d+$/);
+  }
+  function overridesTabText() {
+    return screen.getByTestId("tab-entity-diff-overrides").textContent ?? "";
+  }
+  function toggleOnlyChanged() {
+    fireEvent.click(screen.getByTestId("switch-overrides-only-changed"));
+  }
+
+  it("narrows the list to the changed override(s) when toggled on, and restores the full list when toggled off", async () => {
+    renderPage();
+    await screen.findByTestId("badge-entity-source");
+
+    const list = getBundledEntityList();
+    const [bundled0, bundled1] = list;
+    expect(bundled0).toBeTruthy();
+    expect(bundled1).toBeTruthy();
+    // Distinct addresses so both surface as separate override rows.
+    expect(bundled0.address).not.toBe(bundled1.address);
+
+    fireEvent.click(screen.getByTestId("radio-entity-merge"));
+
+    const CHANGED_NAME = "Changed Override Entity";
+    const snapshot = JSON.stringify([
+      // A real change: renamed + re-categorised bundled entry (changed: true).
+      { address: bundled0.address, name: CHANGED_NAME, category: "gambling" },
+      // An identical re-import of a bundled entry (changed: false → "no change").
+      identical(bundled1),
+    ]);
+    await selectEntityFile("merge-only-changed.json", snapshot);
+
+    await screen.findByTestId("text-preview-incoming");
+    fireEvent.click(screen.getByTestId("button-toggle-entity-diff"));
+    await screen.findByTestId("tab-entity-diff-overrides");
+
+    // The tab trigger reports the total override count plus the changed count:
+    // 2 overrides, of which 1 actually changes anything.
+    expect(overridesTabText()).toContain("Overrides (2, 1 changed)");
+
+    // Toggle OFF (default): both overrides render, including the identical one
+    // which carries the "no change" badge.
+    expect(overrideRows()).toHaveLength(2);
+    expect(screen.getByText(CHANGED_NAME)).toBeTruthy();
+    expect(screen.getByText("no change")).toBeTruthy();
+
+    // Toggle ON: only the changed override survives the filter.
+    toggleOnlyChanged();
+    await waitFor(() => expect(overrideRows()).toHaveLength(1));
+    // The changed override is still present; the identical "no change" row is gone.
+    expect(screen.getByText(CHANGED_NAME)).toBeTruthy();
+    expect(screen.queryByText("no change")).toBeNull();
+    // The empty label must NOT show — there is still a matching changed override.
+    expect(screen.queryByTestId("text-entity-overrides-empty")).toBeNull();
+    // The tab trigger count is unaffected by the view filter.
+    expect(overridesTabText()).toContain("Overrides (2, 1 changed)");
+
+    // Toggle back OFF: the full override list (including the identical row) returns.
+    toggleOnlyChanged();
+    await waitFor(() => expect(overrideRows()).toHaveLength(2));
+    expect(screen.getByText("no change")).toBeTruthy();
+  });
+
+  it("shows the distinct 'no overrides change anything' empty label when every override is identical", async () => {
+    renderPage();
+    await screen.findByTestId("badge-entity-source");
+
+    const list = getBundledEntityList();
+    const [bundled0, bundled1] = list;
+    expect(bundled0).toBeTruthy();
+    expect(bundled1).toBeTruthy();
+    expect(bundled0.address).not.toBe(bundled1.address);
+
+    fireEvent.click(screen.getByTestId("radio-entity-merge"));
+
+    // Both overrides re-import the bundled entries verbatim, so none change.
+    const snapshot = JSON.stringify([identical(bundled0), identical(bundled1)]);
+    await selectEntityFile("merge-all-identical.json", snapshot);
+
+    await screen.findByTestId("text-preview-incoming");
+    fireEvent.click(screen.getByTestId("button-toggle-entity-diff"));
+    await screen.findByTestId("tab-entity-diff-overrides");
+
+    // 2 overrides, 0 of which change anything.
+    expect(overridesTabText()).toContain("Overrides (2, 0 changed)");
+    // Both identical rows render while the filter is off.
+    expect(overrideRows()).toHaveLength(2);
+
+    // Toggle ON: every override is filtered out, so the list shows the
+    // changed-only empty label — NOT the generic search empty label.
+    toggleOnlyChanged();
+    const empty = await screen.findByTestId("text-entity-overrides-empty");
+    expect(empty.textContent).toContain(
+      "No overrides change anything — every match is identical to the bundled entry.",
+    );
+    expect(empty.textContent).not.toContain("No overrides match your search.");
+    expect(overrideRows()).toHaveLength(0);
+  });
+});
+
 describe("SettingsPage — entity list import (merge mode) source-note diff", () => {
   it("renders the override source-note diff (old → new, '(none)' for absent notes) when the note changes", async () => {
     renderPage();
