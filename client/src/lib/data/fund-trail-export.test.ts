@@ -1137,6 +1137,61 @@ function wideFanOutSnapshot(branches: number, detailsPerBranch: number) {
   return buildFundTrailSnapshot("Fan Wallet", "walletName", center, registry);
 }
 
+/**
+ * Mirror of `wideFanOutSnapshot` for the *destinations* (outgoing) side: a
+ * single top-level destination group ("Root") expands into a hop holding
+ * `branches` sibling child flows ("Branch 0" … "Branch N-1") all at the same
+ * depth, each carrying `detailsPerBranch` unique detail rows. The hop is
+ * registered under the path the FlowCard tree uses with direction "dest",
+ * driving buildNode's "dest" recursion (hop.destinations) so flattenNodes over
+ * snapshot.destinations emits Root at depth 0 followed by every branch at
+ * depth 1 in depth-first sibling order.
+ */
+function wideFanOutDestSnapshot(branches: number, detailsPerBranch: number) {
+  const makeDetails = (branch: number): GroupFlowDetail[] => {
+    const details: GroupFlowDetail[] = [];
+    for (let d = 0; d < detailsPerBranch; d++) {
+      details.push(
+        detail({
+          address: `bc1qdestbranch${branch}addr${d}`,
+          txid: `dtxid-${branch}-${d}`,
+          amount: 1_000_000 + d,
+          blockTime: 1_700_000_000 + branch * 1000 + d,
+        }),
+      );
+    }
+    return details;
+  };
+
+  const center: TrailHop = {
+    sources: [],
+    destinations: [
+      flow({ groupLabel: "Root", details: makeDetails(-1) }),
+    ],
+  };
+
+  // The "Root" destination group expands into one hop holding many sibling
+  // destination flows — the outgoing-side fan-out.
+  const branchFlows: GroupFlow[] = [];
+  for (let b = 0; b < branches; b++) {
+    const branchDetails = makeDetails(b);
+    branchFlows.push(
+      flow({
+        groupLabel: `Branch ${b}`,
+        totalSats: branchDetails.reduce((s, x) => s + x.amount, 0),
+        details: branchDetails,
+      }),
+    );
+  }
+  const registry = new Map<string, TrailHop>();
+  registry.set(flowPath("", "dest", "Root"), {
+    sources: [],
+    destinations: branchFlows,
+  });
+
+  return buildFundTrailSnapshot("Fan Wallet", "walletName", center, registry);
+}
+
 describe("buildFundTrailPdf at fan-out", () => {
   it("paginates a wide fan-out detailed snapshot into a valid multi-page Blob", async () => {
     // 30 sibling branches off one hop, each with detail rows, so the detailed
@@ -1148,6 +1203,48 @@ describe("buildFundTrailPdf at fan-out", () => {
     // depth 1, in depth-first sibling order, before anything reaches the PDF.
     const flat: { depth: number; node: ExportFlowNode }[] = [];
     flattenNodes(snapshot.sources, 0, flat);
+    expect(flat.map((r) => [r.node.groupLabel, r.depth])).toEqual([
+      ["Root", 0],
+      ...Array.from({ length: branches }, (_, b) => [`Branch ${b}`, 1]),
+    ]);
+
+    const blob = await buildFundTrailPdf(snapshot, { detailed: true });
+
+    // A real, non-trivial PDF (not blank/corrupt) produced without throwing.
+    expect(blob).toBeInstanceOf(Blob);
+    expect(blob.type).toBe("application/pdf");
+    expect(blob.size).toBeGreaterThan(0);
+
+    const text = await blob.text();
+    expect(text.slice(0, 5)).toBe("%PDF-");
+    // It must end cleanly with the EOF marker, proving the document closed.
+    expect(text.trimEnd().endsWith("%%EOF")).toBe(true);
+
+    // The many same-level sub-tables must span more than a single page.
+    expect(pdfPageCount(text)).toBeGreaterThan(1);
+
+    // Every branch label (each indented with "↳", forcing a UTF-16 run) must
+    // survive into the rendered document — none silently dropped at fan-out.
+    const rendered = await extractPdfText(blob);
+    expect(rendered).toContain("Root");
+    for (let b = 0; b < branches; b++) {
+      expect(rendered).toContain(`Branch ${b}`);
+    }
+  });
+
+  it("paginates a wide fan-out on the destinations side into a valid multi-page Blob", async () => {
+    // The symmetric outgoing-side case: one spending hop fans out into dozens of
+    // sibling outputs, exercising buildNode's "dest" recursion (hop.destinations)
+    // and renderSection over snapshot.destinations.
+    const branches = 30;
+    const snapshot = wideFanOutDestSnapshot(branches, 12);
+
+    // flattenNodes over the DESTINATIONS side must be "Root" at depth 0 followed
+    // by every branch at depth 1, in depth-first sibling order, before anything
+    // reaches the PDF. (Sources is empty in this snapshot.)
+    expect(snapshot.sources).toEqual([]);
+    const flat: { depth: number; node: ExportFlowNode }[] = [];
+    flattenNodes(snapshot.destinations, 0, flat);
     expect(flat.map((r) => [r.node.groupLabel, r.depth])).toEqual([
       ["Root", 0],
       ...Array.from({ length: branches }, (_, b) => [`Branch ${b}`, 1]),
