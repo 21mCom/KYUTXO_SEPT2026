@@ -66,6 +66,7 @@ const BASE_SETTINGS = {
   defaultView: "table",
   cancelConfirmThreshold: 75,
   privacyHistoryLimit: 30,
+  fundTrailTxLimit: 2000,
   disableOrphanCheck: false,
 } as any;
 
@@ -142,7 +143,7 @@ describe("settings preferences backup round-trip", () => {
 
   it("restores non-default numeric preferences", async () => {
     await putSettings(
-      { ...BASE_SETTINGS, cancelConfirmThreshold: 90, privacyHistoryLimit: 100 },
+      { ...BASE_SETTINGS, cancelConfirmThreshold: 90, privacyHistoryLimit: 100, fundTrailTxLimit: 5000 },
       { skipNotification: true },
     );
 
@@ -159,7 +160,7 @@ describe("settings preferences backup round-trip", () => {
     // Flip the live values so restore has to re-apply the backed-up ones.
     await updateSettings(
       "default",
-      { cancelConfirmThreshold: 50, privacyHistoryLimit: 30 },
+      { cancelConfirmThreshold: 50, privacyHistoryLimit: 30, fundTrailTxLimit: 2000 },
       { skipNotification: true },
     );
 
@@ -168,11 +169,12 @@ describe("settings preferences backup round-trip", () => {
     const restored = await getSettings("default");
     expect(restored?.cancelConfirmThreshold).toBe(90);
     expect(restored?.privacyHistoryLimit).toBe(100);
+    expect((restored as any)?.fundTrailTxLimit).toBe(5000);
   });
 
   it("leaves current numeric preferences untouched when the backup lacks them", async () => {
     await putSettings(
-      { ...BASE_SETTINGS, cancelConfirmThreshold: 80, privacyHistoryLimit: 45 },
+      { ...BASE_SETTINGS, cancelConfirmThreshold: 80, privacyHistoryLimit: 45, fundTrailTxLimit: 10000 },
       { skipNotification: true },
     );
 
@@ -181,11 +183,13 @@ describe("settings preferences backup round-trip", () => {
     const olderRow = { ...BASE_SETTINGS };
     delete (olderRow as any).cancelConfirmThreshold;
     delete (olderRow as any).privacyHistoryLimit;
+    delete (olderRow as any).fundTrailTxLimit;
     (olderRow as any).privacyHistoryLimit = Number.NaN;
     await restoreSettingsPreferences([olderRow]);
 
     const after = await getSettings("default");
     expect(after?.cancelConfirmThreshold).toBe(80);
     expect(after?.privacyHistoryLimit).toBe(45);
+    expect((after as any)?.fundTrailTxLimit).toBe(10000);
   });
 });

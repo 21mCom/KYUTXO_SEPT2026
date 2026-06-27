@@ -14,6 +14,7 @@ const KEYS = [
   "disableOrphanCheck",
   "cancelConfirmThreshold",
   "privacyHistoryLimit",
+  "fundTrailTxLimit",
   "entityListSnapshot",
 ] as const;
 
@@ -39,12 +40,14 @@ describe("previewSettingsPreferences", () => {
         disableOrphanCheck: true,
         cancelConfirmThreshold: 90,
         privacyHistoryLimit: 100,
+        fundTrailTxLimit: 5000,
         entityListSnapshot: { entries: [{ address: "a" }, { address: "b" }] },
       },
     ]);
     expect(map.disableOrphanCheck).toMatchObject({ fromBackup: true, backupValue: "Off" });
     expect(map.cancelConfirmThreshold).toMatchObject({ fromBackup: true, backupValue: "90%" });
     expect(map.privacyHistoryLimit).toMatchObject({ fromBackup: true, backupValue: "100 runs" });
+    expect(map.fundTrailTxLimit).toMatchObject({ fromBackup: true, backupValue: "5,000 per hop" });
     expect(map.entityListSnapshot).toMatchObject({ fromBackup: true, backupValue: "2 entries" });
   });
 

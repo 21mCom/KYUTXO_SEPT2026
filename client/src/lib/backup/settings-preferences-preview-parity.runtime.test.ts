@@ -49,6 +49,7 @@ const BASE_SETTINGS = {
   disableOrphanCheck: false,
   cancelConfirmThreshold: 75,
   privacyHistoryLimit: 30,
+  fundTrailTxLimit: 2000,
   // No entity-list snapshot on this device to start.
 } as any;
 
@@ -65,6 +66,8 @@ function formatDeviceValue(key: string, settings: any): string | null {
         : `${settings.cancelConfirmThreshold}%`;
     case "privacyHistoryLimit":
       return `${settings.privacyHistoryLimit} runs`;
+    case "fundTrailTxLimit":
+      return `${settings.fundTrailTxLimit.toLocaleString()} per hop`;
     case "entityListSnapshot": {
       const snap = settings.entityListSnapshot;
       if (!snap || !Array.isArray(snap.entries)) return null;
@@ -156,6 +159,7 @@ describe("settings-preferences preview/restore parity", () => {
       disableOrphanCheck: true,
       cancelConfirmThreshold: 90,
       privacyHistoryLimit: 100,
+      fundTrailTxLimit: 5000,
       entityListSnapshot: { entries: [{ address: "a" }] },
     };
 
@@ -172,6 +176,7 @@ describe("settings-preferences preview/restore parity", () => {
     expect(after?.disableOrphanCheck).toBe(true);
     expect(after?.cancelConfirmThreshold).toBe(90);
     expect(after?.privacyHistoryLimit).toBe(100);
+    expect((after as any)?.fundTrailTxLimit).toBe(5000);
     expect((after as any)?.entityListSnapshot?.entries).toHaveLength(1);
   });
 });

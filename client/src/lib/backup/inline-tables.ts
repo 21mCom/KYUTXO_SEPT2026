@@ -124,6 +124,15 @@ const PORTABLE_PREFERENCES: PortablePreferenceDescriptor[] = [
     format: (v) => `${v} runs`,
   },
   {
+    key: "fundTrailTxLimit",
+    label: "Fund Trail transaction limit",
+    extract: (s) =>
+      typeof s.fundTrailTxLimit === "number" && Number.isFinite(s.fundTrailTxLimit)
+        ? s.fundTrailTxLimit
+        : undefined,
+    format: (v) => `${(v as number).toLocaleString()} per hop`,
+  },
+  {
     key: "entityListSnapshot",
     label: "Custom Privacy Audit entity list",
     // The entity-list snapshot is user data (not a device-local preference), so
