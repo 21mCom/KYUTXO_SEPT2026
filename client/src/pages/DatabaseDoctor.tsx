@@ -1005,26 +1005,39 @@ export function BalanceIntegrityCard() {
     const abort = new AbortController();
     abortRef.current = abort;
     setState({ status: "recomputing", processed: 0, total: 0 });
+
+    // ── Recompute pass ────────────────────────────────────────────────────────
+    // recomputeAddressStats returns { cancelled: true } when the signal is
+    // aborted (user clicked Cancel) — it never *throws* for a cancellation.
+    // Any throw here is therefore a genuine mid-rebuild error and must surface
+    // the error banner, not silently reset to idle.
+    let recomputeResult: { updated: number; cancelled: boolean };
     try {
-      await recomputeAddressStats({
+      recomputeResult = await recomputeAddressStats({
         origin: "user",
         signal: abort.signal,
         ...(recordIds && recordIds.length > 0 ? { recordIds } : {}),
         onProgress: ({ processed, total }) => setState({ status: "recomputing", processed, total }),
       });
-      if (abort.signal.aborted) {
-        setState({ status: "idle" });
-        return;
-      }
-      // Re-run the read-only check so the user sees the now-corrected count,
-      // matching the scope (sample vs. full-table) of the original run. runCheck
-      // also clears the current selection.
+    } catch (err) {
+      setState({ status: "error", message: err instanceof Error ? err.message : String(err) });
+      return;
+    }
+
+    if (recomputeResult.cancelled) {
+      setState({ status: "idle" });
+      return;
+    }
+
+    // ── Post-recompute re-check ───────────────────────────────────────────────
+    // Re-run the read-only check so the user sees the now-corrected count at
+    // the same scope (sample vs. full-table) as the original run. runCheck
+    // handles its own internal errors, but wrap it as a safety net so that any
+    // unexpected throw (e.g. the stale-report store is unavailable) surfaces the
+    // error banner rather than propagating unhandled or silently resetting to idle.
+    try {
       await runCheck(lastCheckAllRef.current);
     } catch (err) {
-      if (abort.signal.aborted) {
-        setState({ status: "idle" });
-        return;
-      }
       setState({ status: "error", message: err instanceof Error ? err.message : String(err) });
     }
   }, [runCheck]);

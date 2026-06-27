@@ -426,4 +426,47 @@ describe("BalanceOverview · Import missing history", () => {
     // Nothing imported → no resolve pass kicked off.
     expect(resolvePrevouts).not.toHaveBeenCalled();
   });
+
+  it("shows import success (not 'Import failed') when the follow-up resolve pass throws", async () => {
+    // The import itself saves one source transaction successfully …
+    primeBannerState({ unresolved: 3, unattributable: 3 });
+    getMissingSourceTxids.mockResolvedValue(["txMissing1"]);
+    getNodeSettings.mockResolvedValue({ id: "default", type: "esplora" });
+    getBlockHeight.mockResolvedValue(800000);
+    runTxidBackfill.mockResolvedValue({ rebuilt: 1, failed: 0 });
+
+    // … but the follow-up prevout-resolution/recompute pass fails (e.g. the node
+    // dropped the connection between the import and the resolve step).
+    resolvePrevouts.mockRejectedValue(new Error("connection reset"));
+
+    // The prevout counts stay the same (resolve failed → nothing changed).
+    countUnresolvedPrevoutInputs.mockResolvedValue(2);
+    getUnresolvedSpendBreakdown.mockResolvedValue({
+      byRecordId: new Map<number, number>(),
+      unattributable: 2,
+    });
+
+    await renderAndWaitForBanner();
+    fireEvent.click(screen.getByTestId("button-import-missing-history"));
+
+    // The import succeeded (rebuilt=1), so the toast must report success — NOT "Import failed".
+    await waitFor(() =>
+      expect(toastSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ title: "History imported" }),
+      ),
+    );
+    // "Import failed" must never fire — the transactions were saved.
+    const failCalls = toastSpy.mock.calls.filter(
+      (c: Parameters<typeof toastSpy>) => (c[0] as { title?: string })?.title === "Import failed",
+    );
+    expect(failCalls).toHaveLength(0);
+
+    // The button must be fully reset after the handler completes.
+    await waitFor(() => {
+      const button = screen.getByTestId("button-import-missing-history");
+      expect(button.textContent).toContain("Import missing history");
+      expect(button.textContent).not.toContain("Importing");
+      expect((button as HTMLButtonElement).disabled).toBe(false);
+    });
+  });
 });

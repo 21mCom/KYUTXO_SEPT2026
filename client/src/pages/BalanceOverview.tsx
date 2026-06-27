@@ -800,8 +800,18 @@ export default function BalanceOverview() {
       // the user cancelled — we keep whatever was imported but don't kick off
       // another long pass they just asked to stop.
       setImportProgress(null);
+      // The follow-up resolve/recompute pass is best-effort: a failure here must
+      // NOT mask the successful import. Run it in its own try-catch so the import
+      // success toast still fires even when attribution or recompute fails.
+      let resolveNote: string | null = null;
       if (result.rebuilt > 0 && !cancelled) {
-        await transactionSyncService.resolvePrevouts(undefined, { recomputeOrigin: "user" });
+        try {
+          await transactionSyncService.resolvePrevouts(undefined, { recomputeOrigin: "user" });
+        } catch (resolveErr) {
+          console.warn("[BalanceOverview] Post-import attribution/recompute failed:", resolveErr);
+          resolveNote =
+            "The attribution step encountered an error — balances may need a manual recompute.";
+        }
       }
 
       const remaining = await countUnresolvedPrevoutInputs();
@@ -810,6 +820,11 @@ export default function BalanceOverview() {
       setUnattributableSpends(unattributable);
       setUnresolvedByRecordId(byRecordId);
       if (remaining === 0) setSpendWarningDismissed(false);
+
+      const importedDesc =
+        result.rebuilt > 0
+          ? `Imported ${result.rebuilt.toLocaleString()} source transaction${result.rebuilt !== 1 ? "s" : ""}.`
+          : "";
 
       if (cancelled) {
         toast({
@@ -828,15 +843,23 @@ export default function BalanceOverview() {
               : "The source transactions could not be found on this provider.",
           variant: result.failed > 0 ? "destructive" : "default",
         });
+      } else if (resolveNote) {
+        // Import succeeded but the follow-up attribution/recompute step failed.
+        // Report the import success with a clear note about the follow-up issue so
+        // the user knows transactions were saved but balances may need a recompute.
+        toast({
+          title: "History imported",
+          description: `${importedDesc} ${resolveNote}`,
+        });
       } else if (unattributable === 0) {
         toast({
           title: "History imported",
-          description: `Imported ${result.rebuilt.toLocaleString()} source transaction${result.rebuilt !== 1 ? "s" : ""}. All spends are now attributed and balances corrected.`,
+          description: `${importedDesc} All spends are now attributed and balances corrected.`,
         });
       } else {
         toast({
           title: "History imported",
-          description: `Imported ${result.rebuilt.toLocaleString()} source transaction${result.rebuilt !== 1 ? "s" : ""}. ${unattributable.toLocaleString()} spend${unattributable !== 1 ? "s" : ""} still can't be attributed (their source addresses aren't tracked).`,
+          description: `${importedDesc} ${unattributable.toLocaleString()} spend${unattributable !== 1 ? "s" : ""} still can't be attributed (their source addresses aren't tracked).`,
         });
       }
     } catch (err) {
