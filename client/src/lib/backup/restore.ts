@@ -58,13 +58,16 @@ import {
 import {
   bulkAddUtxoLineage,
   bulkAddCustodySegments,
+  bulkAddLineageSnapshots,
   clearUtxoLineage,
   clearCustodySegments,
+  clearLineageSnapshots,
 } from "@/lib/data/lineage-crud";
 import type {
   TransactionParticipant,
   UtxoLineage,
   CustodySegment,
+  LineageSnapshot,
 } from "@/lib/database";
 import { clearInlineTables, restoreInlineTables } from "./inline-tables";
 
@@ -195,6 +198,7 @@ export interface RestoreResult {
     blockchainTransactions: number;
     utxoLineage: number;
     custodySegments: number;
+    lineageSnapshots: number;
     attachmentFiles: number;
     // Number of attachment files whose owning record was absent and were
     // routed to the Needs Review folder (never linked to any DB row).
@@ -260,6 +264,7 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
     blockchainTransactions: 0,
     utxoLineage: 0,
     custodySegments: 0,
+    lineageSnapshots: 0,
     attachmentFiles: 0,
     orphanedAttachmentFiles: 0,
     orphanedAttachmentFilesLost: 0,
@@ -307,6 +312,7 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
     await clearAddressSyncState({ skipNotification: true });
     await clearUtxoLineage({ skipNotification: true });
     await clearCustodySegments({ skipNotification: true });
+    await clearLineageSnapshots({ skipNotification: true });
     await clearInlineFn();
   }
 
@@ -360,6 +366,7 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
           manifest.counts.blockchainTransactions +
           (manifest.counts.utxoLineage ?? 0) +
           (manifest.counts.custodySegments ?? 0) +
+          (manifest.counts.lineageSnapshots ?? 0) +
           manifest.counts.attachmentFiles) || 1
       : 1;
   let processed = 0;
@@ -436,6 +443,13 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
       const out = rows.map(({ id, ...d }) => d as CustodySegment);
       if (out.length) await bulkAddCustodySegments(out, { skipNotification: true });
       counts.custodySegments += out.length;
+    } else if (table === "lineageSnapshots") {
+      // No recordId: selective-disclosure proof artifacts keyed by their own
+      // unique `snapshotId`, so insert as-is (drop old id). The v3 streaming
+      // restore always cleared the vault first, so these are appended cleanly.
+      const out = rows.map(({ id, ...d }) => d as LineageSnapshot);
+      if (out.length) await bulkAddLineageSnapshots(out, { skipNotification: true });
+      counts.lineageSnapshots += out.length;
     }
     processed += rows.length;
     report(`Restoring ${table}...`);

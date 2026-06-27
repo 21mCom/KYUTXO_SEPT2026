@@ -1,29 +1,21 @@
 // @vitest-environment jsdom
 //
-// Regression guard for the `lineageSnapshots` (`db.lineageSnapshots`, schema
-// table `ns`) table on the merge-restore path. Task #846 closed an
-// evidence-document doubling bug on merge-restore (following the same fix for
-// price history); this file audits `lineageSnapshots` for the SAME unguarded
-// append-on-merge behaviour.
+// Round-trip + merge-restore de-dup coverage for the `lineageSnapshots`
+// (`db.lineageSnapshots`, schema store `ns`) table. These proof artifacts
+// (selective-disclosure / Continuity Certificate snapshots) are now part of the
+// backup as a STREAMED NDJSON table (alongside its siblings `utxoLineage` and
+// `custodySegments`), so a restored vault keeps its generated snapshots instead
+// of silently losing them.
 //
-// FINDING (locked in by these tests): `lineageSnapshots` is NOT part of the
-// backup at all — it is not a streamed NDJSON table (see STREAMED_TABLES), it is
-// not read into the inline manifest (see readInlineTables), and it is neither
-// cleared nor restored by the v3 restore orchestrator or the legacy path. The
-// table holds regenerable selective-disclosure proof artifacts, so a backup
-// neither carries nor rebuilds them. Because nothing is ever restored INTO this
-// table, repeatedly restoring/merging a backup can never accumulate duplicate
-// snapshot rows — the bug that hit evidence/price does not exist here.
-//
-// These tests pin that invariant two ways so it cannot silently regress:
-//   1. A v3 backup's manifest does not list `lineageSnapshots` as a streamed
-//      table and its inline payload does not carry the snapshots.
-//   2. A snapshot already present in the vault survives repeated full restores
-//      WITHOUT being duplicated (the restore never clears it and the backup
-//      never re-adds it). If a future change starts exporting + restoring
-//      snapshots without de-duping on the unique `snapshotId`, the count would
-//      grow past 1 (or the unique index would throw) and this test would fail —
-//      forcing whoever wires that up to add the de-dup guard.
+// The table carries a UNIQUE `snapshotId` index, so a naive append-on-merge
+// would either double existing snapshots or throw on the unique index and abort
+// the whole restore. These tests pin the contract three ways:
+//   1. A v3 backup's manifest lists `lineageSnapshots` as a streamed table and a
+//      full (replace) restore round-trips the rows back into the vault.
+//   2. The legacy/inline merge path skips snapshots whose `snapshotId` already
+//      exists (no doubling, no unique-index abort) while still adding genuinely
+//      new ones, and replace mode appends as-is over a cleared table.
+//   3. Repeatedly merging the same backup never accumulates duplicate rows.
 //
 // The backup is UNENCRYPTED so no WebCrypto subtle support is required.
 
@@ -34,6 +26,8 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { db, type LineageSnapshot } from "@/lib/database";
 import { exportBackup, type AttachmentFileIO } from "./export";
 import { restoreV3Backup, peekManifest, type AttachmentFileWriter } from "./restore";
+import { restoreInlineTables } from "./inline-tables";
+import { restoreLegacySnapshots } from "./legacy-restore-misc";
 import { MemorySink, type BackupSink } from "./sink";
 import { blobChunks } from "./zip-stream";
 import { isV3Manifest } from "./format";
@@ -57,8 +51,7 @@ import { clearEvidence, clearEvidenceAttachments } from "@/lib/data/evidence-cru
 import { clearPriceData } from "@/lib/data/price-data-crud";
 
 // A fully-populated snapshot (every required field set, optionals included) so a
-// regression that started round-tripping snapshots would have real data to
-// double up.
+// regression in the round-trip would surface as real data loss.
 const SNAPSHOT: Omit<LineageSnapshot, "id"> = {
   snapshotId: "snap-uuid-0001",
   targetType: "address",
@@ -77,6 +70,12 @@ const SNAPSHOT: Omit<LineageSnapshot, "id"> = {
   disclosureLevel: "full",
   generatedAt: 1_700_000_100_000,
   expiresAt: 1_800_000_000_000,
+};
+
+const SNAPSHOT_2: Omit<LineageSnapshot, "id"> = {
+  ...SNAPSHOT,
+  snapshotId: "snap-uuid-0002",
+  narrative: "A second, distinct disclosure snapshot.",
 };
 
 const attachmentIO: AttachmentFileIO = {
@@ -129,12 +128,12 @@ async function exportToBlob(): Promise<Blob> {
   return blob;
 }
 
-describe("lineageSnapshots merge-restore de-dup audit", () => {
+describe("lineageSnapshots backup round-trip + merge de-dup", () => {
   beforeEach(async () => {
     await clearEverything();
   });
 
-  it("does not carry lineageSnapshots in a v3 backup manifest", async () => {
+  it("lists lineageSnapshots as a streamed table in the v3 manifest", async () => {
     await addLineageSnapshot({ ...SNAPSHOT }, { skipNotification: true });
     expect(await countLineageSnapshots()).toBe(1);
 
@@ -142,45 +141,119 @@ describe("lineageSnapshots merge-restore de-dup audit", () => {
     const manifest = await peekManifest(blobChunks(blob));
     expect(isV3Manifest(manifest)).toBe(true);
 
-    // Not a streamed NDJSON table.
-    expect((manifest as any).streamedTables).not.toContain("lineageSnapshots");
-    // Not present in the inline payload (under either its table name or the
-    // raw Dexie store name `ns`).
+    // Now a streamed NDJSON table (NOT inline).
+    expect((manifest as any).streamedTables).toContain("lineageSnapshots");
+    expect((manifest as any).counts?.lineageSnapshots).toBe(1);
     const inline = ((manifest as any).inline ?? {}) as Record<string, unknown>;
     expect(inline.lineageSnapshots).toBeUndefined();
     expect(inline.ns).toBeUndefined();
   });
 
-  it("never duplicates a pre-existing snapshot across repeated full restores", async () => {
+  it("round-trips snapshots through a full (replace) v3 restore", async () => {
     await addLineageSnapshot({ ...SNAPSHOT }, { skipNotification: true });
-    expect(await countLineageSnapshots()).toBe(1);
+    await addLineageSnapshot({ ...SNAPSHOT_2 }, { skipNotification: true });
+    expect(await countLineageSnapshots()).toBe(2);
 
     const blob = await exportToBlob();
 
-    // Restoring twice mimics a user importing the same backup more than once.
-    // Because the restore never clears OR re-adds snapshots, the single
-    // pre-existing row must survive untouched and never be doubled.
+    // Wipe the table, restore, and confirm both snapshots come back intact.
+    await clearLineageSnapshots({ skipNotification: true });
+    expect(await countLineageSnapshots()).toBe(0);
+
+    await restoreV3Backup({ source: blobChunks(blob), attachmentWriter });
+
+    const rows = await getAllLineageSnapshots();
+    expect(rows).toHaveLength(2);
+    const restored = rows.find((r) => r.snapshotId === SNAPSHOT.snapshotId);
+    expect(restored).toBeDefined();
+    expect(restored!.narrative).toBe(SNAPSHOT.narrative);
+    expect(restored!.segments).toEqual(SNAPSHOT.segments);
+    expect(restored!.totalAmount).toBe(SNAPSHOT.totalAmount);
+    expect(rows.some((r) => r.snapshotId === SNAPSHOT_2.snapshotId)).toBe(true);
+  });
+
+  it("does not duplicate a pre-existing snapshot across repeated v3 (replace) restores", async () => {
+    await addLineageSnapshot({ ...SNAPSHOT }, { skipNotification: true });
+    const blob = await exportToBlob();
+
+    // restoreV3Backup always replaces (clears the table first), so importing the
+    // same backup twice leaves exactly one row, not two.
     for (let i = 0; i < 2; i++) {
-      await expect(
-        restoreV3Backup({ source: blobChunks(blob), attachmentWriter }),
-      ).resolves.toBeDefined();
+      await restoreV3Backup({ source: blobChunks(blob), attachmentWriter });
       const rows = await getAllLineageSnapshots();
       expect(rows).toHaveLength(1);
       expect(rows[0].snapshotId).toBe(SNAPSHOT.snapshotId);
     }
   });
 
-  it("does not resurrect snapshots from a backup taken with snapshots present", async () => {
-    // Export a backup while a snapshot exists, then wipe the table and restore.
-    // Since the backup never carried the snapshot, the restore must NOT recreate
-    // it — and must certainly not create more than the (zero) it knows about.
+  it("legacy merge restore skips snapshots whose snapshotId already exists and adds new ones", async () => {
     await addLineageSnapshot({ ...SNAPSHOT }, { skipNotification: true });
-    const blob = await exportToBlob();
+    expect(await countLineageSnapshots()).toBe(1);
 
-    await clearLineageSnapshots({ skipNotification: true });
-    expect(await countLineageSnapshots()).toBe(0);
+    // A backup payload carrying the already-present snapshot plus a new one.
+    const result = await restoreLegacySnapshots(
+      [
+        { id: 999, ...SNAPSHOT },
+        { id: 1000, ...SNAPSHOT_2 },
+      ],
+      "merge",
+    );
 
-    await restoreV3Backup({ source: blobChunks(blob), attachmentWriter });
-    expect(await countLineageSnapshots()).toBe(0);
+    // Only the new snapshot is written; the duplicate is skipped (not throwing
+    // on the unique index, not doubling).
+    expect(result.snapshotsAdded).toBe(1);
+    const rows = await getAllLineageSnapshots();
+    expect(rows).toHaveLength(2);
+    const ids = rows.map((r) => r.snapshotId).sort();
+    expect(ids).toEqual([SNAPSHOT.snapshotId, SNAPSHOT_2.snapshotId].sort());
+  });
+
+  it("legacy merge restore is idempotent: re-merging the same backup never doubles rows", async () => {
+    const payload = [
+      { id: 1, ...SNAPSHOT },
+      { id: 2, ...SNAPSHOT_2 },
+    ];
+
+    const first = await restoreLegacySnapshots(payload, "merge");
+    expect(first.snapshotsAdded).toBe(2);
+    expect(await countLineageSnapshots()).toBe(2);
+
+    const second = await restoreLegacySnapshots(payload, "merge");
+    expect(second.snapshotsAdded).toBe(0);
+    expect(await countLineageSnapshots()).toBe(2);
+  });
+
+  it("legacy replace restore appends every snapshot as-is (caller clears first)", async () => {
+    const result = await restoreLegacySnapshots(
+      [
+        { id: 1, ...SNAPSHOT },
+        { id: 2, ...SNAPSHOT_2 },
+      ],
+      "replace",
+    );
+    expect(result.snapshotsAdded).toBe(2);
+    expect(await countLineageSnapshots()).toBe(2);
+  });
+
+  it("inline merge path de-dups snapshots on snapshotId", async () => {
+    await addLineageSnapshot({ ...SNAPSHOT }, { skipNotification: true });
+    expect(await countLineageSnapshots()).toBe(1);
+
+    // An older-style inline payload that still carries snapshots inline must be
+    // merged without doubling the already-present row.
+    await restoreInlineTables(
+      {
+        lineageSnapshots: [
+          { id: 50, ...SNAPSHOT },
+          { id: 51, ...SNAPSHOT_2 },
+        ],
+      },
+      "merge",
+    );
+
+    const rows = await getAllLineageSnapshots();
+    expect(rows).toHaveLength(2);
+    const ids = rows.map((r) => r.snapshotId).sort();
+    expect(ids).toEqual([SNAPSHOT.snapshotId, SNAPSHOT_2.snapshotId].sort());
   });
 });

@@ -214,6 +214,24 @@ export async function getAllLineageSnapshots(): Promise<LineageSnapshot[]> {
   return db.lineageSnapshots.toArray();
 }
 
+// Bounded id-keyset page. Used by the streaming backup export so the whole
+// lineageSnapshots table is never materialised at once.
+export async function getLineageSnapshotsAfterId(
+  afterId: number,
+  limit: number
+): Promise<LineageSnapshot[]> {
+  return db.lineageSnapshots.where('id').above(afterId).limit(limit).toArray();
+}
+
+// Returns the set of `snapshotId` values already present, read via the unique
+// `&snapshotId` index (no full rows materialised). Used by merge-mode restore to
+// skip snapshots whose snapshotId already exists — appending them would
+// otherwise violate the unique index and abort the whole restore mid-way.
+export async function getExistingSnapshotIds(): Promise<Set<string>> {
+  const keys = await db.lineageSnapshots.orderBy('snapshotId').keys();
+  return new Set(keys as unknown as string[]);
+}
+
 export async function countLineageSnapshots(): Promise<number> {
   return db.lineageSnapshots.count();
 }

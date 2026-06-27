@@ -25,7 +25,7 @@ import { countDerivationTemplates } from "@/lib/data/derivation-templates-crud";
 import { countRecords } from "@/lib/data/record-crud";
 import { countTransactions, countTransactionParticipants } from "@/lib/data/transaction-crud";
 import { countAddressSyncState } from "@/lib/data/address-sync-crud";
-import { countUtxoLineage, countCustodySegments } from "@/lib/data/lineage-crud";
+import { countUtxoLineage, countCustodySegments, countLineageSnapshots } from "@/lib/data/lineage-crud";
 import { isElectron, getElectronAPI } from "@/lib/electron";
 import { exportBackup, estimateExportBytes } from "@/lib/backup/export";
 import { evaluateDiskSpace } from "@/lib/backup/restore";
@@ -199,6 +199,7 @@ export default function ExportPage() {
         syncState,
         utxoLineage,
         custodySegments,
+        lineageSnapshots,
         attachments,
       ] = await Promise.all([
         countRecords(),
@@ -207,6 +208,7 @@ export default function ExportPage() {
         countAddressSyncState(),
         countUtxoLineage(),
         countCustodySegments(),
+        countLineageSnapshots(),
         countAttachments(),
       ]);
       totalRowCount =
@@ -215,7 +217,8 @@ export default function ExportPage() {
         participants +
         syncState +
         utxoLineage +
-        custodySegments;
+        custodySegments +
+        lineageSnapshots;
       exportAttachmentCount = attachments;
       countsKnown = true;
     } catch (error) {

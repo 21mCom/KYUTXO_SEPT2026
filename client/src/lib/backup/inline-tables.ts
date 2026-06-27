@@ -55,8 +55,10 @@ import {
 import {
   bulkAddUtxoLineage,
   bulkAddCustodySegments,
+  bulkAddLineageSnapshots,
   getAllUtxoLineage,
   getExistingSegmentIds,
+  getExistingSnapshotIds,
 } from "@/lib/data/lineage-crud";
 import { lineageIdentity, type RestoreMode } from "./legacy-restore-misc";
 
@@ -294,8 +296,8 @@ export async function clearInlineTables(): Promise<void> {
   await clearPriceData({ skipNotification: true });
   await clearNodeSettings({ skipNotification: true });
   // NOTE: settings is intentionally not cleared (matches legacy restore).
-  // utxoLineage and custodySegments are streamed tables now; the restore
-  // orchestrator clears them, not this inline path.
+  // utxoLineage, custodySegments and lineageSnapshots are streamed tables now;
+  // the restore orchestrator clears them, not this inline path.
 }
 
 export async function restoreInlineTables(
@@ -419,6 +421,33 @@ export async function restoreInlineTables(
   }
   if (segmentRows.length) {
     await bulkAddCustodySegments(segmentRows as any[], { skipNotification: true });
+  }
+
+  // lineageSnapshots (selective-disclosure proof artifacts) are a streamed table
+  // now, so NEW backups carry them as NDJSON (handled by the restore
+  // orchestrator) and won't have them inline. This inline branch mirrors the
+  // custodySegments handling above so a backup that DOES carry snapshots inline
+  // is never silently dropped. In replace mode the caller cleared the table
+  // first, so rows are appended as-is. In merge mode snapshots whose unique
+  // `snapshotId` already exists are skipped, so a merge over an already-present
+  // snapshot does not violate the unique index and abort the restore mid-way.
+  let snapshotRows = arr("lineageSnapshots").map((sn) => {
+    const { id, ...d } = sn;
+    return d;
+  });
+
+  if (restoreMode === "merge" && snapshotRows.length) {
+    const existingSnapshotIds = await getExistingSnapshotIds();
+    snapshotRows = snapshotRows.filter((d) => {
+      const snapshotId = d.snapshotId;
+      if (typeof snapshotId === "string" && existingSnapshotIds.has(snapshotId)) return false;
+      if (typeof snapshotId === "string") existingSnapshotIds.add(snapshotId);
+      return true;
+    });
+  }
+
+  if (snapshotRows.length) {
+    await bulkAddLineageSnapshots(snapshotRows as any[], { skipNotification: true });
   }
 
   // NOTE: recordOrigins is intentionally NOT restored (matches legacy restore

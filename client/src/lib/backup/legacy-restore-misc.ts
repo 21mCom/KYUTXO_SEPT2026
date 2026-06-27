@@ -74,10 +74,13 @@ import { restorePriceDataRows } from "@/lib/data/price-data-crud";
 import {
   addUtxoLineage,
   addCustodySegment,
+  addLineageSnapshot,
   getAllUtxoLineage,
   getExistingSegmentIds,
+  getExistingSnapshotIds,
   type CreateUtxoLineageData,
   type CreateCustodySegmentData,
+  type CreateLineageSnapshotData,
 } from "@/lib/data/lineage-crud";
 
 export type RestoreMode = "merge" | "replace";
@@ -376,4 +379,47 @@ export async function restoreLegacyLineage(
   }
 
   return { lineageAdded, segmentsAdded };
+}
+
+/**
+ * Restore lineage snapshots (selective-disclosure / Continuity Certificate proof
+ * artifacts). In BOTH modes the backup id is stripped (every row gets a fresh
+ * autoincrement id) and no id/FK is remapped.
+ *
+ * lineageSnapshots carry a UNIQUE `snapshotId` index. In `replace` mode the
+ * caller has cleared the table first, so rows are appended as-is — two backup
+ * rows sharing a snapshotId still throw (replace behaviour is unchanged,
+ * mirroring custodySegments). In `merge` mode a snapshot is skipped when its
+ * `snapshotId` is already present in the vault, so a merge-restore over an
+ * already-present snapshot no longer violates the unique index and aborts the
+ * whole restore mid-way, and repeatedly merging the same backup never doubles
+ * the snapshot rows. Counts reflect rows actually written (skipped duplicates
+ * are not counted).
+ */
+export async function restoreLegacySnapshots(
+  lineageSnapshots: any[] | undefined,
+  restoreMode: RestoreMode = "replace",
+): Promise<{ snapshotsAdded: number }> {
+  let snapshotsAdded = 0;
+  if (!lineageSnapshots || lineageSnapshots.length === 0) return { snapshotsAdded };
+
+  // In merge mode, gather the snapshotIds already present so duplicates are
+  // skipped instead of throwing on the unique index.
+  let existingSnapshotIds = new Set<string>();
+  if (restoreMode === "merge") {
+    existingSnapshotIds = await getExistingSnapshotIds();
+  }
+
+  for (const sn of lineageSnapshots) {
+    const { id, ...snData } = sn;
+    if (restoreMode === "merge") {
+      const snapshotId = snData.snapshotId;
+      if (typeof snapshotId === "string" && existingSnapshotIds.has(snapshotId)) continue;
+      if (typeof snapshotId === "string") existingSnapshotIds.add(snapshotId);
+    }
+    await addLineageSnapshot(snData as CreateLineageSnapshotData, { skipNotification: true });
+    snapshotsAdded++;
+  }
+
+  return { snapshotsAdded };
 }

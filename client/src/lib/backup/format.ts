@@ -34,8 +34,9 @@ export const CHECK_SENTINEL = "KYUTXO-BACKUP-V3";
 
 // The large tables streamed as NDJSON (one batch per line), in restore order.
 // records MUST come first so its old->new id map exists before dependents load.
-// utxoLineage and custodySegments carry no recordId, so they relink by txid/vout
-// and can stream after the record-dependent tables (order among them is free).
+// utxoLineage, custodySegments and lineageSnapshots carry no recordId, so they
+// relink by txid/vout / their own unique id and can stream after the
+// record-dependent tables (order among them is free).
 export const STREAMED_TABLES = [
   "records",
   "attachments",
@@ -44,6 +45,7 @@ export const STREAMED_TABLES = [
   "blockchainTransactions",
   "utxoLineage",
   "custodySegments",
+  "lineageSnapshots",
 ] as const;
 export type StreamedTable = (typeof STREAMED_TABLES)[number];
 
@@ -55,6 +57,7 @@ export interface BackupCounts {
   addressSyncState: number;
   utxoLineage: number;
   custodySegments: number;
+  lineageSnapshots: number;
   attachmentFiles: number;
 }
 

@@ -60,7 +60,7 @@ import { getPrivacyAuditHistoryCount } from "@/lib/data/privacy-history-crud";
 import { recomputeAddressStats } from "@/lib/data/address-stats";
 import { renderSourceNote } from "@/lib/renderSourceNote";
 import { clearTransactions, clearParticipants } from "@/lib/data/transaction-crud";
-import { clearUtxoLineage, clearCustodySegments } from "@/lib/data/lineage-crud";
+import { clearUtxoLineage, clearCustodySegments, clearLineageSnapshots } from "@/lib/data/lineage-crud";
 import { clearEvidence, clearEvidenceAttachments } from "@/lib/data/evidence-crud";
 import { clearAttachments } from "@/lib/data/attachments-crud";
 import { clearRecordOrigins } from "@/lib/data/record-origins-crud";
@@ -88,6 +88,7 @@ import {
   restoreLegacyEvidence,
   restoreLegacyPriceData,
   restoreLegacyLineage,
+  restoreLegacySnapshots,
 } from "@/lib/backup/legacy-restore-misc";
 import { clearDerivationTemplates } from "@/lib/data/derivation-templates-crud";
 import { updateSettings } from "@/lib/data/settings-crud";
@@ -2490,6 +2491,7 @@ export default function SettingsPage() {
         nodeSettings: backupNodeSettings = [],
         utxoLineage = [],
         custodySegments = [],
+        lineageSnapshots = [],
         blockchainTransactions = [],
         transactionParticipants = [],
         addressSyncState = [],
@@ -2516,6 +2518,7 @@ export default function SettingsPage() {
         await clearNodeSettings({ skipNotification: true });
         await clearUtxoLineage({ skipNotification: true });
         await clearCustodySegments({ skipNotification: true });
+        await clearLineageSnapshots({ skipNotification: true });
         await clearTransactions({ skipNotification: true });
         await clearParticipants({ skipNotification: true });
         await clearAddressSyncState({ skipNotification: true });
@@ -2729,6 +2732,14 @@ export default function SettingsPage() {
       // legacy-restore-misc helpers; only lineage rows are surfaced to the user.
       const lineageResult = await restoreLegacyLineage(utxoLineage, custodySegments, restoreMode);
       const lineageDataAdded = lineageResult.lineageAdded;
+
+      // Restore lineage snapshots (selective-disclosure / Continuity Certificate
+      // proof artifacts). New backups stream these, but legacy/inline backups
+      // carry them here. backup ids stripped, no remapping. In replace mode the
+      // table was cleared above; in merge mode snapshots whose unique
+      // `snapshotId` already exists are skipped so the unique index is not
+      // violated mid-restore.
+      await restoreLegacySnapshots(lineageSnapshots, restoreMode);
 
       // Restore blockchain transaction data (v2.2.0+, not encrypted): confirmed
       // transactions, their input/output participants, and per-address sync

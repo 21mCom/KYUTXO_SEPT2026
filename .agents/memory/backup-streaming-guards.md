@@ -60,9 +60,20 @@ tables that DO depend on its old→new id map.
 `format.ts` (`STREAMED_TABLES` + `BackupCounts`); `export.ts` (`STREAM_READERS`
 page reader + count in `Promise.all` + `counts` + `totalUnits`); `restore.ts`
 (`handleBatch` branch, `counts`, `RestoreResult`, `total()` denominator, and a
-**clear** in the manifest handler); a paged `get*AfterId` + a `bulkAdd*` + a
-`count*` in the table's CRUD; and the `ExportPage.tsx` memory-fallback aggregate
-(`totalRowCount`) so the OOM guard doesn't undercount. If the table was
-previously inline, also REMOVE it from `inline-tables.ts` read/clear, but KEEP a
-defensive inline-restore fallback so OLD backups (which still carry it inline)
-don't silently drop that data.
+**clear** in the manifest handler — `restoreV3Backup` ALWAYS replaces); a paged
+`get*AfterId` + a `bulkAdd*` + a `count*` in the table's CRUD; the
+`ExportPage.tsx` memory-fallback aggregate (`totalRowCount`) so the OOM guard
+doesn't undercount; AND the LEGACY path (`legacy-restore-misc.ts` new
+`restoreLegacy*` helper + `SettingsPage.tsx` destructure default `[]` + a clear
+in the replace block + the restore call). The v3 path is replace-only, so
+**merge mode lives only on the legacy path + the defensive `inline-tables.ts`
+fallback**. Always KEEP a defensive inline-restore fallback (even for tables
+that were never inline) so OLD/hand-edited backups carrying the table inline
+aren't silently dropped — but do NOT add it to `readInlineTables`.
+
+**Unique-indexed tables (e.g. `lineageSnapshots.&snapshotId`):** merge mode must
+SKIP rows whose unique key already exists (gather existing keys into a `Set` via
+a `getExisting*Ids()` index reader, add as you go), mirroring `custodySegments`.
+Otherwise a re-merge either doubles rows or throws on the unique index and
+ABORTS the whole restore mid-way. Replace mode appends as-is (caller cleared
+first), so two backup rows sharing the key still throw — that's intended.

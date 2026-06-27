@@ -39,8 +39,10 @@ import {
 import {
   getUtxoLineageAfterId,
   getCustodySegmentsAfterId,
+  getLineageSnapshotsAfterId,
   countUtxoLineage,
   countCustodySegments,
+  countLineageSnapshots,
 } from "@/lib/data/lineage-crud";
 import { readInlineTables } from "./inline-tables";
 
@@ -116,6 +118,7 @@ const STREAM_READERS: Record<StreamedTable, PageReader> = {
   blockchainTransactions: getTransactionsAfterId as unknown as PageReader,
   utxoLineage: getUtxoLineageAfterId as unknown as PageReader,
   custodySegments: getCustodySegmentsAfterId as unknown as PageReader,
+  lineageSnapshots: getLineageSnapshotsAfterId as unknown as PageReader,
 };
 
 const DEFAULT_BATCH = 1000;
@@ -151,6 +154,7 @@ export async function exportBackup(opts: ExportOptions): Promise<void> {
     transactionsCount,
     utxoLineageCount,
     custodySegmentsCount,
+    lineageSnapshotsCount,
   ] = await Promise.all([
     countRecords(),
     countAttachments(),
@@ -159,6 +163,7 @@ export async function exportBackup(opts: ExportOptions): Promise<void> {
     countTransactions(),
     countUtxoLineage(),
     countCustodySegments(),
+    countLineageSnapshots(),
   ]);
 
   opts.onProgress?.({ percent: 2, phase: "Listing attachment files..." });
@@ -188,6 +193,7 @@ export async function exportBackup(opts: ExportOptions): Promise<void> {
     blockchainTransactions: transactionsCount,
     utxoLineage: utxoLineageCount,
     custodySegments: custodySegmentsCount,
+    lineageSnapshots: lineageSnapshotsCount,
     attachmentFiles: attachmentPaths.length,
   };
 
@@ -199,6 +205,7 @@ export async function exportBackup(opts: ExportOptions): Promise<void> {
     counts.blockchainTransactions +
     counts.utxoLineage +
     counts.custodySegments +
+    counts.lineageSnapshots +
     counts.attachmentFiles || 1;
   let processedUnits = 0;
   const reportUnits = (phase: string) => {
