@@ -1754,6 +1754,15 @@ export function PrivacyHistoryCard() {
           </CardDescription>
         </div>
         <div className="flex items-center gap-1 flex-wrap">
+          {exportNeedsFallbackConfirm && (
+            <span
+              className="mr-1 inline-flex items-center gap-1 text-xs font-medium text-amber-600 dark:text-amber-400"
+              data-testid="warning-history-export-empty-range"
+            >
+              <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+              Empty range — exports all runs
+            </span>
+          )}
           {exportScopeLabel && (
             <Badge
               variant="secondary"

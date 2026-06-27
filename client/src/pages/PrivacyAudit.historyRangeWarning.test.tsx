@@ -24,6 +24,7 @@ vi.mock("dexie-react-hooks", () => ({
 vi.mock("@/lib/privacy-history-export", () => ({
   buildPrivacyHistoryCsv: vi.fn(() => "csv,data"),
   buildPrivacyHistoryPdf: vi.fn(async () => new Blob(["pdf"], { type: "application/pdf" })),
+  computePrivacyHistoryScopeLabel: vi.fn(() => null),
 }));
 
 // Clearing history is irrelevant here but is imported by the module.
@@ -225,6 +226,45 @@ describe("PrivacyHistoryCard empty-date-range guard", () => {
     expect(screen.queryByTestId("dialog-export-fallback-confirm")).toBeNull();
     expect(buildPrivacyHistoryCsv).toHaveBeenCalledTimes(1);
     expect(buildPrivacyHistoryCsv).toHaveBeenCalledWith([RUN_MAR]);
+  });
+
+  it("shows an amber cue beside the export buttons when an empty range is picked with nothing selected", () => {
+    renderCard([RUN_JAN, RUN_MAR, RUN_JUN]);
+
+    // No cue before the empty range is triggered.
+    expect(screen.queryByTestId("warning-history-export-empty-range")).toBeNull();
+
+    setRange("2026-09-01", "2026-12-31");
+    fireEvent.click(screen.getByTestId("button-history-select-range"));
+
+    // The cue now appears next to the export buttons.
+    expect(screen.getByTestId("warning-history-export-empty-range")).toBeTruthy();
+  });
+
+  it("hides the export-button cue once a selection is made", () => {
+    renderCard([RUN_JAN, RUN_MAR, RUN_JUN]);
+
+    setRange("2026-09-01", "2026-12-31");
+    fireEvent.click(screen.getByTestId("button-history-select-range"));
+    expect(screen.getByTestId("warning-history-export-empty-range")).toBeTruthy();
+
+    // Hand-picking a run clears the fallback condition, so the cue disappears.
+    fireEvent.click(screen.getByTestId("checkbox-history-select-2"));
+    expect(screen.queryByTestId("warning-history-export-empty-range")).toBeNull();
+  });
+
+  it("hides the export-button cue once the date range changes", () => {
+    renderCard([RUN_JAN, RUN_MAR, RUN_JUN]);
+
+    setRange("2026-09-01", "2026-12-31");
+    fireEvent.click(screen.getByTestId("button-history-select-range"));
+    expect(screen.getByTestId("warning-history-export-empty-range")).toBeTruthy();
+
+    // Editing a date input clears the empty-range warning and the cue.
+    fireEvent.change(screen.getByTestId("input-history-from-date"), {
+      target: { value: "2026-01-01" },
+    });
+    expect(screen.queryByTestId("warning-history-export-empty-range")).toBeNull();
   });
 
   it("selects the matching runs and clears the warning when a range DOES match", () => {
