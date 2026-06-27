@@ -57,6 +57,7 @@ let uploadFile: typeof import("@/lib/attachments").uploadFile;
 let getFileBlob: typeof import("@/lib/attachments").getFileBlob;
 let exportBackup: typeof import("./export").exportBackup;
 let restoreV3Backup: typeof import("./restore").restoreV3Backup;
+let RestoreInterruptedError: typeof import("./restore").RestoreInterruptedError;
 let MemorySink: typeof import("./sink").MemorySink;
 let blobChunks: typeof import("./zip-stream").blobChunks;
 let evidenceCrud: typeof import("@/lib/data/evidence-crud");
@@ -100,6 +101,7 @@ beforeAll(async () => {
   getFileBlob = attachments.getFileBlob;
   exportBackup = (await import("./export")).exportBackup;
   restoreV3Backup = (await import("./restore")).restoreV3Backup;
+  RestoreInterruptedError = (await import("./restore")).RestoreInterruptedError;
   MemorySink = (await import("./sink")).MemorySink;
   blobChunks = (await import("./zip-stream")).blobChunks;
   evidenceCrud = await import("@/lib/data/evidence-crud");
@@ -320,13 +322,16 @@ describe("v3 backup full pipeline: evidence files survive export -> wipe -> rest
 
   // Companion to the happy path above: a single attachment file's write can fail
   // for real-world reasons (disk full, permission denied, a path the backend
-  // rejects). When that happens, restore MUST surface the failure — never finish
-  // as if every file landed — because the inline DB tables are already restored
-  // and now hold links pointing at a file that was never written. A swallowed
-  // write error leaves the user with a document that looks present in the list
-  // but cannot be opened. This asserts `restoreV3Backup` propagates the per-file
-  // failure and that the missing file is genuinely unreadable afterwards.
-  it("propagates a per-file attachment write failure instead of silently skipping it", async () => {
+  // rejects). When that happens AFTER the destructive clear, the inline DB
+  // tables are already restored, so the vault is left half-restored: some files
+  // on disk, some missing, and DB links pointing at files that were never
+  // written. Restore MUST NOT silently rethrow the raw error and leave that
+  // broken state behind. Instead it mirrors the cancel-after-clear contract: it
+  // resets the vault to a known-empty state and surfaces a distinct
+  // RestoreInterruptedError telling the user the vault is only partially
+  // restored and to restore again. This asserts both the distinct error AND that
+  // the vault was actually reset (no lingering broken DB links / phantom docs).
+  it("resets the vault and raises a distinct error when a file write fails after the clear", async () => {
     // 1. Put REAL files on disk for the evidence we will back up.
     const plan = [
       { title: "Coinbase Receipt 2021", filename: "receipt.txt", bytes: "RECEIPT-BYTES-COINBASE" },
@@ -391,27 +396,35 @@ describe("v3 backup full pipeline: evidence files survive export -> wipe -> rest
       },
     };
 
-    // 6. The restore must REJECT — the write failure is propagated, not swallowed.
-    await expect(
-      restoreV3Backup({ source: blobChunks(blob), attachmentWriter: flakyWriter }),
-    ).rejects.toThrow(writeError);
+    // 6. The restore must REJECT with the DISTINCT RestoreInterruptedError (not
+    //    the raw write error), signalling the vault is only partially restored
+    //    and the user must restore again. The original write error is preserved
+    //    as the `cause` so the underlying reason is not lost.
+    let caught: unknown;
+    try {
+      await restoreV3Backup({
+        source: blobChunks(blob),
+        attachmentWriter: flakyWriter,
+      });
+      throw new Error("restore should have rejected");
+    } catch (err) {
+      caught = err;
+    }
     expect(attemptedFailingWrite).toBe(true);
+    expect(caught).toBeInstanceOf(RestoreInterruptedError);
+    expect((caught as Error).message).toMatch(/partially restored|restore again/i);
+    expect((caught as { cause?: Error }).cause?.message).toBe(writeError);
 
-    // 7. The inline DB tables were already restored before the file write phase,
-    //    so the bank-wire evidence + its attachment link now exist — but the file
-    //    they point at was never written. Confirm the failing document is
-    //    genuinely unreadable (it does NOT open), proving the failure was not
-    //    misreported as a successful restore.
+    // 7. The failure path must RESET the vault, not leave silently broken DB
+    //    links behind. Even though the inline tables had been restored before the
+    //    file write phase, the post-failure cleanup wipes them so there are no
+    //    phantom documents pointing at files that were never written.
     const allEvidence = await evidenceCrud.getAllEvidence();
-    const failingEvidence = allEvidence.find((e) => e.title === failingTitle);
-    expect(failingEvidence).toBeTruthy();
+    expect(allEvidence).toHaveLength(0);
     const allAttachments = await evidenceCrud.getAllEvidenceAttachments();
-    const failingAttachment = allAttachments.find(
-      (a) => a.evidenceId === failingEvidence!.id,
-    );
-    expect(failingAttachment).toBeTruthy();
-    await expect(
-      fetchBytesViaPath(failingAttachment!.objectStoragePath, failingAttachment!.mimeType),
-    ).rejects.toThrow();
+    expect(allAttachments).toHaveLength(0);
+    // And the failing document is genuinely gone — there is no lingering link to
+    // a file that was never written.
+    expect(allEvidence.find((e) => e.title === failingTitle)).toBeUndefined();
   });
 });

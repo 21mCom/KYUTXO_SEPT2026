@@ -384,7 +384,41 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
       cancelErr.clearedBeforeCancel = true;
       throw cancelErr;
     }
-    throw err;
+
+    // Not a cancel — a genuine failure (e.g. an attachment file write threw for
+    // a real-world reason like disk-full or permission-denied).
+    if (!cleared) {
+      // Failed BEFORE the destructive clear: the existing vault was never
+      // touched, so just propagate the raw error.
+      throw err;
+    }
+
+    // Failed AFTER the destructive clear: the old vault is gone, the inline DB
+    // tables are already restored, and only part of the backup was written —
+    // leaving DB links that may point at attachment files that were never
+    // written. Mirror the cancel-after-clear contract: reset to a known-empty
+    // state and surface a distinct hard error (RestoreInterruptedError, never
+    // the raw error) so the user is never silently left with a half-restored,
+    // unusable vault. If the reset itself fails, we still fail CLOSED with the
+    // same distinct error rather than claiming success.
+    opts.onProgress?.({ percent: 0, phase: "Restore failed — clearing partial data..." });
+    try {
+      await clearVault();
+    } catch (cleanupErr) {
+      throw new RestoreInterruptedError(
+        "Restore failed partway through, after the existing data had been " +
+          "cleared, and the vault could not be reset to a clean state. The vault " +
+          "is now in an unknown, partial state — restore again to recover your data.",
+        { cause: cleanupErr },
+      );
+    }
+    opts.onProgress?.({ percent: 0, phase: "Restore failed — vault is empty" });
+    throw new RestoreInterruptedError(
+      "Restore failed partway through, after the existing data had been cleared, " +
+        "so the vault is only partially restored. It has been reset to empty — " +
+        "restore again to recover your data.",
+      { cause: err },
+    );
   }
 
   if (!manifest) throw new Error("Invalid backup: missing manifest");
