@@ -590,4 +590,74 @@ describe("FindingCard proximity hop-path deep-dive interaction", () => {
     const detail = await within(dialog).findByTestId("text-deep-dive-error-detail");
     expect(detail.textContent).toMatch(/out of memory/i);
   });
+
+  // The escalation above shows the alarming "failed more than once" guidance and
+  // an expanded error-detail panel. If a later retry finally succeeds, all of
+  // that recovery state must clear — otherwise the user would see a valid result
+  // sitting underneath stale failure guidance, undermining trust in the result.
+  it("clears the repeated-failure guidance and error detail once a later analysis succeeds", async () => {
+    const hopPath = ["bc1qhopA", "bc1qhopB", "bc1qhopC"];
+    const hopTxids = [TX(1), TX(2)]; // one per pair → 2
+
+    renderCard(proximityFinding({ details: { hopPath, hopTxids } }));
+    fireEvent.click(screen.getByTestId("button-toggle-details"));
+
+    // Open the deep-dive for the second hop's txid.
+    const second8 = TX(2).slice(0, 8);
+    fireEvent.click(screen.getByTestId(`button-deep-dive-${second8}`));
+
+    const dialog = await screen.findByTestId("dialog-deep-dive");
+    expect(within(dialog).getByText(TX(2))).toBeTruthy();
+
+    // First auto-run: wait for the worker, then fail it.
+    await waitFor(() => {
+      expect(lastWorker).not.toBeNull();
+      expect(lastWorker!.postMessage).toHaveBeenCalled();
+    });
+    act(() => {
+      lastWorker!.onerror!({ message: "Boltzmann worker crashed: out of memory" });
+    });
+    await within(dialog).findByTestId("text-deep-dive-message");
+
+    // Second run (Retry) also fails — escalating to the repeated-failure state.
+    const callsBeforeSecond = lastWorker!.postMessage.mock.calls.length;
+    fireEvent.click(within(dialog).getByTestId("button-retry-deep-dive"));
+    await waitFor(() => {
+      expect(lastWorker!.postMessage.mock.calls.length).toBeGreaterThan(callsBeforeSecond);
+    });
+    act(() => {
+      lastWorker!.onerror!({ message: "Boltzmann worker crashed: out of memory" });
+    });
+
+    // The full recovery state is now on screen: guidance + expandable detail.
+    await within(dialog).findByTestId("text-deep-dive-next-steps");
+    fireEvent.click(within(dialog).getByTestId("button-toggle-deep-dive-detail"));
+    await within(dialog).findByTestId("text-deep-dive-error-detail");
+
+    // Third run (Retry) finally succeeds — drive a valid worker result back.
+    const callsBeforeThird = lastWorker!.postMessage.mock.calls.length;
+    fireEvent.click(within(dialog).getByTestId("button-retry-deep-dive"));
+    await waitFor(() => {
+      expect(lastWorker!.postMessage.mock.calls.length).toBeGreaterThan(callsBeforeThird);
+    });
+    const calls = lastWorker!.postMessage.mock.calls;
+    const { id } = calls[calls.length - 1][0] as { id: string };
+    act(() => {
+      lastWorker!.onmessage!({
+        data: { id, result: { tooComplex: true } },
+      } as MessageEvent);
+    });
+
+    // The user now sees a valid result, and every trace of the failure state is
+    // gone: the error message, the repeated-failure guidance and the error
+    // detail (both the panel and its toggle) have all cleared.
+    const summary = await within(dialog).findByTestId("container-deep-dive-summary");
+    expect(summary).toBeTruthy();
+    expect(within(dialog).getByTestId("container-boltzmann-result")).toBeTruthy();
+
+    expect(within(dialog).queryByTestId("text-deep-dive-message")).toBeNull();
+    expect(within(dialog).queryByTestId("text-deep-dive-next-steps")).toBeNull();
+    expect(within(dialog).queryByTestId("text-deep-dive-error-detail")).toBeNull();
+    expect(within(dialog).queryByTestId("button-toggle-deep-dive-detail")).toBeNull();
+  });
 });
