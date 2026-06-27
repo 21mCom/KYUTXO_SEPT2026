@@ -683,3 +683,152 @@ describe("TransactionSyncService.resolvePrevouts → cancel then re-run resumes 
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// Task #1032: a STOPPED PER-WALLET resolve must still recompute exactly the
+// targeted wallet's source balances — and leave every other address alone.
+//
+// Task #947 (above) proved the GLOBAL path recomputes over resolvedAddressSet
+// when cancelled. The per-wallet "Resolve" action (restrictToRecordIds set)
+// takes the OTHER branch: it recomputes over writtenAddressSet — only the
+// spends whose resolved source output maps to one of the targeted record ids.
+// Per-wallet resolve is LOCAL-only (it never hits the network), so the abort
+// signal is observed after the (skipped) fetch loop: cancelled must still be
+// reported true, the local attribution + scoped recompute must still run, and a
+// non-targeted source address's cached balance must be left byte-for-byte
+// unchanged (it must NOT be swept into the recompute).
+//
+// Setup: a TARGETED source address T (synced + funded) whose blank spend input
+// is resolvable locally, restrictToRecordIds = {T's record}. A NON-TARGETED
+// source address O (synced + funded) whose blank spend input is ALSO resolvable
+// locally, but O's record is NOT in the restrict set, so its spend is skipped
+// and its pre-seeded cached balance must not move. We abort the signal so the
+// run is flagged cancelled while still doing T's local recompute.
+// ---------------------------------------------------------------------------
+
+const ADDR_TARGET = "bc1qtargetwalletaaaaaaaaaaaaaaaaaaaaaaaa4";
+const ADDR_OTHER = "bc1qotherwalletbbbbbbbbbbbbbbbbbbbbbbbbb5";
+const TX_FUND_TARGET = "3".repeat(64); // funds T with 100000
+const TX_SPEND_TARGET = "4".repeat(64); // T's coin gets spent here
+const TX_FUND_OTHER = "5".repeat(64); // funds O with 50000
+const TX_SPEND_OTHER = "6".repeat(64); // O's coin gets spent here
+const OTHER_CACHED_BALANCE = 777777; // sentinel — must survive untouched
+const OTHER_STATS_AT = 1234567890; // sentinel timestamp — must survive untouched
+
+describe("TransactionSyncService.resolvePrevouts → stopped per-wallet resolve recomputes only the targeted wallet", () => {
+  beforeEach(async () => {
+    await testDb.records.clear();
+    await testDb.blockchainTransactions.clear();
+    await testDb.transactionParticipants.clear();
+    await testDb.addressSyncState.clear();
+  });
+
+  it("recomputes the targeted wallet's source balance, leaves a non-targeted source untouched, and flags cancelled", async () => {
+    // Targeted wallet T and non-targeted wallet O, both synced + funded.
+    const targetId = (await testDb.records.add(addrRecord(ADDR_TARGET))) as number;
+    const otherId = (await testDb.records.add(addrRecord(ADDR_OTHER))) as number;
+
+    // Pre-seed O's cached balance so we can prove the run leaves it untouched.
+    await testDb.records.update(otherId, {
+      cachedBalanceSats: OTHER_CACHED_BALANCE,
+      statsComputedAt: OTHER_STATS_AT,
+    } as Partial<DbRecord>);
+
+    // Both are synced addresses → recompute treats a zero balance as a genuine
+    // spent-to-zero rather than "not synced".
+    await testDb.addressSyncState.bulkAdd([
+      {
+        address: ADDR_TARGET,
+        recordId: targetId,
+        lastSyncedHeight: 100,
+        lastSyncedAt: Date.now(),
+        txCount: 1,
+      } as AddressSyncState,
+      {
+        address: ADDR_OTHER,
+        recordId: otherId,
+        lastSyncedHeight: 100,
+        lastSyncedAt: Date.now(),
+        txCount: 1,
+      } as AddressSyncState,
+    ]);
+
+    await testDb.blockchainTransactions.bulkAdd([
+      { txid: TX_FUND_TARGET, blockHeight: 100, blockTime: 1000, syncedAt: Date.now() } as BlockchainTransaction,
+      { txid: TX_SPEND_TARGET, blockHeight: 200, blockTime: 2000, syncedAt: Date.now() } as BlockchainTransaction,
+      { txid: TX_FUND_OTHER, blockHeight: 100, blockTime: 1000, syncedAt: Date.now() } as BlockchainTransaction,
+      { txid: TX_SPEND_OTHER, blockHeight: 200, blockTime: 2000, syncedAt: Date.now() } as BlockchainTransaction,
+    ]);
+
+    // Funding outputs for both, stored LOCALLY so the spends resolve with no
+    // network fetch (per-wallet resolve never touches the node).
+    await testDb.transactionParticipants.bulkAdd([
+      { txid: TX_FUND_TARGET, role: "output", vout: 0, address: ADDR_TARGET, amount: 100000, recordId: targetId } as TransactionParticipant,
+      { txid: TX_FUND_OTHER, role: "output", vout: 0, address: ADDR_OTHER, amount: 50000, recordId: otherId } as TransactionParticipant,
+    ]);
+
+    // Blank spend inputs (locally resolvable) for each wallet, plus their
+    // destination outputs.
+    await testDb.transactionParticipants.bulkAdd([
+      { txid: TX_SPEND_TARGET, role: "input", address: "", amount: 0, prevTxid: TX_FUND_TARGET, prevVout: 0 } as TransactionParticipant,
+      { txid: TX_SPEND_TARGET, role: "output", vout: 0, address: "bc1qtargetdestaaaaaaaaaaaaaaaaaaaaaaaaaa6", amount: 99000 } as TransactionParticipant,
+      { txid: TX_SPEND_OTHER, role: "input", address: "", amount: 0, prevTxid: TX_FUND_OTHER, prevVout: 0 } as TransactionParticipant,
+      { txid: TX_SPEND_OTHER, role: "output", vout: 0, address: "bc1qotherdestbbbbbbbbbbbbbbbbbbbbbbbbbb7", amount: 49000 } as TransactionParticipant,
+    ]);
+
+    // Abort the signal up front: the per-wallet resolve has no fetch loop to
+    // interrupt, so the stop is observed after the (skipped) fetch phase. The
+    // local attribution + scoped recompute must still run regardless.
+    const controller = new AbortController();
+    controller.abort();
+
+    const service = new TransactionSyncService();
+    // A provider that throws if touched — proves the per-wallet path is purely
+    // local and never reaches the network even when scoped + aborted.
+    (service as any).provider = {
+      getTransaction: vi.fn(async () => {
+        throw new Error("per-wallet resolve must never hit the network");
+      }),
+    };
+
+    const result = await service.resolvePrevouts(undefined, {
+      recomputeOrigin: "user",
+      restrictToRecordIds: new Set([targetId]),
+      signal: controller.signal,
+    });
+
+    // The stop is reported, the network was never touched, and exactly the one
+    // targeted spend was attributed.
+    expect(result.cancelled).toBe(true);
+    expect(result.fetchedFromNode).toBe(0);
+    expect(result.resolved).toBe(1);
+    expect(result.resolvedAddresses).toEqual([ADDR_TARGET]);
+    expect((service as any).provider.getTransaction).not.toHaveBeenCalled();
+
+    // T's blank input now carries its source address + amount...
+    const targetInput = await testDb.transactionParticipants
+      .where("[prevTxid+prevVout]")
+      .equals([TX_FUND_TARGET, 0])
+      .first();
+    expect(targetInput?.address).toBe(ADDR_TARGET);
+    expect(targetInput?.amount).toBe(100000);
+
+    // ...and its cached balance was recomputed to 0 (100000 in - 100000 out)
+    // in the SAME (stopped) run.
+    const targetAfter = await testDb.records.get(targetId);
+    expect(targetAfter?.cachedBalanceSats).toBe(0);
+    expect(targetAfter?.statsComputedAt).toBeTruthy();
+
+    // The non-targeted wallet O is untouched: its spend was NOT attributed
+    // (record id not in the restrict set) and its cached balance + timestamp
+    // are exactly what we seeded — it was never swept into the recompute.
+    const otherInput = await testDb.transactionParticipants
+      .where("[prevTxid+prevVout]")
+      .equals([TX_FUND_OTHER, 0])
+      .first();
+    expect(otherInput?.address).toBe("");
+    const otherAfter = await testDb.records.get(otherId);
+    expect(otherAfter?.cachedBalanceSats).toBe(OTHER_CACHED_BALANCE);
+    expect(otherAfter?.statsComputedAt).toBe(OTHER_STATS_AT);
+  });
+});

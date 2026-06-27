@@ -1694,6 +1694,16 @@ export class TransactionSyncService {
       }
     }
 
+    // Per-wallet (restrict) resolve is LOCAL-only: it never enters the fetch
+    // loop above, so an abort signal would otherwise go completely unobserved
+    // and the run would falsely report cancelled === false. Honour the stop
+    // here so a halted per-wallet resolve reports cancelled. The local
+    // attribution and the scoped balance recompute below still run — stopping
+    // never rolls back or skips the work that was already resolvable offline.
+    if (restrictToRecordIds && (this.cancelled || signal?.aborted)) {
+      stats.cancelled = true;
+    }
+
     const resolvedAddressSet = new Set<string>();
     for (const inp of unresolvedInputs) {
       const key = `${inp.prevTxid}:${inp.prevVout}`;
