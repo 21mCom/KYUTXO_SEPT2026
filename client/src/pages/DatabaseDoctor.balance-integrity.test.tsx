@@ -164,3 +164,45 @@ describe("BalanceIntegrityCard - recompute and re-check", () => {
     expect(screen.queryByTestId("button-recompute-balances")).toBeNull();
   });
 });
+
+describe("BalanceIntegrityCard - error state", () => {
+  it("shows the error banner with the message when the balance check throws", async () => {
+    detectMock.mockRejectedValue(new Error("scan engine exploded"));
+
+    render(<BalanceIntegrityCard />);
+
+    fireEvent.click(screen.getByTestId("button-run-balance-check"));
+
+    const banner = await screen.findByTestId("banner-balance-error");
+    expect(banner.textContent).toContain("scan engine exploded");
+
+    // No success/result banner is shown when the check failed.
+    expect(screen.queryByTestId("banner-balance-result")).toBeNull();
+  });
+
+  it("shows the error banner when recompute throws", async () => {
+    // First check finds a stale row so the Recompute button is offered.
+    detectMock.mockImplementation(async (opts) => {
+      if (opts.onStaleBatch) await opts.onStaleBatch([makeStaleRow(1)]);
+      return {
+        sampled: 2000,
+        staleCount: 1,
+        staleAddresses: [],
+        checkedAll: false,
+        cancelled: false,
+      } satisfies StaleBalanceCheckResult;
+    });
+    getWindowMock.mockResolvedValue([makeStaleRow(1)]);
+    recomputeMock.mockRejectedValue(new Error("recompute blew up"));
+
+    render(<BalanceIntegrityCard />);
+
+    fireEvent.click(screen.getByTestId("button-run-balance-check"));
+
+    const recomputeBtn = await screen.findByTestId("button-recompute-balances");
+    fireEvent.click(recomputeBtn);
+
+    const banner = await screen.findByTestId("banner-balance-error");
+    expect(banner.textContent).toContain("recompute blew up");
+  });
+});
