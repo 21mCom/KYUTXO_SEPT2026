@@ -611,6 +611,64 @@ async function persistBehaviorTally(result: BehaviorTallyResult): Promise<void> 
 }
 
 /**
+ * One-time self-healing backfill for addresses that completed a sync run before
+ * the fix that widens the post-run stats recompute set.
+ *
+ * Symptoms: an address has an `addressSyncState` entry (it was genuinely synced)
+ * but its record still has no `statsComputedAt` — so Records shows "Not Synced".
+ *
+ * This function finds those stuck records and runs `recomputeAddressStats` for
+ * them only. It never churns unrelated records and does not trigger a full
+ * engine re-seed.
+ */
+export async function backfillMissingSyncStats(): Promise<{ backfilled: number }> {
+  // Collect the set of addresses that have ever completed a sync.
+  const syncStates = await db.addressSyncState.toArray();
+  if (syncStates.length === 0) return { backfilled: 0 };
+
+  const syncedAddresses = new Set<string>(syncStates.map(s => s.address));
+
+  // Page through address records to find those missing statsComputedAt.
+  const stuckAddresses: string[] = [];
+  let lastId = 0;
+  const BATCH = 500;
+
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const batch = await db.records
+      .where('[type+id]')
+      .between(['address', lastId], ['address', Dexie.maxKey], false, true)
+      .limit(BATCH)
+      .toArray();
+    if (batch.length === 0) break;
+    lastId = batch[batch.length - 1].id!;
+    for (const rec of batch) {
+      if (
+        rec.statsComputedAt == null &&
+        rec.inputString &&
+        syncedAddresses.has(rec.inputString)
+      ) {
+        stuckAddresses.push(rec.inputString);
+      }
+    }
+    if (batch.length < BATCH) break;
+  }
+
+  if (stuckAddresses.length === 0) return { backfilled: 0 };
+
+  console.log(
+    `[address-stats] backfillMissingSyncStats: recomputing ${stuckAddresses.length} stuck address(es)`,
+  );
+
+  const result = await recomputeAddressStats({
+    addresses: stuckAddresses,
+    origin: 'blockchain-sync',
+  });
+
+  return { backfilled: result.updated };
+}
+
+/**
  * Compute the vault-wide behavior tally and persist it to settings. Returns the
  * result; a cancelled pass is not persisted (the stale tally is left intact).
  */

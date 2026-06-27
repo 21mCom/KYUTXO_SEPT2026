@@ -1584,6 +1584,11 @@ export class TransactionSyncService {
       });
     }
 
+    // Always mark this address as touched so the post-run stats recompute
+    // sets statsComputedAt — even when no new transactions were imported
+    // (zero on-chain txs, or a re-sync where everything was already synced).
+    this.statsTouchedAddresses.add(address);
+
     if (stats.imported > 0) {
       this.deferNotification('transactionParticipants');
       this.deferNotification('blockchainTransactions');

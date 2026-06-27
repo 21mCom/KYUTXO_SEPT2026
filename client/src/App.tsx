@@ -160,6 +160,32 @@ function EntityListLoader() {
   return null;
 }
 
+// Runs once at startup to self-heal addresses that completed a sync before the
+// fix that widened the post-run stats recompute set. Those addresses have an
+// addressSyncState entry but no statsComputedAt, so Records shows "Not Synced"
+// even though they were genuinely synced. The backfill is lightweight (touches
+// only the stuck subset), runs in the background, and never blocks the UI.
+function SyncStatsBackfill() {
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const { backfillMissingSyncStats } = await import("@/lib/data/address-stats");
+        if (!cancelled) {
+          await backfillMissingSyncStats();
+        }
+      } catch {
+        // Silent: backfill must never disrupt app startup.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  return null;
+}
+
 function AuthenticatedApp() {
   const { logout } = useAuth();
   
@@ -175,6 +201,7 @@ function AuthenticatedApp() {
           <EngineBootstrapper />
           <OrphanedTxNotifier />
           <EntityListLoader />
+          <SyncStatsBackfill />
           <div className="flex h-screen w-full">
             <AppSidebar />
             <div className="flex flex-col flex-1 overflow-hidden">
