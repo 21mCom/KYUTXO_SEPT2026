@@ -182,6 +182,235 @@ export function buildAnnualActivityCsv(data: ReportData, addresses: string[], ge
   return lines.join("\r\n");
 }
 
+/**
+ * Pure aggregation core of the Annual Activity Report. Given the already-fetched
+ * transactions/participants and the prevout-resolution lookups, it computes the
+ * combined + per-address year rows and the counterparty lists.
+ *
+ * Extracted from `generate()` so the received/spent/tx-count math (the part most
+ * prone to double-counting when a pasted address appears as BOTH an input and an
+ * output of the same transaction, e.g. a self-transfer or consolidation) can be
+ * unit tested without standing up the data layer.
+ */
+export function computeAnnualActivity(params: {
+  addresses: string[];
+  txids: string[];
+  txMap: Map<string, BlockchainTransaction>;
+  allTxParticipants: Map<string, TransactionParticipant[]>;
+  spendingTxids: Set<string>;
+  spentOutputAmounts: Map<string, { amount: number; address: string }>;
+  outputAmountLookup: Map<string, number>;
+}): ReportData {
+  const {
+    addresses,
+    txids,
+    txMap,
+    allTxParticipants,
+    spendingTxids,
+    spentOutputAmounts,
+    outputAmountLookup,
+  } = params;
+  const addressSet = new Set(addresses);
+
+  // ── Step 7: compute per-txid received/spent for each address ─────────
+  // combined maps: txid → sats (across all pasted addresses)
+  const combinedReceivedByTxid = new Map<string, number>();
+  const combinedSpentByTxid = new Map<string, number>();
+  // per-address: address → (txid → sats)
+  const perAddrReceived = new Map<string, Map<string, number>>();
+  const perAddrSpent = new Map<string, Map<string, number>>();
+  for (const addr of addresses) {
+    perAddrReceived.set(addr, new Map());
+    perAddrSpent.set(addr, new Map());
+  }
+
+  // Pre-index spentOutputAmounts by spending txid: O(1) lookup per tx
+  // instead of scanning the full map with a string-prefix filter.
+  // Key format in spentOutputAmounts: "spendingTxid:prevTxid:prevVout"
+  // (txids are 64-char hex, no colons, so split gives exactly 3 parts).
+  const spentByTxid = new Map<string, Array<{ key: string; amount: number; address: string }>>();
+  for (const [key, info] of spentOutputAmounts) {
+    const spendingTxid = key.substring(0, key.indexOf(":"));
+    const list = spentByTxid.get(spendingTxid) ?? [];
+    list.push({ key, ...info });
+    spentByTxid.set(spendingTxid, list);
+  }
+
+  // Derive resolved amounts from participants
+  const resolveInputAmount = (p: TransactionParticipant): number => {
+    let amt = Number(p.amount) || 0;
+    if (amt === 0 && p.prevTxid && p.prevVout !== undefined) {
+      amt = outputAmountLookup.get(`${p.prevTxid}:${p.prevVout}`) ?? 0;
+    }
+    return amt;
+  };
+
+  for (const [txid, participants] of allTxParticipants) {
+    const seen = new Set<string>();
+    // Track prevTxid:prevVout pairs already accounted for via direct
+    // (address-resolved) participants so unresolved-prevout fallback
+    // below doesn't double-count the same prevout.
+    const seenPrevouts = new Set<string>();
+
+    for (const p of participants) {
+      if (p.role !== "input" && p.role !== "output") continue;
+      if (!addressSet.has(p.address)) continue;
+
+      const dedupKey =
+        p.role === "input"
+          ? `in:${p.prevTxid ?? ""}:${p.prevVout ?? p.id ?? ""}`
+          : `out:${p.vout ?? p.id ?? ""}`;
+      if (seen.has(dedupKey)) continue;
+      seen.add(dedupKey);
+
+      const addr = p.address;
+      const amt =
+        p.role === "input" ? resolveInputAmount(p) : Number(p.amount) || 0;
+
+      if (p.role === "output") {
+        perAddrReceived.get(addr)!.set(txid, (perAddrReceived.get(addr)!.get(txid) ?? 0) + amt);
+        combinedReceivedByTxid.set(txid, (combinedReceivedByTxid.get(txid) ?? 0) + amt);
+      } else {
+        if (p.prevTxid && p.prevVout !== undefined) {
+          seenPrevouts.add(`${p.prevTxid}:${p.prevVout}`);
+        }
+        perAddrSpent.get(addr)!.set(txid, (perAddrSpent.get(addr)!.get(txid) ?? 0) + amt);
+        combinedSpentByTxid.set(txid, (combinedSpentByTxid.get(txid) ?? 0) + amt);
+      }
+    }
+
+    // Handle spending txids where the pasted address isn't directly in
+    // participants (blank-address input recovered via spentOutputAmounts).
+    // Sum ALL matching prevouts — do NOT gate on whether addr already has
+    // an entry for this txid (multiple prevouts per address per tx are valid).
+    if (spendingTxids.has(txid)) {
+      const spentEntries = spentByTxid.get(txid) ?? [];
+      const processedKeys = new Set<string>();
+      let addedAnySpend = false;
+
+      for (const entry of spentEntries) {
+        if (processedKeys.has(entry.key)) continue; // dedupe duplicate keys
+        processedKeys.add(entry.key);
+        if (!addressSet.has(entry.address)) continue;
+        // Skip prevouts already counted via a resolved direct input participant
+        const firstColon = entry.key.indexOf(":");
+        const prevOutRef = entry.key.substring(firstColon + 1); // "prevTxid:prevVout"
+        if (seenPrevouts.has(prevOutRef)) continue;
+        const addr = entry.address;
+        // Accumulate: no has(txid) guard — multiple prevouts for same addr OK
+        perAddrSpent.get(addr)!.set(txid, (perAddrSpent.get(addr)!.get(txid) ?? 0) + entry.amount);
+        combinedSpentByTxid.set(txid, (combinedSpentByTxid.get(txid) ?? 0) + entry.amount);
+        addedAnySpend = true;
+      }
+
+      // Change outputs back to pasted address inside spending tx.
+      // Process once per tx (after all prevouts are summed), not per prevout.
+      if (addedAnySpend) {
+        const changeOutputs = participants.filter(
+          (cp) => cp.role === "output" && addressSet.has(cp.address),
+        );
+        for (const co of changeOutputs) {
+          const coAmt = Number(co.amount) || 0;
+          const coDedupKey = `out:${co.vout ?? co.id ?? ""}`;
+          if (!seen.has(coDedupKey)) {
+            seen.add(coDedupKey);
+            const coAddr = co.address;
+            perAddrReceived.get(coAddr)!.set(txid, (perAddrReceived.get(coAddr)!.get(txid) ?? 0) + coAmt);
+            combinedReceivedByTxid.set(txid, (combinedReceivedByTxid.get(txid) ?? 0) + coAmt);
+          }
+        }
+      }
+    }
+  }
+
+  // ── Step 8: build year rows ──────────────────────────────────────────
+  const combinedYearRows = buildYearRowsFromMaps(
+    txids,
+    txMap,
+    combinedReceivedByTxid,
+    combinedSpentByTxid,
+  );
+
+  const perAddress: AddressActivity[] = addresses.map((addr) => {
+    const received = perAddrReceived.get(addr) ?? new Map<string, number>();
+    const spent = perAddrSpent.get(addr) ?? new Map<string, number>();
+    const addrTxids = Array.from(new Set([...received.keys(), ...spent.keys()]));
+    const yearRows = buildYearRowsFromMaps(addrTxids, txMap, received, spent);
+    return { address: addr, yearRows, hasData: addrTxids.length > 0 };
+  });
+
+  // ── Step 9: build counterparty lists ─────────────────────────────────
+  // "Received from" = input-side addresses in txs where a pasted addr received
+  // "Sent to" = output-side addresses in txs where a pasted addr spent
+  // Unresolved inputs (blank address + prevout) are counted separately.
+  const receivedFromTxCounts = new Map<string, Set<string>>();
+  const sentToTxCounts = new Map<string, Set<string>>();
+  // Track txids with unresolved (blank-address) input sources
+  const unresolvedReceivedFromTxids = new Set<string>();
+  const unresolvedSentToTxids = new Set<string>();
+
+  for (const txid of txids) {
+    const parts = allTxParticipants.get(txid) ?? [];
+    const hasPastedOutput = parts.some((p) => p.role === "output" && addressSet.has(p.address));
+    const hasPastedInput = parts.some((p) => p.role === "input" && addressSet.has(p.address));
+    // Also check spending txids: pasted addr may be input via blank participant
+    const isSpendingTx = spendingTxids.has(txid);
+
+    if (hasPastedOutput) {
+      // This tx delivered BTC to a pasted address → inputs are "received from"
+      for (const p of parts) {
+        if (p.role !== "input") continue;
+        if (addressSet.has(p.address)) continue;
+        if (p.address) {
+          const s = receivedFromTxCounts.get(p.address) ?? new Set<string>();
+          s.add(txid);
+          receivedFromTxCounts.set(p.address, s);
+        } else if (p.prevTxid) {
+          // Blank address = unresolved input source
+          unresolvedReceivedFromTxids.add(txid);
+        }
+      }
+    }
+
+    if (hasPastedInput || isSpendingTx) {
+      // This tx spent BTC from a pasted address → outputs are "sent to"
+      for (const p of parts) {
+        if (p.role !== "output") continue;
+        if (addressSet.has(p.address)) continue;
+        if (p.address) {
+          const s = sentToTxCounts.get(p.address) ?? new Set<string>();
+          s.add(txid);
+          sentToTxCounts.set(p.address, s);
+        }
+      }
+      // For spending txids where pasted addr is blank-input, flag unresolved sent-to
+      if (isSpendingTx && !hasPastedInput) {
+        unresolvedSentToTxids.add(txid);
+      }
+    }
+  }
+
+  const receivedFrom: CounterpartyEntry[] = Array.from(receivedFromTxCounts.entries())
+    .map(([address, txSet]) => ({ address, txCount: txSet.size }))
+    .sort((a, b) => b.txCount - a.txCount);
+
+  const sentTo: CounterpartyEntry[] = Array.from(sentToTxCounts.entries())
+    .map(([address, txSet]) => ({ address, txCount: txSet.size }))
+    .sort((a, b) => b.txCount - a.txCount);
+
+  const noDataAddresses = perAddress.filter((pa) => !pa.hasData).map((pa) => pa.address);
+
+  return {
+    combinedYearRows,
+    perAddress,
+    receivedFrom,
+    sentTo,
+    unresolvedReceivedFromCount: unresolvedReceivedFromTxids.size,
+    unresolvedSentToCount: unresolvedSentToTxids.size,
+    noDataAddresses,
+  };
+}
+
 function TotalsRow({ rows }: { rows: YearRow[] }) {
   const total = useMemo(() => {
     return rows.reduce(
@@ -516,203 +745,18 @@ export default function AnnualActivityReport() {
         }
       }
 
-      // ── Step 7: compute per-txid received/spent for each address ─────────
-      // combined maps: txid → sats (across all pasted addresses)
-      const combinedReceivedByTxid = new Map<string, number>();
-      const combinedSpentByTxid = new Map<string, number>();
-      // per-address: address → (txid → sats)
-      const perAddrReceived = new Map<string, Map<string, number>>();
-      const perAddrSpent = new Map<string, Map<string, number>>();
-      for (const addr of addresses) {
-        perAddrReceived.set(addr, new Map());
-        perAddrSpent.set(addr, new Map());
-      }
-
-      // Pre-index spentOutputAmounts by spending txid: O(1) lookup per tx
-      // instead of scanning the full map with a string-prefix filter.
-      // Key format in spentOutputAmounts: "spendingTxid:prevTxid:prevVout"
-      // (txids are 64-char hex, no colons, so split gives exactly 3 parts).
-      const spentByTxid = new Map<string, Array<{ key: string; amount: number; address: string }>>();
-      for (const [key, info] of spentOutputAmounts) {
-        const spendingTxid = key.substring(0, key.indexOf(":"));
-        const list = spentByTxid.get(spendingTxid) ?? [];
-        list.push({ key, ...info });
-        spentByTxid.set(spendingTxid, list);
-      }
-
-      // Derive resolved amounts from participants
-      const resolveInputAmount = (p: TransactionParticipant): number => {
-        let amt = Number(p.amount) || 0;
-        if (amt === 0 && p.prevTxid && p.prevVout !== undefined) {
-          amt = outputAmountLookup.get(`${p.prevTxid}:${p.prevVout}`) ?? 0;
-        }
-        return amt;
-      };
-
-      for (const [txid, participants] of allTxParticipants) {
-        const seen = new Set<string>();
-        // Track prevTxid:prevVout pairs already accounted for via direct
-        // (address-resolved) participants so unresolved-prevout fallback
-        // below doesn't double-count the same prevout.
-        const seenPrevouts = new Set<string>();
-
-        for (const p of participants) {
-          if (p.role !== "input" && p.role !== "output") continue;
-          if (!addressSet.has(p.address)) continue;
-
-          const dedupKey =
-            p.role === "input"
-              ? `in:${p.prevTxid ?? ""}:${p.prevVout ?? p.id ?? ""}`
-              : `out:${p.vout ?? p.id ?? ""}`;
-          if (seen.has(dedupKey)) continue;
-          seen.add(dedupKey);
-
-          const addr = p.address;
-          const amt =
-            p.role === "input" ? resolveInputAmount(p) : Number(p.amount) || 0;
-
-          if (p.role === "output") {
-            perAddrReceived.get(addr)!.set(txid, (perAddrReceived.get(addr)!.get(txid) ?? 0) + amt);
-            combinedReceivedByTxid.set(txid, (combinedReceivedByTxid.get(txid) ?? 0) + amt);
-          } else {
-            if (p.prevTxid && p.prevVout !== undefined) {
-              seenPrevouts.add(`${p.prevTxid}:${p.prevVout}`);
-            }
-            perAddrSpent.get(addr)!.set(txid, (perAddrSpent.get(addr)!.get(txid) ?? 0) + amt);
-            combinedSpentByTxid.set(txid, (combinedSpentByTxid.get(txid) ?? 0) + amt);
-          }
-        }
-
-        // Handle spending txids where the pasted address isn't directly in
-        // participants (blank-address input recovered via spentOutputAmounts).
-        // Sum ALL matching prevouts — do NOT gate on whether addr already has
-        // an entry for this txid (multiple prevouts per address per tx are valid).
-        if (spendingTxids.has(txid)) {
-          const spentEntries = spentByTxid.get(txid) ?? [];
-          const processedKeys = new Set<string>();
-          let addedAnySpend = false;
-
-          for (const entry of spentEntries) {
-            if (processedKeys.has(entry.key)) continue; // dedupe duplicate keys
-            processedKeys.add(entry.key);
-            if (!addressSet.has(entry.address)) continue;
-            // Skip prevouts already counted via a resolved direct input participant
-            const firstColon = entry.key.indexOf(":");
-            const prevOutRef = entry.key.substring(firstColon + 1); // "prevTxid:prevVout"
-            if (seenPrevouts.has(prevOutRef)) continue;
-            const addr = entry.address;
-            // Accumulate: no has(txid) guard — multiple prevouts for same addr OK
-            perAddrSpent.get(addr)!.set(txid, (perAddrSpent.get(addr)!.get(txid) ?? 0) + entry.amount);
-            combinedSpentByTxid.set(txid, (combinedSpentByTxid.get(txid) ?? 0) + entry.amount);
-            addedAnySpend = true;
-          }
-
-          // Change outputs back to pasted address inside spending tx.
-          // Process once per tx (after all prevouts are summed), not per prevout.
-          if (addedAnySpend) {
-            const changeOutputs = participants.filter(
-              (cp) => cp.role === "output" && addressSet.has(cp.address),
-            );
-            for (const co of changeOutputs) {
-              const coAmt = Number(co.amount) || 0;
-              const coDedupKey = `out:${co.vout ?? co.id ?? ""}`;
-              if (!seen.has(coDedupKey)) {
-                seen.add(coDedupKey);
-                const coAddr = co.address;
-                perAddrReceived.get(coAddr)!.set(txid, (perAddrReceived.get(coAddr)!.get(txid) ?? 0) + coAmt);
-                combinedReceivedByTxid.set(txid, (combinedReceivedByTxid.get(txid) ?? 0) + coAmt);
-              }
-            }
-          }
-        }
-      }
-
-      // ── Step 8: build year rows ──────────────────────────────────────────
-      const combinedYearRows = buildYearRowsFromMaps(
+      // ── Steps 7-9: aggregate received/spent + counterparties (pure) ──────
+      const reportData = computeAnnualActivity({
+        addresses,
         txids,
         txMap,
-        combinedReceivedByTxid,
-        combinedSpentByTxid,
-      );
-
-      const perAddress: AddressActivity[] = addresses.map((addr) => {
-        const received = perAddrReceived.get(addr) ?? new Map<string, number>();
-        const spent = perAddrSpent.get(addr) ?? new Map<string, number>();
-        const addrTxids = Array.from(new Set([...received.keys(), ...spent.keys()]));
-        const yearRows = buildYearRowsFromMaps(addrTxids, txMap, received, spent);
-        return { address: addr, yearRows, hasData: addrTxids.length > 0 };
+        allTxParticipants,
+        spendingTxids,
+        spentOutputAmounts,
+        outputAmountLookup,
       });
 
-      // ── Step 9: build counterparty lists ─────────────────────────────────
-      // "Received from" = input-side addresses in txs where a pasted addr received
-      // "Sent to" = output-side addresses in txs where a pasted addr spent
-      // Unresolved inputs (blank address + prevout) are counted separately.
-      const receivedFromTxCounts = new Map<string, Set<string>>();
-      const sentToTxCounts = new Map<string, Set<string>>();
-      // Track txids with unresolved (blank-address) input sources
-      const unresolvedReceivedFromTxids = new Set<string>();
-      const unresolvedSentToTxids = new Set<string>();
-
-      for (const txid of txids) {
-        const parts = allTxParticipants.get(txid) ?? [];
-        const hasPastedOutput = parts.some((p) => p.role === "output" && addressSet.has(p.address));
-        const hasPastedInput = parts.some((p) => p.role === "input" && addressSet.has(p.address));
-        // Also check spending txids: pasted addr may be input via blank participant
-        const isSpendingTx = spendingTxids.has(txid);
-
-        if (hasPastedOutput) {
-          // This tx delivered BTC to a pasted address → inputs are "received from"
-          for (const p of parts) {
-            if (p.role !== "input") continue;
-            if (addressSet.has(p.address)) continue;
-            if (p.address) {
-              const s = receivedFromTxCounts.get(p.address) ?? new Set<string>();
-              s.add(txid);
-              receivedFromTxCounts.set(p.address, s);
-            } else if (p.prevTxid) {
-              // Blank address = unresolved input source
-              unresolvedReceivedFromTxids.add(txid);
-            }
-          }
-        }
-
-        if (hasPastedInput || isSpendingTx) {
-          // This tx spent BTC from a pasted address → outputs are "sent to"
-          for (const p of parts) {
-            if (p.role !== "output") continue;
-            if (addressSet.has(p.address)) continue;
-            if (p.address) {
-              const s = sentToTxCounts.get(p.address) ?? new Set<string>();
-              s.add(txid);
-              sentToTxCounts.set(p.address, s);
-            }
-          }
-          // For spending txids where pasted addr is blank-input, flag unresolved sent-to
-          if (isSpendingTx && !hasPastedInput) {
-            unresolvedSentToTxids.add(txid);
-          }
-        }
-      }
-
-      const receivedFrom: CounterpartyEntry[] = Array.from(receivedFromTxCounts.entries())
-        .map(([address, txSet]) => ({ address, txCount: txSet.size }))
-        .sort((a, b) => b.txCount - a.txCount);
-
-      const sentTo: CounterpartyEntry[] = Array.from(sentToTxCounts.entries())
-        .map(([address, txSet]) => ({ address, txCount: txSet.size }))
-        .sort((a, b) => b.txCount - a.txCount);
-
-      const noDataAddresses = perAddress.filter((pa) => !pa.hasData).map((pa) => pa.address);
-
-      setReportData({
-        combinedYearRows,
-        perAddress,
-        receivedFrom,
-        sentTo,
-        unresolvedReceivedFromCount: unresolvedReceivedFromTxids.size,
-        unresolvedSentToCount: unresolvedSentToTxids.size,
-        noDataAddresses,
-      });
+      setReportData(reportData);
       setHasGenerated(true);
     } catch (err: unknown) {
       if (err instanceof Error && err.name === "AbortError") return;
