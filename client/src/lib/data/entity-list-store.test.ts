@@ -1504,3 +1504,165 @@ describe("prepareEntitySnapshot", () => {
     expect(result.errors.length).toBeGreaterThan(0);
   });
 });
+
+describe("prepareEntitySnapshot replace preview matches applied list", () => {
+  afterEach(() => {
+    resetActiveEntityList();
+  });
+
+  it("previews adds/removes/changes/unchanged exactly as the applied list reflects them", async () => {
+    // A non-trivial active list spanning every replace category:
+    //  - unchanged: re-imported byte-for-byte identical
+    //  - changed (name): same address, different display name
+    //  - changed (category): same address, different category
+    //  - changed (sourceNote): same address, different/added source note
+    //  - removed: present now but absent from the incoming snapshot
+    const current: EntityEntry[] = [
+      { address: ADDR.bitstamp, name: "Bitstamp", category: "exchange" },
+      { address: ADDR.binance, name: "Binance Old", category: "exchange" },
+      { address: ADDR.gambling1, name: "Casino", category: "gambling" },
+      {
+        address: ADDR.gambling2,
+        name: "Mixer X",
+        category: "mixer",
+        sourceNote: "https://example.com/old",
+      },
+      { address: ADDR_C, name: "Soon Gone", category: "exchange" },
+    ];
+    setActiveEntityList(current);
+
+    // The incoming snapshot keeps bitstamp identical, renames binance,
+    // re-categorizes gambling1, re-attributes gambling2's note, drops ADDR_C,
+    // and introduces two brand-new addresses.
+    const raw = [
+      { address: ADDR.bitstamp, name: "Bitstamp", category: "exchange" },
+      { address: ADDR.binance, name: "Binance New", category: "exchange" },
+      { address: ADDR.gambling1, name: "Casino", category: "mixer" },
+      {
+        address: ADDR.gambling2,
+        name: "Mixer X",
+        category: "mixer",
+        sourceNote: "https://example.com/new",
+      },
+      { address: ADDR_B, name: "Binance Cold", category: "exchange" },
+      { address: ADDR_BECH32, name: "New Segwit", category: "darknet" },
+    ];
+
+    const result = prepareEntitySnapshot(raw, "replace");
+    expect(result.valid).toBe(true);
+    const preview = result.preview!;
+    expect(preview.mode).toBe("replace");
+
+    // Aggregate counts.
+    expect(preview.incomingCount).toBe(6);
+    expect(preview.currentCount).toBe(5);
+    expect(preview.resultingCount).toBe(6);
+    expect(preview.added).toBe(2);
+    expect(preview.removed).toBe(1);
+    expect(preview.changed).toBe(3);
+    expect(preview.unchanged).toBe(1);
+    // A replace never reports overrides.
+    expect(preview.overridden).toBe(0);
+    expect(preview.overrides).toEqual([]);
+
+    // The added entries are exactly the two brand-new addresses.
+    expect(preview.addedEntries.map((e) => e.address).sort()).toEqual(
+      [ADDR_B, ADDR_BECH32].sort(),
+    );
+    expect(preview.addedEntries).toContainEqual({
+      address: ADDR_B,
+      name: "Binance Cold",
+      category: "exchange",
+    });
+    expect(preview.addedEntries).toContainEqual({
+      address: ADDR_BECH32,
+      name: "New Segwit",
+      category: "darknet",
+    });
+
+    // The removed entry is exactly ADDR_C, surfaced with its current values.
+    expect(preview.removedEntries).toEqual([
+      { address: ADDR_C, name: "Soon Gone", category: "exchange" },
+    ]);
+
+    // The changed entries cover the rename, re-categorization, and re-note,
+    // each carrying the correct current/incoming pair and change flags.
+    expect(preview.changedEntries).toHaveLength(3);
+    const changedByAddr = new Map(
+      preview.changedEntries.map((c) => [c.address, c]),
+    );
+
+    const renamed = changedByAddr.get(ADDR.binance)!;
+    expect(renamed.current).toEqual({
+      address: ADDR.binance,
+      name: "Binance Old",
+      category: "exchange",
+    });
+    expect(renamed.incoming).toEqual({
+      address: ADDR.binance,
+      name: "Binance New",
+      category: "exchange",
+    });
+    expect(renamed.nameChanged).toBe(true);
+    expect(renamed.categoryChanged).toBe(false);
+    expect(renamed.sourceNoteChanged).toBe(false);
+
+    const recategorized = changedByAddr.get(ADDR.gambling1)!;
+    expect(recategorized.current.category).toBe("gambling");
+    expect(recategorized.incoming.category).toBe("mixer");
+    expect(recategorized.nameChanged).toBe(false);
+    expect(recategorized.categoryChanged).toBe(true);
+    expect(recategorized.sourceNoteChanged).toBe(false);
+
+    const renoted = changedByAddr.get(ADDR.gambling2)!;
+    expect(renoted.current.sourceNote).toBe("https://example.com/old");
+    expect(renoted.incoming.sourceNote).toBe("https://example.com/new");
+    expect(renoted.nameChanged).toBe(false);
+    expect(renoted.categoryChanged).toBe(false);
+    expect(renoted.sourceNoteChanged).toBe(true);
+
+    // The unchanged entry (bitstamp) appears in no change/add/remove array.
+    const touchedAddrs = new Set<string>([
+      ...preview.addedEntries.map((e) => e.address),
+      ...preview.removedEntries.map((e) => e.address),
+      ...preview.changedEntries.map((c) => c.address),
+    ]);
+    expect(touchedAddrs.has(ADDR.bitstamp)).toBe(false);
+
+    // Now apply the SAME snapshot via the import/apply path and assert the
+    // resulting active list is exactly what the preview promised.
+    const applied = await importEntitySnapshot(raw, "replace-source.json", "replace");
+    expect(applied.valid).toBe(true);
+    expect(applied.mode).toBe("replace");
+    expect(applied.count).toBe(preview.incomingCount);
+    expect(applied.activeCount).toBe(preview.resultingCount);
+
+    const active = getActiveEntityList();
+    expect(active).toHaveLength(preview.resultingCount);
+    expect(active).toHaveLength(preview.incomingCount);
+
+    // Removed entries are truly gone.
+    for (const removed of preview.removedEntries) {
+      expect(active.find((e) => e.address === removed.address)).toBeUndefined();
+    }
+
+    // Changed entries now reflect the incoming values, not the old ones.
+    for (const change of preview.changedEntries) {
+      expect(active.find((e) => e.address === change.address)).toEqual(
+        change.incoming,
+      );
+    }
+
+    // Added entries are present with their incoming values.
+    for (const added of preview.addedEntries) {
+      expect(active.find((e) => e.address === added.address)).toEqual(added);
+    }
+
+    // The whole active list equals exactly the previewed entries (the snapshot).
+    const sortByAddr = (a: EntityEntry, b: EntityEntry) =>
+      a.address.localeCompare(b.address);
+    expect([...active].sort(sortByAddr)).toEqual(
+      [...preview.entries].sort(sortByAddr),
+    );
+  });
+});
