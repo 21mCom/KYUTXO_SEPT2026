@@ -4,7 +4,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { FileText, GitBranch, Search, Shield, Eye, Loader2, Download, Printer, ChevronRight, Copy } from "lucide-react";
+import { FileText, GitBranch, Search, Shield, Eye, Loader2, Download, Printer, ChevronLeft, ChevronRight, Copy } from "lucide-react";
 import { SourceOfFundsReport } from "@/components/reports/SourceOfFundsReport";
 import { HopPointReport } from "@/components/reports/HopPointReport";
 import { ContinuityCertificateReport } from "@/components/reports/ContinuityCertificateReport";
@@ -54,19 +54,63 @@ export function PrivacyAuditReportPanel() {
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<PrivacyAuditResult | null>(null);
   const [highlightedType, setHighlightedType] = useState<PrivacyFinding["type"] | null>(null);
+  // Index (into the flat [...findings, ...warnings] list) of the finding that is
+  // currently the navigation anchor. Lets the user step through several findings
+  // of the same type from a single aggregated waterfall row.
+  const [focusedFindingIndex, setFocusedFindingIndex] = useState<number | null>(null);
   const findingsRef = useRef<HTMLDivElement | null>(null);
   const waterfallRef = useRef<HTMLDivElement | null>(null);
 
-  const focusFindingsByType = useCallback((findingType: PrivacyFinding["type"]) => {
-    setHighlightedType(findingType);
+  // Ordered positions (into the flat findings+warnings list) of every finding of
+  // a given type. The waterfall aggregates by type, so a single row can map to
+  // many findings here.
+  const findingIndicesByType = useCallback((findingType: PrivacyFinding["type"]): number[] => {
+    if (!result) return [];
+    const combined = [...result.findings, ...result.warnings];
+    const indices: number[] = [];
+    for (let i = 0; i < combined.length; i++) {
+      if (combined[i].type === findingType) indices.push(i);
+    }
+    return indices;
+  }, [result]);
+
+  const scrollToFindingIndex = useCallback((index: number) => {
     requestAnimationFrame(() => {
-      const el = findingsRef.current?.querySelector<HTMLElement>(`[data-finding-type="${findingType}"]`);
+      const el = findingsRef.current?.querySelector<HTMLElement>(`[data-finding-index="${index}"]`);
       el?.scrollIntoView({ behavior: "smooth", block: "center" });
     });
   }, []);
 
-  const focusWaterfallByType = useCallback((findingType: PrivacyFinding["type"]) => {
+  const focusFindingsByType = useCallback((findingType: PrivacyFinding["type"]) => {
     setHighlightedType(findingType);
+    const indices = findingIndicesByType(findingType);
+    const first = indices.length > 0 ? indices[0] : null;
+    setFocusedFindingIndex(first);
+    if (first !== null) scrollToFindingIndex(first);
+  }, [findingIndicesByType, scrollToFindingIndex]);
+
+  // Step to the next/previous finding of a type (wraps around) and scroll to it.
+  const stepFindingWithinType = useCallback((findingType: PrivacyFinding["type"], direction: 1 | -1) => {
+    const indices = findingIndicesByType(findingType);
+    if (indices.length === 0) return;
+    setHighlightedType(findingType);
+    setFocusedFindingIndex((prev) => {
+      const currentPos = prev === null ? -1 : indices.indexOf(prev);
+      let nextPos: number;
+      if (currentPos === -1) {
+        nextPos = direction === 1 ? 0 : indices.length - 1;
+      } else {
+        nextPos = (currentPos + direction + indices.length) % indices.length;
+      }
+      const target = indices[nextPos];
+      scrollToFindingIndex(target);
+      return target;
+    });
+  }, [findingIndicesByType, scrollToFindingIndex]);
+
+  const focusWaterfallByType = useCallback((findingType: PrivacyFinding["type"], findingIndex?: number) => {
+    setHighlightedType(findingType);
+    if (findingIndex !== undefined) setFocusedFindingIndex(findingIndex);
     requestAnimationFrame(() => {
       const el = waterfallRef.current?.querySelector<HTMLElement>(`[data-waterfall-type="${findingType}"]`);
       el?.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -77,6 +121,7 @@ export function PrivacyAuditReportPanel() {
     setRunning(true);
     setResult(null);
     setHighlightedType(null);
+    setFocusedFindingIndex(null);
     try {
       const allAddresses: string[] = [];
       let beforeId: number | undefined;
@@ -306,15 +351,62 @@ export function PrivacyAuditReportPanel() {
                               if (e.key === "Enter" || e.key === " ") {
                                 e.preventDefault();
                                 focusFindingsByType(entry.findingType as PrivacyFinding["type"]);
+                              } else if (entry.count > 1 && (e.key === "ArrowRight" || e.key === "ArrowDown")) {
+                                e.preventDefault();
+                                stepFindingWithinType(entry.findingType as PrivacyFinding["type"], 1);
+                              } else if (entry.count > 1 && (e.key === "ArrowLeft" || e.key === "ArrowUp")) {
+                                e.preventDefault();
+                                stepFindingWithinType(entry.findingType as PrivacyFinding["type"], -1);
                               }
                             } : undefined}
                             className={`scroll-mt-4 ${hasFindings ? "cursor-pointer hover-elevate focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset" : ""} ${isHighlighted ? "bg-muted" : ""}`}
                           >
                             <td className="p-2">
-                              <span>{entry.label}</span>
-                              {hasFindings && (
-                                <ChevronRight className="inline-block ml-1 h-3 w-3 text-muted-foreground align-middle" />
-                              )}
+                              <div className="flex items-center gap-1 flex-wrap">
+                                <span>{entry.label}</span>
+                                {hasFindings && (
+                                  <ChevronRight className="h-3 w-3 text-muted-foreground" />
+                                )}
+                                {hasFindings && entry.count > 1 && (() => {
+                                  const findingType = entry.findingType as PrivacyFinding["type"];
+                                  const indices = findingIndicesByType(findingType);
+                                  const pos = isHighlighted && focusedFindingIndex !== null
+                                    ? indices.indexOf(focusedFindingIndex)
+                                    : -1;
+                                  const display = pos >= 0 ? `${pos + 1} / ${entry.count}` : `${entry.count}`;
+                                  return (
+                                    <span
+                                      className="inline-flex items-center gap-1 ml-1"
+                                      onClick={(e) => e.stopPropagation()}
+                                    >
+                                      <Button
+                                        size="icon"
+                                        variant="ghost"
+                                        aria-label={`Previous ${entry.label} finding`}
+                                        data-testid={`button-waterfall-prev-${i}`}
+                                        onClick={() => stepFindingWithinType(findingType, -1)}
+                                      >
+                                        <ChevronLeft className="h-3 w-3" />
+                                      </Button>
+                                      <span
+                                        className="text-xs tabular-nums text-muted-foreground"
+                                        data-testid={`text-waterfall-position-${i}`}
+                                      >
+                                        {display}
+                                      </span>
+                                      <Button
+                                        size="icon"
+                                        variant="ghost"
+                                        aria-label={`Next ${entry.label} finding`}
+                                        data-testid={`button-waterfall-next-${i}`}
+                                        onClick={() => stepFindingWithinType(findingType, 1)}
+                                      >
+                                        <ChevronRight className="h-3 w-3" />
+                                      </Button>
+                                    </span>
+                                  );
+                                })()}
+                              </div>
                             </td>
                             <td className="p-2 text-right tabular-nums text-muted-foreground">
                               {entry.count > 0 ? entry.count.toLocaleString() : "—"}
@@ -349,13 +441,14 @@ export function PrivacyAuditReportPanel() {
                     <div
                       key={i}
                       data-finding-type={f.type}
-                      onClick={() => focusWaterfallByType(f.type)}
+                      data-finding-index={i}
+                      onClick={() => focusWaterfallByType(f.type, i)}
                       role="button"
                       tabIndex={0}
                       onKeyDown={(e) => {
                         if (e.key === "Enter" || e.key === " ") {
                           e.preventDefault();
-                          focusWaterfallByType(f.type);
+                          focusWaterfallByType(f.type, i);
                         }
                       }}
                       className={`p-3 flex flex-wrap gap-2 items-start scroll-mt-4 transition-colors cursor-pointer hover-elevate focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset ${
