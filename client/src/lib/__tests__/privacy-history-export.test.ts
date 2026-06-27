@@ -313,6 +313,31 @@ describe('buildPrivacyHistoryPdf summary line', () => {
   });
 });
 
+// The report title ("Privacy Score History") and the two footer lines
+// ("Generated: <timestamp>" and the "KYUTXO — generated offline" branding) are
+// drawn directly via doc.text(), not through autotable, so they are verified by
+// reading back the recorded doc.text(...) calls (see the jspdf wrapper above).
+describe('buildPrivacyHistoryPdf title and footer', () => {
+  beforeEach(() => {
+    drawCalls.text.length = 0;
+  });
+
+  it('draws the report title at the title anchor (x=14, y=20)', async () => {
+    await buildPrivacyHistoryPdf([makeEntry()]);
+    const call = drawCalls.text.find((args) => args[1] === 14 && args[2] === 20);
+    expect(call?.[0]).toBe('Privacy Score History');
+  });
+
+  it('draws both footer lines, including the offline-branding string', async () => {
+    await buildPrivacyHistoryPdf([makeEntry()]);
+    const labels = drawCalls.text.map((c) => c[0]) as string[];
+    // The "Generated:" footer carries a runtime timestamp, so match by prefix.
+    expect(labels.some((s) => s.startsWith('Generated: '))).toBe(true);
+    // The offline-branding footer is a fixed string.
+    expect(labels).toContain('KYUTXO — generated offline');
+  });
+});
+
 // The score-trend sparkline is drawn with raw jsPDF vector primitives (rect for
 // the frame, line for the threshold guides + connecting segments, circle for the
 // point markers). autoTable is mocked, so the only rect/line/circle calls that
