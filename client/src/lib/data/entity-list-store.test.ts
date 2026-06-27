@@ -25,6 +25,7 @@ import {
   setActiveEntityList,
   resetActiveEntityList,
   getBundledEntityCount,
+  getBundledEntityList,
   type EntityEntry,
 } from "../privacy-entity-list";
 
@@ -417,6 +418,65 @@ describe("importEntitySnapshot", () => {
     expect(result.activeCount).toBe(bundledCount);
     const overridden = getActiveEntityList().find((e) => e.address === ADDR_A);
     expect(overridden).toEqual({ address: ADDR_A, name: "Overridden", category: "mixer" });
+  });
+
+  it("saves the right active list and persists only user entries on a merge import", async () => {
+    // A merge that both adds a brand-new address AND overrides a bundled one,
+    // asserting the *apply* path actually writes the correct list — not just a
+    // preview. ADDR_A (Binance) exists in the bundled list; NEW_ADDR does not.
+    const NEW_ADDR = "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq";
+    const bundledList = getBundledEntityList();
+    const bundledCount = bundledList.length;
+    // A bundled default that the snapshot leaves untouched, so we can assert it
+    // still flows through the merged active list.
+    const untouched = bundledList.find((e) => e.address !== ADDR_A)!;
+    expect(untouched).toBeDefined();
+
+    const userEntries = [
+      entry({ address: NEW_ADDR, name: "New Market", category: "darknet" }),
+      entry({ address: ADDR_A, name: "Overridden Binance", category: "mixer" }),
+    ];
+
+    const result = await importEntitySnapshot(userEntries, "merge-source.json", "merge");
+
+    expect(result.valid).toBe(true);
+    expect(result.mode).toBe("merge");
+    // count is the number of user-supplied entries.
+    expect(result.count).toBe(2);
+    // activeCount is the merged total: bundled defaults + the one brand-new
+    // address (the override replaces in place and does not grow the list).
+    expect(result.activeCount).toBe(bundledCount + 1);
+
+    // The active list reflects the saved merge.
+    expect(getActiveEntitySource()).toBe("imported");
+    const active = getActiveEntityList();
+    expect(active).toHaveLength(bundledCount + 1);
+
+    // Bundled defaults still flow through (the untouched entry is unchanged).
+    expect(active.find((e) => e.address === untouched.address)).toEqual(untouched);
+    // The brand-new address was added.
+    expect(active.find((e) => e.address === NEW_ADDR)).toEqual({
+      address: NEW_ADDR,
+      name: "New Market",
+      category: "darknet",
+    });
+    // The override winner replaced the bundled entry for ADDR_A.
+    expect(active.find((e) => e.address === ADDR_A)).toEqual({
+      address: ADDR_A,
+      name: "Overridden Binance",
+      category: "mixer",
+    });
+
+    // Only the user-supplied entries are persisted (not the full merged list),
+    // so future bundled updates still flow through. Mode is recorded as 'merge'.
+    expect(updateSettingsMock).toHaveBeenCalledTimes(1);
+    const [id, changes] = updateSettingsMock.mock.calls[0];
+    expect(id).toBe("default");
+    expect(changes.entityListSnapshot.mode).toBe("merge");
+    expect(changes.entityListSnapshot.sourceLabel).toBe("merge-source.json");
+    expect(changes.entityListSnapshot.entries).toEqual(userEntries);
+    expect(changes.entityListSnapshot.entries).toHaveLength(2);
+    expect(typeof changes.entityListSnapshot.importedAt).toBe("number");
   });
 });
 
