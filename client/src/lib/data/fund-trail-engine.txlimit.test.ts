@@ -122,6 +122,37 @@ async function addIncomingTx(label: string, time: number): Promise<string> {
   return txid;
 }
 
+/**
+ * Seeds one incoming flow via the precise utxoLineage path (no participant or
+ * blockchainTransactions row needed — lineage rows carry their own blockTime).
+ * Each call adds exactly one candidate txid, mirroring addIncomingTx so the two
+ * paths can be mixed in a single group.
+ */
+async function addIncomingLineageTx(label: string, time: number): Promise<string> {
+  const ext = extAddr(label);
+  await addExternalRecord(label);
+  const txid = `lin-${label}-${time}`;
+  await testDb.utxoLineage.add({
+    spentTxid: `prev-${txid}`,
+    spentVout: 0,
+    spentAddress: ext,
+    spentAmount: 100,
+    consumingTxid: txid,
+    createdTxid: txid,
+    createdVout: 0,
+    createdAddress: GROUP_ADDR,
+    createdAmount: 100,
+    spentOwned: false,
+    createdOwned: true,
+    isChange: false,
+    confidence: "high",
+    blockTime: time,
+    blockHeight: 1,
+    createdAt: 1,
+  } as UtxoLineage);
+  return txid;
+}
+
 function txidsOfDetails(flows: { details: { txid: string }[] }[]): Set<string> {
   const set = new Set<string>();
   for (const f of flows) for (const d of f.details) set.add(d.txid);
@@ -202,5 +233,73 @@ describe("computeOneHop txLimit cap", () => {
     expect(hop.totalTxCount).toBe(5);
     expect(hop.shownTxCount).toBe(5);
     expect(hop.sources).toHaveLength(5);
+  });
+
+  it("caps a mix of lineage + participant txids to the most recent txLimit", async () => {
+    // A busy wallet's addresses are touched by BOTH precise lineage rows and
+    // participant-only rows. The cap must rank every candidate txid together by
+    // blockTime and keep the newest `txLimit`, regardless of which attribution
+    // path each txid came from.
+    const txLimit = 3;
+
+    // 3 lineage-path candidate txids dated 1000, 3000, 5000.
+    const lin1 = await addIncomingLineageTx("Lin1", 1000);
+    const lin3 = await addIncomingLineageTx("Lin3", 3000);
+    const lin5 = await addIncomingLineageTx("Lin5", 5000);
+    // 3 participant-only candidate txids dated 2000, 4000, 6000.
+    const part2 = await addIncomingTx("Part2", 2000);
+    const part4 = await addIncomingTx("Part4", 4000);
+    const part6 = await addIncomingTx("Part6", 6000);
+
+    const hop = await computeOneHop(
+      [GROUP_ADDR],
+      "walletName",
+      SELF_LABEL,
+      undefined,
+      undefined,
+      { txLimit },
+    );
+
+    // 6 total candidates across both paths; capped to the newest 3.
+    expect(hop.isCapped).toBe(true);
+    expect(hop.totalTxCount).toBe(6);
+    expect(hop.shownTxCount).toBe(txLimit);
+
+    // The newest three by blockTime are part6 (6000), lin5 (5000), part4 (4000)
+    // — a mix of both paths — and nothing older survives.
+    const kept = txidsOfDetails(hop.sources);
+    expect(kept).toEqual(new Set([part6, lin5, part4]));
+    expect(kept.has(part2)).toBe(false);
+    expect(kept.has(lin3)).toBe(false);
+    expect(kept.has(lin1)).toBe(false);
+
+    // Every kept detail is at or above the blockTime of every dropped one.
+    const keptTimes = hop.sources.flatMap((f) => f.details.map((d) => d.blockTime));
+    expect(Math.min(...keptTimes)).toBe(4000);
+  });
+
+  it("does not cap a small mixed wallet (lineage + participant under the limit)", async () => {
+    // Same two-path mix, but the total candidate count stays at/under the cap,
+    // so isCapped must be false and every txid is processed.
+    const txLimit = 3;
+
+    const lin = await addIncomingLineageTx("LinOnly", 1000);
+    const part = await addIncomingTx("PartOnly", 2000);
+
+    const hop = await computeOneHop(
+      [GROUP_ADDR],
+      "walletName",
+      SELF_LABEL,
+      undefined,
+      undefined,
+      { txLimit },
+    );
+
+    expect(hop.isCapped).toBe(false);
+    expect(hop.totalTxCount).toBe(2);
+    expect(hop.shownTxCount).toBe(2);
+
+    const kept = txidsOfDetails(hop.sources);
+    expect(kept).toEqual(new Set([lin, part]));
   });
 });
