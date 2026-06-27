@@ -46,20 +46,25 @@ import {
   type GroupFlow,
   type TrailHop,
   type DateRange,
+  type HopNode,
+  type MultiHopTrailResult,
   listGroupValues,
   getAddressesForGroup,
   getRecordByAddress,
   computeOneHop,
+  computeMultiHopKnown,
   formatBtc,
   formatDate,
   formatDateRange,
   deduplicateDetails,
   UNKNOWN_SOURCE_LABEL,
   UNKNOWN_DEST_LABEL,
+  MAX_HOP_DEPTH,
 } from "@/lib/data/fund-trail-engine";
 import { validateAddress, truncateAddress } from "@/lib/bitcoin";
 import {
   buildFundTrailSnapshot,
+  buildMultiHopFundTrailSnapshot,
   buildFundTrailCsv,
   buildFundTrailPdf,
   fundTrailFilename,
@@ -504,6 +509,371 @@ function FlowCard({
 }
 
 // ---------------------------------------------------------------------------
+// HopCard — flat card for multi-hop auto-traced results (no expand button)
+// ---------------------------------------------------------------------------
+
+/**
+ * Simplified card for multi-hop layout. Shows which hop depth the entity was
+ * found at, its group label, total amount, and a Details toggle. No manual
+ * expand — the depth was set by the user and the trail was pre-computed.
+ */
+function HopCard({
+  node,
+  direction,
+}: {
+  node: HopNode;
+  direction: "source" | "dest";
+}) {
+  const [showDetails, setShowDetails] = useState(false);
+  const uniqueDetails = deduplicateDetails(node.details);
+
+  return (
+    <div
+      className="rounded-md border border-border bg-card"
+      data-testid={`fund-trail-hop-card-${node.groupLabel.replace(/\s/g, "-")}-h${node.hopDepth}`}
+    >
+      <div className="flex items-center gap-2 flex-wrap px-3 pt-3 pb-2">
+        <Badge
+          variant="outline"
+          className="shrink-0 text-xs font-mono"
+          data-testid={`fund-trail-hop-badge-${node.groupLabel.replace(/\s/g, "-")}-h${node.hopDepth}`}
+        >
+          Hop {node.hopDepth}
+        </Badge>
+        <span className="text-xs font-semibold shrink-0 text-muted-foreground uppercase tracking-wide">
+          {direction === "source" ? "from:" : "to:"}
+        </span>
+        <span className="font-medium text-sm truncate flex-1 min-w-0">
+          {node.groupLabel}
+        </span>
+        <Badge variant="secondary" className="shrink-0">
+          {formatBtc(node.totalSats)}
+        </Badge>
+      </div>
+
+      <div className="flex items-center gap-1 flex-wrap px-3 pb-2">
+        {uniqueDetails.length > 0 && (
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => setShowDetails(v => !v)}
+            data-testid={`fund-trail-hop-details-${node.groupLabel.replace(/\s/g, "-")}-h${node.hopDepth}`}
+          >
+            <Info className="h-3 w-3 mr-1" />
+            {showDetails ? "Hide" : "Details"} ({uniqueDetails.length})
+          </Button>
+        )}
+        {node.isUnknown && (
+          <span className="text-xs text-muted-foreground italic pl-1">
+            unidentified
+          </span>
+        )}
+      </div>
+
+      {showDetails && uniqueDetails.length > 0 && (
+        <div className="mx-3 mb-3 rounded-md bg-muted/30 px-2 py-1">
+          {uniqueDetails.map((d, i) => (
+            <DetailRow key={i} {...d} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// MultiHopTrailLayout — flat scrollable layout for auto-traced multi-hop results
+// ---------------------------------------------------------------------------
+
+/**
+ * Renders a multi-hop trail result as a flat scrollable 3-column layout:
+ * sources (left) | center node (middle) | destinations (right).
+ *
+ * Each HopNode is a top-level card with a "Hop N" badge — no nesting. This
+ * avoids the cramped nested-column problem of the manual expand approach.
+ */
+function MultiHopTrailLayout({
+  centerLabel,
+  centerDisplayMode = "group",
+  centerRecordLabel,
+  dimension,
+  multiHopResult,
+  dateRange,
+  backwardHops,
+  forwardHops,
+}: {
+  centerLabel: string;
+  centerDisplayMode?: "group" | "address";
+  centerRecordLabel?: string | null;
+  dimension: GroupingDimension;
+  multiHopResult: MultiHopTrailResult;
+  dateRange?: DateRange;
+  backwardHops: number;
+  forwardHops: number;
+}) {
+  const { toast } = useToast();
+  const [isExporting, setIsExporting] = useState(false);
+
+  const hasSources = multiHopResult.sources.length > 0;
+  const hasDests = multiHopResult.destinations.length > 0;
+  // Totals use only hop-1 nodes — those represent direct flows into/out of
+  // the center address. Summing across all depths would double-count because
+  // deeper nodes are upstream/downstream chain segments of the same funds.
+  const totalIn = multiHopResult.sources
+    .filter(n => n.hopDepth === 1)
+    .reduce((s, n) => s + n.totalSats, 0);
+  const totalOut = multiHopResult.destinations
+    .filter(n => n.hopDepth === 1)
+    .reduce((s, n) => s + n.totalSats, 0);
+
+  const isCapped = multiHopResult.caps.some(c => c.isCapped);
+  const shownTxCount = multiHopResult.caps.filter(c => c.isCapped).reduce((s, c) => s + c.shownTxCount, 0);
+  const totalTxCount = multiHopResult.caps.filter(c => c.isCapped).reduce((s, c) => s + c.totalTxCount, 0);
+
+  const handleExport = useCallback(
+    async (format: "csv" | "pdf" | "pdf-detailed") => {
+      setIsExporting(true);
+      try {
+        const snapshot = buildMultiHopFundTrailSnapshot(
+          centerLabel,
+          dimension,
+          multiHopResult,
+        );
+        if (format === "csv") {
+          const csv = buildFundTrailCsv(snapshot);
+          triggerDownload(
+            new Blob([csv], { type: "text/csv;charset=utf-8" }),
+            fundTrailFilename(centerLabel, "csv"),
+          );
+        } else {
+          const detailed = format === "pdf-detailed";
+          const blob = await buildFundTrailPdf(snapshot, { detailed });
+          triggerDownload(blob, fundTrailFilename(centerLabel, "pdf"));
+        }
+        toast({
+          title: "Export ready",
+          description:
+            format === "csv"
+              ? "Fund Trail exported as CSV."
+              : format === "pdf-detailed"
+                ? "Fund Trail exported as detailed PDF."
+                : "Fund Trail exported as PDF.",
+        });
+      } catch (err) {
+        console.error("[FundTrail] export error", err);
+        toast({
+          variant: "destructive",
+          title: "Export failed",
+          description: "Couldn't generate the export. Please try again.",
+        });
+      } finally {
+        setIsExporting(false);
+      }
+    },
+    [centerLabel, dimension, multiHopResult, toast],
+  );
+
+  const dateRangeLabel = formatDateRange(dateRange);
+
+  return (
+    <div className="flex flex-col flex-1 min-h-0 overflow-auto">
+      {dateRangeLabel && (
+        <div className="sticky top-0 z-50 flex justify-center px-6 pt-4">
+          <Badge
+            variant="secondary"
+            className="text-xs shadow-sm"
+            data-testid="fund-trail-active-range"
+          >
+            {dateRangeLabel}
+          </Badge>
+        </div>
+      )}
+      {isCapped && (
+        <div className="px-6 pt-4">
+          <CapNotice
+            shownTxCount={shownTxCount}
+            totalTxCount={totalTxCount}
+            dateRange={dateRange}
+          />
+        </div>
+      )}
+      {/* Export toolbar */}
+      <div className="flex items-center justify-end px-6 pt-4">
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={isExporting || (!hasSources && !hasDests)}
+              data-testid="fund-trail-export-button"
+            >
+              {isExporting ? (
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              ) : (
+                <Download className="h-4 w-4 mr-2" />
+              )}
+              Export
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem
+              onClick={() => handleExport("csv")}
+              data-testid="fund-trail-export-csv"
+            >
+              <FileSpreadsheet className="h-4 w-4 mr-2" />
+              Export as CSV
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onClick={() => handleExport("pdf")}
+              data-testid="fund-trail-export-pdf"
+            >
+              <FileText className="h-4 w-4 mr-2" />
+              Export as PDF
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onClick={() => handleExport("pdf-detailed")}
+              data-testid="fund-trail-export-pdf-detailed"
+            >
+              <FileText className="h-4 w-4 mr-2" />
+              Export as detailed PDF
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+
+      <div className="flex flex-1 gap-4 px-6 pb-6 pt-2 min-h-0 overflow-auto">
+        {/* Sources column */}
+        <div className="flex flex-col gap-3 flex-1 min-w-0">
+          <div className="flex items-center gap-2 mb-1">
+            <ArrowRight className="h-4 w-4 text-muted-foreground" />
+            <div className="flex flex-col min-w-0">
+              <span className="text-sm font-semibold text-muted-foreground uppercase tracking-wide leading-tight">
+                Incoming
+              </span>
+              <span className="text-xs text-muted-foreground leading-tight">
+                up to {backwardHops} hop{backwardHops !== 1 ? "s" : ""} back
+              </span>
+            </div>
+            {hasSources && (
+              <Badge variant="outline" className="text-xs ml-auto">
+                {formatBtc(totalIn)} in
+              </Badge>
+            )}
+          </div>
+
+          {!hasSources && (
+            <p className="text-sm text-muted-foreground italic">
+              No incoming sources found within {backwardHops} hop{backwardHops !== 1 ? "s" : ""}.
+            </p>
+          )}
+
+          {multiHopResult.sources.map((node, i) => (
+            <HopCard
+              key={`${node.groupLabel}-h${node.hopDepth}-${i}`}
+              node={node}
+              direction="source"
+            />
+          ))}
+        </div>
+
+        {/* Center node */}
+        <div className="flex flex-col items-center justify-start gap-3 w-44 shrink-0">
+          <div
+            className="rounded-md border-2 border-primary bg-primary/10 px-4 py-5 text-center w-full"
+            data-testid="fund-trail-center-node"
+          >
+            {centerDisplayMode === "address" ? (
+              <>
+                <div className="flex items-center justify-center gap-1 mb-1">
+                  <MapPin className="h-3 w-3 text-muted-foreground" />
+                  <span className="text-xs text-muted-foreground uppercase tracking-wide font-medium">
+                    Address
+                  </span>
+                </div>
+                <div
+                  className="font-mono text-xs break-all leading-snug"
+                  data-testid="fund-trail-center-address"
+                >
+                  {truncateAddress(centerLabel, 8, 8)}
+                </div>
+                {centerRecordLabel && (
+                  <div
+                    className="text-xs text-muted-foreground mt-1 break-words"
+                    data-testid="fund-trail-center-record-label"
+                  >
+                    {centerRecordLabel}
+                  </div>
+                )}
+              </>
+            ) : (
+              <>
+                <div className="text-xs text-muted-foreground mb-1 uppercase tracking-wide font-medium">
+                  {DIMENSION_LABELS[dimension]}
+                </div>
+                <div className="font-semibold text-sm break-words">{centerLabel}</div>
+              </>
+            )}
+            <ChevronsLeftRight className="h-4 w-4 mx-auto mt-2 text-primary" />
+          </div>
+
+          <div className="text-xs text-muted-foreground text-center space-y-1">
+            {hasSources && (
+              <div>
+                {multiHopResult.sources.filter(n => !n.isUnknown).length} known source
+                {multiHopResult.sources.filter(n => !n.isUnknown).length !== 1 ? "s" : ""}
+              </div>
+            )}
+            {hasDests && (
+              <div>
+                {multiHopResult.destinations.filter(n => !n.isUnknown).length} known destination
+                {multiHopResult.destinations.filter(n => !n.isUnknown).length !== 1 ? "s" : ""}
+              </div>
+            )}
+            {!hasSources && !hasDests && (
+              <div className="italic">No transactions found.</div>
+            )}
+          </div>
+        </div>
+
+        {/* Destinations column */}
+        <div className="flex flex-col gap-3 flex-1 min-w-0">
+          <div className="flex items-center gap-2 mb-1">
+            <ArrowLeft className="h-4 w-4 text-muted-foreground" />
+            <div className="flex flex-col min-w-0">
+              <span className="text-sm font-semibold text-muted-foreground uppercase tracking-wide leading-tight">
+                Outgoing
+              </span>
+              <span className="text-xs text-muted-foreground leading-tight">
+                up to {forwardHops} hop{forwardHops !== 1 ? "s" : ""} forward
+              </span>
+            </div>
+            {hasDests && (
+              <Badge variant="outline" className="text-xs ml-auto">
+                {formatBtc(totalOut)} out
+              </Badge>
+            )}
+          </div>
+
+          {!hasDests && (
+            <p className="text-sm text-muted-foreground italic">
+              No outgoing destinations found within {forwardHops} hop{forwardHops !== 1 ? "s" : ""}.
+            </p>
+          )}
+
+          {multiHopResult.destinations.map((node, i) => (
+            <HopCard
+              key={`${node.groupLabel}-h${node.hopDepth}-${i}`}
+              node={node}
+              direction="dest"
+            />
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main Page
 // ---------------------------------------------------------------------------
 
@@ -530,6 +900,11 @@ export default function FundTrail() {
   const [sourceMode, setSourceMode] = useState<"group" | "address">("group");
   const [addressInput, setAddressInput] = useState<string>("");
   const [addressError, setAddressError] = useState<string | null>(null);
+
+  // --- Hop depth controls (1 = same as single-hop; >1 = auto multi-hop) ---
+  const [backwardHops, setBackwardHops] = useState(1);
+  const [forwardHops, setForwardHops] = useState(1);
+  const isMultiHop = backwardHops > 1 || forwardHops > 1;
 
   const trimmedAddress = addressInput.trim();
   const isAddressValid =
@@ -597,7 +972,7 @@ export default function FundTrail() {
     queryFn: () => getRecordByAddress(trimmedAddress),
   });
 
-  // --- Center node hop ---
+  // --- Center node hop (single-hop, used when isMultiHop = false) ---
   const {
     data: centerHop,
     isLoading: isLoadingCenter,
@@ -613,11 +988,7 @@ export default function FundTrail() {
       dateRange?.end ?? null,
       fundTrailTxLimit,
     ],
-    enabled: isActive,
-    // Keep the previously-computed trail on screen while a new window/limit
-    // recomputes. Without this the page drops to the "Computing…" spinner on
-    // every date change, unmounting the whole trail — and with it any expanded
-    // sub-hops, which would lose their state instead of refreshing in place.
+    enabled: isActive && !isMultiHop,
     placeholderData: keepPreviousData,
     queryFn: async () => {
       if (sourceMode === "address") {
@@ -640,11 +1011,63 @@ export default function FundTrail() {
     },
   });
 
-  // A recompute is in flight when the query is fetching a new window/limit but
-  // we still have a previous trail on screen (placeholderData). This drives the
-  // subtle in-progress cue without unmounting the trail.
-  const isRecomputing =
-    isFetchingCenter && (isCenterPlaceholder || !isLoadingCenter) && isActive;
+  // --- Multi-hop query (used when backwardHops > 1 || forwardHops > 1) ---
+  const {
+    data: multiHopResult,
+    isLoading: isLoadingMultiHop,
+    isFetching: isFetchingMultiHop,
+    isPlaceholderData: isMultiHopPlaceholder,
+  } = useQuery<MultiHopTrailResult>({
+    queryKey: [
+      "fund-trail-multihop",
+      sourceMode,
+      sourceMode === "group" ? dimension : "address",
+      sourceMode === "group" ? selectedGroup : trimmedAddress,
+      dateRange?.start ?? null,
+      dateRange?.end ?? null,
+      fundTrailTxLimit,
+      backwardHops,
+      forwardHops,
+    ],
+    enabled: isActive && isMultiHop,
+    placeholderData: keepPreviousData,
+    queryFn: async () => {
+      if (sourceMode === "address") {
+        return computeMultiHopKnown(
+          [trimmedAddress],
+          dimension,
+          null,
+          backwardHops,
+          forwardHops,
+          dateRange,
+          undefined,
+          { txLimit: fundTrailTxLimit },
+        );
+      }
+      const records = await getAddressesForGroup(dimension, selectedGroup);
+      const addresses = records
+        .map(r => r.inputString)
+        .filter((s): s is string => !!s);
+      return computeMultiHopKnown(
+        addresses,
+        dimension,
+        selectedGroup,
+        backwardHops,
+        forwardHops,
+        dateRange,
+        undefined,
+        { txLimit: fundTrailTxLimit },
+      );
+    },
+  });
+
+  // A recompute is in flight when the active query is fetching a new window/
+  // limit but we still have a previous trail on screen (placeholderData).
+  const isRecomputing = isMultiHop
+    ? isFetchingMultiHop && (isMultiHopPlaceholder || !isLoadingMultiHop) && isActive
+    : isFetchingCenter && (isCenterPlaceholder || !isLoadingCenter) && isActive;
+
+  const isLoadingActive = isMultiHop ? isLoadingMultiHop : isLoadingCenter;
 
   // Label and display info for the center node
   const centerLabel =
@@ -663,9 +1086,9 @@ export default function FundTrail() {
       <div className="border-b border-border px-6 py-4">
         <h1 className="text-xl font-semibold">Fund Trail</h1>
         <p className="text-sm text-muted-foreground mt-1">
-          Trace where coins came from and went. Trace by group (wallet, owner,
-          or seed) or enter a single Bitcoin address. Expand any source or
-          destination hop-by-hop.
+          Trace where coins came from and went. Set source and destination hop
+          depth to automatically surface known entities through unknown
+          intermediaries — or keep depth at 1 and expand hops manually.
         </p>
       </div>
 
@@ -832,6 +1255,49 @@ export default function FundTrail() {
           </span>
         )}
 
+        {/* Hop depth controls */}
+        <div className="flex flex-col gap-1">
+          <label className="text-xs text-muted-foreground font-medium">
+            Sources depth
+          </label>
+          <Select
+            value={String(backwardHops)}
+            onValueChange={v => setBackwardHops(Number(v))}
+          >
+            <SelectTrigger className="w-20" data-testid="fund-trail-backward-hops">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {Array.from({ length: MAX_HOP_DEPTH }, (_, i) => i + 1).map(n => (
+                <SelectItem key={n} value={String(n)}>
+                  {n}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+
+        <div className="flex flex-col gap-1">
+          <label className="text-xs text-muted-foreground font-medium">
+            Destinations depth
+          </label>
+          <Select
+            value={String(forwardHops)}
+            onValueChange={v => setForwardHops(Number(v))}
+          >
+            <SelectTrigger className="w-20" data-testid="fund-trail-forward-hops">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {Array.from({ length: MAX_HOP_DEPTH }, (_, i) => i + 1).map(n => (
+                <SelectItem key={n} value={String(n)}>
+                  {n}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+
         {isRecomputing ? (
           <span
             className="flex items-center gap-2 text-xs text-muted-foreground pb-2.5"
@@ -846,10 +1312,31 @@ export default function FundTrail() {
       {/* Body */}
       {!isActive ? (
         <EmptyState sourceMode={sourceMode} dimension={dimension} />
-      ) : isLoadingCenter ? (
+      ) : isLoadingActive ? (
         <div className="flex flex-col items-center justify-center flex-1 gap-3 text-muted-foreground">
           <Loader2 className="h-8 w-8 animate-spin" />
           <p className="text-sm">Computing fund trail…</p>
+        </div>
+      ) : isMultiHop ? (
+        <div
+          className={
+            isRecomputing
+              ? "flex flex-col flex-1 opacity-60 transition-opacity"
+              : "flex flex-col flex-1 transition-opacity"
+          }
+          aria-busy={isRecomputing}
+          data-testid="fund-trail-body"
+        >
+          <MultiHopTrailLayout
+            centerLabel={centerLabel}
+            centerDisplayMode={sourceMode}
+            centerRecordLabel={centerRecordLabel}
+            dimension={dimension}
+            multiHopResult={multiHopResult ?? { sources: [], destinations: [], caps: [] }}
+            dateRange={dateRange}
+            backwardHops={backwardHops}
+            forwardHops={forwardHops}
+          />
         </div>
       ) : (
         <div

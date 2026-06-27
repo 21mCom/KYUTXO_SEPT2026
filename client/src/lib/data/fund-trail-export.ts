@@ -15,6 +15,8 @@ import {
   type GroupFlow,
   type GroupFlowDetail,
   type TrailHop,
+  type HopNode,
+  type MultiHopTrailResult,
   deduplicateDetails,
   formatBtc,
 } from "./fund-trail-engine";
@@ -31,6 +33,13 @@ export interface ExportFlowNode {
   details: GroupFlowDetail[];
   /** Expanded next-hop flows in the same direction (empty when not expanded). */
   children: ExportFlowNode[];
+  /**
+   * Hop depth at which this node was found (1 = direct counterparty, 2 = one
+   * unknown intermediary, …). Present on multi-hop snapshots; absent on
+   * single-hop (manually-expanded) snapshots so the existing CSV format is
+   * preserved for those.
+   */
+  hopDepth?: number;
 }
 
 /**
@@ -114,6 +123,41 @@ function buildNode(
     details: deduplicateDetails(flow.details),
     children,
   };
+}
+
+/**
+ * Build a flat export snapshot from a multi-hop trail result.
+ * Each HopNode becomes a top-level ExportFlowNode (no nesting — multi-hop
+ * results are already fully traversed and presented in a flat list).
+ */
+export function buildMultiHopFundTrailSnapshot(
+  centerLabel: string,
+  dimension: GroupingDimension,
+  result: MultiHopTrailResult,
+  generatedAt: string = new Date().toISOString(),
+): FundTrailSnapshot {
+  const toNode = (hn: HopNode): ExportFlowNode => ({
+    groupLabel: hn.groupLabel,
+    totalSats: hn.totalSats,
+    isUnknown: hn.isUnknown,
+    details: deduplicateDetails(hn.details),
+    children: [],
+    hopDepth: hn.hopDepth,
+  });
+
+  const sources = result.sources.map(toNode);
+  const destinations = result.destinations.map(toNode);
+
+  // Aggregate cap info from the multi-hop cap entries
+  const cappedEntries = result.caps.filter(c => c.isCapped);
+  const cap: FundTrailCapInfo = {
+    capped: cappedEntries.length > 0,
+    shownTxCount: cappedEntries.reduce((s, c) => s + c.shownTxCount, 0),
+    totalTxCount: cappedEntries.reduce((s, c) => s + c.totalTxCount, 0),
+    cappedHopCount: cappedEntries.length,
+  };
+
+  return { centerLabel, dimension, generatedAt, sources, destinations, cap };
 }
 
 /**
@@ -232,36 +276,48 @@ function collectCsvRows(
   node: ExportFlowNode,
   direction: "source" | "destination",
   rows: string[][],
+  includeHopDepth: boolean,
 ): void {
   for (const d of node.details) {
-    rows.push([
+    const row = [
       direction === "source" ? "incoming" : "outgoing",
       node.groupLabel,
       btcAmount(d.amount),
       d.address,
       d.txid,
       isoDate(d.blockTime),
-    ]);
+    ];
+    if (includeHopDepth) {
+      // Insert hop_depth after direction+group, before amount_btc
+      row.splice(2, 0, String(node.hopDepth ?? 1));
+    }
+    rows.push(row);
   }
   for (const child of node.children) {
-    collectCsvRows(child, direction, rows);
+    collectCsvRows(child, direction, rows, includeHopDepth);
   }
 }
 
 /**
  * Build a CSV export of the Fund Trail snapshot. Columns: direction, group,
- * amount_btc, address, txid, date. One row per address flow, covering the
- * center node's sources and destinations plus every expanded hop. Fully
- * offline — no external resources.
+ * [hop_depth,] amount_btc, address, txid, date. One row per address flow,
+ * covering the center node's sources and destinations plus every expanded hop.
+ * hop_depth is included only for multi-hop snapshots (where any node has
+ * hopDepth set) so the existing single-hop CSV format is preserved.
+ * Fully offline — no external resources.
  */
 export function buildFundTrailCsv(snapshot: FundTrailSnapshot): string {
-  const headers = ["direction", "group", "amount_btc", "address", "txid", "date"];
+  const allNodes = [...snapshot.sources, ...snapshot.destinations];
+  const includeHopDepth = allNodes.some(n => n.hopDepth != null);
+  const headers = includeHopDepth
+    ? ["direction", "group", "hop_depth", "amount_btc", "address", "txid", "date"]
+    : ["direction", "group", "amount_btc", "address", "txid", "date"];
   const rows: string[][] = [];
   for (const node of snapshot.sources) {
-    collectCsvRows(node, "source", rows);
+    collectCsvRows(node, "source", rows, includeHopDepth);
   }
   for (const node of snapshot.destinations) {
-    collectCsvRows(node, "destination", rows);
+    collectCsvRows(node, "destination", rows, includeHopDepth);
   }
   const lines = [headers, ...rows].map((cols) => cols.map(csvCell).join(","));
   // Prepend the cap warning as a comment line above the header when the trail
@@ -290,9 +346,20 @@ export function flattenNodes(
   }
 }
 
-/** Sum the top-level totals for a side (center hop in/out). */
+/**
+ * Sum the totals for a side (center hop in/out).
+ *
+ * For single-hop snapshots all nodes are direct flows (`hopDepth` is
+ * undefined) and all are summed. For multi-hop snapshots, only hop-1 nodes
+ * represent actual direct flows; deeper nodes are upstream/downstream chain
+ * segments of the same funds. Summing across all depths would double-count,
+ * so we restrict to `hopDepth === 1` (or `hopDepth == null` for single-hop).
+ */
 export function sumTopLevel(nodes: ExportFlowNode[]): number {
-  return nodes.reduce((s, n) => s + n.totalSats, 0);
+  const isMultiHop = nodes.some(n => n.hopDepth != null);
+  return nodes
+    .filter(n => !isMultiHop || n.hopDepth === 1)
+    .reduce((s, n) => s + n.totalSats, 0);
 }
 
 /** Options controlling what the Fund Trail PDF includes. */
@@ -410,11 +477,15 @@ export async function buildFundTrailPdf(
 
     const flat: { depth: number; node: ExportFlowNode }[] = [];
     flattenNodes(nodes, 0, flat);
-    const body = flat.map(({ depth, node }) => [
-      `${"    ".repeat(depth)}${depth > 0 ? "↳ " : ""}${node.groupLabel}`,
-      formatBtc(node.totalSats),
-      String(node.details.length),
-    ]);
+    const body = flat.map(({ depth, node }) => {
+      const hopPrefix = node.hopDepth != null ? `Hop ${node.hopDepth}: ` : "";
+      const indentPrefix = `${"    ".repeat(depth)}${depth > 0 ? "↳ " : ""}`;
+      return [
+        `${indentPrefix}${hopPrefix}${node.groupLabel}`,
+        formatBtc(node.totalSats),
+        String(node.details.length),
+      ];
+    });
 
     autoTable(doc, {
       startY: cursorY,

@@ -509,6 +509,200 @@ export async function computeOneHop(
 }
 
 // ---------------------------------------------------------------------------
+// Multi-hop known-entity traversal
+// ---------------------------------------------------------------------------
+
+/**
+ * One entity node in a multi-hop trail result. Flat (not nested) so the UI
+ * can render each node at the correct hop depth without nesting columns.
+ */
+export interface HopNode {
+  groupLabel: string;
+  dimension: GroupingDimension;
+  /** 1 = direct counterparty, 2 = one unknown intermediary away, etc. */
+  hopDepth: number;
+  direction: 'source' | 'dest';
+  totalSats: number;
+  details: GroupFlowDetail[];
+  isUnknown: boolean;
+  unknownAddresses?: string[];
+}
+
+export interface MultiHopCapEntry {
+  depth: number;
+  direction: 'source' | 'dest';
+  isCapped: boolean;
+  shownTxCount: number;
+  totalTxCount: number;
+}
+
+export interface MultiHopTrailResult {
+  sources: HopNode[];
+  destinations: HopNode[];
+  /** Cap metadata per hop direction + depth, for surfacing notices in the UI. */
+  caps: MultiHopCapEntry[];
+}
+
+/** Hard upper limit on hop depth for the multi-hop trail, to protect performance. */
+export const MAX_HOP_DEPTH = 5;
+
+/**
+ * Compute a multi-hop known-entity trail.
+ *
+ * Traces backward (sources) up to `backwardHops` and forward (destinations) up
+ * to `forwardHops`, automatically following chains through unidentified addresses
+ * to surface known entities deeper in the chain. Only known entities appear as
+ * named nodes; branches that exhaust hop budget while still in unknown territory
+ * are collapsed into a single acknowledged "Unidentified" terminus at their
+ * deepest hop so totals remain honest.
+ *
+ * Cycle-safe: each group label is visited at most once per direction.
+ * Read-only, batched, and abortable — identical safety guarantees to computeOneHop.
+ */
+export async function computeMultiHopKnown(
+  centerAddresses: string[],
+  dimension: GroupingDimension,
+  selfGroupLabel: string | null,
+  backwardHops: number,
+  forwardHops: number,
+  dateRange?: DateRange,
+  signal?: AbortSignal,
+  options?: ComputeOneHopOptions,
+): Promise<MultiHopTrailResult> {
+  const clampedBack = Math.min(Math.max(1, backwardHops), MAX_HOP_DEPTH);
+  const clampedFwd = Math.min(Math.max(1, forwardHops), MAX_HOP_DEPTH);
+
+  const sources: HopNode[] = [];
+  const destinations: HopNode[] = [];
+  const caps: MultiHopCapEntry[] = [];
+
+  // Backward: who funded the center?
+  await traceHopDirection(
+    'source', centerAddresses, selfGroupLabel,
+    clampedBack, dimension, dateRange, signal, options,
+    sources, caps,
+  );
+
+  if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+
+  // Forward: where did the center send?
+  await traceHopDirection(
+    'dest', centerAddresses, selfGroupLabel,
+    clampedFwd, dimension, dateRange, signal, options,
+    destinations, caps,
+  );
+
+  return { sources, destinations, caps };
+}
+
+/**
+ * Internal: iteratively trace one direction (source or dest) through up to
+ * `maxDepth` hops, following unknown-address buckets between hops.
+ */
+async function traceHopDirection(
+  direction: 'source' | 'dest',
+  startAddresses: string[],
+  selfGroupLabel: string | null,
+  maxDepth: number,
+  dimension: GroupingDimension,
+  dateRange: DateRange | undefined,
+  signal: AbortSignal | undefined,
+  options: ComputeOneHopOptions | undefined,
+  result: HopNode[],
+  caps: MultiHopCapEntry[],
+): Promise<void> {
+  let pendingAddresses = [...startAddresses];
+  // Never re-visit a known group label (cycle protection + deduplication)
+  const visitedGroups = new Set<string>(selfGroupLabel ? [selfGroupLabel] : []);
+
+  // Track the last unknown flow we chose to follow deeper instead of surfacing
+  // immediately, so we can surface it as a terminus if the chain dead-ends.
+  let pendingUnknownTerminus: { flow: GroupFlow; depth: number } | null = null;
+
+  for (let depth = 1; depth <= maxDepth; depth++) {
+    if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+    if (pendingAddresses.length === 0) break;
+
+    // At depth > 1 the "center" is the unknown intermediary addresses which
+    // have no group label — pass null so computeOneHop doesn't self-filter.
+    const selfLabel = depth === 1 ? selfGroupLabel : null;
+    const hop = await computeOneHop(
+      pendingAddresses, dimension, selfLabel, dateRange, signal, options,
+    );
+
+    caps.push({
+      depth,
+      direction,
+      isCapped: hop.isCapped ?? false,
+      shownTxCount: hop.shownTxCount ?? 0,
+      totalTxCount: hop.totalTxCount ?? 0,
+    });
+
+    const flows = direction === 'source' ? hop.sources : hop.destinations;
+
+    // Record every known entity we haven't seen yet
+    for (const flow of flows) {
+      if (flow.isUnknown) continue;
+      if (visitedGroups.has(flow.groupLabel)) continue;
+      visitedGroups.add(flow.groupLabel);
+      result.push({ ...flow, hopDepth: depth, direction });
+    }
+
+    // Handle unknown remainder
+    const unknownFlow = flows.find(f => f.isUnknown);
+
+    if (!unknownFlow) {
+      // No unknown bucket at this depth. If we were following unknown addresses
+      // from a previous hop, surface the pending terminus so funds do not
+      // silently disappear from the display.
+      //
+      // Note: when some unknown addresses resolved to known entities at this
+      // depth, those known entities are already included in `result`. The
+      // terminus represents the *remaining* unresolved portion of the unknown
+      // bucket; `computeOneHop` aggregates all unknown addresses so we cannot
+      // trivially separate which ones were fully resolved vs. dead-ended —
+      // surfacing the terminus ensures "honest totals" for the unresolved share.
+      if (pendingUnknownTerminus !== null) {
+        result.push({
+          ...pendingUnknownTerminus.flow,
+          hopDepth: pendingUnknownTerminus.depth,
+          direction,
+        });
+        pendingUnknownTerminus = null;
+      }
+      break;
+    }
+
+    const unknownAddrs = unknownFlow.unknownAddresses ?? [];
+
+    if (unknownAddrs.length === 0 || depth >= maxDepth) {
+      // Either no further addresses to follow, or budget exhausted.
+      // Surface this unknown as the terminus so totals stay honest.
+      // Discard any earlier pendingUnknownTerminus — the current hop's unknown
+      // bucket is the deeper (more accurate) terminus to report.
+      result.push({ ...unknownFlow, hopDepth: depth, direction });
+      pendingUnknownTerminus = null;
+      break;
+    }
+
+    // We have more depth budget and addresses to explore. Remember this
+    // unknown flow in case the next hop dead-ends without its own unknown.
+    pendingUnknownTerminus = { flow: unknownFlow, depth };
+    pendingAddresses = unknownAddrs;
+  }
+
+  // If we exited the loop normally (exhausted maxDepth) but still have a
+  // pending terminus (shouldn't happen — handled inside loop — but guard it).
+  if (pendingUnknownTerminus !== null) {
+    result.push({
+      ...pendingUnknownTerminus.flow,
+      hopDepth: pendingUnknownTerminus.depth,
+      direction,
+    });
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
 
