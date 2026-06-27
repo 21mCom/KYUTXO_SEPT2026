@@ -390,6 +390,84 @@ describe("buildFundTrailCsv", () => {
     const rows = parseCsv(buildFundTrailCsv(snapshot)).slice(1);
     expect(rows.filter((r) => r[3] === "bc1qdup")).toHaveLength(1);
   });
+
+  it("prepends a cap warning comment line when a hop is capped", () => {
+    const center: TrailHop = {
+      sources: [flow()],
+      destinations: [],
+      isCapped: true,
+      shownTxCount: 1000,
+      totalTxCount: 8500,
+    };
+    const snapshot = buildFundTrailSnapshot(
+      "Alice",
+      "walletName",
+      center,
+      new Map(),
+    );
+    const csv = buildFundTrailCsv(snapshot);
+    const firstLine = csv.split("\r\n")[0];
+    expect(firstLine.startsWith("#")).toBe(true);
+    expect(firstLine).toContain("incomplete");
+    expect(firstLine).toContain("1,000");
+    expect(firstLine).toContain("8,500");
+    // The header still follows the comment so the columns are intact.
+    expect(csv.split("\r\n")[1]).toBe(
+      "direction,group,amount_btc,address,txid,date",
+    );
+  });
+
+  it("omits the cap warning when nothing was capped", () => {
+    const center: TrailHop = {
+      sources: [flow()],
+      destinations: [],
+      isCapped: false,
+      shownTxCount: 5,
+      totalTxCount: 5,
+    };
+    const snapshot = buildFundTrailSnapshot(
+      "Alice",
+      "walletName",
+      center,
+      new Map(),
+    );
+    const csv = buildFundTrailCsv(snapshot);
+    expect(csv).not.toContain("#");
+    expect(csv).not.toContain("incomplete");
+    expect(csv.split("\r\n")[0]).toBe(
+      "direction,group,amount_btc,address,txid,date",
+    );
+  });
+
+  it("warns when only a deeper expanded hop is capped", () => {
+    const center: TrailHop = {
+      sources: [
+        flow({
+          groupLabel: "Alice",
+          details: [detail({ address: "bc1qalice", txid: "src1" })],
+        }),
+      ],
+      destinations: [],
+    };
+    const expandedHop: TrailHop = {
+      sources: [flow({ groupLabel: "Carol" })],
+      destinations: [],
+      isCapped: true,
+      shownTxCount: 250,
+      totalTxCount: 4000,
+    };
+    const registry = new Map<string, TrailHop>();
+    registry.set(flowPath("", "source", "Alice"), expandedHop);
+    const snapshot = buildFundTrailSnapshot(
+      "Center",
+      "walletName",
+      center,
+      registry,
+    );
+    const csv = buildFundTrailCsv(snapshot);
+    expect(csv.split("\r\n")[0]).toContain("250");
+    expect(csv.split("\r\n")[0]).toContain("4,000");
+  });
 });
 
 describe("fundTrailFilename", () => {
@@ -597,6 +675,32 @@ describe("buildFundTrailPdf", () => {
     // The expanded "Carol" hop's detail rows must also be present.
     expect(text).toContain("bc1qcarol");
     expect(text).toContain("hop1");
+  });
+
+  it("renders the cap warning banner when a hop is capped", async () => {
+    const center: TrailHop = {
+      sources: [flow({ groupLabel: "Alice" })],
+      destinations: [],
+      isCapped: true,
+      shownTxCount: 1000,
+      totalTxCount: 8500,
+    };
+    const snapshot = buildFundTrailSnapshot(
+      "Alice",
+      "walletName",
+      center,
+      new Map(),
+    );
+    const text = await extractPdfText(await buildFundTrailPdf(snapshot));
+    expect(text).toContain("incomplete");
+    expect(text).toContain("1,000");
+    expect(text).toContain("8,500");
+  });
+
+  it("omits the cap warning banner when nothing was capped", async () => {
+    const snapshot = richSnapshot();
+    const text = await extractPdfText(await buildFundTrailPdf(snapshot));
+    expect(text).not.toContain("incomplete");
   });
 
   it("flattens the snapshot into the rows the table will render", () => {

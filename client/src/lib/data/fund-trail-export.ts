@@ -33,6 +33,22 @@ export interface ExportFlowNode {
   children: ExportFlowNode[];
 }
 
+/**
+ * Aggregate cap status across every hop rendered in a snapshot. When the trail
+ * was truncated for performance (any hop with isCapped=true), `capped` is true
+ * and the shown/total counts summarize how much of the flow is missing so an
+ * exported artifact can warn the reader it is incomplete.
+ */
+export interface FundTrailCapInfo {
+  capped: boolean;
+  /** Transactions actually rendered across all capped hops. */
+  shownTxCount: number;
+  /** Transactions that touched those hops' addresses (the full count). */
+  totalTxCount: number;
+  /** How many distinct hops were capped. */
+  cappedHopCount: number;
+}
+
 /** The full, serializable snapshot of what is currently on screen. */
 export interface FundTrailSnapshot {
   centerLabel: string;
@@ -40,6 +56,8 @@ export interface FundTrailSnapshot {
   generatedAt: string;
   sources: ExportFlowNode[];
   destinations: ExportFlowNode[];
+  /** Cap status aggregated across the center hop and every expanded hop. */
+  cap: FundTrailCapInfo;
 }
 
 const DIMENSION_LABELS: Record<GroupingDimension, string> = {
@@ -71,15 +89,23 @@ function buildNode(
   path: string,
   direction: "source" | "dest",
   registry: Map<string, TrailHop>,
+  reachedHops: TrailHop[],
 ): ExportFlowNode {
   const hop = registry.get(path);
+  if (hop) reachedHops.push(hop);
   const childFlows = hop
     ? direction === "source"
       ? hop.sources
       : hop.destinations
     : [];
   const children = childFlows.map((cf) =>
-    buildNode(cf, flowPath(path, direction, cf.groupLabel), direction, registry),
+    buildNode(
+      cf,
+      flowPath(path, direction, cf.groupLabel),
+      direction,
+      registry,
+      reachedHops,
+    ),
   );
   return {
     groupLabel: flow.groupLabel,
@@ -102,17 +128,76 @@ export function buildFundTrailSnapshot(
   expandedHops: Map<string, TrailHop>,
   generatedAt: string = new Date().toISOString(),
 ): FundTrailSnapshot {
+  // Collect every hop actually reached while assembling the tree (the center
+  // hop plus any expanded hops the recursion pulled from the registry), so the
+  // cap summary reflects exactly what the snapshot renders.
+  const reachedHops: TrailHop[] = [centerHop];
+  const sources = centerHop.sources.map((f) =>
+    buildNode(
+      f,
+      flowPath("", "source", f.groupLabel),
+      "source",
+      expandedHops,
+      reachedHops,
+    ),
+  );
+  const destinations = centerHop.destinations.map((f) =>
+    buildNode(
+      f,
+      flowPath("", "dest", f.groupLabel),
+      "dest",
+      expandedHops,
+      reachedHops,
+    ),
+  );
   return {
     centerLabel,
     dimension,
     generatedAt,
-    sources: centerHop.sources.map((f) =>
-      buildNode(f, flowPath("", "source", f.groupLabel), "source", expandedHops),
-    ),
-    destinations: centerHop.destinations.map((f) =>
-      buildNode(f, flowPath("", "dest", f.groupLabel), "dest", expandedHops),
-    ),
+    sources,
+    destinations,
+    cap: aggregateCapInfo(reachedHops),
   };
+}
+
+/**
+ * Aggregate cap status across a set of hops. A hop counts toward the warning
+ * only when isCapped=true; its shown/total transaction counts are summed so the
+ * export can state how much of the trail is missing. De-dupes by reference so a
+ * hop reached via multiple paths is counted once.
+ */
+function aggregateCapInfo(hops: TrailHop[]): FundTrailCapInfo {
+  const seen = new Set<TrailHop>();
+  let shownTxCount = 0;
+  let totalTxCount = 0;
+  let cappedHopCount = 0;
+  for (const hop of hops) {
+    if (seen.has(hop)) continue;
+    seen.add(hop);
+    if (!hop.isCapped) continue;
+    cappedHopCount += 1;
+    shownTxCount += hop.shownTxCount ?? 0;
+    totalTxCount += hop.totalTxCount ?? 0;
+  }
+  return { capped: cappedHopCount > 0, shownTxCount, totalTxCount, cappedHopCount };
+}
+
+/**
+ * Human-readable warning line describing how much of the trail is missing.
+ * Returns null when nothing was capped. Shared by all export formats so the
+ * wording stays consistent.
+ */
+export function capWarningText(cap: FundTrailCapInfo): string | null {
+  if (!cap.capped) return null;
+  const shown = cap.shownTxCount.toLocaleString();
+  const total = cap.totalTxCount.toLocaleString();
+  const hops =
+    cap.cappedHopCount > 1 ? `${cap.cappedHopCount} hops were` : "a hop was";
+  return (
+    `WARNING: This Fund Trail is incomplete. Because ${hops} truncated for ` +
+    `performance, only ${shown} of ${total} transactions are included. The ` +
+    `exported fund flow does not represent the complete history.`
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -179,6 +264,13 @@ export function buildFundTrailCsv(snapshot: FundTrailSnapshot): string {
     collectCsvRows(node, "destination", rows);
   }
   const lines = [headers, ...rows].map((cols) => cols.map(csvCell).join(","));
+  // Prepend the cap warning as a comment line above the header when the trail
+  // was truncated, so a reader sees the incompleteness without it corrupting
+  // the columns. Uncapped exports are byte-for-byte unchanged.
+  const warning = capWarningText(snapshot.cap);
+  if (warning) {
+    lines.unshift(`# ${csvCell(warning)}`);
+  }
   return lines.join("\r\n");
 }
 
@@ -262,6 +354,25 @@ export async function buildFundTrailPdf(
   doc.setTextColor(0);
 
   let cursorY = 40;
+
+  // When the trail was truncated, render a prominent warning banner before the
+  // sections so anyone reading (or sharing) the PDF knows the flow is partial.
+  const warning = capWarningText(snapshot.cap);
+  if (warning) {
+    const warnMaxWidth = pageWidth - 28;
+    const warnLines = doc.splitTextToSize(warning, warnMaxWidth);
+    const warnHeight = doc.getTextDimensions(warnLines).h;
+    const boxTop = cursorY - 4;
+    const boxHeight = warnHeight + 6;
+    doc.setFillColor(255, 243, 205); // soft amber background
+    doc.setDrawColor(214, 158, 46); // amber border
+    doc.rect(14, boxTop, pageWidth - 28, boxHeight, "FD");
+    doc.setFontSize(9);
+    doc.setTextColor(133, 100, 4);
+    doc.text(warnLines, 16, cursorY);
+    doc.setTextColor(0);
+    cursorY = boxTop + boxHeight + 6;
+  }
 
   const getFinalY = (): number => {
     const lastTable = (doc as unknown as { lastAutoTable?: { finalY: number } })
