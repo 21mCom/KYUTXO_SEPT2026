@@ -157,7 +157,9 @@ function getSyncStatusText(progress: SyncProgress): string {
     case 'fetching-height':
       return 'Getting current block height…';
     case 'syncing-addresses':
-      return 'Fetching transactions…';
+      return progress.transactionsFound > 0
+        ? `Fetching transactions… ${progress.transactionsNew} / ${progress.transactionsFound}`
+        : 'Fetching transactions…';
     case 'processing':
       return `Processing transactions… ${progress.transactionsNew} / ${progress.transactionsFound}`;
     case 'resolving-prevouts':

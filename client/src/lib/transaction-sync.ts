@@ -477,7 +477,16 @@ export class TransactionSyncService {
         recordId,
         minConfirmedHeight,
         currentHeight,
-        1
+        1,
+        (processed, total) => {
+          // Emit a live "X / Y" transaction counter while syncing-addresses.
+          // These fields are overwritten with final accurate stats on 'complete'.
+          this.updateProgress({
+            phase: 'syncing-addresses',
+            transactionsFound: total,
+            transactionsNew: processed,
+          });
+        }
       );
       const syncResult = await this.withTimeout(
         syncPromise,
@@ -1401,7 +1410,8 @@ export class TransactionSyncService {
     recordId: number,
     minConfirmedHeight: number,
     currentHeight: number,
-    newAddressDepth: number = 1 // Depth for newly discovered addresses
+    newAddressDepth: number = 1, // Depth for newly discovered addresses
+    onTxProgress?: (processed: number, total: number) => void // Live per-transaction progress (single-address sync only)
   ): Promise<{ imported: number; updated: number; newRecords: number; apiTxCount: number; skippedAlreadySynced: number; skippedUnconfirmed: number }> {
     const stats = { imported: 0, updated: 0, newRecords: 0, apiTxCount: 0, skippedAlreadySynced: 0, skippedUnconfirmed: 0 };
 
@@ -1419,8 +1429,13 @@ export class TransactionSyncService {
     console.log(`[TransactionSync] ${address.substring(0, 12)}...: ${apiTransactions.length} txs from API${syncState ? `, last synced at height ${syncState.lastSyncedHeight}` : ' (first sync)'}`);
 
     let txProcessed = 0;
+    let txScanned = 0;
+    onTxProgress?.(0, apiTransactions.length);
     for (const apiTx of apiTransactions) {
       if (this.cancelled) break;
+
+      txScanned++;
+      onTxProgress?.(txScanned, apiTransactions.length);
 
       const parsed = parseTransaction(apiTx);
       
