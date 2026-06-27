@@ -314,7 +314,7 @@ export function PrivacyAuditReportPanel() {
             {(["CRITICAL", "HIGH", "MEDIUM", "LOW"] as PrivacySeverity[]).map(sev => {
               const count = countBySeverity(sev);
               if (count === 0) return null;
-              return <Badge key={sev} className={severityBadgeClass(sev)}>{count} {severityLabel(sev)}</Badge>;
+              return <Badge key={sev} className={severityBadgeClass(sev)} data-testid={`badge-severity-count-${sev}`}>{count} {severityLabel(sev)}</Badge>;
             })}
             {result.isClean && <Badge className="bg-green-500 text-white no-default-hover-elevate no-default-active-elevate">Clean</Badge>}
             {result.needsResync && (
