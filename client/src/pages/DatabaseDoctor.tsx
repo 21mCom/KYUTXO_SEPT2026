@@ -1145,6 +1145,16 @@ export function BalanceIntegrityCard() {
                 : `Recompute selected (${selectedIds.size.toLocaleString()})`}
             </Button>
           )}
+          {hasStale && selectedIds.size > 0 && (
+            <Button
+              variant="ghost"
+              onClick={() => setSelectedIds(new Set())}
+              data-testid="button-clear-selection"
+            >
+              <XCircle className="h-4 w-4" />
+              {`Clear selection (${selectedIds.size.toLocaleString()})`}
+            </Button>
+          )}
           {isBusy && (
             <Button
               variant="ghost"
