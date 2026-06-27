@@ -12,6 +12,7 @@ const {
 } = require('./tor-proxy.cjs');
 
 const { registerFileHandlers } = require('./file-handlers.cjs');
+const { resolveDataDirs, ensureDirectories: ensureDataDirectories } = require('./paths.cjs');
 const { registerElectrumHandlers, stopKeepalive } = require('./electrum-client.cjs');
 const { registerEngineHandlers, stopEngineWorker } = require('./engine-handlers.cjs');
 
@@ -46,10 +47,11 @@ let needsReviewDir = '';
 
 if (portableMode) {
   const portableDir = getPortableDir();
-  dataDir = path.join(portableDir, 'KYUTXO_Data');
-  attachmentsDir = path.join(dataDir, 'attachments');
-  needsReviewDir = path.join(dataDir, 'attachments-needs-review');
-  
+  ({ dataDir, attachmentsDir, needsReviewDir } = resolveDataDirs({
+    baseDir: portableDir,
+    portableMode: true,
+  }));
+
   if (!fs.existsSync(dataDir)) {
     fs.mkdirSync(dataDir, { recursive: true });
   }
@@ -61,23 +63,16 @@ if (portableMode) {
   console.log('[KYUTXO] Data directory:', dataDir);
   console.log('[KYUTXO] userData path set to:', app.getPath('userData'));
 } else {
-  dataDir = path.join(app.getPath('userData'), 'data');
-  attachmentsDir = path.join(dataDir, 'attachments');
-  needsReviewDir = path.join(dataDir, 'attachments-needs-review');
+  ({ dataDir, attachmentsDir, needsReviewDir } = resolveDataDirs({
+    baseDir: app.getPath('userData'),
+    portableMode: false,
+  }));
   console.log('[KYUTXO] STANDARD MODE');
   console.log('[KYUTXO] Data directory:', dataDir);
 }
 
 function ensureDirectories() {
-  if (!fs.existsSync(dataDir)) {
-    fs.mkdirSync(dataDir, { recursive: true });
-  }
-  if (!fs.existsSync(attachmentsDir)) {
-    fs.mkdirSync(attachmentsDir, { recursive: true });
-  }
-  if (!fs.existsSync(needsReviewDir)) {
-    fs.mkdirSync(needsReviewDir, { recursive: true });
-  }
+  ensureDataDirectories({ dataDir, attachmentsDir, needsReviewDir });
 }
 
 function createWindow() {

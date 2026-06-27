@@ -18,6 +18,7 @@ export default defineConfig({
       "client/src/**/*.test.ts",
       "client/src/**/*.test.tsx",
       "server/**/*.test.ts",
+      "electron/**/*.test.ts",
     ],
   },
 });
