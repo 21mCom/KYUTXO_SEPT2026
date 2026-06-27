@@ -41,6 +41,7 @@ import {
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { useToast } from "@/hooks/use-toast";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Separator } from "@/components/ui/separator";
 import { db } from "@/lib/database";
@@ -914,6 +915,7 @@ export function StaleAddressList({
 }
 
 export function BalanceIntegrityCard() {
+  const { toast } = useToast();
   const [state, setState] = useState<BalanceCheckState>({ status: "idle" });
   const abortRef = useRef<AbortController | null>(null);
   // Stale rows stream batch-by-batch into a local IndexedDB scratch store rather
@@ -1060,10 +1062,23 @@ export function BalanceIntegrityCard() {
       } finally {
         URL.revokeObjectURL(url);
       }
+      toast({
+        title: "Export complete",
+        description: `Exported ${rowCount.toLocaleString()} stale ${
+          rowCount === 1 ? "address" : "addresses"
+        }.`,
+      });
+    } catch (err) {
+      toast({
+        variant: "destructive",
+        title: "Export failed",
+        description:
+          err instanceof Error ? err.message : "Could not export the stale-address report.",
+      });
     } finally {
       setExporting(null);
     }
-  }, []);
+  }, [toast]);
 
   const hasStale = state.status === "done" && state.result.staleCount > 0;
   const allGood = state.status === "done" && state.result.staleCount === 0;
