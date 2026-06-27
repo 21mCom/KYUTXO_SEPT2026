@@ -75,6 +75,13 @@ beforeAll(() => {
     unobserve() {}
     disconnect() {}
   };
+  // A successful restore schedules window.location.reload() on a timer. jsdom's
+  // reload is non-configurable and unimplemented, so replace window.location
+  // wholesale with a plain object carrying a no-op reload spy.
+  Object.defineProperty(window, "location", {
+    configurable: true,
+    value: { ...window.location, reload: vi.fn() },
+  });
 });
 
 // Build a real V3 (streaming) backup zip with the app's own exporter. The big
@@ -127,6 +134,10 @@ beforeEach(async () => {
       cancelConfirmThreshold: 75,
       privacyHistoryLimit: 30,
       fundTrailTxLimit: 2000,
+      // Device-local settings (NOT in the portable allow-list) — must survive a
+      // restore untouched.
+      theme: "dark",
+      defaultView: "grid",
     } as Settings,
     { skipNotification: true },
   );
@@ -276,5 +287,74 @@ describe("SettingsPage — v3 backup preference preview (encrypted)", () => {
     await waitFor(() => {
       expect(screen.queryByTestId("restore-preferences-preview")).toBeNull();
     });
+  });
+});
+
+// The preview tests above stop at the (read-only) confirm stage and never run
+// the destructive restore. These drive the WHOLE flow — configure -> confirm ->
+// "Restore Now" — so we don't just trust the preview but assert the v3 restore
+// path actually APPLIES the previewed portable preferences to the on-device
+// `default` settings row (and leaves device-local, non-allow-listed settings
+// alone). A preview that's correct while the restore writes the wrong values
+// would otherwise ship undetected.
+describe("SettingsPage — v3 backup full restore (applies portable prefs)", () => {
+  async function confirmRestore() {
+    // Reach the confirm stage, then click through the destructive restore.
+    await screen.findByTestId("restore-preferences-preview");
+    fireEvent.click(await screen.findByTestId("button-confirm-restore"));
+  }
+
+  it("applies the portable prefs from a PLAIN backup and leaves device-local settings untouched", async () => {
+    renderWithSettingsProviders(<SettingsPage />);
+    await openRestoreWith(await makeV3Backup({ settings: PREFS_SETTINGS }));
+
+    fireEvent.click(await screen.findByTestId("button-continue-restore"));
+    await confirmRestore();
+
+    // The restore reports success once it has cleared + re-applied everything.
+    await waitFor(() => {
+      const titles = toastSpy.mock.calls.map((c) => c[0]?.title ?? "");
+      expect(titles.some((t) => /restore successful/i.test(t))).toBe(true);
+    });
+
+    const after = await getSettings("default");
+    // Portable prefs present in the backup are applied to the device row.
+    expect(after?.disableOrphanCheck).toBe(true);
+    expect(after?.cancelConfirmThreshold).toBe(90);
+    expect(after?.privacyHistoryLimit).toBe(100);
+    expect(after?.entityListSnapshot?.entries).toHaveLength(2);
+    // A portable pref ABSENT from the backup keeps its current device value.
+    expect(after?.fundTrailTxLimit).toBe(2000);
+    // Device-local settings (not in the allow-list) are never touched.
+    expect(after?.theme).toBe("dark");
+    expect(after?.defaultView).toBe("grid");
+  });
+
+  it("applies the portable prefs from an ENCRYPTED backup given the correct password", async () => {
+    const PASSWORD = "correct horse battery staple";
+    renderWithSettingsProviders(<SettingsPage />);
+    await openRestoreWith(
+      await makeV3Backup({ settings: PREFS_SETTINGS, password: PASSWORD }),
+    );
+
+    const pw = (await screen.findByTestId("input-restore-password")) as HTMLInputElement;
+    fireEvent.change(pw, { target: { value: PASSWORD } });
+
+    fireEvent.click(await screen.findByTestId("button-continue-restore"));
+    await confirmRestore();
+
+    await waitFor(() => {
+      const titles = toastSpy.mock.calls.map((c) => c[0]?.title ?? "");
+      expect(titles.some((t) => /restore successful/i.test(t))).toBe(true);
+    });
+
+    const after = await getSettings("default");
+    expect(after?.disableOrphanCheck).toBe(true);
+    expect(after?.cancelConfirmThreshold).toBe(90);
+    expect(after?.privacyHistoryLimit).toBe(100);
+    expect(after?.entityListSnapshot?.entries).toHaveLength(2);
+    expect(after?.fundTrailTxLimit).toBe(2000);
+    expect(after?.theme).toBe("dark");
+    expect(after?.defaultView).toBe("grid");
   });
 });
