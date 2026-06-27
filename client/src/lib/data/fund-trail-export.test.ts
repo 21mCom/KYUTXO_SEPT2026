@@ -1424,12 +1424,28 @@ describe("buildFundTrailCsv vs detailed buildFundTrailPdf parity", () => {
       sources: [
         flow({
           groupLabel: "Alice",
-          details: [detail({ address: "bc1qxalice", txid: "txxalice" })],
+          details: [
+            // A non-round amount that must not be re-rounded in either export.
+            detail({
+              address: "bc1qxalice",
+              txid: "txxalice",
+              amount: 123_456_789,
+              blockTime: 1_700_000_000,
+            }),
+          ],
         }),
         flow({
           groupLabel: "Unknown",
           isUnknown: true,
-          details: [detail({ address: "bc1qxunknown", txid: "txxunknown" })],
+          details: [
+            // A sub-satoshi-precision amount and an unknown (blank) date.
+            detail({
+              address: "bc1qxunknown",
+              txid: "txxunknown",
+              amount: 1,
+              blockTime: 0,
+            }),
+          ],
         }),
       ],
       destinations: [
@@ -1441,6 +1457,7 @@ describe("buildFundTrailCsv vs detailed buildFundTrailPdf parity", () => {
               address: "bc1qxbob",
               txid: "txxbob",
               amount: 50_000_000,
+              blockTime: 1_705_000_000,
             }),
           ],
         }),
@@ -1452,7 +1469,14 @@ describe("buildFundTrailCsv vs detailed buildFundTrailPdf parity", () => {
       sources: [
         flow({
           groupLabel: "Carol",
-          details: [detail({ address: "bc1qxcarol", txid: "txxcarol" })],
+          details: [
+            detail({
+              address: "bc1qxcarol",
+              txid: "txxcarol",
+              amount: 999_999_999,
+              blockTime: 1_710_000_000,
+            }),
+          ],
         }),
       ],
       destinations: [],
@@ -1540,5 +1564,89 @@ describe("buildFundTrailCsv vs detailed buildFundTrailPdf parity", () => {
     // The set of pairs must match exactly: neither format may drop, duplicate,
     // or re-pair a flow the other carries.
     expect(pdfPairs).toEqual(csvPairs);
+  });
+
+  it("renders the same amount and date for each pair in both exports", async () => {
+    const snapshot = paritySnapshot();
+
+    // A detail amount is an 8-decimal BTC string; a date is ISO YYYY-MM-DD (or
+    // blank when the block time is unknown). Both forms appear only in a
+    // CSV/PDF detail cell, never inside a group label, summary amount ("X.XX
+    // BTC"), or any other chrome, so they can be matched exactly.
+    const AMOUNT_RE = /^\d+\.\d{8}$/;
+    const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+    const iso = (bt: number) =>
+      bt ? new Date(bt * 1000).toISOString().slice(0, 10) : "";
+
+    // CSV: amount is column 2, address column 3, txid column 4, date column 5.
+    const csvRows = parseCsv(buildFundTrailCsv(snapshot)).slice(1);
+    const csvByPair = new Map<string, { amount: string; date: string }>();
+    for (const r of csvRows) {
+      csvByPair.set(`${r[3]}\t${r[4]}`, { amount: r[2], date: r[5] });
+    }
+
+    // Guard the fixture: it must carry the interesting amount/date cases — a
+    // non-round amount, a sub-satoshi-precision amount, and the blank-when-
+    // unknown date — so the cross-check below is non-trivial.
+    expect(csvByPair).toEqual(
+      new Map([
+        [
+          "bc1qxalice\ttxxalice",
+          { amount: "1.23456789", date: iso(1_700_000_000) },
+        ],
+        ["bc1qxunknown\ttxxunknown", { amount: "0.00000001", date: "" }],
+        [
+          "bc1qxbob\ttxxbob",
+          { amount: "0.50000000", date: iso(1_705_000_000) },
+        ],
+        [
+          "bc1qxcarol\ttxxcarol",
+          { amount: "9.99999999", date: iso(1_710_000_000) },
+        ],
+      ]),
+    );
+
+    // Detailed PDF: each detail row emits its cells in column order (address,
+    // txid, amount, date) as adjacent literals. Walk the rendered lines,
+    // attributing the amount and date that follow each address to it. A blank
+    // (unknown) date emits no date literal, so the row's date stays "".
+    const pdfText = await extractPdfText(
+      await buildFundTrailPdf(snapshot, { detailed: true }),
+    );
+    const pdfLines = pdfText.split("\n").map((l) => l.trim());
+    type PdfRow = {
+      address: string;
+      txid: string | null;
+      amount: string | null;
+      date: string;
+    };
+    const pdfRows: PdfRow[] = [];
+    let cur: PdfRow | null = null;
+    for (const line of pdfLines) {
+      if (ADDR_RE.test(line)) {
+        cur = { address: line, txid: null, amount: null, date: "" };
+        pdfRows.push(cur);
+      } else if (cur) {
+        if (cur.txid === null && TXID_RE.test(line)) cur.txid = line;
+        else if (cur.amount === null && AMOUNT_RE.test(line)) cur.amount = line;
+        else if (cur.amount !== null && DATE_RE.test(line)) cur.date = line;
+      }
+    }
+
+    const pdfByPair = new Map<string, { amount: string; date: string }>();
+    for (const row of pdfRows) {
+      // Every detail row must have rendered its txid and amount cells.
+      expect(row.txid).not.toBeNull();
+      expect(row.amount).not.toBeNull();
+      pdfByPair.set(`${row.address}\t${row.txid}`, {
+        amount: row.amount!,
+        date: row.date,
+      });
+    }
+
+    // For every (address, txid) pair, the amount (8-decimal BTC) and date (ISO,
+    // blank when unknown) the detailed PDF renders must exactly match the CSV's
+    // cells — neither path may round, blank, or reformat them differently.
+    expect(pdfByPair).toEqual(csvByPair);
   });
 });
