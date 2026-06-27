@@ -16,6 +16,7 @@ import {
   Loader2,
   Info,
   ChevronsLeftRight,
+  AlertCircle,
   X,
   Download,
   FileText,
@@ -214,9 +215,11 @@ function FlowCard({
   path: string;
 }) {
   const { fundTrailTxLimit } = useSettings();
+  const { toast } = useToast();
   const [showDetails, setShowDetails] = useState(false);
   const [isExpanding, setIsExpanding] = useState(false);
   const [expandedHop, setExpandedHop] = useState<TrailHop | null>(null);
+  const [expandError, setExpandError] = useState<string | null>(null);
   // Track visited labels within this branch (child of visitedLabels)
   const [branchVisited] = useState<Set<string>>(() => new Set(visitedLabels));
 
@@ -250,6 +253,7 @@ function FlowCard({
     }
 
     setIsExpanding(true);
+    setExpandError(null);
     try {
       let addresses: string[];
       let selfLabel: string | null;
@@ -276,10 +280,20 @@ function FlowCard({
     } catch (err) {
       console.error('[FundTrail] expand error', err);
       branchVisited.delete(flow.groupLabel);
+      const message =
+        err instanceof Error && err.message
+          ? err.message
+          : "Something went wrong while loading this hop.";
+      setExpandError(message);
+      toast({
+        title: "Couldn't expand hop",
+        description: message,
+        variant: "destructive",
+      });
     } finally {
       setIsExpanding(false);
     }
-  }, [isExpanded, flow, dimension, unknownAddresses, branchVisited, dateRange, fundTrailTxLimit]);
+  }, [isExpanded, flow, dimension, unknownAddresses, branchVisited, dateRange, fundTrailTxLimit, toast]);
 
   // The next level's visited set includes everything visited so far + this node
   const nextVisited = new Set(branchVisited);
@@ -347,6 +361,28 @@ function FlowCard({
           </span>
         )}
       </div>
+
+      {/* Expand error */}
+      {expandError && (
+        <div
+          className="mx-3 mb-3 flex items-start gap-2 rounded-md border border-destructive/50 bg-destructive/10 px-2 py-2"
+          data-testid={`fund-trail-expand-error-${flow.groupLabel.replace(/\s/g, "-")}-d${depth}`}
+        >
+          <AlertCircle className="h-4 w-4 shrink-0 text-destructive mt-0.5" />
+          <p className="text-xs text-destructive flex-1 min-w-0">
+            Couldn't expand this hop: {expandError}
+          </p>
+          <Button
+            size="icon"
+            variant="ghost"
+            className="h-5 w-5 shrink-0"
+            onClick={() => setExpandError(null)}
+            data-testid={`fund-trail-expand-error-dismiss-${flow.groupLabel.replace(/\s/g, "-")}-d${depth}`}
+          >
+            <X className="h-3 w-3" />
+          </Button>
+        </div>
+      )}
 
       {/* Detail rows */}
       {showDetails && uniqueDetails.length > 0 && (
