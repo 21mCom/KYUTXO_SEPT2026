@@ -235,4 +235,140 @@ describe('exportStaleReport', () => {
     expect(csv.rowCount).toBe(stored);
     expect(json.rowCount).toBe(stored);
   });
+
+  // A live "Check all addresses" scan can be cancelled partway through, leaving
+  // the scratch store holding only the rows streamed in before the stop. The
+  // user can still hit export on those partial results, so the file must remain
+  // well-formed even though it represents an incomplete scan.
+  it('exports valid CSV after a partial/cancelled scan', async () => {
+    // 137 rows: an incomplete scan that stopped well before any "expected" total.
+    const partial = 137;
+    await appendStaleReportRows(
+      Array.from({ length: partial }, (_, i) => makeRow(i)),
+    );
+
+    const { blob, rowCount } = await exportStaleReport('csv');
+    expect(rowCount).toBe(partial);
+
+    const lines = (await blob.text()).split('\n');
+    expect(lines[0]).toBe('recordId,address,cachedSats,computedSats');
+    expect(lines[lines.length - 1]).toBe('');
+    const dataLines = lines.slice(1, -1);
+    // Row count in the file matches the reported count exactly.
+    expect(dataLines).toHaveLength(partial);
+    // Every data row is well-formed (4 comma-separated fields here).
+    for (const line of dataLines) {
+      expect(line.split(',')).toHaveLength(4);
+    }
+    expect(dataLines[0]).toBe('0,addr-0,0,1');
+    expect(dataLines[partial - 1]).toBe('136,addr-136,136,137');
+  });
+
+  it('exports valid JSON after a partial/cancelled scan', async () => {
+    const partial = 137;
+    await appendStaleReportRows(
+      Array.from({ length: partial }, (_, i) => makeRow(i)),
+    );
+
+    const { blob, rowCount } = await exportStaleReport('json');
+    expect(rowCount).toBe(partial);
+
+    const parsed = JSON.parse(await blob.text());
+    expect(Array.isArray(parsed)).toBe(true);
+    expect(parsed).toHaveLength(partial);
+    expect(parsed[0]).toEqual({
+      recordId: 0,
+      address: 'addr-0',
+      cachedSats: 0,
+      computedSats: 1,
+    });
+    expect(parsed[partial - 1].recordId).toBe(136);
+  });
+
+  // The store can be wiped mid-export (e.g. the user clears results or starts a
+  // fresh scan while a large export is still streaming windows out of IndexedDB).
+  // The export reads `total` up front, so later windows come back empty and the
+  // loop short-circuits. The resulting file must still be internally consistent:
+  // its reported rowCount equals the data it actually wrote, and it parses.
+  it('a store cleared mid-export still yields well-formed CSV', async () => {
+    const seeded = 2500; // spans multiple export windows of 1000
+    await appendStaleReportRows(
+      Array.from({ length: seeded }, (_, i) => makeRow(i)),
+    );
+
+    let cleared = false;
+    const { blob, rowCount } = await exportStaleReport('csv', () => {
+      // Wipe the store after the first window is written.
+      if (!cleared) {
+        cleared = true;
+        void clearStaleReport();
+      }
+    });
+
+    // Whatever survived must be self-consistent and bounded by what was seeded.
+    expect(rowCount).toBeGreaterThan(0);
+    expect(rowCount).toBeLessThanOrEqual(seeded);
+
+    const lines = (await blob.text()).split('\n');
+    expect(lines[0]).toBe('recordId,address,cachedSats,computedSats');
+    expect(lines[lines.length - 1]).toBe('');
+    const dataLines = lines.slice(1, -1);
+    // No malformed CSV: data line count matches the reported rowCount...
+    expect(dataLines).toHaveLength(rowCount);
+    // ...and every row still has the expected number of fields.
+    for (const line of dataLines) {
+      expect(line.split(',')).toHaveLength(4);
+    }
+  });
+
+  it('a store cleared mid-export still yields well-formed JSON', async () => {
+    const seeded = 2500;
+    await appendStaleReportRows(
+      Array.from({ length: seeded }, (_, i) => makeRow(i)),
+    );
+
+    let cleared = false;
+    const { blob, rowCount } = await exportStaleReport('json', () => {
+      if (!cleared) {
+        cleared = true;
+        void clearStaleReport();
+      }
+    });
+
+    expect(rowCount).toBeGreaterThan(0);
+    expect(rowCount).toBeLessThanOrEqual(seeded);
+
+    // Never a dangling comma or unterminated array: it must parse to an array
+    // whose length matches the reported rowCount.
+    const text = await blob.text();
+    const parsed = JSON.parse(text);
+    expect(Array.isArray(parsed)).toBe(true);
+    expect(parsed).toHaveLength(rowCount);
+  });
+
+  // Clearing the results during/after a scan is the documented way to reset the
+  // report. A subsequent export must look exactly like a never-run scan.
+  it('clearStaleReport() after a scan leaves a header-only CSV', async () => {
+    await appendStaleReportRows(
+      Array.from({ length: 200 }, (_, i) => makeRow(i)),
+    );
+    await clearStaleReport();
+
+    const { blob, rowCount } = await exportStaleReport('csv');
+    expect(rowCount).toBe(0);
+    expect(await blob.text()).toBe('recordId,address,cachedSats,computedSats\n');
+  });
+
+  it('clearStaleReport() after a scan leaves an empty JSON array', async () => {
+    await appendStaleReportRows(
+      Array.from({ length: 200 }, (_, i) => makeRow(i)),
+    );
+    await clearStaleReport();
+
+    const { blob, rowCount } = await exportStaleReport('json');
+    expect(rowCount).toBe(0);
+    const text = await blob.text();
+    expect(text).toBe('[]');
+    expect(JSON.parse(text)).toEqual([]);
+  });
 });
