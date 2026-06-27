@@ -137,6 +137,35 @@ describe('plain-text report — sections present', () => {
     expect(text).toContain('No privacy findings — your transaction history is clean.');
   });
 
+  it('enumerates each individual finding under its Score Breakdown category', () => {
+    const text = buildPrivacyTextReport(makeResult(), { owner: null, wallet: null }, FIXED_NOW);
+
+    // The aggregated category line is still present...
+    expect(text).toContain('  Known Scam');
+    expect(text).toContain('    Count: 1  ·  Delta: -28  ·  Score: 72');
+    // ...and the single same-type finding is now listed beneath it with its
+    // address/tx locator and per-finding score impact, grouped under the category.
+    expect(text).toContain(
+      '      1. addr 134r8iHv69xdT6p5qVKTsHrcUEuBVZAYak  ·  tx tx_scam   —  -28 pts',
+    );
+  });
+
+  it('enumerates a finding with no penalty without a score-impact suffix', () => {
+    const text = buildPrivacyTextReport(
+      makeResult({
+        findings: [
+          { ...ENTITY_FINDING, scoreDelta: undefined } as unknown as PrivacyFinding,
+        ],
+        warnings: [],
+      }),
+      { owner: null, wallet: null },
+      FIXED_NOW,
+    );
+    // Locator still listed, but no "— -N pts" suffix when there is no penalty.
+    expect(text).toContain('      1. addr 134r8iHv69xdT6p5qVKTsHrcUEuBVZAYak  ·  tx tx_scam');
+    expect(text).not.toContain('tx tx_scam   —');
+  });
+
   it('renders the findings list with count, label, description, fix and meta', () => {
     const text = buildPrivacyTextReport(makeResult(), { owner: null, wallet: null }, FIXED_NOW);
 

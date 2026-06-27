@@ -104,8 +104,12 @@ function readInAppRows(container: HTMLElement): WaterfallRow[] {
   );
   return rows.map((tr) => {
     const cells = Array.from(tr.querySelectorAll("td"));
+    // The category cell also hosts the same-type finding navigator (chevrons +
+    // an "n / total" badge) for entries with more than one finding, so read the
+    // label from its dedicated span rather than the whole cell's textContent.
+    const labelSpan = cells[0].querySelector("span");
     return {
-      category: cells[0].textContent!.trim(),
+      category: (labelSpan?.textContent ?? cells[0].textContent!).trim(),
       count: cells[1].textContent!.trim(),
       delta: cells[2].textContent!.trim(),
       score: cells[3].textContent!.trim(),
@@ -113,11 +117,15 @@ function readInAppRows(container: HTMLElement): WaterfallRow[] {
   });
 }
 
-/** Parse the waterfall table rows out of the printable HTML export. */
+/** Parse the aggregated waterfall category rows out of the printable HTML export.
+ * The per-finding enumeration rows (`.waterfall-finding-row`) are excluded so
+ * this reads one row per category, matching the in-app and JSON surfaces. */
 function readHtmlRows(html: string): WaterfallRow[] {
   const doc = new DOMParser().parseFromString(html, "text/html");
   const rows = Array.from(
-    doc.querySelectorAll<HTMLElement>(".waterfall-table tbody tr"),
+    doc.querySelectorAll<HTMLElement>(
+      ".waterfall-table tbody tr:not(.waterfall-finding-row)",
+    ),
   );
   return rows.map((tr) => {
     const cells = Array.from(tr.querySelectorAll("td"));
@@ -136,11 +144,16 @@ function readTextRows(text: string): WaterfallRow[] {
   const start = lines.indexOf("SCORE BREAKDOWN");
   expect(start).toBeGreaterThanOrEqual(0);
   const rows: WaterfallRow[] = [];
-  // The block is: a "----" separator, then pairs of (label line, stats line),
-  // ending at the blank line before the next section.
+  // The block is: a "----" separator, then per category a (label line, stats
+  // line) pair optionally followed by indented per-finding enumeration lines
+  // ("      1. addr … — -N pts"), ending at the blank line before the next
+  // section. A category label line is a stats line's predecessor; the enumerated
+  // finding lines are skipped here (they're covered by the per-surface tests).
+  const isFindingLine = (s: string) => /^\s+\d+\.\s/.test(s);
   for (let i = start + 2; i < lines.length; i++) {
     const labelLine = lines[i];
     if (labelLine.trim() === "") break;
+    if (isFindingLine(labelLine)) continue; // skip per-finding enumeration lines
     const statsLine = lines[i + 1] ?? "";
     const m = statsLine.match(/Count:\s*(.+?)\s*·\s*Delta:\s*(.+?)\s*·\s*Score:\s*(.+)/);
     expect(m).not.toBeNull();

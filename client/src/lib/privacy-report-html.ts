@@ -7,6 +7,8 @@ import {
 import {
   type ExportScope,
   extractCitations,
+  findingsOfType,
+  formatFindingLocator,
   formatScoreDelta,
   severityLabel,
 } from "@/lib/privacy-report-export";
@@ -161,6 +163,23 @@ export function buildPrintableReport(
     scope.wallet ? `Wallet: ${escapeHtml(scope.wallet)}` : "Wallet: All",
   ].join(" · ");
 
+  // Enumerate the individual findings aggregated into a category as nested rows
+  // beneath it, so the printed breakdown lists each same-type finding (with its
+  // address/tx + score impact) grouped under their category — mirroring the
+  // on-screen Score Breakdown navigator.
+  const renderWaterfallFindings = (findingType: PrivacyFinding["type"] | "BASE"): string => {
+    const members = findingsOfType(result, findingType);
+    if (members.length === 0) return "";
+    return members.map((f, idx) => {
+      const impact = formatScoreDelta(f.scoreDelta);
+      return `
+      <tr class="waterfall-finding-row">
+        <td colspan="3"><span class="wf-finding-idx">${idx + 1}.</span> <span class="mono">${escapeHtml(formatFindingLocator(f))}</span></td>
+        <td class="num wf-finding-impact">${impact ? escapeHtml(impact) : "—"}</td>
+      </tr>`;
+    }).join("");
+  };
+
   const waterfallHtml = result.scoreWaterfall.length > 0
     ? `
   <h2>Score Breakdown</h2>
@@ -175,7 +194,7 @@ export function buildPrintableReport(
         <td class="num">${entry.count > 0 ? entry.count.toLocaleString() : "—"}</td>
         <td class="num ${entry.delta < 0 ? "delta-neg" : entry.delta > 0 ? "delta-pos" : ""}">${entry.delta === 0 ? "—" : (entry.delta > 0 ? "+" : "") + entry.delta}</td>
         <td class="num">${entry.runningScore}</td>
-      </tr>`).join("")}
+      </tr>${renderWaterfallFindings(entry.findingType)}`).join("")}
     </tbody>
   </table>`
     : "";
@@ -217,6 +236,9 @@ export function buildPrintableReport(
   .waterfall-table .num { text-align: right; font-variant-numeric: tabular-nums; }
   .waterfall-table .delta-neg { color: #dc2626; }
   .waterfall-table .delta-pos { color: #16a34a; }
+  .waterfall-table .waterfall-finding-row td { font-size: 11px; color: #555; background: #fafafa; padding-left: 22px; }
+  .waterfall-table .wf-finding-idx { color: #999; margin-right: 4px; }
+  .waterfall-table .wf-finding-impact { color: #dc2626; font-weight: 600; white-space: nowrap; }
   .mono { font-family: "JetBrains Mono", "Courier New", monospace; }
   .clean { color: #16a34a; font-size: 14px; }
   .footer { margin-top: 28px; padding-top: 12px; border-top: 1px solid #ddd; font-size: 11px; color: #777; }

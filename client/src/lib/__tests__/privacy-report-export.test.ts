@@ -305,15 +305,59 @@ describe('privacy report export — full report shape', () => {
     expect(typeof report.summary.fingerprintCoverage).toBe('number');
   });
 
-  it('preserves the scoreWaterfall from the audit result', async () => {
+  it('preserves the scoreWaterfall from the audit result and nests its findings', async () => {
     const result = await runPrivacyAudit([USER_ADDRESS]);
     const report = JSON.parse(
       JSON.stringify(buildPrivacyReport(result, { owner: null, wallet: null })),
-    ) as { scoreWaterfall: unknown };
+    ) as {
+      scoreWaterfall: Array<Record<string, unknown> & {
+        findingType: string;
+        findings: Array<Record<string, unknown>>;
+      }>;
+    };
 
-    expect(report.scoreWaterfall).toEqual(
-      JSON.parse(JSON.stringify(result.scoreWaterfall)),
+    // Sanity: the audit produced a waterfall to assert against.
+    expect(result.scoreWaterfall.length).toBeGreaterThan(0);
+    expect(report.scoreWaterfall).toHaveLength(result.scoreWaterfall.length);
+
+    report.scoreWaterfall.forEach((entry, i) => {
+      const source = result.scoreWaterfall[i];
+      // Every original waterfall field is preserved verbatim.
+      expect(entry.label).toBe(source.label);
+      expect(entry.findingType).toBe(source.findingType);
+      expect(entry.delta).toBe(source.delta);
+      expect(entry.runningScore).toBe(source.runningScore);
+      expect(entry.count).toBe(source.count);
+
+      // Each entry additionally enumerates its individual same-type findings,
+      // grouping them under the aggregated category, in the same flat order the
+      // on-screen navigator uses. BASE carries none.
+      const members =
+        source.findingType === 'BASE'
+          ? []
+          : [...result.findings, ...result.warnings].filter(
+              (f) => f.type === source.findingType,
+            );
+      expect(Array.isArray(entry.findings)).toBe(true);
+      expect(entry.findings).toHaveLength(members.length);
+      entry.findings.forEach((m, j) => {
+        expect(m.severity).toBe(members[j].severity);
+        expect(m.addresses).toEqual(members[j].addresses);
+        expect(m.txids).toEqual(members[j].txids);
+        if (typeof members[j].scoreDelta === 'number') {
+          expect(m.scoreDelta).toBe(members[j].scoreDelta);
+        } else {
+          expect('scoreDelta' in m).toBe(false);
+        }
+      });
+    });
+
+    // At least one non-BASE category actually enumerated findings (proves the
+    // nesting is exercised, not vacuously empty).
+    const enumerated = report.scoreWaterfall.filter(
+      (e) => e.findingType !== 'BASE' && e.findings.length > 0,
     );
+    expect(enumerated.length).toBeGreaterThan(0);
   });
 
   it('each mapped finding carries label/severity/description/correction/txids/addresses', async () => {

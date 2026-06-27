@@ -141,6 +141,34 @@ describe('printable HTML report — sections present', () => {
     expect(html).toContain('<td class="num">72</td>');
   });
 
+  it('enumerates each individual finding as a nested row under its category', () => {
+    const html = buildPrintableReport(makeResult(), { owner: null, wallet: null }, FIXED_NOW);
+
+    // A nested finding row is emitted beneath the aggregated category.
+    expect(html).toContain('class="waterfall-finding-row"');
+    // It carries the per-finding address/tx locator (escaped, in the mono cell)...
+    expect(html).toContain(
+      'addr 134r8iHv69xdT6p5qVKTsHrcUEuBVZAYak  ·  tx tx_scam',
+    );
+    // ...and the per-finding score impact in its own cell.
+    expect(html).toContain('class="num wf-finding-impact">-28 pts</td>');
+  });
+
+  it('shows an em dash for a nested finding with no score impact', () => {
+    const html = buildPrintableReport(
+      makeResult({
+        findings: [
+          { ...ENTITY_FINDING, scoreDelta: undefined } as unknown as PrivacyFinding,
+        ],
+        warnings: [],
+      }),
+      { owner: null, wallet: null },
+      FIXED_NOW,
+    );
+    expect(html).toContain('class="waterfall-finding-row"');
+    expect(html).toContain('class="num wf-finding-impact">—</td>');
+  });
+
   it('omits the waterfall table when the result has no waterfall entries', () => {
     const html = buildPrintableReport(
       makeResult({ scoreWaterfall: [] }),

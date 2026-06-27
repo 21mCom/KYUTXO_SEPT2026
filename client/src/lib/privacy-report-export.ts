@@ -41,6 +41,42 @@ export function formatScoreDelta(scoreDelta: number | undefined): string | null 
 }
 
 /**
+ * Collect the individual findings aggregated into a single Score Breakdown
+ * category, in the same flat `[...findings, ...warnings]` order the on-screen
+ * report uses when stepping through same-type findings. Returns `[]` for the
+ * synthetic BASE row. This is the single source of truth for the per-category
+ * grouping shared by the JSON, text, and HTML exports so the breakdown enumerated
+ * in the artifact matches what the user reviewed on screen.
+ */
+export function findingsOfType(
+  result: PrivacyAuditResult,
+  findingType: PrivacyFindingType | "BASE",
+): PrivacyFinding[] {
+  if (findingType === "BASE") return [];
+  return [...result.findings, ...result.warnings].filter((f) => f.type === findingType);
+}
+
+/**
+ * A compact one-line locator for an individual finding used when the exports
+ * enumerate the same-type findings under an aggregated Score Breakdown category:
+ * its primary address and/or transaction id, each suffixed with "(+N more)" when
+ * the finding spans several. Returns "—" when the finding carries neither.
+ * Addresses/txids are emitted as plain text and are never fetched (offline-first).
+ */
+export function formatFindingLocator(f: PrivacyFinding): string {
+  const parts: string[] = [];
+  if (f.addresses.length > 0) {
+    const more = f.addresses.length > 1 ? ` (+${f.addresses.length - 1} more)` : "";
+    parts.push(`addr ${f.addresses[0]}${more}`);
+  }
+  if (f.txids.length > 0) {
+    const more = f.txids.length > 1 ? ` (+${f.txids.length - 1} more)` : "";
+    parts.push(`tx ${f.txids[0]}${more}`);
+  }
+  return parts.length > 0 ? parts.join("  ·  ") : "—";
+}
+
+/**
  * Surface per-entity source citations (name, address, category label and the
  * public attribution note) as a clean field on entity findings so the citation
  * travels with the exported report. Both direct (ENTITY_*) and indirect
@@ -97,14 +133,50 @@ export interface ExportedSummary {
   warningsCount: number;
 }
 
+/**
+ * A single same-type finding nested under its Score Breakdown category in the
+ * exported JSON. Carries only the per-finding context the user explored on
+ * screen — its address(es)/tx(s) and individual score impact — without
+ * duplicating the full finding payload already present in the top-level
+ * `findings`/`warnings` arrays.
+ */
+export interface ExportedWaterfallFinding {
+  severity: PrivacySeverity;
+  addresses: string[];
+  txids: string[];
+  scoreDelta?: number;
+}
+
+/**
+ * A Score Breakdown waterfall entry in the exported JSON. Mirrors the audit's
+ * {@link ScoreWaterfallEntry} (label/findingType/delta/runningScore/count) and
+ * additionally enumerates the individual `findings` aggregated into the category
+ * so the exported breakdown lists each finding, not just the per-type count.
+ * Empty for the BASE row and for categories with no captured findings.
+ */
+export interface ExportedWaterfallEntry extends ScoreWaterfallEntry {
+  findings: ExportedWaterfallFinding[];
+}
+
 /** Full shape of the exported Privacy Audit JSON report. */
 export interface ExportedReport {
   generatedAt: string;
   scope: ExportScope;
   summary: ExportedSummary;
-  scoreWaterfall: ScoreWaterfallEntry[];
+  scoreWaterfall: ExportedWaterfallEntry[];
   findings: ExportedFinding[];
   warnings: ExportedFinding[];
+}
+
+/** Map an internal PrivacyFinding to the compact per-finding shape nested under
+ * its Score Breakdown category in the exported JSON. */
+export function toWaterfallFinding(f: PrivacyFinding): ExportedWaterfallFinding {
+  return {
+    severity: f.severity,
+    addresses: f.addresses,
+    txids: f.txids,
+    scoreDelta: f.scoreDelta,
+  };
 }
 
 /**
@@ -133,7 +205,10 @@ export function buildPrivacyReport(
       findingsCount: result.findings.length,
       warningsCount: result.warnings.length,
     },
-    scoreWaterfall: result.scoreWaterfall,
+    scoreWaterfall: result.scoreWaterfall.map((entry) => ({
+      ...entry,
+      findings: findingsOfType(result, entry.findingType).map(toWaterfallFinding),
+    })),
     findings: result.findings.map(mapFinding),
     warnings: result.warnings.map(mapFinding),
   };
@@ -204,6 +279,15 @@ export function buildPrivacyTextReport(
       const delta = entry.delta === 0 ? "—" : (entry.delta > 0 ? "+" : "") + entry.delta;
       lines.push(`  ${entry.label}`);
       lines.push(`    Count: ${count}  ·  Delta: ${delta}  ·  Score: ${entry.runningScore}`);
+      // Enumerate the individual findings aggregated into this category so the
+      // per-finding context (address/tx + score impact) the user stepped through
+      // on screen travels with the artifact, grouped under their category.
+      const members = findingsOfType(result, entry.findingType);
+      members.forEach((f, idx) => {
+        const impact = formatScoreDelta(f.scoreDelta);
+        const suffix = impact ? `   —  ${impact}` : "";
+        lines.push(`      ${idx + 1}. ${formatFindingLocator(f)}${suffix}`);
+      });
     }
     lines.push("");
   }
