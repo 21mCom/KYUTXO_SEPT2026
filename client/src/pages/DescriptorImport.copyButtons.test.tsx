@@ -144,8 +144,7 @@ describe("DescriptorImport copy buttons toast", () => {
 
     expect(writeText).toHaveBeenCalledWith(RECEIVE_ADDRESS);
     expect(toastMock).toHaveBeenCalledWith({
-      title: "Copied",
-      description: "Address copied to clipboard",
+      description: "Address copied",
     });
   });
 
@@ -161,8 +160,7 @@ describe("DescriptorImport copy buttons toast", () => {
 
     expect(writeText).toHaveBeenCalledWith(CHANGE_ADDRESS);
     expect(toastMock).toHaveBeenCalledWith({
-      title: "Copied",
-      description: "Address copied to clipboard",
+      description: "Address copied",
     });
   });
 
@@ -176,7 +174,7 @@ describe("DescriptorImport copy buttons toast", () => {
     expect(toastMock).toHaveBeenCalledWith(
       expect.objectContaining({
         title: "Copy failed",
-        description: "Could not copy to clipboard",
+        description: "Could not copy the address to your clipboard.",
         variant: "destructive",
       }),
     );

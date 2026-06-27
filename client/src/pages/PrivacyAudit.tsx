@@ -86,6 +86,7 @@ import { useTags } from "@/hooks/use-tags";
 import { useOwners } from "@/hooks/use-owners";
 import { useWalletNames } from "@/hooks/use-wallet-names";
 import { useToast } from "@/hooks/use-toast";
+import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
 import { ClickableAddress } from "@/components/ClickableAddress";
 import { TxidLink } from "@/components/TxidLink";
 import { classifyBehavior, BEHAVIOR_LABEL_DISPLAY, type BehaviorProfile } from "@/lib/behavior-profile";
@@ -939,9 +940,8 @@ function shortPeelTxid(t: string): string {
 // payments branch off to the right toward external addresses.
 function PeelChainGraph({ steps, coinjoinTxids }: { steps: PeelStep[]; coinjoinTxids: Set<string> }) {
   const { openRecordPreviewByAddress } = useRecordPreview();
-  const { toast } = useToast();
+  const { copy, isCopied } = useCopyToClipboard(1500);
   const [deepDiveTxid, setDeepDiveTxid] = useState<string | null>(null);
-  const [copiedAddr, setCopiedAddr] = useState<string | null>(null);
   const marginTop = 36;
   const hopGap = 150;
   const txX = 92;
@@ -963,18 +963,9 @@ function PeelChainGraph({ steps, coinjoinTxids }: { steps: PeelStep[]; coinjoinT
       openNode(value);
     }
   };
-  const copyAddr = async (value: string) => {
+  const copyAddr = (value: string) => {
     if (!value || value === "—") return;
-    try {
-      await navigator.clipboard.writeText(value);
-      setCopiedAddr(value);
-      window.setTimeout(() => {
-        setCopiedAddr((prev) => (prev === value ? null : prev));
-      }, 1500);
-      toast({ title: "Address copied", description: shortPeelAddr(value) });
-    } catch {
-      toast({ title: "Copy failed", description: "Could not copy to clipboard", variant: "destructive" });
-    }
+    copy(value, { label: "Address" });
   };
   const onCopyKeyDown = (e: React.KeyboardEvent, value: string) => {
     if (e.key === "Enter" || e.key === " ") {
@@ -1242,7 +1233,7 @@ function PeelChainGraph({ steps, coinjoinTxids }: { steps: PeelStep[]; coinjoinT
                     >
                       <title>{`Copy ${step.paymentAddress}`}</title>
                       <circle r={7} fill="hsl(var(--background))" stroke={PEEL_PAYMENT_COLOR} strokeWidth={1.5} />
-                      {copiedAddr === step.paymentAddress ? (
+                      {isCopied(step.paymentAddress) ? (
                         <Check x={-4} y={-4} width={8} height={8} color={PEEL_PAYMENT_COLOR} />
                       ) : (
                         <Copy x={-4} y={-4} width={8} height={8} color={PEEL_PAYMENT_COLOR} />
@@ -1295,7 +1286,7 @@ function PeelChainGraph({ steps, coinjoinTxids }: { steps: PeelStep[]; coinjoinT
                     >
                       <title>{`Copy ${step.changeAddress}`}</title>
                       <circle r={7} fill="hsl(var(--background))" stroke={PEEL_CHANGE_COLOR} strokeWidth={1.5} />
-                      {copiedAddr === step.changeAddress ? (
+                      {isCopied(step.changeAddress) ? (
                         <Check x={-4} y={-4} width={8} height={8} color={PEEL_CHANGE_COLOR} />
                       ) : (
                         <Copy x={-4} y={-4} width={8} height={8} color={PEEL_CHANGE_COLOR} />

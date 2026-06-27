@@ -1,5 +1,6 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { useToast } from "@/hooks/use-toast";
+import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
 import { useDbChangeSignal } from "@/hooks/use-db-change-signal";
 import { useLiveQuery } from "dexie-react-hooks";
 import { getBtcUsdPriceData } from "@/lib/data/price-data-crud";
@@ -930,21 +931,10 @@ export default function BalanceOverview() {
     [expandedGroups, ensureGroupRows],
   );
 
-  const [copiedAddress, setCopiedAddress] = useState<string | null>(null);
-  const copyAddress = useCallback(async (address: string) => {
-    try {
-      await navigator.clipboard.writeText(address);
-      setCopiedAddress(address);
-      setTimeout(() => setCopiedAddress(null), 2000);
-      toast({ description: "Address copied" });
-    } catch {
-      toast({
-        title: "Copy failed",
-        description: "Could not copy the address to your clipboard.",
-        variant: "destructive",
-      });
-    }
-  }, [toast]);
+  const { copy, copiedKey } = useCopyToClipboard();
+  const copyAddress = useCallback((address: string) => {
+    copy(address, { label: "Address" });
+  }, [copy]);
 
   // Open the "missing transactions" dialog and compute the list. Works fully
   // offline — it reads only local participant data and needs no provider.
@@ -1269,7 +1259,7 @@ export default function BalanceOverview() {
                         size="icon"
                         variant="ghost"
                         className="flex-none"
-                        onClick={() => copyText(d.sourceTxid, "Transaction id copied")}
+                        onClick={() => copy(d.sourceTxid, { label: "Transaction id" })}
                         data-testid={`button-copy-missing-${d.sourceTxid}`}
                       >
                         <Copy className="h-3 w-3" />
@@ -1496,7 +1486,7 @@ export default function BalanceOverview() {
                         <GroupAddressRows
                           rows={rows}
                           displayUnit={displayUnit}
-                          copiedAddress={copiedAddress}
+                          copiedAddress={copiedKey}
                           onCopy={copyAddress}
                           unresolvedByRecordId={unresolvedByRecordId}
                           resolvingRecordIds={resolvingRecordIds}

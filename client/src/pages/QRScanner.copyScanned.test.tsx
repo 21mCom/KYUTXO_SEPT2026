@@ -121,8 +121,7 @@ describe("QRScanner scanned-data 'Copy to Clipboard' button toast", () => {
     expect(writeText).toHaveBeenCalledWith(ADDRESS);
     expect(toastMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        title: "Copied",
-        description: "Address copied to clipboard",
+        description: "Address copied",
       }),
     );
   });
@@ -139,7 +138,7 @@ describe("QRScanner scanned-data 'Copy to Clipboard' button toast", () => {
     expect(toastMock).toHaveBeenCalledWith(
       expect.objectContaining({
         title: "Copy failed",
-        description: "Could not copy to clipboard",
+        description: "Could not copy the address to your clipboard.",
         variant: "destructive",
       }),
     );

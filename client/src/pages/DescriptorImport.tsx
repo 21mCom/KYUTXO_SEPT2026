@@ -54,6 +54,7 @@ import {
 } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
+import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
 import { MultiSelectCombobox } from "@/components/ui/multi-select-combobox";
 import { useTags, createTag as createTagHook } from "@/hooks/use-tags";
 import { useCategories, createCategory as createCategoryHook } from "@/hooks/use-categories";
@@ -131,6 +132,7 @@ export default function DescriptorImport() {
   const { tags } = useTags();
   const { categories } = useCategories();
   const { toast } = useToast();
+  const { copy } = useCopyToClipboard();
 
   const { owners: existingOwners } = useOwners();
   const { walletNames: existingWalletNames } = useWalletNames();
@@ -757,20 +759,8 @@ export default function DescriptorImport() {
     setSelectedChangeAddresses(new Set());
   };
 
-  const copyAddress = async (address: string) => {
-    try {
-      await navigator.clipboard.writeText(address);
-      toast({
-        title: "Copied",
-        description: "Address copied to clipboard",
-      });
-    } catch {
-      toast({
-        title: "Copy failed",
-        description: "Could not copy to clipboard",
-        variant: "destructive",
-      });
-    }
+  const copyAddress = (address: string) => {
+    copy(address, { label: "Address" });
   };
 
   return (

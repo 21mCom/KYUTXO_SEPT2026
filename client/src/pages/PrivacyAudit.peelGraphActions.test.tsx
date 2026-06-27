@@ -225,7 +225,7 @@ describe("PeelChainGraph copy-address failure branch", () => {
     // happy-path "Address copied" toast must NOT).
     expect((await findAllByText("Copy failed")).length).toBeGreaterThan(0);
     expect(
-      (await findAllByText("Could not copy to clipboard")).length,
+      (await findAllByText("Could not copy the address to your clipboard.")).length,
     ).toBeGreaterThan(0);
   });
 

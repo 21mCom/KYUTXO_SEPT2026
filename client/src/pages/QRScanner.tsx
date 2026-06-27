@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
+import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
 import jsQR from "jsqr";
 import QRCode from "qrcode";
 
@@ -19,6 +20,7 @@ export default function QRScanner() {
   const streamRef = useRef<MediaStream | null>(null);
   const animationRef = useRef<number | null>(null);
   const { toast } = useToast();
+  const { copy } = useCopyToClipboard();
 
   const [generatorInput, setGeneratorInput] = useState('');
   const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
@@ -285,21 +287,8 @@ export default function QRScanner() {
                 <div className="flex gap-2">
                   <Button
                     className="flex-1"
-                    onClick={async () => {
-                      const address = extractAddress(scannedData);
-                      try {
-                        await navigator.clipboard.writeText(address);
-                        toast({
-                          title: "Copied",
-                          description: "Address copied to clipboard",
-                        });
-                      } catch {
-                        toast({
-                          title: "Copy failed",
-                          description: "Could not copy to clipboard",
-                          variant: "destructive",
-                        });
-                      }
+                    onClick={() => {
+                      copy(extractAddress(scannedData), { label: "Address" });
                     }}
                     data-testid="button-copy-scanned"
                   >
@@ -363,20 +352,8 @@ export default function QRScanner() {
                 <div className="flex gap-2">
                   <Button
                     variant="outline"
-                    onClick={async () => {
-                      try {
-                        await navigator.clipboard.writeText(generatorInput.trim());
-                        toast({
-                          title: "Copied",
-                          description: "Text copied to clipboard",
-                        });
-                      } catch {
-                        toast({
-                          title: "Copy failed",
-                          description: "Could not copy to clipboard",
-                          variant: "destructive",
-                        });
-                      }
+                    onClick={() => {
+                      copy(generatorInput.trim(), { label: "Text" });
                     }}
                     data-testid="button-copy-qr-text"
                   >

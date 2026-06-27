@@ -39,6 +39,7 @@ import {
 } from "lucide-react";
 import { updateRecord, getParticipantsByAddresses } from "@/lib/dataFacade";
 import { useToast } from "@/hooks/use-toast";
+import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
 import { useOwners } from "@/hooks/use-owners";
 import { useWalletNames } from "@/hooks/use-wallet-names";
 import { RecordFormDialog } from "@/components/RecordFormDialog";
@@ -82,8 +83,8 @@ export default function AddressReuse() {
   const [search, setSearch] = useState("");
   const [debouncedSearch, isSearchPending] = useDebouncedValue(search, PAGE_DEBOUNCE.AddressReuse);
   const [expandedAddresses, setExpandedAddresses] = useState<Set<string>>(new Set());
-  const [copiedAddress, setCopiedAddress] = useState<string | null>(null);
   const { toast } = useToast();
+  const { copy, isCopied } = useCopyToClipboard();
   
   // Filter states
   const [reuseTypeFilter, setReuseTypeFilter] = useState<ReuseReason | 'all'>('all');
@@ -382,22 +383,8 @@ export default function AddressReuse() {
     });
   };
 
-  const copyToClipboard = async (text: string, type: string) => {
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopiedAddress(text);
-      setTimeout(() => setCopiedAddress(null), 2000);
-      toast({
-        title: "Copied",
-        description: `${type} copied to clipboard`,
-      });
-    } catch {
-      toast({
-        title: "Failed to copy",
-        description: "Could not copy to clipboard",
-        variant: "destructive",
-      });
-    }
+  const copyToClipboard = (text: string, type: string) => {
+    copy(text, { label: type });
   };
 
   const openInExplorer = (txid: string) => {
@@ -719,7 +706,7 @@ export default function AddressReuse() {
                                 }}
                                 data-testid={`button-copy-address-${item.address.slice(0, 8)}`}
                               >
-                                {copiedAddress === item.address ? (
+                                {isCopied(item.address) ? (
                                   <Check className="h-4 w-4 text-green-500" />
                                 ) : (
                                   <Copy className="h-4 w-4" />
@@ -799,7 +786,7 @@ export default function AddressReuse() {
                                       title="Copy transaction ID"
                                       data-testid={`button-copy-txid-${tx.txid.slice(0, 8)}`}
                                     >
-                                      {copiedAddress === tx.txid ? (
+                                      {isCopied(tx.txid) ? (
                                         <Check className="h-4 w-4 text-green-500" />
                                       ) : (
                                         <Copy className="h-4 w-4" />

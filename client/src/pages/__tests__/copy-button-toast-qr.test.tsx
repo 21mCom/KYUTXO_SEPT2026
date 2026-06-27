@@ -72,7 +72,7 @@ describe("QRScanner generator 'Copy Text' button toast", () => {
 
     expect(writeText).toHaveBeenCalledWith(ADDRESS);
     expect(toastMock).toHaveBeenCalledWith(
-      expect.objectContaining({ description: "Text copied to clipboard" }),
+      expect.objectContaining({ description: "Text copied" }),
     );
   });
 

@@ -3,7 +3,7 @@ import { Copy, Check, FileText } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useRecordPreview } from "@/contexts/RecordPreviewContext";
-import { useToast } from "@/hooks/use-toast";
+import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
 import { useSettings } from "@/hooks/use-settings";
 import {
   resolveIdentifier,
@@ -79,9 +79,9 @@ export function AddressLink({
   onNavigate,
 }: AddressLinkProps) {
   const { openRecordPreview, openRecordPreviewByAddress } = useRecordPreview();
-  const { toast } = useToast();
+  const { copy, isCopied } = useCopyToClipboard();
   const { hoverTooltipPrefs } = useSettings();
-  const [copied, setCopied] = useState(false);
+  const copied = isCopied(address);
 
   const resolvedRef = useRef<DbRecord | null | undefined>(
     recordId != null ? undefined : getCachedRecord(address)
@@ -134,22 +134,11 @@ export function AddressLink({
   );
 
   const handleCopy = useCallback(
-    async (e: React.MouseEvent) => {
+    (e: React.MouseEvent) => {
       e.stopPropagation();
-      try {
-        await navigator.clipboard.writeText(address);
-        setCopied(true);
-        setTimeout(() => setCopied(false), 2000);
-        toast({ description: "Address copied" });
-      } catch {
-        toast({
-          title: "Copy failed",
-          description: "Could not copy the address to your clipboard.",
-          variant: "destructive",
-        });
-      }
+      copy(address, { label: "Address" });
     },
-    [address, toast]
+    [address, copy]
   );
 
   const handleClick = useCallback(
