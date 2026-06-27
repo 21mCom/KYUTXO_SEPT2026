@@ -265,6 +265,13 @@ export async function computeOneHop(
   const totalTxCount = cappableTxids.length;
 
   let isCapped = false;
+  // shownTxCount is finalised AFTER the enrichment loops (steps 4/5) from the
+  // txids that actually land in a source/destination row. Assigning it here from
+  // keptTxids.size would overstate the count, because the enrichment loops drop
+  // kept txids via several `continue` skip paths (same-group, self-label,
+  // out-of-date-range, no matching participant/lineage row). Those skipped txids
+  // are retained for processing but never shown, so counting them would make the
+  // cap notice claim more transactions than the reader can see.
   let shownTxCount = totalTxCount;
   if (totalTxCount > txLimit) {
     isCapped = true;
@@ -273,7 +280,6 @@ export async function computeOneHop(
         .sort((a, b) => (blockTimes.get(b) ?? 0) - (blockTimes.get(a) ?? 0))
         .slice(0, txLimit)
     );
-    shownTxCount = keptTxids.size;
     incomingLineage = incomingLineage.filter(l => keptTxids.has(l.consumingTxid));
     outgoingLineage = outgoingLineage.filter(l => keptTxids.has(l.consumingTxid));
     incomingTxidsFromParticipants = new Set(
@@ -465,6 +471,22 @@ export async function computeOneHop(
         }
       }
     }
+  }
+
+  // Finalise the shown-transaction count from the txids that actually produced a
+  // source or destination row. When capped, this can be fewer than the kept set
+  // because the enrichment loops above skip kept txids that map only to
+  // same-group/self-label/out-of-range/unmatched flows. Counting only the txids
+  // a reader can actually see keeps the cap notice honest.
+  if (isCapped) {
+    const shownTxids = new Set<string>();
+    for (const flow of sourceMap.values()) {
+      for (const d of flow.details) shownTxids.add(d.txid);
+    }
+    for (const flow of destMap.values()) {
+      for (const d of flow.details) shownTxids.add(d.txid);
+    }
+    shownTxCount = shownTxids.size;
   }
 
   return {

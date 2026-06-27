@@ -153,6 +153,32 @@ async function addIncomingLineageTx(label: string, time: number): Promise<string
   return txid;
 }
 
+/**
+ * Seeds one incoming participant-path flow whose external input belongs to the
+ * SAME self group as the queried addresses. The enrichment loop treats this as
+ * internal movement and `continue`s past it, so the txid is a valid cap
+ * candidate (and may be kept) but never produces a visible source row.
+ */
+async function addSelfGroupIncomingTx(time: number): Promise<string> {
+  const ext = extAddr(SELF_LABEL);
+  // walletName === SELF_LABEL so getGroupLabel() === selfGroupLabel => skipped.
+  await addExternalRecord(SELF_LABEL);
+  const txid = `self-${time}`;
+  await testDb.blockchainTransactions.add({
+    txid,
+    blockHeight: 1,
+    blockTime: time,
+    fee: 0,
+    feeRate: 0,
+    syncedAt: 1,
+  } as BlockchainTransaction);
+  await testDb.transactionParticipants.bulkAdd([
+    { txid, role: "output", address: GROUP_ADDR, amount: 100, vout: 0 } as TransactionParticipant,
+    { txid, role: "input", address: ext, amount: 100, vout: 1 } as TransactionParticipant,
+  ]);
+  return txid;
+}
+
 function txidsOfDetails(flows: { details: { txid: string }[] }[]): Set<string> {
   const set = new Set<string>();
   for (const f of flows) for (const d of f.details) set.add(d.txid);
@@ -301,5 +327,39 @@ describe("computeOneHop txLimit cap", () => {
 
     const kept = txidsOfDetails(hop.sources);
     expect(kept).toEqual(new Set([lin, part]));
+  });
+
+  it("does not count kept-but-skipped txids in shownTxCount", async () => {
+    // Regression: shownTxCount must reflect the txids that actually land in a
+    // source/destination row, NOT the size of the kept set. The newest kept
+    // txid here is an internal (self-group) movement that the enrichment loop
+    // skips, so it must NOT inflate the cap notice's "shown" count.
+    const txLimit = 2;
+
+    const t1 = await addIncomingTx("Src1", 1000); // dropped by cap (oldest)
+    const t2 = await addIncomingTx("Src2", 2000); // kept AND shown
+    const tSelf = await addSelfGroupIncomingTx(3000); // kept but skipped (internal)
+
+    const hop = await computeOneHop(
+      [GROUP_ADDR],
+      "walletName",
+      SELF_LABEL,
+      undefined,
+      undefined,
+      { txLimit },
+    );
+
+    // 3 candidates total; capped to the newest 2 (t2 + tSelf).
+    expect(hop.isCapped).toBe(true);
+    expect(hop.totalTxCount).toBe(3);
+
+    // The self-group txid is kept by the cap but skipped during enrichment, so
+    // only t2 is actually shown — shownTxCount must be 1, not the kept-set size 2.
+    expect(hop.shownTxCount).toBe(1);
+
+    const shown = txidsOfDetails(hop.sources);
+    expect(shown).toEqual(new Set([t2]));
+    expect(shown.has(tSelf)).toBe(false);
+    expect(shown.has(t1)).toBe(false);
   });
 });
