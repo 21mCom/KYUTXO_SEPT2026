@@ -67,6 +67,25 @@ async function listAllAttachmentFiles(): Promise<string[]> {
   }
 }
 
+// Exact total bytes of every attachment file on disk (stored uncompressed in the
+// ZIP). Recorded in the backup manifest so the restore pre-flight can size disk
+// space precisely. Returns null when the figure is unavailable, so the export
+// falls back to summing the attachment metadata `size`.
+async function totalAttachmentFileBytes(): Promise<number | null> {
+  if (isElectron()) {
+    const api = getElectronAPI();
+    const result = await api.listAllAttachments();
+    return result.success && typeof result.totalBytes === "number" ? result.totalBytes : null;
+  } else {
+    const response = await fetch('/api/attachments/list-all');
+    if (response.ok) {
+      const data = await response.json();
+      return data.success && typeof data.totalBytes === "number" ? data.totalBytes : null;
+    }
+    return null;
+  }
+}
+
 // Helper to read an attachment file
 async function readAttachmentFile(relativePath: string): Promise<ArrayBuffer | null> {
   if (isElectron()) {
@@ -340,7 +359,7 @@ export default function ExportPage() {
         sink,
         encrypted,
         password,
-        attachmentIO: { listAll: listAllAttachmentFiles, read: readAttachmentFile },
+        attachmentIO: { listAll: listAllAttachmentFiles, read: readAttachmentFile, totalBytes: totalAttachmentFileBytes },
         onProgress: (p) => {
           setProgress(p.percent);
           setProgressMessage(p.phase);

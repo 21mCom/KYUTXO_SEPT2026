@@ -3,9 +3,11 @@
 // Tests for the pre-flight disk-space check that runs BEFORE a restore's
 // destructive clear. The point is to let a user free space without losing their
 // current vault, instead of discovering a disk-full failure only after the vault
-// has already been wiped. The estimate is the backup file's own size (attachment
-// files are stored uncompressed in the v3 ZIP, so the archive size is a safe
-// upper bound on the bytes a restore writes to disk).
+// has already been wiped. The estimate is the v3 manifest's recorded
+// `totalAttachmentBytes` (the exact bytes a restore writes, since attachment
+// files are stored uncompressed), falling back to the backup file's own size for
+// older backups that lack the field (a safe upper bound). evaluateDiskSpace
+// itself is estimate-source-agnostic: it just pads and compares the given bytes.
 
 import { describe, it, expect } from "vitest";
 import { evaluateDiskSpace } from "./restore";

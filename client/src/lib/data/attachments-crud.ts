@@ -139,3 +139,18 @@ export async function getAttachmentsAfterId(
 export async function countAttachments(): Promise<number> {
   return db.attachments.count();
 }
+
+// Sum the byte sizes of every attachment file (from each row's `size`). Used by
+// the backup export to record the exact total attachment bytes in the manifest,
+// so the restore pre-flight can estimate required disk space precisely instead
+// of falling back to the (compression-inflated) backup file size. Iterates with
+// a cursor so the whole table is never materialised at once.
+export async function sumAttachmentSizes(): Promise<number> {
+  let total = 0;
+  await db.attachments.each((a) => {
+    if (typeof a.size === 'number' && Number.isFinite(a.size) && a.size > 0) {
+      total += a.size;
+    }
+  });
+  return total;
+}

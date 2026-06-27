@@ -25,7 +25,7 @@ import {
 } from "./format";
 import { deriveKey, generateSalt, bufferToBase64, encrypt } from "@/lib/crypto";
 import { getRecordsAfterId, countRecords } from "@/lib/data/record-crud";
-import { getAttachmentsAfterId, countAttachments } from "@/lib/data/attachments-crud";
+import { getAttachmentsAfterId, countAttachments, sumAttachmentSizes } from "@/lib/data/attachments-crud";
 import {
   getTransactionsAfterId,
   countTransactions,
@@ -47,6 +47,13 @@ import { readInlineTables } from "./inline-tables";
 export interface AttachmentFileIO {
   listAll(): Promise<string[]>;
   read(relPath: string): Promise<ArrayBuffer | null>;
+  // Optional: the exact total bytes of every attachment FILE on disk — i.e. the
+  // bytes that will be stored UNCOMPRESSED in the ZIP. Preferred over the DB
+  // metadata sum because it reflects the archive's true attachment footprint,
+  // including legacy root-level files that have no `db.attachments` row. Returns
+  // null (or is absent) when the IO impl cannot provide it, in which case the
+  // export falls back to summing the attachment metadata `size`.
+  totalBytes?(): Promise<number | null>;
 }
 
 export interface ExportProgress {
@@ -157,6 +164,22 @@ export async function exportBackup(opts: ExportOptions): Promise<void> {
   opts.onProgress?.({ percent: 2, phase: "Listing attachment files..." });
   const attachmentPaths = await opts.attachmentIO.listAll();
 
+  // Exact total bytes of the attachment FILES written into the ZIP (stored
+  // uncompressed), recorded in the manifest so the restore pre-flight can size
+  // disk space precisely rather than inferring it from the compressed backup
+  // file. Prefer the IO's on-disk total (which reflects the true archive
+  // footprint, including legacy root-level files with no DB row); fall back to
+  // summing the attachment metadata `size` when the IO can't report it.
+  let totalAttachmentBytes: number;
+  const ioTotal = opts.attachmentIO.totalBytes
+    ? await opts.attachmentIO.totalBytes()
+    : null;
+  if (typeof ioTotal === "number" && Number.isFinite(ioTotal) && ioTotal >= 0) {
+    totalAttachmentBytes = ioTotal;
+  } else {
+    totalAttachmentBytes = await sumAttachmentSizes();
+  }
+
   const counts: BackupCounts = {
     records: recordsCount,
     attachments: attachmentsCount,
@@ -198,6 +221,7 @@ export async function exportBackup(opts: ExportOptions): Promise<void> {
     salt: salt ? bufferToBase64(salt) : undefined,
     check,
     counts,
+    totalAttachmentBytes,
     streamedTables: [...STREAMED_TABLES],
     ...inlineEnvelope,
   };

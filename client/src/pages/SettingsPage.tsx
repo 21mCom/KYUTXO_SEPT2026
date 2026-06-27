@@ -2207,17 +2207,25 @@ export default function SettingsPage() {
       const manifestPeek = await peekManifest(blobChunks(restoreFile));
       if (isV3Manifest(manifestPeek)) {
         // Pre-flight disk-space check (Electron only). Attachment files are
-        // stored UNCOMPRESSED in the v3 ZIP, so the backup file's own size is a
-        // safe estimate of the bytes this restore will write to disk. Running
-        // this BEFORE the destructive clear lets the user free space without
-        // losing their current vault — a disk-full failure during attachment
-        // writes would otherwise be discovered only after the clear. Best-effort:
-        // if the probe fails we let the restore proceed rather than block it.
+        // stored UNCOMPRESSED in the v3 ZIP and are what a restore writes to
+        // disk. v3 manifests record the exact total attachment bytes
+        // (`totalAttachmentBytes`), so we use that as the estimate; older
+        // backups that lack it fall back to the backup file's own size (a safe
+        // upper bound, since the compressed NDJSON tables only inflate it).
+        // Running this BEFORE the destructive clear lets the user free space
+        // without losing their current vault — a disk-full failure during
+        // attachment writes would otherwise be discovered only after the clear.
+        // Best-effort: if the probe fails we let the restore proceed rather than
+        // block it.
         if (isElectron() && !bypassDiskCheckRef.current) {
           try {
             const space = await getElectronAPI().getDiskSpace();
             if (space.success && typeof space.freeBytes === "number") {
-              const estimate = evaluateDiskSpace(restoreFile.size, space.freeBytes);
+              const estimatedBytes =
+                typeof manifestPeek.totalAttachmentBytes === "number"
+                  ? manifestPeek.totalAttachmentBytes
+                  : restoreFile.size;
+              const estimate = evaluateDiskSpace(estimatedBytes, space.freeBytes);
               if (!estimate.sufficient) {
                 setIsRestoring(false);
                 setRestoreCancellable(false);

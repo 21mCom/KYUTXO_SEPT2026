@@ -114,6 +114,12 @@ router.get('/list-all', async (req, res) => {
     await ensureDir(ATTACHMENTS_DIR);
     
     const result: string[] = [];
+    // Exact total bytes of every attachment FILE on disk. Stored uncompressed in
+    // the backup ZIP, so this is the true number of bytes a restore writes — the
+    // backup export records it in the manifest for an exact restore disk-space
+    // estimate (more reliable than DB metadata, which can miss legacy
+    // root-level files that this walk still includes).
+    let totalBytes = 0;
     
     try {
       const entries = await fs.readdir(ATTACHMENTS_DIR, { withFileTypes: true });
@@ -126,23 +132,33 @@ router.get('/list-all', async (req, res) => {
           for (const file of files) {
             // Return relative paths like "identifier/filename.ext"
             result.push(path.join(entry.name, file));
+            try {
+              totalBytes += (await fs.stat(path.join(subDir, file))).size;
+            } catch {
+              // File vanished between readdir and stat — skip its bytes.
+            }
           }
         } else if (entry.isFile()) {
           // Root-level (single-segment) legacy files. Without this branch they
           // are invisible to backups and the attachment audit, which makes them
           // look "missing" even though they are still on disk.
           result.push(entry.name);
+          try {
+            totalBytes += (await fs.stat(path.join(ATTACHMENTS_DIR, entry.name))).size;
+          } catch {
+            // File vanished between readdir and stat — skip its bytes.
+          }
         }
       }
     } catch (error) {
       // Directory doesn't exist yet - return empty
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-        return res.json({ success: true, files: [] });
+        return res.json({ success: true, files: [], totalBytes: 0 });
       }
       throw error;
     }
     
-    res.json({ success: true, files: result });
+    res.json({ success: true, files: result, totalBytes });
   } catch (error) {
     console.error('List all attachments error:', error);
     res.status(500).json({ error: error instanceof Error ? error.message : 'List failed' });

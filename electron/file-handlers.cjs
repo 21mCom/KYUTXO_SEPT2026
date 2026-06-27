@@ -163,9 +163,15 @@ function registerFileHandlers(ipcMain, { dataDir, attachmentsDir, needsReviewDir
   ipcMain.handle('list-all-attachments', async () => {
     try {
       const result = [];
+      // Exact total bytes of every attachment FILE on disk. Stored uncompressed
+      // in the backup ZIP, so this is the true number of bytes a restore writes —
+      // the backup export records it in the manifest for an exact restore
+      // disk-space estimate (more reliable than DB metadata, which can miss the
+      // legacy root-level files this walk still includes).
+      let totalBytes = 0;
       
       if (!fs.existsSync(attachmentsDir)) {
-        return { success: true, files: [] };
+        return { success: true, files: [], totalBytes: 0 };
       }
       
       // Get all subdirectories (record identifiers)
@@ -179,16 +185,26 @@ function registerFileHandlers(ipcMain, { dataDir, attachmentsDir, needsReviewDir
           for (const file of files) {
             // Return relative paths like "identifier/filename.ext"
             result.push(path.join(entry.name, file));
+            try {
+              totalBytes += fs.statSync(path.join(subDir, file)).size;
+            } catch {
+              // File vanished between readdir and stat — skip its bytes.
+            }
           }
         } else if (entry.isFile()) {
           // Root-level (single-segment) legacy files. Without this branch they
           // are invisible to backups and the attachment audit, which makes them
           // look "missing" even though they are still on disk.
           result.push(entry.name);
+          try {
+            totalBytes += fs.statSync(path.join(attachmentsDir, entry.name)).size;
+          } catch {
+            // File vanished between readdir and stat — skip its bytes.
+          }
         }
       }
       
-      return { success: true, files: result };
+      return { success: true, files: result, totalBytes };
     } catch (error) {
       return { success: false, error: error.message };
     }

@@ -67,6 +67,12 @@ export interface BackupManifest {
   salt?: string; // base64, present iff encrypted
   check?: string; // encrypt(CHECK_SENTINEL), present iff encrypted
   counts: BackupCounts;
+  // Total bytes of all attachment FILES (summed from attachment metadata
+  // `size`). Attachment files are stored UNCOMPRESSED in the ZIP, so this is the
+  // exact number of bytes a restore writes to disk — used by the restore
+  // pre-flight as a precise disk-space estimate. Absent in pre-v3.1 backups,
+  // where callers fall back to the backup file's own size.
+  totalAttachmentBytes?: number;
   streamedTables: string[];
   // Small tables. Plaintext backups use `inline`; encrypted backups use
   // `inlineEnc` (a single base64 envelope of JSON.stringify(inline)).

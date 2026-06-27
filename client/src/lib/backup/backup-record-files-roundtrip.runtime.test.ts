@@ -61,6 +61,7 @@ let uploadFile: typeof import("@/lib/attachments").uploadFile;
 let getFileBlob: typeof import("@/lib/attachments").getFileBlob;
 let exportBackup: typeof import("./export").exportBackup;
 let restoreV3Backup: typeof import("./restore").restoreV3Backup;
+let peekManifest: typeof import("./restore").peekManifest;
 let RestoreInterruptedError: typeof import("./restore").RestoreInterruptedError;
 let MemorySink: typeof import("./sink").MemorySink;
 let blobChunks: typeof import("./zip-stream").blobChunks;
@@ -108,6 +109,7 @@ beforeAll(async () => {
   getFileBlob = attachments.getFileBlob;
   exportBackup = (await import("./export")).exportBackup;
   restoreV3Backup = (await import("./restore")).restoreV3Backup;
+  peekManifest = (await import("./restore")).peekManifest;
   RestoreInterruptedError = (await import("./restore")).RestoreInterruptedError;
   MemorySink = (await import("./sink")).MemorySink;
   blobChunks = (await import("./zip-stream")).blobChunks;
@@ -149,6 +151,13 @@ const attachmentIO = {
     const res = await fetch(`/api/attachments/download/attachments/${relPath}`);
     if (res.ok) return await res.arrayBuffer();
     return null;
+  },
+  // Exact on-disk total (stat sum) the real ExportPage records in the manifest.
+  async totalBytes(): Promise<number | null> {
+    const res = await fetch("/api/attachments/list-all");
+    if (!res.ok) throw new Error(`list-all failed: ${res.status}`);
+    const data = await res.json();
+    return typeof data.totalBytes === "number" ? data.totalBytes : null;
   },
 };
 
@@ -352,6 +361,14 @@ describe("v3 UNENCRYPTED backup full pipeline: record/transaction attachment fil
     expect(result.counts.attachmentFiles).toBe(plan.length);
     expect(result.counts.attachments).toBe(plan.length);
 
+    // The v3 manifest records the EXACT total attachment bytes — the on-disk
+    // size of every attachment FILE the export wrote into the zip — which the
+    // restore pre-flight uses as a precise disk-space estimate instead of the
+    // compression-inflated backup file size. With one file per attachment and
+    // text bodies, the on-disk total equals the summed plan byte lengths.
+    const expectedTotalBytes = plan.reduce((sum, p) => sum + p.bytes.length, 0);
+    expect(result.manifest.totalAttachmentBytes).toBe(expectedTotalBytes);
+
     // 7. The restored records must coexist with the collision rows; pull the
     //    full record set and index by inputString.
     const allRecords = await recordCrud.getAllRecords();
@@ -377,6 +394,56 @@ describe("v3 UNENCRYPTED backup full pipeline: record/transaction attachment fil
       const actualBytes = await fetchBytesViaPath(att.objectStoragePath, att.mimeType);
       expect(actualBytes).toBe(expectedBytesByInput.get(linkedInput!));
     }
+  });
+
+  // Guards the EXACT-estimate guarantee against the DB-metadata blind spot the
+  // code review flagged: the manifest's totalAttachmentBytes must equal the
+  // bytes of the FILES actually written into the zip, NOT the sum of the
+  // `db.attachments` metadata `size`. Those two diverge whenever a file lives on
+  // disk with no matching DB row — e.g. a legacy root-level attachment that the
+  // export's list-all walk still bundles. Here we plant exactly such an orphan
+  // file (no DB row) and assert the manifest total includes its bytes, so the
+  // restore pre-flight does not UNDER-estimate disk space and fail mid-restore.
+  it("records the on-disk file total (not the DB metadata sum) when a file has no DB row", async () => {
+    // Clean disk so list-all reflects only this test's files.
+    await wipeDiskFiles();
+
+    const plan: Plan[] = [
+      { type: "address", inputString: "bc1qaddressone", filename: "receipt.txt", bytes: "RECEIPT-BYTES-ADDR-ONE" },
+      { type: "transaction", inputString: "txid-aaaa-1111", filename: "txproof.txt", bytes: "TXPROOF-BYTES-TX-AAAA" },
+    ];
+    await seedRecordsWithAttachments(plan);
+
+    // Plant a legacy root-level file directly on disk with NO db.attachments row.
+    // The export's list-all walk bundles it into the zip, but a metadata-based
+    // sum would miss it entirely — the exact under-estimate this test guards.
+    const orphanBytes = "ORPHAN-LEGACY-FILE-BYTES-NO-DB-ROW";
+    const attachmentsDir = path.join(tmpDataDir, "attachments");
+    await fs.mkdir(attachmentsDir, { recursive: true });
+    await fs.writeFile(path.join(attachmentsDir, "legacy-orphan.txt"), orphanBytes);
+
+    const dbMetadataSum = await attachmentsCrud.sumAttachmentSizes();
+    const planBytes = plan.reduce((sum, p) => sum + p.bytes.length, 0);
+    const onDiskTotal = planBytes + orphanBytes.length;
+    // Sanity: the on-disk total must genuinely exceed the DB metadata sum, or the
+    // test would pass even if the export fell back to the metadata sum.
+    expect(dbMetadataSum).toBe(planBytes);
+    expect(onDiskTotal).toBeGreaterThan(dbMetadataSum);
+
+    const sink = new MemorySink();
+    await exportBackup({
+      sink: sink as any,
+      encrypted: false,
+      batchSize: 50,
+      attachmentIO,
+    });
+    const blob = sink.blob as Blob;
+
+    // Read the manifest (first zip entry) straight from the produced backup —
+    // the same path the restore pre-flight uses to size disk space.
+    const manifest = await peekManifest(blobChunks(blob));
+    expect(manifest.totalAttachmentBytes).toBe(onDiskTotal);
+    expect(manifest.totalAttachmentBytes).not.toBe(dbMetadataSum);
   });
 
   // Companion to the happy path above: a single record attachment file's write

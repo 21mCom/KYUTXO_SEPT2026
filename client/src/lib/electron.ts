@@ -191,7 +191,7 @@ interface ElectronAPI {
   deleteAttachment: (relativePath: string) => Promise<{ success: boolean; error?: string }>;
   listAttachments: (identifier: string) => Promise<{ success: boolean; files?: string[]; error?: string }>;
   // Backup/restore operations
-  listAllAttachments: () => Promise<{ success: boolean; files?: string[]; error?: string }>;
+  listAllAttachments: () => Promise<{ success: boolean; files?: string[]; totalBytes?: number; error?: string }>;
   writeAttachment: (relativePath: string, data: ArrayBuffer) => Promise<{ success: boolean; error?: string }>;
   renameAttachment: (oldPath: string, newPath: string) => Promise<{ success: boolean; error?: string }>;
   // Streaming backup writer (export) — chunks are written straight to disk.
