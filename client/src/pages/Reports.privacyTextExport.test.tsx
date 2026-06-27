@@ -116,6 +116,25 @@ vi.mock("@/lib/privacy-audit", async (importOriginal) => {
 });
 
 const { PrivacyAuditReportPanel } = await import("./Reports");
+const { runPrivacyAudit } = await import("@/lib/privacy-audit");
+
+// A sub-1-point finding (scoreDelta between -1 and 0). formatScoreDelta renders
+// these as the tiny-penalty "<-1 pts" label rather than rounding to "0 pts".
+const TINY_PENALTY_RESULT = {
+  ...mockResult,
+  findings: [
+    {
+      type: "FINGERPRINT_NVERSION",
+      severity: "LOW",
+      description: "Transaction uses a non-default nVersion.",
+      details: {},
+      correction: "Use a wallet with standard transaction construction.",
+      txids: ["tx1"],
+      addresses: [],
+      scoreDelta: -0.4,
+    },
+  ],
+};
 
 // ── DOM stubs ────────────────────────────────────────────────────────────────
 // jsdom doesn't implement URL.createObjectURL or anchor navigation, and Radix
@@ -198,6 +217,20 @@ describe("PrivacyAuditReportPanel — Export Text", () => {
     expect(text).toContain("PRIVACY AUDIT REPORT");
     expect(text).toContain("Grade: B");
     expect(text).toContain("Address reused across multiple transactions.");
+  });
+
+  it("emits the tiny-penalty '<-1 pts' label for a sub-1-point finding", async () => {
+    // A regression in the export path could silently re-hide sub-1-point
+    // penalties in the document users actually save. The audit returns a finding
+    // whose -0.4 scoreDelta must surface as "<-1 pts" — not rounded away to 0.
+    vi.mocked(runPrivacyAudit).mockResolvedValueOnce(TINY_PENALTY_RESULT as any);
+
+    const { getByTestId } = await renderWithResult();
+    fireEvent.click(getByTestId("button-export-privacy-report-text"));
+    await waitFor(() => expect(createObjectURL).toHaveBeenCalledTimes(1));
+
+    const text = await (createObjectURL.mock.calls[0][0] as Blob).text();
+    expect(text).toContain("Score Impact: <-1 pts");
   });
 });
 

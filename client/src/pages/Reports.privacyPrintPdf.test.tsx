@@ -133,6 +133,26 @@ const { getRecordsPageByTypeIdReverseKeyset } = await import("@/lib/data/record-
 // byte-for-byte what the builder produces for this result + scope (the only
 // non-deterministic part — the generated-at timestamp — is normalized out).
 const { buildPrintableReport } = await import("@/lib/privacy-report-html");
+const { runPrivacyAudit } = await import("@/lib/privacy-audit");
+
+// A sub-1-point finding (scoreDelta between -1 and 0). The printable HTML renders
+// these as the tiny-penalty "<-1 pts" chip (HTML-escaped to "&lt;-1 pts") rather
+// than rounding the penalty away to "0 pts".
+const TINY_PENALTY_RESULT = {
+  ...mockResult,
+  findings: [
+    {
+      type: "FINGERPRINT_NVERSION",
+      severity: "LOW",
+      description: "Transaction uses a non-default nVersion.",
+      details: {},
+      correction: "Use a wallet with standard transaction construction.",
+      txids: ["tx1"],
+      addresses: [],
+      scoreDelta: -0.4,
+    },
+  ],
+};
 
 // The printable HTML embeds the generation time in two spots (the <title> date
 // and the "Generated …" subtitle). Normalize both so an exact-match comparison
@@ -278,6 +298,22 @@ describe("PrivacyAuditReportPanel — Print / PDF", () => {
     const written = fake.getWritten();
     const expected = buildPrintableReport(mockResult as any, { owner: null, wallet: null });
     expect(normalizeReportDates(written)).toBe(normalizeReportDates(expected));
+  });
+
+  it("renders the tiny-penalty '<-1 pts' chip in the printable HTML for a sub-1-point finding", async () => {
+    // A regression in the print/PDF path could silently re-hide sub-1-point
+    // penalties in the document users save/share. The audit returns a finding
+    // whose -0.4 scoreDelta must surface as the "<-1 pts" chip — HTML-escaped to
+    // "&lt;-1 pts" — not rounded away to "0 pts".
+    const fake = makeFakeWindow();
+    vi.spyOn(window, "open").mockReturnValue(fake.win);
+    vi.mocked(runPrivacyAudit).mockResolvedValueOnce(TINY_PENALTY_RESULT as any);
+
+    const { getByTestId } = await renderWithResult();
+    fireEvent.click(getByTestId("button-print-privacy-report"));
+
+    const html = fake.getWritten();
+    expect(html).toContain('<span class="finding-score">&lt;-1 pts</span>');
   });
 
   it("shows a destructive toast and does not write/print when the pop-up is blocked (window.open returns null)", async () => {
