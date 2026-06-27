@@ -388,6 +388,56 @@ describe("TransactionDeepDive CoinJoin Sankey wiring", () => {
     expect(await screen.findByTestId("container-coinjoin-sankey")).toBeTruthy();
   });
 
+  it("keeps the Sankey for a flagged CoinJoin even when Boltzmann is too complex (>8×8)", async () => {
+    // A large CoinJoin: nine equal inputs → nine equal outputs. Nine inputs
+    // exceeds MAX_INPUTS (8) so computeBoltzmann returns tooComplex, but
+    // buildSankey has no size cap and still produces proportional links. This
+    // is exactly the large mix a user most wants to inspect, so the Sankey must
+    // NOT be gated on a successful Boltzmann result.
+    const inputs = Array.from({ length: 9 }, (_, i) => ({
+      txid: TXID,
+      role: "input",
+      address: `bc1qin${i}`,
+      amount: 100_000,
+      vout: i,
+    }));
+    const outputs = Array.from({ length: 9 }, (_, i) => ({
+      txid: TXID,
+      role: "output",
+      address: `bc1qout${i}`,
+      amount: 100_000,
+      vout: i,
+    }));
+    mockedGetTx.mockResolvedValue({ txid: TXID, fee: 0 } as any);
+    mockedGetParticipants.mockResolvedValue([...inputs, ...outputs] as any);
+
+    // The analysed txid is flagged as a CoinJoin.
+    renderDeepDive(new Set<string>([TXID]));
+    fireEvent.click(screen.getByTestId("button-analyse-deep-dive"));
+
+    await waitFor(() => {
+      expect(lastWorker).not.toBeNull();
+      expect(lastWorker!.postMessage).toHaveBeenCalled();
+    });
+
+    // The real worker computation hits the too-complex branch.
+    let result!: ReturnType<typeof computeBoltzmann>;
+    act(() => {
+      result = lastWorker!.deliverReal();
+    });
+    expect(result.tooComplex).toBe(true);
+
+    // The Boltzmann panel shows the too-complex message (no entropy numbers)…
+    const container = await screen.findByTestId("container-boltzmann-result");
+    expect(container.textContent).toContain(
+      "too many inputs/outputs for exact Boltzmann analysis",
+    );
+    expect(screen.queryByTestId("text-boltzmann-entropy")).toBeNull();
+
+    // …and the CoinJoin Sankey still renders alongside it.
+    expect(await screen.findByTestId("container-coinjoin-sankey")).toBeTruthy();
+  });
+
   it("does not render the Sankey for a non-CoinJoin txid (Boltzmann result still shows)", async () => {
     // Same participant shape, but the txid is NOT flagged as a CoinJoin.
     seedCoinjoinShapedTx();
