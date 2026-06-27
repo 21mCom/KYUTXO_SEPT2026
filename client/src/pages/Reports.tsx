@@ -470,7 +470,7 @@ export function PrivacyAuditReportPanel() {
                         <div className="font-medium" data-testid={`text-privacy-finding-type-${i}`}>{FINDING_TYPE_LABELS[f.type] ?? f.type}</div>
                         <div className="text-xs text-muted-foreground mt-0.5 line-clamp-2" data-testid={`text-privacy-finding-desc-${i}`}>{renderSourceNote(f.description)}</div>
                         {f.correction && (
-                          <div className="text-xs text-muted-foreground mt-0.5 italic">Fix: {renderSourceNote(f.correction)}</div>
+                          <div className="text-xs text-muted-foreground mt-0.5 italic" data-testid={`text-privacy-finding-fix-${i}`}>Fix: {renderSourceNote(f.correction)}</div>
                         )}
                         <div className="text-xs text-muted-foreground mt-0.5">
                           {f.addresses.length > 0 && <span>{f.addresses.length} address(es)</span>}
