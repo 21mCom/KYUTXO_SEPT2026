@@ -236,6 +236,142 @@ describe("computeAnnualActivity — address both sends and receives in one tx", 
   });
 });
 
+describe("computeAnnualActivity — blank-address spend via the prevout fallback", () => {
+  it("counts a blank-address spend recovered from spentOutputAmounts and adds change back to self", () => {
+    // CONSOL spends a prior UTXO of MINE, but the input row's address is blank
+    // (never resolved), so the address-index lookup misses it entirely. The
+    // spend is recoverable only through spendingTxids + spentOutputAmounts.
+    const participants = [
+      mkInput(CONSOL, "", 0, SRC_A, 0, 1), // blank-address input
+      mkOutput(CONSOL, MINE, 90_000, 0, 2), // change back to self
+    ];
+
+    const result = computeAnnualActivity({
+      addresses: [MINE],
+      txids: [CONSOL],
+      txMap: new Map([[CONSOL, mkTx(CONSOL, TIME_2024)]]),
+      allTxParticipants: participantMap(participants),
+      spendingTxids: new Set([CONSOL]),
+      spentOutputAmounts: new Map([
+        [`${CONSOL}:${SRC_A}:0`, { amount: 100_000, address: MINE }],
+      ]),
+      outputAmountLookup: new Map(),
+    });
+
+    expect(result.combinedYearRows).toHaveLength(1);
+    const row = result.combinedYearRows[0];
+    expect(row.year).toBe(2024);
+    // Spend recovered via the fallback even though the input address is blank.
+    expect(row.spentSats).toBe(100_000);
+    // Change-back-to-self output is still counted (exactly once).
+    expect(row.receivedSats).toBe(90_000);
+    expect(row.txCount).toBe(1);
+
+    // Per-address breakdown mirrors the combined totals.
+    const mine = result.perAddress.find((a) => a.address === MINE)!;
+    expect(mine.hasData).toBe(true);
+    expect(mine.yearRows[0]).toMatchObject({
+      year: 2024,
+      txCount: 1,
+      receivedSats: 90_000,
+      spentSats: 100_000,
+    });
+
+    // The blank input means the spend's source could not be resolved.
+    expect(result.unresolvedSentToCount).toBe(1);
+  });
+
+  it("does not double-count a prevout already attributed to a resolved direct input", () => {
+    // SELF has a resolved direct input for MINE (50k) AND the same prevout also
+    // appears in spentOutputAmounts. seenPrevouts must stop the fallback from
+    // adding the spend a second time.
+    const participants = [
+      mkInput(SELF, MINE, 50_000, SRC_A, 0, 1), // resolved direct input
+      mkOutput(SELF, MINE, 45_000, 0, 2),
+    ];
+
+    const result = computeAnnualActivity({
+      addresses: [MINE],
+      txids: [SELF],
+      txMap: new Map([[SELF, mkTx(SELF, TIME_2023)]]),
+      allTxParticipants: participantMap(participants),
+      spendingTxids: new Set([SELF]),
+      spentOutputAmounts: new Map([
+        [`${SELF}:${SRC_A}:0`, { amount: 50_000, address: MINE }],
+      ]),
+      outputAmountLookup: new Map(),
+    });
+
+    const row = result.combinedYearRows[0];
+    // Counted ONCE (50k), not 100k.
+    expect(row.spentSats).toBe(50_000);
+    expect(row.receivedSats).toBe(45_000);
+    expect(row.txCount).toBe(1);
+    // A resolved direct input exists, so this is not an unresolved spend.
+    expect(result.unresolvedSentToCount).toBe(0);
+  });
+
+  it("counts both a resolved input and a separate blank-address prevout in one tx", () => {
+    // CONSOL spends two of MINE's prior UTXOs: one resolved directly (30k), one
+    // whose input row is blank and only recoverable via the fallback (40k). The
+    // resolved prevout must not be re-added; the blank one must be added.
+    const participants = [
+      mkInput(CONSOL, MINE, 30_000, SRC_A, 0, 1), // resolved direct input
+      mkInput(CONSOL, "", 0, SRC_B, 0, 2), // blank input → fallback only
+      mkOutput(CONSOL, MINE, 60_000, 0, 3),
+    ];
+
+    const result = computeAnnualActivity({
+      addresses: [MINE],
+      txids: [CONSOL],
+      txMap: new Map([[CONSOL, mkTx(CONSOL, TIME_2024)]]),
+      allTxParticipants: participantMap(participants),
+      spendingTxids: new Set([CONSOL]),
+      spentOutputAmounts: new Map([
+        [`${CONSOL}:${SRC_A}:0`, { amount: 30_000, address: MINE }], // already resolved → skipped
+        [`${CONSOL}:${SRC_B}:0`, { amount: 40_000, address: MINE }], // fallback adds this
+      ]),
+      outputAmountLookup: new Map(),
+    });
+
+    const row = result.combinedYearRows[0];
+    // 30k (resolved, counted once) + 40k (fallback) = 70k.
+    expect(row.spentSats).toBe(70_000);
+    expect(row.receivedSats).toBe(60_000);
+    expect(row.txCount).toBe(1);
+  });
+
+  it("flags unresolvedSentToCount and lists the real external recipient for a blank-input spend", () => {
+    // SELF spends a UTXO of MINE via a blank input and pays an external address.
+    const participants = [
+      mkInput(SELF, "", 0, SRC_A, 0, 1), // blank input
+      mkOutput(SELF, EXT_Y, 95_000, 0, 2), // real external payment
+    ];
+
+    const result = computeAnnualActivity({
+      addresses: [MINE],
+      txids: [SELF],
+      txMap: new Map([[SELF, mkTx(SELF, TIME_2023)]]),
+      allTxParticipants: participantMap(participants),
+      spendingTxids: new Set([SELF]),
+      spentOutputAmounts: new Map([
+        [`${SELF}:${SRC_A}:0`, { amount: 100_000, address: MINE }],
+      ]),
+      outputAmountLookup: new Map(),
+    });
+
+    const row = result.combinedYearRows[0];
+    expect(row.spentSats).toBe(100_000);
+    expect(row.receivedSats).toBe(0);
+    expect(row.txCount).toBe(1);
+
+    // Blank input → the spend's source is unresolved.
+    expect(result.unresolvedSentToCount).toBe(1);
+    // The genuine external recipient is still recorded as a counterparty.
+    expect(result.sentTo.map((e) => e.address)).toContain(EXT_Y);
+  });
+});
+
 describe("computeAnnualActivity — two pasted addresses trade in one tx", () => {
   it("sums A's spend and B's receipt without listing either as the other's counterparty", () => {
     // SELF tx: pasted address MINE_A is an input (spends 100k) and pasted
