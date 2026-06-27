@@ -877,6 +877,75 @@ describe("SettingsPage — entity list import (merge mode) only-changed filter",
     // search-narrowed subset.
     expect(overridesTabText()).toContain("Overrides (2, 1 changed)");
   });
+
+  // Transition behavior: a reviewer who narrows the diff *while the toggle is
+  // ON* and then clears the filter must see the changed-override set re-expand.
+  // The regression guarded here is the toggle silently turning itself off, or a
+  // stale changed-only empty label lingering because filteredOverrides did not
+  // recompute when the search/category cleared.
+  function toggleState() {
+    return screen
+      .getByTestId("switch-overrides-only-changed")
+      .getAttribute("data-state");
+  }
+
+  it("re-expands the changed overrides and drops the stale empty label when the search box is cleared with the toggle still ON", async () => {
+    const { identicalBase, CHANGED_NAME } = await openChangedPlusIdenticalDiff();
+
+    // Toggle ON first: only the lone changed override is shown.
+    toggleOnlyChanged();
+    await waitFor(() => expect(overrideRows()).toHaveLength(1));
+    expect(screen.getByText(CHANGED_NAME)).toBeTruthy();
+    expect(toggleState()).toBe("checked");
+
+    // Narrow by a token unique to the identical re-import (its address), so the
+    // changed override drops out. searchedOverrides is non-empty (the identical
+    // one matches), so the changed-only empty label wins.
+    typeSearch(identicalBase.address);
+    const empty = await screen.findByTestId("text-entity-overrides-empty");
+    expect(empty.textContent).toContain(
+      "No overrides change anything — every match is identical to the bundled entry.",
+    );
+    expect(overrideRows()).toHaveLength(0);
+
+    // Clear the search box: the full changed-override set must re-expand...
+    typeSearch("");
+    await waitFor(() => expect(overrideRows()).toHaveLength(1));
+    expect(screen.getByText(CHANGED_NAME)).toBeTruthy();
+    // ...the toggle must stay ON (it is not tied to the filter state)...
+    expect(toggleState()).toBe("checked");
+    // ...and no stale empty label lingers.
+    expect(screen.queryByTestId("text-entity-overrides-empty")).toBeNull();
+  });
+
+  it("re-expands the changed overrides and drops the stale empty label when the category is reset to 'all' with the toggle still ON", async () => {
+    const { CHANGED_NAME } = await openChangedPlusIdenticalDiff();
+
+    // Toggle ON first: only the lone changed override is shown.
+    toggleOnlyChanged();
+    await waitFor(() => expect(overrideRows()).toHaveLength(1));
+    expect(screen.getByText(CHANGED_NAME)).toBeTruthy();
+    expect(toggleState()).toBe("checked");
+
+    // Narrow by the "mixer" category, which matches ONLY the identical re-import
+    // (the changed override is exchange → gambling). With the toggle ON the list
+    // empties to the changed-only label.
+    setCategory("mixer");
+    const empty = await screen.findByTestId("text-entity-overrides-empty");
+    expect(empty.textContent).toContain(
+      "No overrides change anything — every match is identical to the bundled entry.",
+    );
+    expect(overrideRows()).toHaveLength(0);
+
+    // Reset the category back to "all": the changed-override set re-expands...
+    setCategory("all");
+    await waitFor(() => expect(overrideRows()).toHaveLength(1));
+    expect(screen.getByText(CHANGED_NAME)).toBeTruthy();
+    // ...the toggle stays ON...
+    expect(toggleState()).toBe("checked");
+    // ...and no stale empty label lingers.
+    expect(screen.queryByTestId("text-entity-overrides-empty")).toBeNull();
+  });
 });
 
 describe("SettingsPage — entity list import (merge mode) source-note diff", () => {
