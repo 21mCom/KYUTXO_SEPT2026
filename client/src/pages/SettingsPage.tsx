@@ -114,7 +114,7 @@ import {
 } from "@/lib/vault";
 import JSZip from "jszip";
 import { peekManifest, restoreV3Backup, RestoreInterruptedError, type AttachmentFileWriter } from "@/lib/backup/restore";
-import { BackupCancelledError } from "@/lib/backup/sink";
+import { BackupCancelledError, downloadBlob } from "@/lib/backup/sink";
 import { blobChunks } from "@/lib/backup/zip-stream";
 import { isV3Manifest, parseInline } from "@/lib/backup/format";
 import VocabularyManager from "@/components/VocabularyManager";
@@ -663,6 +663,21 @@ function EntityErrorGroupItem({
     });
   };
 
+  // Saves the raw offending entries to a JSON file so large error groups can be
+  // fixed and re-imported without the awkwardness of a giant clipboard paste.
+  // The error kind is in the filename so downloading several groups never
+  // overwrites a previous file.
+  const handleDownload = () => {
+    const text = JSON.stringify(entriesWithRaw.map((err) => err.rawEntry), null, 2);
+    const blob = new Blob([text], { type: "application/json" });
+    downloadBlob(blob, `entity-import-errors-${group.kind}.json`);
+    const jsonCount = entriesWithRaw.length;
+    toast({
+      title: "Download started",
+      description: `${jsonCount.toLocaleString()} ${jsonCount === 1 ? "entry" : "entries"} saved as JSON.`,
+    });
+  };
+
   return (
     <div
       className="rounded-md border border-destructive/40 overflow-hidden"
@@ -718,6 +733,18 @@ function EntityErrorGroupItem({
               >
                 <Copy className="h-4 w-4" />
                 Copy entries (JSON)
+              </Button>
+            )}
+            {entriesWithRaw.length > 0 && (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={handleDownload}
+                data-testid={`button-download-entity-error-json-${group.kind}`}
+              >
+                <Download className="h-4 w-4" />
+                Download entries (JSON)
               </Button>
             )}
           </div>
