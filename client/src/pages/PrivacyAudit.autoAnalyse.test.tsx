@@ -18,7 +18,7 @@
 // with a known result and assert what renders.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, cleanup, waitFor, act } from "@testing-library/react";
+import { render, screen, cleanup, waitFor, act, fireEvent } from "@testing-library/react";
 
 vi.mock("@/lib/data/transaction-crud", () => ({
   getTransactionByTxid: vi.fn(),
@@ -101,6 +101,17 @@ async function driveError(message: string) {
   });
   act(() => {
     lastWorker!.onerror!({ message } as { message: string });
+  });
+}
+
+// After a Retry (re-running analyse), wait until the worker has been posted to
+// `count` times before driving its next callback — otherwise we'd fire against
+// the *previous* run's handler before the retry's async load reattaches a fresh
+// onmessage/onerror and posts again.
+async function waitForPostCount(count: number) {
+  await waitFor(() => {
+    expect(lastWorker).not.toBeNull();
+    expect(lastWorker!.postMessage).toHaveBeenCalledTimes(count);
   });
 }
 
@@ -262,5 +273,74 @@ describe("TransactionDeepDive auto-run — the calculation itself fails", () => 
     // The calculation never produced a result, so no heatmap or results render.
     expect(screen.queryByTestId("container-boltzmann-result")).toBeNull();
     expect(screen.queryByTestId("container-boltzmann-heatmap")).toBeNull();
+  });
+});
+
+describe("TransactionDeepDive — Retry recovers after a crashed calculation", () => {
+  it("re-runs the analysis on Retry and recovers to a heatmap + summary", async () => {
+    // A transient crash should be fully recoverable: after the worker errors,
+    // clicking Retry must re-run the analysis and — given a valid result this
+    // time — clear the failure and land the user on real results.
+    render(<TransactionDeepDive txids={[TXID]} coinjoinTxids={new Set<string>()} autoAnalyse />);
+
+    // The auto-run posts to the worker, which then crashes.
+    await driveError("RangeError: too many interpretations");
+
+    // The failure message and Retry button are surfaced, and no results yet.
+    expect((await screen.findByTestId("text-deep-dive-message")).textContent).toContain(
+      "Couldn't analyse this transaction — the calculation failed unexpectedly.",
+    );
+    const retry = await screen.findByTestId("button-retry-deep-dive");
+    expect(screen.queryByTestId("container-boltzmann-result")).toBeNull();
+
+    // Click Retry — the analysis re-runs and posts to the worker a second time.
+    fireEvent.click(retry);
+    await waitForPostCount(2);
+
+    // This time the worker returns a valid result.
+    await driveResult(successResult());
+
+    // The failure message and Retry affordance clear once results arrive.
+    await waitFor(() => {
+      expect(screen.queryByTestId("text-deep-dive-message")).toBeNull();
+    });
+    expect(screen.queryByTestId("button-retry-deep-dive")).toBeNull();
+
+    // The heatmap, summary, and result metrics all render from the retry result.
+    expect(await screen.findByTestId("container-boltzmann-result")).toBeTruthy();
+    expect(await screen.findByTestId("container-boltzmann-heatmap")).toBeTruthy();
+    expect(screen.getByTestId("container-deep-dive-summary")).toBeTruthy();
+    expect(screen.getByTestId("cell-heatmap-0-0").textContent).toBe("100");
+    expect(screen.getByTestId("text-boltzmann-entropy").textContent).toBe("1.50 bits");
+
+    // The participant data was loaded once per run (auto-run + retry).
+    expect(mockedGetParticipants).toHaveBeenCalledTimes(2);
+  });
+
+  it("shows the 'failed more than once' guidance after a second consecutive failure", async () => {
+    // The next-steps guidance is gated on failCount >= 2, so it must not appear
+    // on the first crash but should after a retry that crashes again.
+    render(<TransactionDeepDive txids={[TXID]} coinjoinTxids={new Set<string>()} autoAnalyse />);
+
+    // First crash: the failure message shows, but the extra guidance does not.
+    await driveError("RangeError: too many interpretations");
+    await screen.findByTestId("button-retry-deep-dive");
+    expect(screen.queryByTestId("text-deep-dive-next-steps")).toBeNull();
+
+    // Retry, then crash a second time.
+    fireEvent.click(screen.getByTestId("button-retry-deep-dive"));
+    await waitForPostCount(2);
+    act(() => {
+      lastWorker!.onerror!({ message: "RangeError: again" } as { message: string });
+    });
+
+    // After two consecutive failures the extra guidance is now offered.
+    expect(await screen.findByTestId("text-deep-dive-next-steps")).toBeTruthy();
+    expect(screen.getByTestId("text-deep-dive-next-steps").textContent).toContain(
+      "This has failed more than once",
+    );
+
+    // Still retryable — the Retry button persists for a third attempt.
+    expect(screen.getByTestId("button-retry-deep-dive")).toBeTruthy();
   });
 });
