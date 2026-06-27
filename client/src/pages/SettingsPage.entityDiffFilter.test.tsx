@@ -73,7 +73,9 @@ vi.mock("@/components/ui/select", async () => {
 });
 
 const SettingsPage = (await import("./SettingsPage")).default;
-const { ActivityBusProvider } = await import("@/lib/activity-bus");
+const { renderWithSettingsProviders } = await import(
+  "@/test/settingsTestProviders"
+);
 const { putSettings } = await import("@/lib/data/settings-crud");
 const { resetActiveEntityList, setActiveEntityList } = await import(
   "@/lib/privacy-entity-list"
@@ -150,11 +152,7 @@ afterEach(() => {
 
 describe("SettingsPage — import diff category filter", () => {
   async function openDiff() {
-    render(
-      <ActivityBusProvider>
-        <SettingsPage />
-      </ActivityBusProvider>,
-    );
+    renderWithSettingsProviders(<SettingsPage />);
     await screen.findByTestId("badge-entity-source");
 
     // Replace the active list with our small known baseline so the diff is

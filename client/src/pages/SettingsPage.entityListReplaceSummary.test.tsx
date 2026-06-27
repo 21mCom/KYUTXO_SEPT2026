@@ -43,11 +43,9 @@ vi.mock("@/components/MigrationAuditPanel", () => ({ default: () => null }));
 vi.mock("@/components/LegacyRecoveryPanel", () => ({ default: () => null }));
 
 const SettingsPage = (await import("./SettingsPage")).default;
-const { ActivityBusProvider } = await import("@/lib/activity-bus");
-const { RecordPreviewProvider } = await import(
-  "@/contexts/RecordPreviewContext"
+const { renderWithSettingsProviders } = await import(
+  "@/test/settingsTestProviders"
 );
-const { TooltipProvider } = await import("@/components/ui/tooltip");
 const { putSettings } = await import("@/lib/data/settings-crud");
 const { resetActiveEntityList, setActiveEntityList } = await import(
   "@/lib/privacy-entity-list"
@@ -82,15 +80,7 @@ async function selectEntityFile(name: string, contents: string) {
 }
 
 function renderPage() {
-  render(
-    <ActivityBusProvider>
-      <TooltipProvider>
-        <RecordPreviewProvider>
-          <SettingsPage />
-        </RecordPreviewProvider>
-      </TooltipProvider>
-    </ActivityBusProvider>,
-  );
+  renderWithSettingsProviders(<SettingsPage />);
 }
 
 beforeEach(async () => {

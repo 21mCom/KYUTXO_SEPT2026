@@ -112,7 +112,9 @@ vi.mock("@/lib/txid-backfill", () => ({
 }));
 
 const SettingsPage = (await import("./SettingsPage")).default;
-const { ActivityBusProvider } = await import("@/lib/activity-bus");
+const { renderWithSettingsProviders } = await import(
+  "@/test/settingsTestProviders"
+);
 const { putSettings } = await import("@/lib/data/settings-crud");
 import type { Settings } from "@/lib/db-types";
 
@@ -128,11 +130,7 @@ afterEach(() => {
 
 describe("SettingsPage — Resolve Input Addresses cancel progress", () => {
   it("shows the post-cancel recompute progress, then fires the cancel toast", async () => {
-    render(
-      <ActivityBusProvider>
-        <SettingsPage />
-      </ActivityBusProvider>,
-    );
+    renderWithSettingsProviders(<SettingsPage />);
 
     // Start the pass.
     fireEvent.click(await screen.findByTestId("button-resolve-inputs"));

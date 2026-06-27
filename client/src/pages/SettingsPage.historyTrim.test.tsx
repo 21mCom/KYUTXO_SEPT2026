@@ -90,7 +90,9 @@ vi.mock("@/components/MigrationAuditPanel", () => ({ default: () => null }));
 vi.mock("@/components/LegacyRecoveryPanel", () => ({ default: () => null }));
 
 const SettingsPage = (await import("./SettingsPage")).default;
-const { ActivityBusProvider } = await import("@/lib/activity-bus");
+const { renderWithSettingsProviders } = await import(
+  "@/test/settingsTestProviders"
+);
 const { putSettings, getSettings } = await import("@/lib/data/settings-crud");
 const { getPrivacyAuditHistoryCount } = await import("@/lib/data/privacy-history-crud");
 const { db } = await import("@/lib/database");
@@ -145,11 +147,7 @@ describe("SettingsPage — Privacy Audit History retention guard", () => {
     // 60 stored runs, default limit 30. Lowering to 10 would remove 50 (>20).
     await seedRuns(60);
 
-    render(
-      <ActivityBusProvider>
-        <SettingsPage />
-      </ActivityBusProvider>,
-    );
+    renderWithSettingsProviders(<SettingsPage />);
 
     await lowerLimitTo("10");
 
@@ -170,11 +168,7 @@ describe("SettingsPage — Privacy Audit History retention guard", () => {
   it("cancelling the dialog leaves the limit unchanged and deletes nothing", async () => {
     await seedRuns(60);
 
-    render(
-      <ActivityBusProvider>
-        <SettingsPage />
-      </ActivityBusProvider>,
-    );
+    renderWithSettingsProviders(<SettingsPage />);
 
     await lowerLimitTo("10");
     fireEvent.click(await screen.findByTestId("button-cancel-history-trim"));
@@ -193,11 +187,7 @@ describe("SettingsPage — Privacy Audit History retention guard", () => {
   it("confirming trims the runs and shows the removal toast", async () => {
     await seedRuns(60);
 
-    render(
-      <ActivityBusProvider>
-        <SettingsPage />
-      </ActivityBusProvider>,
-    );
+    renderWithSettingsProviders(<SettingsPage />);
 
     await lowerLimitTo("10");
     fireEvent.click(await screen.findByTestId("button-confirm-history-trim"));
@@ -224,11 +214,7 @@ describe("SettingsPage — Privacy Audit History retention guard", () => {
     // applies straight away with no confirmation step.
     await seedRuns(25);
 
-    render(
-      <ActivityBusProvider>
-        <SettingsPage />
-      </ActivityBusProvider>,
-    );
+    renderWithSettingsProviders(<SettingsPage />);
 
     await lowerLimitTo("10");
 

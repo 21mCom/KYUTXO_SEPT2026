@@ -42,7 +42,9 @@ vi.mock("@/components/MigrationAuditPanel", () => ({ default: () => null }));
 vi.mock("@/components/LegacyRecoveryPanel", () => ({ default: () => null }));
 
 const SettingsPage = (await import("./SettingsPage")).default;
-const { ActivityBusProvider } = await import("@/lib/activity-bus");
+const { renderWithSettingsProviders } = await import(
+  "@/test/settingsTestProviders"
+);
 const { putSettings } = await import("@/lib/data/settings-crud");
 const { resetActiveEntityList, setActiveEntityList, getBundledEntityList } =
   await import("@/lib/privacy-entity-list");
@@ -81,11 +83,7 @@ function selectMergeMode() {
 }
 
 function renderPage() {
-  render(
-    <ActivityBusProvider>
-      <SettingsPage />
-    </ActivityBusProvider>,
-  );
+  renderWithSettingsProviders(<SettingsPage />);
 }
 
 beforeEach(async () => {

@@ -124,9 +124,9 @@ vi.mock("@/components/ui/select", async () => {
 });
 
 const SettingsPage = (await import("./SettingsPage")).default;
-const { ActivityBusProvider } = await import("@/lib/activity-bus");
-const { RecordPreviewProvider } = await import("@/contexts/RecordPreviewContext");
-const { TooltipProvider } = await import("@/components/ui/tooltip");
+const { renderWithSettingsProviders } = await import(
+  "@/test/settingsTestProviders"
+);
 const { putSettings, getSettings } = await import("@/lib/data/settings-crud");
 const {
   resetActiveEntityList,
@@ -175,15 +175,7 @@ function setErrorKind(value: string) {
 // calls useRecordPreview and throws outside a RecordPreviewProvider. Wrap the
 // page in both providers so those clickable links can mount.
 function renderSettingsPage() {
-  return render(
-    <ActivityBusProvider>
-      <TooltipProvider>
-        <RecordPreviewProvider>
-          <SettingsPage />
-        </RecordPreviewProvider>
-      </TooltipProvider>
-    </ActivityBusProvider>,
-  );
+  return renderWithSettingsProviders(<SettingsPage />);
 }
 
 beforeEach(async () => {
@@ -266,11 +258,7 @@ describe("SettingsPage — Privacy Audit Entity List panel", () => {
       { address: addrs[5], name: "Cur Gamble 1", category: "gambling" },
     ];
 
-    render(
-      <ActivityBusProvider>
-        <SettingsPage />
-      </ActivityBusProvider>,
-    );
+    renderWithSettingsProviders(<SettingsPage />);
     await screen.findByTestId("badge-entity-source");
 
     // Set the baseline AFTER render but BEFORE selecting the file, since the
@@ -458,15 +446,7 @@ describe("SettingsPage — Privacy Audit Entity List panel", () => {
     });
 
     try {
-      render(
-        <TooltipProvider>
-          <RecordPreviewProvider>
-            <ActivityBusProvider>
-              <SettingsPage />
-            </ActivityBusProvider>
-          </RecordPreviewProvider>
-        </TooltipProvider>,
-      );
+      renderWithSettingsProviders(<SettingsPage />);
 
       await screen.findByTestId("badge-entity-source");
 
@@ -753,11 +733,7 @@ describe("SettingsPage — Privacy Audit Entity List panel", () => {
   });
 
   it("keeps one huge collapsed group virtualized while small groups stay closed", async () => {
-    render(
-      <ActivityBusProvider>
-        <SettingsPage />
-      </ActivityBusProvider>,
-    );
+    renderWithSettingsProviders(<SettingsPage />);
     await screen.findByTestId("badge-entity-source");
 
     // The realistic "messy paste": one problem type dominates with hundreds of

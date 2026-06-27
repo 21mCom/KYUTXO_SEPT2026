@@ -121,7 +121,9 @@ vi.mock("@/components/ui/select", async () => {
 });
 
 const SettingsPage = (await import("./SettingsPage")).default;
-const { ActivityBusProvider } = await import("@/lib/activity-bus");
+const { renderWithSettingsProviders } = await import(
+  "@/test/settingsTestProviders"
+);
 const { putSettings } = await import("@/lib/data/settings-crud");
 const { resetActiveEntityList, getBundledEntityList } = await import(
   "@/lib/privacy-entity-list"
@@ -155,11 +157,7 @@ function selectEntityFile(name: string, contents: string) {
 }
 
 function renderPage() {
-  render(
-    <ActivityBusProvider>
-      <SettingsPage />
-    </ActivityBusProvider>,
-  );
+  renderWithSettingsProviders(<SettingsPage />);
 }
 
 function overridesTabText() {
