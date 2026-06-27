@@ -965,6 +965,9 @@ export default function SettingsPage() {
   // user proceed anyway (the check is a safeguard, not a hard gate).
   const [diskWarning, setDiskWarning] = useState<{ requiredBytes: number; freeBytes: number } | null>(null);
   const bypassDiskCheckRef = useRef(false);
+  // Pre-flight disk-space info shown in the confirm stage (Electron + v3 only),
+  // so the user sees the exact estimate before clicking "Restore Now."
+  const [diskSpacePreview, setDiskSpacePreview] = useState<{ estimatedBytes: number; freeBytes: number } | null>(null);
 
   const [changePasswordDialogOpen, setChangePasswordDialogOpen] = useState(false);
   const [currentPassword, setCurrentPassword] = useState("");
@@ -2038,6 +2041,7 @@ export default function SettingsPage() {
     setBackupInfo(null);
     setRestoreStage("configure");
     setPrefPreview(null);
+    setDiskSpacePreview(null);
 
     try {
       // v3 streaming backups: read ONLY the manifest (first ZIP entry) via the
@@ -2148,6 +2152,24 @@ export default function SettingsPage() {
 
         const settingsRows = Array.isArray(inline.settings) ? (inline.settings as any[]) : [];
         setPrefPreview(previewSettingsPreferences(settingsRows));
+
+        // Pre-flight space disclosure: fetch disk space so the confirm stage can
+        // show "estimated X needed, Y available" before the user clicks Restore.
+        // Best-effort only — if the probe fails, skip the info row.
+        setDiskSpacePreview(null);
+        if (isElectron()) {
+          try {
+            const space = await getElectronAPI().getDiskSpace();
+            if (space.success && typeof space.freeBytes === "number") {
+              const estimatedBytes =
+                typeof manifestPeek.totalAttachmentBytes === "number"
+                  ? manifestPeek.totalAttachmentBytes
+                  : restoreFile.size;
+              setDiskSpacePreview({ estimatedBytes, freeBytes: space.freeBytes });
+            }
+          } catch { /* best-effort */ }
+        }
+
         setRestoreStage("confirm");
         return;
       }
@@ -2188,6 +2210,22 @@ export default function SettingsPage() {
         }
       }
 
+      // For plaintext legacy backups: warn when backup.data is present but is not
+      // a proper plain object — this would silently produce a no-data restore.
+      if (
+        !backup.encrypted &&
+        backup.data !== undefined &&
+        backup.data !== null &&
+        (typeof legacyData !== "object" || Array.isArray(legacyData))
+      ) {
+        toast({
+          variant: "destructive",
+          title: "Malformed backup data",
+          description:
+            "This backup's data payload is present but couldn't be read. Records and other data may not restore. Check that the backup file is not corrupt.",
+        });
+      }
+
       const legacySettings = Array.isArray(legacyData?.settings)
         ? (legacyData.settings as any[])
         : [];
@@ -2220,6 +2258,21 @@ export default function SettingsPage() {
     setRestoreCancellable(false);
     restoreClearedRef.current = false;
     restoreAbortRef.current = null;
+
+    // Clear any Needs Review files left by previous restores so they don't
+    // accumulate across repeated restores. Best-effort: a failure here must
+    // never block the restore itself.
+    if (isElectron()) {
+      try {
+        const api = getElectronAPI();
+        const listed = await api.listNeedsReview();
+        if (listed.success && listed.files) {
+          for (const f of listed.files) {
+            await api.deleteNeedsReview(f.name).catch(() => {});
+          }
+        }
+      } catch { /* best-effort */ }
+    }
 
     // Portable-prefs snapshot — declared here (outer scope) so the `undoInlinePrefs`
     // helper below is accessible from both the try block and the catch block.
@@ -2442,7 +2495,7 @@ export default function SettingsPage() {
               : "";
             toast({
               title: "Restore Successful",
-              description: `Restored ${result.counts.records} records, ${result.counts.blockchainTransactions} transactions, ${result.counts.transactionParticipants} participants, ${result.counts.attachmentFiles} attachment files.${backfillSummary}${v3OrphanMsg}${v3LostMsg}`,
+              description: `Restored ${result.counts.records} records, ${result.counts.blockchainTransactions} transactions, ${result.counts.transactionParticipants} participants, ${result.counts.attachmentFiles} attachment files${result.counts.lineageSnapshots > 0 ? `, ${result.counts.lineageSnapshots} snapshot${result.counts.lineageSnapshots !== 1 ? "s" : ""}` : ""}.${backfillSummary}${v3OrphanMsg}${v3LostMsg}`,
               ...(result.counts.orphanedAttachmentFiles > 0 && isElectron() ? {
                 action: (
                   <button
@@ -2463,7 +2516,7 @@ export default function SettingsPage() {
               : "";
             toast({
               title: "Restore Successful",
-              description: `Restored ${result.counts.records} records, ${result.counts.blockchainTransactions} transactions, ${result.counts.transactionParticipants} participants, ${result.counts.attachmentFiles} attachment files. Existing data was replaced.${v3OrphanMsg}${v3LostMsg}`,
+              description: `Restored ${result.counts.records} records, ${result.counts.blockchainTransactions} transactions, ${result.counts.transactionParticipants} participants, ${result.counts.attachmentFiles} attachment files${result.counts.lineageSnapshots > 0 ? `, ${result.counts.lineageSnapshots} snapshot${result.counts.lineageSnapshots !== 1 ? "s" : ""}` : ""}. Existing data was replaced.${v3OrphanMsg}${v3LostMsg}`,
               ...(result.counts.orphanedAttachmentFiles > 0 && isElectron() ? {
                 action: (
                   <button
@@ -2477,9 +2530,25 @@ export default function SettingsPage() {
             });
           }
         } catch {
+          const v3OrphanMsgFallback = result.counts.orphanedAttachmentFiles > 0
+            ? ` ${result.counts.orphanedAttachmentFiles} attachment file${result.counts.orphanedAttachmentFiles !== 1 ? "s" : ""} could not be re-linked — find them in the "Needs Review" section of Settings to re-attach or delete them.`
+            : "";
+          const v3LostMsgFallback = result.counts.orphanedAttachmentFilesLost > 0
+            ? ` Warning: ${result.counts.orphanedAttachmentFilesLost} of those file${result.counts.orphanedAttachmentFilesLost !== 1 ? "s" : ""} could not be saved to Needs Review and ${result.counts.orphanedAttachmentFilesLost !== 1 ? "their" : "its"} contents were lost.`
+            : "";
           toast({
             title: "Restore Successful",
-            description: `Restored ${result.counts.records} records, ${result.counts.blockchainTransactions} transactions, ${result.counts.transactionParticipants} participants, ${result.counts.attachmentFiles} attachment files. Existing data was replaced.`,
+            description: `Restored ${result.counts.records} records, ${result.counts.blockchainTransactions} transactions, ${result.counts.transactionParticipants} participants, ${result.counts.attachmentFiles} attachment files${result.counts.lineageSnapshots > 0 ? `, ${result.counts.lineageSnapshots} snapshot${result.counts.lineageSnapshots !== 1 ? "s" : ""}` : ""}. Existing data was replaced.${v3OrphanMsgFallback}${v3LostMsgFallback}`,
+            ...(result.counts.orphanedAttachmentFiles > 0 && isElectron() ? {
+              action: (
+                <button
+                  className="shrink-0 rounded border px-2 py-1 text-xs font-medium"
+                  onClick={() => getElectronAPI().openNeedsReviewFolder()}
+                >
+                  Open folder
+                </button>
+              ) as any,
+            } : {}),
           });
         }
 
@@ -2499,6 +2568,7 @@ export default function SettingsPage() {
           setBackupInfo(null);
           setRestoreStage("configure");
           setPrefPreview(null);
+          setDiskSpacePreview(null);
           window.location.reload();
         }, 1500);
         return;
@@ -2591,6 +2661,9 @@ export default function SettingsPage() {
         await clearTransactions({ skipNotification: true });
         await clearParticipants({ skipNotification: true });
         await clearAddressSyncState({ skipNotification: true });
+        // Mark the vault as wiped so the cancel/error handlers know to
+        // reload rather than just close the dialog.
+        restoreClearedRef.current = true;
       }
 
       setRestoreProgress(50);
@@ -2808,7 +2881,8 @@ export default function SettingsPage() {
       // table was cleared above; in merge mode snapshots whose unique
       // `snapshotId` already exists are skipped so the unique index is not
       // violated mid-restore.
-      await restoreLegacySnapshots(lineageSnapshots, restoreMode);
+      const snapshotsResult = await restoreLegacySnapshots(lineageSnapshots, restoreMode);
+      const snapshotsAdded = snapshotsResult.snapshotsAdded;
 
       // Restore blockchain transaction data (v2.2.0+, not encrypted): confirmed
       // transactions, their input/output participants, and per-address sync
@@ -2851,11 +2925,12 @@ export default function SettingsPage() {
       }
       let additionalDataMsg = "";
       const legacyOrphanCount = legacyOrphanedFilesRouted;
-      if (evidenceAdded > 0 || priceDataAdded > 0 || lineageDataAdded > 0 || transactionsAdded > 0 || addressSyncAdded > 0) {
+      if (evidenceAdded > 0 || priceDataAdded > 0 || lineageDataAdded > 0 || snapshotsAdded > 0 || transactionsAdded > 0 || addressSyncAdded > 0) {
         const parts = [];
         if (evidenceAdded > 0) parts.push(`${evidenceAdded} evidence`);
         if (priceDataAdded > 0) parts.push(`${priceDataAdded} prices`);
         if (lineageDataAdded > 0) parts.push(`${lineageDataAdded} lineage`);
+        if (snapshotsAdded > 0) parts.push(`${snapshotsAdded} snapshot${snapshotsAdded !== 1 ? "s" : ""}`);
         if (transactionsAdded > 0) parts.push(`${transactionsAdded} transactions`);
         if (addressSyncAdded > 0) parts.push(`${addressSyncAdded} synced addresses`);
         additionalDataMsg = `, ${parts.join(", ")}`;
@@ -3100,7 +3175,10 @@ export default function SettingsPage() {
       toast({
         variant: "destructive",
         title: "Restore Failed",
-        description: error instanceof Error ? error.message : "Failed to restore backup",
+        description: (error instanceof Error ? error.message : "Failed to restore backup") +
+          (restoreClearedRef.current
+            ? " Your existing vault data was already cleared before this error occurred — the vault may be empty or partially restored."
+            : ""),
       });
       setRestoreProgress(0);
       setRestoreMessage("");
@@ -4996,6 +5074,7 @@ export default function SettingsPage() {
           setBackupInfo(null);
           setRestoreStage("configure");
           setPrefPreview(null);
+          setDiskSpacePreview(null);
         }
       }}>
         <DialogContent className="sm:max-w-lg">
@@ -5155,6 +5234,21 @@ export default function SettingsPage() {
                     they'll all stay as they are on this device.
                   </p>
                 )}
+                {diskSpacePreview && !isRestoring && (
+                  <div
+                    className="flex items-center justify-between rounded-lg border bg-muted/40 px-3 py-2 text-sm"
+                    data-testid="disk-space-preview"
+                  >
+                    <span className="text-muted-foreground">Estimated disk space needed</span>
+                    <span className={diskSpacePreview.estimatedBytes > diskSpacePreview.freeBytes ? "text-destructive font-medium" : "font-medium"}>
+                      {formatBytes(diskSpacePreview.estimatedBytes)}
+                      {" "}
+                      <span className="text-muted-foreground font-normal">
+                        ({formatBytes(diskSpacePreview.freeBytes)} free)
+                      </span>
+                    </span>
+                  </div>
+                )}
               </div>
             )}
 
@@ -5214,6 +5308,7 @@ export default function SettingsPage() {
                   setBackupInfo(null);
                   setRestoreStage("configure");
                   setPrefPreview(null);
+                  setDiskSpacePreview(null);
                 }}>
                   Cancel
                 </Button>
