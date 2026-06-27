@@ -153,6 +153,14 @@ export interface EngineEnvelope<T = unknown> {
   error?: string;
 }
 
+// One orphaned attachment file sitting in the Needs Review folder.
+export interface NeedsReviewFile {
+  name: string;
+  size: number;
+  // Epoch millis when the file was routed into the folder (file mtime).
+  routedAt: number;
+}
+
 export interface EngineBridge {
   init: () => Promise<EngineEnvelope>;
   status: () => Promise<EngineEnvelope>;
@@ -198,6 +206,9 @@ interface ElectronAPI {
   getNeedsReviewPath: () => Promise<string>;
   writeNeedsReview: (originalFilename: string, data: ArrayBuffer) => Promise<{ success: boolean; path?: string; error?: string }>;
   openNeedsReviewFolder: () => Promise<{ success: boolean; error?: string }>;
+  listNeedsReview: () => Promise<{ success: boolean; files?: NeedsReviewFile[]; error?: string }>;
+  readNeedsReview: (name: string) => Promise<{ success: boolean; data?: ArrayBuffer; error?: string }>;
+  deleteNeedsReview: (name: string) => Promise<{ success: boolean; error?: string }>;
   // Tor proxy operations
   torTest: (torProxyUrl?: string) => Promise<TorTestResult>;
   torRequest: (params: TorRequestParams) => Promise<TorRequestResult>;

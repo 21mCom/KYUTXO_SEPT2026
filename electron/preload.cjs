@@ -38,6 +38,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('write-needs-review', { filename, data }),
   openNeedsReviewFolder: () =>
     ipcRenderer.invoke('open-needs-review-folder'),
+  listNeedsReview: () =>
+    ipcRenderer.invoke('list-needs-review'),
+  readNeedsReview: (name) =>
+    ipcRenderer.invoke('read-needs-review', { name }),
+  deleteNeedsReview: (name) =>
+    ipcRenderer.invoke('delete-needs-review', { name }),
 
   // Streaming backup writer (export): chunks go straight to disk, so the full
   // archive never has to be buffered in renderer memory.

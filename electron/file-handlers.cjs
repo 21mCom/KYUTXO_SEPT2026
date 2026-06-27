@@ -307,6 +307,88 @@ function registerFileHandlers(ipcMain, { dataDir, attachmentsDir, needsReviewDir
     }
   });
 
+  // List the orphaned attachment files currently in the Needs Review folder.
+  // Returns one entry per regular file with its name, byte size, and the time
+  // it was routed there (mtime — written once on route, never touched after).
+  ipcMain.handle('list-needs-review', async () => {
+    try {
+      if (!fs.existsSync(needsReviewDir)) {
+        return { success: true, files: [] };
+      }
+      const names = await fs.promises.readdir(needsReviewDir);
+      const files = [];
+      for (const name of names) {
+        const full = path.join(needsReviewDir, name);
+        try {
+          const stat = await fs.promises.stat(full);
+          if (!stat.isFile()) continue;
+          files.push({
+            name,
+            size: stat.size,
+            routedAt: stat.mtimeMs,
+          });
+        } catch {
+          // Skip entries that vanished or cannot be stat'd between readdir and stat.
+        }
+      }
+      // Newest first so the most recently routed orphans surface at the top.
+      files.sort((a, b) => b.routedAt - a.routedAt);
+      return { success: true, files };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  // Read the raw bytes of a single Needs Review file (for re-attaching it to a
+  // record). The name is sanitized so callers cannot escape the folder.
+  ipcMain.handle('read-needs-review', async (event, { name }) => {
+    try {
+      if (!name || typeof name !== 'string') {
+        return { success: false, error: 'Invalid filename' };
+      }
+      const safeName = path.basename(name);
+      if (!safeName) {
+        return { success: false, error: 'Invalid filename' };
+      }
+      const target = path.join(needsReviewDir, safeName);
+      if (!fs.existsSync(target)) {
+        return { success: false, error: 'File not found' };
+      }
+      const data = await fs.promises.readFile(target);
+      // Slice to this file's own bytes — never hand back the pooled Buffer's
+      // underlying ArrayBuffer, which may include unrelated neighbouring bytes.
+      return {
+        success: true,
+        data: data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength),
+      };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  // Delete a single Needs Review file (after the user resolves it). The name is
+  // sanitized so callers cannot escape the folder.
+  ipcMain.handle('delete-needs-review', async (event, { name }) => {
+    try {
+      if (!name || typeof name !== 'string') {
+        return { success: false, error: 'Invalid filename' };
+      }
+      const safeName = path.basename(name);
+      if (!safeName) {
+        return { success: false, error: 'Invalid filename' };
+      }
+      const target = path.join(needsReviewDir, safeName);
+      if (!fs.existsSync(target)) {
+        // Already gone — treat as success so the UI converges to a clean state.
+        return { success: true };
+      }
+      await fs.promises.unlink(target);
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
   // --- Streaming backup writer (for export) ---------------------------------
   // The renderer streams ZIP byte-chunks straight to a user-chosen file via a
   // Node write stream, so the full archive never has to be buffered in memory.

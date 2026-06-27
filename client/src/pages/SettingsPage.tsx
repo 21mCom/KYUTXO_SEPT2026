@@ -124,6 +124,7 @@ import { AddressLink } from "@/components/AddressLink";
 import StripMarkersPanel from "@/components/StripMarkersPanel";
 import MigrationAuditPanel from "@/components/MigrationAuditPanel";
 import LegacyRecoveryPanel from "@/components/LegacyRecoveryPanel";
+import NeedsReviewPanel from "@/components/NeedsReviewPanel";
 import { hasUnrecoveredLegacyData } from "@/lib/legacy-decrypt";
 import {
   getSearchFadePreference,
@@ -2259,7 +2260,7 @@ export default function SettingsPage() {
               }
             }
             const v3OrphanMsg = result.counts.orphanedAttachmentFiles > 0
-              ? ` ${result.counts.orphanedAttachmentFiles} attachment file${result.counts.orphanedAttachmentFiles !== 1 ? "s" : ""} could not be re-linked (owning record absent) and were saved to the Needs Review folder — open it to re-attach or delete them.`
+              ? ` ${result.counts.orphanedAttachmentFiles} attachment file${result.counts.orphanedAttachmentFiles !== 1 ? "s" : ""} could not be re-linked (owning record absent) — find them in the "Needs Review" section of Settings to re-attach or delete them.`
               : "";
             toast({
               title: "Restore Successful",
@@ -2277,7 +2278,7 @@ export default function SettingsPage() {
             });
           } else {
             const v3OrphanMsg = result.counts.orphanedAttachmentFiles > 0
-              ? ` ${result.counts.orphanedAttachmentFiles} attachment file${result.counts.orphanedAttachmentFiles !== 1 ? "s" : ""} could not be re-linked and were saved to the Needs Review folder — open it to re-attach or delete them.`
+              ? ` ${result.counts.orphanedAttachmentFiles} attachment file${result.counts.orphanedAttachmentFiles !== 1 ? "s" : ""} could not be re-linked — find them in the "Needs Review" section of Settings to re-attach or delete them.`
               : "";
             toast({
               title: "Restore Successful",
@@ -2700,7 +2701,7 @@ export default function SettingsPage() {
       }
 
       const legacyOrphanSuffix = legacyOrphanCount > 0
-        ? ` ${legacyOrphanCount} attachment file${legacyOrphanCount !== 1 ? "s" : ""} could not be re-linked (owning record absent) and were saved to the Needs Review folder — open it to re-attach or delete them.`
+        ? ` ${legacyOrphanCount} attachment file${legacyOrphanCount !== 1 ? "s" : ""} could not be re-linked (owning record absent) — find them in the "Needs Review" section of Settings to re-attach or delete them.`
         : "";
       toast({
         title: "Restore Successful",
@@ -4038,6 +4039,8 @@ export default function SettingsPage() {
             </Link>
           </CardContent>
         </Card>
+
+        <NeedsReviewPanel />
 
         <LegacyRecoveryPanel />
 

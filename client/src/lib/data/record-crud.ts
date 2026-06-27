@@ -477,6 +477,35 @@ export async function getAllRecords(): Promise<Record[]> {
   return db.records.toArray();
 }
 
+/**
+ * Lightweight record search for pickers (e.g. re-attaching an orphaned file to a
+ * record). Matches the trimmed query case-insensitively against the address /
+ * txid (inputString) prefix and the label substring, capped at `limit` results.
+ * Read-only; safe to call directly without going through a write CRUD path.
+ */
+export async function searchRecordsForPicker(query: string, limit = 25): Promise<Record[]> {
+  const q = query.trim().toLowerCase();
+  if (!q) return [];
+  const byInput = await db.records
+    .where('inputStringLower')
+    .startsWith(q)
+    .limit(limit)
+    .toArray();
+  if (byInput.length >= limit) return byInput;
+  const seen = new Set<number>(byInput.map((r) => r.id!).filter((id) => id !== undefined));
+  const byLabel = await db.records
+    .filter((r) => typeof r.label === 'string' && r.label.toLowerCase().includes(q))
+    .limit(limit)
+    .toArray();
+  const merged = [...byInput];
+  for (const r of byLabel) {
+    if (merged.length >= limit) break;
+    if (r.id !== undefined && seen.has(r.id)) continue;
+    merged.push(r);
+  }
+  return merged.slice(0, limit);
+}
+
 export async function countRecords(): Promise<number> {
   return db.records.count();
 }
