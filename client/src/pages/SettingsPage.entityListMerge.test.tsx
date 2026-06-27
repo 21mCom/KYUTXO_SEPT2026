@@ -878,6 +878,106 @@ describe("SettingsPage — entity list import (merge mode) only-changed filter",
     expect(overridesTabText()).toContain("Overrides (2, 1 changed)");
   });
 
+  it("composes all three filters (category + search + toggle): leaves exactly one changed override and narrows the '(N changed)' label", async () => {
+    renderPage();
+    await screen.findByTestId("badge-entity-source");
+
+    // The identical re-import is a *gambling* entry whose first name word is a
+    // usable (>=4 char) search token. Re-importing it verbatim keeps it
+    // changed: false, and its bundled category/name let it match BOTH the
+    // gambling category filter and the shared-token search.
+    const list = getBundledEntityList();
+    const identicalBase = list.find(
+      (e) =>
+        e.category === "gambling" &&
+        e.name.trim().split(/\s+/)[0].length >= 4,
+    );
+    expect(identicalBase).toBeTruthy();
+    const sharedToken = identicalBase!.name.trim().split(/\s+/)[0];
+    const tokenLower = sharedToken.toLowerCase();
+
+    const mentionsToken = (e: { name: string; address: string }) =>
+      e.name.toLowerCase().includes(tokenLower) ||
+      e.address.toLowerCase().includes(tokenLower);
+
+    // The changed override is a distinct entry that does NOT itself mention the
+    // shared token via its bundled name/address (it only matches the search via
+    // its new name) and is re-categorised to gambling so it matches the filter.
+    const changedBase = list.find(
+      (e) => e.address !== identicalBase!.address && !mentionsToken(e),
+    );
+    expect(changedBase).toBeTruthy();
+
+    fireEvent.click(screen.getByTestId("radio-entity-merge"));
+
+    const CHANGED_NAME = `${sharedToken} Qwizzle Changed`;
+    const snapshot = JSON.stringify([
+      // Changed: renamed + re-categorised to gambling. Matches the token via its
+      // new name and the gambling category via its incoming side.
+      { address: changedBase!.address, name: CHANGED_NAME, category: "gambling" },
+      // Identical re-import of a gambling entry. Matches the token via its
+      // bundled name and gambling via its (unchanged) category. changed: false.
+      identical(identicalBase!),
+    ]);
+    await selectEntityFile("merge-all-three-one-changed.json", snapshot);
+
+    await screen.findByTestId("text-preview-incoming");
+    fireEvent.click(screen.getByTestId("button-toggle-entity-diff"));
+    await screen.findByTestId("tab-entity-diff-overrides");
+
+    // Baseline: 2 overrides, 1 of which actually changes.
+    expect(overridesTabText()).toContain("Overrides (2, 1 changed)");
+    expect(overrideRows()).toHaveLength(2);
+
+    // Apply the category dropdown AND the search box together: both overrides
+    // are gambling-categorised and both match the shared token, so the
+    // search-narrowed subset stays (2, 1 changed).
+    setCategory("gambling");
+    typeSearch(sharedToken);
+    await waitFor(() =>
+      expect(overridesTabText()).toContain("Overrides (2, 1 changed)"),
+    );
+    expect(overrideRows()).toHaveLength(2);
+
+    // Flip the toggle ON as the third filter: of the two category+search
+    // matches, only the changed override survives, leaving exactly one row.
+    toggleOnlyChanged();
+    await waitFor(() => expect(overrideRows()).toHaveLength(1));
+    expect(screen.getByText(CHANGED_NAME)).toBeTruthy();
+    expect(screen.queryByText("no change")).toBeNull();
+    // A real changed override still matches, so no empty label appears.
+    expect(screen.queryByTestId("text-entity-overrides-empty")).toBeNull();
+    // The view-only toggle does not change the tab label: it still reflects the
+    // category+search-narrowed subset.
+    expect(overridesTabText()).toContain("Overrides (2, 1 changed)");
+  });
+
+  it("composes all three filters (category + search + toggle): leaving only an identical override shows the changed-only empty label", async () => {
+    const { identicalBase } = await openChangedPlusIdenticalDiff();
+
+    // Category "mixer" matches only the identical re-import (the changed
+    // override is exchange → gambling), and searching its address — unique to
+    // that same identical row — keeps the two non-toggle filters in agreement.
+    setCategory("mixer");
+    typeSearch(identicalBase.address);
+    await waitFor(() => expect(overrideRows()).toHaveLength(1));
+    expect(screen.getByText("no change")).toBeTruthy();
+    // The combined non-toggle subset is a single identical override (0 changed).
+    expect(overridesTabText()).toContain("Overrides (1, 0 changed)");
+
+    // Flip the toggle ON as the third filter: the only category+search match is
+    // identical, so the list empties. Because searchedOverrides is non-empty,
+    // the *changed-only* empty label must win over the generic search-no-match
+    // label.
+    toggleOnlyChanged();
+    const empty = await screen.findByTestId("text-entity-overrides-empty");
+    expect(empty.textContent).toContain(
+      "No overrides change anything — every match is identical to the bundled entry.",
+    );
+    expect(empty.textContent).not.toContain("No overrides match your search.");
+    expect(overrideRows()).toHaveLength(0);
+  });
+
   // Transition behavior: a reviewer who narrows the diff *while the toggle is
   // ON* and then clears the filter must see the changed-override set re-expand.
   // The regression guarded here is the toggle silently turning itself off, or a
