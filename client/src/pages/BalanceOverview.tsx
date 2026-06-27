@@ -643,20 +643,44 @@ export default function BalanceOverview() {
     try {
       // resolvePrevouts now recomputes stats for every newly-resolved source
       // address itself (origin "user"), so we don't need a second pass here.
-      await transactionSyncService.resolvePrevouts(
+      const result = await transactionSyncService.resolvePrevouts(
         (resolved, total) => setResolveProgressGlobal({ resolved, total }),
         { recomputeOrigin: "user" },
       );
       const remaining = await countUnresolvedPrevoutInputs();
       setUnresolvedPrevouts(remaining);
       if (remaining === 0) setSpendWarningDismissed(false);
+
+      if (result.resolved === 0) {
+        toast({
+          title: "Nothing to resolve",
+          description:
+            "No pending spends could be attributed to a known source. Their balances can't be corrected automatically.",
+          variant: "destructive",
+        });
+      } else if (remaining > 0) {
+        toast({
+          title: "Partially resolved",
+          description: `Resolved ${result.resolved.toLocaleString()} spend${result.resolved !== 1 ? "s" : ""} across all wallets. ${remaining.toLocaleString()} still can't be attributed.`,
+        });
+      } else {
+        toast({
+          title: "Resolved",
+          description: `Resolved ${result.resolved.toLocaleString()} spend${result.resolved !== 1 ? "s" : ""} across all wallets and recomputed balances.`,
+        });
+      }
     } catch (err) {
       console.warn("[BalanceOverview] Prevout fix failed:", err);
+      toast({
+        title: "Resolve failed",
+        description: "Could not resolve pending spends. Please try again.",
+        variant: "destructive",
+      });
     } finally {
       setFixingPrevouts(false);
       setResolveProgressGlobal(null);
     }
-  }, []);
+  }, [toast]);
 
   // Fetch + import the source transactions behind unattributable spends, then
   // attribute those spends locally. "Resolve & Recompute" can only attribute a
