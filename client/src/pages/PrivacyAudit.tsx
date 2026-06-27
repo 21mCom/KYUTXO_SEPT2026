@@ -390,6 +390,20 @@ interface SankeyData {
   links: { source: number; target: number; value: number }[];
 }
 
+// Sankey node/link colours. Recharts' defaults are fixed colours that fail WCAG
+// AA against the background in at least one theme: the node fill (#0088fe at 0.8
+// opacity) only reaches ~2.8:1 in light mode, and the link stroke (#333 at 0.2
+// opacity) is a faint near-invisible flow line. We drive both from theme-aware
+// tokens at full opacity instead — the node uses --chart-2 (a blue that flips
+// lightness between themes) and the link uses --muted-foreground — so both clear
+// AA against the background in light AND dark mode. The link is rendered at
+// strokeOpacity 1 (not recharts' default 0.2) so its on-screen colour equals the
+// token value. PrivacyAudit.coinjoinSankey.test reads the token values from
+// index.css and pins the contrast so a future palette tweak can't quietly make
+// either illegible in one theme.
+export const SANKEY_NODE_FILL = "hsl(var(--chart-2))";
+export const SANKEY_LINK_STROKE = "hsl(var(--muted-foreground))";
+
 /** Build a proportional fund-flow Sankey model from a tx's inputs/outputs. */
 export function buildSankey(inputs: TransactionParticipant[], outputs: TransactionParticipant[]): SankeyData {
   const nodes = [
@@ -781,7 +795,8 @@ export function TransactionDeepDive({
                 nodePadding={8}
                 nodeWidth={12}
                 iterations={32}
-                link={{ stroke: "hsl(var(--muted-foreground) / 0.25)" }}
+                node={{ fill: SANKEY_NODE_FILL, fillOpacity: 1 }}
+                link={{ stroke: SANKEY_LINK_STROKE, strokeOpacity: 1 }}
               >
                 <Tooltip
                   formatter={(value: number) => [`${(value / 1e8).toFixed(8)} BTC`, "Flow"]}
