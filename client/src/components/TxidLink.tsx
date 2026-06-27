@@ -96,18 +96,18 @@ export function TxidLink({
   const [tooltipOpen, setTooltipOpen] = useState(false);
 
   useEffect(() => {
-    if (resolvedRef.current !== undefined) return;
     const cached = getCachedRecord(txid);
     if (cached !== undefined) {
       resolvedRef.current = cached;
       setTooltipRecord(cached);
-      return;
     }
+    // Stay subscribed for the component's lifetime so the indicator/tooltip
+    // react not just to the initial preload/resolve but also to later cache
+    // invalidations (a record edit/delete re-resolves and notifies here),
+    // keeping the orange FileText icon in sync without waiting on a hover.
     return subscribeCacheEntry(txid, (record) => {
-      if (resolvedRef.current === undefined) {
-        resolvedRef.current = record;
-        setTooltipRecord(record);
-      }
+      resolvedRef.current = record;
+      setTooltipRecord(record);
     });
   }, [txid]);
 

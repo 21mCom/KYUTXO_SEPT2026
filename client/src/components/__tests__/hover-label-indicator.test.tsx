@@ -68,6 +68,20 @@ function labelOnlyRecord(inputString: string): DbRecord {
   } as DbRecord;
 }
 
+function noMetaRecord(inputString: string): DbRecord {
+  return {
+    id: 1,
+    type: "address",
+    inputString,
+    inputStringLower: inputString.toLowerCase(),
+    label: "Unlabeled",
+    tags: [],
+    categories: [],
+    createdAt: 0,
+    updatedAt: 0,
+  } as DbRecord;
+}
+
 async function flush() {
   await act(async () => {
     await Promise.resolve();
@@ -165,5 +179,51 @@ describe("TxidLink label-only hover indicator", () => {
     await flush();
 
     expect(screen.queryAllByTestId("text-hover-label")).toHaveLength(0);
+  });
+});
+
+// Live-update behaviour: when a record is edited or deleted the CRUD layer calls
+// invalidateCachedRecord(identifier). A visible AddressLink/TxidLink is
+// subscribed to that identifier, so the invalidation must re-resolve and flip
+// the orange FileText indicator without waiting for a hover or the cache TTL.
+describe("AddressLink live indicator refresh on invalidate", () => {
+  const triggerId = `link-address-${ADDRESS.slice(0, 8)}`;
+
+  it("shows the indicator after a record gains metadata (edit)", async () => {
+    // Initially the address resolves to a record with no metadata -> no icon.
+    getRecordsByInputString.mockResolvedValue([noMetaRecord(ADDRESS)]);
+    await resolveIdentifier(ADDRESS);
+
+    renderWithProvider(<AddressLink address={ADDRESS} />);
+    const trigger = screen.getByTestId(triggerId);
+    expect(hasIndicator(trigger)).toBe(false);
+
+    // Simulate an edit that adds a label, then the CRUD-layer invalidation.
+    getRecordsByInputString.mockResolvedValue([labelOnlyRecord(ADDRESS)]);
+    await act(async () => {
+      invalidateCachedRecord(ADDRESS);
+      await flush();
+    });
+
+    await waitFor(() => expect(hasIndicator(trigger)).toBe(true));
+  });
+
+  it("clears the indicator after the record is deleted", async () => {
+    // Initially the address resolves to a label-only record -> icon shown.
+    getRecordsByInputString.mockResolvedValue([labelOnlyRecord(ADDRESS)]);
+    await resolveIdentifier(ADDRESS);
+
+    renderWithProvider(<AddressLink address={ADDRESS} />);
+    const trigger = screen.getByTestId(triggerId);
+    expect(hasIndicator(trigger)).toBe(true);
+
+    // Simulate a delete: the address now resolves to nothing.
+    getRecordsByInputString.mockResolvedValue([]);
+    await act(async () => {
+      invalidateCachedRecord(ADDRESS);
+      await flush();
+    });
+
+    await waitFor(() => expect(hasIndicator(trigger)).toBe(false));
   });
 });

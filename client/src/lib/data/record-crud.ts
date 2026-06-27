@@ -4,6 +4,20 @@ import { ensureOwner, ensureWalletName, ensureSeedName, ensureWalletSoftware } f
 import { getActivityBus } from '../activity-bus';
 import { type GroupBy, GROUP_EMPTY_KEY, addressMatchesGroup, type AddressBalanceRow } from '../balance-grouping';
 
+/**
+ * Drop the hover-metadata cache entry for `identifier` after a record write so a
+ * visible AddressLink/TxidLink's orange FileText indicator / tooltip refreshes
+ * immediately instead of showing stale data for up to the cache TTL. Loaded
+ * lazily to avoid a static import cycle (metadata-hover imports this module);
+ * fire-and-forget since the module is already resident and invalidation is
+ * non-critical to the write completing.
+ */
+function invalidateHoverCache(identifier: string): void {
+  void import('../metadata-hover')
+    .then((m) => m.invalidateCachedRecord(identifier))
+    .catch(() => {});
+}
+
 async function syncRecordVocabulary(
   data: Partial<Record>
 ): Promise<void> {
@@ -182,7 +196,16 @@ export async function updateRecord(
   }
 
   await db.records.put(updated);
-  
+
+  // Drop the hover-metadata cache so the orange FileText indicator / tooltip on
+  // any visible AddressLink/TxidLink refreshes immediately instead of showing
+  // stale data for up to the cache TTL. Invalidate both the old and (if it
+  // changed) the new identifier.
+  if (existing.inputString) invalidateHoverCache(existing.inputString);
+  if (updates.inputString && updates.inputString !== existing.inputString) {
+    invalidateHoverCache(updates.inputString);
+  }
+
   if (!options?.skipNotification) {
     notifyDbChange('records');
   }
@@ -421,6 +444,7 @@ export interface DeleteRecordOptions {
 export async function deleteRecord(id: number, options?: DeleteRecordOptions): Promise<void> {
   const { getAttachmentsByRecordId, deleteAttachmentsByRecordId } = await import('./attachments-crud');
   const { archiveAttachments } = await import('./trash-crud');
+  const existing = await db.records.get(id);
   const attachments = await getAttachmentsByRecordId(id);
 
   // Deleting a record must NOT destroy its attachment files. Instead we archive
@@ -435,6 +459,11 @@ export async function deleteRecord(id: number, options?: DeleteRecordOptions): P
 
   await deleteAttachmentsByRecordId(id, { skipNotification: true });
   await db.records.delete(id);
+
+  // Drop the hover-metadata cache so a deleted record's orange FileText
+  // indicator / tooltip on any visible AddressLink/TxidLink clears immediately
+  // instead of lingering for up to the cache TTL.
+  if (existing?.inputString) invalidateHoverCache(existing.inputString);
 
   if (!options?.skipNotification) {
     notifyDbChange('records');

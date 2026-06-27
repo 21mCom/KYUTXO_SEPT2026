@@ -242,8 +242,24 @@ export async function resolveIdentifier(identifier: string): Promise<DbRecord | 
   return promise;
 }
 
+/**
+ * Drop the cached entry for `identifier` after a record write so stale metadata
+ * (the 5-minute TTL) can't keep an orange FileText indicator / tooltip out of
+ * sync. If any AddressLink/TxidLink is currently subscribed to this identifier
+ * (i.e. it's visible on screen), immediately re-resolve from the DB so its
+ * indicator updates within a render instead of waiting for a hover. When nobody
+ * is subscribed we just clear the entry — the next hover/preload resolves it.
+ */
 export function invalidateCachedRecord(identifier: string): void {
-  _cache.delete(identifier.toLowerCase());
+  const key = identifier.toLowerCase();
+  _cache.delete(key);
+  // A concurrent in-flight resolution would have read the DB *before* this
+  // write committed, so drop it too and let resolveIdentifier start fresh.
+  _inFlight.delete(key);
+  const subs = _subscribers.get(key);
+  if (subs && subs.size > 0) {
+    void resolveIdentifier(identifier);
+  }
 }
 
 /**
