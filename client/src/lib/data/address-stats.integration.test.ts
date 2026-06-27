@@ -737,6 +737,56 @@ describe("detectStaleCachedBalances", () => {
     expect(sampledReports).toEqual([10]);
     expect(totalReports).toEqual([COUNT]);
   });
+
+  it("completes a page densely packed with synced rows, yielding within the page without disturbing the sampled/staleCount totals", async () => {
+    // A single DB page (200 records) that is entirely synced and entirely
+    // stale. This is the worst case the task targets: one page whose
+    // participant/blocktime joins and per-row comparison loop could block the
+    // event loop. The scan now hands control back to the UI after the heavy
+    // participant fetch and periodically within the per-row loop; those extra
+    // macrotask yields must not change the sampled/staleCount results or the
+    // once-per-page progress contract.
+    const COUNT = 200;
+    const records: DbRecord[] = [];
+    const participants: TransactionParticipant[] = [];
+    const txs: BlockchainTransaction[] = [];
+    for (let i = 1; i <= COUNT; i++) {
+      const addr = `dense-addr-${String(i).padStart(4, "0")}`;
+      const txid = `dense-tx-${i}`;
+      records.push(
+        mkAddr({
+          id: i,
+          inputString: addr,
+          statsComputedAt: 5000,
+          // Cached 0 but computed 1000 → every synced row is stale.
+          cachedBalanceSats: 0,
+        }),
+      );
+      participants.push(mkOutput(addr, txid, 1000));
+      txs.push(mkTx(txid, 100 + i));
+    }
+    await testDb.records.bulkAdd(records);
+    await testDb.transactionParticipants.bulkAdd(participants);
+    await testDb.blockchainTransactions.bulkAdd(txs);
+
+    const sampledReports: number[] = [];
+    const onProgress = vi.fn((sampled: number) => {
+      sampledReports.push(sampled);
+    });
+
+    const result = await detectStaleCachedBalances({ checkAll: true, onProgress });
+
+    // The full dense page was scanned to completion with exact totals.
+    expect(result.cancelled).toBe(false);
+    expect(result.sampled).toBe(COUNT);
+    expect(result.staleCount).toBe(COUNT);
+    expect(result.checkedAll).toBe(true);
+
+    // Despite the in-page yields, progress is still reported exactly once for
+    // the single page, landing on the full count.
+    expect(onProgress).toHaveBeenCalledTimes(1);
+    expect(sampledReports).toEqual([COUNT]);
+  });
 });
 
 describe("recomputeAddressStats then re-check", () => {

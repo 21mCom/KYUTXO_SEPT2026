@@ -150,14 +150,21 @@ export async function detectStaleCachedBalances(opts: {
       // pages would loop tightly and starve the UI. We still don't report
       // progress (the running `sampled` count hasn't moved), but we hand control
       // back to the event loop between pages just like a sampled batch does.
-      await new Promise(resolve => setTimeout(resolve, 0));
+      await yieldToEventLoop();
       continue;
     }
 
     const addresses = synced.map(r => r.inputString);
     const freshStats = await computeStatsForAddresses(addresses, opts.signal);
 
+    // The participant/blocktime joins above are the heaviest part of a dense
+    // page. On a page packed with synced rows, hand control back to the UI
+    // before the per-row comparison loop so that work alone can't block the
+    // event loop between the once-per-page yields below.
+    if (synced.length >= ROW_YIELD_INTERVAL) await yieldToEventLoop();
+
     const batchStale: StaleAddressDetail[] = [];
+    let rowsSinceYield = 0;
     for (const rec of synced) {
       const fresh = freshStats.get(rec.inputString);
       const freshBalance = fresh?.balanceSats ?? 0;
@@ -180,12 +187,19 @@ export async function detectStaleCachedBalances(opts: {
       }
       sampled++;
       if (sampled >= limit) break;
+      // For very dense synced pages, also yield periodically within the loop so
+      // the comparison work itself can't monopolise the event loop between the
+      // once-per-page yields.
+      if (++rowsSinceYield >= ROW_YIELD_INTERVAL) {
+        rowsSinceYield = 0;
+        await yieldToEventLoop();
+      }
     }
 
     if (streaming && batchStale.length > 0) await opts.onStaleBatch!(batchStale);
 
     opts.onProgress?.(sampled, total);
-    await new Promise(resolve => setTimeout(resolve, 0));
+    await yieldToEventLoop();
     if (batch.length < BATCH || sampled >= limit) break;
   }
 
@@ -204,6 +218,19 @@ interface AddressAgg {
 function isAborted(signal?: AbortSignal): boolean {
   return !!signal?.aborted;
 }
+
+/** Hand control back to the event loop so the UI can paint/respond. */
+function yieldToEventLoop(): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, 0));
+}
+
+/**
+ * Within a single sampling page, yield to the UI after the heavy participant
+ * fetch and again every this-many rows of the mismatch comparison loop, so a
+ * page densely packed with synced rows can't block the event loop between the
+ * once-per-page yields.
+ */
+const ROW_YIELD_INTERVAL = 50;
 
 /**
  * Count the unspent outputs (UTXOs) currently held by a single address from its
