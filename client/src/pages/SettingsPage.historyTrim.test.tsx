@@ -97,6 +97,7 @@ const { putSettings, getSettings } = await import("@/lib/data/settings-crud");
 const privacyHistoryCrud = await import("@/lib/data/privacy-history-crud");
 const { getPrivacyAuditHistoryCount, getPrivacyAuditHistory } =
   privacyHistoryCrud;
+const useSettings = await import("@/hooks/use-settings");
 const { db } = await import("@/lib/database");
 import type { Settings } from "@/lib/db-types";
 
@@ -345,5 +346,79 @@ describe("SettingsPage — Privacy Audit History retention guard", () => {
     await waitFor(() => expect(toastSpy).toHaveBeenCalled());
     const titles = toastSpy.mock.calls.map((c) => c[0]?.title ?? "");
     expect(titles.some((t) => t.includes("50") && /run/i.test(t))).toBe(true);
+  });
+
+  it("warns the user (and shows no success toast) when the trim itself fails (Task #857)", async () => {
+    // 25 runs, default limit 30. Lowering to 10 removes only 15 (<=20), so it
+    // applies straight away with no confirmation step — i.e. it goes directly
+    // through applyPrivacyHistoryLimit -> updatePrivacyHistoryLimit.
+    await seedRuns(25);
+
+    // Force the trim to fail. A failed trim must never pass silently: the user
+    // would otherwise believe old runs were removed when they weren't.
+    const trimSpy = vi
+      .spyOn(useSettings, "updatePrivacyHistoryLimit")
+      .mockRejectedValueOnce(new Error("trim failed"));
+
+    renderWithSettingsProviders(<SettingsPage />);
+
+    await lowerLimitTo("10");
+
+    // The trim was attempted and rejected.
+    await waitFor(() => expect(trimSpy).toHaveBeenCalledWith(10));
+
+    // A destructive error toast tells the user the update failed.
+    await waitFor(() => {
+      const destructive = toastSpy.mock.calls.find(
+        (c) => c[0]?.variant === "destructive",
+      );
+      expect(destructive?.[0]?.description).toBe(
+        "Failed to update retention limit",
+      );
+    });
+
+    // No success/removal toast ever fires — the user is not told runs were
+    // removed when the trim actually failed.
+    const titles = toastSpy.mock.calls.map((c) => c[0]?.title ?? "");
+    expect(titles.some((t) => /run/i.test(t))).toBe(false);
+    expect(
+      toastSpy.mock.calls.some((c) => c[0]?.variant !== "destructive"),
+    ).toBe(false);
+
+    // Nothing was removed (the rejecting spy short-circuited before any delete).
+    expect(await getPrivacyAuditHistoryCount()).toBe(25);
+  });
+
+  it("warns the user when a large-batch trim fails after the user confirms (Task #857)", async () => {
+    // 60 runs, default limit 30. Lowering to 10 removes 50 (>20), which pops the
+    // confirmation dialog. Confirming routes through applyPrivacyHistoryLimit,
+    // where the trim then fails — the user must still be warned.
+    await seedRuns(60);
+
+    const trimSpy = vi
+      .spyOn(useSettings, "updatePrivacyHistoryLimit")
+      .mockRejectedValueOnce(new Error("trim failed"));
+
+    renderWithSettingsProviders(<SettingsPage />);
+
+    await lowerLimitTo("10");
+    fireEvent.click(await screen.findByTestId("button-confirm-history-trim"));
+
+    await waitFor(() => expect(trimSpy).toHaveBeenCalledWith(10));
+
+    // Destructive error toast shown, no success/removal toast.
+    await waitFor(() => {
+      const destructive = toastSpy.mock.calls.find(
+        (c) => c[0]?.variant === "destructive",
+      );
+      expect(destructive?.[0]?.description).toBe(
+        "Failed to update retention limit",
+      );
+    });
+    const titles = toastSpy.mock.calls.map((c) => c[0]?.title ?? "");
+    expect(titles.some((t) => /run/i.test(t))).toBe(false);
+
+    // History is intact since the trim rejected.
+    expect(await getPrivacyAuditHistoryCount()).toBe(60);
   });
 });
