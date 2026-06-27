@@ -1109,6 +1109,103 @@ describe("SettingsPage — Privacy Audit Entity List panel", () => {
     expect((await getSettings("default"))?.entityListSnapshot).toBeUndefined();
   });
 
+  it("combines the reason filter and problem-type dropdown with AND: only entries matching both survive, and a fragment from another kind drops the count to zero", async () => {
+    renderSettingsPage();
+    await screen.findByTestId("badge-entity-source");
+
+    // A snapshot where the token "alpha" appears in error messages of TWO
+    // different kinds, so neither control alone equals their intersection:
+    //   invalid-address × 3  -> messages embed the bad address
+    //     "bad-alpha-1", "bad-alpha-2" (contain "alpha")
+    //     "bad-beta-1"                 (no "alpha")
+    //   unknown-category × 2  -> messages embed the bogus category
+    //     "alpha-cat" (contains "alpha"), "gamma-cat" (no "alpha")
+    // Reusing ADDR.a/ADDR.b across the unknown-category entries is safe: only
+    // fully-valid entries are recorded for duplicate detection, so a bad
+    // category never collapses into a spurious duplicate-address error. None of
+    // the valid category names embedded in the unknown-category message contain
+    // "alpha"/"beta"/"gamma", so those fragments only match where intended.
+    const mixed = JSON.stringify([
+      { address: "bad-alpha-1", name: "Bad Alpha One", category: "exchange" },
+      { address: "bad-alpha-2", name: "Bad Alpha Two", category: "exchange" },
+      { address: "bad-beta-1", name: "Bad Beta One", category: "exchange" },
+      { address: ADDR.a, name: "Cat One", category: "alpha-cat" },
+      { address: ADDR.b, name: "Cat Two", category: "gamma-cat" },
+    ]);
+    await selectEntityFile("combined.json", mixed);
+
+    const container = await screen.findByTestId("container-entity-errors");
+    expect(container.textContent).toContain("5 problems");
+
+    // --- Text "alpha" alone spans BOTH kinds (3: two invalid-address + one
+    // unknown-category). ---
+    setErrorFilter("alpha");
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("text-entity-error-match-count").textContent,
+      ).toBe("3 matching entries."),
+    );
+    expect(screen.getByTestId("group-entity-error-invalid-address")).toBeTruthy();
+    expect(screen.getByTestId("group-entity-error-unknown-category")).toBeTruthy();
+
+    // --- Kind "invalid-address" alone matches all 3 invalid addresses. ---
+    setErrorFilter("");
+    setErrorKind("invalid-address");
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("text-entity-error-match-count").textContent,
+      ).toBe("3 matching entries."),
+    );
+
+    // --- Combined (AND): kind invalid-address + text "alpha" surfaces ONLY the
+    // intersection (2), which is fewer than either control alone (3 and 3). ---
+    setErrorFilter("alpha");
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("text-entity-error-match-count").textContent,
+      ).toBe("2 matching entries."),
+    );
+    // The unknown-category "alpha-cat" entry is excluded by the kind filter even
+    // though its message contains "alpha".
+    expect(screen.getByTestId("group-entity-error-invalid-address")).toBeTruthy();
+    expect(screen.queryByTestId("group-entity-error-unknown-category")).toBeNull();
+    const rows = screen.getAllByTestId(/^text-entity-error-\d+$/);
+    expect(rows).toHaveLength(2);
+    rows.forEach((row) => {
+      expect(row.textContent).toContain("alpha");
+      expect(row.textContent).toContain("Invalid Bitcoin address");
+    });
+
+    // --- A fragment that exists ONLY in a different kind drops the combined
+    // count to zero while invalid-address stays selected. ---
+    setErrorFilter("gamma");
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("text-entity-error-match-count").textContent,
+      ).toBe("No matching entries."),
+    );
+    expect(screen.queryAllByTestId(/^text-entity-error-\d+$/)).toHaveLength(0);
+    expect(screen.queryByTestId("group-entity-error-invalid-address")).toBeNull();
+
+    // Proof the "gamma" fragment really does exist (in unknown-category): clear
+    // the kind back to "all" and it surfaces the one unknown-category match —
+    // so it was the AND, not a missing token, that zeroed the count above.
+    setErrorKind("all");
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("text-entity-error-match-count").textContent,
+      ).toBe("1 matching entry."),
+    );
+    expect(screen.getByTestId("group-entity-error-unknown-category")).toBeTruthy();
+    expect(screen.queryByTestId("group-entity-error-invalid-address")).toBeNull();
+
+    // Throughout the triage nothing was applied — no preview dialog, still on
+    // the bundled list, and no persisted snapshot.
+    expect(screen.queryByTestId("text-preview-incoming")).toBeNull();
+    expect(getActiveEntitySource()).toBe("bundled");
+    expect((await getSettings("default"))?.entityListSnapshot).toBeUndefined();
+  });
+
   it("exports the current list as a downloadable JSON file", async () => {
     const created: string[] = [];
     const revoked: string[] = [];
