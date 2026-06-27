@@ -258,6 +258,39 @@ describe("BalanceOverview · Import missing history", () => {
     expect(resolvePrevouts).toHaveBeenCalled();
   });
 
+  it("surfaces a clear error and resets the button when the import throws unexpectedly", async () => {
+    primeBannerState();
+    getMissingSourceTxids.mockResolvedValue(["txMissing1"]);
+    getNodeSettings.mockResolvedValue({ id: "default", type: "esplora" });
+    getBlockHeight.mockResolvedValue(800000);
+    // The backfill blows up mid-run (e.g. an unexpected DB/IPC failure).
+    runTxidBackfill.mockRejectedValue(new Error("kaboom"));
+
+    await renderAndWaitForBanner();
+    fireEvent.click(screen.getByTestId("button-import-missing-history"));
+
+    await waitFor(() =>
+      expect(toastSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: "Import failed",
+          variant: "destructive",
+        }),
+      ),
+    );
+
+    // The catch path threw before any successful import, so no resolve pass.
+    expect(resolvePrevouts).not.toHaveBeenCalled();
+
+    // The finally block must clear the importing state so the button returns to
+    // its idle (non-spinning) label rather than being stuck on "Importing…".
+    await waitFor(() => {
+      const button = screen.getByTestId("button-import-missing-history");
+      expect(button.textContent).toContain("Import missing history");
+      expect(button.textContent).not.toContain("Importing");
+      expect((button as HTMLButtonElement).disabled).toBe(false);
+    });
+  });
+
   it("reports when no history could be imported (all fetches failed)", async () => {
     primeBannerState();
     getMissingSourceTxids.mockResolvedValue(["txMissing1"]);
