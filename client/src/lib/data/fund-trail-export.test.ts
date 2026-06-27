@@ -219,13 +219,13 @@ describe("buildFundTrailCsv", () => {
 
     const source = rows.find((r) => r[3] === "bc1qalice");
     expect(source).toBeDefined();
-    expect(source![0]).toBe("source");
+    expect(source![0]).toBe("incoming");
     expect(source![1]).toBe("Alice");
     expect(source![4]).toBe("src1");
 
     const dest = rows.find((r) => r[3] === "bc1qbob");
     expect(dest).toBeDefined();
-    expect(dest![0]).toBe("destination");
+    expect(dest![0]).toBe("outgoing");
     expect(dest![1]).toBe("Bob");
     expect(dest![4]).toBe("dst1");
   });
@@ -266,7 +266,7 @@ describe("buildFundTrailCsv", () => {
 
     const hopRow = rows.find((r) => r[3] === "bc1qcarol");
     expect(hopRow).toBeDefined();
-    expect(hopRow![0]).toBe("source");
+    expect(hopRow![0]).toBe("incoming");
     expect(hopRow![1]).toBe("Carol");
     expect(hopRow![4]).toBe("hop1");
   });
@@ -624,8 +624,10 @@ describe("buildFundTrailPdf", () => {
     // Center node identity.
     expect(text).toContain(snapshot.centerLabel);
     // Both section headings must survive into the rendered document.
-    expect(text).toContain("Sources");
-    expect(text).toContain("Destinations");
+    expect(text).toContain("Incoming");
+    expect(text).toContain("received from");
+    expect(text).toContain("Outgoing");
+    expect(text).toContain("sent to");
     // The in/out totals must be labeled and formatted, not transposed.
     const totalIn = formatBtc(sumTopLevel(snapshot.sources));
     const totalOut = formatBtc(sumTopLevel(snapshot.destinations));

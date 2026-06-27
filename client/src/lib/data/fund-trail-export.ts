@@ -235,7 +235,7 @@ function collectCsvRows(
 ): void {
   for (const d of node.details) {
     rows.push([
-      direction,
+      direction === "source" ? "incoming" : "outgoing",
       node.groupLabel,
       btcAmount(d.amount),
       d.address,
@@ -480,8 +480,8 @@ export async function buildFundTrailPdf(
     cursorY = getFinalY() + 6;
   };
 
-  renderSection("Sources (incoming)", snapshot.sources, "No incoming transactions found.");
-  renderSection("Destinations (outgoing)", snapshot.destinations, "No outgoing transactions found.");
+  renderSection("Incoming — received from", snapshot.sources, "No incoming transactions found.");
+  renderSection("Outgoing — sent to", snapshot.destinations, "No outgoing transactions found.");
 
   // Footer on every page (page count is known only after all content is laid out).
   const pageCount = doc.getNumberOfPages();

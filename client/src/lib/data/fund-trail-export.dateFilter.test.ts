@@ -329,8 +329,8 @@ describe("Fund Trail export respects the active date window", () => {
     }
 
     // Exactly one source row and one destination row survive.
-    const sourceRows = dataRows.filter((r) => r[0] === "source");
-    const destRows = dataRows.filter((r) => r[0] === "destination");
+    const sourceRows = dataRows.filter((r) => r[0] === "incoming");
+    const destRows = dataRows.filter((r) => r[0] === "outgoing");
     expect(sourceRows).toHaveLength(1);
     expect(destRows).toHaveLength(1);
   });
@@ -345,14 +345,14 @@ describe("Fund Trail export respects the active date window", () => {
         .reduce((s, r) => s + Number(r[2]), 0);
 
     // Only the INSIDE amounts appear, in BTC (sats / 1e8).
-    expect(sumBtc("source")).toBeCloseTo(AMT.srcInside / 1e8, 12);
-    expect(sumBtc("destination")).toBeCloseTo(AMT.dstInside / 1e8, 12);
+    expect(sumBtc("incoming")).toBeCloseTo(AMT.srcInside / 1e8, 12);
+    expect(sumBtc("outgoing")).toBeCloseTo(AMT.dstInside / 1e8, 12);
 
     // Guard against an all-time regression: the all-time sums must NOT appear.
     const allTimeIn = (AMT.srcBefore + AMT.srcInside + AMT.srcAfter) / 1e8;
     const allTimeOut = (AMT.dstBefore + AMT.dstInside + AMT.dstAfter) / 1e8;
-    expect(sumBtc("source")).not.toBeCloseTo(allTimeIn, 12);
-    expect(sumBtc("destination")).not.toBeCloseTo(allTimeOut, 12);
+    expect(sumBtc("incoming")).not.toBeCloseTo(allTimeIn, 12);
+    expect(sumBtc("outgoing")).not.toBeCloseTo(allTimeOut, 12);
   });
 
   it("PDF snapshot (detailed) contains only in-window flows and totals", async () => {

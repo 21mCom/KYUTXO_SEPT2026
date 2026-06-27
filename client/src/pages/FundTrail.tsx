@@ -326,11 +326,9 @@ function FlowCard({
     >
       {/* Header */}
       <div className="flex items-center gap-2 flex-wrap px-3 pt-3 pb-2">
-        {direction === "source" ? (
-          <ArrowRight className="h-4 w-4 text-muted-foreground shrink-0" />
-        ) : (
-          <ArrowLeft className="h-4 w-4 text-muted-foreground shrink-0" />
-        )}
+        <span className="text-xs font-semibold shrink-0 text-muted-foreground uppercase tracking-wide">
+          {direction === "source" ? "Incoming from:" : "Outgoing to:"}
+        </span>
         <span className="font-medium text-sm truncate flex-1 min-w-0">
           {flow.groupLabel}
         </span>
@@ -436,8 +434,8 @@ function FlowCard({
         <div className="mx-3 mb-3 border-t border-border/50 pt-2">
           <p className="text-xs text-muted-foreground mb-2 font-medium">
             {direction === "source"
-              ? `Where ${flow.groupLabel} received from:`
-              : `Where ${flow.groupLabel} sent to:`}
+              ? `Incoming — where ${flow.groupLabel} received funds from:`
+              : `Outgoing — where ${flow.groupLabel} sent funds to:`}
           </p>
 
           {expandedHop.isCapped && (
@@ -1032,9 +1030,14 @@ function TrailLayout({
       <div className="flex flex-col gap-3 flex-1 min-w-0">
         <div className="flex items-center gap-2 mb-1">
           <ArrowRight className="h-4 w-4 text-muted-foreground" />
-          <span className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
-            Sources
-          </span>
+          <div className="flex flex-col min-w-0">
+            <span className="text-sm font-semibold text-muted-foreground uppercase tracking-wide leading-tight">
+              Incoming
+            </span>
+            <span className="text-xs text-muted-foreground leading-tight">
+              received from
+            </span>
+          </div>
           {hasSources && (
             <Badge variant="outline" className="text-xs ml-auto">
               {formatBtc(totalIn)} in
@@ -1124,15 +1127,20 @@ function TrailLayout({
       {/* Destinations column */}
       <div className="flex flex-col gap-3 flex-1 min-w-0">
         <div className="flex items-center gap-2 mb-1">
-          <span className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
-            Destinations
-          </span>
+          <ArrowLeft className="h-4 w-4 text-muted-foreground" />
+          <div className="flex flex-col min-w-0">
+            <span className="text-sm font-semibold text-muted-foreground uppercase tracking-wide leading-tight">
+              Outgoing
+            </span>
+            <span className="text-xs text-muted-foreground leading-tight">
+              sent to
+            </span>
+          </div>
           {hasDests && (
             <Badge variant="outline" className="text-xs ml-auto">
               {formatBtc(totalOut)} out
             </Badge>
           )}
-          <ArrowLeft className="h-4 w-4 text-muted-foreground" />
         </div>
 
         {!hasDests && (
