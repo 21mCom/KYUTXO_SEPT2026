@@ -2825,6 +2825,7 @@ export default function SettingsPage() {
       );
       const transactionsAdded = txResult.transactionsAdded;
       const participantsAdded = txResult.participantsAdded;
+      const transactionsEnriched = txResult.transactionsEnriched;
 
       // Address sync state: unique `address` index, de-duped against existing
       // (merge) and the incoming set; recordId remapped. Shared with tests via
@@ -2835,7 +2836,7 @@ export default function SettingsPage() {
         recordIdMap,
       );
 
-      console.log(`[Restore] transactions: ${transactionsAdded}, participants: ${participantsAdded}, synced addresses: ${addressSyncAdded}`);
+      console.log(`[Restore] transactions: ${transactionsAdded}, enriched: ${transactionsEnriched}, participants: ${participantsAdded}, synced addresses: ${addressSyncAdded}`);
 
       setRestoreProgress(100);
       setRestoreMessage("Restore complete! Checking for missing transaction data...");

@@ -32,6 +32,7 @@ import {
 import {
   bulkAddTransactions,
   bulkAddParticipants,
+  updateTransaction,
   getTransactionsByTxids,
   getParticipantsByTxids,
   type CreateTransactionData,
@@ -240,9 +241,111 @@ function participantKey(p: {
 }
 
 /**
+ * Numeric transaction fields where a value of `0` means "not known yet" — the
+ * placeholder blockchain sync writes before it has resolved the real value
+ * (e.g. an unconfirmed tx synced with `blockHeight`/`blockTime`/`fee` still 0).
+ * For these, the live row is treated as missing when undefined/null/0, and is
+ * filled only from a backup value that is itself a meaningful (non-zero) number.
+ */
+const ENRICH_ZERO_PLACEHOLDER_FIELDS = [
+  "blockHeight",
+  "blockTime",
+  "fee",
+  "feeRate",
+  "syncedAt",
+  "size",
+  "weight",
+  "vsize",
+] as const;
+
+/**
+ * Numeric fields where `0` is a legitimate value (e.g. `nLockTime` 0 = "no
+ * lock"), so the live row only counts as missing when undefined/null. Filled
+ * from any defined backup number.
+ */
+const ENRICH_NULLABLE_NUMERIC_FIELDS = ["nVersion", "nLockTime"] as const;
+
+/**
+ * Boolean fingerprint/flag fields. `false` is a real, known value, so the live
+ * row is missing only when undefined/null; filled from any defined backup
+ * boolean.
+ */
+const ENRICH_BOOLEAN_FIELDS = [
+  "hasOpReturn",
+  "rawFingerprintCaptured",
+  "hasRbf",
+  "isBip69Ordered",
+  "hasLowRSig",
+  "hasWitness",
+  "hasMixedWitness",
+  "hasCoinbaseInput",
+] as const;
+
+/**
+ * Compute the fields to fill on a live transaction row from a richer backup row
+ * for the SAME txid (merge mode). Only fields that are missing/empty/placeholder
+ * on the live row are returned; any field already populated on the live row is
+ * omitted so it is never overwritten. `txid` and `id` are never touched. Returns
+ * an empty object when the live row already has everything the backup could add.
+ */
+export function computeTransactionEnrichment(
+  live: Record<string, any>,
+  backup: Record<string, any>,
+): Partial<CreateTransactionData> {
+  const changes: Record<string, any> = {};
+
+  for (const field of ENRICH_ZERO_PLACEHOLDER_FIELDS) {
+    const liveVal = live[field];
+    const backupVal = backup[field];
+    const liveMissing = liveVal === undefined || liveVal === null || liveVal === 0;
+    if (liveMissing && typeof backupVal === "number" && backupVal !== 0) {
+      changes[field] = backupVal;
+    }
+  }
+
+  for (const field of ENRICH_NULLABLE_NUMERIC_FIELDS) {
+    const liveVal = live[field];
+    const backupVal = backup[field];
+    const liveMissing = liveVal === undefined || liveVal === null;
+    if (liveMissing && typeof backupVal === "number") {
+      changes[field] = backupVal;
+    }
+  }
+
+  for (const field of ENRICH_BOOLEAN_FIELDS) {
+    const liveVal = live[field];
+    const backupVal = backup[field];
+    const liveMissing = liveVal === undefined || liveVal === null;
+    if (liveMissing && typeof backupVal === "boolean") {
+      changes[field] = backupVal;
+    }
+  }
+
+  // opReturnData is an array; the live row is missing when undefined/null/empty.
+  const liveOpReturn = live.opReturnData;
+  const backupOpReturn = backup.opReturnData;
+  const liveOpReturnMissing =
+    liveOpReturn === undefined ||
+    liveOpReturn === null ||
+    (Array.isArray(liveOpReturn) && liveOpReturn.length === 0);
+  if (liveOpReturnMissing && Array.isArray(backupOpReturn) && backupOpReturn.length > 0) {
+    changes.opReturnData = backupOpReturn;
+  }
+
+  return changes as Partial<CreateTransactionData>;
+}
+
+/**
  * Restore confirmed blockchain transactions and their input/output
  * participants. Transactions are de-duped by `txid` (existing rows in merge
  * mode, and within the incoming set in both modes).
+ *
+ * For a txid that collides with an existing row (merge mode), the live
+ * transaction row itself is NOT replaced — but fields that are
+ * missing/empty/placeholder on the live row (e.g. `blockHeight` 0, missing
+ * `fee`/`feeRate`/`blockTime`) ARE filled in from the richer backup row via
+ * {@link computeTransactionEnrichment}. Fields already populated on the live row
+ * are never overwritten.
  *
  * Participants are added for transactions actually inserted AND — in merge mode
  * — merged into transactions that already existed (collided by `txid`): a backup
@@ -257,14 +360,18 @@ export async function restoreLegacyTransactions(
   transactionParticipants: any[] | undefined,
   restoreMode: RestoreMode,
   recordIdMap: Map<number, number>,
-): Promise<{ transactionsAdded: number; participantsAdded: number }> {
+): Promise<{ transactionsAdded: number; participantsAdded: number; transactionsEnriched: number }> {
   let transactionsAdded = 0;
   let participantsAdded = 0;
+  let transactionsEnriched = 0;
 
   const restoredTxids = new Set<string>();
   // Txids present in the backup that already exist in the vault (merge mode).
-  // Their transaction row is kept as-is, but their participants are merged in.
+  // Their transaction row is kept as-is, but missing fields are filled from the
+  // backup row and their participants are merged in. Maps txid -> live row so we
+  // can enrich without reloading.
   const collidedTxids = new Set<string>();
+  const existingTxRowsByTxid = new Map<string, any>();
   if (blockchainTransactions && blockchainTransactions.length > 0) {
     const existingTxids = new Set<string>();
     if (restoreMode === "merge") {
@@ -274,15 +381,22 @@ export async function restoreLegacyTransactions(
       const TX_MERGE_BATCH = 500;
       for (let i = 0; i < incomingTxids.length; i += TX_MERGE_BATCH) {
         const found = await getTransactionsByTxids(incomingTxids.slice(i, i + TX_MERGE_BATCH));
-        for (const tx of found) existingTxids.add(tx.txid);
+        for (const tx of found) {
+          existingTxids.add(tx.txid);
+          existingTxRowsByTxid.set(tx.txid, tx);
+        }
       }
     }
 
     const txToAdd: CreateTransactionData[] = [];
+    // Keep the LAST backup row per collided txid (matches the de-dup rule that a
+    // later incoming row wins) so its richer fields drive enrichment.
+    const backupRowByCollidedTxid = new Map<string, any>();
     for (const tx of blockchainTransactions) {
       if (!tx.txid) continue;
       if (existingTxids.has(tx.txid)) {
         collidedTxids.add(tx.txid);
+        backupRowByCollidedTxid.set(tx.txid, tx);
         continue;
       }
       if (restoredTxids.has(tx.txid)) continue;
@@ -292,6 +406,17 @@ export async function restoreLegacyTransactions(
     }
     await bulkAddTransactions(txToAdd, { skipNotification: true });
     transactionsAdded = txToAdd.length;
+
+    // Fill missing/placeholder fields on each collided live row from its backup
+    // row. Already-populated live fields are left untouched.
+    for (const [txid, backupRow] of backupRowByCollidedTxid) {
+      const liveRow = existingTxRowsByTxid.get(txid);
+      if (!liveRow || typeof liveRow.id !== "number") continue;
+      const changes = computeTransactionEnrichment(liveRow, backupRow);
+      if (Object.keys(changes).length === 0) continue;
+      await updateTransaction(liveRow.id, changes, { skipNotification: true });
+      transactionsEnriched++;
+    }
   }
 
   if (transactionParticipants && transactionParticipants.length > 0) {
@@ -334,7 +459,7 @@ export async function restoreLegacyTransactions(
     participantsAdded = participantsToAdd.length;
   }
 
-  return { transactionsAdded, participantsAdded };
+  return { transactionsAdded, participantsAdded, transactionsEnriched };
 }
 
 /**
