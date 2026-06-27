@@ -61,6 +61,7 @@ let uploadFile: typeof import("@/lib/attachments").uploadFile;
 let getFileBlob: typeof import("@/lib/attachments").getFileBlob;
 let exportBackup: typeof import("./export").exportBackup;
 let restoreV3Backup: typeof import("./restore").restoreV3Backup;
+let RestoreInterruptedError: typeof import("./restore").RestoreInterruptedError;
 let MemorySink: typeof import("./sink").MemorySink;
 let blobChunks: typeof import("./zip-stream").blobChunks;
 let recordCrud: typeof import("@/lib/data/record-crud");
@@ -107,6 +108,7 @@ beforeAll(async () => {
   getFileBlob = attachments.getFileBlob;
   exportBackup = (await import("./export")).exportBackup;
   restoreV3Backup = (await import("./restore")).restoreV3Backup;
+  RestoreInterruptedError = (await import("./restore")).RestoreInterruptedError;
   MemorySink = (await import("./sink")).MemorySink;
   blobChunks = (await import("./zip-stream")).blobChunks;
   recordCrud = await import("@/lib/data/record-crud");
@@ -166,7 +168,40 @@ const attachmentWriter = {
       throw new Error(err.error || res.statusText);
     }
   },
+  async delete(relativePath: string): Promise<void> {
+    const encoded = `attachments/${relativePath}`
+      .split("/")
+      .map((s) => encodeURIComponent(s))
+      .join("/");
+    const res = await fetch(`/api/attachments/${encoded}`, { method: "DELETE" });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || res.statusText);
+    }
+  },
 };
+
+// Count every attachment file currently on disk under the data dir, so a test
+// can assert whether a failed restore left orphaned bytes behind.
+async function countDiskFiles(): Promise<number> {
+  const root = path.join(tmpDataDir, "attachments");
+  let n = 0;
+  async function walk(dir: string): Promise<void> {
+    let entries: import("fs").Dirent[];
+    try {
+      entries = await fs.readdir(dir, { withFileTypes: true });
+    } catch {
+      return; // dir absent (fully wiped) — zero files
+    }
+    for (const e of entries) {
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) await walk(full);
+      else n += 1;
+    }
+  }
+  await walk(root);
+  return n;
+}
 
 function fileWithBytes(name: string, mime: string, text: string): File {
   return new File([new TextEncoder().encode(text)], name, { type: mime });
@@ -346,23 +381,26 @@ describe("v3 UNENCRYPTED backup full pipeline: record/transaction attachment fil
 
   // Companion to the happy path above: a single record attachment file's write
   // can fail for real-world reasons (disk full, permission denied, a path the
-  // backend rejects). When that happens, restore MUST surface the failure —
-  // never finish as if every file landed — because the inline DB tables
-  // (records + attachments) are already restored, so a swallowed write error
-  // would leave the user with a record whose attachment looks present but cannot
-  // be opened. This mirrors the evidence per-file failure guard in
+  // backend rejects). When that happens AFTER the destructive clear, the inline
+  // DB tables (records + attachments) are already restored, so the vault is left
+  // half-restored: some files on disk, some missing, and DB links pointing at
+  // files that were never written. Restore MUST NOT silently rethrow the raw
+  // error and leave that broken state behind. Instead it mirrors the
+  // cancel-after-clear contract: it resets the vault to a known-empty state and
+  // surfaces a distinct RestoreInterruptedError (the raw write error preserved
+  // as its `cause`) telling the user the vault is only partially restored and to
+  // restore again. This mirrors the evidence per-file failure guard in
   // `backup-evidence-files-roundtrip.runtime.test.ts`, but for the general
-  // `db.attachments` (record/transaction) attachments.
-  //
-  // `restoreV3Backup` now FAILS CLOSED on any post-clear failure: it resets the
-  // vault to a known-empty state and rejects with a distinct hard error
-  // (RestoreInterruptedError) that carries the underlying write failure as its
-  // `cause`, rather than re-throwing the raw error or finishing as if every file
-  // landed. So this test asserts (a) the restore REJECTS, (b) the per-file write
-  // failure is genuinely propagated up the error's cause chain (not swallowed),
-  // and (c) the affected attachment is genuinely unreadable afterwards via its
-  // `objectStoragePath` (its bytes were never written to disk).
-  it("propagates a per-file record attachment write failure instead of silently skipping it", async () => {
+  // `db.attachments` (record/transaction) attachments. It asserts (a) the
+  // distinct error + preserved cause, (b) the vault was actually reset (no
+  // lingering record/attachment rows), and (c) — mirroring Task #827 — no record
+  // attachment files were stranded on disk by the failed restore.
+  it("resets the vault and raises a distinct error when a record attachment file write fails after the clear", async () => {
+    // Start from a clean disk so countDiskFiles() reflects only THIS test's
+    // files (the prior test leaves its restored files on disk, and export's
+    // list-all walks the whole data dir).
+    await wipeDiskFiles();
+
     // 1. Seed records + attachments (files written to disk) so a real export
     //    walks them, each with distinct, inputString-identifiable bytes.
     const plan: Plan[] = [
@@ -404,7 +442,8 @@ describe("v3 UNENCRYPTED backup full pipeline: record/transaction attachment fil
 
     // 4. Restore with a writer that fails on exactly ONE record's attachment file
     //    (the transaction proof), identified by its distinct bytes, and otherwise
-    //    writes for real.
+    //    writes for real. The flakyWriter delegates `delete` to the real writer so
+    //    the post-failure sweep of already-written files can be exercised.
     const writeError = "simulated disk-full: attachment write rejected";
     let attemptedFailingWrite = false;
     const flakyWriter = {
@@ -416,31 +455,40 @@ describe("v3 UNENCRYPTED backup full pipeline: record/transaction attachment fil
         }
         return attachmentWriter.write(relativePath, fileData);
       },
+      delete: attachmentWriter.delete,
     };
 
-    // 5. The restore must REJECT — the write failure is propagated, not swallowed.
+    // 5. The restore must REJECT with the DISTINCT RestoreInterruptedError (not
+    //    the raw write error), signalling the vault is only partially restored
+    //    and the user must restore again. The original write error is preserved
+    //    as the `cause` so the underlying reason is not lost.
     let caught: unknown;
     try {
       await restoreV3Backup({ source: blobChunks(blob), attachmentWriter: flakyWriter });
-    } catch (e) {
-      caught = e;
+      throw new Error("restore should have rejected");
+    } catch (err) {
+      caught = err;
     }
-    expect(caught).toBeTruthy();
     expect(attemptedFailingWrite).toBe(true);
+    expect(caught).toBeInstanceOf(RestoreInterruptedError);
+    expect((caught as Error).message).toMatch(/partially restored|restore again/i);
+    expect((caught as { cause?: Error }).cause?.message).toBe(writeError);
 
-    // The per-file failure must genuinely propagate: walk the error's cause chain
-    // and confirm the original write error message is present somewhere in it. A
-    // swallowed error would leave the chain free of this message (or not reject
-    // at all).
-    const messages: string[] = [];
-    let cursor: unknown = caught;
-    while (cursor instanceof Error) {
-      messages.push(cursor.message);
-      cursor = (cursor as { cause?: unknown }).cause;
-    }
-    expect(messages.some((m) => m.includes(writeError))).toBe(true);
+    // 6. The failure path must RESET the vault, not leave silently broken DB
+    //    links behind. Even though the inline tables had been restored before the
+    //    file write phase, the post-failure cleanup wipes them so there are no
+    //    phantom records pointing at files that were never written.
+    expect(await recordCrud.getAllRecords()).toHaveLength(0);
+    expect(await attachmentsCrud.getAllAttachments()).toHaveLength(0);
 
-    // 6. Confirm the affected attachment is genuinely unreadable afterwards: its
+    // 7. Task #827: clearVault only wipes the DB/inline tables — the files this
+    //    restore had ALREADY written to disk before the failing write would be
+    //    stranded as orphans without the post-failure sweep. The flakyWriter
+    //    delegates `delete` to the real writer, so assert NOTHING is left on disk:
+    //    a write failure must not leak record attachment files.
+    expect(await countDiskFiles()).toBe(0);
+
+    // 8. Confirm the affected attachment is genuinely unreadable afterwards: its
     //    bytes were never written to disk, so opening it via its (preserved)
     //    objectStoragePath must fail. This proves the failure was not misreported
     //    as a successful restore that silently dropped the file.
