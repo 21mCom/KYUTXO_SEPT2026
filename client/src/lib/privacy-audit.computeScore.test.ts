@@ -237,3 +237,51 @@ describe("computeScore zero floor on heavy wallets", () => {
     expect(grade).toBe("F");
   });
 });
+
+// The mirror image of the zero-floor guard above: computeScore starts at a base
+// of 100 and only ever subtracts penalties, while privacy-positive findings
+// (CoinJoin) are intentionally neutral (delta 0). A clean or privacy-positive-only
+// wallet must therefore land at exactly 100 — never above it. If a future change
+// ever let a finding type ADD points, the report could show a nonsensical >100
+// score; these tests pin the upper bound directly, bypassing Dexie seeding.
+describe("computeScore upper bound (never exceeds 100)", () => {
+  it("scores a completely clean wallet at exactly 100 with grade A+", () => {
+    const { score, grade, waterfall } = computeScore([], []);
+
+    expect(score).toBe(100);
+    expect(score).toBeLessThanOrEqual(100);
+    expect(grade).toBe("A+");
+
+    // The only entry is the base score; nothing ever pushes the running score up.
+    for (const entry of waterfall) {
+      expect(entry.runningScore).toBeLessThanOrEqual(100);
+    }
+  });
+
+  it("caps at 100 for a privacy-positive-only wallet (many CoinJoins, no penalties)", () => {
+    // A heap of privacy-positive findings across every CoinJoin type. Good
+    // privacy behaviour must never be rewarded with bonus points beyond 100.
+    const findings: PrivacyFinding[] = [
+      makeCoinJoinFinding("COINJOIN_WHIRLPOOL"),
+      makeCoinJoinFinding("COINJOIN_WHIRLPOOL"),
+      makeCoinJoinFinding("COINJOIN_WASABI"),
+      makeCoinJoinFinding("COINJOIN_WASABI"),
+      makeCoinJoinFinding("COINJOIN_JOINMARKET"),
+      makeCoinJoinFinding("COINJOIN_JOINMARKET"),
+    ];
+
+    const { score, grade, waterfall } = computeScore(findings, []);
+
+    // The crux: even with many privacy-positive findings, the score caps at 100.
+    expect(score).toBe(100);
+    expect(score).toBeLessThanOrEqual(100);
+    expect(grade).toBe("A+");
+
+    // Every privacy-positive entry stays neutral and never lifts the running
+    // score above the 100 base.
+    for (const entry of waterfall) {
+      expect(entry.delta).toBeLessThanOrEqual(0);
+      expect(entry.runningScore).toBeLessThanOrEqual(100);
+    }
+  });
+});
