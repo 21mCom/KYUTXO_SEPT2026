@@ -88,6 +88,7 @@ import { useWalletNames } from "@/hooks/use-wallet-names";
 import { useToast } from "@/hooks/use-toast";
 import { ClickableAddress } from "@/components/ClickableAddress";
 import { TxidLink } from "@/components/TxidLink";
+import { classifyBehavior, BEHAVIOR_LABEL_DISPLAY, type BehaviorProfile } from "@/lib/behavior-profile";
 import { useRecordPreview } from "@/contexts/RecordPreviewContext";
 import {
   runPrivacyAudit,
@@ -2738,6 +2739,26 @@ export function FindingCard({ finding, coinjoinTxids }: { finding: PrivacyFindin
   const hopPath = (finding.details?.hopPath as string[] | undefined) ?? [];
   const hopTxids = (finding.details?.hopTxids as string[] | undefined) ?? [];
 
+  // Map each flagged address to its deterministic behavior profile so users can
+  // correlate behavioral patterns with privacy risk. Uses the same classifier
+  // as RecordTable; addresses with no synced stats simply have no entry.
+  const addressBehaviors = useLiveQuery(async () => {
+    const map = new Map<string, BehaviorProfile>();
+    if (!finding.addresses || finding.addresses.length === 0) return map;
+    const records = await getRecordsByInputStrings(finding.addresses);
+    for (const r of records) {
+      if (r.type !== 'address' || !r.inputString) continue;
+      map.set(r.inputString, classifyBehavior({
+        synced: r.statsComputedAt != null,
+        balanceSats: r.cachedBalanceSats ?? 0,
+        txCount: r.cachedTxCount ?? 0,
+        utxoCount: r.cachedUtxoCount ?? 0,
+        lastActivityTime: r.cachedLastActivityTime ?? 0,
+      }));
+    }
+    return map;
+  }, [finding.addresses]);
+
   return (
     <div
       className="border rounded-md p-3 space-y-2"
@@ -2835,10 +2856,25 @@ export function FindingCard({ finding, coinjoinTxids }: { finding: PrivacyFindin
             {finding.addresses.length > 0 && (
               <div>
                 <span className="text-xs font-medium text-muted-foreground">Addresses:</span>
-                <div className="flex flex-wrap gap-1 mt-1">
-                  {finding.addresses.slice(0, 10).map((addr) => (
-                    <ClickableAddress key={addr} address={addr} />
-                  ))}
+                <div className="flex flex-wrap gap-x-2 gap-y-1 mt-1">
+                  {finding.addresses.slice(0, 10).map((addr) => {
+                    const bp = addressBehaviors?.get(addr);
+                    return (
+                      <span key={addr} className="inline-flex items-center gap-1">
+                        <ClickableAddress address={addr} />
+                        {bp && bp.label !== 'not-enough-data' && (
+                          <Badge
+                            variant="secondary"
+                            className="text-xs w-fit"
+                            title={bp.summarySentence}
+                            data-testid={`badge-behavior-${addr}`}
+                          >
+                            {BEHAVIOR_LABEL_DISPLAY[bp.label]}
+                          </Badge>
+                        )}
+                      </span>
+                    );
+                  })}
                   {finding.addresses.length > 10 && (
                     <span className="text-xs text-muted-foreground">
                       +{finding.addresses.length - 10} more
