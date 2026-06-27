@@ -470,6 +470,25 @@ export function TransactionDeepDive({
     }
   }, [autoAnalyse, selectedTxid, analyse]);
 
+  // When the user switches to a different transaction, immediately hide the
+  // previously analysed transaction's results, summary and any error/message.
+  // Otherwise the stale numbers would keep showing under a different txid until
+  // Analyse is clicked again — letting a user read one transaction's privacy
+  // result while believing it belongs to another. Results reappear only after
+  // the newly selected transaction is analysed.
+  const prevTxidRef = useRef(selectedTxid);
+  useEffect(() => {
+    if (prevTxidRef.current === selectedTxid) return;
+    prevTxidRef.current = selectedTxid;
+    setResult(null);
+    setData(null);
+    setMessage(null);
+    setErrorDetail(null);
+    setShowErrorDetail(false);
+    setCanRetry(false);
+    setFailCount(0);
+  }, [selectedTxid]);
+
   if (txids.length === 0) return null;
 
   const sankey = data && data.isCoinJoin ? buildSankey(data.inputs, data.outputs) : null;

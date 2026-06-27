@@ -269,6 +269,85 @@ describe("TransactionDeepDive failure handling", () => {
     expect(screen.queryByTestId("button-retry-deep-dive")).toBeNull();
   });
 
+  it("hides the first tx's successful results when a different tx is selected, until it is re-analysed", async () => {
+    // Success-then-switch: analyse the first transaction successfully (its
+    // summary + Boltzmann result render), then pick a *different* transaction
+    // from the dropdown. The stale results must disappear immediately — a user
+    // must never read one tx's privacy numbers while a different txid is
+    // selected — and only the newly analysed tx's results may appear.
+    const TXID2 = "a".repeat(64);
+
+    // First tx resolves with its own participants; second tx with its own.
+    mockedGetTx.mockResolvedValue({ txid: TXID, fee: 1_000 } as any);
+    mockedGetParticipants
+      .mockResolvedValueOnce([
+        { txid: TXID, role: "input", address: "bc1qin1", amount: 100_000, vout: 0 },
+        { txid: TXID, role: "output", address: "bc1qout1", amount: 99_000, vout: 0 },
+      ] as any)
+      .mockResolvedValue([
+        { txid: TXID2, role: "input", address: "bc1qin2", amount: 200_000, vout: 0 },
+        { txid: TXID2, role: "output", address: "bc1qout2", amount: 199_000, vout: 0 },
+      ] as any);
+
+    render(
+      <TransactionDeepDive
+        txids={[TXID, TXID2]}
+        coinjoinTxids={new Set<string>()}
+      />,
+    );
+
+    // Analyse the first transaction successfully.
+    fireEvent.click(screen.getByTestId("button-analyse-deep-dive"));
+    await waitFor(() => {
+      expect(lastWorker).not.toBeNull();
+      expect(lastWorker!.postMessage).toHaveBeenCalled();
+    });
+    const firstCallCount = lastWorker!.postMessage.mock.calls.length;
+    const firstId = (
+      lastWorker!.postMessage.mock.calls[firstCallCount - 1][0] as { id: string }
+    ).id;
+    act(() => {
+      lastWorker!.onmessage!({
+        data: { id: firstId, result: { tooComplex: true } },
+      } as MessageEvent);
+    });
+
+    // First tx's results are on screen.
+    await screen.findByTestId("container-boltzmann-result");
+    expect(screen.getByTestId("container-deep-dive-summary")).toBeTruthy();
+
+    // Switch to a different transaction.
+    fireEvent.change(screen.getByTestId("select-deep-dive-txid"), {
+      target: { value: TXID2 },
+    });
+
+    // The first tx's stale results must be gone immediately — before the new
+    // tx has been analysed.
+    await waitFor(() => {
+      expect(screen.queryByTestId("container-boltzmann-result")).toBeNull();
+    });
+    expect(screen.queryByTestId("container-deep-dive-summary")).toBeNull();
+
+    // Analyse the second transaction successfully.
+    fireEvent.click(screen.getByTestId("button-analyse-deep-dive"));
+    await waitFor(() => {
+      expect(lastWorker!.postMessage.mock.calls.length).toBeGreaterThan(
+        firstCallCount,
+      );
+    });
+    const secondCalls = lastWorker!.postMessage.mock.calls;
+    const secondId = (secondCalls[secondCalls.length - 1][0] as { id: string }).id;
+    act(() => {
+      lastWorker!.onmessage!({
+        data: { id: secondId, result: { tooComplex: true } },
+      } as MessageEvent);
+    });
+
+    // The second tx's results now render.
+    await screen.findByTestId("container-boltzmann-result");
+    expect(screen.getByTestId("container-deep-dive-summary")).toBeTruthy();
+  });
+
   it("clears a prior transaction's error when a different tx is selected and analysed successfully", async () => {
     // Multi-tx mode: the first transaction's analysis fails (twice, so the
     // next-steps hint is on screen), then the user picks a *different*
