@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { buildPrintableReport } from '../privacy-report-html';
+import { computeScore } from '../privacy-audit';
 import type {
   PrivacyAuditResult,
   PrivacyFinding,
@@ -319,6 +320,88 @@ describe('printable HTML report — finding-type label fallback', () => {
     // The friendly mapped label wins over the raw enum string.
     expect(html).toContain('<span class="finding-title">Script Type Mixing</span>');
     expect(html).not.toContain('<span class="finding-title">SCRIPT_TYPE_MIXING</span>');
+  });
+});
+
+describe('printable HTML report — score breakdown category fallback', () => {
+  it('prints the raw type string (escaped) as the waterfall category when the label is the unmapped type', () => {
+    const html = buildPrintableReport(
+      makeResult({
+        scoreWaterfall: [
+          { label: 'Base Score', findingType: 'BASE', delta: 0, runningScore: 100, count: 0 },
+          {
+            // Mirrors the upstream `FINDING_TYPE_LABELS[type] ?? type` fallback:
+            // an unmapped finding type leaves the raw enum string as the label.
+            label: 'A_BRAND_NEW_UNMAPPED_TYPE',
+            findingType: 'A_BRAND_NEW_UNMAPPED_TYPE' as unknown as PrivacyFinding['type'],
+            delta: -10,
+            runningScore: 90,
+            count: 1,
+          },
+        ],
+      }),
+      { owner: null, wallet: null },
+      FIXED_NOW,
+    );
+
+    // The category cell shows the raw enum string verbatim.
+    expect(html).toContain('<td>A_BRAND_NEW_UNMAPPED_TYPE</td>');
+    // The category cell must never collapse to "undefined" or an empty <td>.
+    expect(html).not.toContain('<td>undefined</td>');
+    expect(html).not.toContain('<td></td>');
+  });
+
+  it('escapes the raw type string when used as the waterfall category', () => {
+    const html = buildPrintableReport(
+      makeResult({
+        scoreWaterfall: [
+          { label: 'Base Score', findingType: 'BASE', delta: 0, runningScore: 100, count: 0 },
+          {
+            label: '<img src=x onerror=alert(1)>',
+            findingType: '<img src=x onerror=alert(1)>' as unknown as PrivacyFinding['type'],
+            delta: -10,
+            runningScore: 90,
+            count: 1,
+          },
+        ],
+      }),
+      { owner: null, wallet: null },
+      FIXED_NOW,
+    );
+
+    expect(html).toContain('<td>&lt;img src=x onerror=alert(1)&gt;</td>');
+    // The raw payload must never survive unescaped in a category cell.
+    expect(html).not.toContain('<td><img src=x onerror=alert(1)></td>');
+  });
+
+  it('falls back to the raw type as the waterfall category end-to-end through the scoring path', () => {
+    // Drive the real scoring code (computeScore) so the label fallback is
+    // exercised, not just hand-fed into the HTML builder. An unmapped finding
+    // type must surface as its raw enum string in the produced scoreWaterfall.
+    const finding = {
+      ...ENTITY_FINDING,
+      type: 'A_BRAND_NEW_UNMAPPED_TYPE' as unknown as PrivacyFinding['type'],
+    } as unknown as PrivacyFinding;
+
+    const { score, grade, waterfall } = computeScore([finding], []);
+
+    const unmapped = waterfall.find(
+      e => (e.findingType as string) === 'A_BRAND_NEW_UNMAPPED_TYPE',
+    );
+    expect(unmapped).toBeDefined();
+    expect(unmapped!.label).toBe('A_BRAND_NEW_UNMAPPED_TYPE');
+
+    const result = makeResult({
+      findings: [finding],
+      warnings: [],
+      score,
+      grade,
+      scoreWaterfall: waterfall,
+    });
+
+    const html = buildPrintableReport(result, { owner: null, wallet: null }, FIXED_NOW);
+    expect(html).toContain('<td>A_BRAND_NEW_UNMAPPED_TYPE</td>');
+    expect(html).not.toContain('<td>undefined</td>');
   });
 });
 
