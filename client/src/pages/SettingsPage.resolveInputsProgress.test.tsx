@@ -172,3 +172,43 @@ describe("SettingsPage — Resolve Input Addresses cancel progress", () => {
     );
   });
 });
+
+describe("SettingsPage — Resolve Input Addresses error messaging", () => {
+  it("explains a node outage when the resolve fails on a connectivity error", async () => {
+    // The pass throws while reaching the node for a prior transaction.
+    resolveSpy.mockRejectedValueOnce(new Error("ETIMEDOUT"));
+
+    renderWithSettingsProviders(<SettingsPage />);
+
+    fireEvent.click(await screen.findByTestId("button-resolve-inputs"));
+
+    await waitFor(() =>
+      expect(toastSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          variant: "destructive",
+          title: "Resolution Failed",
+          description: expect.stringContaining("Couldn't reach your Bitcoin node"),
+        }),
+      ),
+    );
+  });
+
+  it("explains an internal error when the resolve fails for a non-connectivity reason", async () => {
+    // The pass blows up for an unexpected, non-network reason.
+    resolveSpy.mockRejectedValueOnce(new Error("kaboom"));
+
+    renderWithSettingsProviders(<SettingsPage />);
+
+    fireEvent.click(await screen.findByTestId("button-resolve-inputs"));
+
+    await waitFor(() =>
+      expect(toastSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          variant: "destructive",
+          title: "Resolution Failed",
+          description: expect.stringContaining("An internal error stopped the resolve"),
+        }),
+      ),
+    );
+  });
+});

@@ -352,6 +352,50 @@ describe("BalanceOverview · Import missing history", () => {
     expect(resolvePrevouts).not.toHaveBeenCalled();
   });
 
+  it("explains a node outage when the import fails on a connectivity error", async () => {
+    primeBannerState();
+    getMissingSourceTxids.mockResolvedValue(["txMissing1"]);
+    getNodeSettings.mockResolvedValue({ id: "default", type: "esplora" });
+    getBlockHeight.mockResolvedValue(800000);
+    // The backfill fails while reaching the node for a source transaction.
+    runTxidBackfill.mockRejectedValue(new Error("connection to node timed out"));
+
+    await renderAndWaitForBanner();
+    fireEvent.click(screen.getByTestId("button-import-missing-history"));
+
+    await waitFor(() =>
+      expect(toastSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: "Import failed",
+          variant: "destructive",
+          description: expect.stringContaining("Couldn't reach your Bitcoin node"),
+        }),
+      ),
+    );
+  });
+
+  it("explains an internal error when the import fails for a non-connectivity reason", async () => {
+    primeBannerState();
+    getMissingSourceTxids.mockResolvedValue(["txMissing1"]);
+    getNodeSettings.mockResolvedValue({ id: "default", type: "esplora" });
+    getBlockHeight.mockResolvedValue(800000);
+    // The backfill blows up for an unexpected, non-network reason.
+    runTxidBackfill.mockRejectedValue(new Error("kaboom"));
+
+    await renderAndWaitForBanner();
+    fireEvent.click(screen.getByTestId("button-import-missing-history"));
+
+    await waitFor(() =>
+      expect(toastSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: "Import failed",
+          variant: "destructive",
+          description: expect.stringContaining("An internal error stopped the resolve"),
+        }),
+      ),
+    );
+  });
+
   it("reports when no history could be imported (all fetches failed)", async () => {
     primeBannerState();
     getMissingSourceTxids.mockResolvedValue(["txMissing1"]);
