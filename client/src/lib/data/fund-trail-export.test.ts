@@ -495,3 +495,108 @@ describe("buildFundTrailPdf", () => {
     expect(sumTopLevel(snapshot.destinations)).toBe(50_000_000);
   });
 });
+
+// ---------------------------------------------------------------------------
+// PDF builder at scale — the detailed export must paginate across many pages
+// rather than overflow one page or emit a corrupt/blank document.
+// ---------------------------------------------------------------------------
+
+/**
+ * Count the pages in a (jsPDF, uncompressed) PDF blob's raw text. jsPDF records
+ * the total in the pages tree (`/Type /Pages … /Count N`) and emits one
+ * `/MediaBox` per page object; we use the tree count and fall back to the
+ * per-page boxes so the assertion stays robust if jsPDF reorders objects.
+ */
+function pdfPageCount(pdfText: string): number {
+  const countMatch = pdfText.match(/\/Type\s*\/Pages\b[\s\S]*?\/Count\s+(\d+)/);
+  if (countMatch) return Number(countMatch[1]);
+  return (pdfText.match(/\/MediaBox/g) || []).length;
+}
+
+/**
+ * Build a snapshot with `groups` top-level source groups, each carrying
+ * `detailsPerGroup` unique (address, txid) detail rows — i.e. thousands of
+ * deduplicated addresses overall — so the detailed PDF must span many pages.
+ */
+function largeSnapshot(groups: number, detailsPerGroup: number) {
+  const sources: GroupFlow[] = [];
+  for (let g = 0; g < groups; g++) {
+    const details: GroupFlowDetail[] = [];
+    for (let d = 0; d < detailsPerGroup; d++) {
+      details.push(
+        detail({
+          address: `bc1qgroup${g}addr${d}`,
+          txid: `txid-${g}-${d}`,
+          amount: 1_000_000 + d,
+          blockTime: 1_700_000_000 + g * 1000 + d,
+        }),
+      );
+    }
+    sources.push(
+      flow({
+        groupLabel: `Group ${g}`,
+        totalSats: details.reduce((s, x) => s + x.amount, 0),
+        details,
+      }),
+    );
+  }
+  const center: TrailHop = { sources, destinations: [] };
+  return buildFundTrailSnapshot("Big Wallet", "walletName", center, new Map());
+}
+
+describe("buildFundTrailPdf at scale", () => {
+  it("paginates a large detailed snapshot into a valid multi-page Blob", async () => {
+    // 60 groups × 40 rows = 2,400 deduplicated detail rows (thousands of
+    // addresses) — far more than fits on a single page.
+    const snapshot = largeSnapshot(60, 40);
+
+    const blob = await buildFundTrailPdf(snapshot, { detailed: true });
+
+    // A real, non-trivial PDF (not blank/corrupt).
+    expect(blob).toBeInstanceOf(Blob);
+    expect(blob.type).toBe("application/pdf");
+    expect(blob.size).toBeGreaterThan(100_000);
+
+    const text = await blob.text();
+    expect(text.slice(0, 5)).toBe("%PDF-");
+    // It must end cleanly with the EOF marker, proving the document closed.
+    expect(text.trimEnd().endsWith("%%EOF")).toBe(true);
+
+    // The whole point: it spans many pages instead of overflowing one.
+    expect(pdfPageCount(text)).toBeGreaterThan(5);
+  });
+
+  it("detailed: false yields the original summary-only layout", async () => {
+    const snapshot = largeSnapshot(60, 40);
+
+    const summary = await buildFundTrailPdf(snapshot, { detailed: false });
+    const detailed = await buildFundTrailPdf(snapshot, { detailed: true });
+
+    expect(summary.type).toBe("application/pdf");
+    const summaryText = await summary.text();
+    expect(summaryText.slice(0, 5)).toBe("%PDF-");
+    expect(summaryText.trimEnd().endsWith("%%EOF")).toBe(true);
+
+    // Summary-only omits every per-detail sub-table, so for the same data it is
+    // dramatically smaller and uses far fewer pages than the detailed export.
+    const summaryPages = pdfPageCount(summaryText);
+    const detailedPages = pdfPageCount(await detailed.text());
+    expect(summaryPages).toBeLessThan(detailedPages);
+    expect(summary.size).toBeLessThan(detailed.size);
+  });
+
+  it("omitting options defaults to the summary-only layout", async () => {
+    const snapshot = largeSnapshot(60, 40);
+
+    const noOptions = await buildFundTrailPdf(snapshot);
+    const explicitSummary = await buildFundTrailPdf(snapshot, {
+      detailed: false,
+    });
+
+    // No options must match the explicit summary layout in page count, proving
+    // `detailed` defaults to false rather than embedding detail rows.
+    expect(pdfPageCount(await noOptions.text())).toBe(
+      pdfPageCount(await explicitSummary.text()),
+    );
+  });
+});
