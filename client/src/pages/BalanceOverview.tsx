@@ -49,6 +49,7 @@ import {
   Download,
   X,
   ListChecks,
+  StopCircle,
 } from "lucide-react";
 import { SiBitcoin } from "react-icons/si";
 
@@ -360,6 +361,10 @@ export default function BalanceOverview() {
   // Global resolve progress for the top banner's "Resolve & Recompute" pass, as
   // reported by resolvePrevouts' onProgress callback.
   const [resolveProgressGlobal, setResolveProgressGlobal] = useState<{ resolved: number; total: number } | null>(null);
+  // AbortController for the in-progress global "Resolve & Recompute" pass, so the
+  // banner can cancel a long-running resolve without rolling back partial work.
+  const fixPrevoutsAbortRef = useRef<AbortController | null>(null);
+  const [cancellingFixPrevouts, setCancellingFixPrevouts] = useState(false);
 
   // Re-run aggregation when the native read-engine flips to ready so the fast
   // path can take over from any Dexie fallback that ran first.
@@ -683,6 +688,9 @@ export default function BalanceOverview() {
   }, [unresolvedByRecordId, toast]);
 
   const handleFixPrevouts = useCallback(async () => {
+    const controller = new AbortController();
+    fixPrevoutsAbortRef.current = controller;
+    setCancellingFixPrevouts(false);
     setFixingPrevouts(true);
     setResolveProgressGlobal({ resolved: 0, total: 0 });
     try {
@@ -690,13 +698,21 @@ export default function BalanceOverview() {
       // address itself (origin "user"), so we don't need a second pass here.
       const result = await transactionSyncService.resolvePrevouts(
         (resolved, total) => setResolveProgressGlobal({ resolved, total }),
-        { recomputeOrigin: "user" },
+        { recomputeOrigin: "user", signal: controller.signal },
       );
       const remaining = await countUnresolvedPrevoutInputs();
       setUnresolvedPrevouts(remaining);
       if (remaining === 0) setSpendWarningDismissed(false);
 
-      if (result.resolved === 0) {
+      if (result.cancelled) {
+        toast({
+          title: "Resolve stopped",
+          description:
+            result.resolved > 0
+              ? `Stopped after resolving ${result.resolved.toLocaleString()} spend${result.resolved !== 1 ? "s" : ""}. ${remaining.toLocaleString()} still pending.`
+              : "Stopped before any spends were resolved.",
+        });
+      } else if (result.resolved === 0) {
         toast({
           title: "Nothing to resolve",
           description:
@@ -722,10 +738,22 @@ export default function BalanceOverview() {
         variant: "destructive",
       });
     } finally {
+      fixPrevoutsAbortRef.current = null;
+      setCancellingFixPrevouts(false);
       setFixingPrevouts(false);
       setResolveProgressGlobal(null);
     }
   }, [toast]);
+
+  // Cancel the in-progress global resolve. Aborting stops further network
+  // fetching cleanly; spends already resolved are kept (no rollback) and the
+  // unresolved count refreshes in handleFixPrevouts' completion path.
+  const handleCancelFixPrevouts = useCallback(() => {
+    if (fixPrevoutsAbortRef.current) {
+      setCancellingFixPrevouts(true);
+      fixPrevoutsAbortRef.current.abort();
+    }
+  }, []);
 
   // Fetch + import the source transactions behind unattributable spends, then
   // attribute those spends locally. "Resolve & Recompute" can only attribute a
@@ -1128,25 +1156,34 @@ export default function BalanceOverview() {
                 Cancel
               </Button>
             )}
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={handleFixPrevouts}
-              disabled={fixingPrevouts || importingHistory}
-              data-testid="button-fix-prevouts"
-              className="border-yellow-400 dark:border-yellow-600 text-yellow-800 dark:text-yellow-200"
-            >
-              {fixingPrevouts ? (
-                <>
-                  <Loader2 className="h-3 w-3 animate-spin mr-1.5" />
-                  {resolveProgressGlobal && resolveProgressGlobal.total > 0
-                    ? `Resolving… ${resolveProgressGlobal.resolved.toLocaleString()}/${resolveProgressGlobal.total.toLocaleString()}`
-                    : "Resolving…"}
-                </>
-              ) : (
-                "Resolve & Recompute"
-              )}
-            </Button>
+            {fixingPrevouts ? (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={handleCancelFixPrevouts}
+                disabled={cancellingFixPrevouts}
+                data-testid="button-cancel-fix-prevouts"
+                className="border-yellow-400 dark:border-yellow-600 text-yellow-800 dark:text-yellow-200"
+              >
+                <StopCircle className="h-3 w-3 mr-1.5" />
+                {cancellingFixPrevouts
+                  ? "Stopping…"
+                  : resolveProgressGlobal && resolveProgressGlobal.total > 0
+                    ? `Stop (${resolveProgressGlobal.resolved.toLocaleString()}/${resolveProgressGlobal.total.toLocaleString()})`
+                    : "Stop resolving"}
+              </Button>
+            ) : (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={handleFixPrevouts}
+                disabled={importingHistory}
+                data-testid="button-fix-prevouts"
+                className="border-yellow-400 dark:border-yellow-600 text-yellow-800 dark:text-yellow-200"
+              >
+                Resolve & Recompute
+              </Button>
+            )}
             <button
               onClick={() => setSpendWarningDismissed(true)}
               className="text-yellow-600/60 dark:text-yellow-400/60 hover:text-yellow-700 dark:hover:text-yellow-300 transition-colors"

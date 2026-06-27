@@ -1594,16 +1594,21 @@ export class TransactionSyncService {
 
   async resolvePrevouts(
     onProgress?: (resolved: number, total: number) => void,
-    options?: { recomputeOrigin?: string; restrictToRecordIds?: Set<number> },
-  ): Promise<{ resolved: number; fetchedFromNode: number; errors: number; resolvedAddresses: string[] }> {
+    options?: { recomputeOrigin?: string; restrictToRecordIds?: Set<number>; signal?: AbortSignal },
+  ): Promise<{ resolved: number; fetchedFromNode: number; errors: number; resolvedAddresses: string[]; cancelled: boolean }> {
     const recomputeOrigin = options?.recomputeOrigin ?? 'blockchain-sync';
+    // Optional external cancellation for standalone resolve passes (e.g. the
+    // Balance page "Resolve & Recompute" banner). Cancelling stops further
+    // network fetching cleanly; whatever has already been resolved is still
+    // written and recomputed below — no rollback.
+    const signal = options?.signal;
     // When set, only spends whose resolved source output maps to one of these
     // record ids are attributed — used by the per-wallet "Resolve" action on the
     // Balance page. Scoped resolution is LOCAL-only: a spend can only be tied to
     // a specific wallet when its prevout output is already known locally, so we
     // never hit the network in this mode.
     const restrictToRecordIds = options?.restrictToRecordIds;
-    const stats = { resolved: 0, fetchedFromNode: 0, errors: 0, resolvedAddresses: [] as string[] };
+    const stats = { resolved: 0, fetchedFromNode: 0, errors: 0, resolvedAddresses: [] as string[], cancelled: false };
 
     const allInputs = await db.transactionParticipants
       .where('role').equals('input')
@@ -1656,7 +1661,10 @@ export class TransactionSyncService {
       const fetchArr = Array.from(needFetch);
       const CONCURRENCY = 4;
       for (let i = 0; i < fetchArr.length; i += CONCURRENCY) {
-        if (this.cancelled) break;
+        if (this.cancelled || signal?.aborted) {
+          stats.cancelled = true;
+          break;
+        }
         const chunk = fetchArr.slice(i, i + CONCURRENCY);
         const results = await Promise.allSettled(
           chunk.map(txid => this.provider.getTransaction(txid).then(apiTx => ({ txid, apiTx })))
