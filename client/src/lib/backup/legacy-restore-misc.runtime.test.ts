@@ -17,10 +17,14 @@
 //     autoincrement ids (backup id stripped).
 //   - derivation templates: merge de-dups by `fingerprint:scriptType`; replace
 //     adds every template.
-//   - evidence: no de-dup in either mode; evidence rows get fresh autoincrement
-//     ids on restore, so each backup evidence id is mapped to its new live id and
-//     every attachment's `evidenceId` is remapped through that map (without this an
-//     old backup would orphan/mislink every evidence file).
+//   - evidence: replace mode adds every row; merge mode skips an evidence row
+//     whose identity (title + documentType + originalDate) already exists and any
+//     attachment belonging to a skipped row, so merging the same/overlapping
+//     backup more than once doesn't accumulate duplicate documents or orphaned
+//     attachments. Evidence rows get fresh autoincrement ids on restore, so each
+//     backup evidence id is mapped to its new live id and every attachment's
+//     `evidenceId` is remapped through that map (without this an old backup would
+//     orphan/mislink every evidence file).
 
 import "fake-indexeddb/auto";
 
@@ -359,5 +363,101 @@ describe("legacy restore: evidence", () => {
     });
     expect(await getAllEvidence()).toHaveLength(0);
     expect(await getAllEvidenceAttachments()).toHaveLength(0);
+  });
+
+  it("merge mode skips evidence that already exists and drops its attachments (no doubling)", async () => {
+    // Seed the vault with one document + attachment, as a prior restore would.
+    await restoreLegacyEvidence(
+      [{ id: 1, title: "Coinbase Receipt", documentType: "receipt", originalDate: 1700 }],
+      [attachmentRow(11, 1, "coinbase.pdf")],
+      "merge",
+    );
+    expect(await getAllEvidence()).toHaveLength(1);
+    expect(await getAllEvidenceAttachments()).toHaveLength(1);
+
+    // Merge the SAME backup again plus one genuinely new document. The duplicate
+    // evidence (and its attachment) must be skipped; only the new one is added.
+    const result = await restoreLegacyEvidence(
+      [
+        { id: 1, title: "Coinbase Receipt", documentType: "receipt", originalDate: 1700 }, // dup
+        { id: 2, title: "Bank Statement", documentType: "statement", originalDate: 1800 }, // new
+      ],
+      [attachmentRow(12, 1, "coinbase.pdf"), attachmentRow(13, 2, "bank.pdf")],
+      "merge",
+    );
+    expect(result.evidenceAdded).toBe(1);
+    expect(result.evidenceAttachmentsAdded).toBe(1);
+
+    const live = await getAllEvidence();
+    expect(live).toHaveLength(2);
+    expect(live.filter((e) => e.title === "Coinbase Receipt")).toHaveLength(1);
+
+    const attachments = await getAllEvidenceAttachments();
+    expect(attachments).toHaveLength(2);
+    // The new attachment links to the LIVE id of the new document, never the
+    // stale backup id; no orphaned duplicate attachment for the skipped doc.
+    const bankDoc = live.find((e) => e.title === "Bank Statement")!;
+    expect(attachments.find((a) => a.filename === "bank.pdf")!.evidenceId).toBe(bankDoc.id);
+    const liveIds = new Set(live.map((e) => e.id));
+    expect(attachments.every((a) => liveIds.has(a.evidenceId))).toBe(true);
+  });
+
+  it("merge mode de-dups documents that share an identity WITHIN one backup", async () => {
+    // Two backup rows with the same title+documentType+originalDate collapse to
+    // one on a merge, and only the kept row's attachments are added.
+    const result = await restoreLegacyEvidence(
+      [
+        { id: 1, title: "Same Doc", documentType: "other", originalDate: 500 },
+        { id: 2, title: "Same Doc", documentType: "other", originalDate: 500 },
+        { id: 3, title: "Different Doc", documentType: "other", originalDate: 600 },
+      ],
+      [
+        attachmentRow(10, 1, "first.pdf"),
+        attachmentRow(20, 2, "second.pdf"),
+        attachmentRow(30, 3, "third.pdf"),
+      ],
+      "merge",
+    );
+    expect(result.evidenceAdded).toBe(2);
+    // The attachment of the de-duped second row (id 2) is dropped; the kept
+    // row's (id 1) attachment and the distinct row's attachment remain.
+    expect(result.evidenceAttachmentsAdded).toBe(2);
+
+    expect(await getAllEvidence()).toHaveLength(2);
+    const attachments = await getAllEvidenceAttachments();
+    expect(attachments.map((a) => a.filename).sort()).toEqual(["first.pdf", "third.pdf"]);
+  });
+
+  it("merge mode distinguishes documents by originalDate and documentType, not just title", async () => {
+    await restoreLegacyEvidence(
+      [{ id: 1, title: "Doc", documentType: "receipt", originalDate: 100 }],
+      undefined,
+      "merge",
+    );
+    // Same title but a different documentType or originalDate is NOT a duplicate.
+    const result = await restoreLegacyEvidence(
+      [
+        { id: 2, title: "Doc", documentType: "statement", originalDate: 100 }, // diff type
+        { id: 3, title: "Doc", documentType: "receipt", originalDate: 200 }, // diff date
+        { id: 4, title: "Doc", documentType: "receipt", originalDate: 100 }, // dup
+      ],
+      undefined,
+      "merge",
+    );
+    expect(result.evidenceAdded).toBe(2);
+    expect(await getAllEvidence()).toHaveLength(3);
+  });
+
+  it("replace mode still adds duplicate documents (no de-dup; table was cleared first)", async () => {
+    const result = await restoreLegacyEvidence(
+      [
+        { id: 1, title: "Dup Doc", documentType: "other", originalDate: 1 },
+        { id: 2, title: "Dup Doc", documentType: "other", originalDate: 1 },
+      ],
+      undefined,
+      "replace",
+    );
+    expect(result.evidenceAdded).toBe(2);
+    expect(await getAllEvidence()).toHaveLength(2);
   });
 });

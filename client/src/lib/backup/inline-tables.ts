@@ -15,7 +15,6 @@
 // guarded and are read/cleared directly.
 
 import { db } from "@/lib/database";
-import type { Evidence } from "@/lib/database";
 import {
   restoreTag,
   restoreCategory,
@@ -38,8 +37,7 @@ import {
 import {
   getAllEvidence,
   getAllEvidenceAttachments,
-  bulkAddEvidence,
-  addEvidenceAttachment,
+  restoreEvidenceRows,
   clearEvidence,
   clearEvidenceAttachments,
 } from "@/lib/data/evidence-crud";
@@ -356,56 +354,15 @@ export async function restoreInlineTables(
     );
   }
 
-  // Evidence rows are re-`add`ed and so receive fresh auto-increment ids. We map
-  // each original id to its new id so evidenceAttachments (which reference
-  // evidence by id) can be relinked below — otherwise restore would orphan every
-  // attachment because the table's key generator is not reset by `clear()`.
-  const evidenceSource = arr("evidence");
-  const evidenceRows = evidenceSource.map((ev) => {
-    const { id, ...d } = ev;
-    return {
-      title: d.title || "Restored Evidence",
-      documentType: d.documentType || "other",
-      originalDate: d.originalDate,
-      notes: d.notes,
-      tags: d.tags || [],
-      partiesInvolved: d.partiesInvolved || [],
-      source: d.source,
-      importance: d.importance,
-      createdAt: d.createdAt || now,
-      updatedAt: d.updatedAt || now,
-    };
-  });
-  const evidenceIdMap = new Map<number, number>();
-  if (evidenceRows.length) {
-    const newIds = await bulkAddEvidence(evidenceRows as Evidence[], {
-      skipNotification: true,
-    });
-    evidenceSource.forEach((ev, i) => {
-      if (typeof ev.id === "number" && typeof newIds[i] === "number") {
-        evidenceIdMap.set(ev.id, newIds[i]);
-      }
-    });
-  }
-
-  for (const ea of arr("evidenceAttachments")) {
-    const { id, ...d } = ea;
-    const mappedEvidenceId =
-      typeof d.evidenceId === "number"
-        ? evidenceIdMap.get(d.evidenceId) ?? d.evidenceId
-        : d.evidenceId;
-    await addEvidenceAttachment(
-      {
-        evidenceId: mappedEvidenceId,
-        filename: d.filename || "unknown",
-        mimeType: d.mimeType || "application/octet-stream",
-        size: d.size || 0,
-        objectStoragePath: d.objectStoragePath || "",
-        createdAt: d.createdAt || now,
-      },
-      { skipNotification: true },
-    );
-  }
+  // Evidence rows are re-`add`ed and so receive fresh auto-increment ids; the
+  // shared helper maps each original id to its new id so evidenceAttachments
+  // (which reference evidence by id) are relinked — otherwise restore would
+  // orphan every attachment because the table's key generator is not reset by
+  // `clear()`. In merge mode the helper also skips evidence documents whose
+  // identity already exists (and their attachments), so merging the same backup
+  // twice doesn't accumulate duplicate documents. Routed through the shared
+  // restoreEvidenceRows helper so the v3 and legacy paths can never diverge.
+  await restoreEvidenceRows(arr("evidence"), arr("evidenceAttachments"), restoreMode);
 
   // The v3 restore orchestrator always clears the vault first, so this runs in
   // effective "replace" mode (every row added). Routed through the shared

@@ -2469,12 +2469,17 @@ export default function SettingsPage() {
       // Restore evidence documents and their attachments. Evidence rows get
       // fresh auto-increment ids on restore (clear() does NOT reset IndexedDB
       // key generation), so the attachments' evidenceId must be remapped to the
-      // new ids — otherwise restore orphans/mislinks every evidence file. The
-      // shared helper does this remapping (mirroring the v3 path) and is covered
-      // by a regression test.
+      // new ids — otherwise restore orphans/mislinks every evidence file. In
+      // merge mode the shared helper also skips evidence documents whose identity
+      // already exists (and their attachments) so merging the same/overlapping
+      // backup more than once doesn't accumulate duplicates; replace mode adds
+      // every row (the table was cleared above). The shared helper does this
+      // remapping/de-dup (mirroring the v3 path) and is covered by a regression
+      // test.
       const evidenceResult = await restoreLegacyEvidence(
         evidence,
         evidenceAttachments,
+        restoreMode,
       );
       const evidenceAdded = evidenceResult.evidenceAdded;
       const evidenceAttachmentsAdded = evidenceResult.evidenceAttachmentsAdded;

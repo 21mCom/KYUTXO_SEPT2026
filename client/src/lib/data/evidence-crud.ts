@@ -195,3 +195,137 @@ export async function countEvidenceAttachmentsByEvidenceId(
 export async function countEvidenceAttachments(): Promise<number> {
   return db.evidenceAttachments.count();
 }
+
+// =============================================================================
+// RESTORE (shared by the legacy and v3 inline backup paths)
+// =============================================================================
+
+export type EvidenceRestoreMode = 'merge' | 'replace';
+
+// Stable identity for an evidence document. The evidence table has no unique
+// index, so merge mode uses this to skip rows that already exist rather than
+// appending a duplicate document. The NUL separator can never appear in any
+// component, so distinct documents can never collide on the same key. Matches
+// on title + documentType + originalDate (the user-meaningful identity of a
+// document, surfaced in the Evidence/Vault UI).
+export function evidenceIdentity(row: {
+  title?: unknown;
+  documentType?: unknown;
+  originalDate?: unknown;
+}): string {
+  return `${row.title}\u0000${row.documentType}\u0000${row.originalDate}`;
+}
+
+/**
+ * Restore evidence documents and their attachments. SINGLE source of truth
+ * shared by BOTH the legacy (pre-v3) restore path and the v3 inline path so they
+ * can never diverge.
+ *
+ * The backup `id` is always stripped — evidence rows receive FRESH autoincrement
+ * ids on restore (clear() does NOT reset IndexedDB key generation), so each
+ * backup evidence id is mapped to its new live id and the attachments'
+ * `evidenceId` is remapped through that map. Without this, restoring an old
+ * backup would orphan/mislink every evidence file.
+ *
+ * In MERGE mode, an evidence row whose identity (title + documentType +
+ * originalDate) already exists is skipped: the table has no unique index, so
+ * without this guard merging the same/overlapping backup more than once silently
+ * accumulates redundant evidence documents. The skip-set is seeded from the rows
+ * already in the table AND extended as rows are added, so an internally
+ * duplicated backup can't re-add the same document within one merge either. Any
+ * attachment whose `evidenceId` points at a skipped evidence row is skipped too,
+ * so no orphaned attachment rows are appended.
+ *
+ * In REPLACE mode every row is added (the caller cleared the tables first),
+ * which preserves the original append-only behaviour exactly.
+ *
+ * Returns the number of evidence rows and attachment rows actually written.
+ */
+export async function restoreEvidenceRows(
+  evidence: any[] | undefined,
+  evidenceAttachments: any[] | undefined,
+  restoreMode: EvidenceRestoreMode = 'replace'
+): Promise<{ evidenceAdded: number; evidenceAttachmentsAdded: number }> {
+  const now = Date.now();
+  const evidenceIdMap = new Map<number, number>();
+  // Backup evidence ids that were skipped as duplicates in merge mode, so their
+  // attachments can be skipped too (no orphaned attachment rows).
+  const skippedEvidenceIds = new Set<number>();
+
+  const evidenceSource = Array.isArray(evidence) ? evidence : [];
+
+  // In merge mode, seed the de-dup set with the identities already in the vault.
+  const seen = new Set<string>();
+  if (restoreMode === 'merge') {
+    for (const ev of await getAllEvidence()) seen.add(evidenceIdentity(ev));
+  }
+
+  // Build the list of rows to add (after merge de-dup), keeping the source rows
+  // parallel so the new ids can be mapped back to backup ids for attachments.
+  const toAddSource: any[] = [];
+  const toAddRows: Evidence[] = [];
+  for (const ev of evidenceSource) {
+    if (restoreMode === 'merge') {
+      const key = evidenceIdentity(ev);
+      if (seen.has(key)) {
+        if (typeof ev.id === 'number') skippedEvidenceIds.add(ev.id);
+        continue;
+      }
+      seen.add(key);
+    }
+    const { id, ...d } = ev;
+    toAddSource.push(ev);
+    toAddRows.push({
+      title: d.title || 'Restored Evidence',
+      documentType: d.documentType || 'other',
+      originalDate: d.originalDate,
+      notes: d.notes,
+      tags: d.tags || [],
+      partiesInvolved: d.partiesInvolved || [],
+      source: d.source,
+      importance: d.importance,
+      createdAt: d.createdAt || now,
+      updatedAt: d.updatedAt || now,
+    } as Evidence);
+  }
+
+  let evidenceAdded = 0;
+  if (toAddRows.length > 0) {
+    const newIds = await bulkAddEvidence(toAddRows, { skipNotification: true });
+    toAddSource.forEach((ev, i) => {
+      if (typeof ev.id === 'number' && typeof newIds[i] === 'number') {
+        evidenceIdMap.set(ev.id, newIds[i]);
+      }
+    });
+    evidenceAdded = newIds.length;
+  }
+
+  let evidenceAttachmentsAdded = 0;
+  const attachmentSource = Array.isArray(evidenceAttachments) ? evidenceAttachments : [];
+  for (const ea of attachmentSource) {
+    const { id, ...d } = ea;
+    // Skip attachments belonging to an evidence row that was de-duped away, so
+    // no orphaned attachment is appended for a document we didn't add.
+    if (typeof d.evidenceId === 'number' && skippedEvidenceIds.has(d.evidenceId)) {
+      continue;
+    }
+    const mappedEvidenceId =
+      typeof d.evidenceId === 'number'
+        ? evidenceIdMap.get(d.evidenceId) ?? d.evidenceId
+        : d.evidenceId;
+    await addEvidenceAttachment(
+      {
+        evidenceId: mappedEvidenceId,
+        filename: d.filename || 'unknown',
+        mimeType: d.mimeType || 'application/octet-stream',
+        size: d.size || 0,
+        objectStoragePath: d.objectStoragePath || '',
+        createdAt: d.createdAt || now,
+      },
+      { skipNotification: true }
+    );
+    evidenceAttachmentsAdded++;
+  }
+
+  return { evidenceAdded, evidenceAttachmentsAdded };
+}

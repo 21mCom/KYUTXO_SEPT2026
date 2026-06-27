@@ -18,11 +18,16 @@
 //     replace mode adds every entry.
 //   - derivation templates: merge mode de-dups by `fingerprint:scriptType`;
 //     replace mode adds every entry.
-//   - evidence: no de-dup in either mode — every evidence row and every evidence
-//     attachment is added. Evidence rows receive fresh autoincrement ids on
-//     restore, so each backup evidence id is mapped to its new live id and the
-//     attachments' `evidenceId` is remapped through that map; without this an old
-//     backup would orphan/mislink every evidence file (mirrors the v3 path).
+//   - evidence: in replace mode every evidence row and every evidence attachment
+//     is added; in merge mode an evidence row whose identity (title +
+//     documentType + originalDate) already exists is skipped, and any attachment
+//     belonging to a skipped row is skipped too, so merging the same/overlapping
+//     backup more than once does not accumulate duplicate documents or orphaned
+//     attachments. Evidence rows receive fresh autoincrement ids on restore, so
+//     each backup evidence id is mapped to its new live id and the attachments'
+//     `evidenceId` is remapped through that map; without this an old backup would
+//     orphan/mislink every evidence file. Shared with the v3 inline path via the
+//     `restoreEvidenceRows` helper so the two paths can never diverge.
 //   - price data: no id/FK remapping in either mode — every row is added with a
 //     fresh autoincrement id (the backup id is stripped). In `merge` mode a row
 //     whose `[date+currency+asset]` already exists is skipped (the index is NOT
@@ -41,7 +46,6 @@
 // priceData tables are not guarded and are read/written through their CRUD
 // module too.
 
-import type { Evidence } from "@/lib/database";
 import {
   getTags,
   getCategories,
@@ -65,10 +69,7 @@ import {
   getAllDerivationTemplates,
   type CreateDerivationTemplateData,
 } from "@/lib/data/derivation-templates-crud";
-import {
-  bulkAddEvidence,
-  addEvidenceAttachment,
-} from "@/lib/data/evidence-crud";
+import { restoreEvidenceRows } from "@/lib/data/evidence-crud";
 import { restorePriceDataRows } from "@/lib/data/price-data-crud";
 import {
   addUtxoLineage,
@@ -258,72 +259,30 @@ export async function restoreLegacyDerivationTemplates(
 }
 
 /**
- * Restore evidence documents and their attachments. The legacy path does NOT
- * de-dup evidence in either mode (every row is added with a fresh autoincrement
- * id). Evidence rows receive FRESH ids on restore (clear() does NOT reset
- * IndexedDB key generation), so each backup evidence id is mapped to its new
- * live id and the attachments' `evidenceId` is remapped through that map —
- * otherwise restoring an old backup would orphan/mislink every evidence file by
- * leaving the attachment pointed at a stale backup id (mirrors the v3 restore
- * path in `inline-tables.ts`).
+ * Restore evidence documents and their attachments. Delegates to the shared
+ * `restoreEvidenceRows` so the legacy path and the v3 inline path can never
+ * diverge in how evidence is de-duplicated, how the backup id is stripped, or
+ * how attachments are relinked.
+ *
+ * Evidence rows receive FRESH ids on restore (clear() does NOT reset IndexedDB
+ * key generation), so each backup evidence id is mapped to its new live id and
+ * the attachments' `evidenceId` is remapped through that map — otherwise
+ * restoring an old backup would orphan/mislink every evidence file by leaving
+ * the attachment pointed at a stale backup id.
+ *
+ * In `merge` mode an evidence row whose identity (title + documentType +
+ * originalDate) already exists is skipped (the table has no unique index, so
+ * without this guard merging the same/overlapping backup more than once silently
+ * accumulates redundant evidence documents); any attachment belonging to a
+ * skipped row is skipped too so no orphaned attachment is added. In `replace`
+ * mode every row is added (the caller cleared the tables first).
  */
 export async function restoreLegacyEvidence(
   evidence: any[] | undefined,
   evidenceAttachments: any[] | undefined,
+  restoreMode: RestoreMode = "replace",
 ): Promise<{ evidenceAdded: number; evidenceAttachmentsAdded: number }> {
-  let evidenceAdded = 0;
-  let evidenceAttachmentsAdded = 0;
-  const now = Date.now();
-  const evidenceIdMap = new Map<number, number>();
-
-  if (evidence && evidence.length > 0) {
-    for (const ev of evidence) {
-      const { id, ...evData } = ev;
-      const newEvidence = {
-        title: evData.title || "Restored Evidence",
-        documentType: evData.documentType || "other",
-        originalDate: evData.originalDate,
-        notes: evData.notes,
-        tags: evData.tags || [],
-        partiesInvolved: evData.partiesInvolved || [],
-        source: evData.source,
-        importance: evData.importance,
-        createdAt: evData.createdAt || now,
-        updatedAt: evData.updatedAt || now,
-      };
-      const [newId] = await bulkAddEvidence([newEvidence as Evidence], {
-        skipNotification: true,
-      });
-      if (typeof id === "number" && typeof newId === "number") {
-        evidenceIdMap.set(id, newId);
-      }
-      evidenceAdded++;
-    }
-  }
-
-  if (evidenceAttachments && evidenceAttachments.length > 0) {
-    for (const ea of evidenceAttachments) {
-      const { id, ...eaData } = ea;
-      const mappedEvidenceId =
-        typeof eaData.evidenceId === "number"
-          ? evidenceIdMap.get(eaData.evidenceId) ?? eaData.evidenceId
-          : eaData.evidenceId;
-      await addEvidenceAttachment(
-        {
-          evidenceId: mappedEvidenceId,
-          filename: eaData.filename || "unknown",
-          mimeType: eaData.mimeType || "application/octet-stream",
-          size: eaData.size || 0,
-          objectStoragePath: eaData.objectStoragePath || "",
-          createdAt: eaData.createdAt || now,
-        },
-        { skipNotification: true },
-      );
-      evidenceAttachmentsAdded++;
-    }
-  }
-
-  return { evidenceAdded, evidenceAttachmentsAdded };
+  return restoreEvidenceRows(evidence, evidenceAttachments, restoreMode);
 }
 
 /**
