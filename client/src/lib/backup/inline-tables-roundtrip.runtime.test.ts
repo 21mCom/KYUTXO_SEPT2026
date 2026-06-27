@@ -537,6 +537,72 @@ describe("restoreInlineTables merge mode (inline lineage / custody segments)", (
     expect(await getAllUtxoLineage()).toHaveLength(1);
   });
 
+  it("preserves pre-existing lineage / custody segments absent from a merge backup", async () => {
+    // The inline merge branch deliberately does NOT clear these tables. Seed the
+    // vault with lineage edges + custody segments that the backup does NOT carry,
+    // then merge a DISJOINT set of inline rows. Both the pre-existing rows AND
+    // the new rows must survive — a regression that cleared/overwrote existing
+    // lineage on merge would silently drop user provenance data.
+    await bulkAddCustodySegments(
+      [
+        inlineSegment(700, "seg-vault-1", { currentAmount: 11111 }),
+        inlineSegment(701, "seg-vault-2", { currentAmount: 22222 }),
+      ] as any,
+      { skipNotification: true },
+    );
+    await bulkAddUtxoLineage(
+      [
+        inlineLineage(710, "tx-vault-1", { spentAmount: 33333 }),
+        inlineLineage(711, "tx-vault-2", { spentAmount: 44444 }),
+      ] as any,
+      { skipNotification: true },
+    );
+    expect(await getAllCustodySegments()).toHaveLength(2);
+    expect(await getAllUtxoLineage()).toHaveLength(2);
+
+    // Merge a backup whose rows are entirely disjoint from what's in the vault.
+    await restoreInlineTables(
+      {
+        custodySegments: [
+          inlineSegment(720, "seg-backup-1"),
+          inlineSegment(721, "seg-backup-2"),
+        ],
+        utxoLineage: [
+          inlineLineage(730, "tx-backup-1"),
+          inlineLineage(731, "tx-backup-2"),
+        ],
+      },
+      "merge",
+    );
+
+    // Pre-existing rows are still present (not cleared) alongside the new ones.
+    const liveSegments = await getAllCustodySegments();
+    expect(liveSegments).toHaveLength(4);
+    expect(new Set(liveSegments.map((s) => s.segmentId))).toEqual(
+      new Set(["seg-vault-1", "seg-vault-2", "seg-backup-1", "seg-backup-2"]),
+    );
+    // The pre-existing segments are untouched — their identifying fields survive.
+    expect(
+      liveSegments.find((s) => s.segmentId === "seg-vault-1")!.currentAmount,
+    ).toBe(11111);
+    expect(
+      liveSegments.find((s) => s.segmentId === "seg-vault-2")!.currentAmount,
+    ).toBe(22222);
+
+    const liveLineage = await getAllUtxoLineage();
+    expect(liveLineage).toHaveLength(4);
+    expect(new Set(liveLineage.map((l) => l.consumingTxid))).toEqual(
+      new Set(["tx-vault-1", "tx-vault-2", "tx-backup-1", "tx-backup-2"]),
+    );
+    // The pre-existing lineage edges are untouched — their fields survive.
+    expect(
+      liveLineage.find((l) => l.consumingTxid === "tx-vault-1")!.spentAmount,
+    ).toBe(33333);
+    expect(
+      liveLineage.find((l) => l.consumingTxid === "tx-vault-2")!.spentAmount,
+    ).toBe(44444);
+  });
+
   it("replace mode (default) appends inline rows as-is into a cleared vault", async () => {
     // Mirrors production: the v3 orchestrator clears these tables first, so
     // replace mode adds every distinct row without de-dup against the vault.
