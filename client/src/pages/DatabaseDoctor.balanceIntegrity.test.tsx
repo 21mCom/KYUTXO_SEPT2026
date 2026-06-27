@@ -261,6 +261,60 @@ describe("BalanceIntegrityCard recompute-selected flow", () => {
     expect(detectMock).not.toHaveBeenCalled();
   });
 
+  it("leaves a full recompute (no selection) at idle with no verdict when cancelled", async () => {
+    // The card also exposes a full-table "Recompute" button (no recordIds) that
+    // shares the same AbortController handling as recompute-selected. A recompute
+    // that only settles on abort lets us cancel mid-rebuild and prove the full
+    // path unwinds just as cleanly.
+    recomputeMock.mockImplementation(
+      ((opts: any) =>
+        new Promise<void>((resolve) => {
+          if (opts?.signal?.aborted) {
+            resolve();
+            return;
+          }
+          opts?.signal?.addEventListener("abort", () => resolve());
+        })) as unknown as typeof recomputeAddressStats,
+    );
+
+    render(<BalanceIntegrityCard />);
+
+    // Run the check so stale rows exist and the full-table Recompute button shows.
+    await runCheckAndAwaitRows();
+
+    // Clear the detect calls from the initial check so any later call can only be
+    // the post-recompute re-check.
+    detectMock.mockClear();
+
+    // Kick off the full recompute (no rows ticked) and confirm it ran with no
+    // recordIds — i.e. the whole-table path, not the selected path.
+    fireEvent.click(await screen.findByTestId("button-recompute-balances"));
+    await waitFor(() => {
+      expect(recomputeMock).toHaveBeenCalledTimes(1);
+    });
+    expect((recomputeMock.mock.calls[0][0] as any).recordIds).toBeUndefined();
+
+    // The card is now recomputing: the progress line and Cancel button show.
+    await waitFor(() => {
+      expect(screen.getByTestId("text-balance-recompute-progress")).toBeTruthy();
+    });
+
+    // Cancel mid-recompute: the card must drop back to idle with no stale/clean
+    // verdict banner and no error banner left behind.
+    fireEvent.click(screen.getByTestId("button-cancel-balance-check"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("text-balance-idle")).toBeTruthy();
+    });
+    expect(screen.queryByTestId("banner-balance-result")).toBeNull();
+    expect(screen.queryByTestId("text-balance-verdict")).toBeNull();
+    expect(screen.queryByTestId("banner-balance-error")).toBeNull();
+
+    // The aborted full recompute must NOT trigger a fresh detect/re-check; the
+    // user cancelled, so no new verdict should be computed from that work.
+    expect(detectMock).not.toHaveBeenCalled();
+  });
+
   it("clears the selection when a fresh balance check is run", async () => {
     render(<BalanceIntegrityCard />);
 
