@@ -624,10 +624,14 @@ function EntityErrorGroupItem({
 }) {
   const [open, setOpen] = useState(defaultOpen);
   const { toast } = useToast();
-  // Re-open when filtering forces groups open (defaultOpen flips to true) so
-  // matched results appear without the user re-expanding each group by hand.
+  // Track the auto-open intent in both directions: open when filtering forces
+  // groups open (defaultOpen flips true) so matched results appear without the
+  // user re-expanding each group, and collapse back when that intent clears
+  // (defaultOpen flips false) so a previously auto-expanded subset group does
+  // not stay stuck open after the filter is cleared, returning the panel to its
+  // clean collapsed baseline.
   useEffect(() => {
-    if (defaultOpen) setOpen(true);
+    setOpen(defaultOpen);
   }, [defaultOpen]);
   const count = group.errors.length;
 

@@ -1184,6 +1184,90 @@ describe("SettingsPage — Privacy Audit Entity List panel", () => {
     expect((await getSettings("default"))?.entityListSnapshot).toBeUndefined();
   });
 
+  it("a subset filter that auto-expands one group re-collapses it once the filter is cleared, matching the baseline", async () => {
+    renderSettingsPage();
+    await screen.findByTestId("badge-entity-source");
+
+    // A mixed snapshot so the matching group has MORE than one entry (the subset
+    // case): the filter will surface only one of the two invalid-address entries
+    // while leaving the other groups out of the DOM entirely.
+    //   - invalid-address  × 2 (entries 1, 2)
+    //   - unknown-category × 1 (entry 3)
+    //   - missing-name     × 1 (entry 4)
+    const mixed = JSON.stringify([
+      { address: "totally-invalid-a", name: "Bad One", category: "exchange" },
+      { address: "totally-invalid-b", name: "Bad Two", category: "exchange" },
+      { address: ADDR.a, name: "Bogus", category: "not-a-category" },
+      { address: ADDR.b, name: "", category: "exchange" },
+    ]);
+    await selectEntityFile("messy-paste.json", mixed);
+
+    await screen.findByTestId("container-entity-errors");
+
+    // Baseline: all groups present and collapsed, no rows mounted.
+    expect(
+      screen
+        .getByTestId("button-entity-error-group-invalid-address")
+        .getAttribute("aria-expanded"),
+    ).toBe("false");
+    expect(screen.queryByTestId(/^text-entity-error-\d+$/)).toBeNull();
+
+    // Filter to a MATCHING SUBSET: "totally-invalid-a" hits only entry 1's
+    // message, so the invalid-address group stays mounted and auto-expands while
+    // the other groups drop out of the DOM. This is the gap Task #757 left open
+    // (it only covered a filter that matched nothing).
+    setErrorFilter("totally-invalid-a");
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("text-entity-error-match-count").textContent,
+      ).toBe("1 matching entry."),
+    );
+    expect(
+      screen
+        .getByTestId("button-entity-error-group-invalid-address")
+        .getAttribute("aria-expanded"),
+    ).toBe("true");
+    let rows = screen.getAllByTestId(/^text-entity-error-\d+$/);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].textContent).toContain('Invalid Bitcoin address "totally-invalid-a"');
+    expect(screen.queryByTestId("group-entity-error-unknown-category")).toBeNull();
+    expect(screen.queryByTestId("group-entity-error-missing-name")).toBeNull();
+
+    // Clear the filter: filterActive flips false, so the auto-open intent clears
+    // and the previously-expanded (and still-mounted) invalid-address group must
+    // collapse back to the baseline rather than staying stuck open.
+    setErrorFilter("");
+    await waitFor(() =>
+      expect(screen.queryByTestId("text-entity-error-match-count")).toBeNull(),
+    );
+
+    // The matching group is collapsed again with no offending rows mounted, and
+    // matches the rest of the (always-collapsed) baseline groups.
+    await waitFor(() =>
+      expect(
+        screen
+          .getByTestId("button-entity-error-group-invalid-address")
+          .getAttribute("aria-expanded"),
+      ).toBe("false"),
+    );
+    expect(screen.queryByTestId(/^text-entity-error-\d+$/)).toBeNull();
+    expect(
+      screen
+        .getByTestId("button-entity-error-group-unknown-category")
+        .getAttribute("aria-expanded"),
+    ).toBe("false");
+    expect(
+      screen
+        .getByTestId("button-entity-error-group-missing-name")
+        .getAttribute("aria-expanded"),
+    ).toBe("false");
+
+    // Triage only — nothing was applied.
+    expect(screen.queryByTestId("text-preview-incoming")).toBeNull();
+    expect(getActiveEntitySource()).toBe("bundled");
+    expect((await getSettings("default"))?.entityListSnapshot).toBeUndefined();
+  });
+
   it("combines the reason filter and problem-type dropdown with AND: only entries matching both survive, and a fragment from another kind drops the count to zero", async () => {
     renderSettingsPage();
     await screen.findByTestId("badge-entity-source");
