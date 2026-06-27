@@ -9,7 +9,7 @@ import { Link } from "wouter";
 import { useState, useEffect, useCallback } from "react";
 import { useToast } from "@/hooks/use-toast";
 import { useNodeSettings } from "@/hooks/use-node-settings";
-import { transactionSyncService } from "@/lib/transaction-sync";
+import { transactionSyncService, type SyncProgress } from "@/lib/transaction-sync";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
@@ -147,6 +147,23 @@ function getImportanceLabel(importance?: AddressImportance): string {
       return 'Pending Review';
     default:
       return 'Unknown';
+  }
+}
+
+function getSyncStatusText(progress: SyncProgress): string {
+  switch (progress.phase) {
+    case 'idle':
+      return 'Preparing…';
+    case 'fetching-height':
+      return 'Getting current block height…';
+    case 'syncing-addresses':
+      return 'Fetching transactions…';
+    case 'processing':
+      return `Processing transactions… ${progress.transactionsNew} / ${progress.transactionsFound}`;
+    case 'resolving-prevouts':
+      return 'Resolving input details…';
+    default:
+      return '';
   }
 }
 
@@ -505,14 +522,19 @@ export function RecordDetailPanel({
   const [conflictCount, setConflictCount] = useState(0);
   const [blockchainTx, setBlockchainTx] = useState<BlockchainTransaction | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [syncProgress, setSyncProgress] = useState<SyncProgress | null>(null);
   const [txHistoryRefreshTrigger, setTxHistoryRefreshTrigger] = useState(0);
 
   const handleSyncNow = useCallback(async () => {
     if (!record || record.type !== 'address' || isSyncing) return;
     setIsSyncing(true);
+    setSyncProgress(null);
     transactionSyncService.updateProvider(nodeSettings);
     try {
-      const result = await transactionSyncService.syncSingleAddress(record.inputString);
+      const result = await transactionSyncService.syncSingleAddress(
+        record.inputString,
+        (progress) => setSyncProgress(progress)
+      );
       if (result.success) {
         toast({
           title: "Sync Complete",
@@ -535,6 +557,7 @@ export function RecordDetailPanel({
       });
     } finally {
       setIsSyncing(false);
+      setSyncProgress(null);
     }
   }, [record, isSyncing, nodeSettings, toast]);
 
@@ -940,6 +963,11 @@ export function RecordDetailPanel({
                     {isSyncing ? "Syncing…" : "Sync Now"}
                   </Button>
                 </div>
+                {isSyncing && syncProgress && getSyncStatusText(syncProgress) && (
+                  <p className="text-xs text-muted-foreground" data-testid="text-sync-progress">
+                    {getSyncStatusText(syncProgress)}
+                  </p>
+                )}
                 <TransactionHistorySection address={record.inputString} refreshTrigger={txHistoryRefreshTrigger} />
               </>
             )}
