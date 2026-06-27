@@ -94,9 +94,9 @@ const { renderWithSettingsProviders } = await import(
   "@/test/settingsTestProviders"
 );
 const { putSettings, getSettings } = await import("@/lib/data/settings-crud");
-const { getPrivacyAuditHistoryCount, getPrivacyAuditHistory } = await import(
-  "@/lib/data/privacy-history-crud"
-);
+const privacyHistoryCrud = await import("@/lib/data/privacy-history-crud");
+const { getPrivacyAuditHistoryCount, getPrivacyAuditHistory } =
+  privacyHistoryCrud;
 const { db } = await import("@/lib/database");
 import type { Settings } from "@/lib/db-types";
 
@@ -135,6 +135,7 @@ beforeEach(async () => {
 
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
 });
 
 async function lowerLimitTo(value: string) {
@@ -273,5 +274,48 @@ describe("SettingsPage — Privacy Audit History retention guard", () => {
 
     // The confirmation dialog never appeared.
     expect(screen.queryByTestId("button-confirm-history-trim")).toBeNull();
+  });
+
+  it("still trims (and reports the removal) when the preview count lookup throws (Task #688)", async () => {
+    // 60 stored runs, default limit 30. Lowering to 10 would normally remove 50
+    // (>20), which is a large batch that would pop the confirmation dialog. But
+    // here the count preview (getPrivacyAuditHistoryCount) throws, so the guard
+    // can't compute removeCount. The retention guard must fail safe by applying
+    // the trim directly — never silently skipping it, and never bypassing the
+    // confirmation in a way that loses history without telling the user.
+    await seedRuns(60);
+
+    // Make the *preview* lookup reject once (the call inside
+    // handlePrivacyHistoryLimitChange). The fallback applyPrivacyHistoryLimit
+    // path doesn't read the count, so a single one-time rejection is enough;
+    // the spy falls back to the real implementation for any later call.
+    const countSpy = vi
+      .spyOn(privacyHistoryCrud, "getPrivacyAuditHistoryCount")
+      .mockRejectedValueOnce(new Error("count unavailable"));
+
+    renderWithSettingsProviders(<SettingsPage />);
+
+    await lowerLimitTo("10");
+
+    // The preview was attempted and failed.
+    await waitFor(() => expect(countSpy).toHaveBeenCalled());
+
+    // No confirmation dialog: with no count, the guard falls through to applying
+    // the trim directly rather than showing (or skipping) the dialog.
+    expect(screen.queryByTestId("button-confirm-history-trim")).toBeNull();
+
+    // The trim still happened: only the most-recent 10 remain and the new limit
+    // persists. (Use the real count helper for this assertion — the destructured
+    // reference points at the original implementation, not the spy.)
+    await waitFor(async () =>
+      expect(await getPrivacyAuditHistoryCount()).toBe(10),
+    );
+    expect((await getSettings("default"))?.privacyHistoryLimit).toBe(10);
+
+    // And the removal toast still reports how many runs were deleted (60-10=50),
+    // so the user is never left thinking nothing happened.
+    await waitFor(() => expect(toastSpy).toHaveBeenCalled());
+    const titles = toastSpy.mock.calls.map((c) => c[0]?.title ?? "");
+    expect(titles.some((t) => t.includes("50") && /run/i.test(t))).toBe(true);
   });
 });
