@@ -266,3 +266,75 @@ describe("TransactionSyncService.resolvePrevouts → cancellation keeps partial 
     expect(blankInputs).toHaveLength(2);
   });
 });
+
+// ---------------------------------------------------------------------------
+// "Stop can't keep hammering the node" (Task #946): once the abort signal
+// fires, resolvePrevouts must NOT launch any NEW fetch chunk. The abort is
+// only checked at the TOP of each chunk, so the single in-flight chunk
+// (CONCURRENCY = 4) still settles — but nothing beyond it may reach the node.
+//
+// This test directly COUNTS provider.getTransaction calls. With many more
+// fetchable sources than one chunk holds, aborting on the very first call
+// must cap the total call count at the first in-flight chunk size: any value
+// above 4 would mean a post-stop chunk leaked through to the node.
+// ---------------------------------------------------------------------------
+
+const HAMMER_SPEND_TX = (n: number) => `a${n}`.padEnd(64, "9");
+const HAMMER_SRC = (n: number) => `b${n}`.padEnd(64, "8");
+
+describe("TransactionSyncService.resolvePrevouts → stop launches no new node fetch", () => {
+  beforeEach(async () => {
+    await testDb.records.clear();
+    await testDb.blockchainTransactions.clear();
+    await testDb.transactionParticipants.clear();
+    await testDb.addressSyncState.clear();
+  });
+
+  it("never calls provider.getTransaction beyond the first in-flight chunk after abort", async () => {
+    const CONCURRENCY = 4; // mirrors resolvePrevouts' fetch chunk size
+
+    // Many more fetchable sources than a single chunk holds (5 chunks worth),
+    // so if abort failed to stop the loop, the call count would blow past 4.
+    const TOTAL_FETCH = CONCURRENCY * 5;
+    const fetchInputs: TransactionParticipant[] = [];
+    for (let i = 1; i <= TOTAL_FETCH; i++) {
+      fetchInputs.push({
+        txid: HAMMER_SPEND_TX(i),
+        role: "input",
+        address: "",
+        amount: 0,
+        prevTxid: HAMMER_SRC(i),
+        prevVout: 0,
+      } as TransactionParticipant);
+    }
+    await testDb.transactionParticipants.bulkAdd(fetchInputs);
+
+    const controller = new AbortController();
+
+    const service = new TransactionSyncService();
+    const getTransaction = vi.fn(async (txid: string) => {
+      // Trip the abort on the very first call — the rest of the first chunk
+      // is already in flight, but no later chunk may start.
+      if (getTransaction.mock.calls.length === 1) controller.abort();
+      return {
+        vout: [
+          {
+            n: 0,
+            value: 30000,
+            scriptpubkey_address: `bc1qfetched${txid.slice(0, 6)}`,
+            scriptpubkey_type: "v0_p2wpkh",
+          },
+        ],
+      };
+    });
+    (service as any).provider = { getTransaction };
+
+    const result = await service.resolvePrevouts(undefined, { signal: controller.signal });
+
+    // The node was hit for at most one in-flight chunk and never again.
+    expect(getTransaction.mock.calls.length).toBeLessThanOrEqual(CONCURRENCY);
+    expect(getTransaction.mock.calls.length).toBe(CONCURRENCY);
+    expect(result.cancelled).toBe(true);
+    expect(result.fetchedFromNode).toBe(CONCURRENCY);
+  });
+});
