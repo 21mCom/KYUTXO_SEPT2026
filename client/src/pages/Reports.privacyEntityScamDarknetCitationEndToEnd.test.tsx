@@ -37,8 +37,13 @@ import "fake-indexeddb/auto";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, fireEvent, cleanup, waitFor } from "@testing-library/react";
 
-import { db } from "@/lib/database";
-import { addTransaction, addParticipant } from "@/lib/data/transaction-crud";
+import { clearAllRecords } from "@/lib/data/record-crud";
+import {
+  addTransaction,
+  addParticipant,
+  clearTransactions,
+  clearParticipants,
+} from "@/lib/data/transaction-crud";
 import {
   runPrivacyAudit,
   type EntityCitation,
@@ -151,9 +156,9 @@ function findDirectEntity(
 
 beforeEach(async () => {
   Element.prototype.scrollIntoView = vi.fn();
-  await db.records.clear();
-  await db.blockchainTransactions.clear();
-  await db.transactionParticipants.clear();
+  await clearAllRecords({ skipNotification: true });
+  await clearTransactions({ skipNotification: true });
+  await clearParticipants({ skipNotification: true });
   await seedDirectContact(TX_SCAM, OWNED_SCAM, SCAM_ENTITY);
   await seedDirectContact(TX_DARK, OWNED_DARK, DARKNET_ENTITY);
 
@@ -168,9 +173,9 @@ afterEach(async () => {
   cleanup();
   vi.restoreAllMocks();
   resetActiveEntityList();
-  await db.records.clear();
-  await db.blockchainTransactions.clear();
-  await db.transactionParticipants.clear();
+  await clearAllRecords({ skipNotification: true });
+  await clearTransactions({ skipNotification: true });
+  await clearParticipants({ skipNotification: true });
 });
 
 const { PrivacyAuditReportPanel } = await import("./Reports");
