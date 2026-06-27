@@ -8,12 +8,13 @@
 // parsing rules: trailing punctuation is stripped out of the link target (but
 // kept as visible text), and multiple URLs in one note each become their own
 // correct link. Notes without a URL render as plain text.
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import { render, screen, cleanup, within } from "@testing-library/react";
 import { renderSourceNote } from "../renderSourceNote";
 
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
 });
 
 describe("renderSourceNote parsing rules", () => {
@@ -189,5 +190,88 @@ describe("renderSourceNote parsing rules", () => {
     const container = screen.getByTestId("note");
     expect(container.textContent).toBe(plain);
     expect(within(container).queryByRole("link")).toBeNull();
+  });
+});
+
+describe("renderSourceNote offline-first guarantees", () => {
+  it("performs zero network requests when rendering a note containing URLs", () => {
+    // Stub every render-time network entry point. If a regression ever pre-fetches
+    // a URL (fetch), kicks off an XHR, opens a WebSocket/EventSource, or pre-renders
+    // an <img>/preload that loads the URL, one of these spies will catch it.
+    const fetchSpy = vi.fn(() => Promise.resolve(new Response("")));
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const xhrOpenSpy = vi.spyOn(XMLHttpRequest.prototype, "open");
+    const xhrSendSpy = vi.spyOn(XMLHttpRequest.prototype, "send");
+
+    const sendBeaconSpy = vi.fn(() => true);
+    vi.stubGlobal("navigator", {
+      ...globalThis.navigator,
+      sendBeacon: sendBeaconSpy,
+    });
+
+    // Spy on <img>.src assignments — setting src is what triggers an image fetch.
+    const imgSrcSpy = vi.fn();
+    const imgSrcDescriptor = Object.getOwnPropertyDescriptor(
+      HTMLImageElement.prototype,
+      "src",
+    );
+    Object.defineProperty(HTMLImageElement.prototype, "src", {
+      configurable: true,
+      set(value: string) {
+        imgSrcSpy(value);
+      },
+      get() {
+        return "";
+      },
+    });
+
+    try {
+      const note =
+        "Source one https://example.com/a and source two https://example.com/b too.";
+      render(<div data-testid="note">{renderSourceNote(note)}</div>);
+
+      // Sanity check: the links did render (so we know rendering actually ran).
+      const container = screen.getByTestId("note");
+      expect(within(container).getAllByRole("link")).toHaveLength(2);
+
+      // The core assertion: rendering performed no network activity whatsoever.
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(xhrOpenSpy).not.toHaveBeenCalled();
+      expect(xhrSendSpy).not.toHaveBeenCalled();
+      expect(sendBeaconSpy).not.toHaveBeenCalled();
+      expect(imgSrcSpy).not.toHaveBeenCalled();
+    } finally {
+      if (imgSrcDescriptor) {
+        Object.defineProperty(
+          HTMLImageElement.prototype,
+          "src",
+          imgSrcDescriptor,
+        );
+      }
+    }
+  });
+
+  it("does not open the URL at render time (window.open only fires on click)", () => {
+    const openSpy = vi.fn();
+    vi.stubGlobal("open", openSpy);
+
+    const note = "Check https://example.com/x for the details.";
+    render(<div data-testid="note">{renderSourceNote(note)}</div>);
+
+    const container = screen.getByTestId("note");
+    const link = within(container).getByRole("link");
+
+    // Nothing should have been opened just by rendering the link.
+    expect(openSpy).not.toHaveBeenCalled();
+
+    // Only an explicit user click opens the URL externally.
+    link.click();
+    expect(openSpy).toHaveBeenCalledTimes(1);
+    expect(openSpy).toHaveBeenCalledWith(
+      "https://example.com/x",
+      "_blank",
+      "noopener,noreferrer",
+    );
   });
 });
