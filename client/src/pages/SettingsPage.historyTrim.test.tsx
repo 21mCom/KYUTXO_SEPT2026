@@ -389,6 +389,58 @@ describe("SettingsPage — Privacy Audit History retention guard", () => {
     expect(await getPrivacyAuditHistoryCount()).toBe(25);
   });
 
+  it("snaps the Select back to the prior limit when the trim itself fails (Task #942)", async () => {
+    // 25 runs, default limit 30. Lowering to 10 removes only 15 (<=20), so it
+    // applies directly through applyPrivacyHistoryLimit -> updatePrivacyHistoryLimit
+    // with no confirmation step. When that trim throws, the error toast fires —
+    // but the Select must NOT stay stuck on the failed value (10); it has to
+    // return to the previously persisted limit (30), exactly like a cancel does.
+    await seedRuns(25);
+
+    const trimSpy = vi
+      .spyOn(useSettings, "updatePrivacyHistoryLimit")
+      .mockRejectedValueOnce(new Error("trim failed"));
+
+    renderWithSettingsProviders(<SettingsPage />);
+
+    const select = (await screen.findByTestId(
+      "select-privacy-history-limit",
+    )) as HTMLSelectElement;
+    // The limit before any change (default 30, since none is persisted).
+    const priorLimit = select.value;
+    expect(priorLimit).toBe("30");
+
+    await lowerLimitTo("10");
+
+    // The trim was attempted and rejected.
+    await waitFor(() => expect(trimSpy).toHaveBeenCalledWith(10));
+
+    // A destructive error toast tells the user the update failed.
+    await waitFor(() => {
+      const destructive = toastSpy.mock.calls.find(
+        (c) => c[0]?.variant === "destructive",
+      );
+      expect(destructive?.[0]?.description).toBe(
+        "Failed to update retention limit",
+      );
+    });
+
+    // The Select reflects the prior limit (30), NOT the value that failed to
+    // apply (10) — a failed trim is just as reversible as a cancel.
+    await waitFor(() =>
+      expect(
+        (
+          screen.getByTestId(
+            "select-privacy-history-limit",
+          ) as HTMLSelectElement
+        ).value,
+      ).toBe(priorLimit),
+    );
+
+    // And nothing was persisted, so the limit really is still the old one.
+    expect((await getSettings("default"))?.privacyHistoryLimit).toBeUndefined();
+  });
+
   it("warns the user when a large-batch trim fails after the user confirms (Task #857)", async () => {
     // 60 runs, default limit 30. Lowering to 10 removes 50 (>20), which pops the
     // confirmation dialog. Confirming routes through applyPrivacyHistoryLimit,
