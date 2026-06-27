@@ -23,11 +23,17 @@ vi.mock("@/lib/data/record-crud", async (importOriginal) => ({
 
 // The panel's funding-transaction effect reaches into the data facade on mount.
 // Stub those reads so the test stays fast and isolated from IndexedDB state.
+// Hoist the mocks so individual tests can override the funding reads.
+const facadeMocks = vi.hoisted(() => ({
+  getTransactionByTxid: vi.fn(),
+  getParticipantsByTxid: vi.fn(),
+  getRecordsByType: vi.fn(),
+}));
 vi.mock("@/lib/dataFacade", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/dataFacade")>()),
-  getTransactionByTxid: vi.fn().mockResolvedValue(null),
-  getParticipantsByTxid: vi.fn().mockResolvedValue([]),
-  getRecordsByType: vi.fn().mockResolvedValue([]),
+  getTransactionByTxid: facadeMocks.getTransactionByTxid,
+  getParticipantsByTxid: facadeMocks.getParticipantsByTxid,
+  getRecordsByType: facadeMocks.getRecordsByType,
 }));
 
 import { renderWithProviders } from "@/test/testProviders";
@@ -37,6 +43,7 @@ import type { Record as DbRecord } from "@/lib/database";
 
 const ADDRESS = "bc1qmetaaddr00000000000000000000000000q0zz";
 const TXID = "c".repeat(64);
+const FUNDING_ADDRESS = "bc1qfundinput0000000000000000000000000q9aa";
 
 function metaRecord(inputString: string): DbRecord {
   return {
@@ -67,10 +74,16 @@ beforeEach(() => {
   getRecordsByInputString.mockImplementation((id: string) =>
     Promise.resolve([metaRecord(id)]),
   );
+  // Default funding reads: no transaction / inputs / records. Individual tests
+  // override getParticipantsByTxid to exercise the funding-input render path.
+  facadeMocks.getTransactionByTxid.mockResolvedValue(null);
+  facadeMocks.getParticipantsByTxid.mockResolvedValue([]);
+  facadeMocks.getRecordsByType.mockResolvedValue([]);
   // The metadata-hover cache is module-level and survives across test cases;
-  // clear both identifiers so each test starts with the indicator hidden.
+  // clear identifiers so each test starts with the indicator hidden.
   invalidateCachedRecord(ADDRESS);
   invalidateCachedRecord(TXID);
+  invalidateCachedRecord(FUNDING_ADDRESS);
 });
 
 afterEach(() => {
@@ -78,6 +91,7 @@ afterEach(() => {
   vi.clearAllMocks();
   invalidateCachedRecord(ADDRESS);
   invalidateCachedRecord(TXID);
+  invalidateCachedRecord(FUNDING_ADDRESS);
 });
 
 describe("UTXODetailPanel metadata indicator", () => {
@@ -114,6 +128,31 @@ describe("UTXODetailPanel metadata indicator", () => {
       expect(
         screen
           .getByTestId(`link-txid-${TXID.slice(0, 8)}`)
+          .querySelector(".lucide-file-text"),
+      ).toBeTruthy();
+    });
+  });
+
+  it("renders each funding-input address as an AddressLink that surfaces the FileText indicator after hover", async () => {
+    facadeMocks.getParticipantsByTxid.mockResolvedValue([
+      { txid: TXID, address: FUNDING_ADDRESS, role: "input", amount: 50_000_000 },
+    ]);
+
+    renderWithProviders(
+      <UTXODetailPanel open={true} onClose={vi.fn()} utxo={utxo} />,
+    );
+
+    const link = await screen.findByTestId(
+      `link-address-${FUNDING_ADDRESS.slice(0, 8)}`,
+    );
+    expect(link.querySelector(".lucide-file-text")).toBeNull();
+
+    fireEvent.focus(link);
+
+    await waitFor(() => {
+      expect(
+        screen
+          .getByTestId(`link-address-${FUNDING_ADDRESS.slice(0, 8)}`)
           .querySelector(".lucide-file-text"),
       ).toBeTruthy();
     });

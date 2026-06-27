@@ -81,11 +81,6 @@ function formatUsdValue(value: number | undefined): string {
   }).format(value);
 }
 
-function truncateAddress(addr: string): string {
-  if (addr.length <= 16) return addr;
-  return `${addr.slice(0, 8)}...${addr.slice(-8)}`;
-}
-
 export function UTXODetailPanel({ open, onClose, utxo, latestPrice }: UTXODetailPanelProps) {
   const [fundingInputs, setFundingInputs] = useState<FundingInput[]>([]);
   const [fundingTx, setFundingTx] = useState<BlockchainTransaction | null>(null);
@@ -372,9 +367,11 @@ export function UTXODetailPanel({ open, onClose, utxo, latestPrice }: UTXODetail
                       <div key={`${input.address}-${idx}`} className="border rounded-md p-3 space-y-2">
                         <div className="flex items-start justify-between gap-2">
                           <div className="flex-1 min-w-0">
-                            <span className="font-mono text-sm break-all" title={input.address}>
-                              {truncateAddress(input.address)}
-                            </span>
+                            <AddressLink
+                              address={input.address}
+                              recordId={input.record?.id}
+                              truncate={false}
+                            />
                             {input.record?.label && (
                               <p className="text-xs text-muted-foreground mt-1">{input.record.label}</p>
                             )}
