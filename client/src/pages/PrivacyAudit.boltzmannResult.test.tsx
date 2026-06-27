@@ -79,6 +79,7 @@ import {
   formatEntropy,
   type BoltzmannInput,
   type BoltzmannOutput,
+  type BoltzmannResult,
 } from "@/lib/boltzmann";
 import { TransactionDeepDive } from "./PrivacyAudit";
 
@@ -112,6 +113,12 @@ class MockWorker {
     const result = computeBoltzmann(inputs, outputs, fee);
     this.onmessage?.({ data: { id, result, error: null } } as MessageEvent);
     return result;
+  }
+  // Deliver an arbitrary, hand-seeded result (used to pin the heatmap render to a
+  // known link matrix instead of whatever computeBoltzmann happens to produce).
+  deliver(result: BoltzmannResult) {
+    const { id } = this._lastData as { id: string };
+    this.onmessage?.({ data: { id, result, error: null } } as MessageEvent);
   }
 }
 
@@ -193,6 +200,75 @@ describe("TransactionDeepDive Boltzmann result rendering", () => {
     // And the link-probability heatmap (built from the real link matrix) shows.
     expect(result.linkMatrix.length).toBeGreaterThan(0);
     expect(screen.getByTestId("cell-heatmap-0-0")).toBeTruthy();
+  });
+
+  it("renders each heatmap cell's probability from the link matrix in the correct input-row/output-column orientation", async () => {
+    // A 2×2 link matrix with deliberately ASYMMETRIC off-diagonal entries and
+    // empty diagonal cells. Asymmetry is the whole point: if the component ever
+    // transposed the matrix (used inputIndex as the column / outputIndex as the
+    // row), cell (0,1) and cell (1,0) would swap values and this test would fail.
+    // The probabilities are also chosen to exercise the percentage rounding:
+    // 0.25 → "25", 0.666 → "67" (rounds up), 0.5 → "50".
+    mockedGetTx.mockResolvedValue({ txid: TXID, fee: 0 } as any);
+    mockedGetParticipants.mockResolvedValue([
+      { txid: TXID, role: "input", address: "bc1qin0", amount: 100_000, vout: 0 },
+      { txid: TXID, role: "input", address: "bc1qin1", amount: 100_000, vout: 1 },
+      { txid: TXID, role: "output", address: "bc1qout0", amount: 100_000, vout: 0 },
+      { txid: TXID, role: "output", address: "bc1qout1", amount: 100_000, vout: 1 },
+    ] as any);
+
+    const seeded: BoltzmannResult = {
+      entropy: 1,
+      entropyLabel: "Very Low",
+      interpretationCount: 2,
+      tooComplex: false,
+      efficiency: 0.5,
+      maxEntropy: 2,
+      linkMatrix: [
+        // I0 funded O1 a quarter of the time.
+        { inputIndex: 0, outputIndex: 1, inputAddress: "bc1qin0", outputAddress: "bc1qout1", probability: 0.25 },
+        // I1 funded O0 two-thirds of the time (rounds to 67%).
+        { inputIndex: 1, outputIndex: 0, inputAddress: "bc1qin1", outputAddress: "bc1qout0", probability: 0.666 },
+        // I1 funded O1 half the time.
+        { inputIndex: 1, outputIndex: 1, inputAddress: "bc1qin1", outputAddress: "bc1qout1", probability: 0.5 },
+      ],
+    };
+
+    renderDeepDive();
+    fireEvent.click(screen.getByTestId("button-analyse-deep-dive"));
+
+    await waitFor(() => {
+      expect(lastWorker).not.toBeNull();
+      expect(lastWorker!.postMessage).toHaveBeenCalled();
+    });
+
+    // Deliver the hand-seeded result instead of the computed one.
+    act(() => {
+      lastWorker!.deliver(seeded);
+    });
+
+    expect(await screen.findByTestId("container-boltzmann-heatmap")).toBeTruthy();
+
+    // Filled cells show their rounded percentage in the right cell.
+    expect(screen.getByTestId("cell-heatmap-0-1").textContent).toBe("25");
+    expect(screen.getByTestId("cell-heatmap-1-0").textContent).toBe("67");
+    expect(screen.getByTestId("cell-heatmap-1-1").textContent).toBe("50");
+
+    // Empty cell (no matrix entry) renders the placeholder, not "0" or a number.
+    expect(screen.getByTestId("cell-heatmap-0-0").textContent).toBe("–");
+
+    // Orientation guard: a transposed matrix would put I1→O0's 67% in cell (0,1)
+    // and I0→O1's 25% in cell (1,0). Assert the opposite explicitly.
+    expect(screen.getByTestId("cell-heatmap-0-1").textContent).not.toBe("67");
+    expect(screen.getByTestId("cell-heatmap-1-0").textContent).not.toBe("25");
+
+    // The cell's title attribute also encodes the I→O orientation.
+    expect(screen.getByTestId("cell-heatmap-0-1").getAttribute("title")).toBe(
+      "I0→O1: 25%",
+    );
+    expect(screen.getByTestId("cell-heatmap-1-0").getAttribute("title")).toBe(
+      "I1→O0: 67%",
+    );
   });
 
   it("shows the too-complex message for a transaction beyond the 8×8 limit", async () => {
