@@ -559,7 +559,12 @@ export default function FundTrail() {
   });
 
   // --- Center node hop ---
-  const { data: centerHop, isLoading: isLoadingCenter } = useQuery<TrailHop>({
+  const {
+    data: centerHop,
+    isLoading: isLoadingCenter,
+    isFetching: isFetchingCenter,
+    isPlaceholderData: isCenterPlaceholder,
+  } = useQuery<TrailHop>({
     queryKey: [
       "fund-trail-center",
       dimension,
@@ -584,6 +589,12 @@ export default function FundTrail() {
       });
     },
   });
+
+  // A recompute is in flight when the query is fetching a new window/limit but
+  // we still have a previous trail on screen (placeholderData). This drives the
+  // subtle in-progress cue without unmounting the trail.
+  const isRecomputing =
+    isFetchingCenter && (isCenterPlaceholder || !isLoadingCenter) && !!selectedGroup;
 
   return (
     <div className="flex flex-col h-full overflow-auto">
@@ -699,6 +710,16 @@ export default function FundTrail() {
             Showing all time
           </span>
         )}
+
+        {isRecomputing ? (
+          <span
+            className="flex items-center gap-2 text-xs text-muted-foreground pb-2.5"
+            data-testid="fund-trail-recomputing"
+          >
+            <Loader2 className="h-4 w-4 animate-spin" />
+            Updating…
+          </span>
+        ) : null}
       </div>
 
       {/* Body */}
@@ -710,12 +731,22 @@ export default function FundTrail() {
           <p className="text-sm">Computing fund trail…</p>
         </div>
       ) : (
-        <TrailLayout
-          centerLabel={selectedGroup}
-          dimension={dimension}
-          centerHop={centerHop ?? { sources: [], destinations: [] }}
-          dateRange={dateRange}
-        />
+        <div
+          className={
+            isRecomputing
+              ? "flex flex-col flex-1 opacity-60 transition-opacity"
+              : "flex flex-col flex-1 transition-opacity"
+          }
+          aria-busy={isRecomputing}
+          data-testid="fund-trail-body"
+        >
+          <TrailLayout
+            centerLabel={selectedGroup}
+            dimension={dimension}
+            centerHop={centerHop ?? { sources: [], destinations: [] }}
+            dateRange={dateRange}
+          />
+        </div>
       )}
     </div>
   );
