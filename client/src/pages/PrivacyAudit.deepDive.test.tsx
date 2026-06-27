@@ -482,4 +482,66 @@ describe("TransactionDeepDive empty-participants handling", () => {
     expect(screen.queryByTestId("text-deep-dive-next-steps")).toBeNull();
     expect(screen.queryByTestId("button-retry-deep-dive")).toBeNull();
   });
+
+  it("clears a prior empty-result message once a different tx analyses successfully", async () => {
+    // The first transaction loads but has no participants, so the informational
+    // "No participant data available" message is shown (no worker spun up). The
+    // user then picks a *different* transaction with valid participants and
+    // analyses it successfully. The success path must wipe the stale empty
+    // message and never leave it lingering alongside valid results.
+    const TXID2 = "a".repeat(64);
+
+    mockedGetTx
+      .mockResolvedValueOnce({ txid: TXID, fee: 1_000 } as any)
+      .mockResolvedValue({ txid: TXID2, fee: 1_000 } as any);
+    mockedGetParticipants
+      .mockResolvedValueOnce([] as any)
+      .mockResolvedValue([
+        { txid: TXID2, role: "input", address: "bc1qinput", amount: 100_000, vout: 0 },
+        { txid: TXID2, role: "output", address: "bc1qoutput", amount: 99_000, vout: 0 },
+      ] as any);
+
+    render(
+      <TransactionDeepDive
+        txids={[TXID, TXID2]}
+        coinjoinTxids={new Set<string>()}
+      />,
+    );
+
+    // First tx: empty participants → informational message, no worker.
+    fireEvent.click(screen.getByTestId("button-analyse-deep-dive"));
+    const message = await screen.findByTestId("text-deep-dive-message");
+    expect(message.textContent).toContain(
+      "No participant data available for this transaction",
+    );
+    expect(lastWorker).toBeNull();
+
+    // Switch to a different transaction…
+    fireEvent.change(screen.getByTestId("select-deep-dive-txid"), {
+      target: { value: TXID2 },
+    });
+
+    // …and analyse it. This succeeds: data loads and the worker is posted to.
+    fireEvent.click(screen.getByTestId("button-analyse-deep-dive"));
+    await waitFor(() => {
+      expect(lastWorker).not.toBeNull();
+      expect(lastWorker!.postMessage).toHaveBeenCalled();
+    });
+
+    // Drive a valid worker result back for the latest analysis.
+    const calls = lastWorker!.postMessage.mock.calls;
+    const { id } = calls[calls.length - 1][0] as { id: string };
+    act(() => {
+      lastWorker!.onmessage!({
+        data: { id, result: { tooComplex: true } },
+      } as MessageEvent);
+    });
+
+    // The second tx's results render…
+    await screen.findByTestId("container-boltzmann-result");
+    expect(screen.getByTestId("container-deep-dive-summary")).toBeTruthy();
+
+    // …and the stale empty-result message is gone.
+    expect(screen.queryByTestId("text-deep-dive-message")).toBeNull();
+  });
 });
