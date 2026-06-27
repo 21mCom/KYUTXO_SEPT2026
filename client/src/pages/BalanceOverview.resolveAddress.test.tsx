@@ -136,26 +136,48 @@ vi.mock("@/lib/balance-grouping", () => ({
 // Number of unresolved spends pending attribution to PENDING_RECORD_ID. The
 // per-address badge/button render off this map (keyed by record id === row id).
 const PENDING_COUNT = 3;
+
+// After a per-record resolve, handleResolveAddress re-reads
+// countUnresolvedPrevoutInputs and pushes the result to the top banner. We gate
+// the returned value on `resolveCalled` (flipped inside resolvePrevouts) so the
+// mount-time read keeps the top banner hidden (existing tests assume no banner)
+// and only the post-resolve re-read sees a configurable follow-up count — the
+// seam the refresh-the-banner test drives.
+const MOUNT_BANNER_COUNT = 0;
+let resolveCalled = false;
+let followUpBannerCount = MOUNT_BANNER_COUNT;
+const countUnresolvedPrevoutInputs = vi.fn(() =>
+  Promise.resolve(resolveCalled ? followUpBannerCount : MOUNT_BANNER_COUNT),
+);
+const getUnresolvedSpendBreakdown = vi.fn(() =>
+  Promise.resolve({
+    byRecordId: new Map([[PENDING_RECORD_ID, PENDING_COUNT]]),
+    unattributable: 0,
+  }),
+);
 vi.mock("@/lib/data/transaction-crud", () => ({
-  countUnresolvedPrevoutInputs: vi.fn(() => Promise.resolve(0)),
-  getUnresolvedSpendBreakdown: vi.fn(() =>
-    Promise.resolve({
-      byRecordId: new Map([[PENDING_RECORD_ID, PENDING_COUNT]]),
-      unattributable: 0,
-    }),
-  ),
+  countUnresolvedPrevoutInputs,
+  getUnresolvedSpendBreakdown,
 }));
 
 // resolvePrevouts is the seam we assert scoping on; its return value drives the
-// outcome toast. Each test overrides the resolved count via resolveResult.
-let resolveResult: { resolved: number };
+// outcome toast. Each test overrides the resolved count (and optionally the
+// cancelled flag) via resolveResult.
+let resolveResult: { resolved: number; cancelled?: boolean };
 let resolveShouldReject: boolean;
 let resolveRejectError: unknown;
 const resolvePrevouts = vi.fn(() => {
+  resolveCalled = true;
   if (resolveShouldReject) {
     return Promise.reject(resolveRejectError ?? new Error("node unreachable"));
   }
-  return Promise.resolve({ resolved: resolveResult.resolved, fetchedFromNode: 0, errors: 0, resolvedAddresses: [] });
+  return Promise.resolve({
+    resolved: resolveResult.resolved,
+    fetchedFromNode: 0,
+    errors: 0,
+    resolvedAddresses: [],
+    cancelled: resolveResult.cancelled ?? false,
+  });
 });
 vi.mock("@/lib/transaction-sync", () => ({
   transactionSyncService: { resolvePrevouts },
@@ -175,9 +197,12 @@ async function expandGroupAndShowRows() {
 beforeEach(() => {
   toastCalls.length = 0;
   resolvePrevouts.mockClear();
+  countUnresolvedPrevoutInputs.mockClear();
   resolveResult = { resolved: 0 };
   resolveShouldReject = false;
   resolveRejectError = undefined;
+  resolveCalled = false;
+  followUpBannerCount = MOUNT_BANNER_COUNT;
 });
 
 afterEach(() => {
@@ -292,5 +317,70 @@ describe("BalanceOverview per-address Resolve", () => {
     expect(toastCalls[0].variant).toBe("destructive");
     expect(toastCalls[0].description).toContain("internal error");
     expect(toastCalls[0].description).not.toContain("Bitcoin node");
+  });
+
+  it("re-reads the unresolved count after the resolve and refreshes the top banner", async () => {
+    // The record fully resolves, but the post-resolve re-read reports other
+    // wallets still have pending spends — the per-record handler must push that
+    // refreshed figure to the top spend-warning banner.
+    resolveResult = { resolved: PENDING_COUNT };
+    followUpBannerCount = 7;
+    await expandGroupAndShowRows();
+
+    // The top banner is hidden at mount (mount count is 0).
+    expect(screen.queryByTestId("banner-spend-warning")).toBeNull();
+
+    fireEvent.click(screen.getByTestId(`button-resolve-address-${PENDING_ADDRESS}`));
+
+    await waitFor(() => expect(resolvePrevouts).toHaveBeenCalledTimes(1));
+    // The count is re-read after the resolve: once on mount, then again here.
+    await waitFor(() =>
+      expect(countUnresolvedPrevoutInputs.mock.calls.length).toBeGreaterThanOrEqual(2),
+    );
+
+    await waitFor(() => expect(toastCalls.length).toBeGreaterThan(0));
+    expect(toastCalls[0].title).toBe("Resolved");
+
+    // The refreshed count surfaces on the top banner.
+    await waitFor(() => {
+      const banner = screen.getByTestId("banner-spend-warning");
+      expect(banner.textContent).toContain("7 spends");
+    });
+  });
+
+  it("clears the per-record resolving state on the success path too", async () => {
+    resolveResult = { resolved: PENDING_COUNT };
+    await expandGroupAndShowRows();
+
+    fireEvent.click(screen.getByTestId(`button-resolve-address-${PENDING_ADDRESS}`));
+
+    await waitFor(() => expect(toastCalls.length).toBeGreaterThan(0));
+    expect(toastCalls[0].title).toBe("Resolved");
+
+    // The finally block runs on success as well: the row button must leave its
+    // disabled "Resolving…" spinner and return to the actionable "Resolve" label
+    // (resolvingRecordIds / resolveProgressByRecordId both cleared).
+    await waitFor(() => {
+      const btn = screen.getByTestId(`button-resolve-address-${PENDING_ADDRESS}`);
+      expect(btn.textContent).toContain("Resolve");
+      expect(btn.textContent).not.toContain("Resolving…");
+      expect((btn as HTMLButtonElement).disabled).toBe(false);
+    });
+  });
+
+  it("treats a cancelled per-record payload by its resolved count (no distinct stop toast)", async () => {
+    // The per-record handler has no cancel branch — a cancelled payload that
+    // still resolved some spends falls through to the same { resolved }-based
+    // outcome. Here 1 of PENDING_COUNT (3) resolved → 2 still pending →
+    // "Partially resolved" rather than any "Resolve stopped" message.
+    resolveResult = { resolved: 1, cancelled: true };
+    await expandGroupAndShowRows();
+
+    fireEvent.click(screen.getByTestId(`button-resolve-address-${PENDING_ADDRESS}`));
+
+    await waitFor(() => expect(toastCalls.length).toBeGreaterThan(0));
+    expect(toastCalls[0].title).toBe("Partially resolved");
+    expect(toastCalls[0].title).not.toBe("Resolve stopped");
+    expect(toastCalls[0].description).toContain("2 still can't be attributed");
   });
 });
