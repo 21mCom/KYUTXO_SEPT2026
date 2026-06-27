@@ -57,6 +57,29 @@ describe("sourceOfFundsCapWarning", () => {
     expect(warning).toContain("2,000");
     expect(warning).toContain("12,345");
   });
+
+  it("explains the earliest+most-recent retention strategy when both halves are kept", () => {
+    const warning = sourceOfFundsCapWarning({
+      capped: true,
+      shownTxCount: 2000,
+      totalTxCount: 12345,
+    });
+    expect(warning).toContain("earliest and most recent funding events were retained");
+    expect(warning).toContain("intermediate funding was omitted");
+  });
+
+  it("only promises the earliest funding when the cap is too small to keep the newest half", () => {
+    const warning = sourceOfFundsCapWarning({
+      capped: true,
+      shownTxCount: 1,
+      totalTxCount: 500,
+    });
+    expect(warning).toContain("earliest funding events were retained");
+    expect(warning).toContain("later funding was");
+    // Must not claim recent activity was kept when only the oldest was retained.
+    expect(warning).not.toContain("most recent");
+    expect(warning).not.toContain("intermediate");
+  });
 });
 
 describe("buildSourceOfFundsText", () => {

@@ -114,11 +114,24 @@ export function sourceOfFundsCapWarning(cap: SourceOfFundsCapInfo): string | nul
   if (!cap.capped) return null;
   const shown = cap.shownTxCount.toLocaleString();
   const total = cap.totalTxCount.toLocaleString();
+  // Mirror the deterministic retention strategy in selectFundingTxidsUnderCap:
+  // ceil(limit/2) oldest + the remaining newest. Describe which slice was kept so
+  // a reader knows the original provenance and most recent activity are present
+  // and only the middle of the history was omitted. When the cap is so small that
+  // the newest half rounds to zero, only the earliest funding is retained, so the
+  // wording must not promise recent activity that was not included.
+  const keptNewest = cap.shownTxCount - Math.ceil(cap.shownTxCount / 2) > 0;
+  const strategy = keptNewest
+    ? `the earliest and most recent funding events were retained, and ` +
+      `intermediate funding was omitted for performance`
+    : `the earliest funding events were retained, and later funding was ` +
+      `omitted for performance`;
   return (
     `WARNING: This Source of Funds report is incomplete. Because this address ` +
     `has a large number of funding transactions, only ${shown} of ${total} were ` +
-    `included for performance. The funding sources below do not represent the ` +
-    `complete funding history.`
+    `included for performance. To preserve the most relevant provenance, ` +
+    `${strategy}. The funding sources below do not represent the complete ` +
+    `funding history.`
   );
 }
 
