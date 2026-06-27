@@ -87,6 +87,42 @@ vi.mock("@/components/StripMarkersPanel", () => ({ default: () => null }));
 vi.mock("@/components/MigrationAuditPanel", () => ({ default: () => null }));
 vi.mock("@/components/LegacyRecoveryPanel", () => ({ default: () => null }));
 
+// Radix Select doesn't open under jsdom (it relies on real pointer-capture and
+// layout), so swap it for a minimal native <select> that wires value /
+// onValueChange the same way — this lets the "problem type" dropdown
+// (select-entity-error-kind) be driven with fireEvent.change. The filter state
+// path itself stays real. Mirrors the approach in SettingsPage.entityDiffFilter.
+vi.mock("@/components/ui/select", async () => {
+  const React = await import("react");
+  const SelectTrigger: any = () => null;
+  SelectTrigger.__isTrigger = true;
+  return {
+    Select: ({ value, onValueChange, children }: any) => {
+      let testid: string | undefined;
+      React.Children.forEach(children, (child: any) => {
+        if (child && child.type && child.type.__isTrigger) {
+          testid = child.props["data-testid"];
+        }
+      });
+      return React.createElement(
+        "select",
+        {
+          "data-testid": testid,
+          value: value ?? "",
+          onChange: (e: any) => onValueChange?.(e.target.value),
+        },
+        children,
+      );
+    },
+    SelectTrigger,
+    SelectValue: () => null,
+    SelectContent: ({ children }: any) =>
+      React.createElement(React.Fragment, null, children),
+    SelectItem: ({ value, children }: any) =>
+      React.createElement("option", { value }, children),
+  };
+});
+
 const SettingsPage = (await import("./SettingsPage")).default;
 const { ActivityBusProvider } = await import("@/lib/activity-bus");
 const { RecordPreviewProvider } = await import("@/contexts/RecordPreviewContext");
@@ -119,6 +155,20 @@ function fakeFile(name: string, contents: string) {
 async function selectEntityFile(name: string, contents: string) {
   const input = screen.getByTestId("input-entity-file") as HTMLInputElement;
   fireEvent.change(input, { target: { files: [fakeFile(name, contents)] } });
+}
+
+// The error-list filter box and the "problem type" dropdown.
+function setErrorFilter(value: string) {
+  fireEvent.change(screen.getByTestId("input-entity-error-filter"), {
+    target: { value },
+  });
+}
+function setErrorKind(value: string) {
+  // The Radix <Select> exposes its value through a change event on the trigger
+  // (same approach the import-diff category filter test uses).
+  fireEvent.change(screen.getByTestId("select-entity-error-kind"), {
+    target: { value },
+  });
 }
 
 // The warning/error UI renders AddressLink (clickable cited addresses), which
@@ -870,6 +920,127 @@ describe("SettingsPage — Privacy Audit Entity List panel", () => {
     );
     const settings = await getSettings("default");
     expect(settings?.entityListSnapshot).toBeUndefined();
+  });
+
+  it("filtering jumps straight to a buried entry: entry # and reason text open the right group (even the big virtualized one) and hide the rest", async () => {
+    renderSettingsPage();
+    await screen.findByTestId("badge-entity-source");
+
+    // A realistic "messy paste": one problem type dominates with 150 bad
+    // addresses (well over the 100-entry virtualization threshold) plus a couple
+    // of small groups. Reusing the valid ADDR.a/ADDR.b across the small entries
+    // is safe — only fully-valid entries are recorded for duplicate detection,
+    // so the invalid-category / missing-name entries never collapse into spurious
+    // duplicate-address errors.
+    //   - invalid-address  × 150 (indices 0..149  -> entries 1..150)
+    //   - unknown-category × 3   (indices 150..152)
+    //   - missing-name     × 1   (index 153)
+    const BIG_COUNT = 150;
+    const bigKind = Array.from({ length: BIG_COUNT }, (_, i) => ({
+      address: `totally-invalid-${i}`,
+      name: `Bad Addr ${i}`,
+      category: "exchange",
+    }));
+    const mixed = JSON.stringify([
+      ...bigKind,
+      { address: ADDR.a, name: "Bogus One", category: "not-a-category" },
+      { address: ADDR.b, name: "Bogus Two", category: "definitely-wrong" },
+      { address: ADDR.a, name: "Bogus Three", category: "nope" },
+      { address: ADDR.b, name: "", category: "exchange" },
+    ]);
+    await selectEntityFile("messy-paste.json", mixed);
+
+    await screen.findByTestId("container-entity-errors");
+
+    // Multiple groups => every group starts collapsed; no offending rows mount
+    // and no match-count line is shown until the user filters.
+    expect(screen.queryByTestId("text-entity-error-0")).toBeNull();
+    expect(screen.queryByTestId("text-entity-error-match-count")).toBeNull();
+
+    // --- Entry-number jump deep into the large virtualized group ---
+    // Entry 75 -> index 74 -> address "totally-invalid-74", buried mid-way
+    // through the 150-entry group, far outside any virtual window.
+    setErrorFilter("75");
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("text-entity-error-match-count").textContent,
+      ).toBe("1 matching entry."),
+    );
+    // The invalid-address group auto-opened and shows exactly the one match.
+    let rows = screen.getAllByTestId(/^text-entity-error-\d+$/);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].textContent).toContain("Entry 75");
+    expect(rows[0].textContent).toContain('Invalid Bitcoin address "totally-invalid-74"');
+    // Non-matching groups are gone entirely (filtered out, not just collapsed).
+    expect(screen.getByTestId("group-entity-error-invalid-address")).toBeTruthy();
+    expect(screen.queryByTestId("group-entity-error-unknown-category")).toBeNull();
+    expect(screen.queryByTestId("group-entity-error-missing-name")).toBeNull();
+
+    // --- Reason-text fragment that lands on the LAST entry of the big group ---
+    // (index 149 -> entry 150) — a row that would normally be off-screen, proving
+    // filtering surfaces a match anywhere inside the virtualized group.
+    setErrorFilter("totally-invalid-149");
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("text-entity-error-match-count").textContent,
+      ).toBe("1 matching entry."),
+    );
+    rows = screen.getAllByTestId(/^text-entity-error-\d+$/);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].textContent).toContain("Entry 150");
+    expect(rows[0].textContent).toContain('Invalid Bitcoin address "totally-invalid-149"');
+    expect(screen.queryByTestId("group-entity-error-unknown-category")).toBeNull();
+    expect(screen.queryByTestId("group-entity-error-missing-name")).toBeNull();
+
+    // --- Reason fragment that picks out a single buried small-group entry ---
+    setErrorFilter("not-a-category");
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("text-entity-error-match-count").textContent,
+      ).toBe("1 matching entry."),
+    );
+    rows = screen.getAllByTestId(/^text-entity-error-\d+$/);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].textContent).toContain('Unknown category "not-a-category"');
+    expect(screen.getByTestId("group-entity-error-unknown-category")).toBeTruthy();
+    expect(screen.queryByTestId("group-entity-error-invalid-address")).toBeNull();
+    expect(screen.queryByTestId("group-entity-error-missing-name")).toBeNull();
+
+    // --- "Problem type" dropdown narrows to one group (text filter cleared) ---
+    setErrorFilter("");
+    setErrorKind("missing-name");
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("text-entity-error-match-count").textContent,
+      ).toBe("1 matching entry."),
+    );
+    expect(screen.getByTestId("group-entity-error-missing-name")).toBeTruthy();
+    expect(screen.queryByTestId("group-entity-error-invalid-address")).toBeNull();
+    expect(screen.queryByTestId("group-entity-error-unknown-category")).toBeNull();
+    rows = screen.getAllByTestId(/^text-entity-error-\d+$/);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].textContent).toContain('Missing "name"');
+
+    // Selecting the big problem type narrows to it and KEEPS it virtualized
+    // (150 matches > threshold), so only a window of rows mounts.
+    setErrorKind("invalid-address");
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("text-entity-error-match-count").textContent,
+      ).toBe("150 matching entries."),
+    );
+    expect(screen.getByTestId("group-entity-error-invalid-address")).toBeTruthy();
+    expect(screen.queryByTestId("group-entity-error-unknown-category")).toBeNull();
+    expect(screen.queryByTestId("group-entity-error-missing-name")).toBeNull();
+    const windowRows = screen.getAllByTestId(/^text-entity-error-\d+$/);
+    expect(windowRows.length).toBeGreaterThan(0);
+    expect(windowRows.length).toBeLessThan(BIG_COUNT);
+
+    // Throughout all this triage, nothing was applied — still on the bundled
+    // list with no persisted snapshot, and no preview dialog ever opened.
+    expect(screen.queryByTestId("text-preview-incoming")).toBeNull();
+    expect(getActiveEntitySource()).toBe("bundled");
+    expect((await getSettings("default"))?.entityListSnapshot).toBeUndefined();
   });
 
   it("exports the current list as a downloadable JSON file", async () => {
