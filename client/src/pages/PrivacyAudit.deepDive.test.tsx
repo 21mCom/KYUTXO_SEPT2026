@@ -624,3 +624,29 @@ describe("TransactionDeepDive empty-participants handling", () => {
     expect(screen.queryByTestId("text-deep-dive-message")).toBeNull();
   });
 });
+
+// The deep-dive spins up a dedicated Boltzmann worker lazily on first analyse
+// and reuses it. It must be torn down when the panel unmounts (closed/navigated
+// away), otherwise the worker leaks and can keep delivering late messages to a
+// component that no longer exists.
+describe("TransactionDeepDive worker teardown", () => {
+  it("terminates the worker when the component unmounts", async () => {
+    mockedGetTx.mockResolvedValue({ txid: TXID, fee: 1_000 } as any);
+    mockedGetParticipants.mockResolvedValue(validParticipants());
+
+    const { unmount } = renderDeepDive();
+
+    // Run an analysis so the worker is actually created.
+    fireEvent.click(screen.getByTestId("button-analyse-deep-dive"));
+    await waitFor(() => {
+      expect(lastWorker).not.toBeNull();
+      expect(lastWorker!.postMessage).toHaveBeenCalled();
+    });
+
+    expect(lastWorker!.terminate).not.toHaveBeenCalled();
+
+    // Closing/navigating away unmounts the panel → the worker must be torn down.
+    unmount();
+    expect(lastWorker!.terminate).toHaveBeenCalledTimes(1);
+  });
+});

@@ -522,6 +522,17 @@ export function TransactionDeepDive({
     }
   }, [autoAnalyse, selectedTxid, analyse]);
 
+  // Tear down the Boltzmann worker when the panel unmounts. The worker is
+  // created lazily on first analyse and reused, but never terminated — without
+  // this it keeps running (and could deliver late messages to a now-unmounted
+  // component) after the deep-dive is closed or navigated away from.
+  useEffect(() => {
+    return () => {
+      workerRef.current?.terminate();
+      workerRef.current = null;
+    };
+  }, []);
+
   // When the user switches to a different transaction, immediately hide the
   // previously analysed transaction's results, summary and any error/message.
   // Otherwise the stale numbers would keep showing under a different txid until
