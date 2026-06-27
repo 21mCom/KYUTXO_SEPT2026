@@ -188,6 +188,30 @@ describe("VaultManagement notes link rendering (offline-first)", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
+  it("wraps a very long unbroken URL (break-all) so it can't break the vault layout", async () => {
+    const longUrl =
+      "https://example.com/" + "a".repeat(400) + "/recovery-instructions";
+    vaultNotes = makeVaultNotes({
+      cosignerNote: `Key details ${longUrl} end`,
+      userNotes: `Recovery ${longUrl} steps`,
+    });
+    const { findByTestId } = render(<VaultManagement />);
+
+    const vaultNotesEl = await findByTestId("text-vault-notes-0");
+    const vaultLink = within(vaultNotesEl).getByRole("link");
+    expect(vaultLink.getAttribute("href")).toBe(longUrl);
+    expect(vaultLink.classList.contains("break-all")).toBe(true);
+
+    fireEvent.click(await findByTestId("button-toggle-cosigners-0"));
+    const cosignerNotesEl = await findByTestId("text-cosigner-notes-0-0");
+    const cosignerLink = within(cosignerNotesEl).getByRole("link");
+    expect(cosignerLink.getAttribute("href")).toBe(longUrl);
+    expect(cosignerLink.classList.contains("break-all")).toBe(true);
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(openSpy).not.toHaveBeenCalled();
+  });
+
   it("renders plain notes text (no URL) without any link", async () => {
     vaultNotes = makeVaultNotes({
       cosignerNote: "Key held by a trusted family member",
