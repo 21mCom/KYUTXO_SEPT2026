@@ -1,4 +1,5 @@
 import { useState, useMemo } from "react";
+import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -1108,6 +1109,7 @@ export default function IconsReference() {
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [copiedIcon, setCopiedIcon] = useState<string | null>(null);
+  const { toast } = useToast();
 
   const filteredLucideIcons = useMemo(() => {
     return lucideIcons.filter(icon => {
@@ -1129,10 +1131,19 @@ export default function IconsReference() {
     });
   }, [searchTerm, selectedCategory]);
 
-  const copyIconName = (name: string) => {
-    navigator.clipboard.writeText(name);
-    setCopiedIcon(name);
-    setTimeout(() => setCopiedIcon(null), 2000);
+  const copyIconName = async (name: string) => {
+    try {
+      await navigator.clipboard.writeText(name);
+      setCopiedIcon(name);
+      setTimeout(() => setCopiedIcon(null), 2000);
+      toast({ description: `Copied "${name}"` });
+    } catch {
+      toast({
+        title: "Copy failed",
+        description: "Could not copy the icon name to your clipboard.",
+        variant: "destructive",
+      });
+    }
   };
 
   const lucideCategories = Array.from(new Set(lucideIcons.map(i => i.category))).sort();
