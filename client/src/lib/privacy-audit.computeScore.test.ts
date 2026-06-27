@@ -117,6 +117,56 @@ describe("computeScore subsequent (stacking) penalties", () => {
   });
 });
 
+// Locks in the exact first-penalty AND subsequent-penalty for EVERY severity
+// tier (LOW, MEDIUM, HIGH, CRITICAL). The boundary test pins the score→grade
+// mapping, but the score→penalty mapping was only partially covered (LOW &
+// MEDIUM directly, HIGH only end-to-end, CRITICAL only inside clamping tests).
+// A silent change to any single SEVERITY_FIRST_PENALTY or
+// SEVERITY_SUBSEQUENT_PENALTY constant could shift many wallets across a grade
+// boundary without failing a test — these cases close that gap by asserting
+// every constant directly.
+describe("computeScore penalty constants per severity tier", () => {
+  // [severity, expected first-penalty, expected subsequent-penalty, type used]
+  const tiers: Array<
+    [PrivacyFinding["severity"], number, number, PrivacyFinding["type"]]
+  > = [
+    ["LOW", -3, -1, "ADDRESS_REUSE"],
+    ["MEDIUM", -8, -3, "ROUND_AMOUNT"],
+    ["HIGH", -15, -6, "PROXIMITY_EXCHANGE"],
+    ["CRITICAL", -25, -12, "ADDRESS_REUSE"],
+  ];
+
+  function tierDelta(
+    type: PrivacyFinding["type"],
+    severity: PrivacyFinding["severity"],
+    count: number
+  ): number {
+    const { waterfall } = computeScore(makeFindings(type, severity, count), []);
+    const entry = waterfall.find((w) => w.findingType === type);
+    expect(entry).toBeTruthy();
+    expect(entry!.count).toBe(count);
+    return entry!.delta;
+  }
+
+  for (const [severity, first, subsequent, type] of tiers) {
+    it(`${severity}: first finding of its tier pays exactly ${first}`, () => {
+      // A single finding is the first of its severity tier, so it must pay the
+      // full first-penalty and nothing else.
+      expect(tierDelta(type, severity, 1)).toBe(first);
+    });
+
+    it(`${severity}: a second finding adds exactly the ${subsequent} subsequent penalty`, () => {
+      const oneDelta = tierDelta(type, severity, 1);
+      const twoDelta = tierDelta(type, severity, 2);
+      // The grouped delta of two findings is first + one subsequent penalty...
+      expect(twoDelta).toBe(first + subsequent);
+      // ...so the incremental cost of the second finding is the subsequent
+      // penalty alone. This isolates the subsequent constant from the first.
+      expect(twoDelta - oneDelta).toBe(subsequent);
+    });
+  }
+});
+
 // Builds a CoinJoin (privacy-positive) finding. Using CoinJoin is GOOD privacy
 // behaviour: such findings must surface in the waterfall for visibility but must
 // never subtract from the score. severity is intentionally set to a penalising
