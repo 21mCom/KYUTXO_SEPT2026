@@ -17,6 +17,7 @@ import {
   Info,
   ChevronsLeftRight,
   AlertCircle,
+  RefreshCw,
   X,
   Download,
   FileText,
@@ -369,9 +370,27 @@ function FlowCard({
           data-testid={`fund-trail-expand-error-${flow.groupLabel.replace(/\s/g, "-")}-d${depth}`}
         >
           <AlertCircle className="h-4 w-4 shrink-0 text-destructive mt-0.5" />
-          <p className="text-xs text-destructive flex-1 min-w-0">
-            Couldn't expand this hop: {expandError}
-          </p>
+          <div className="flex-1 min-w-0 flex flex-col gap-2">
+            <p className="text-xs text-destructive">
+              Couldn't expand this hop: {expandError}
+            </p>
+            <div>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={handleExpand}
+                disabled={isExpanding}
+                data-testid={`fund-trail-expand-error-retry-${flow.groupLabel.replace(/\s/g, "-")}-d${depth}`}
+              >
+                {isExpanding ? (
+                  <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                ) : (
+                  <RefreshCw className="h-3 w-3 mr-1" />
+                )}
+                Retry
+              </Button>
+            </div>
+          </div>
           <Button
             size="icon"
             variant="ghost"

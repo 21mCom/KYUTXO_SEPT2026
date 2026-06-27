@@ -180,4 +180,54 @@ describe("FundTrail expand error surfacing", () => {
       ).toBeNull();
     });
   });
+
+  it("re-runs computeOneHop and clears the error when Retry succeeds", async () => {
+    renderPage();
+
+    await waitFor(() => {
+      const sel = screen.getByTestId("fund-trail-group-select") as HTMLSelectElement;
+      expect(Array.from(sel.options).some((o) => o.value === GROUP)).toBe(true);
+    });
+    fireEvent.change(screen.getByTestId("fund-trail-group-select"), {
+      target: { value: GROUP },
+    });
+
+    const expandBtn = await screen.findByTestId(
+      `fund-trail-expand-${EXPAND_TARGET}-d0`,
+    );
+
+    // The expand rejects the first time.
+    computeOneHopSpy.mockRejectedValueOnce(new Error(EXPAND_ERROR));
+    fireEvent.click(expandBtn);
+
+    // Error banner appears.
+    await screen.findByTestId(`fund-trail-expand-error-${EXPAND_TARGET}-d0`);
+    const callsBeforeRetry = computeOneHopSpy.mock.calls.length;
+
+    // The next expand (the retry) succeeds.
+    computeOneHopSpy.mockResolvedValueOnce({
+      sources: [],
+      destinations: [],
+      isCapped: false,
+      shownTxCount: 0,
+      totalTxCount: 0,
+    });
+
+    // Click Retry.
+    fireEvent.click(
+      screen.getByTestId(`fund-trail-expand-error-retry-${EXPAND_TARGET}-d0`),
+    );
+
+    // computeOneHop was re-invoked.
+    await waitFor(() => {
+      expect(computeOneHopSpy.mock.calls.length).toBe(callsBeforeRetry + 1);
+    });
+
+    // The error clears on success.
+    await waitFor(() => {
+      expect(
+        screen.queryByTestId(`fund-trail-expand-error-${EXPAND_TARGET}-d0`),
+      ).toBeNull();
+    });
+  });
 });
