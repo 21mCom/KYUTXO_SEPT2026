@@ -1010,6 +1010,145 @@ describe("runTxidBackfill (cancellation leaves a consistent DB)", () => {
       expect(untouched?.amount ?? 0).toBe(0);
     }
   });
+
+  it("resumes the still-blank inputs on a re-run after a cancel, without rebuilding or double-writing committed work", async () => {
+    // End-to-end proof of the scoped backfill's resume contract: a cancel that
+    // lands at a committed prevout-write batch boundary must leave the DB
+    // consistent, and re-running runTxidBackfill for the SAME orphan must pick
+    // up exactly the inputs the first pass left blank — without rebuilding the
+    // (already-present) blockchain row, without touching the inputs already
+    // committed, and without double-counting prevoutsResolved across the runs.
+    //
+    // One orphan with 201 blank inputs, all chasing the same previous tx, so
+    // resolution produces two write batches (200 + 1). Each referenced vout
+    // resolves to a distinct amount (1000 + k), so a committed input is
+    // identifiable unambiguously by its amount.
+    const INPUT_COUNT = 201;
+    const FIRST_BATCH = 200;
+
+    // A source record + synced state so the post-resolution recompute has an
+    // address to attribute the newly-linked spends to.
+    const recId = await testDb.records.add(makeAddressRecord(ADDR_PREV1));
+    await testDb.addressSyncState.add({ address: ADDR_PREV1 } as unknown as {
+      address: string;
+    });
+
+    const orphan = makeApiTx(TXID_A, {
+      inputs: Array.from({ length: INPUT_COUNT }, (_, k) => ({
+        address: "",
+        amount: 0,
+        prevTxid: PREV_1,
+        prevVout: k,
+      })),
+      outputs: [{ address: ADDR_OUT, amount: 80000, n: 0 }],
+    });
+    const prev = makeApiTx(PREV_1, {
+      outputs: Array.from({ length: INPUT_COUNT }, (_, k) => ({
+        address: ADDR_PREV1,
+        amount: 1000 + k,
+        n: k,
+      })),
+    });
+    const txs = new Map<string, ApiTransaction | null>([
+      [TXID_A, orphan],
+      [PREV_1, prev],
+    ]);
+
+    // ---- First pass: cancel the instant the first write batch commits. ----
+    const controller = new AbortController();
+    const firstRun = await runTxidBackfill(makeProvider({ txs }), [TXID_A], {
+      concurrency: 1,
+      signal: controller.signal,
+      onProgress: (p) => {
+        if (p.phase === "resolving" && p.resolveProcessed === FIRST_BATCH) {
+          controller.abort();
+        }
+      },
+    });
+
+    // The orphan was rebuilt and the first batch (and only the first batch) of
+    // its inputs was resolved before the cancel landed.
+    expect(firstRun.rebuilt).toBe(1);
+    expect(firstRun.prevoutsResolved).toBe(FIRST_BATCH);
+    expect(
+      await testDb.blockchainTransactions.where("txid").equals(TXID_A).count(),
+    ).toBe(1);
+
+    const inputsAfterFirst = await testDb.transactionParticipants
+      .where("txid")
+      .equals(TXID_A)
+      .and((p) => p.role === "input")
+      .toArray();
+    expect(inputsAfterFirst).toHaveLength(INPUT_COUNT);
+    const resolvedAfterFirst = inputsAfterFirst.filter((p) => p.address);
+    expect(resolvedAfterFirst).toHaveLength(FIRST_BATCH);
+
+    // Snapshot the committed rows (keyed by participant id) so we can prove the
+    // re-run leaves them byte-for-byte unchanged.
+    const committedAfterFirst = new Map<
+      number,
+      { address: string; amount: number; recordId?: number }
+    >();
+    for (const p of resolvedAfterFirst) {
+      if (p.id !== undefined) {
+        committedAfterFirst.set(p.id, {
+          address: p.address,
+          amount: Number(p.amount),
+          recordId: p.recordId,
+        });
+      }
+    }
+    expect(committedAfterFirst.size).toBe(FIRST_BATCH);
+
+    // ---- Second pass: re-run the SAME orphan with a fresh, non-aborted signal. ----
+    const secondRun = await runTxidBackfill(makeProvider({ txs }), [TXID_A], {
+      concurrency: 1,
+      signal: new AbortController().signal,
+    });
+
+    // The blockchain row already exists, so the orphan is skipped — never
+    // rebuilt a second time and never duplicated.
+    expect(secondRun.rebuilt).toBe(0);
+    expect(secondRun.skipped).toBe(1);
+    expect(
+      await testDb.blockchainTransactions.where("txid").equals(TXID_A).count(),
+    ).toBe(1);
+
+    // The re-run resolves exactly the inputs the first pass left blank — the
+    // single leftover input — with no overlap with the first run's work.
+    expect(secondRun.prevoutsResolved).toBe(INPUT_COUNT - FIRST_BATCH);
+    expect(firstRun.prevoutsResolved + secondRun.prevoutsResolved).toBe(
+      INPUT_COUNT,
+    );
+
+    // Every input is now attributed on disk — nothing left blank after resume —
+    // and each carries the distinct amount of the prevout it spends, linked to
+    // the source record. This proves per-row data was written, not a blanket fill.
+    const inputsAfterSecond = await testDb.transactionParticipants
+      .where("txid")
+      .equals(TXID_A)
+      .and((p) => p.role === "input")
+      .toArray();
+    expect(inputsAfterSecond).toHaveLength(INPUT_COUNT);
+    expect(inputsAfterSecond.every((p) => p.address === ADDR_PREV1)).toBe(true);
+    for (const p of inputsAfterSecond) {
+      expect(p.amount).toBe(1000 + (p.prevVout ?? -1));
+      expect(p.recordId).toBe(recId);
+    }
+
+    // The rows committed by the FIRST pass are completely unchanged by the
+    // re-run: same address, amount, and record link — never re-written.
+    for (const [id, snap] of committedAfterFirst) {
+      const row = await testDb.transactionParticipants.get(id);
+      expect(row?.address).toBe(snap.address);
+      expect(Number(row?.amount)).toBe(snap.amount);
+      expect(row?.recordId).toBe(snap.recordId);
+    }
+
+    // No participant rows were duplicated: still exactly the orphan's
+    // 201 inputs + 1 output across the whole table.
+    expect(await testDb.transactionParticipants.count()).toBe(INPUT_COUNT + 1);
+  });
 });
 
 // ---- resolveBackfillPrevouts (input address resolution) --------------------

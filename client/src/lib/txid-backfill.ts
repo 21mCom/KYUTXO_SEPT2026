@@ -283,8 +283,16 @@ export async function runTxidBackfill(
 
   let processed = 0;
   // Track which txids actually got new on-chain rows written so prevout
-  // resolution only scans the participants we just created.
+  // resolution scans the participants we just created.
   const rebuiltTxids: string[] = [];
+  // Track requested txids that already had a blockchain row (so they were
+  // skipped instead of rebuilt). These can still carry blank input addresses
+  // left behind by an earlier backfill whose prevout-resolution pass was
+  // cancelled at a committed batch boundary; resolving them here is what lets a
+  // re-run resume that leftover work. resolveBackfillPrevouts only acts on
+  // inputs that are still blank, so re-scanning an already-resolved txid is a
+  // cheap idempotent no-op.
+  const existingRowTxids: string[] = [];
 
   const reportProgress = (currentTxid?: string) => {
     onProgress?.({
@@ -319,7 +327,7 @@ export async function runTxidBackfill(
         // Guard: check again in case a concurrent run already wrote this row
         const alreadyHasRow = await getTransactionByTxid(txid);
         if (alreadyHasRow) {
-          return { txid, status: 'skipped' as const };
+          return { txid, status: 'skipped' as const, reason: 'has-row' };
         }
 
         const rawTx = await provider.getTransaction(txid);
@@ -358,6 +366,12 @@ export async function runTxidBackfill(
           rebuiltTxids.push(txid);
         } else {
           result.skipped++;
+          // A txid skipped because it already had a blockchain row may still
+          // carry blank inputs from a previously-cancelled resolution pass; flag
+          // it so the resolution step below can resume that leftover work.
+          if ('reason' in r.value && r.value.reason === 'has-row') {
+            existingRowTxids.push(txid);
+          }
         }
       } else {
         result.failed++;
@@ -373,10 +387,13 @@ export async function runTxidBackfill(
   }
 
   // After importing, resolve any blank input addresses for the participants we
-  // just wrote. The txid-driven path writes inputs straight from the raw tx,
-  // which may lack prevout addresses (same gap the full sync closes with its
-  // own resolvePrevouts() pass). Errors here never fail the backfill.
-  if (!signal?.aborted && rebuiltTxids.length > 0) {
+  // just wrote, plus any already-present txids whose prevout-resolution was
+  // cancelled on an earlier run (so a re-run resumes the still-blank inputs).
+  // The txid-driven path writes inputs straight from the raw tx, which may lack
+  // prevout addresses (same gap the full sync closes with its own
+  // resolvePrevouts() pass). Errors here never fail the backfill.
+  const txidsToResolve = [...rebuiltTxids, ...existingRowTxids];
+  if (!signal?.aborted && txidsToResolve.length > 0) {
     try {
       onProgress?.({
         phase: 'resolving',
@@ -389,7 +406,7 @@ export async function runTxidBackfill(
       });
       result.prevoutsResolved = await resolveBackfillPrevouts(
         provider,
-        rebuiltTxids,
+        txidsToResolve,
         {
           signal,
           concurrency,
