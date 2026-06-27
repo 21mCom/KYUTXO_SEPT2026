@@ -193,6 +193,28 @@ describe('buildPrivacyHistoryPdf', () => {
     expect(runsTable.body[1][2]).toBe('C');
   });
 
+  it('renders the runs-table "Date" cell in the human-readable locale format, not epoch/ISO', async () => {
+    const ts = Date.UTC(2026, 0, 1, 12, 0, 0);
+    await buildPrivacyHistoryPdf([makeEntry({ timestamp: ts })]);
+    const dateCell = (autoTableCalls[0].body[0] as string[])[0];
+    const expected = new Date(ts).toLocaleString();
+    expect(dateCell).toBe(expected);
+    // The cell must be the formatted timestamp, never a raw epoch or ISO string.
+    expect(dateCell).not.toBe(String(ts));
+    expect(dateCell).not.toBe(new Date(ts).toISOString());
+  });
+
+  it('renders the findings-by-type "Date" cell in the same human-readable locale format', async () => {
+    const ts = Date.UTC(2026, 0, 1, 12, 0, 0);
+    await buildPrivacyHistoryPdf([makeEntry({ timestamp: ts, findingTypeCounts: { ADDRESS_REUSE: 2 } })]);
+    // autoTableCalls[1] is the findings-by-type table.
+    const dateCell = (autoTableCalls[1].body[0] as string[])[0];
+    const expected = new Date(ts).toLocaleString();
+    expect(dateCell).toBe(expected);
+    expect(dateCell).not.toBe(String(ts));
+    expect(dateCell).not.toBe(new Date(ts).toISOString());
+  });
+
   it('reflects severity and scope values for each run', async () => {
     await buildPrivacyHistoryPdf([
       makeEntry({
@@ -335,6 +357,28 @@ describe('buildPrivacyHistoryPdf title and footer', () => {
     expect(labels.some((s) => s.startsWith('Generated: '))).toBe(true);
     // The offline-branding footer is a fixed string.
     expect(labels).toContain('KYUTXO — generated offline');
+  });
+
+  it('renders the "Generated:" footer timestamp in the human-readable locale format', async () => {
+    // Pin the wall clock so the footer's `new Date()` is deterministic, then
+    // assert the exact rendered string. This locks the format down: a regression
+    // that swapped toLocaleString() for an ISO string or a raw epoch number
+    // would no longer match.
+    const fixedNow = new Date(Date.UTC(2026, 5, 27, 9, 30, 0));
+    vi.useFakeTimers();
+    vi.setSystemTime(fixedNow);
+    try {
+      await buildPrivacyHistoryPdf([makeEntry()]);
+    } finally {
+      vi.useRealTimers();
+    }
+    const labels = drawCalls.text.map((c) => c[0]) as string[];
+    const generated = labels.find((s) => s.startsWith('Generated: '));
+    const expected = fixedNow.toLocaleString();
+    expect(generated).toBe(`Generated: ${expected}`);
+    // Guard against the two most likely format regressions explicitly.
+    expect(generated).not.toBe(`Generated: ${fixedNow.toISOString()}`);
+    expect(generated).not.toBe(`Generated: ${fixedNow.getTime()}`);
   });
 });
 
