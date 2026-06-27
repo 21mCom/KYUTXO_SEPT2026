@@ -20,7 +20,7 @@ import {
   type EntityCitation,
 } from "@/lib/privacy-audit";
 import { renderSourceNote } from "@/lib/renderSourceNote";
-import { buildPrivacyReport, buildPrivacyTextReport, copyPrivacyReportText, downloadPrivacyTextReport, formatScoreDelta } from "@/lib/privacy-report-export";
+import { buildPrivacyReport, buildPrivacyTextReport, copyPrivacyReportText, downloadPrivacyTextReport, formatScoreDelta, extractCitations } from "@/lib/privacy-report-export";
 import { buildPrintableReport, severityLabel, wireReportCopyButton } from "@/lib/privacy-report-html";
 import { getRecordsPageByTypeIdReverseKeyset } from "@/lib/data/record-crud";
 
@@ -374,6 +374,43 @@ export function PrivacyAuditReportPanel() {
                           {f.addresses.length > 0 && <span>{f.addresses.length} address(es)</span>}
                           {f.txids.length > 0 && <span className="ml-2">{f.txids.length} tx(s)</span>}
                         </div>
+                        {(() => {
+                          const citations = extractCitations(f);
+                          if (!citations || citations.length === 0) return null;
+                          return (
+                            <div
+                              className="mt-2 rounded-md border overflow-hidden"
+                              data-testid={`table-privacy-citations-${i}`}
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <div className="bg-muted/50 px-2 py-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                                Source Citations
+                              </div>
+                              <table className="w-full text-xs">
+                                <thead>
+                                  <tr className="bg-muted/50 text-[10px] uppercase tracking-wide text-muted-foreground">
+                                    <th className="text-left font-medium p-1.5">Entity</th>
+                                    <th className="text-left font-medium p-1.5">Category</th>
+                                    <th className="text-left font-medium p-1.5">Address</th>
+                                    <th className="text-left font-medium p-1.5">Source</th>
+                                  </tr>
+                                </thead>
+                                <tbody className="divide-y divide-border">
+                                  {citations.map((c, j) => (
+                                    <tr key={j} data-testid={`row-privacy-citation-${i}-${j}`}>
+                                      <td className="p-1.5">{c.name}</td>
+                                      <td className="p-1.5">{c.categoryLabel}</td>
+                                      <td className="p-1.5 font-mono break-all">{c.address}</td>
+                                      <td className="p-1.5 break-all">
+                                        {c.sourceNote ? renderSourceNote(c.sourceNote) : "—"}
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          );
+                        })()}
                       </div>
                       <div className="shrink-0 flex items-center gap-1 self-center" data-testid={`text-privacy-finding-impact-${i}`}>
                         <span
