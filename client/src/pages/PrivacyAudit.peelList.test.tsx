@@ -378,3 +378,91 @@ describe("PeelChainView list mode transaction navigation", () => {
     });
   });
 });
+
+// Each list hop exposes a forensic deep-dive entry point (DeepDiveDialog,
+// testid `button-deep-dive-{slice}`) next to its TxidLink. The existing list
+// tests only assert the button is *present*; these click it to confirm the
+// dialog actually opens with the right transaction, and that a CoinJoin hop's
+// coinjoin context is carried through into the dialog (so its CoinJoin
+// Fund-Flow diagram is rendered). The graph view's deep-dive open path is
+// covered separately in PrivacyAudit.peelGraph.test.tsx.
+describe("PeelChainView list mode deep-dive", () => {
+  // Switch to list mode and wait for the hop cards to render.
+  async function openList(getByTestId: (id: string) => HTMLElement) {
+    await waitForToggle(getByTestId);
+    fireEvent.click(getByTestId("button-peel-view-list"));
+    await waitFor(() => {
+      expect(getByTestId("card-peel-step-0")).toBeTruthy();
+    });
+  }
+
+  it("opens the deep-dive dialog when a hop's deep-dive button is clicked", async () => {
+    const { getByTestId, findByTestId, findByText } = renderView();
+    await openList(getByTestId);
+
+    // The plain (non-CoinJoin) hop's deep-dive button lives in its hop card.
+    const card1 = getByTestId("card-peel-step-1");
+    fireEvent.click(
+      within(card1).getByTestId(`button-deep-dive-${PLAIN_TXID.slice(0, 8)}`),
+    );
+
+    // The DeepDiveDialog opens with its content and title rendered.
+    expect(await findByTestId("dialog-deep-dive")).toBeTruthy();
+    expect(await findByText("Transaction Deep-Dive")).toBeTruthy();
+
+    // The dialog is scoped to the hop's transaction — its description echoes the
+    // full txid the button belongs to.
+    const dialog = await findByTestId("dialog-deep-dive");
+    expect(dialog.textContent).toContain(PLAIN_TXID);
+  });
+
+  it("carries a CoinJoin hop's coinjoin context through into the dialog", async () => {
+    // Hop 0 is the CoinJoin hop; the list passes coinjoinTxids into its dialog.
+    const { getByTestId, findByTestId } = renderView(
+      new Set<string>([COINJOIN_TXID]),
+    );
+    await openList(getByTestId);
+
+    const card0 = getByTestId("card-peel-step-0");
+    fireEvent.click(
+      within(card0).getByTestId(`button-deep-dive-${COINJOIN_TXID.slice(0, 8)}`),
+    );
+
+    expect(await findByTestId("dialog-deep-dive")).toBeTruthy();
+
+    // Because the hop is a known CoinJoin, the deep-dive renders its CoinJoin
+    // Fund-Flow Sankey — proof the coinjoin context reached the dialog. (Plain
+    // hops never get this section.)
+    const dialog = await findByTestId("dialog-deep-dive");
+    await waitFor(() => {
+      expect(
+        within(dialog).getByTestId("container-coinjoin-sankey"),
+      ).toBeTruthy();
+    });
+    expect(dialog.textContent).toContain("CoinJoin Fund-Flow");
+  });
+
+  it("does not render the CoinJoin Fund-Flow for a non-CoinJoin hop's deep-dive", async () => {
+    // With no txid marked as a CoinJoin, even hop 0's deep-dive must omit the
+    // Sankey — confirming the section is gated on the carried coinjoin context.
+    const { getByTestId, findByTestId, queryByTestId } = renderView(
+      new Set<string>(),
+    );
+    await openList(getByTestId);
+
+    const card0 = getByTestId("card-peel-step-0");
+    fireEvent.click(
+      within(card0).getByTestId(`button-deep-dive-${COINJOIN_TXID.slice(0, 8)}`),
+    );
+
+    const dialog = await findByTestId("dialog-deep-dive");
+    // Wait for the analysis summary to populate so we know the dialog finished
+    // building its body before asserting the Sankey is absent.
+    await waitFor(() => {
+      expect(
+        within(dialog).getByTestId("container-deep-dive-summary"),
+      ).toBeTruthy();
+    });
+    expect(queryByTestId("container-coinjoin-sankey")).toBeNull();
+  });
+});
