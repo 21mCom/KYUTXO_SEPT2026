@@ -29,3 +29,4 @@
 - [metadata-hover cache in tests](metadata-hover-cache-tests.md) — module-level resolve cache leaks the FileText indicator across test cases; invalidateCachedRecord per id in before/afterEach.
 - [Copy-button toast guard tests](copy-button-toast-tests.md) — assert clipboard+toast: mockClear right before the click (setup toasts pollute), stub execCommand for the failure path, don't duplicate already-covered buttons.
 - [Browser-seed privacy audit](browser-seed-privacy-audit.md) — real-browser layout checks: seed via Vite-singleton dynamic imports; active entity list is in-memory (reload wipes it); one combined snippet avoids runTest timeouts.
+- [Stale dev-bundle e2e](stale-dev-bundle-e2e.md) — e2e failing while unit tests + code review are green often = stale Vite/PWA bundle; force a rebuild (edit/restart) before chasing a non-bug.
