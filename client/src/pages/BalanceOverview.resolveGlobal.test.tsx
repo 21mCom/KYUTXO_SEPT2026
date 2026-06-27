@@ -169,9 +169,13 @@ vi.mock("@/lib/data/transaction-crud", () => ({
 // the onProgress callback while the button is still in its "Resolving…" state.
 let resolveResult: { resolved: number };
 let resolveDeferred: { promise: Promise<void>; resolve: () => void } | null;
+let resolveShouldReject: boolean;
 let lastOnProgress: ((resolved: number, total: number) => void) | undefined;
 const resolvePrevouts = vi.fn((onProgress: any) => {
   lastOnProgress = onProgress;
+  if (resolveShouldReject) {
+    return Promise.reject(new Error("engine crashed mid-pass"));
+  }
   const payload = {
     resolved: resolveResult.resolved,
     fetchedFromNode: 0,
@@ -202,6 +206,7 @@ beforeEach(() => {
   countUnresolvedPrevoutInputs.mockClear();
   resolveResult = { resolved: 0 };
   resolveDeferred = null;
+  resolveShouldReject = false;
   lastOnProgress = undefined;
   remainingAfterResolve = 0;
 });
@@ -261,6 +266,26 @@ describe("BalanceOverview global Resolve & Recompute", () => {
     await waitFor(() => expect(toastCalls.length).toBeGreaterThan(0));
     expect(toastCalls[0].title).toBe("Nothing to resolve");
     expect(toastCalls[0].variant).toBe("destructive");
+  });
+
+  it("toasts 'Resolve failed' (destructive) and clears the in-button 'Resolving…' state when resolvePrevouts rejects", async () => {
+    resolveShouldReject = true;
+    await renderWithBanner();
+
+    fireEvent.click(screen.getByTestId("button-fix-prevouts"));
+
+    await waitFor(() => expect(toastCalls.length).toBeGreaterThan(0));
+    expect(toastCalls[0].title).toBe("Resolve failed");
+    expect(toastCalls[0].variant).toBe("destructive");
+
+    // The finally block must clear fixingPrevouts so the banner button leaves
+    // its "Resolving…" spinner and returns to the actionable label.
+    await waitFor(() => {
+      const btn = screen.getByTestId("button-fix-prevouts");
+      expect(btn.textContent).toContain("Resolve & Recompute");
+      expect(btn.textContent).not.toContain("Resolving…");
+      expect((btn as HTMLButtonElement).disabled).toBe(false);
+    });
   });
 
   it("updates the in-button progress label from the onProgress callback while resolving", async () => {
