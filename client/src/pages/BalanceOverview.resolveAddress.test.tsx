@@ -301,7 +301,7 @@ describe("BalanceOverview per-address Resolve", () => {
     await waitFor(() => expect(toastCalls.length).toBeGreaterThan(0));
     expect(toastCalls[0].title).toBe("Resolve failed");
     expect(toastCalls[0].variant).toBe("destructive");
-    expect(toastCalls[0].description).toContain("Bitcoin node");
+    expect(toastCalls[0].description).toContain("Couldn't reach your Bitcoin node");
     expect(toastCalls[0].description).not.toContain("internal error");
   });
 
@@ -315,7 +315,7 @@ describe("BalanceOverview per-address Resolve", () => {
     await waitFor(() => expect(toastCalls.length).toBeGreaterThan(0));
     expect(toastCalls[0].title).toBe("Resolve failed");
     expect(toastCalls[0].variant).toBe("destructive");
-    expect(toastCalls[0].description).toContain("internal error");
+    expect(toastCalls[0].description).toContain("An internal error stopped the resolve");
     expect(toastCalls[0].description).not.toContain("Bitcoin node");
   });
 
