@@ -73,7 +73,7 @@ vi.mock("@/components/ui/select", async () => {
 });
 
 import { getTransactionByTxid } from "@/lib/data/transaction-crud";
-import { getParticipantsByTxids } from "@/lib/data/record-queries";
+import { getParticipantsByTxids } from "@/lib/data/transaction-crud";
 import {
   computeBoltzmann,
   formatEntropy,

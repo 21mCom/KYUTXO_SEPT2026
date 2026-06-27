@@ -92,12 +92,13 @@ import {
   restoreLegacySnapshots,
 } from "@/lib/backup/legacy-restore-misc";
 import { clearDerivationTemplates } from "@/lib/data/derivation-templates-crud";
-import { updateSettings } from "@/lib/data/settings-crud";
+import { getSettings, updateSettings } from "@/lib/data/settings-crud";
 import {
   prepareEntitySnapshot,
   applyEntitySnapshot,
   resetEntitySnapshot,
   serializeActiveEntityList,
+  loadEntitySnapshotFromStorage,
   ENTITY_ERROR_KIND_LABELS,
   type EntitySnapshotError,
   type EntitySnapshotErrorKind,
@@ -2114,7 +2115,26 @@ export default function SettingsPage() {
 
         let inline: Record<string, unknown>;
         try {
-          inline = await parseInline(manifestPeek, key);
+          const rawInline = await parseInline(manifestPeek, key);
+          // For plaintext backups: warn when the `inline` field is present (not
+          // null/undefined) but is not a proper object — this indicates a
+          // malformed backup that would silently show "no preferences" otherwise.
+          if (
+            !manifestPeek.encrypted &&
+            manifestPeek.inline !== undefined &&
+            manifestPeek.inline !== null &&
+            (typeof rawInline !== "object" || Array.isArray(rawInline))
+          ) {
+            toast({
+              variant: "destructive",
+              title: "Malformed backup data",
+              description:
+                "This backup's inline preference data is present but couldn't be read. Preferences won't carry over. The rest of the backup is still valid — you can continue.",
+            });
+            inline = {};
+          } else {
+            inline = rawInline as Record<string, unknown>;
+          }
         } catch {
           // A wrong password (or corrupted inline data) fails here, BEFORE any
           // destructive work — surface it and stay on the configure stage.
@@ -2200,6 +2220,35 @@ export default function SettingsPage() {
     setRestoreCancellable(false);
     restoreClearedRef.current = false;
     restoreAbortRef.current = null;
+
+    // Portable-prefs snapshot — declared here (outer scope) so the `undoInlinePrefs`
+    // helper below is accessible from both the try block and the catch block.
+    // The actual value is populated inside the try, just before `restoreV3Backup`.
+    type PortablePrefsSnapshot = {
+      disableOrphanCheck?: boolean;
+      cancelConfirmThreshold?: number;
+      privacyHistoryLimit?: number;
+      fundTrailTxLimit?: number;
+      entityListSnapshot?: unknown;
+    };
+    let preRestorePrefs: PortablePrefsSnapshot | null = null;
+
+    // Undo any portable-pref writes the backup's inline-restore phase applied to
+    // the settings table. Called after every post-clear failure so the user never
+    // sees half-applied backup prefs in an otherwise empty vault.
+    const undoInlinePrefs = async () => {
+      if (!preRestorePrefs) return;
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        await updateSettings("default", preRestorePrefs as any, { skipNotification: true });
+        // Re-sync the in-memory entity list from DB so the active privacy-audit
+        // list reflects the restored (pre-restore) snapshot, not the backup's.
+        await loadEntitySnapshotFromStorage();
+      } catch {
+        // Non-fatal — prefs may not exist yet on a fresh vault; the user has
+        // already been informed about the cancel/failure.
+      }
+    };
 
     try {
       // v3 streaming backups: peek the manifest (first ZIP entry) without
@@ -2306,6 +2355,25 @@ export default function SettingsPage() {
             }
           },
         };
+
+        // Populate the portable-prefs snapshot BEFORE the destructive clear so
+        // that `undoInlinePrefs` (declared above the outer try) can roll back any
+        // backup prefs that `restoreSettingsPreferences()` already merged into the
+        // settings table if the restore is later cancelled or interrupted.
+        try {
+          const cur = await getSettings("default");
+          if (cur) {
+            preRestorePrefs = {
+              disableOrphanCheck: cur.disableOrphanCheck,
+              cancelConfirmThreshold: cur.cancelConfirmThreshold,
+              privacyHistoryLimit: cur.privacyHistoryLimit,
+              fundTrailTxLimit: cur.fundTrailTxLimit,
+              entityListSnapshot: cur.entityListSnapshot,
+            };
+          }
+        } catch {
+          // Non-fatal — if we can't read the prefs we simply won't restore them.
+        }
 
         const controller = new AbortController();
         restoreAbortRef.current = controller;
@@ -2894,6 +2962,10 @@ export default function SettingsPage() {
             description:
               "Your existing data had already been cleared, so the vault is now empty. Run the restore again to recover your data.",
           });
+          // Undo any portable-preference writes the backup's inline-restore phase
+          // already applied to the settings table (entity-list snapshot, etc.)
+          // so a cancelled restore never leaves half-applied backup prefs behind.
+          await undoInlinePrefs();
           // A cancel-after-clear can leave partially-written transaction records
           // (missing on-chain data) behind. Reset the once-per-session
           // orphan-check gate so the startup check re-evaluates after the reload,
@@ -2968,6 +3040,10 @@ export default function SettingsPage() {
             `${reasonMsg}${filesSavedMsg} ${vaultStateMsg} Check the reason above (free up disk space, fix file permissions, or reconnect the storage), then run the restore again.`,
         });
         if (vaultWasCleared) {
+          // Undo any portable-preference writes the backup's inline-restore phase
+          // already applied to the settings table before the failure, so no
+          // backup prefs bleed into the now-empty vault.
+          await undoInlinePrefs();
           // The reset-to-empty contract clears everything, so re-evaluate the
           // once-per-session orphan check after reload, the same as other paths.
           resetOrphanCheckGate();
@@ -3000,6 +3076,10 @@ export default function SettingsPage() {
           title: "Restore Interrupted",
           description: error.message,
         });
+        // Undo any portable-preference writes that the backup's inline-restore
+        // phase applied to settings before the interruption, so the partially-
+        // restored vault doesn't silently carry the backup's preferences.
+        await undoInlinePrefs();
         // The vault is in an unknown partial state that can include transaction
         // records missing on-chain data. Reset the once-per-session orphan-check
         // gate so the startup check re-evaluates after the reload, the same way a

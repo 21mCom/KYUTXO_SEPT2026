@@ -54,7 +54,7 @@ vi.mock("@/lib/data/record-queries", () => ({
 }));
 
 import { getTransactionByTxid } from "@/lib/data/transaction-crud";
-import { getParticipantsByTxids } from "@/lib/data/record-queries";
+import { getParticipantsByTxids } from "@/lib/data/transaction-crud";
 import { FindingCard } from "./PrivacyAudit";
 
 const mockedGetTx = vi.mocked(getTransactionByTxid);
