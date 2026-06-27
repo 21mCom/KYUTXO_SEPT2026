@@ -1406,6 +1406,74 @@ describe("prepareEntitySnapshot", () => {
     expect(preview.resultingCount).toBe(getBundledEntityCount() + 1);
   });
 
+  it("previews a bundled-entry override exactly as it will be applied", () => {
+    // The override case must surface under `overrides` (changed=true) and be
+    // counted as `overridden` — NOT as an `added` entry — so a user reviewing
+    // the confirmation sees a re-attribution of a bundled entry before it is
+    // applied. A mismatch here would hide a re-categorization at confirmation.
+    const bundledBinance = getBundledEntityList().find(
+      (e) => e.address === ADDR.binance,
+    )!;
+
+    // The incoming entry genuinely differs from the bundled one across name,
+    // category, and sourceNote.
+    const incoming = {
+      address: ADDR.binance,
+      name: "Re-attributed Binance",
+      category: "mixer",
+      sourceNote: "https://example.com/reattribution",
+    };
+    expect(incoming.name).not.toBe(bundledBinance.name);
+    expect(incoming.category).not.toBe(bundledBinance.category);
+    expect(incoming.sourceNote).not.toBe(bundledBinance.sourceNote);
+
+    const result = prepareEntitySnapshot([incoming], "merge");
+
+    expect(result.valid).toBe(true);
+    const preview = result.preview!;
+    expect(preview.mode).toBe("merge");
+
+    // Reported as an override, not an add.
+    expect(preview.overridden).toBe(1);
+    expect(preview.added).toBe(0);
+    expect(preview.addedEntries).toEqual([]);
+    expect(preview.removed).toBe(0);
+
+    // The override pairs the existing bundled entry (previous) with the
+    // incoming entry that wins on this duplicate address.
+    expect(preview.overrides).toHaveLength(1);
+    const ov = preview.overrides[0];
+    expect(ov.previous).toEqual(bundledBinance);
+    expect(ov.incoming).toEqual({
+      address: ADDR.binance,
+      name: "Re-attributed Binance",
+      category: "mixer",
+      sourceNote: "https://example.com/reattribution",
+    });
+    expect(ov.changed).toBe(true);
+  });
+
+  it("reports a no-op override (changed=false) when re-importing a bundled entry unchanged", () => {
+    // An identical re-import (same values as the bundled entry) is a no-op:
+    // still counted as an override, but flagged changed=false so the
+    // confirmation step does not imply a re-attribution that isn't happening.
+    const bundledBinance = getBundledEntityList().find(
+      (e) => e.address === ADDR.binance,
+    )!;
+    // Round-trip through JSON to mimic re-importing the entry from a file.
+    const raw = [JSON.parse(JSON.stringify(bundledBinance))];
+
+    const result = prepareEntitySnapshot(raw, "merge");
+
+    expect(result.valid).toBe(true);
+    const preview = result.preview!;
+    expect(preview.overridden).toBe(1);
+    expect(preview.added).toBe(0);
+    expect(preview.overrides).toHaveLength(1);
+    expect(preview.overrides[0].previous).toEqual(bundledBinance);
+    expect(preview.overrides[0].changed).toBe(false);
+  });
+
   it("returns errors and no preview for an invalid snapshot", () => {
     const raw = [
       { address: "not-a-valid-address", name: "Bad", category: "exchange" },
