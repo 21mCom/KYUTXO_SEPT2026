@@ -149,4 +149,46 @@ describe("Reports privacy-finding link rendering (offline-first)", () => {
     expect(desc.textContent).toBe(plain);
     expect(desc.querySelector("a")).toBeNull();
   });
+
+  // A very long URL with no whitespace would, by default, overflow its
+  // container horizontally. The anchor must carry `break-all` so the URL wraps
+  // mid-string, and the clamped/truncated container classes must remain so the
+  // finding row never grows or overflows visually.
+  const LONG_URL =
+    "https://example.com/very/long/path/" +
+    "abcdefghijklmnopqrstuvwxyz0123456789".repeat(8) +
+    "?q=address_reuse_and_clustering_analysis_reference";
+
+  it("wraps a very long URL in a finding description via break-all without overflowing the clamped container", () => {
+    const { getByTestId } = render(
+      <FindingDescription description={`Address reuse detected — see ${LONG_URL}`} />,
+    );
+    const desc = getByTestId("text-privacy-finding-description");
+
+    // The description container keeps its 2-line clamp so it cannot grow.
+    expect(desc.className).toContain("line-clamp-2");
+
+    const link = desc.querySelector("a") as HTMLAnchorElement;
+    expect(link).not.toBeNull();
+    // The full URL is the link target and visible text.
+    expect(link.getAttribute("href")).toBe(LONG_URL);
+    expect(link.textContent).toBe(LONG_URL);
+    // break-all lets the unbroken URL wrap inside the clamped container.
+    expect(link.className).toContain("break-all");
+  });
+
+  it("wraps a very long URL in remediation (Fix) text via break-all", () => {
+    const { getByTestId } = render(
+      <FindingCorrection correction={`Review the guidance at ${LONG_URL}`} />,
+    );
+    const fix = getByTestId("text-privacy-finding-correction");
+
+    const link = fix.querySelector("a") as HTMLAnchorElement;
+    expect(link).not.toBeNull();
+    expect(link.getAttribute("href")).toBe(LONG_URL);
+    expect(link.textContent).toBe(LONG_URL);
+    expect(link.className).toContain("break-all");
+    // The static "Fix: " prefix is preserved alongside the wrapped URL.
+    expect(fix.textContent).toBe(`Fix: Review the guidance at ${LONG_URL}`);
+  });
 });
