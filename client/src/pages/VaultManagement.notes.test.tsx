@@ -1,206 +1,212 @@
 // @vitest-environment jsdom
-import { describe, it, expect, afterEach, vi } from "vitest";
-import { render, fireEvent, cleanup } from "@testing-library/react";
-import { renderSourceNote } from "@/lib/renderSourceNote";
+//
+// Verifies the Vault Management page renders http(s) URLs found in vault
+// `userNotes` and per-cosigner `notes` as click-only links via the shared
+// renderSourceNote util. Upholds the offline-first guarantee: a URL is only ever
+// opened on an explicit user click (window.open) and is NEVER fetched merely by
+// rendering. Plain text notes (no URL) render without a link. Clicking a link
+// inside the editable vault note must not enter edit mode (stopPropagation).
+//
+// We render the REAL VaultManagement page but stub the data-fetching chain
+// (engine freshness/client + the Dexie record-crud lookup, toast, router) so the
+// test exercises the page's actual notes markup rather than a replica.
 
-// These tests mirror the exact JSX VaultManagement.tsx uses to display notes:
-//  - Per-cosigner notes are rendered as `<p>{renderSourceNote(cosigner.notes)}</p>`
-//    (see VaultManagement.tsx cosigner notes block).
-//  - Vault-level notes are rendered as a clickable `<p onClick={edit}>` wrapping a
-//    `<span onClick={stopPropagation}>{renderSourceNote(vault.userNotes)}</span>`
-//    so clicking a link inside the note does NOT enter note edit mode.
-// Mounting the full page requires the engine client + IndexedDB, so we replicate
-// the surrounding structure faithfully and exercise renderSourceNote within it.
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import {
+  render,
+  fireEvent,
+  cleanup,
+  within,
+  waitFor,
+} from "@testing-library/react";
 
-afterEach(() => {
-  cleanup();
-  vi.restoreAllMocks();
-});
+const VAULT_NOTE_URL = "https://example.com/vault-recovery";
+const COSIGNER_NOTE_URL = "https://cosigner.example.org/alice";
 
-/** Faithful replica of VaultManagement's vault-notes display markup. */
-function VaultNotesDisplay({
-  userNotes,
-  onEdit,
-}: {
-  userNotes: string;
-  onEdit: () => void;
-}) {
-  return (
-    <p
-      className="text-sm whitespace-pre-wrap cursor-pointer hover-elevate rounded p-1 -mx-1"
-      onClick={onEdit}
-      data-testid="text-vault-notes-0"
-    >
-      <span onClick={(e) => e.stopPropagation()}>
-        {renderSourceNote(userNotes)}
-      </span>
-    </p>
-  );
+let vaultNotes = "";
+
+vi.mock("wouter", () => ({
+  useLocation: () => ["/vaults", vi.fn()],
+}));
+
+vi.mock("@/hooks/use-toast", () => ({
+  useToast: () => ({ toast: vi.fn() }),
+}));
+
+vi.mock("@/lib/dataFacade", () => ({
+  updateRecord: vi.fn(async () => {}),
+}));
+
+// Force the page down its Dexie fallback path (engine not used) so we control
+// the records via the record-crud mock below.
+vi.mock("@/lib/engine/engine-freshness", () => ({
+  evaluateEngineFreshness: vi.fn(async () => ({ useEngine: false })),
+}));
+
+vi.mock("@/lib/engine/engine-client", () => ({
+  subscribeEngineReadiness: vi.fn(() => () => {}),
+  engineGetVaultSummaries: vi.fn(async () => []),
+}));
+
+vi.mock("@/lib/data/record-crud", () => ({
+  getAddressRecordsByImportanceTiersFiltered: vi.fn(
+    async (
+      _tiers: unknown,
+      filter: (r: Record<string, unknown>) => boolean,
+    ) => {
+      const record = {
+        id: "rec1",
+        type: "address",
+        inputString: "bc1qexamplevaultaddress",
+        addressImportance: "verified",
+        vault: {
+          isVaultXpub: true,
+          vaultName: "Family Vault",
+          m: 2,
+          n: 3,
+          vaultNotes,
+        },
+      } as Record<string, unknown>;
+      return [record].filter(filter);
+    },
+  ),
+}));
+
+const VaultManagement = (await import("./VaultManagement")).default;
+
+function makeVaultNotes(opts: { cosignerNote: string; userNotes: string }) {
+  return JSON.stringify({
+    scriptType: "P2WSH",
+    cosigners: [
+      {
+        index: 0,
+        name: "Alice",
+        notes: opts.cosignerNote,
+        xpubPreview: "xpub6ABCDEF",
+      },
+    ],
+    userNotes: opts.userNotes,
+  });
 }
 
-/** Faithful replica of VaultManagement's cosigner-notes display markup. */
-function CosignerNotesDisplay({ notes }: { notes: string }) {
-  return (
-    <p
-      className="text-xs text-muted-foreground whitespace-pre-wrap"
-      data-testid="text-cosigner-notes-0-0"
-    >
-      {renderSourceNote(notes)}
-    </p>
-  );
-}
+describe("VaultManagement notes link rendering (offline-first)", () => {
+  let openSpy: ReturnType<typeof vi.fn>;
+  let fetchSpy: ReturnType<typeof vi.fn>;
 
-describe("VaultManagement notes link rendering", () => {
-  it("renders a URL in vault-level notes as a clickable anchor", () => {
-    const { getByTestId } = render(
-      <VaultNotesDisplay
-        userNotes="Cold storage backup at https://example.com/vault docs"
-        onEdit={() => {}}
-      />,
-    );
-    const notes = getByTestId("text-vault-notes-0");
-    const link = notes.querySelector("a") as HTMLAnchorElement;
-    expect(link).not.toBeNull();
-    expect(link.getAttribute("href")).toBe("https://example.com/vault");
-    expect(notes.textContent).toBe(
-      "Cold storage backup at https://example.com/vault docs",
-    );
-  });
-
-  it("renders a URL in a per-cosigner note as a clickable anchor", () => {
-    const { getByTestId } = render(
-      <CosignerNotesDisplay notes="Key held by https://cosigner.example.org/profile" />,
-    );
-    const notes = getByTestId("text-cosigner-notes-0-0");
-    const link = notes.querySelector("a") as HTMLAnchorElement;
-    expect(link).not.toBeNull();
-    expect(link.getAttribute("href")).toBe(
-      "https://cosigner.example.org/profile",
-    );
-    expect(link.textContent).toBe("https://cosigner.example.org/profile");
-  });
-
-  it("opens cosigner-note links via window.open without fetching at render", () => {
-    const fetchSpy = vi.fn();
+  beforeEach(() => {
+    openSpy = vi.fn();
+    vi.stubGlobal("open", openSpy);
+    fetchSpy = vi
+      .fn()
+      .mockRejectedValue(new Error("network access is forbidden"));
     vi.stubGlobal("fetch", fetchSpy);
-    const openSpy = vi.spyOn(window, "open").mockReturnValue(null);
+  });
 
-    const { getByTestId } = render(
-      <CosignerNotesDisplay notes="Profile https://cosigner.example.org" />,
-    );
-    // Render alone must never fetch or open anything.
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+    vi.clearAllMocks();
+  });
+
+  it("renders a URL in vault-level notes as a click-only link and never fetches on load", async () => {
+    vaultNotes = makeVaultNotes({
+      cosignerNote: "Key held offline",
+      userNotes: `Recovery steps ${VAULT_NOTE_URL} here`,
+    });
+    const { findByTestId } = render(<VaultManagement />);
+
+    const notes = await findByTestId("text-vault-notes-0");
+    const link = within(notes).getByRole("link");
+    expect(link.getAttribute("href")).toBe(VAULT_NOTE_URL);
+    expect(link.textContent).toBe(VAULT_NOTE_URL);
+    expect(notes.textContent).toBe(`Recovery steps ${VAULT_NOTE_URL} here`);
+
+    // Offline-first: nothing is fetched merely by rendering the notes.
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(openSpy).not.toHaveBeenCalled();
+  });
 
-    const link = getByTestId("text-cosigner-notes-0-0").querySelector(
-      "a",
-    ) as HTMLAnchorElement;
-    fireEvent.click(link);
+  it("opens the vault-note link via window.open only on click, without entering edit mode", async () => {
+    vaultNotes = makeVaultNotes({
+      cosignerNote: "Key held offline",
+      userNotes: `See ${VAULT_NOTE_URL} for the steps`,
+    });
+    const { findByTestId, queryByTestId } = render(<VaultManagement />);
+
+    const notes = await findByTestId("text-vault-notes-0");
+    const link = within(notes).getByRole("link");
+
+    expect(openSpy).not.toHaveBeenCalled();
+    expect(fetchSpy).not.toHaveBeenCalled();
+
+    const clickEvent = new MouseEvent("click", {
+      bubbles: true,
+      cancelable: true,
+    });
+    fireEvent(link, clickEvent);
 
     expect(openSpy).toHaveBeenCalledTimes(1);
     expect(openSpy).toHaveBeenCalledWith(
-      "https://cosigner.example.org",
+      VAULT_NOTE_URL,
+      "_blank",
+      "noopener,noreferrer",
+    );
+    expect(clickEvent.defaultPrevented).toBe(true);
+    // The wrapping span stops propagation, so the click never opens edit mode.
+    expect(queryByTestId("textarea-vault-notes-0")).toBeNull();
+    // Opening is delegated to the browser, never fetched in-app.
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("renders a URL in a per-cosigner note as a click-only link and opens it via window.open on click", async () => {
+    vaultNotes = makeVaultNotes({
+      cosignerNote: `Profile ${COSIGNER_NOTE_URL} contact`,
+      userNotes: "Plain vault note",
+    });
+    const { findByTestId, getByTestId } = render(<VaultManagement />);
+
+    // Cosigner notes live inside a collapsible; expand it to render them.
+    const toggle = await findByTestId("button-toggle-cosigners-0");
+    fireEvent.click(toggle);
+
+    const notes = await findByTestId("text-cosigner-notes-0-0");
+    const link = within(notes).getByRole("link");
+    expect(link.getAttribute("href")).toBe(COSIGNER_NOTE_URL);
+    expect(link.textContent).toBe(COSIGNER_NOTE_URL);
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(openSpy).not.toHaveBeenCalled();
+
+    fireEvent.click(getByTestId("text-cosigner-notes-0-0").querySelector("a")!);
+
+    expect(openSpy).toHaveBeenCalledTimes(1);
+    expect(openSpy).toHaveBeenCalledWith(
+      COSIGNER_NOTE_URL,
       "_blank",
       "noopener,noreferrer",
     );
     expect(fetchSpy).not.toHaveBeenCalled();
-    vi.unstubAllGlobals();
   });
 
-  it("renders plain vault notes (no URL) without any link", () => {
-    const fetchSpy = vi.fn();
-    vi.stubGlobal("fetch", fetchSpy);
+  it("renders plain notes text (no URL) without any link", async () => {
+    vaultNotes = makeVaultNotes({
+      cosignerNote: "Key held by a trusted family member",
+      userNotes: "Cold storage backup kept in the safe",
+    });
+    const { findByTestId } = render(<VaultManagement />);
 
-    const { getByTestId } = render(
-      <VaultNotesDisplay
-        userNotes="Cold storage backup kept in the safe"
-        onEdit={() => {}}
-      />,
+    const vaultNotesEl = await findByTestId("text-vault-notes-0");
+    expect(within(vaultNotesEl).queryByRole("link")).toBeNull();
+    expect(vaultNotesEl.textContent).toBe("Cold storage backup kept in the safe");
+
+    fireEvent.click(await findByTestId("button-toggle-cosigners-0"));
+    const cosignerNotesEl = await findByTestId("text-cosigner-notes-0-0");
+    expect(within(cosignerNotesEl).queryByRole("link")).toBeNull();
+    expect(cosignerNotesEl.textContent).toBe(
+      "Key held by a trusted family member",
     );
-    const notes = getByTestId("text-vault-notes-0");
-    expect(notes.querySelector("a")).toBeNull();
-    expect(notes.textContent).toBe("Cold storage backup kept in the safe");
-    expect(fetchSpy).not.toHaveBeenCalled();
-    vi.unstubAllGlobals();
-  });
 
-  it("renders plain cosigner notes (no URL) without any link", () => {
-    const fetchSpy = vi.fn();
-    vi.stubGlobal("fetch", fetchSpy);
-
-    const { getByTestId } = render(
-      <CosignerNotesDisplay notes="Key held by a trusted family member" />,
-    );
-    const notes = getByTestId("text-cosigner-notes-0-0");
-    expect(notes.querySelector("a")).toBeNull();
-    expect(notes.textContent).toBe("Key held by a trusted family member");
-    expect(fetchSpy).not.toHaveBeenCalled();
-    vi.unstubAllGlobals();
-  });
-
-  it("opens vault-note links via window.open without fetching at render", () => {
-    const fetchSpy = vi.fn();
-    vi.stubGlobal("fetch", fetchSpy);
-    const openSpy = vi.spyOn(window, "open").mockReturnValue(null);
-
-    const { getByTestId } = render(
-      <VaultNotesDisplay
-        userNotes="ref https://example.com"
-        onEdit={() => {}}
-      />,
-    );
-    // Render alone must never fetch or open anything.
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(openSpy).not.toHaveBeenCalled();
-
-    const link = getByTestId("text-vault-notes-0").querySelector(
-      "a",
-    ) as HTMLAnchorElement;
-    fireEvent.click(link);
-
-    expect(openSpy).toHaveBeenCalledTimes(1);
-    expect(openSpy).toHaveBeenCalledWith(
-      "https://example.com",
-      "_blank",
-      "noopener,noreferrer",
-    );
-    expect(fetchSpy).not.toHaveBeenCalled();
-    vi.unstubAllGlobals();
-  });
-
-  it("does not enter note edit mode when a link inside vault notes is clicked (stopPropagation)", () => {
-    const onEdit = vi.fn();
-    vi.spyOn(window, "open").mockReturnValue(null);
-
-    const { getByTestId } = render(
-      <VaultNotesDisplay
-        userNotes="See https://example.com for the recovery steps"
-        onEdit={onEdit}
-      />,
-    );
-
-    const link = getByTestId("text-vault-notes-0").querySelector(
-      "a",
-    ) as HTMLAnchorElement;
-    fireEvent.click(link);
-
-    // The click is stopped by the wrapping span, so edit mode is never triggered.
-    expect(onEdit).not.toHaveBeenCalled();
-  });
-
-  it("still enters edit mode when the surrounding note text (not a link) is clicked", () => {
-    const onEdit = vi.fn();
-
-    const { getByTestId } = render(
-      <VaultNotesDisplay
-        userNotes="See https://example.com for the recovery steps"
-        onEdit={onEdit}
-      />,
-    );
-
-    // Clicking the paragraph itself (outside the stopPropagation span path)
-    // should still trigger edit mode.
-    fireEvent.click(getByTestId("text-vault-notes-0"));
-    expect(onEdit).toHaveBeenCalledTimes(1);
   });
 });
