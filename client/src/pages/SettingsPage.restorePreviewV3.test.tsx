@@ -28,8 +28,11 @@ import "fake-indexeddb/auto";
 import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from "vitest";
 import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
 
+import JSZip from "jszip";
+
 import { MemorySink } from "@/lib/backup/sink";
 import { exportBackup } from "@/lib/backup/export";
+import { MANIFEST_FILENAME } from "@/lib/backup/format";
 
 // A hoisted toast spy so the mocked useToast hands back the same fn we assert on.
 const { toastSpy } = vi.hoisted(() => ({ toastSpy: vi.fn() }));
@@ -356,5 +359,104 @@ describe("SettingsPage — v3 backup full restore (applies portable prefs)", () 
     expect(after?.fundTrailTxLimit).toBe(2000);
     expect(after?.theme).toBe("dark");
     expect(after?.defaultView).toBe("grid");
+  });
+});
+
+// A STRUCTURALLY corrupt v3 backup: the manifest still parses and reports
+// formatVersion 3 (so it is detected as v3 and skips the legacy path), but its
+// inline payload is malformed/truncated. This is distinct from a wrong password
+// (which is bad-key, not bad-data) and must fail the SAME way: an error toast,
+// the dialog frozen on the configure stage, and the on-device vault untouched.
+// We assert no destructive work happens BEFORE the user ever reaches confirm.
+describe("SettingsPage — v3 backup with a structurally corrupt inline payload", () => {
+  const PASSWORD = "correct horse battery staple";
+
+  // Re-pack a real v3 zip after mutating its manifest, so the corruption is the
+  // only difference from a healthy backup the component would otherwise accept.
+  async function tamperManifest(file: File, mutate: (m: any) => void): Promise<File> {
+    const zip = await JSZip.loadAsync(await file.arrayBuffer());
+    const manifest = JSON.parse(await zip.file(MANIFEST_FILENAME)!.async("text"));
+    mutate(manifest);
+    zip.file(MANIFEST_FILENAME, JSON.stringify(manifest));
+    const bytes = await zip.generateAsync({ type: "uint8array" });
+    return new File([bytes], "kyutxo-backup-corrupt.zip", { type: "application/zip" });
+  }
+
+  it("encrypted backup, CORRECT password but truncated inline ciphertext: errors, stays on configure, no writes", async () => {
+    // Truncate the encrypted inline envelope so it decodes but fails the GCM
+    // auth check even with the right key — i.e. data corruption, not bad auth.
+    const corrupt = await tamperManifest(
+      await makeV3Backup({ settings: PREFS_SETTINGS, password: PASSWORD }),
+      (m) => {
+        m.inlineEnc = String(m.inlineEnc).slice(0, Math.max(0, String(m.inlineEnc).length - 12));
+      },
+    );
+
+    renderWithSettingsProviders(<SettingsPage />);
+    await openRestoreWith(corrupt);
+
+    // The manifest is still detected as encrypted v3 (password field appears).
+    const pw = (await screen.findByTestId("input-restore-password")) as HTMLInputElement;
+    fireEvent.change(pw, { target: { value: PASSWORD } });
+
+    fireEvent.click(await screen.findByTestId("button-continue-restore"));
+
+    await waitFor(() => {
+      const titles = toastSpy.mock.calls.map((c) => c[0]?.title ?? "");
+      expect(titles.some((t) => /could not read backup/i.test(t))).toBe(true);
+    });
+
+    // Frozen on configure: the confirm-stage preview never rendered.
+    expect(screen.queryByTestId("restore-preferences-preview")).toBeNull();
+    expect(screen.getByTestId("radio-replace")).toBeTruthy();
+
+    // The on-device settings row is untouched.
+    const after = await getSettings("default");
+    expect(after?.disableOrphanCheck).toBe(false);
+    expect(after?.cancelConfirmThreshold).toBe(75);
+    expect(after?.privacyHistoryLimit).toBe(30);
+    expect(after?.fundTrailTxLimit).toBe(2000);
+  });
+
+  it("plain backup whose manifest claims an inline ciphertext it has no key for: errors, stays on configure, no writes", async () => {
+    // A self-contradictory manifest (plaintext, yet carrying an encrypted inline
+    // blob and no salt) — another shape of a mangled v3 backup. There is no key
+    // to decrypt it, so reading the inline payload must throw rather than
+    // silently advancing with empty preferences.
+    const corrupt = await tamperManifest(
+      await makeV3Backup({ settings: PREFS_SETTINGS }),
+      (m) => {
+        m.inlineEnc = "totallyNotValidCiphertext";
+        delete m.inline;
+      },
+    );
+
+    renderWithSettingsProviders(<SettingsPage />);
+    await openRestoreWith(corrupt);
+
+    // Plaintext backup → no password field; Continue is enabled.
+    const continueBtn = (await screen.findByTestId(
+      "button-continue-restore",
+    )) as HTMLButtonElement;
+    expect(continueBtn.disabled).toBe(false);
+    expect(screen.queryByTestId("input-restore-password")).toBeNull();
+
+    fireEvent.click(continueBtn);
+
+    await waitFor(() => {
+      const titles = toastSpy.mock.calls.map((c) => c[0]?.title ?? "");
+      expect(
+        titles.some((t) => /could not read backup|invalid backup/i.test(t)),
+      ).toBe(true);
+    });
+
+    expect(screen.queryByTestId("restore-preferences-preview")).toBeNull();
+    expect(screen.getByTestId("radio-replace")).toBeTruthy();
+
+    const after = await getSettings("default");
+    expect(after?.disableOrphanCheck).toBe(false);
+    expect(after?.cancelConfirmThreshold).toBe(75);
+    expect(after?.privacyHistoryLimit).toBe(30);
+    expect(after?.fundTrailTxLimit).toBe(2000);
   });
 });
