@@ -287,7 +287,7 @@ interface TxHistoryEntry {
   netAmount: number;
 }
 
-function TransactionHistorySection({ address }: { address: string }) {
+export function TransactionHistorySection({ address }: { address: string }) {
   const [isOpen, setIsOpen] = useState(false);
   const [entries, setEntries] = useState<TxHistoryEntry[]>([]);
   const [loading, setLoading] = useState(false);

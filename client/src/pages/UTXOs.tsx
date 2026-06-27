@@ -176,6 +176,43 @@ interface AddressGroup {
 type SortColumn = "amount" | "date" | "address" | "gain";
 type SortDirection = "asc" | "desc";
 
+export function CopyTxidButton({ txid }: { txid: string }) {
+  const [copied, setCopied] = useState(false);
+  const { toast } = useToast();
+
+  const handleCopy = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    try {
+      await navigator.clipboard.writeText(txid);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+      toast({ description: "Transaction ID copied" });
+    } catch {
+      toast({
+        title: "Copy failed",
+        description: "Could not copy the transaction ID to your clipboard.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  return (
+    <Button
+      variant="ghost"
+      size="icon"
+      className="h-6 w-6"
+      onClick={handleCopy}
+      data-testid={`button-copy-${txid.slice(0, 8)}`}
+    >
+      {copied ? (
+        <Check className="h-3 w-3 text-green-500" />
+      ) : (
+        <Copy className="h-3 w-3" />
+      )}
+    </Button>
+  );
+}
+
 export default function UTXOs() {
   const { toast } = useToast();
   const initialSettings = useMemo(() => loadSettings(), []);
@@ -193,7 +230,6 @@ export default function UTXOs() {
   const [utxoMode, setUtxoMode] = useState<UTXOCalculationMode>(initialSettings.utxoMode);
   const [displayUnit, setDisplayUnit] = useState<"btc" | "sats">(initialSettings.displayUnit);
   const [expandedAddresses, setExpandedAddresses] = useState<Set<string>>(new Set());
-  const [copiedTxid, setCopiedTxid] = useState<string | null>(null);
   const [selectedUtxo, setSelectedUtxo] = useState<UTXO | null>(null);
   const [detailPanelOpen, setDetailPanelOpen] = useState(false);
   
@@ -1090,21 +1126,6 @@ export default function UTXOs() {
     });
   };
 
-  const copyTxid = async (txid: string) => {
-    try {
-      await navigator.clipboard.writeText(txid);
-      setCopiedTxid(txid);
-      setTimeout(() => setCopiedTxid(null), 2000);
-      toast({ description: "Transaction ID copied" });
-    } catch {
-      toast({
-        title: "Copy failed",
-        description: "Could not copy the transaction ID to your clipboard.",
-        variant: "destructive",
-      });
-    }
-  };
-
   const openUtxoDetail = (utxo: UTXO) => {
     setSelectedUtxo(utxo);
     setDetailPanelOpen(true);
@@ -1630,22 +1651,7 @@ export default function UTXOs() {
                               <div className="flex items-center gap-2 pl-4">
                                 <span className="text-muted-foreground text-xs">{idx + 1}.</span>
                                 <span title={utxo.txid}>{truncateTxid(utxo.txid)}:{utxo.vout}</span>
-                                <Button
-                                  variant="ghost"
-                                  size="icon"
-                                  className="h-6 w-6"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    copyTxid(utxo.txid);
-                                  }}
-                                  data-testid={`button-copy-${utxo.txid.slice(0, 8)}`}
-                                >
-                                  {copiedTxid === utxo.txid ? (
-                                    <Check className="h-3 w-3 text-green-500" />
-                                  ) : (
-                                    <Copy className="h-3 w-3" />
-                                  )}
-                                </Button>
+                                <CopyTxidButton txid={utxo.txid} />
                                 <a
                                   href={`https://mempool.space/tx/${utxo.txid}`}
                                   target="_blank"
