@@ -22,6 +22,7 @@ import {
   Download,
   FileText,
   FileSpreadsheet,
+  MapPin,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -47,6 +48,7 @@ import {
   type DateRange,
   listGroupValues,
   getAddressesForGroup,
+  getRecordByAddress,
   computeOneHop,
   formatBtc,
   formatDate,
@@ -55,6 +57,7 @@ import {
   UNKNOWN_SOURCE_LABEL,
   UNKNOWN_DEST_LABEL,
 } from "@/lib/data/fund-trail-engine";
+import { validateAddress, truncateAddress } from "@/lib/bitcoin";
 import {
   buildFundTrailSnapshot,
   buildFundTrailCsv,
@@ -524,6 +527,38 @@ function toDateRange(startDate: string, endDate: string): DateRange | undefined 
 
 export default function FundTrail() {
   const { fundTrailTxLimit } = useSettings();
+
+  // --- Source mode: trace by group or by a single address ---
+  const [sourceMode, setSourceMode] = useState<"group" | "address">("group");
+  const [addressInput, setAddressInput] = useState<string>("");
+  const [addressError, setAddressError] = useState<string | null>(null);
+
+  const trimmedAddress = addressInput.trim();
+  const isAddressValid =
+    sourceMode === "address" &&
+    trimmedAddress.length > 0 &&
+    validateAddress(trimmedAddress).isValid;
+
+  const handleAddressChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const val = e.target.value;
+      setAddressInput(val);
+      const t = val.trim();
+      if (t.length > 0 && !validateAddress(t).isValid) {
+        setAddressError("Not a valid Bitcoin address");
+      } else {
+        setAddressError(null);
+      }
+    },
+    [],
+  );
+
+  const handleModeSwitch = useCallback((mode: "group" | "address") => {
+    setSourceMode(mode);
+    setAddressError(null);
+  }, []);
+
+  // --- Group controls ---
   const [dimension, setDimension] = useState<GroupingDimension>("walletName");
   const [selectedGroup, setSelectedGroup] = useState<string>("");
   const [startDate, setStartDate] = useState<string>("");
@@ -546,10 +581,22 @@ export default function FundTrail() {
     setEndDate("");
   }, []);
 
-  // --- Group value list ---
+  // Whether we have enough to run a trail
+  const isActive =
+    sourceMode === "group" ? !!selectedGroup : isAddressValid;
+
+  // --- Group value list (only needed in group mode) ---
   const { data: groupValues = [], isLoading: isLoadingGroups } = useQuery({
     queryKey: ["fund-trail-groups", dimension],
     queryFn: () => listGroupValues(dimension),
+    enabled: sourceMode === "group",
+  });
+
+  // --- Record lookup for address mode (label display in center node) ---
+  const { data: addressRecord } = useQuery({
+    queryKey: ["fund-trail-address-record", trimmedAddress],
+    enabled: isAddressValid,
+    queryFn: () => getRecordByAddress(trimmedAddress),
   });
 
   // --- Center node hop ---
@@ -561,19 +608,30 @@ export default function FundTrail() {
   } = useQuery<TrailHop>({
     queryKey: [
       "fund-trail-center",
-      dimension,
-      selectedGroup,
+      sourceMode,
+      sourceMode === "group" ? dimension : "address",
+      sourceMode === "group" ? selectedGroup : trimmedAddress,
       dateRange?.start ?? null,
       dateRange?.end ?? null,
       fundTrailTxLimit,
     ],
-    enabled: !!selectedGroup,
+    enabled: isActive,
     // Keep the previously-computed trail on screen while a new window/limit
     // recomputes. Without this the page drops to the "Computing…" spinner on
     // every date change, unmounting the whole trail — and with it any expanded
     // sub-hops, which would lose their state instead of refreshing in place.
     placeholderData: keepPreviousData,
     queryFn: async () => {
+      if (sourceMode === "address") {
+        return computeOneHop(
+          [trimmedAddress],
+          dimension,
+          null,
+          dateRange,
+          undefined,
+          { txLimit: fundTrailTxLimit },
+        );
+      }
       const records = await getAddressesForGroup(dimension, selectedGroup);
       const addresses = records
         .map(r => r.inputString)
@@ -588,7 +646,18 @@ export default function FundTrail() {
   // we still have a previous trail on screen (placeholderData). This drives the
   // subtle in-progress cue without unmounting the trail.
   const isRecomputing =
-    isFetchingCenter && (isCenterPlaceholder || !isLoadingCenter) && !!selectedGroup;
+    isFetchingCenter && (isCenterPlaceholder || !isLoadingCenter) && isActive;
+
+  // Label and display info for the center node
+  const centerLabel =
+    sourceMode === "address" ? trimmedAddress : selectedGroup;
+  const centerRecordLabel: string | null =
+    sourceMode === "address"
+      ? (addressRecord?.walletName?.trim() ||
+          addressRecord?.owner?.trim() ||
+          addressRecord?.seedName?.trim() ||
+          null)
+      : null;
 
   return (
     <div className="flex flex-col h-full overflow-auto">
@@ -596,68 +665,128 @@ export default function FundTrail() {
       <div className="border-b border-border px-6 py-4">
         <h1 className="text-xl font-semibold">Fund Trail</h1>
         <p className="text-sm text-muted-foreground mt-1">
-          Trace where coins came from and went, grouped by wallet, owner, or
-          seed. Expand any source or destination hop-by-hop.
+          Trace where coins came from and went. Trace by group (wallet, owner,
+          or seed) or enter a single Bitcoin address. Expand any source or
+          destination hop-by-hop.
         </p>
       </div>
 
       {/* Controls */}
       <div className="px-6 py-4 flex flex-wrap items-end gap-4 border-b border-border">
+
+        {/* Mode toggle */}
         <div className="flex flex-col gap-1">
           <label className="text-xs text-muted-foreground font-medium">
-            Group by
+            Trace by
           </label>
-          <Select value={dimension} onValueChange={handleDimensionChange}>
-            <SelectTrigger
-              className="w-40"
-              data-testid="fund-trail-dimension-select"
+          <div className="flex gap-1">
+            <Button
+              size="sm"
+              variant={sourceMode === "group" ? "default" : "outline"}
+              onClick={() => handleModeSwitch("group")}
+              data-testid="fund-trail-mode-group"
             >
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="walletName">Wallet</SelectItem>
-              <SelectItem value="owner">Owner</SelectItem>
-              <SelectItem value="seedName">Seed</SelectItem>
-            </SelectContent>
-          </Select>
+              Group
+            </Button>
+            <Button
+              size="sm"
+              variant={sourceMode === "address" ? "default" : "outline"}
+              onClick={() => handleModeSwitch("address")}
+              data-testid="fund-trail-mode-address"
+            >
+              Address
+            </Button>
+          </div>
         </div>
 
-        <div className="flex flex-col gap-1 min-w-[200px]">
-          <label className="text-xs text-muted-foreground font-medium">
-            Select {DIMENSION_LABELS[dimension]}
-          </label>
-          {isLoadingGroups ? (
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <Loader2 className="h-4 w-4 animate-spin" />
-              Loading…
+        {/* Group mode controls */}
+        {sourceMode === "group" && (
+          <>
+            <div className="flex flex-col gap-1">
+              <label className="text-xs text-muted-foreground font-medium">
+                Group by
+              </label>
+              <Select value={dimension} onValueChange={handleDimensionChange}>
+                <SelectTrigger
+                  className="w-40"
+                  data-testid="fund-trail-dimension-select"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="walletName">Wallet</SelectItem>
+                  <SelectItem value="owner">Owner</SelectItem>
+                  <SelectItem value="seedName">Seed</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
-          ) : (
-            <Select value={selectedGroup} onValueChange={handleGroupChange}>
-              <SelectTrigger
-                className="w-56"
-                data-testid="fund-trail-group-select"
-              >
-                <SelectValue
-                  placeholder={`Choose a ${DIMENSION_LABELS[dimension]}…`}
-                />
-              </SelectTrigger>
-              <SelectContent>
-                {groupValues.length === 0 ? (
-                  <SelectItem value="__none__" disabled>
-                    No {DIMENSION_LABELS[dimension].toLowerCase()} values found
-                  </SelectItem>
-                ) : (
-                  groupValues.map(v => (
-                    <SelectItem key={v} value={v}>
-                      {v}
-                    </SelectItem>
-                  ))
-                )}
-              </SelectContent>
-            </Select>
-          )}
-        </div>
 
+            <div className="flex flex-col gap-1 min-w-[200px]">
+              <label className="text-xs text-muted-foreground font-medium">
+                Select {DIMENSION_LABELS[dimension]}
+              </label>
+              {isLoadingGroups ? (
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Loading…
+                </div>
+              ) : (
+                <Select value={selectedGroup} onValueChange={handleGroupChange}>
+                  <SelectTrigger
+                    className="w-56"
+                    data-testid="fund-trail-group-select"
+                  >
+                    <SelectValue
+                      placeholder={`Choose a ${DIMENSION_LABELS[dimension]}…`}
+                    />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {groupValues.length === 0 ? (
+                      <SelectItem value="__none__" disabled>
+                        No {DIMENSION_LABELS[dimension].toLowerCase()} values found
+                      </SelectItem>
+                    ) : (
+                      groupValues.map(v => (
+                        <SelectItem key={v} value={v}>
+                          {v}
+                        </SelectItem>
+                      ))
+                    )}
+                  </SelectContent>
+                </Select>
+              )}
+            </div>
+          </>
+        )}
+
+        {/* Address mode input */}
+        {sourceMode === "address" && (
+          <div className="flex flex-col gap-1">
+            <label className="text-xs text-muted-foreground font-medium">
+              Bitcoin address
+            </label>
+            <input
+              type="text"
+              value={addressInput}
+              onChange={handleAddressChange}
+              placeholder="Enter or paste a Bitcoin address…"
+              spellCheck={false}
+              autoComplete="off"
+              data-testid="fund-trail-address-input"
+              className="flex h-9 w-80 rounded-md border border-input bg-transparent px-3 py-1 text-sm font-mono shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            />
+            {addressError && (
+              <p
+                className="text-xs text-destructive"
+                data-testid="fund-trail-address-error"
+              >
+                {addressError}
+              </p>
+            )}
+          </div>
+        )}
+
+        {/* Date filters (shared between both modes) */}
         <div className="flex flex-col gap-1">
           <label className="text-xs text-muted-foreground font-medium">
             From
@@ -717,8 +846,8 @@ export default function FundTrail() {
       </div>
 
       {/* Body */}
-      {!selectedGroup ? (
-        <EmptyState dimension={dimension} />
+      {!isActive ? (
+        <EmptyState sourceMode={sourceMode} dimension={dimension} />
       ) : isLoadingCenter ? (
         <div className="flex flex-col items-center justify-center flex-1 gap-3 text-muted-foreground">
           <Loader2 className="h-8 w-8 animate-spin" />
@@ -735,7 +864,9 @@ export default function FundTrail() {
           data-testid="fund-trail-body"
         >
           <TrailLayout
-            centerLabel={selectedGroup}
+            centerLabel={centerLabel}
+            centerDisplayMode={sourceMode}
+            centerRecordLabel={centerRecordLabel}
             dimension={dimension}
             centerHop={centerHop ?? { sources: [], destinations: [] }}
             dateRange={dateRange}
@@ -752,11 +883,15 @@ export default function FundTrail() {
 
 function TrailLayout({
   centerLabel,
+  centerDisplayMode = "group",
+  centerRecordLabel,
   dimension,
   centerHop,
   dateRange,
 }: {
   centerLabel: string;
+  centerDisplayMode?: "group" | "address";
+  centerRecordLabel?: string | null;
   dimension: GroupingDimension;
   centerHop: TrailHop;
   dateRange?: DateRange;
@@ -933,10 +1068,37 @@ function TrailLayout({
           className="rounded-md border-2 border-primary bg-primary/10 px-4 py-5 text-center w-full"
           data-testid="fund-trail-center-node"
         >
-          <div className="text-xs text-muted-foreground mb-1 uppercase tracking-wide font-medium">
-            {DIMENSION_LABELS[dimension]}
-          </div>
-          <div className="font-semibold text-sm break-words">{centerLabel}</div>
+          {centerDisplayMode === "address" ? (
+            <>
+              <div className="flex items-center justify-center gap-1 mb-1">
+                <MapPin className="h-3 w-3 text-muted-foreground" />
+                <span className="text-xs text-muted-foreground uppercase tracking-wide font-medium">
+                  Address
+                </span>
+              </div>
+              <div
+                className="font-mono text-xs break-all leading-snug"
+                data-testid="fund-trail-center-address"
+              >
+                {truncateAddress(centerLabel, 8, 8)}
+              </div>
+              {centerRecordLabel && (
+                <div
+                  className="text-xs text-muted-foreground mt-1 break-words"
+                  data-testid="fund-trail-center-record-label"
+                >
+                  {centerRecordLabel}
+                </div>
+              )}
+            </>
+          ) : (
+            <>
+              <div className="text-xs text-muted-foreground mb-1 uppercase tracking-wide font-medium">
+                {DIMENSION_LABELS[dimension]}
+              </div>
+              <div className="font-semibold text-sm break-words">{centerLabel}</div>
+            </>
+          )}
           <ChevronsLeftRight className="h-4 w-4 mx-auto mt-2 text-primary" />
         </div>
 
@@ -1002,20 +1164,36 @@ function TrailLayout({
 // Empty state
 // ---------------------------------------------------------------------------
 
-function EmptyState({ dimension }: { dimension: GroupingDimension }) {
+function EmptyState({
+  sourceMode,
+  dimension,
+}: {
+  sourceMode: "group" | "address";
+  dimension: GroupingDimension;
+}) {
   return (
     <div className="flex flex-col items-center justify-center flex-1 gap-4 text-center px-6 py-16 text-muted-foreground">
       <ChevronsLeftRight className="h-12 w-12 opacity-30" />
-      <div>
-        <p className="font-medium text-foreground">
-          Select a {DIMENSION_LABELS[dimension]} to begin
-        </p>
-        <p className="text-sm mt-1 max-w-sm">
-          Choose a grouping dimension and a specific{" "}
-          {DIMENSION_LABELS[dimension].toLowerCase()} to see where its coins
-          came from and where they went. Expand any line to trace further.
-        </p>
-      </div>
+      {sourceMode === "address" ? (
+        <div>
+          <p className="font-medium text-foreground">Enter an address to begin</p>
+          <p className="text-sm mt-1 max-w-sm">
+            Paste a Bitcoin address to trace where its coins came from and
+            where they went. Expand any source or destination hop-by-hop.
+          </p>
+        </div>
+      ) : (
+        <div>
+          <p className="font-medium text-foreground">
+            Select a {DIMENSION_LABELS[dimension]} to begin
+          </p>
+          <p className="text-sm mt-1 max-w-sm">
+            Choose a grouping dimension and a specific{" "}
+            {DIMENSION_LABELS[dimension].toLowerCase()} to see where its coins
+            came from and where they went. Expand any line to trace further.
+          </p>
+        </div>
+      )}
     </div>
   );
 }

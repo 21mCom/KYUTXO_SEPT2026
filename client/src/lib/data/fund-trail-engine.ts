@@ -157,6 +157,16 @@ export async function getAddressesForGroup(
   return db.records.where(dimension).equals(groupValue).toArray();
 }
 
+/**
+ * Returns the first record whose inputString matches the given address, or undefined.
+ * Read-only; safe to call from any context.
+ */
+export async function getRecordByAddress(
+  address: string
+): Promise<DbRecord | undefined> {
+  return db.records.where('inputString').equals(address).first();
+}
+
 // ---------------------------------------------------------------------------
 // Trail computation — one hop in both directions
 // ---------------------------------------------------------------------------
