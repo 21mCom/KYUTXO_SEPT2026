@@ -955,6 +955,7 @@ export default function SettingsPage() {
       setShowEntityDiff(false);
       setEntityDiffSearch("");
       setEntityDiffCategory("all");
+      setOverridesOnlyChanged(false);
       setEntityImportWarnings(result.warnings);
       setEntityPreview(result.preview);
     } catch (error: any) {
@@ -1003,6 +1004,7 @@ export default function SettingsPage() {
     setEntityPreviewSource(undefined);
     setEntityDiffSearch("");
     setEntityDiffCategory("all");
+    setOverridesOnlyChanged(false);
     setEntityImportWarnings([]);
   };
 
