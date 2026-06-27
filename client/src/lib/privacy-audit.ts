@@ -194,7 +194,7 @@ export function computeScore(
       }
       countBySeverity[sev]++;
     }
-    score = Math.max(0, score + delta);
+    score = Math.min(100, Math.max(0, score + delta));
     waterfall.push({
       label: FINDING_TYPE_LABELS[type] ?? type,
       findingType: type,
