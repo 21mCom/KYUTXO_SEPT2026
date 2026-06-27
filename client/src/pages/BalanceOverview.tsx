@@ -313,6 +313,10 @@ export default function BalanceOverview() {
   const [importingHistory, setImportingHistory] = useState(false);
   // Fetch progress for the import action: { processed, total } source txs.
   const [importProgress, setImportProgress] = useState<{ processed: number; total: number } | null>(null);
+  // AbortController for the in-flight "Import missing history" run, so the user
+  // can cancel a long import partway through. Any transactions already imported
+  // are kept; cancelling only stops further fetches.
+  const importAbortRef = useRef<AbortController | null>(null);
   // Unresolved spends that map to no tracked source record (prevout not locally
   // known, or its output belongs to no tracked address). These overstate the
   // overall balance but no single wallet card can reflect them.
@@ -715,6 +719,8 @@ export default function BalanceOverview() {
   // the configured blockchain provider, writes them into the vault, and then
   // runs a resolve pass so the now-local prevouts attribute and balances drop.
   const handleImportMissingHistory = useCallback(async () => {
+    const abort = new AbortController();
+    importAbortRef.current = abort;
     setImportingHistory(true);
     setImportProgress(null);
     try {
@@ -756,6 +762,7 @@ export default function BalanceOverview() {
 
       setImportProgress({ processed: 0, total: txids.length });
       const result = await runTxidBackfill(provider, txids, {
+        signal: abort.signal,
         onProgress: (p) => {
           if (p.phase === "fetching") {
             setImportProgress({ processed: p.processed, total: p.orphansFound });
@@ -763,11 +770,15 @@ export default function BalanceOverview() {
         },
       });
 
+      const cancelled = abort.signal.aborted;
+
       // Importing the source transactions made their outputs locally known. Now
       // attribute the original spends that referenced them (their inputs are
-      // still blank) and recompute the affected source balances.
+      // still blank) and recompute the affected source balances. Skip this when
+      // the user cancelled — we keep whatever was imported but don't kick off
+      // another long pass they just asked to stop.
       setImportProgress(null);
-      if (result.rebuilt > 0) {
+      if (result.rebuilt > 0 && !cancelled) {
         await transactionSyncService.resolvePrevouts(undefined, { recomputeOrigin: "user" });
       }
 
@@ -778,7 +789,15 @@ export default function BalanceOverview() {
       setUnresolvedByRecordId(byRecordId);
       if (remaining === 0) setSpendWarningDismissed(false);
 
-      if (result.rebuilt === 0) {
+      if (cancelled) {
+        toast({
+          title: "Import cancelled",
+          description:
+            result.rebuilt > 0
+              ? `Stopped early. Kept ${result.rebuilt.toLocaleString()} source transaction${result.rebuilt !== 1 ? "s" : ""} imported so far.`
+              : "Stopped before any source transactions were imported.",
+        });
+      } else if (result.rebuilt === 0) {
         toast({
           title: "No history imported",
           description:
@@ -808,8 +827,15 @@ export default function BalanceOverview() {
     } finally {
       setImportingHistory(false);
       setImportProgress(null);
+      importAbortRef.current = null;
     }
   }, [toast]);
+
+  // User-triggered cancel of an in-flight history import. Aborts the run's
+  // signal; any transactions already imported are kept.
+  const handleCancelImportHistory = useCallback(() => {
+    importAbortRef.current?.abort();
+  }, []);
 
   const ensureGroupRows = useCallback(async (name: string) => {
     if (groupRowsRef.current.has(name) || loadingGroupsRef.current.has(name)) return;
@@ -1016,6 +1042,18 @@ export default function BalanceOverview() {
                     Import missing history
                   </>
                 )}
+              </Button>
+            )}
+            {importingHistory && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={handleCancelImportHistory}
+                data-testid="button-cancel-import-history"
+                className="border-yellow-400 dark:border-yellow-600 text-yellow-800 dark:text-yellow-200"
+              >
+                <X className="h-3 w-3 mr-1.5" />
+                Cancel
               </Button>
             )}
             <Button
