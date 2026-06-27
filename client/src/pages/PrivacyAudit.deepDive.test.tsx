@@ -348,6 +348,124 @@ describe("TransactionDeepDive failure handling", () => {
     expect(screen.getByTestId("container-deep-dive-summary")).toBeTruthy();
   });
 
+  it("replaces a prior tx's successful results when a different tx is analysed (no stale numbers)", async () => {
+    // Success → success: analyse tx1 successfully (its summary + Boltzmann
+    // numbers render), switch to tx2 and analyse it successfully. The panel must
+    // show tx2's numbers and never leave tx1's stale figures on screen. analyse()
+    // resets result/data at the start, but nothing pinned this success→success
+    // transition before — so we drive two *distinct* valid results and assert the
+    // first tx's specific values are gone once the second's render.
+    const TXID2 = "a".repeat(64);
+
+    // Each tx resolves with its own fee and its own participant set, so the
+    // rendered summary numbers differ between the two transactions.
+    mockedGetTx.mockImplementation(async (txid: string) => ({
+      txid,
+      fee: txid === TXID ? 1_000 : 2_000,
+    }) as any);
+    mockedGetParticipants.mockImplementation(async ([txid]: string[]) =>
+      (txid === TXID
+        ? [
+            { txid: TXID, role: "input", address: "bc1qin1", amount: 100_000, vout: 0 },
+            { txid: TXID, role: "output", address: "bc1qout1", amount: 99_000, vout: 0 },
+          ]
+        : [
+            { txid: TXID2, role: "input", address: "bc1qin2a", amount: 500_000, vout: 0 },
+            { txid: TXID2, role: "input", address: "bc1qin2b", amount: 500_000, vout: 1 },
+            { txid: TXID2, role: "input", address: "bc1qin2c", amount: 500_000, vout: 2 },
+            { txid: TXID2, role: "output", address: "bc1qout2a", amount: 700_000, vout: 0 },
+            { txid: TXID2, role: "output", address: "bc1qout2b", amount: 798_000, vout: 1 },
+          ]) as any,
+    );
+
+    // Distinct Boltzmann results so the on-screen privacy numbers also differ.
+    const RESULT1 = {
+      entropy: 2,
+      maxEntropy: 4,
+      efficiency: 0.5,
+      interpretationCount: 4,
+      entropyLabel: "Low entropy",
+      linkMatrix: [],
+    };
+    const RESULT2 = {
+      entropy: 8,
+      maxEntropy: 8.9,
+      efficiency: 0.9,
+      interpretationCount: 256,
+      entropyLabel: "High entropy",
+      linkMatrix: [],
+    };
+
+    render(
+      <TransactionDeepDive
+        txids={[TXID, TXID2]}
+        coinjoinTxids={new Set<string>()}
+      />,
+    );
+
+    // Analyse tx1 successfully and drive its valid worker result.
+    fireEvent.click(screen.getByTestId("button-analyse-deep-dive"));
+    await waitFor(() => {
+      expect(lastWorker).not.toBeNull();
+      expect(lastWorker!.postMessage).toHaveBeenCalled();
+    });
+    const firstCallCount = lastWorker!.postMessage.mock.calls.length;
+    const firstId = (
+      lastWorker!.postMessage.mock.calls[firstCallCount - 1][0] as { id: string }
+    ).id;
+    act(() => {
+      lastWorker!.onmessage!({
+        data: { id: firstId, result: RESULT1 },
+      } as MessageEvent);
+    });
+
+    // tx1's results are on screen with its own numbers.
+    await screen.findByTestId("container-boltzmann-result");
+    expect(screen.getByTestId("container-deep-dive-summary")).toBeTruthy();
+    expect(screen.getByTestId("text-deep-dive-inputs").textContent).toBe("1");
+    expect(screen.getByTestId("text-deep-dive-outputs").textContent).toBe("1");
+    expect(screen.getByTestId("text-deep-dive-total").textContent).toBe("0.0010");
+    expect(screen.getByTestId("text-deep-dive-fee").textContent).toBe("1,000");
+    expect(screen.getByTestId("text-boltzmann-entropy").textContent).toBe("2.00 bits");
+    expect(screen.getByTestId("text-boltzmann-interpretations").textContent).toBe("4");
+
+    // Switch to tx2 and analyse it, driving its own valid worker result.
+    fireEvent.change(screen.getByTestId("select-deep-dive-txid"), {
+      target: { value: TXID2 },
+    });
+    fireEvent.click(screen.getByTestId("button-analyse-deep-dive"));
+    await waitFor(() => {
+      expect(lastWorker!.postMessage.mock.calls.length).toBeGreaterThan(
+        firstCallCount,
+      );
+    });
+    const secondCalls = lastWorker!.postMessage.mock.calls;
+    const secondId = (secondCalls[secondCalls.length - 1][0] as { id: string }).id;
+    act(() => {
+      lastWorker!.onmessage!({
+        data: { id: secondId, result: RESULT2 },
+      } as MessageEvent);
+    });
+
+    // tx2's results render with ITS numbers…
+    await screen.findByTestId("container-boltzmann-result");
+    await waitFor(() => {
+      expect(screen.getByTestId("text-deep-dive-inputs").textContent).toBe("3");
+    });
+    expect(screen.getByTestId("text-deep-dive-outputs").textContent).toBe("2");
+    expect(screen.getByTestId("text-deep-dive-total").textContent).toBe("0.0150");
+    expect(screen.getByTestId("text-deep-dive-fee").textContent).toBe("2,000");
+    expect(screen.getByTestId("text-boltzmann-entropy").textContent).toBe("8.00 bits");
+    expect(screen.getByTestId("text-boltzmann-interpretations").textContent).toBe("256");
+
+    // …and none of tx1's stale figures linger anywhere in the panel.
+    const summaryText = screen.getByTestId("container-deep-dive-summary").textContent ?? "";
+    expect(summaryText).not.toContain("0.0010");
+    expect(summaryText).not.toContain("1,000");
+    const resultText = screen.getByTestId("container-boltzmann-result").textContent ?? "";
+    expect(resultText).not.toContain("2.00 bits");
+  });
+
   it("clears a prior transaction's error when a different tx is selected and analysed successfully", async () => {
     // Multi-tx mode: the first transaction's analysis fails (twice, so the
     // next-steps hint is on screen), then the user picks a *different*
