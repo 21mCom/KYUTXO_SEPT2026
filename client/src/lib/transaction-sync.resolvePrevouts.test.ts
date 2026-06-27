@@ -154,3 +154,115 @@ describe("TransactionSyncService.resolvePrevouts → source balance recompute", 
     expect(aAfter?.statsComputedAt).toBeTruthy();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Cancellation contract (Task #642 follow-up): aborting resolvePrevouts via its
+// signal mid-fetch must stop further network fetching cleanly and KEEP whatever
+// was already resolved — no rollback. The unresolved count should reflect the
+// partial progress (only the still-blank inputs remain), and stats.cancelled
+// must be true so the caller can report the partial outcome.
+//
+// Setup: two inputs whose source outputs are already stored LOCALLY (resolved
+// without any network call), plus six inputs whose source transactions must be
+// fetched from the node. resolvePrevouts fetches in chunks of CONCURRENCY (4),
+// checking the abort signal at the TOP of each chunk. We abort on the very first
+// getTransaction call, so the first chunk (4 txs, already in flight) completes
+// and is written, but the second chunk is skipped. End result: 2 local + 4
+// fetched = 6 inputs resolved; the remaining 2 stay blank.
+// ---------------------------------------------------------------------------
+
+const LOCAL_SRC_1 = "c".repeat(64);
+const LOCAL_SRC_2 = "d".repeat(64);
+const FETCH_SRC = (n: number) => `${n}`.repeat(64).slice(0, 64);
+const SPEND_TX = (n: number) => `e${n}`.padEnd(64, "f");
+
+describe("TransactionSyncService.resolvePrevouts → cancellation keeps partial progress", () => {
+  beforeEach(async () => {
+    await testDb.records.clear();
+    await testDb.blockchainTransactions.clear();
+    await testDb.transactionParticipants.clear();
+    await testDb.addressSyncState.clear();
+  });
+
+  it("aborts mid-fetch, keeps already-resolved inputs, flags cancelled, and leaves the rest blank", async () => {
+    // Two source outputs that are already stored locally — resolvable WITHOUT
+    // any network fetch. Their spending inputs must always be attributed,
+    // regardless of when the abort lands.
+    await testDb.transactionParticipants.bulkAdd([
+      { txid: LOCAL_SRC_1, role: "output", vout: 0, address: "bc1qlocalsrc1", amount: 11000 } as TransactionParticipant,
+      { txid: LOCAL_SRC_2, role: "output", vout: 0, address: "bc1qlocalsrc2", amount: 22000 } as TransactionParticipant,
+    ]);
+
+    // Two locally-resolvable spend inputs (blank address, prevout points at the
+    // local outputs above). Inserted FIRST so they sort ahead of the fetch
+    // inputs by primary key — keeps fetch ordering deterministic.
+    await testDb.transactionParticipants.bulkAdd([
+      { txid: SPEND_TX(1), role: "input", address: "", amount: 0, prevTxid: LOCAL_SRC_1, prevVout: 0 } as TransactionParticipant,
+      { txid: SPEND_TX(2), role: "input", address: "", amount: 0, prevTxid: LOCAL_SRC_2, prevVout: 0 } as TransactionParticipant,
+    ]);
+
+    // Six spend inputs whose source transactions are NOT local and must be
+    // fetched. Distinct prevTxids → six fetch txids → chunk0 = first 4,
+    // chunk1 = last 2 at CONCURRENCY 4.
+    const fetchInputs: TransactionParticipant[] = [];
+    for (let i = 1; i <= 6; i++) {
+      fetchInputs.push({
+        txid: SPEND_TX(10 + i),
+        role: "input",
+        address: "",
+        amount: 0,
+        prevTxid: FETCH_SRC(i),
+        prevVout: 0,
+      } as TransactionParticipant);
+    }
+    await testDb.transactionParticipants.bulkAdd(fetchInputs);
+
+    const controller = new AbortController();
+    const fetchCalls: string[] = [];
+
+    const service = new TransactionSyncService();
+    // Mock provider: each fetch returns one output (vout 0) carrying an address.
+    // The very first call trips the abort, so the in-flight first chunk still
+    // settles and is written, but no further chunk is fetched.
+    (service as any).provider = {
+      getTransaction: vi.fn(async (txid: string) => {
+        fetchCalls.push(txid);
+        if (fetchCalls.length === 1) controller.abort();
+        return {
+          vout: [
+            {
+              n: 0,
+              value: 30000,
+              scriptpubkey_address: `bc1qfetched${txid.slice(0, 6)}`,
+              scriptpubkey_type: "v0_p2wpkh",
+            },
+          ],
+        };
+      }),
+    };
+
+    const result = await service.resolvePrevouts(undefined, { signal: controller.signal });
+
+    // Cancellation is flagged and only the first fetch chunk ran.
+    expect(result.cancelled).toBe(true);
+    expect(result.fetchedFromNode).toBe(4);
+    // 2 locally-resolvable + 4 from the completed first chunk = 6 attributed.
+    expect(result.resolved).toBe(6);
+
+    // The two locally-resolvable inputs were written (no network needed).
+    const local1 = await testDb.transactionParticipants
+      .where("[prevTxid+prevVout]").equals([LOCAL_SRC_1, 0]).first();
+    const local2 = await testDb.transactionParticipants
+      .where("[prevTxid+prevVout]").equals([LOCAL_SRC_2, 0]).first();
+    expect(local1?.address).toBe("bc1qlocalsrc1");
+    expect(local2?.address).toBe("bc1qlocalsrc2");
+
+    // Exactly six inputs now carry an address (no rollback of partial work),
+    // and exactly two remain blank — the partial-progress contract.
+    const allInputs = await testDb.transactionParticipants.where("role").equals("input").toArray();
+    const resolvedInputs = allInputs.filter((p) => p.address && p.address !== "");
+    const blankInputs = allInputs.filter((p) => !p.address || p.address === "");
+    expect(resolvedInputs).toHaveLength(6);
+    expect(blankInputs).toHaveLength(2);
+  });
+});
