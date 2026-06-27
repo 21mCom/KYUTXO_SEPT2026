@@ -23,3 +23,4 @@
 - [Settings restore allow-list](settings-restore-allowlist.md) — settings table is never wholesale restored (device-local survives); portable prefs round-trip only via restoreSettingsPreferences allow-list, type-checked so older backups keep defaults.
 - [Stale-report scratch store](stale-report-scratch-store.md) — stream unbounded scan results to a SEPARATE Dexie DB (++seq), read windows on demand; awaitable batch cb for backpressure; dodges CRUD-guards + memory cap.
 - [Portable-pref preview/restore parity](portable-pref-preview.md) — preview + restore of backup portable prefs must share one descriptor list; preview before vault clear so wrong-password fails non-destructively.
+- [Force-graph testid collisions](force-graph-testid-collision.md) — node testid is id.slice(0,8); fixtures sharing first 8 chars collide → getByTestId-in-waitFor times out (looks like a render hang); graph colours are index.css theme tokens.

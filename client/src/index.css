@@ -52,6 +52,29 @@
   --chart-3: 155 70% 32%;
   --chart-4: 280 70% 38%;
   --chart-5: 45 80% 40%;
+  /* Graph palettes (Network Analysis clusters + Flow Visualizer owned marks).
+     Light-theme variants are deliberately dark (L 30-38%) so each coloured
+     node/edge keeps >=3:1 against the near-white graph surface; the .dark block
+     flips them light. Keep light/dark pairs in lockstep — see the
+     *graphContrast* tests which read these straight from this file. */
+  --graph-community-0: 210 70% 32%;
+  --graph-community-1: 340 65% 32%;
+  --graph-community-2: 120 50% 32%;
+  --graph-community-3: 40 80% 32%;
+  --graph-community-4: 270 55% 32%;
+  --graph-community-5: 180 55% 32%;
+  --graph-community-6: 15 70% 32%;
+  --graph-community-7: 300 50% 32%;
+  --graph-community-8: 75 55% 32%;
+  --graph-community-9: 195 65% 32%;
+  --graph-community-10: 350 55% 32%;
+  --graph-community-11: 160 50% 32%;
+  --graph-community-12: 50 60% 32%;
+  --graph-community-13: 230 55% 32%;
+  --graph-community-14: 100 45% 32%;
+  --graph-community-15: 0 50% 32%;
+  --graph-owned: 142 70% 30%;
+  --graph-owned-border: 142 70% 38%;
   --font-sans: "Inter Variable", Inter, sans-serif;
   --font-serif: Georgia, serif;
   --font-mono: "JetBrains Mono Variable", "JetBrains Mono", monospace;
@@ -139,6 +162,26 @@
   --chart-3: 155 70% 60%;
   --chart-4: 280 70% 65%;
   --chart-5: 45 80% 65%;
+  /* Graph palettes — dark-theme variants (light enough for >=3:1 against the
+     near-black graph surface). Keep in lockstep with the :root pairs above. */
+  --graph-community-0: 210 70% 66%;
+  --graph-community-1: 340 65% 66%;
+  --graph-community-2: 120 50% 66%;
+  --graph-community-3: 40 80% 66%;
+  --graph-community-4: 270 55% 66%;
+  --graph-community-5: 180 55% 66%;
+  --graph-community-6: 15 70% 66%;
+  --graph-community-7: 300 50% 66%;
+  --graph-community-8: 75 55% 66%;
+  --graph-community-9: 195 65% 66%;
+  --graph-community-10: 350 55% 66%;
+  --graph-community-11: 160 50% 66%;
+  --graph-community-12: 50 60% 66%;
+  --graph-community-13: 230 55% 66%;
+  --graph-community-14: 100 45% 66%;
+  --graph-community-15: 0 50% 66%;
+  --graph-owned: 142 60% 62%;
+  --graph-owned-border: 142 70% 72%;
   --shadow-2xs: 0px 2px 0px 0px hsl(0 0% 0% / 0.00);
   --shadow-xs: 0px 2px 0px 0px hsl(0 0% 0% / 0.00);
   --shadow-sm: 0px 2px 0px 0px hsl(0 0% 0% / 0.00), 0px 1px 2px -1px hsl(0 0% 0% / 0.00);

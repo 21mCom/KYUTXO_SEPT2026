@@ -462,9 +462,9 @@ export default function BitcoinFlowVisualizer() {
     // Owned addresses get green-tinted colors, external get default
     if (isOwned) {
       switch (type) {
-        case "input": return "hsl(142, 76%, 36%)"; // Green for owned inputs
+        case "input": return "hsl(var(--graph-owned))"; // Green for owned inputs
         case "selected": return "hsl(var(--primary))";
-        case "output": return "hsl(142, 76%, 36%)"; // Green for owned outputs  
+        case "output": return "hsl(var(--graph-owned))"; // Green for owned outputs  
         default: return "hsl(var(--muted))";
       }
     }
@@ -757,12 +757,12 @@ export default function BitcoinFlowVisualizer() {
                           <stop offset="100%" stopColor="hsl(var(--chart-2))" stopOpacity="0.8" />
                         </linearGradient>
                         <linearGradient id="ownedInputGrad" x1="0%" y1="0%" x2="100%" y2="0%">
-                          <stop offset="0%" stopColor="hsl(142, 76%, 36%)" stopOpacity="0.9" />
+                          <stop offset="0%" stopColor="hsl(var(--graph-owned))" stopOpacity="0.9" />
                           <stop offset="100%" stopColor="hsl(var(--primary))" stopOpacity="0.7" />
                         </linearGradient>
                         <linearGradient id="ownedOutputGrad" x1="0%" y1="0%" x2="100%" y2="0%">
                           <stop offset="0%" stopColor="hsl(var(--primary))" stopOpacity="0.7" />
-                          <stop offset="100%" stopColor="hsl(142, 76%, 36%)" stopOpacity="0.9" />
+                          <stop offset="100%" stopColor="hsl(var(--graph-owned))" stopOpacity="0.9" />
                         </linearGradient>
                       </defs>
 
@@ -801,7 +801,7 @@ export default function BitcoinFlowVisualizer() {
                               width="100"
                               height={height}
                               rx="4"
-                              fill={isOwned ? "hsl(142, 76%, 36%)" : "hsl(var(--chart-1))"}
+                              fill={isOwned ? "hsl(var(--graph-owned))" : "hsl(var(--chart-1))"}
                               opacity={isOwned ? "0.95" : "0.8"}
                               className="hover:opacity-100 transition-opacity"
                             />
@@ -813,7 +813,7 @@ export default function BitcoinFlowVisualizer() {
                                 height={height}
                                 rx="4"
                                 fill="none"
-                                stroke="hsl(142, 76%, 50%)"
+                                stroke="hsl(var(--graph-owned-border))"
                                 strokeWidth="2"
                               />
                             )}
@@ -896,7 +896,7 @@ export default function BitcoinFlowVisualizer() {
                               width="100"
                               height={height}
                               rx="4"
-                              fill={isOwned ? "hsl(142, 76%, 36%)" : "hsl(var(--chart-2))"}
+                              fill={isOwned ? "hsl(var(--graph-owned))" : "hsl(var(--chart-2))"}
                               opacity={isOwned ? "0.95" : "0.8"}
                               className="hover:opacity-100 transition-opacity"
                             />
@@ -908,7 +908,7 @@ export default function BitcoinFlowVisualizer() {
                                 height={height}
                                 rx="4"
                                 fill="none"
-                                stroke="hsl(142, 76%, 50%)"
+                                stroke="hsl(var(--graph-owned-border))"
                                 strokeWidth="2"
                               />
                             )}
@@ -941,7 +941,7 @@ export default function BitcoinFlowVisualizer() {
                       {(ownedInputs.length > 0 || ownedOutputs.length > 0) && (
                         <div className="flex items-center gap-4 border-t pt-2 mt-1">
                           <div className="flex items-center gap-1">
-                            <div className="w-3 h-3 rounded border-2" style={{ background: "hsl(142, 76%, 36%)", borderColor: "hsl(142, 76%, 50%)" }} />
+                            <div className="w-3 h-3 rounded border-2" style={{ background: "hsl(var(--graph-owned))", borderColor: "hsl(var(--graph-owned-border))" }} />
                             <span className="text-green-600 dark:text-green-400 font-medium">
                               Owned ({ownedInputs.length + ownedOutputs.length})
                             </span>
@@ -1150,7 +1150,7 @@ export default function BitcoinFlowVisualizer() {
                               key={i}
                               d={`M ${link.source.x} ${link.source.y} Q ${midX} ${(link.source.y + link.target.y) / 2 + curveOffset} ${link.target.x - offsetX} ${link.target.y - offsetY}`}
                               fill="none"
-                              stroke={link.source.isOwned || link.target.isOwned ? "hsl(142, 60%, 45%)" : "hsl(var(--muted-foreground))"}
+                              stroke={link.source.isOwned || link.target.isOwned ? "hsl(var(--graph-owned-border))" : "hsl(var(--muted-foreground))"}
                               strokeWidth={Math.max(1, Math.min(3, link.source.amount * 4))}
                               strokeOpacity={0.4}
                               markerEnd="url(#arrowhead)"
@@ -1164,7 +1164,7 @@ export default function BitcoinFlowVisualizer() {
                           const fillColor = node.type === "selected" 
                             ? "hsl(var(--primary))"
                             : node.isOwned 
-                              ? "hsl(142, 70%, 40%)"
+                              ? "hsl(var(--graph-owned))"
                               : node.type === "input"
                                 ? "hsl(var(--chart-1))"
                                 : "hsl(var(--chart-2))";
@@ -1289,7 +1289,7 @@ export default function BitcoinFlowVisualizer() {
                       <span>External Outputs</span>
                     </div>
                     <div className="flex items-center gap-2">
-                      <div className="w-4 h-4 rounded-full border-2" style={{ background: "hsl(142, 70%, 40%)", borderColor: "hsl(142, 70%, 50%)" }} />
+                      <div className="w-4 h-4 rounded-full border-2" style={{ background: "hsl(var(--graph-owned))", borderColor: "hsl(var(--graph-owned-border))" }} />
                       <span className="text-green-600 dark:text-green-400">Owned</span>
                     </div>
                   </div>

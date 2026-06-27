@@ -429,24 +429,16 @@ function yieldToUI(): Promise<void> {
   return new Promise(r => setTimeout(r, 0));
 }
 
-export const COMMUNITY_COLORS = [
-  'hsl(210, 70%, 55%)',
-  'hsl(340, 65%, 55%)',
-  'hsl(120, 50%, 45%)',
-  'hsl(40, 80%, 50%)',
-  'hsl(270, 55%, 55%)',
-  'hsl(180, 55%, 45%)',
-  'hsl(15, 70%, 55%)',
-  'hsl(300, 50%, 55%)',
-  'hsl(75, 55%, 45%)',
-  'hsl(195, 65%, 50%)',
-  'hsl(350, 55%, 45%)',
-  'hsl(160, 50%, 40%)',
-  'hsl(50, 60%, 50%)',
-  'hsl(230, 55%, 55%)',
-  'hsl(100, 45%, 45%)',
-  'hsl(0, 50%, 50%)',
-];
+// Categorical cluster palette. These are theme-aware CSS custom properties
+// (defined in client/src/index.css for both :root and .dark) rather than fixed
+// hsl() literals: the light-theme tokens are dark enough and the dark-theme
+// tokens light enough that every cluster node keeps >=3:1 contrast against the
+// graph surface in either mode. Contrast is pinned by
+// NetworkAnalysis.graphContrast.test.tsx.
+export const COMMUNITY_COLORS = Array.from(
+  { length: 16 },
+  (_, i) => `hsl(var(--graph-community-${i}))`,
+);
 
 export function getCommunityColor(community: number): string {
   return COMMUNITY_COLORS[community % COMMUNITY_COLORS.length];
