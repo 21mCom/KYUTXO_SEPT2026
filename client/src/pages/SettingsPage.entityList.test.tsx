@@ -92,11 +92,13 @@ const { ActivityBusProvider } = await import("@/lib/activity-bus");
 const { putSettings, getSettings } = await import("@/lib/data/settings-crud");
 const {
   resetActiveEntityList,
+  setActiveEntityList,
   getActiveEntitySource,
   getActiveEntityCount,
   getBundledEntityCount,
   getBundledEntityList,
 } = await import("@/lib/privacy-entity-list");
+import type { EntityEntry } from "@/lib/privacy-entity-list";
 import type { Settings } from "@/lib/db-types";
 
 // Valid mainnet addresses that are NOT in the bundled list so the preview shows
@@ -179,6 +181,75 @@ describe("SettingsPage — Privacy Audit Entity List panel", () => {
     await waitFor(() =>
       expect(screen.queryByTestId("text-preview-incoming")).toBeNull(),
     );
+  });
+
+  it("renders the per-category change column with the right sign and color for growing, shrinking, and unchanged categories", async () => {
+    // Reuse real (valid) bundled addresses so the incoming snapshot passes
+    // validation; their categories here are reassigned freely since validation
+    // only checks the address, a known category, and no duplicate addresses.
+    const addrs = getBundledEntityList()
+      .slice(0, 8)
+      .map((e) => e.address);
+    expect(new Set(addrs).size).toBe(8);
+
+    // Stage a known active baseline (replace mode compares against the active
+    // list): exchange ×3, mixer ×2, gambling ×1.
+    const baseline: EntityEntry[] = [
+      { address: addrs[0], name: "Cur Ex 1", category: "exchange" },
+      { address: addrs[1], name: "Cur Ex 2", category: "exchange" },
+      { address: addrs[2], name: "Cur Ex 3", category: "exchange" },
+      { address: addrs[3], name: "Cur Mix 1", category: "mixer" },
+      { address: addrs[4], name: "Cur Mix 2", category: "mixer" },
+      { address: addrs[5], name: "Cur Gamble 1", category: "gambling" },
+    ];
+
+    render(
+      <ActivityBusProvider>
+        <SettingsPage />
+      </ActivityBusProvider>,
+    );
+    await screen.findByTestId("badge-entity-source");
+
+    // Set the baseline AFTER render but BEFORE selecting the file, since the
+    // preview is computed from the active list at selection time.
+    setActiveEntityList(baseline);
+
+    // Incoming snapshot (default "replace" mode):
+    //   exchange ×5  -> delta +2 (growing)
+    //   mixer    ×1  -> delta -1 (shrinking)
+    //   gambling ×1  -> delta  0 (unchanged)
+    const snapshot = JSON.stringify([
+      { address: addrs[0], name: "Ex 1", category: "exchange" },
+      { address: addrs[1], name: "Ex 2", category: "exchange" },
+      { address: addrs[2], name: "Ex 3", category: "exchange" },
+      { address: addrs[6], name: "Ex 4", category: "exchange" },
+      { address: addrs[7], name: "Ex 5", category: "exchange" },
+      { address: addrs[3], name: "Mix 1", category: "mixer" },
+      { address: addrs[5], name: "Gamble 1", category: "gambling" },
+    ]);
+    await selectEntityFile("snapshot.json", snapshot);
+
+    // Preview dialog appears with the by-category breakdown.
+    await screen.findByTestId("text-preview-incoming");
+
+    // Growing category: "+2" in the increase (green) color.
+    const exchangeDelta = screen.getByTestId("text-preview-category-delta-exchange");
+    expect(exchangeDelta.textContent).toBe("+2");
+    expect(exchangeDelta.className).toContain("text-green-600");
+
+    // Shrinking category: a real minus sign (U+2212) + magnitude, in the
+    // decrease (red) color.
+    const mixerDelta = screen.getByTestId("text-preview-category-delta-mixer");
+    expect(mixerDelta.textContent).toBe("\u22121");
+    expect(mixerDelta.className).toContain("text-red-600");
+
+    // Unchanged category: a plain "0" in the muted (neutral) color, with no
+    // increase/decrease color applied.
+    const gamblingDelta = screen.getByTestId("text-preview-category-delta-gambling");
+    expect(gamblingDelta.textContent).toBe("0");
+    expect(gamblingDelta.className).toContain("text-muted-foreground");
+    expect(gamblingDelta.className).not.toContain("text-green-600");
+    expect(gamblingDelta.className).not.toContain("text-red-600");
   });
 
   it("merge mode: unions imported entries onto the bundled list and persists only user entries", async () => {
