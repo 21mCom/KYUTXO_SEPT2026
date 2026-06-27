@@ -114,6 +114,25 @@ const UNCAPPED_HOP: TrailHop = {
   totalTxCount: SHOWN,
 };
 
+// Hops returned by an *expand* click. They have no further sources (so the
+// nested level just renders "No further sources found." alongside any notice),
+// keeping the only CapNotice on screen the one belonging to the expanded hop.
+const CAPPED_EXPAND_HOP: TrailHop = {
+  sources: [],
+  destinations: [],
+  isCapped: true,
+  shownTxCount: SHOWN,
+  totalTxCount: TOTAL,
+};
+
+const UNCAPPED_EXPAND_HOP: TrailHop = {
+  sources: [],
+  destinations: [],
+  isCapped: false,
+  shownTxCount: SHOWN,
+  totalTxCount: SHOWN,
+};
+
 const computeOneHopSpy = vi.fn(async (): Promise<TrailHop> => UNCAPPED_HOP);
 
 vi.mock("@/lib/data/fund-trail-engine", async () => {
@@ -227,6 +246,75 @@ describe("FundTrail cap notice", () => {
     await screen.findByTestId("fund-trail-expand-Counterparty-d0");
 
     // Even with an active range, an uncapped result shows neither notice.
+    expect(screen.queryByTestId("fund-trail-cap-notice")).toBeNull();
+    expect(screen.queryByTestId("fund-trail-cap-notice-range")).toBeNull();
+  });
+});
+
+// Drives an expand by selecting a group (center hop -> UNCAPPED_HOP, which
+// exposes a "Counterparty" FlowCard) and clicking that card's Expand button.
+// The center hop is always uncapped here, so any notice that shows up belongs
+// to the *expanded* hop — letting us assert on the deeper-hop wiring in
+// isolation despite the notice testids being shared across depths.
+async function expandCenterHop() {
+  const expandBtn = await screen.findByTestId(
+    "fund-trail-expand-Counterparty-d0",
+  );
+  // Center hop is uncapped: neither notice should be present before expanding.
+  expect(screen.queryByTestId("fund-trail-cap-notice")).toBeNull();
+  expect(screen.queryByTestId("fund-trail-cap-notice-range")).toBeNull();
+  fireEvent.click(expandBtn);
+}
+
+describe("FundTrail cap notice on expanded hops", () => {
+  it("shows the window-aware notice on an expanded hop when capped AND a date range is active", async () => {
+    // Center hop expandable + uncapped; the expand call returns a capped hop.
+    computeOneHopSpy.mockResolvedValueOnce(UNCAPPED_HOP);
+    computeOneHopSpy.mockResolvedValue(CAPPED_EXPAND_HOP);
+    renderPage();
+
+    activateDateRange();
+    await selectGroup();
+    await expandCenterHop();
+
+    const rangeNotice = await screen.findByTestId("fund-trail-cap-notice-range");
+    const rangeText = rangeNotice.textContent ?? "";
+    expect(rangeText).toContain(SHOWN.toLocaleString());
+    expect(rangeText).toContain(TOTAL.toLocaleString());
+    expect(rangeText.toLowerCase()).toContain("date range");
+
+    // The all-time variant must NOT also be present.
+    expect(screen.queryByTestId("fund-trail-cap-notice")).toBeNull();
+  });
+
+  it("shows the all-time notice on an expanded hop when capped with NO date range", async () => {
+    computeOneHopSpy.mockResolvedValueOnce(UNCAPPED_HOP);
+    computeOneHopSpy.mockResolvedValue(CAPPED_EXPAND_HOP);
+    renderPage();
+
+    await selectGroup();
+    await expandCenterHop();
+
+    const allTimeNotice = await screen.findByTestId("fund-trail-cap-notice");
+    const allTimeText = allTimeNotice.textContent ?? "";
+    expect(allTimeText).toContain(SHOWN.toLocaleString());
+    expect(allTimeText).toContain(TOTAL.toLocaleString());
+
+    // The window-aware variant must NOT be present without an active range.
+    expect(screen.queryByTestId("fund-trail-cap-notice-range")).toBeNull();
+  });
+
+  it("renders NO notice on an expanded hop when its result is not capped", async () => {
+    computeOneHopSpy.mockResolvedValueOnce(UNCAPPED_HOP);
+    computeOneHopSpy.mockResolvedValue(UNCAPPED_EXPAND_HOP);
+    renderPage();
+
+    await selectGroup();
+    await expandCenterHop();
+
+    // Wait for the expanded section to resolve ("No further sources found.").
+    await screen.findByText(/no further sources found/i);
+
     expect(screen.queryByTestId("fund-trail-cap-notice")).toBeNull();
     expect(screen.queryByTestId("fund-trail-cap-notice-range")).toBeNull();
   });
