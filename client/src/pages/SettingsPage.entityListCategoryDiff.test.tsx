@@ -44,9 +44,8 @@ vi.mock("@/components/LegacyRecoveryPanel", () => ({ default: () => null }));
 const SettingsPage = (await import("./SettingsPage")).default;
 const { ActivityBusProvider } = await import("@/lib/activity-bus");
 const { putSettings } = await import("@/lib/data/settings-crud");
-const { resetActiveEntityList, setActiveEntityList } = await import(
-  "@/lib/privacy-entity-list"
-);
+const { resetActiveEntityList, setActiveEntityList, getBundledEntityList } =
+  await import("@/lib/privacy-entity-list");
 import type { EntityEntry } from "@/lib/privacy-entity-list";
 import type { Settings } from "@/lib/db-types";
 
@@ -75,6 +74,10 @@ function fakeFile(name: string, contents: string) {
 async function selectEntityFile(name: string, contents: string) {
   const input = screen.getByTestId("input-entity-file") as HTMLInputElement;
   fireEvent.change(input, { target: { files: [fakeFile(name, contents)] } });
+}
+
+function selectMergeMode() {
+  fireEvent.click(screen.getByTestId("radio-entity-merge"));
 }
 
 function renderPage() {
@@ -187,5 +190,156 @@ describe("SettingsPage — entity list import (per-category diff table)", () => 
         screen.queryByTestId(`row-preview-category-${absent}`),
       ).toBeNull();
     }
+  });
+});
+
+describe("SettingsPage — entity list import (overall net change total row)", () => {
+  it("replace: total Current/New columns match currentCount and incomingCount", async () => {
+    renderPage();
+    await screen.findByTestId("badge-entity-source");
+
+    // Baseline of 3 (exchange 2, gambling 1).
+    setActiveEntityList(BASELINE);
+
+    // Incoming snapshot of 3 entries.
+    const snapshot = JSON.stringify([
+      { address: ADDR.exchange, name: "Ex One", category: "exchange" },
+      { address: ADDR.mixerA, name: "Mix One", category: "mixer" },
+      { address: ADDR.mixerB, name: "Mix Two", category: "mixer" },
+    ]);
+    await selectEntityFile("replace.json", snapshot);
+
+    await screen.findByTestId("text-preview-incoming");
+
+    expect(screen.getByTestId("row-preview-total")).toBeTruthy();
+    // Current column == currentCount (active list = 3).
+    expect(
+      screen.getByTestId("text-preview-total-current").textContent,
+    ).toBe("3");
+    // New column == incomingCount (snapshot = 3).
+    expect(
+      screen.getByTestId("text-preview-total-incoming").textContent,
+    ).toBe("3");
+  });
+
+  it("replace: total delta is +N (green) on a net increase", async () => {
+    renderPage();
+    await screen.findByTestId("badge-entity-source");
+
+    // Baseline of 1 (gambling).
+    setActiveEntityList([
+      { address: ADDR.gambling, name: "Gam One", category: "gambling" },
+    ]);
+
+    // Incoming snapshot of 3 — net +2.
+    const snapshot = JSON.stringify([
+      { address: ADDR.exchange, name: "Ex One", category: "exchange" },
+      { address: ADDR.mixerA, name: "Mix One", category: "mixer" },
+      { address: ADDR.mixerB, name: "Mix Two", category: "mixer" },
+    ]);
+    await selectEntityFile("replace-increase.json", snapshot);
+
+    await screen.findByTestId("text-preview-incoming");
+
+    const delta = screen.getByTestId("text-preview-total-delta");
+    expect(delta.textContent).toBe("+2");
+    expect(delta.className).toContain("text-green-600");
+  });
+
+  it("replace: total delta is −N (red) on a net decrease", async () => {
+    renderPage();
+    await screen.findByTestId("badge-entity-source");
+
+    // Baseline of 3.
+    setActiveEntityList(BASELINE);
+
+    // Incoming snapshot of 1 — net −2.
+    const snapshot = JSON.stringify([
+      { address: ADDR.exchange, name: "Ex One", category: "exchange" },
+    ]);
+    await selectEntityFile("replace-decrease.json", snapshot);
+
+    await screen.findByTestId("text-preview-incoming");
+
+    const delta = screen.getByTestId("text-preview-total-delta");
+    // U+2212 MINUS SIGN, not an ASCII hyphen.
+    expect(delta.textContent).toBe("\u22122");
+    expect(delta.className).toContain("text-red-600");
+  });
+
+  it("replace: total delta is 0 (muted) when the count is unchanged", async () => {
+    renderPage();
+    await screen.findByTestId("badge-entity-source");
+
+    // Baseline of 3.
+    setActiveEntityList(BASELINE);
+
+    // Incoming snapshot also of 3 (different addresses) — net 0.
+    const snapshot = JSON.stringify([
+      { address: ADDR.mixerA, name: "Mix One", category: "mixer" },
+      { address: ADDR.mixerB, name: "Mix Two", category: "mixer" },
+      { address: ADDR.gambling, name: "Gam One", category: "gambling" },
+    ]);
+    await selectEntityFile("replace-unchanged.json", snapshot);
+
+    await screen.findByTestId("text-preview-incoming");
+
+    const delta = screen.getByTestId("text-preview-total-delta");
+    expect(delta.textContent).toBe("0");
+    expect(delta.className).toContain("text-muted-foreground");
+  });
+
+  it("merge: total columns match counts and delta is +N (green) on a net increase", async () => {
+    renderPage();
+    await screen.findByTestId("badge-entity-source");
+
+    // Merge always compares against the bundled list, regardless of the active
+    // list, so the baseline (Current/Bundled) is the bundled entry count.
+    const bundledCount = getBundledEntityList().length;
+
+    selectMergeMode();
+
+    // Two brand-new addresses (not in the bundled list) — net +2.
+    const snapshot = JSON.stringify([
+      { address: ADDR.mixerA, name: "Mix One", category: "mixer" },
+      { address: ADDR.mixerB, name: "Mix Two", category: "mixer" },
+    ]);
+    await selectEntityFile("merge-increase.json", snapshot);
+
+    await screen.findByTestId("text-preview-incoming");
+
+    // Current column == currentCount (bundled list length).
+    expect(
+      screen.getByTestId("text-preview-total-current").textContent,
+    ).toBe(bundledCount.toLocaleString());
+    // New column == incomingCount (snapshot = 2).
+    expect(
+      screen.getByTestId("text-preview-total-incoming").textContent,
+    ).toBe("2");
+
+    const delta = screen.getByTestId("text-preview-total-delta");
+    expect(delta.textContent).toBe("+2");
+    expect(delta.className).toContain("text-green-600");
+  });
+
+  it("merge: total delta is 0 (muted) when every incoming address already exists", async () => {
+    renderPage();
+    await screen.findByTestId("badge-entity-source");
+
+    selectMergeMode();
+
+    // A single entry that already exists in the bundled list: a merge never
+    // removes bundled entries and this address adds nothing — net 0.
+    const existing = getBundledEntityList()[0];
+    const snapshot = JSON.stringify([
+      { address: existing.address, name: existing.name, category: existing.category },
+    ]);
+    await selectEntityFile("merge-unchanged.json", snapshot);
+
+    await screen.findByTestId("text-preview-incoming");
+
+    const delta = screen.getByTestId("text-preview-total-delta");
+    expect(delta.textContent).toBe("0");
+    expect(delta.className).toContain("text-muted-foreground");
   });
 });
