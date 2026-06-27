@@ -2888,10 +2888,13 @@ export default function SettingsPage() {
       }
       // A single attachment file could not be written (e.g. the disk is full or
       // the write endpoint rejected the file). This can surface either directly
-      // (raw AttachmentWriteError) or wrapped as the cause of a
-      // RestoreInterruptedError once the vault has been reset to empty. In both
-      // cases give a specific, plain-language message that tells the user what
-      // to do next, instead of a raw endpoint error.
+      // (raw AttachmentWriteError — the write failed BEFORE the destructive
+      // clear, so the existing vault was never touched) or wrapped as the cause
+      // of a RestoreInterruptedError (the failure happened AFTER the clear, so
+      // the vault has been reset to empty). In both cases give a specific,
+      // plain-language message instead of a raw endpoint error — but be honest
+      // about whether the existing vault was wiped, since those are opposite
+      // outcomes for the user's data.
       const attachmentWriteFailure =
         error instanceof AttachmentWriteError
           ? error
@@ -2920,23 +2923,39 @@ export default function SettingsPage() {
               : attachmentWriteFailure.message;
         const reason = rawReason?.trim();
         const reasonMsg = reason ? `Reason: ${reason}. ` : "";
+        // A wrapped failure means the vault crossed the destructive clear and was
+        // reset to empty; a raw one means the failure happened first, so the
+        // existing vault is intact.
+        const vaultWasCleared = error instanceof RestoreInterruptedError;
+        const vaultStateMsg = vaultWasCleared
+          ? "The vault was reset to empty, so no partial data was left behind."
+          : "Your existing data was left untouched.";
         toast({
           variant: "destructive",
           title: "Restore Failed — Couldn't Write Attachment",
           description:
             `Restore failed while saving the attachment file "${attachmentWriteFailure.relPath}" — your disk may be full, the file was rejected, or the write failed for another reason. ` +
-            `${reasonMsg}${filesSavedMsg} The vault was reset to empty, so no partial data was left behind. Check the reason above (free up disk space, fix file permissions, or reconnect the storage), then run the restore again.`,
+            `${reasonMsg}${filesSavedMsg} ${vaultStateMsg} Check the reason above (free up disk space, fix file permissions, or reconnect the storage), then run the restore again.`,
         });
-        // The reset-to-empty contract clears everything, so re-evaluate the
-        // once-per-session orphan check after reload, the same as other paths.
-        resetOrphanCheckGate();
-        setTimeout(() => {
+        if (vaultWasCleared) {
+          // The reset-to-empty contract clears everything, so re-evaluate the
+          // once-per-session orphan check after reload, the same as other paths.
+          resetOrphanCheckGate();
+          setTimeout(() => {
+            setRestoreDialogOpen(false);
+            setRestoreFile(null);
+            setRestorePassword("");
+            setBackupInfo(null);
+            window.location.reload();
+          }, 3000);
+        } else {
+          // Nothing was cleared — the existing vault is intact, so just reset the
+          // dialog. No reload (the data is unchanged) and no orphan-gate reset.
           setRestoreDialogOpen(false);
           setRestoreFile(null);
           setRestorePassword("");
           setBackupInfo(null);
-          window.location.reload();
-        }, 3000);
+        }
         return;
       }
       // Cancelled after the clear, but the vault could NOT be reset to a clean
