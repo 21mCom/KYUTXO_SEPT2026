@@ -531,6 +531,54 @@ describe("TransactionDeepDive failure handling", () => {
     expect(screen.queryByTestId("text-deep-dive-next-steps")).toBeNull();
     expect(screen.queryByTestId("button-retry-deep-dive")).toBeNull();
   });
+
+  it("restarts the consecutive-failure counter when a different tx is selected", async () => {
+    // Switching transactions must reset failCount, not just the results: the
+    // "this has failed more than once" next-steps hint must never carry over
+    // from a previously failed transaction onto a freshly selected one. We make
+    // tx1 fail twice (so the hint is on screen), switch to tx2, then make tx2
+    // fail exactly once — the hint must NOT appear, proving failCount restarted
+    // at 0 on the switch rather than continuing to climb.
+    const TXID2 = "a".repeat(64);
+
+    // Every load fails, so tx1's two attempts and tx2's single attempt all error.
+    mockedGetTx.mockRejectedValue(new Error("boom"));
+
+    render(
+      <TransactionDeepDive
+        txids={[TXID, TXID2]}
+        coinjoinTxids={new Set<string>()}
+      />,
+    );
+
+    // tx1 fails once (message + Retry, no hint), then fails again via Retry so
+    // the next-steps hint is showing.
+    fireEvent.click(screen.getByTestId("button-analyse-deep-dive"));
+    await screen.findByTestId("button-retry-deep-dive");
+    expect(screen.queryByTestId("text-deep-dive-next-steps")).toBeNull();
+
+    fireEvent.click(screen.getByTestId("button-retry-deep-dive"));
+    await screen.findByTestId("text-deep-dive-next-steps");
+
+    // Switch to a different transaction — this clears the error UI and resets
+    // failCount.
+    fireEvent.change(screen.getByTestId("select-deep-dive-txid"), {
+      target: { value: TXID2 },
+    });
+    await waitFor(() => {
+      expect(screen.queryByTestId("text-deep-dive-next-steps")).toBeNull();
+    });
+
+    // Analyse tx2 and let it fail exactly once.
+    fireEvent.click(screen.getByTestId("button-analyse-deep-dive"));
+    await screen.findByTestId("button-retry-deep-dive");
+
+    // A single failure on tx2 must NOT show the next-steps hint: if failCount
+    // had carried over from tx1 it would already be >= 2 and the hint would
+    // appear after this one failure.
+    expect(screen.getByTestId("text-deep-dive-message")).toBeTruthy();
+    expect(screen.queryByTestId("text-deep-dive-next-steps")).toBeNull();
+  });
 });
 
 // The worker.onmessage handler guards against out-of-order results: a slow
