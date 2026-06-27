@@ -2161,10 +2161,30 @@ export default function SettingsPage() {
               }
             }
           },
-          // Used only to sweep files this restore wrote if it fails/cancels
-          // after the destructive clear, so they are not stranded on disk.
+          // Used to sweep files this restore wrote if it fails/cancels after
+          // the destructive clear, AND to reclaim OLD-vault files a successful
+          // restore left behind, so neither is stranded on disk.
           async delete(relativePath) {
             await deleteFile(`${ATTACHMENTS_DIR}/${relativePath}`);
+          },
+          // Snapshot of every attachment file on disk before the write phase,
+          // so a successful restore can delete prior-vault files the new vault
+          // does not reference (relative paths, no `attachments/` prefix).
+          async list() {
+            if (isElectron()) {
+              const api = getElectronAPI();
+              const result = await api.listAllAttachments();
+              if (!result.success) {
+                throw new Error(result.error || "Failed to list attachments");
+              }
+              return result.files ?? [];
+            }
+            const response = await fetch("/api/attachments/list-all");
+            if (!response.ok) {
+              throw new Error(`Failed to list attachments: ${response.status}`);
+            }
+            const data = await response.json();
+            return data.files ?? [];
           },
           // Orphaned files: owning record absent. Route to Needs Review folder
           // under the original filename. Best-effort in Electron; no-op in web.

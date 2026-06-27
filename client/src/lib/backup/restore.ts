@@ -149,12 +149,19 @@ export function evaluateDiskSpace(
 
 export interface AttachmentFileWriter {
   write(relPath: string, data: ArrayBuffer): Promise<void>;
-  // Optional: remove a previously-written attachment file. Used only to sweep
+  // Optional: remove a previously-written attachment file. Used both to sweep
   // files this restore wrote when the restore fails (or is cancelled) AFTER the
-  // destructive clear. clearVault only resets DB/inline tables, so without this
-  // sweep the files written before the failure would be stranded on disk as
-  // orphans. Best-effort: a failure to delete must not mask the primary error.
+  // destructive clear, AND to reclaim OLD-vault files a SUCCESSFUL restore left
+  // behind (see sweepOrphanedOldFiles). clearVault only resets DB/inline tables,
+  // so without this delete those files would be stranded on disk as orphans.
+  // Best-effort: a failure to delete must not mask the primary error.
   delete?(relPath: string): Promise<void>;
+  // Optional: list every attachment file currently on disk (relative paths, no
+  // `attachments/` prefix). Snapshotted BEFORE the write phase so a successful
+  // restore can delete any prior-vault file the new vault does not reference
+  // (the write phase only overwrites colliding paths; clearVault never touches
+  // files). Best-effort: if absent or it throws, the old-vault sweep is skipped.
+  list?(): Promise<string[]>;
   // Optional: write an attachment whose owning record was absent (orphan) to a
   // Needs Review folder under the original filename instead of the normal pool.
   // Called in place of write() for orphaned files. Best-effort: failures are
@@ -264,6 +271,22 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
   // otherwise they are stranded on disk as orphans (see sweepWrittenFiles).
   const writtenFiles: string[] = [];
 
+  // Snapshot of the OLD vault's on-disk attachment files (normalised relative
+  // paths), taken BEFORE the write phase. After a SUCCESSFUL restore, any file
+  // here that the new vault did NOT write is a prior-vault orphan and is swept
+  // (see sweepOrphanedOldFiles). Null when listing is unavailable/failed, in
+  // which case the old-vault sweep is skipped entirely.
+  let preExistingFiles: Set<string> | null = null;
+
+  // Normalise a relative attachment path so on-disk listings and the paths this
+  // restore wrote compare equal: forward slashes, no `attachments/` prefix.
+  const normalizeRelPath = (p: string): string => {
+    const fwd = p.replace(/\\/g, "/");
+    return fwd.startsWith(`${ATTACHMENTS_DIR}/`)
+      ? fwd.slice(ATTACHMENTS_DIR.length + 1)
+      : fwd;
+  };
+
   const throwIfAborted = () => {
     if (opts.signal?.aborted) throw new BackupCancelledError();
   };
@@ -299,6 +322,28 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
       }
     }
     writtenFiles.length = 0;
+  }
+
+  // Best-effort removal of OLD-vault attachment files a SUCCESSFUL restore left
+  // stranded on disk. clearVault only wipes the DB, and the write phase only
+  // overwrites files whose paths collide with a backup entry — so any prior file
+  // whose path is NOT present in the restored vault would otherwise linger
+  // forever as an orphan (wasting space, polluting attachment audits). We delete
+  // only files that (a) existed on disk BEFORE this restore and (b) were NOT
+  // written by it, so a file the new vault references is never removed. Per-file
+  // delete errors are swallowed (the orphan stays discoverable by the audit).
+  async function sweepOrphanedOldFiles(): Promise<void> {
+    const del = opts.attachmentWriter.delete;
+    if (!del || preExistingFiles === null || preExistingFiles.size === 0) return;
+    const written = new Set(writtenFiles.map(normalizeRelPath));
+    for (const oldRel of preExistingFiles) {
+      if (written.has(oldRel)) continue;
+      try {
+        await del.call(opts.attachmentWriter, oldRel);
+      } catch {
+        // intentionally ignored — see comment above
+      }
+    }
   }
 
   const total = () =>
@@ -421,6 +466,23 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
             // A cancel requested before the clear leaves the existing vault
             // intact; check one last time on the point-of-no-return boundary.
             throwIfAborted();
+
+            // Snapshot the OLD vault's on-disk attachment files BEFORE writing
+            // anything, so a successful restore can later delete any prior-vault
+            // file the new vault does not reference. clearVault never touches
+            // files, so doing this just before it is equivalent and keeps the
+            // listing close to the point of no return. Best-effort: a listing
+            // failure simply disables the post-restore sweep.
+            const listFn = opts.attachmentWriter.list;
+            if (listFn) {
+              try {
+                const existing = await listFn.call(opts.attachmentWriter);
+                preExistingFiles = new Set(existing.map(normalizeRelPath));
+              } catch {
+                preExistingFiles = null;
+              }
+            }
+
             opts.onProgress?.({ percent: 8, phase: "Clearing existing data..." });
             await clearVault();
             cleared = true;
@@ -582,6 +644,13 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
   }
 
   if (!manifest) throw new Error("Invalid backup: missing manifest");
+
+  // Restore succeeded. Reclaim any OLD-vault attachment files the new vault does
+  // not reference (clearVault wiped only the DB; the write phase only overwrote
+  // colliding paths). Best-effort — never affects the restored data, and a
+  // failure here must not turn a successful restore into a failure.
+  await sweepOrphanedOldFiles();
+
   opts.onProgress?.({ percent: 100, phase: "Restore complete" });
   return { manifest, counts };
 }
