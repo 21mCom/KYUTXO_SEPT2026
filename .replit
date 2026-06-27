@@ -49,6 +49,10 @@ args = "entity-list"
 task = "workflow.run"
 args = "typecheck"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "note-rendering"
+
 [[workflows.workflow]]
 name = "Start application"
 author = "agent"
@@ -109,6 +113,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "npm run check"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "note-rendering"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-note-rendering.js"
 
 [workflows.workflow.metadata]
 isValidation = true

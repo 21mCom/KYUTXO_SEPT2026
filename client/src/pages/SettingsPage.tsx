@@ -58,6 +58,7 @@ import { db, type TrashedAttachment } from "@/lib/database";
 import { clearAllRecords } from "@/lib/data/record-crud";
 import { getPrivacyAuditHistoryCount } from "@/lib/data/privacy-history-crud";
 import { recomputeAddressStats } from "@/lib/data/address-stats";
+import { renderSourceNote } from "@/lib/renderSourceNote";
 import { clearTransactions, clearParticipants } from "@/lib/data/transaction-crud";
 import { clearUtxoLineage, clearCustodySegments } from "@/lib/data/lineage-crud";
 import { clearEvidence, clearEvidenceAttachments } from "@/lib/data/evidence-crud";
@@ -307,11 +308,11 @@ function ChangedEntityList({
                 >
                   <span className="mr-1 font-medium">Source:</span>
                   <span className="line-through break-words">
-                    {change.current.sourceNote ?? "(none)"}
+                    {change.current.sourceNote ? renderSourceNote(change.current.sourceNote) : "(none)"}
                   </span>
                   <span className="mx-1">→</span>
                   <span className="text-foreground break-words">
-                    {change.incoming.sourceNote ?? "(none)"}
+                    {change.incoming.sourceNote ? renderSourceNote(change.incoming.sourceNote) : "(none)"}
                   </span>
                 </p>
               )}
@@ -408,11 +409,11 @@ function EntityOverrideList({
                 >
                   <span className="mr-1 font-medium">Source:</span>
                   <span className="line-through break-words">
-                    {previous.sourceNote ?? "(none)"}
+                    {previous.sourceNote ? renderSourceNote(previous.sourceNote) : "(none)"}
                   </span>
                   <span className="mx-1">→</span>
                   <span className="text-foreground break-words">
-                    {incoming.sourceNote ?? "(none)"}
+                    {incoming.sourceNote ? renderSourceNote(incoming.sourceNote) : "(none)"}
                   </span>
                 </p>
               )}

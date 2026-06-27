@@ -6,6 +6,7 @@ HOOK_FILE="$HOOK_DIR/pre-commit"
 CRUD_CMD="node scripts/check-crud-guards.js"
 LOCKFILE_CMD="node scripts/check-lockfile-urls.js"
 NO_EXTERNAL_CMD="node scripts/check-no-external-resources.js"
+NOTE_RENDER_CMD="node scripts/check-note-rendering.js"
 
 append_check() {
   cmd="$1"
@@ -29,3 +30,4 @@ append_check() {
 append_check "$CRUD_CMD" "CRUD guards"
 append_check "$LOCKFILE_CMD" "lockfile URLs"
 append_check "$NO_EXTERNAL_CMD" "no external resources"
+append_check "$NOTE_RENDER_CMD" "note rendering"

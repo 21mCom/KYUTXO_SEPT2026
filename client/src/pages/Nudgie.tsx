@@ -26,6 +26,7 @@ import {
   getRecordsByType,
 } from "@/lib/data/record-crud";
 import { uploadAttachment } from "@/lib/attachments";
+import { renderSourceNote } from "@/lib/renderSourceNote";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -835,7 +836,7 @@ export default function Nudgie() {
 
             {r.notes && (
               <div className="mt-1 p-1.5 bg-muted/50 rounded text-muted-foreground italic">
-                {r.notes.length > 100 ? `${r.notes.slice(0, 100)}...` : r.notes}
+                {renderSourceNote(r.notes.length > 100 ? `${r.notes.slice(0, 100)}...` : r.notes)}
               </div>
             )}
 

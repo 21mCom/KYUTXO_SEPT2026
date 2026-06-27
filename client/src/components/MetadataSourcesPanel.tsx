@@ -9,6 +9,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { type RecordOrigin, type RecordOriginType, type Record as DBRecord } from '@/lib/database';
 import { getRecordOrigins } from '@/lib/dataFacade';
 import { SINGULAR_FIELDS, type FieldConfig } from '@/lib/conflict-detection';
+import { renderSourceNote } from '@/lib/renderSourceNote';
 
 interface RecordFields {
   label?: string;
@@ -153,7 +154,7 @@ function OriginCard({ origin, record }: { origin: RecordOrigin; record?: RecordF
                 <div data-testid={`text-origin-notes-${origin.id}`}>
                   <span className="text-muted-foreground">Notes:</span>
                   <p className="mt-1 text-xs whitespace-pre-wrap bg-muted p-2 rounded">
-                    {origin.notes}
+                    {renderSourceNote(origin.notes)}
                   </p>
                 </div>
               )}

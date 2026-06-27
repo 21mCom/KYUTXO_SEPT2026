@@ -254,7 +254,7 @@ function VaultInfoSection({ vault }: { vault: VaultMetadata }) {
                   )}
                 </div>
                 {cosigner.notes && (
-                  <p className="text-xs text-muted-foreground" data-testid={`text-cosigner-notes-${idx}`}>{cosigner.notes}</p>
+                  <p className="text-xs text-muted-foreground" data-testid={`text-cosigner-notes-${idx}`}>{renderSourceNote(cosigner.notes)}</p>
                 )}
               </div>
             ))}
