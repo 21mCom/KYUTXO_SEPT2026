@@ -1025,3 +1025,77 @@ describe("buildFundTrailPdf at depth", () => {
     expect(pdfPageCount(text)).toBeGreaterThan(1);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Detail-vs-summary consistency — the summary table claims an "Addresses" count
+// per group, and the detailed mode renders one detail row per deduplicated
+// address beneath that group. These two must never drift: a regression that
+// drops some detail rows while leaving the count unchanged (or vice versa)
+// would silently understate the document. This asserts every address (and its
+// txid) the count claims is actually rendered, and that the count equals the
+// number of detail rows actually rendered for the group.
+// ---------------------------------------------------------------------------
+
+describe("buildFundTrailPdf detail/summary address consistency", () => {
+  it("renders every address and txid the group's Addresses count claims", async () => {
+    // Several distinct, easily-recognizable addresses in a single group.
+    const knownDetails = Array.from({ length: 5 }, (_, i) =>
+      detail({
+        address: `bc1qknownaddr${i}`,
+        txid: `knowntxid${i}`,
+        amount: 11_000_000 + i,
+        blockTime: 1_700_000_000 + i * 86_400,
+      }),
+    );
+    const center: TrailHop = {
+      sources: [
+        flow({
+          groupLabel: "KnownGroup",
+          totalSats: knownDetails.reduce((s, d) => s + d.amount, 0),
+          details: knownDetails,
+        }),
+      ],
+      destinations: [],
+    };
+    const snapshot = buildFundTrailSnapshot(
+      "Center",
+      "walletName",
+      center,
+      new Map(),
+    );
+
+    const text = await extractPdfText(
+      await buildFundTrailPdf(snapshot, { detailed: true }),
+    );
+    const normalized = text.replace(/\s+/g, "");
+
+    // Every address (and its txid) the count claims must appear in the detail
+    // sub-table — none may be silently dropped.
+    for (const d of knownDetails) {
+      expect(normalized).toContain(d.address);
+      expect(normalized).toContain(d.txid);
+    }
+
+    // Count the detail rows the PDF *actually* rendered for the group, derived
+    // from the rendered text (not the fixture) so it would also catch a row
+    // rendered more than once. The detail addresses are short, unique, and only
+    // appear in the detail sub-table, so one match == one rendered detail row.
+    const renderedRows = (text.match(/bc1qknownaddr\d+/g) || []).length;
+    expect(renderedRows).toBe(knownDetails.length);
+
+    // Read the group's own "Addresses" summary cell from the rendered summary
+    // table: the summary row emits its cells (label, amount, count) as adjacent
+    // literals, so the first pure-integer line right after the exact "KnownGroup"
+    // label cell is that group's Addresses count.
+    const lines = text.split("\n");
+    const summaryIdx = lines.indexOf("KnownGroup");
+    expect(summaryIdx).toBeGreaterThanOrEqual(0);
+    const summaryCountCell = lines
+      .slice(summaryIdx + 1, summaryIdx + 4)
+      .find((l) => /^\d+$/.test(l));
+    expect(summaryCountCell).toBeDefined();
+
+    // The summary count the group claims must equal the detail rows it renders.
+    expect(Number(summaryCountCell)).toBe(renderedRows);
+  });
+});
