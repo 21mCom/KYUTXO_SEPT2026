@@ -192,6 +192,10 @@ interface ElectronAPI {
   backupClose: (id: string) => Promise<{ success: boolean; error?: string }>;
   backupAbort: (id: string) => Promise<{ success: boolean; error?: string }>;
   isPortableMode: () => Promise<boolean>;
+  // Needs Review folder (orphaned restore attachments)
+  getNeedsReviewPath: () => Promise<string>;
+  writeNeedsReview: (originalFilename: string, data: ArrayBuffer) => Promise<{ success: boolean; path?: string; error?: string }>;
+  openNeedsReviewFolder: () => Promise<{ success: boolean; error?: string }>;
   // Tor proxy operations
   torTest: (torProxyUrl?: string) => Promise<TorTestResult>;
   torRequest: (params: TorRequestParams) => Promise<TorRequestResult>;

@@ -42,11 +42,13 @@ function checkPortableMode() {
 const portableMode = checkPortableMode();
 let dataDir = '';
 let attachmentsDir = '';
+let needsReviewDir = '';
 
 if (portableMode) {
   const portableDir = getPortableDir();
   dataDir = path.join(portableDir, 'KYUTXO_Data');
   attachmentsDir = path.join(dataDir, 'attachments');
+  needsReviewDir = path.join(dataDir, 'attachments-needs-review');
   
   if (!fs.existsSync(dataDir)) {
     fs.mkdirSync(dataDir, { recursive: true });
@@ -61,6 +63,7 @@ if (portableMode) {
 } else {
   dataDir = path.join(app.getPath('userData'), 'data');
   attachmentsDir = path.join(dataDir, 'attachments');
+  needsReviewDir = path.join(dataDir, 'attachments-needs-review');
   console.log('[KYUTXO] STANDARD MODE');
   console.log('[KYUTXO] Data directory:', dataDir);
 }
@@ -71,6 +74,9 @@ function ensureDirectories() {
   }
   if (!fs.existsSync(attachmentsDir)) {
     fs.mkdirSync(attachmentsDir, { recursive: true });
+  }
+  if (!fs.existsSync(needsReviewDir)) {
+    fs.mkdirSync(needsReviewDir, { recursive: true });
   }
 }
 
@@ -162,7 +168,7 @@ function createWindow() {
 // REGISTER IPC HANDLERS
 // ============================================================================
 
-registerFileHandlers(ipcMain, { dataDir, attachmentsDir, portableMode });
+registerFileHandlers(ipcMain, { dataDir, attachmentsDir, needsReviewDir, portableMode });
 registerElectrumHandlers(ipcMain);
 registerEngineHandlers(ipcMain, { dataDir, portableMode, getWindow: () => mainWindow });
 

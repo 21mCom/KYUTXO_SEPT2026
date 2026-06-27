@@ -79,6 +79,7 @@ import {
   restoreLegacyTransactions,
   restoreLegacyAddressSyncState,
 } from "@/lib/backup/legacy-restore";
+import type { LegacyAttachmentsResult } from "@/lib/backup/legacy-restore";
 import {
   restoreLegacyVocabulary,
   restoreLegacyCustomFields,
@@ -2092,6 +2093,17 @@ export default function SettingsPage() {
           async delete(relativePath) {
             await deleteFile(`${ATTACHMENTS_DIR}/${relativePath}`);
           },
+          // Orphaned files: owning record absent. Route to Needs Review folder
+          // under the original filename. Best-effort in Electron; no-op in web.
+          async writeReview(originalFilename, fileData) {
+            if (isElectron()) {
+              const api = getElectronAPI();
+              const result = await api.writeNeedsReview(originalFilename, fileData);
+              if (!result.success) {
+                throw new Error(result.error ?? `Failed to write ${originalFilename} to Needs Review folder`);
+              }
+            }
+          },
         };
 
         const controller = new AbortController();
@@ -2153,14 +2165,40 @@ export default function SettingsPage() {
                 backfillSummary = ` ${txids.length} transaction${txids.length !== 1 ? "s" : ""} need on-chain data — run "Rebuild Missing Transactions" in Settings when connected.`;
               }
             }
+            const v3OrphanMsg = result.counts.orphanedAttachmentFiles > 0
+              ? ` ${result.counts.orphanedAttachmentFiles} attachment file${result.counts.orphanedAttachmentFiles !== 1 ? "s" : ""} could not be re-linked (owning record absent) and were saved to the Needs Review folder — open it to re-attach or delete them.`
+              : "";
             toast({
               title: "Restore Successful",
-              description: `Restored ${result.counts.records} records, ${result.counts.blockchainTransactions} transactions, ${result.counts.transactionParticipants} participants, ${result.counts.attachmentFiles} attachment files.${backfillSummary}`,
+              description: `Restored ${result.counts.records} records, ${result.counts.blockchainTransactions} transactions, ${result.counts.transactionParticipants} participants, ${result.counts.attachmentFiles} attachment files.${backfillSummary}${v3OrphanMsg}`,
+              ...(result.counts.orphanedAttachmentFiles > 0 && isElectron() ? {
+                action: (
+                  <button
+                    className="shrink-0 rounded border px-2 py-1 text-xs font-medium"
+                    onClick={() => getElectronAPI().openNeedsReviewFolder()}
+                  >
+                    Open folder
+                  </button>
+                ) as any,
+              } : {}),
             });
           } else {
+            const v3OrphanMsg = result.counts.orphanedAttachmentFiles > 0
+              ? ` ${result.counts.orphanedAttachmentFiles} attachment file${result.counts.orphanedAttachmentFiles !== 1 ? "s" : ""} could not be re-linked and were saved to the Needs Review folder — open it to re-attach or delete them.`
+              : "";
             toast({
               title: "Restore Successful",
-              description: `Restored ${result.counts.records} records, ${result.counts.blockchainTransactions} transactions, ${result.counts.transactionParticipants} participants, ${result.counts.attachmentFiles} attachment files. Existing data was replaced.`,
+              description: `Restored ${result.counts.records} records, ${result.counts.blockchainTransactions} transactions, ${result.counts.transactionParticipants} participants, ${result.counts.attachmentFiles} attachment files. Existing data was replaced.${v3OrphanMsg}`,
+              ...(result.counts.orphanedAttachmentFiles > 0 && isElectron() ? {
+                action: (
+                  <button
+                    className="shrink-0 rounded border px-2 py-1 text-xs font-medium"
+                    onClick={() => getElectronAPI().openNeedsReviewFolder()}
+                  >
+                    Open folder
+                  </button>
+                ) as any,
+              } : {}),
             });
           }
         } catch {
@@ -2321,20 +2359,25 @@ export default function SettingsPage() {
       setRestoreMessage("Restoring attachments...");
 
       // Restore attachment metadata (de-dup by objectStoragePath in merge mode;
-      // recordId remapped through recordIdMap, orphans dropped). Shared with
+      // recordId remapped through recordIdMap, orphans tracked). Shared with
       // tests via the legacy-restore helpers.
-      const attachmentsAdded = await restoreLegacyAttachments(
+      const legacyAttResult: LegacyAttachmentsResult = await restoreLegacyAttachments(
         attachments,
         restoreMode,
         recordIdMap,
       );
+      const attachmentsAdded = legacyAttResult.attachmentsAdded;
+      const legacyOrphanedRelPaths = legacyAttResult.orphanedRelPaths;
 
-      // Restore attachment files from ZIP
+      // Restore attachment files from ZIP. Orphaned files (whose owning record
+      // was absent) are routed to the Needs Review folder rather than the normal
+      // attachment pool, so no hidden copy is left behind.
       setRestoreProgress(85);
       setRestoreMessage("Restoring attachment files...");
       
       let attachmentFilesRestored = 0;
       let attachmentFilesErrors = 0;
+      let legacyOrphanedFilesRouted = 0;
       const attachmentsFolder = zip.folder("attachments");
       if (attachmentsFolder) {
         const filePromises: Promise<void>[] = [];
@@ -2344,7 +2387,22 @@ export default function SettingsPage() {
             filePromises.push((async () => {
               try {
                 const fileData = await file.async("arraybuffer");
-                
+
+                // Check if this file belongs to an orphaned attachment (no
+                // owning record). If so, route to the Needs Review folder.
+                const orphanFilename = legacyOrphanedRelPaths.get(relativePath);
+                if (orphanFilename !== undefined) {
+                  if (isElectron()) {
+                    const api = getElectronAPI();
+                    const result = await api.writeNeedsReview(orphanFilename, fileData);
+                    if (!result.success) {
+                      throw new Error(result.error ?? `Failed to write ${orphanFilename} to Needs Review folder`);
+                    }
+                  }
+                  legacyOrphanedFilesRouted++;
+                  return;
+                }
+
                 if (isElectron()) {
                   const api = getElectronAPI();
                   const result = await api.writeAttachment(relativePath, fileData);
@@ -2487,6 +2545,7 @@ export default function SettingsPage() {
         attachmentFilesMsg = ` (${attachmentFilesErrors} attachment files failed)`;
       }
       let additionalDataMsg = "";
+      const legacyOrphanCount = legacyOrphanedFilesRouted;
       if (evidenceAdded > 0 || priceDataAdded > 0 || lineageDataAdded > 0 || transactionsAdded > 0 || addressSyncAdded > 0) {
         const parts = [];
         if (evidenceAdded > 0) parts.push(`${evidenceAdded} evidence`);
@@ -2542,9 +2601,22 @@ export default function SettingsPage() {
         // backfill detection failure is non-fatal
       }
 
+      const legacyOrphanSuffix = legacyOrphanCount > 0
+        ? ` ${legacyOrphanCount} attachment file${legacyOrphanCount !== 1 ? "s" : ""} could not be re-linked (owning record absent) and were saved to the Needs Review folder — open it to re-attach or delete them.`
+        : "";
       toast({
         title: "Restore Successful",
-        description: baseMessage + backfillSuffix,
+        description: baseMessage + backfillSuffix + legacyOrphanSuffix,
+        ...(legacyOrphanCount > 0 && isElectron() ? {
+          action: (
+            <button
+              className="shrink-0 rounded border px-2 py-1 text-xs font-medium"
+              onClick={() => getElectronAPI().openNeedsReviewFolder()}
+            >
+              Open folder
+            </button>
+          ) as any,
+        } : {}),
       });
 
       // A restore can introduce transaction records missing on-chain data. Reset

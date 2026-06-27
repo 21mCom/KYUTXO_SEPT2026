@@ -26,6 +26,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
   renameAttachment: (oldPath, newPath) =>
     ipcRenderer.invoke('rename-attachment', { oldPath, newPath }),
 
+  // Orphaned-attachment review folder (populated during restore when an
+  // attachment's owning record is absent — never linked to any record).
+  getNeedsReviewPath: () =>
+    ipcRenderer.invoke('get-needs-review-path'),
+  writeNeedsReview: (filename, data) =>
+    ipcRenderer.invoke('write-needs-review', { filename, data }),
+  openNeedsReviewFolder: () =>
+    ipcRenderer.invoke('open-needs-review-folder'),
+
   // Streaming backup writer (export): chunks go straight to disk, so the full
   // archive never has to be buffered in renderer memory.
   backupOpen: (suggestedName) => ipcRenderer.invoke('backup-open', { suggestedName }),

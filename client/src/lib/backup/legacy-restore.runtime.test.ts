@@ -165,7 +165,7 @@ describe("legacy restore: records", () => {
 });
 
 describe("legacy restore: attachments", () => {
-  it("remaps recordId, drops orphans, and de-dups by objectStoragePath in merge mode", async () => {
+  it("remaps recordId, routes orphans to review, and de-dups by objectStoragePath in merge mode", async () => {
     // Restore two records so attachments have live records to bind to.
     const recordIdMap = new Map<number, number>();
     await restoreLegacyRecords(
@@ -181,24 +181,28 @@ describe("legacy restore: attachments", () => {
       { id: 1, recordId: 301, filename: "a.pdf", mimeType: "application/pdf", size: 10, objectStoragePath: "hash-a" },
       // bound to record 302 -> liveY
       { id: 2, recordId: 302, filename: "b.pdf", mimeType: "application/pdf", size: 20, objectStoragePath: "hash-b" },
-      // ORPHAN: backup recordId 999 was never restored -> dropped
+      // ORPHAN: backup recordId 999 was never restored -> routed to review, NOT linked
       { id: 3, recordId: 999, filename: "orphan.pdf", mimeType: "application/pdf", size: 30, objectStoragePath: "hash-orphan" },
     ];
 
-    const added = await restoreLegacyAttachments(attachments, "replace", recordIdMap);
-    expect(added).toBe(2);
+    const result = await restoreLegacyAttachments(attachments, "replace", recordIdMap);
+    expect(result.attachmentsAdded).toBe(2);
+
+    // Orphan is reported in the returned map so callers can route its bytes.
+    expect(result.orphanedRelPaths.size).toBe(1);
+    expect(result.orphanedRelPaths.get("hash-orphan")).toBe("orphan.pdf");
 
     const live = await getAllAttachments();
     expect(live).toHaveLength(2);
     // recordId was rewritten to the live ids, not the backup ids.
     expect(live.find((a) => a.objectStoragePath === "hash-a")!.recordId).toBe(liveX);
     expect(live.find((a) => a.objectStoragePath === "hash-b")!.recordId).toBe(liveY);
-    // The orphan was never written.
+    // The orphan is NOT in the DB (no spurious link to any record).
     expect(live.some((a) => a.objectStoragePath === "hash-orphan")).toBe(false);
 
     // Merge again with the SAME objectStoragePaths: nothing new is added.
-    const addedAgain = await restoreLegacyAttachments(attachments, "merge", recordIdMap);
-    expect(addedAgain).toBe(0);
+    const mergeResult = await restoreLegacyAttachments(attachments, "merge", recordIdMap);
+    expect(mergeResult.attachmentsAdded).toBe(0);
     expect(await getAllAttachments()).toHaveLength(2);
   });
 
@@ -213,8 +217,8 @@ describe("legacy restore: attachments", () => {
       { id: 3, recordId: 401, filename: "scan.pdf", mimeType: "application/pdf", size: 12, objectStoragePath: "hash-3" },
     ];
 
-    const added = await restoreLegacyAttachments(attachments, "merge", recordIdMap);
-    expect(added).toBe(3);
+    const result = await restoreLegacyAttachments(attachments, "merge", recordIdMap);
+    expect(result.attachmentsAdded).toBe(3);
     const stored = await getAllAttachments();
     expect(stored).toHaveLength(3);
     expect(stored.every((a) => a.recordId === live)).toBe(true);

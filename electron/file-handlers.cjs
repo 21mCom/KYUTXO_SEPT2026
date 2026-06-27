@@ -1,7 +1,7 @@
 const path = require('path');
 const fs = require('fs');
 
-function registerFileHandlers(ipcMain, { dataDir, attachmentsDir, portableMode }) {
+function registerFileHandlers(ipcMain, { dataDir, attachmentsDir, needsReviewDir, portableMode }) {
   // Stored attachment paths may or may not carry an `attachments/` prefix
   // depending on which backend wrote them: the Express server stores paths WITH
   // the prefix (relative to the data dir), while Electron stores them WITHOUT it
@@ -221,6 +221,64 @@ function registerFileHandlers(ipcMain, { dataDir, attachmentsDir, portableMode }
       const buffer = Buffer.from(data);
       fs.writeFileSync(filePath, buffer);
       
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  // Get the path of the Needs Review folder (for display in UI after restore).
+  ipcMain.handle('get-needs-review-path', () => {
+    return needsReviewDir;
+  });
+
+  // Write an orphaned attachment to the Needs Review folder under its original
+  // filename, de-duping name collisions by appending _1, _2, ... before the
+  // extension. Returns the absolute path of the file that was written.
+  ipcMain.handle('write-needs-review', async (event, { filename, data }) => {
+    try {
+      if (!filename || typeof filename !== 'string') {
+        return { success: false, error: 'Invalid filename' };
+      }
+      // Sanitize: strip any path separators so callers cannot escape the folder.
+      const safeName = path.basename(filename);
+      if (!safeName) {
+        return { success: false, error: 'Invalid filename' };
+      }
+
+      // Ensure the Needs Review folder exists (it may have been removed by the
+      // user or not yet created on first run).
+      if (!fs.existsSync(needsReviewDir)) {
+        fs.mkdirSync(needsReviewDir, { recursive: true });
+      }
+
+      // De-duplicate: if <name> already exists, try <stem>_1<ext>, _2, ...
+      const ext = path.extname(safeName);
+      const stem = safeName.slice(0, safeName.length - ext.length);
+      let candidate = safeName;
+      let counter = 0;
+      while (fs.existsSync(path.join(needsReviewDir, candidate))) {
+        counter++;
+        candidate = `${stem}_${counter}${ext}`;
+      }
+
+      const dest = path.join(needsReviewDir, candidate);
+      const buffer = Buffer.from(data);
+      fs.writeFileSync(dest, buffer);
+      return { success: true, savedPath: dest };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  // Open the Needs Review folder in the OS file manager.
+  ipcMain.handle('open-needs-review-folder', async () => {
+    try {
+      if (!fs.existsSync(needsReviewDir)) {
+        fs.mkdirSync(needsReviewDir, { recursive: true });
+      }
+      const { shell } = require('electron');
+      await shell.openPath(needsReviewDir);
       return { success: true };
     } catch (error) {
       return { success: false, error: error.message };

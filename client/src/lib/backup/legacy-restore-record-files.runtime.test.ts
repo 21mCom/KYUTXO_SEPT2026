@@ -175,8 +175,8 @@ describe("legacy restore: record attachment files open via their restored path",
     const recordIdMap = new Map<number, number>();
     const recResult = await restoreLegacyRecords(backupRecords, "replace", recordIdMap);
     expect(recResult.recordsAdded).toBe(3);
-    const attAdded = await restoreLegacyAttachments(backupAttachments, "replace", recordIdMap);
-    expect(attAdded).toBe(3);
+    const attResult = await restoreLegacyAttachments(backupAttachments, "replace", recordIdMap);
+    expect(attResult.attachmentsAdded).toBe(3);
 
     // 5. The restored records must have ids DIFFERENT from the backup ids
     //    (proving ids shifted — the remap scenario is actually exercised).
@@ -356,8 +356,8 @@ describe("legacy restore (MERGE mode): merged attachments bind to the right pre-
       expect(recordIdMap.get(p.backupId)).toBe(liveIdByInputString.get(p.inputString));
     }
 
-    const attAdded = await restoreLegacyAttachments(backupAttachments, "merge", recordIdMap);
-    expect(attAdded).toBe(3);
+    const attResult2 = await restoreLegacyAttachments(backupAttachments, "merge", recordIdMap);
+    expect(attResult2.attachmentsAdded).toBe(3);
 
     // 6. No new records were created by the merge (decoys + matches only).
     const allRecords = await getAllRecords();
@@ -413,14 +413,16 @@ describe("legacy restore (MERGE mode): merged attachments bind to the right pre-
     const map1 = new Map<number, number>();
     const rec1 = await restoreLegacyRecords(backupRecords, "merge", map1);
     expect(rec1.recordsSkipped).toBe(1);
-    expect(await restoreLegacyAttachments(backupAttachments, "merge", map1)).toBe(1);
+    const mergeAtt1 = await restoreLegacyAttachments(backupAttachments, "merge", map1);
+    expect(mergeAtt1.attachmentsAdded).toBe(1);
     expect(await getAllAttachments()).toHaveLength(1);
 
     // Second merge of the SAME backup: attachment de-duped by objectStoragePath,
     // so no duplicate file row is created.
     const map2 = new Map<number, number>();
     await restoreLegacyRecords(backupRecords, "merge", map2);
-    expect(await restoreLegacyAttachments(backupAttachments, "merge", map2)).toBe(0);
+    const mergeAtt2 = await restoreLegacyAttachments(backupAttachments, "merge", map2);
+    expect(mergeAtt2.attachmentsAdded).toBe(0);
 
     const atts = await getAllAttachments();
     expect(atts).toHaveLength(1);

@@ -358,6 +358,134 @@ describe("legacy pre-v3 backups route away from the v3 restore", () => {
   });
 });
 
+describe("v3 restore: orphaned attachment files routed to review, never to normal pool", () => {
+  it("an attachment whose owning record is absent goes to writeReview, not write, and is counted", async () => {
+    await seedVault();
+    const blob = await exportPlain();
+    await clearEverything();
+
+    const normalFiles = new Map<string, Uint8Array>();
+    const reviewFiles = new Map<string, string>(); // filename -> bytes (as string)
+
+    const writerWithReview: AttachmentFileWriter = {
+      async write(relPath, data) {
+        normalFiles.set(relPath, new Uint8Array(data));
+      },
+      async writeReview(filename, data) {
+        reviewFiles.set(filename, new TextDecoder().decode(new Uint8Array(data)));
+      },
+    };
+
+    // Tamper: strip all record rows from the ZIP so every attachment is orphaned.
+    // We do this by patching the source to replace records.ndjson with an empty
+    // file, which means no records are restored and every attachment row is an orphan.
+    const zip = await JSZip.loadAsync(await blob.arrayBuffer());
+    const recordsFile = zip.file("tables/records.ndjson");
+    if (recordsFile) {
+      zip.file("tables/records.ndjson", "");
+    }
+    // Also wipe attachments.ndjson so the attachment metadata rows reference the
+    // original backup record ids (which were cleared above and aren't restored).
+    // Instead, inject a single attachment row referencing a non-existent record id.
+    const orphanAttRow = JSON.stringify([{
+      id: 9999,
+      recordId: 99999,
+      filename: "secret-doc.pdf",
+      mimeType: "application/pdf",
+      size: 4,
+      objectStoragePath: "ab/cd/file-0.bin",
+    }]);
+    zip.file("tables/attachments.ndjson", orphanAttRow + "\n");
+
+    const tampered = new Blob([await zip.generateAsync({ type: "uint8array" })]);
+
+    const result = await restoreV3Backup({
+      source: blobChunks(tampered),
+      attachmentWriter: writerWithReview,
+    });
+
+    // The orphaned file must NOT be written to the normal pool.
+    expect(normalFiles.has("ab/cd/file-0.bin")).toBe(false);
+
+    // It MUST be written to the review folder under its original filename.
+    expect(reviewFiles.has("secret-doc.pdf")).toBe(true);
+
+    // The orphaned count in the result must reflect what was routed.
+    expect(result.counts.orphanedAttachmentFiles).toBe(1);
+
+    // No attachment DB row must have been created (the orphan row was discarded).
+    expect(await countAttachments()).toBe(0);
+  });
+
+  it("non-orphaned files go to write() and orphaned to writeReview(), count reported correctly", async () => {
+    await seedVault();
+    const blob = await exportPlain();
+    await clearEverything();
+
+    const normalFiles = new Map<string, Uint8Array>();
+    const reviewFiles = new Map<string, string>();
+
+    const writerWithReview: AttachmentFileWriter = {
+      async write(relPath, data) {
+        normalFiles.set(relPath, new Uint8Array(data));
+      },
+      async writeReview(filename, data) {
+        reviewFiles.set(filename, String(new Uint8Array(data).length));
+      },
+    };
+
+    // Use the unmodified blob: all attachment metadata rows should have their
+    // records present (restored from the NDJSON), so no orphans.
+    const result = await restoreV3Backup({
+      source: blobChunks(blob),
+      attachmentWriter: writerWithReview,
+    });
+
+    // All files go to the normal pool, none to review.
+    expect(result.counts.attachmentFiles).toBe(N_FILES);
+    expect(result.counts.orphanedAttachmentFiles).toBe(0);
+    expect(normalFiles.size).toBe(N_FILES);
+    expect(reviewFiles.size).toBe(0);
+  });
+
+  it("name collision de-duplication in writeReview is handled by the writer implementation", async () => {
+    // Inject two orphaned attachment rows referencing the SAME filename but
+    // different objectStoragePaths; the writeReview implementation (here: a
+    // simple in-memory map that uses a counter to de-dup) must receive both calls.
+    await seedVault();
+    const blob = await exportPlain();
+    await clearEverything();
+
+    const reviewCalls: string[] = [];
+    const writerWithReview: AttachmentFileWriter = {
+      async write() {},
+      async writeReview(filename) {
+        reviewCalls.push(filename);
+      },
+    };
+
+    const zip = await JSZip.loadAsync(await blob.arrayBuffer());
+    zip.file("tables/records.ndjson", "");
+    const twoOrphans = [
+      JSON.stringify([{ id: 1, recordId: 99990, filename: "report.pdf", mimeType: "application/pdf", size: 4, objectStoragePath: "ab/cd/file-0.bin" }]),
+      JSON.stringify([{ id: 2, recordId: 99991, filename: "report.pdf", mimeType: "application/pdf", size: 4, objectStoragePath: "ab/cd/file-1.bin" }]),
+    ].join("\n");
+    zip.file("tables/attachments.ndjson", twoOrphans + "\n");
+
+    const tampered = new Blob([await zip.generateAsync({ type: "uint8array" })]);
+
+    const result = await restoreV3Backup({
+      source: blobChunks(tampered),
+      attachmentWriter: writerWithReview,
+    });
+
+    // Both orphans are reported; writeReview called twice (de-dup is the writer's job).
+    expect(result.counts.orphanedAttachmentFiles).toBe(2);
+    expect(reviewCalls).toHaveLength(2);
+    expect(reviewCalls.every((f) => f === "report.pdf")).toBe(true);
+  });
+});
+
 describe("a failing attachment write surfaces a specific error after clear", () => {
   it("wraps the write failure as RestoreInterruptedError(cause=AttachmentWriteError) and resets the vault", async () => {
     await seedVault();

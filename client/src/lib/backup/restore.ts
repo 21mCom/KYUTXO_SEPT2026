@@ -107,6 +107,12 @@ export interface AttachmentFileWriter {
   // sweep the files written before the failure would be stranded on disk as
   // orphans. Best-effort: a failure to delete must not mask the primary error.
   delete?(relPath: string): Promise<void>;
+  // Optional: write an attachment whose owning record was absent (orphan) to a
+  // Needs Review folder under the original filename instead of the normal pool.
+  // Called in place of write() for orphaned files. Best-effort: failures are
+  // swallowed rather than aborting the restore (the orphan is counted but the
+  // bytes are lost, which is still better than silently vanishing).
+  writeReview?(originalFilename: string, data: ArrayBuffer): Promise<void>;
 }
 
 export interface RestoreProgress {
@@ -135,6 +141,9 @@ export interface RestoreResult {
     utxoLineage: number;
     custodySegments: number;
     attachmentFiles: number;
+    // Number of attachment files whose owning record was absent and were
+    // routed to the Needs Review folder (never linked to any DB row).
+    orphanedAttachmentFiles: number;
   };
 }
 
@@ -178,6 +187,12 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
   let manifestSeen = false;
   let key: CryptoKey | null = null;
   const idMap = new Map<number, number>();
+  // Orphaned attachment metadata: relPath (objectStoragePath) → original
+  // filename. Populated in handleBatch("attachments") for rows whose owning
+  // record is absent. When the ZIP file bytes entry for that relPath arrives,
+  // the bytes are routed to writeReview() instead of write(), so no hidden
+  // duplicate is left in the normal attachment pool.
+  const orphanRelPaths = new Map<string, string>();
   const counts = {
     records: 0,
     attachments: 0,
@@ -187,6 +202,7 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
     utxoLineage: 0,
     custodySegments: 0,
     attachmentFiles: 0,
+    orphanedAttachmentFiles: 0,
   };
 
   // Becomes true once the destructive clear has run. After this point the
@@ -273,7 +289,17 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
       for (const a of rows) {
         const { id, ...d } = a;
         const recordId = remap(idMap, d.recordId);
-        if (recordId === undefined) continue; // orphan: owning record absent
+        if (recordId === undefined) {
+          // Orphan: owning record absent. Track the relPath so the file bytes
+          // can be routed to the review folder when the ZIP entry arrives.
+          if (d.objectStoragePath) {
+            orphanRelPaths.set(
+              String(d.objectStoragePath),
+              String(d.filename || "unknown"),
+            );
+          }
+          continue;
+        }
         out.push({ ...d, recordId } as CreateAttachmentData);
       }
       if (out.length) await bulkAddAttachments(out, { skipNotification: true });
@@ -387,6 +413,25 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
               bytes.byteOffset,
               bytes.byteOffset + bytes.byteLength,
             ) as ArrayBuffer;
+
+            const orphanFilename = orphanRelPaths.get(relPath);
+            if (orphanFilename !== undefined) {
+              // Orphaned file: no owning record. Route to the review folder
+              // under the original filename instead of the normal attachment
+              // pool, so no hidden duplicate is left behind. Best-effort: a
+              // writeReview failure is swallowed so it cannot abort the restore
+              // — the orphan is still counted for the UI notification.
+              try {
+                await opts.attachmentWriter.writeReview?.(orphanFilename, ab);
+              } catch {
+                // intentionally swallowed — best-effort routing
+              }
+              counts.orphanedAttachmentFiles += 1;
+              processed += 1;
+              report("Restoring attachment files...");
+              return;
+            }
+
             try {
               await opts.attachmentWriter.write(relPath, ab);
             } catch (writeErr) {

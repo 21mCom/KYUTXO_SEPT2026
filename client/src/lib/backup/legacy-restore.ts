@@ -145,20 +145,36 @@ export async function restoreLegacyRecords(
   return { recordsAdded, recordsSkipped };
 }
 
+export interface LegacyAttachmentsResult {
+  /** Number of attachment DB rows successfully linked to a live record. */
+  attachmentsAdded: number;
+  /**
+   * Attachment files whose owning record was absent (never restored). Maps
+   * `objectStoragePath` (the ZIP entry relPath) → original filename. Callers
+   * should route these bytes to the Needs Review folder instead of the normal
+   * attachment pool, and never link them to any record.
+   */
+  orphanedRelPaths: Map<string, string>;
+}
+
 /**
  * Restore attachment metadata rows. Each attachment requires a live record, so
  * its backup `recordId` is rewritten through `recordIdMap`; orphans (owning
- * record absent) are dropped rather than left dangling. In merge mode, identity
- * is keyed by `objectStoragePath` (sha256-derived, unique per stored file),
- * falling back to `recordId:filename` so duplicates are not re-added.
+ * record absent) are tracked in the returned map instead of silently dropped.
+ * In merge mode, identity is keyed by `objectStoragePath` (sha256-derived,
+ * unique per stored file), falling back to `recordId:filename` so duplicates
+ * are not re-added.
  */
 export async function restoreLegacyAttachments(
   attachments: any[] | undefined,
   restoreMode: RestoreMode,
   recordIdMap: Map<number, number>,
-): Promise<number> {
+): Promise<LegacyAttachmentsResult> {
+  const orphanedRelPaths = new Map<string, string>();
   let attachmentsAdded = 0;
-  if (!attachments || attachments.length === 0) return attachmentsAdded;
+  if (!attachments || attachments.length === 0) {
+    return { attachmentsAdded, orphanedRelPaths };
+  }
 
   const existingAttachmentKeys = new Set<string>();
   if (restoreMode === "merge") {
@@ -173,6 +189,14 @@ export async function restoreLegacyAttachments(
     const { id, ...attData } = attachment;
     const mappedRecordId = remapRecordId(recordIdMap, attData.recordId);
     if (mappedRecordId === undefined) {
+      // Orphan: owning record absent. Record the relPath → filename so callers
+      // can route the file bytes to the Needs Review folder.
+      if (attData.objectStoragePath) {
+        orphanedRelPaths.set(
+          String(attData.objectStoragePath),
+          String(attData.filename || "unknown"),
+        );
+      }
       continue;
     }
     const attKey = attData.objectStoragePath || `${mappedRecordId}:${attData.filename}`;
@@ -195,7 +219,7 @@ export async function restoreLegacyAttachments(
     attachmentsAdded++;
   }
 
-  return attachmentsAdded;
+  return { attachmentsAdded, orphanedRelPaths };
 }
 
 /**
