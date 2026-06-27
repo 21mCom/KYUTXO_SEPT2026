@@ -92,6 +92,13 @@ vi.mock("@/lib/database", () => ({
 }));
 
 import DescriptorImport from "./DescriptorImport";
+// These imports resolve to the vi.fn mocks declared above, so the multisig
+// describe block can override their behaviour per-test.
+import { parseDescriptor } from "@/lib/descriptor-parser";
+import { deriveMultisigDualChain } from "@/lib/xpub";
+
+const MS_RECEIVE_ADDRESS = "bc1qmsreceive000000000000000000000000000000q";
+const MS_CHANGE_ADDRESS = "bc1qmschange0000000000000000000000000000000q";
 
 let writeText: ReturnType<typeof vi.fn>;
 
@@ -160,6 +167,95 @@ describe("DescriptorImport copy buttons toast", () => {
   });
 
   it("shows the destructive 'Copy failed' toast when the clipboard write rejects", async () => {
+    await renderAndDerive();
+
+    writeText.mockImplementation(() => Promise.reject(new Error("denied")));
+    fireEvent.click(screen.getByTestId("button-copy-receive-0"));
+    await flush();
+
+    expect(toastMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "Copy failed",
+        description: "Could not copy to clipboard",
+        variant: "destructive",
+      }),
+    );
+  });
+});
+
+// Task #1038: the multisig derivation path (deriveMultisigDualChain) renders the
+// SAME receive/change copy buttons as the taproot path, so it needs equivalent
+// coverage of the clipboard + toast wiring. We override the parser to return a
+// multisig descriptor (isTaproot: false) and point deriveMultisigDualChain at
+// fixed address arrays.
+describe("DescriptorImport copy buttons toast (multisig path)", () => {
+  beforeEach(() => {
+    vi.mocked(parseDescriptor).mockReturnValue({
+      success: true,
+      descriptor: {
+        scriptType: "p2wsh",
+        threshold: 2,
+        keys: [
+          {
+            fingerprint: "deadbeef",
+            derivationPath: "48'/0'/0'/2'",
+            xpub: "xpubFAKE0000000000000000000000000000000000A",
+            chainPath: "/0/*",
+            rawChainPath: "/0/*",
+          },
+          {
+            fingerprint: "feedface",
+            derivationPath: "48'/0'/0'/2'",
+            xpub: "xpubFAKE0000000000000000000000000000000000B",
+            chainPath: "/0/*",
+            rawChainPath: "/0/*",
+          },
+        ],
+        network: "mainnet",
+        isMultisig: true,
+        isSortedMulti: true,
+        isTaproot: false,
+        rawDescriptor: "wsh(sortedmulti(2,xpubFAKE...A/0/*,xpubFAKE...B/0/*))",
+        chainType: "dual-chain",
+      },
+    } as ReturnType<typeof parseDescriptor>);
+
+    vi.mocked(deriveMultisigDualChain).mockResolvedValue({
+      receive: [{ index: 0, address: MS_RECEIVE_ADDRESS }],
+      change: [{ index: 0, address: MS_CHANGE_ADDRESS }],
+    } as Awaited<ReturnType<typeof deriveMultisigDualChain>>);
+  });
+
+  it("copies a multisig receive address and shows the success toast", async () => {
+    await renderAndDerive();
+
+    fireEvent.click(screen.getByTestId("button-copy-receive-0"));
+    await flush();
+
+    expect(writeText).toHaveBeenCalledWith(MS_RECEIVE_ADDRESS);
+    expect(toastMock).toHaveBeenCalledWith({
+      title: "Copied",
+      description: "Address copied to clipboard",
+    });
+  });
+
+  it("copies a multisig change address and shows the success toast", async () => {
+    await renderAndDerive();
+
+    fireEvent.click(screen.getByTestId("button-toggle-change"));
+    await waitFor(() => screen.getByTestId("button-copy-change-0"));
+
+    fireEvent.click(screen.getByTestId("button-copy-change-0"));
+    await flush();
+
+    expect(writeText).toHaveBeenCalledWith(MS_CHANGE_ADDRESS);
+    expect(toastMock).toHaveBeenCalledWith({
+      title: "Copied",
+      description: "Address copied to clipboard",
+    });
+  });
+
+  it("shows the destructive 'Copy failed' toast when the multisig clipboard write rejects", async () => {
     await renderAndDerive();
 
     writeText.mockImplementation(() => Promise.reject(new Error("denied")));
