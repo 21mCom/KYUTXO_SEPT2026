@@ -87,6 +87,9 @@ vi.mock("@/components/ui/select", async () => {
 // --- Engine seam: spy on computeOneHop, stub data loaders --------------------
 const GROUP = "Exchange";
 const EXPAND_TARGET = "Counterparty";
+// A deeper hop the d1 FlowCard can itself expand into (d1 -> d2). Distinct from
+// EXPAND_TARGET so its expand button has its own testid at depth 1.
+const CHILD_TARGET = "Mixer";
 const SHOWN = 50;
 const TOTAL = 1234;
 
@@ -100,6 +103,24 @@ const CENTER_HOP: TrailHop = {
       dimension: "walletName",
       totalSats: 100,
       details: [{ address: "ext-cp", txid: "tx-cp", amount: 100, blockTime: 1000 }],
+      isUnknown: false,
+    },
+  ],
+  destinations: [],
+  isCapped: false,
+  shownTxCount: 1,
+  totalTxCount: 1,
+};
+
+// A middle hop (the d0 expand result) that is uncapped but itself exposes a
+// source the d1 FlowCard can expand again, taking us to depth 2.
+const MID_HOP: TrailHop = {
+  sources: [
+    {
+      groupLabel: CHILD_TARGET,
+      dimension: "walletName",
+      totalSats: 80,
+      details: [{ address: "ext-mx", txid: "tx-mx", amount: 80, blockTime: 1000 }],
       isUnknown: false,
     },
   ],
@@ -177,6 +198,11 @@ async function expandCenterFlow() {
   fireEvent.click(expandBtn);
 }
 
+async function expandChildFlow() {
+  const expandBtn = await screen.findByTestId(`fund-trail-expand-${CHILD_TARGET}-d1`);
+  fireEvent.click(expandBtn);
+}
+
 beforeEach(() => {
   computeOneHopSpy.mockReset();
 });
@@ -233,6 +259,50 @@ describe("FundTrail expanded-hop cap notice", () => {
 
     // The expanded section resolves to an empty-sources message; wait for it so
     // we know the expand hop finished rendering before asserting no notice.
+    await screen.findByText("No further sources found.");
+
+    expect(screen.queryByTestId("fund-trail-cap-notice")).toBeNull();
+    expect(screen.queryByTestId("fund-trail-cap-notice-range")).toBeNull();
+  });
+
+  it("shows the notice for a DEEPLY nested expanded hop (d1 -> d2) that is capped", async () => {
+    // center hop (uncapped, expandable), d0 expand -> MID_HOP (uncapped,
+    // expandable child), d1 expand -> capped deep hop.
+    computeOneHopSpy.mockResolvedValueOnce(CENTER_HOP);
+    computeOneHopSpy.mockResolvedValueOnce(MID_HOP);
+    computeOneHopSpy.mockResolvedValue(CAPPED_EXPAND_HOP);
+    renderPage();
+
+    await selectGroup();
+    await expandCenterFlow();
+    // The d1 FlowCard (the child of the first expand) must render before we can
+    // expand it deeper.
+    await screen.findByTestId(`fund-trail-flow-card-${CHILD_TARGET}-d1`);
+    await expandChildFlow();
+
+    const notice = await screen.findByTestId("fund-trail-cap-notice");
+    const text = notice.textContent ?? "";
+    expect(text).toContain(SHOWN.toLocaleString());
+    expect(text).toContain(TOTAL.toLocaleString());
+
+    // Neither the center nor the d0 hop was capped, so the deep notice is the
+    // only one, and the window-aware variant must be absent without a range.
+    expect(screen.queryByTestId("fund-trail-cap-notice-range")).toBeNull();
+  });
+
+  it("renders NO notice at the deeper level (d1 -> d2) when that hop is not capped", async () => {
+    computeOneHopSpy.mockResolvedValueOnce(CENTER_HOP);
+    computeOneHopSpy.mockResolvedValueOnce(MID_HOP);
+    computeOneHopSpy.mockResolvedValue(UNCAPPED_EXPAND_HOP);
+    renderPage();
+
+    await selectGroup();
+    await expandCenterFlow();
+    await screen.findByTestId(`fund-trail-flow-card-${CHILD_TARGET}-d1`);
+    await expandChildFlow();
+
+    // The deepest expand resolves to an empty-sources message; wait for it so we
+    // know the d2 hop finished rendering before asserting no notice exists.
     await screen.findByText("No further sources found.");
 
     expect(screen.queryByTestId("fund-trail-cap-notice")).toBeNull();
