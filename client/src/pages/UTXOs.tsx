@@ -337,6 +337,109 @@ export function UtxoTableRow({
   );
 }
 
+// Scrollable, virtualized UTXO list. Extracted as a pure-props component (like
+// VirtualizedTransactionList) so the virtual-scroll note-icon preload wiring can
+// be regression-tested in isolation, without rendering the whole engine-backed,
+// Dexie-driven page. As the visible window moves it preloads hover metadata for
+// the newly-visible rows (group addresses + utxo txids from the flattened row
+// model) via batchPreloadIdentifiers, so note icons appear without a hover.
+export function VirtualizedUtxoList({
+  flattenedRows,
+  expandedAddresses,
+  displayUnit,
+  onToggleGroup,
+  onOpenUtxo,
+  scrollRef,
+  header,
+}: {
+  flattenedRows: FlatUtxoRow[];
+  expandedAddresses: Set<string>;
+  displayUnit: "btc" | "sats";
+  onToggleGroup: (address: string) => void;
+  onOpenUtxo: (utxo: UTXO) => void;
+  scrollRef: React.RefObject<HTMLDivElement>;
+  header: React.ReactNode;
+}) {
+  const utxoVirtualizer = useVirtualizer({
+    count: flattenedRows.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: (index) => flattenedRows[index]?.kind === 'utxo' ? 44 : 72,
+    overscan: 20,
+    measureElement: (el) => el.getBoundingClientRect().height,
+  });
+
+  const utxoVirtualItems = utxoVirtualizer.getVirtualItems();
+  const utxoVisibleRangeKey = utxoVirtualItems.length > 0
+    ? `${utxoVirtualItems[0].index}-${utxoVirtualItems[utxoVirtualItems.length - 1].index}`
+    : '';
+
+  useEffect(() => {
+    if (!utxoVisibleRangeKey || flattenedRows.length === 0) return;
+    const [startStr, endStr] = utxoVisibleRangeKey.split('-');
+    const start = parseInt(startStr);
+    const end = parseInt(endStr);
+    const ids: string[] = [];
+    for (let i = start; i <= end; i++) {
+      const row = flattenedRows[i];
+      if (!row) continue;
+      if (row.kind === 'group') ids.push(row.group.address);
+      else if (row.kind === 'utxo') ids.push(row.utxo.txid);
+    }
+    if (ids.length > 0) batchPreloadIdentifiers(ids);
+  }, [utxoVisibleRangeKey, flattenedRows]);
+
+  return (
+    <div ref={scrollRef} className="h-full overflow-auto">
+      <Table>
+        <TableHeader className="sticky top-0 bg-card z-10">
+          {header}
+        </TableHeader>
+        <TableBody>
+          {utxoVirtualizer.getVirtualItems().length > 0 && utxoVirtualizer.getVirtualItems()[0].start > 0 && (
+            <TableRow>
+              <TableCell colSpan={7} className="p-0 border-0" style={{ height: utxoVirtualizer.getVirtualItems()[0].start }} />
+            </TableRow>
+          )}
+          {utxoVirtualizer.getVirtualItems().map(virtualRow => {
+            const row = flattenedRows[virtualRow.index];
+            const key = row.kind === 'group'
+              ? `group-${row.group.address}`
+              : `utxo-${row.utxo.id}`;
+            return (
+              <UtxoTableRow
+                key={key}
+                row={row}
+                isExpanded={row.kind === 'group' && expandedAddresses.has(row.group.address)}
+                displayUnit={displayUnit}
+                onToggleGroup={onToggleGroup}
+                onOpenUtxo={onOpenUtxo}
+                measureRef={utxoVirtualizer.measureElement}
+                dataIndex={virtualRow.index}
+              />
+            );
+          })}
+          {utxoVirtualizer.getVirtualItems().length > 0 && (() => {
+            const lastItem = utxoVirtualizer.getVirtualItems().at(-1)!;
+            const remaining = utxoVirtualizer.getTotalSize() - lastItem.end;
+            return remaining > 0 ? (
+              <TableRow>
+                <TableCell colSpan={7} className="p-0 border-0" style={{ height: remaining }} />
+              </TableRow>
+            ) : null;
+          })()}
+        </TableBody>
+      </Table>
+      <ScrollPositionIndicator
+        virtualItems={utxoVirtualizer.getVirtualItems()}
+        totalCount={flattenedRows.length}
+        scrollElement={scrollRef.current}
+        label="rows"
+        variant="table"
+      />
+    </div>
+  );
+}
+
 export default function UTXOs() {
   const { toast } = useToast();
   const initialSettings = useMemo(() => loadSettings(), []);
@@ -1186,34 +1289,6 @@ export default function UTXOs() {
 
   const utxoScrollRef = useRef<HTMLDivElement>(null);
 
-  const utxoVirtualizer = useVirtualizer({
-    count: flattenedRows.length,
-    getScrollElement: () => utxoScrollRef.current,
-    estimateSize: (index) => flattenedRows[index]?.kind === 'utxo' ? 44 : 72,
-    overscan: 20,
-    measureElement: (el) => el.getBoundingClientRect().height,
-  });
-
-  const utxoVirtualItems = utxoVirtualizer.getVirtualItems();
-  const utxoVisibleRangeKey = utxoVirtualItems.length > 0
-    ? `${utxoVirtualItems[0].index}-${utxoVirtualItems[utxoVirtualItems.length - 1].index}`
-    : '';
-
-  useEffect(() => {
-    if (!utxoVisibleRangeKey || flattenedRows.length === 0) return;
-    const [startStr, endStr] = utxoVisibleRangeKey.split('-');
-    const start = parseInt(startStr);
-    const end = parseInt(endStr);
-    const ids: string[] = [];
-    for (let i = start; i <= end; i++) {
-      const row = flattenedRows[i];
-      if (!row) continue;
-      if (row.kind === 'group') ids.push(row.group.address);
-      else if (row.kind === 'utxo') ids.push(row.utxo.txid);
-    }
-    if (ids.length > 0) batchPreloadIdentifiers(ids);
-  }, [utxoVisibleRangeKey, flattenedRows]);
-
   const totalSats = filteredGroups.reduce((sum, g) => sum + g.totalSats, 0);
   const totalUtxoCount = filteredGroups.reduce((sum, g) => sum + g.utxos.length, 0);
   const totalAddressCount = filteredGroups.length;
@@ -1678,62 +1753,25 @@ export default function UTXOs() {
                 )}
               </div>
             ) : (
-              <div ref={utxoScrollRef} className="h-full overflow-auto">
-                <Table>
-                  <TableHeader className="sticky top-0 bg-card z-10">
-                    <TableRow>
-                      <TableHead className="w-8"></TableHead>
-                      <SortableHeader column="address" label="Address" />
-                      <SortableHeader column="amount" label="UTXO Value" />
-                      <SortableHeader column="date" label="Date" />
-                      <TableHead>Value at Receipt</TableHead>
-                      <TableHead>Current Value</TableHead>
-                      <SortableHeader column="gain" label="Gain/Loss" />
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {utxoVirtualizer.getVirtualItems().length > 0 && utxoVirtualizer.getVirtualItems()[0].start > 0 && (
-                      <TableRow>
-                        <TableCell colSpan={7} className="p-0 border-0" style={{ height: utxoVirtualizer.getVirtualItems()[0].start }} />
-                      </TableRow>
-                    )}
-                    {utxoVirtualizer.getVirtualItems().map(virtualRow => {
-                      const row = flattenedRows[virtualRow.index];
-                      const key = row.kind === 'group'
-                        ? `group-${row.group.address}`
-                        : `utxo-${row.utxo.id}`;
-                      return (
-                        <UtxoTableRow
-                          key={key}
-                          row={row}
-                          isExpanded={row.kind === 'group' && expandedAddresses.has(row.group.address)}
-                          displayUnit={displayUnit}
-                          onToggleGroup={toggleExpanded}
-                          onOpenUtxo={openUtxoDetail}
-                          measureRef={utxoVirtualizer.measureElement}
-                          dataIndex={virtualRow.index}
-                        />
-                      );
-                    })}
-                    {utxoVirtualizer.getVirtualItems().length > 0 && (() => {
-                      const lastItem = utxoVirtualizer.getVirtualItems().at(-1)!;
-                      const remaining = utxoVirtualizer.getTotalSize() - lastItem.end;
-                      return remaining > 0 ? (
-                        <TableRow>
-                          <TableCell colSpan={7} className="p-0 border-0" style={{ height: remaining }} />
-                        </TableRow>
-                      ) : null;
-                    })()}
-                  </TableBody>
-                </Table>
-                <ScrollPositionIndicator
-                  virtualItems={utxoVirtualizer.getVirtualItems()}
-                  totalCount={flattenedRows.length}
-                  scrollElement={utxoScrollRef.current}
-                  label="rows"
-                  variant="table"
-                />
-              </div>
+              <VirtualizedUtxoList
+                flattenedRows={flattenedRows}
+                expandedAddresses={expandedAddresses}
+                displayUnit={displayUnit}
+                onToggleGroup={toggleExpanded}
+                onOpenUtxo={openUtxoDetail}
+                scrollRef={utxoScrollRef}
+                header={
+                  <TableRow>
+                    <TableHead className="w-8"></TableHead>
+                    <SortableHeader column="address" label="Address" />
+                    <SortableHeader column="amount" label="UTXO Value" />
+                    <SortableHeader column="date" label="Date" />
+                    <TableHead>Value at Receipt</TableHead>
+                    <TableHead>Current Value</TableHead>
+                    <SortableHeader column="gain" label="Gain/Loss" />
+                  </TableRow>
+                }
+              />
             )}
           </CardContent>
         </Card>
