@@ -26,6 +26,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   renameAttachment: (oldPath, newPath) =>
     ipcRenderer.invoke('rename-attachment', { oldPath, newPath }),
 
+  // Free/total disk space on the attachments filesystem (pre-flight restore check).
+  getDiskSpace: () =>
+    ipcRenderer.invoke('get-disk-space'),
+
   // Orphaned-attachment review folder (populated during restore when an
   // attachment's owning record is absent — never linked to any record).
   getNeedsReviewPath: () =>

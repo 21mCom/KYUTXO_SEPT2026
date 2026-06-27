@@ -108,6 +108,45 @@ export class AttachmentWriteError extends Error {
   }
 }
 
+// Result of a pre-flight disk-space check run BEFORE the destructive clear.
+export interface DiskSpaceEstimate {
+  // Raw estimate of bytes the restore will write to disk.
+  estimatedBytes: number;
+  // estimatedBytes padded by the safety factor — the threshold actually
+  // compared against free space.
+  requiredBytes: number;
+  freeBytes: number;
+  // True when free space is at least requiredBytes.
+  sufficient: boolean;
+}
+
+// Decides whether a restore should be allowed to start given the bytes it is
+// estimated to need and the disk space currently free.
+//
+// The estimate is the backup file's own size: attachment files are stored
+// UNCOMPRESSED in the v3 ZIP, so the archive size is a safe upper bound on the
+// bytes a restore writes to disk (the compressed NDJSON tables it also contains
+// only make the estimate more conservative). A small safety factor leaves head
+// room for filesystem overhead. This lets the user free space BEFORE the
+// destructive clear, instead of discovering a disk-full failure only after the
+// existing vault is already gone.
+export function evaluateDiskSpace(
+  estimatedBytes: number,
+  freeBytes: number,
+  safetyFactor = 1.1,
+): DiskSpaceEstimate {
+  const estimate = Number.isFinite(estimatedBytes)
+    ? Math.max(0, Math.ceil(estimatedBytes))
+    : 0;
+  const requiredBytes = Math.ceil(estimate * safetyFactor);
+  return {
+    estimatedBytes: estimate,
+    requiredBytes,
+    freeBytes,
+    sufficient: freeBytes >= requiredBytes,
+  };
+}
+
 export interface AttachmentFileWriter {
   write(relPath: string, data: ArrayBuffer): Promise<void>;
   // Optional: remove a previously-written attachment file. Used only to sweep

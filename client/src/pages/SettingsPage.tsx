@@ -115,7 +115,7 @@ import {
   setAttachmentPathsMigrated,
 } from "@/lib/vault";
 import JSZip from "jszip";
-import { peekManifest, restoreV3Backup, RestoreInterruptedError, AttachmentWriteError, type AttachmentFileWriter } from "@/lib/backup/restore";
+import { peekManifest, restoreV3Backup, evaluateDiskSpace, RestoreInterruptedError, AttachmentWriteError, type AttachmentFileWriter } from "@/lib/backup/restore";
 import { BackupCancelledError, downloadBlob } from "@/lib/backup/sink";
 import { blobChunks } from "@/lib/backup/zip-stream";
 import { isV3Manifest, parseInline, ATTACHMENTS_DIR } from "@/lib/backup/format";
@@ -803,6 +803,15 @@ function VirtualizedEntityErrorList({ errors }: { errors: EntitySnapshotError[] 
   );
 }
 
+// Human-readable byte size for disk-space warnings (e.g. "1.5 GB").
+function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  const i = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
+  const value = bytes / Math.pow(1024, i);
+  return `${value.toFixed(value >= 100 || i === 0 ? 0 : 1)} ${units[i]}`;
+}
+
 export default function SettingsPage() {
   const { settings, fieldVisibility, cancelConfirmThreshold, privacyHistoryLimit, disableOrphanCheck, fundTrailTxLimit, hoverTooltipPrefs, isLoading: settingsLoading } = useSettings();
   const { customFields, isLoading: customFieldsLoading } = useCustomFields();
@@ -866,6 +875,13 @@ export default function SettingsPage() {
   const restoreAbortRef = useRef<AbortController | null>(null);
   const restoreClearedRef = useRef(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // Pre-flight disk-space warning (Electron only): set when a restore is about
+  // to start but the disk likely lacks room for the backup's attachment files.
+  // The warning is shown BEFORE the destructive clear, so the user can free
+  // space without losing their current vault. `bypassDiskCheckRef` lets the
+  // user proceed anyway (the check is a safeguard, not a hard gate).
+  const [diskWarning, setDiskWarning] = useState<{ requiredBytes: number; freeBytes: number } | null>(null);
+  const bypassDiskCheckRef = useRef(false);
 
   const [changePasswordDialogOpen, setChangePasswordDialogOpen] = useState(false);
   const [currentPassword, setCurrentPassword] = useState("");
@@ -2068,6 +2084,36 @@ export default function SettingsPage() {
       // JSON path below, which is left untouched for backward compatibility.
       const manifestPeek = await peekManifest(blobChunks(restoreFile));
       if (isV3Manifest(manifestPeek)) {
+        // Pre-flight disk-space check (Electron only). Attachment files are
+        // stored UNCOMPRESSED in the v3 ZIP, so the backup file's own size is a
+        // safe estimate of the bytes this restore will write to disk. Running
+        // this BEFORE the destructive clear lets the user free space without
+        // losing their current vault — a disk-full failure during attachment
+        // writes would otherwise be discovered only after the clear. Best-effort:
+        // if the probe fails we let the restore proceed rather than block it.
+        if (isElectron() && !bypassDiskCheckRef.current) {
+          try {
+            const space = await getElectronAPI().getDiskSpace();
+            if (space.success && typeof space.freeBytes === "number") {
+              const estimate = evaluateDiskSpace(restoreFile.size, space.freeBytes);
+              if (!estimate.sufficient) {
+                setIsRestoring(false);
+                setRestoreCancellable(false);
+                setRestoreProgress(0);
+                setRestoreMessage("");
+                setDiskWarning({
+                  requiredBytes: estimate.requiredBytes,
+                  freeBytes: space.freeBytes,
+                });
+                return;
+              }
+            }
+          } catch {
+            // Probe failed — fall through and let the restore proceed.
+          }
+        }
+        bypassDiskCheckRef.current = false;
+
         const attachmentWriter: AttachmentFileWriter = {
           async write(relativePath, fileData) {
             if (isElectron()) {
@@ -4833,6 +4879,45 @@ export default function SettingsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Pre-flight low-disk-space warning. Shown BEFORE the destructive clear so
+          the user can free space without losing their current vault. */}
+      <AlertDialog
+        open={diskWarning !== null}
+        onOpenChange={(open) => !open && setDiskWarning(null)}
+      >
+        <AlertDialogContent data-testid="dialog-disk-warning">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="h-5 w-5 text-destructive" />
+              Not enough free disk space
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {diskWarning
+                ? `This backup needs about ${formatBytes(diskWarning.requiredBytes)} of free space to restore, but only ${formatBytes(diskWarning.freeBytes)} is available. Your current data has NOT been touched. Free up some space and try again, or continue anyway — but if the disk fills up partway through, your existing vault will already have been replaced.`
+                : ""}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel
+              onClick={() => setDiskWarning(null)}
+              data-testid="button-cancel-disk-warning"
+            >
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                bypassDiskCheckRef.current = true;
+                setDiskWarning(null);
+                void handleRestore();
+              }}
+              data-testid="button-proceed-disk-warning"
+            >
+              Restore Anyway
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* Confirm before lowering the Privacy Audit History limit deletes a large batch of older runs */}
       <AlertDialog

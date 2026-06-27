@@ -227,6 +227,28 @@ function registerFileHandlers(ipcMain, { dataDir, attachmentsDir, needsReviewDir
     }
   });
 
+  // Report free/total disk space on the filesystem that holds the attachments
+  // directory. Used as a pre-flight check before a destructive restore so the
+  // user can free space BEFORE the existing vault is cleared, instead of hitting
+  // a disk-full failure mid-write (after the vault is already gone).
+  ipcMain.handle('get-disk-space', async () => {
+    try {
+      // statfs needs an existing path; fall back to the parent if the
+      // attachments dir has not been created yet on a fresh install.
+      let target = attachmentsDir;
+      if (!fs.existsSync(target)) {
+        target = path.dirname(target);
+      }
+      const stats = await fs.promises.statfs(target);
+      // bavail = blocks available to unprivileged users; bsize = block size.
+      const freeBytes = stats.bavail * stats.bsize;
+      const totalBytes = stats.blocks * stats.bsize;
+      return { success: true, freeBytes, totalBytes };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
   // Get the path of the Needs Review folder (for display in UI after restore).
   ipcMain.handle('get-needs-review-path', () => {
     return needsReviewDir;

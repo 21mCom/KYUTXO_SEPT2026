@@ -192,6 +192,8 @@ interface ElectronAPI {
   backupClose: (id: string) => Promise<{ success: boolean; error?: string }>;
   backupAbort: (id: string) => Promise<{ success: boolean; error?: string }>;
   isPortableMode: () => Promise<boolean>;
+  // Free/total disk space on the attachments filesystem (pre-flight restore check)
+  getDiskSpace: () => Promise<{ success: boolean; freeBytes?: number; totalBytes?: number; error?: string }>;
   // Needs Review folder (orphaned restore attachments)
   getNeedsReviewPath: () => Promise<string>;
   writeNeedsReview: (originalFilename: string, data: ArrayBuffer) => Promise<{ success: boolean; path?: string; error?: string }>;
