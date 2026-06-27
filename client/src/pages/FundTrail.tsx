@@ -6,7 +6,7 @@ import {
   useContext,
   createContext,
 } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, keepPreviousData } from "@tanstack/react-query";
 import { useSettings } from "@/hooks/use-settings";
 import {
   ChevronDown,
@@ -247,12 +247,10 @@ function FlowCard({
 
   const isExpanded = expandedHop !== null;
 
-  const handleExpand = useCallback(async () => {
-    if (isExpanded) {
-      setExpandedHop(null);
-      return;
-    }
-
+  // Actually compute this hop with the *current* window / tx limit. Shared by
+  // the Expand button and the refresh-on-window-change effect below so both
+  // always use the same dateRange/fundTrailTxLimit the page is currently on.
+  const runExpand = useCallback(async () => {
     setIsExpanding(true);
     setExpandError(null);
     try {
@@ -294,7 +292,31 @@ function FlowCard({
     } finally {
       setIsExpanding(false);
     }
-  }, [isExpanded, flow, dimension, unknownAddresses, branchVisited, dateRange, fundTrailTxLimit, toast]);
+  }, [flow, dimension, unknownAddresses, branchVisited, dateRange, fundTrailTxLimit, toast]);
+
+  const handleExpand = useCallback(() => {
+    if (isExpanded) {
+      setExpandedHop(null);
+      return;
+    }
+    void runExpand();
+  }, [isExpanded, runExpand]);
+
+  // Keep an already-expanded sub-trail in sync with the active window / tx
+  // limit. When the user changes the From/To dates (or the limit) the center
+  // hop re-runs with the new window; an open sub-hop must re-fetch with that
+  // SAME window instead of being left showing stale all-time results. We
+  // re-run only when those inputs actually change — not on the initial expand
+  // (runExpand already handled that) and not on unrelated re-renders.
+  const refetchKey = `${dateRange?.start ?? ""}|${dateRange?.end ?? ""}|${fundTrailTxLimit}`;
+  const lastRefetchKey = useRef(refetchKey);
+  useEffect(() => {
+    if (lastRefetchKey.current === refetchKey) return;
+    lastRefetchKey.current = refetchKey;
+    if (isExpanded) {
+      void runExpand();
+    }
+  }, [refetchKey, isExpanded, runExpand]);
 
   // The next level's visited set includes everything visited so far + this node
   const nextVisited = new Set(branchVisited);
@@ -547,6 +569,11 @@ export default function FundTrail() {
       fundTrailTxLimit,
     ],
     enabled: !!selectedGroup,
+    // Keep the previously-computed trail on screen while a new window/limit
+    // recomputes. Without this the page drops to the "Computing…" spinner on
+    // every date change, unmounting the whole trail — and with it any expanded
+    // sub-hops, which would lose their state instead of refreshing in place.
+    placeholderData: keepPreviousData,
     queryFn: async () => {
       const records = await getAddressesForGroup(dimension, selectedGroup);
       const addresses = records
