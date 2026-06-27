@@ -536,6 +536,120 @@ describe("SettingsPage — entity list import (merge mode) only-changed filter",
     expect(empty.textContent).not.toContain("No overrides match your search.");
     expect(overrideRows()).toHaveLength(0);
   });
+
+  it("keeps a source-note-only override visible but hides an identical re-import when toggled on", async () => {
+    renderPage();
+    await screen.findByTestId("badge-entity-source");
+
+    // Two bundled entries that both carry a real source note: one drives a
+    // source-note-only change, the other an identical re-import.
+    const withNote = getBundledEntityList().filter((e) => e.sourceNote);
+    expect(withNote.length).toBeGreaterThanOrEqual(2);
+    const [first, second] = withNote;
+    expect(first.address).not.toBe(second.address);
+    expect(first.sourceNote).toBeTruthy();
+
+    fireEvent.click(screen.getByTestId("radio-entity-merge"));
+
+    const NEW_NOTE = "Re-attributed provenance note for review";
+    // Guard the fixture: the new note must actually differ from the bundled one,
+    // otherwise this override would be identical and the test would be vacuous.
+    expect(first.sourceNote).not.toBe(NEW_NOTE);
+    const snapshot = JSON.stringify([
+      // Override 0: same name + category, ONLY the source note changes.
+      // entriesEqual compares sourceNote, so this is changed: true even though
+      // name/category are untouched — exactly the attribution change reviewers
+      // must not accidentally hide.
+      {
+        address: first.address,
+        name: first.name,
+        category: first.category,
+        sourceNote: NEW_NOTE,
+      },
+      // Override 1: byte-for-byte identical re-import → changed: false.
+      identical(second),
+    ]);
+    await selectEntityFile("merge-sourcenote-only-changed.json", snapshot);
+
+    await screen.findByTestId("text-preview-incoming");
+    fireEvent.click(screen.getByTestId("button-toggle-entity-diff"));
+    await screen.findByTestId("tab-entity-diff-overrides");
+
+    // A source-note-only difference still counts toward the "changed" total:
+    // 2 overrides, 1 of which actually changes anything.
+    expect(overridesTabText()).toContain("Overrides (2, 1 changed)");
+
+    // Toggle OFF (default): both rows render. The source-note-changed override
+    // surfaces its old → new note diff and carries NO "no change" badge; the
+    // identical re-import carries the "no change" badge.
+    expect(overrideRows()).toHaveLength(2);
+    const noteDiff = screen.getByTestId("text-entity-override-sourcenote-0");
+    expect(noteDiff.textContent).toContain(first.sourceNote!);
+    expect(noteDiff.textContent).toContain(NEW_NOTE);
+    expect(within(noteDiff).getByText(first.sourceNote!).className).toContain(
+      "line-through",
+    );
+    expect(screen.getByText("no change")).toBeTruthy();
+
+    // Toggle ON: the source-note-changed override survives the filter; the
+    // identical re-import is hidden.
+    toggleOnlyChanged();
+    await waitFor(() => expect(overrideRows()).toHaveLength(1));
+    // The surviving row is the source-note change — its diff line (with the new
+    // note) is still on screen.
+    const survivingNote = screen.getByTestId("text-entity-override-sourcenote-0");
+    expect(survivingNote.textContent).toContain(NEW_NOTE);
+    // The identical "no change" row is gone.
+    expect(screen.queryByText("no change")).toBeNull();
+    // A real changed override remains, so the empty label must NOT appear.
+    expect(screen.queryByTestId("text-entity-overrides-empty")).toBeNull();
+    // The tab trigger count is unaffected by the view filter.
+    expect(overridesTabText()).toContain("Overrides (2, 1 changed)");
+
+    // Toggle back OFF: the identical "no change" row returns.
+    toggleOnlyChanged();
+    await waitFor(() => expect(overrideRows()).toHaveLength(2));
+    expect(screen.getByText("no change")).toBeTruthy();
+  });
+
+  it("shows the 'no overrides change anything' empty label when only source-note-bearing identical re-imports remain", async () => {
+    renderPage();
+    await screen.findByTestId("badge-entity-source");
+
+    // Re-import two source-note-bearing bundled entries verbatim (including
+    // their notes) so both classify as changed: false.
+    const withNote = getBundledEntityList().filter((e) => e.sourceNote);
+    expect(withNote.length).toBeGreaterThanOrEqual(2);
+    const [first, second] = withNote;
+    expect(first.address).not.toBe(second.address);
+
+    fireEvent.click(screen.getByTestId("radio-entity-merge"));
+
+    const snapshot = JSON.stringify([identical(first), identical(second)]);
+    await selectEntityFile("merge-sourcenote-all-identical.json", snapshot);
+
+    await screen.findByTestId("text-preview-incoming");
+    fireEvent.click(screen.getByTestId("button-toggle-entity-diff"));
+    await screen.findByTestId("tab-entity-diff-overrides");
+
+    // Both carry source notes yet none changes anything.
+    expect(overridesTabText()).toContain("Overrides (2, 0 changed)");
+    expect(overrideRows()).toHaveLength(2);
+    // No source-note diff line renders since the notes were preserved verbatim.
+    expect(
+      screen.queryByTestId("text-entity-override-sourcenote-0"),
+    ).toBeNull();
+
+    // Toggle ON: every override is filtered out, so the changed-only empty
+    // label shows — NOT the generic search empty label.
+    toggleOnlyChanged();
+    const empty = await screen.findByTestId("text-entity-overrides-empty");
+    expect(empty.textContent).toContain(
+      "No overrides change anything — every match is identical to the bundled entry.",
+    );
+    expect(empty.textContent).not.toContain("No overrides match your search.");
+    expect(overrideRows()).toHaveLength(0);
+  });
 });
 
 describe("SettingsPage — entity list import (merge mode) source-note diff", () => {
