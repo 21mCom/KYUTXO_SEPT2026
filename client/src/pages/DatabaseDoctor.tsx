@@ -1192,11 +1192,35 @@ export function BalanceIntegrityCard() {
 
         {state.status === "error" && (
           <div
-            className="rounded-md border border-destructive/40 bg-destructive/10 p-3 flex items-start gap-2"
+            className="rounded-md border border-destructive/40 bg-destructive/10 p-3 flex items-start gap-3"
             data-testid="banner-balance-error"
           >
             <XCircle className="h-5 w-5 text-destructive mt-0.5 shrink-0" />
-            <div className="text-sm text-destructive">{state.message}</div>
+            <div className="space-y-2 flex-1">
+              <div className="text-sm text-destructive">{state.message}</div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => runCheck(lastCheckAllRef.current)}
+                  disabled={isBusy}
+                  data-testid="button-retry-balance-check"
+                >
+                  <RefreshCw className="h-4 w-4" />
+                  Retry
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setState({ status: "idle" })}
+                  disabled={isBusy}
+                  data-testid="button-dismiss-balance-error"
+                >
+                  <XCircle className="h-4 w-4" />
+                  Dismiss
+                </Button>
+              </div>
+            </div>
           </div>
         )}
 
