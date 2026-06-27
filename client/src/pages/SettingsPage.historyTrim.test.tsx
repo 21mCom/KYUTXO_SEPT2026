@@ -94,7 +94,9 @@ const { renderWithSettingsProviders } = await import(
   "@/test/settingsTestProviders"
 );
 const { putSettings, getSettings } = await import("@/lib/data/settings-crud");
-const { getPrivacyAuditHistoryCount } = await import("@/lib/data/privacy-history-crud");
+const { getPrivacyAuditHistoryCount, getPrivacyAuditHistory } = await import(
+  "@/lib/data/privacy-history-crud"
+);
 const { db } = await import("@/lib/database");
 import type { Settings } from "@/lib/db-types";
 
@@ -207,6 +209,48 @@ describe("SettingsPage — Privacy Audit History retention guard", () => {
     await waitFor(() =>
       expect(screen.queryByTestId("button-confirm-history-trim")).toBeNull(),
     );
+  });
+
+  it("trims immediately to the new limit, keeping the most recent runs (oldest first)", async () => {
+    // 25 runs, default limit 30. Lowering to 10 removes 15 (<=20), applying
+    // straight away. seedRuns gives strictly increasing timestamps, so the 10
+    // survivors must be the newest 10 (timestamps for indices 15..24).
+    await seedRuns(25);
+
+    renderWithSettingsProviders(<SettingsPage />);
+
+    await lowerLimitTo("10");
+
+    // The existing history is trimmed down to the new limit right away.
+    await waitFor(async () =>
+      expect(await getPrivacyAuditHistoryCount()).toBe(10),
+    );
+
+    const base = 1_700_000_000_000;
+    const remaining = await getPrivacyAuditHistory();
+    const timestamps = remaining.map((r) => r.timestamp);
+    // Exactly the newest 10 timestamps survive; everything older was removed.
+    expect(timestamps).toEqual(
+      Array.from({ length: 10 }, (_, i) => base + (15 + i) * 60_000),
+    );
+  });
+
+  it("raising the limit leaves existing runs untouched", async () => {
+    // 25 runs, default limit 30. Raising to 50 removes nothing.
+    await seedRuns(25);
+
+    renderWithSettingsProviders(<SettingsPage />);
+
+    await lowerLimitTo("50");
+
+    // The new (higher) limit persists but no run is deleted and no toast fires.
+    await waitFor(async () =>
+      expect((await getSettings("default"))?.privacyHistoryLimit).toBe(50),
+    );
+    expect(await getPrivacyAuditHistoryCount()).toBe(25);
+    expect(toastSpy).not.toHaveBeenCalled();
+    // No confirmation dialog for a no-op (nothing would be removed).
+    expect(screen.queryByTestId("button-confirm-history-trim")).toBeNull();
   });
 
   it("a small trim (<=20 removed) applies immediately with no dialog", async () => {
