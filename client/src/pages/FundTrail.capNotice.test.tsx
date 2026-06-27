@@ -1,15 +1,24 @@
 // @vitest-environment jsdom
 //
-// Render test: when a hop comes back capped (isCapped=true), the Fund Trail
-// page must surface a CapNotice so users know they are tracing an incomplete
-// trail. The notice text must reflect the hop's shownTxCount / totalTxCount.
-// When a hop is not capped, no notice should render.
+// CapNotice rendering test: the Fund Trail page shows a "trail may be
+// incomplete" warning ONLY when results are actually capped, and it must pick
+// the correct wording for the situation:
 //
-// Task #771 proved the engine caps and the page passes the configured limit;
-// this locks in the *UI* contract so a refactor can't silently drop or
-// mis-wire the notice. We render the real FundTrail page but stub the engine
-// seam: computeOneHop returns a controllable hop, and the data loaders return
-// fixed groups/addresses so selecting a group fires the center hop.
+//   - capped WITH an active date range  -> window-aware notice
+//                                          (testid `fund-trail-cap-notice-range`)
+//   - capped WITHOUT a date range       -> all-time notice
+//                                          (testid `fund-trail-cap-notice`)
+//   - not capped (range or not)         -> no notice at all
+//
+// In every capped case the notice text must reflect the hop's shownTxCount /
+// totalTxCount. Without this, a future change could silently swap, drop, or
+// mis-wire the warning, misleading users into believing they're seeing a
+// complete trail.
+//
+// We render the real FundTrail page but stub the engine seam: computeOneHop is
+// a spy whose resolved hop (capped or not) we control per test, and
+// listGroupValues / getAddressesForGroup return fixed data. Selecting a group
+// fires the center hop; setting the start-date input activates a date range.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor, fireEvent, cleanup } from "@testing-library/react";
@@ -25,12 +34,12 @@ class ResizeObserverStub {
 (globalThis as unknown as { ResizeObserver: typeof ResizeObserverStub }).ResizeObserver =
   ResizeObserverStub;
 
-// --- useSettings: report a custom fundTrailTxLimit -----------------------
+// --- useSettings: a plain tx limit; not the focus of this test --------------
 vi.mock("@/hooks/use-settings", () => ({
   useSettings: () => ({ fundTrailTxLimit: 2000 }),
 }));
 
-// --- toast / record-preview: trivial stubs -------------------------------
+// --- toast / record-preview: trivial stubs ----------------------------------
 vi.mock("@/hooks/use-toast", () => ({
   useToast: () => ({ toast: vi.fn(), dismiss: vi.fn(), toasts: [] }),
 }));
@@ -41,7 +50,7 @@ vi.mock("@/contexts/RecordPreviewContext", () => ({
   }),
 }));
 
-// --- Swap radix Select for a native <select> so options are choosable -----
+// --- Swap radix Select for a native <select> so options are choosable --------
 vi.mock("@/components/ui/select", async () => {
   const React = await import("react");
   const SelectTrigger: any = () => null;
@@ -73,22 +82,24 @@ vi.mock("@/components/ui/select", async () => {
   };
 });
 
-// --- Engine seam: control computeOneHop, stub data loaders ----------------
+// --- Engine seam: spy on computeOneHop, stub data loaders --------------------
 const GROUP = "Exchange";
-
 const SHOWN = 50;
 const TOTAL = 1234;
 
+// A populated source so the hop renders a real FlowCard alongside the notice.
+const SAMPLE_SOURCES = [
+  {
+    groupLabel: "Counterparty",
+    dimension: "walletName" as const,
+    totalSats: 100,
+    details: [{ address: "ext-cp", txid: "tx-cp", amount: 100, blockTime: 1000 }],
+    isUnknown: false,
+  },
+];
+
 const CAPPED_HOP: TrailHop = {
-  sources: [
-    {
-      groupLabel: "Counterparty",
-      dimension: "walletName",
-      totalSats: 100,
-      details: [{ address: "ext-cp", txid: "tx-cp", amount: 100, blockTime: 1000 }],
-      isUnknown: false,
-    },
-  ],
+  sources: SAMPLE_SOURCES,
   destinations: [],
   isCapped: true,
   shownTxCount: SHOWN,
@@ -96,15 +107,7 @@ const CAPPED_HOP: TrailHop = {
 };
 
 const UNCAPPED_HOP: TrailHop = {
-  sources: [
-    {
-      groupLabel: "Counterparty",
-      dimension: "walletName",
-      totalSats: 100,
-      details: [{ address: "ext-cp", txid: "tx-cp", amount: 100, blockTime: 1000 }],
-      isUnknown: false,
-    },
-  ],
+  sources: SAMPLE_SOURCES,
   destinations: [],
   isCapped: false,
   shownTxCount: SHOWN,
@@ -152,6 +155,12 @@ async function selectGroup() {
   });
 }
 
+function activateDateRange() {
+  fireEvent.change(screen.getByTestId("fund-trail-start-date"), {
+    target: { value: "2024-01-01" },
+  });
+}
+
 beforeEach(() => {
   computeOneHopSpy.mockReset();
 });
@@ -160,26 +169,64 @@ afterEach(() => {
   cleanup();
 });
 
-describe("FundTrail CapNotice", () => {
-  it("renders the cap notice with shown/total counts when the center hop is capped", async () => {
+describe("FundTrail cap notice", () => {
+  it("shows the window-aware notice when capped AND a date range is active", async () => {
     computeOneHopSpy.mockResolvedValue(CAPPED_HOP);
     renderPage();
+
+    activateDateRange();
     await selectGroup();
 
-    const notice = await screen.findByTestId("fund-trail-cap-notice");
-    expect(notice).toBeTruthy();
-    expect(notice.textContent).toContain(SHOWN.toLocaleString());
-    expect(notice.textContent).toContain(TOTAL.toLocaleString());
+    const rangeNotice = await screen.findByTestId("fund-trail-cap-notice-range");
+    // The window-aware copy surfaces shown/total counts so users know how much
+    // of the date-range slice they're actually seeing.
+    const rangeText = rangeNotice.textContent ?? "";
+    expect(rangeText).toContain(SHOWN.toLocaleString());
+    expect(rangeText).toContain(TOTAL.toLocaleString());
+    expect(rangeText.toLowerCase()).toContain("date range");
+
+    // The all-time variant must NOT also be present.
+    expect(screen.queryByTestId("fund-trail-cap-notice")).toBeNull();
   });
 
-  it("renders no cap notice when the center hop is not capped", async () => {
-    computeOneHopSpy.mockResolvedValue(UNCAPPED_HOP);
+  it("shows the all-time notice when capped with NO date range", async () => {
+    computeOneHopSpy.mockResolvedValue(CAPPED_HOP);
     renderPage();
+
     await selectGroup();
 
-    // Wait for the hop to render (its expandable source FlowCard appears).
+    const allTimeNotice = await screen.findByTestId("fund-trail-cap-notice");
+    const allTimeText = allTimeNotice.textContent ?? "";
+    expect(allTimeText).toContain(SHOWN.toLocaleString());
+    expect(allTimeText).toContain(TOTAL.toLocaleString());
+
+    // The window-aware variant must NOT be present without an active range.
+    expect(screen.queryByTestId("fund-trail-cap-notice-range")).toBeNull();
+  });
+
+  it("renders NO notice when results are not capped (no date range)", async () => {
+    computeOneHopSpy.mockResolvedValue(UNCAPPED_HOP);
+    renderPage();
+
+    await selectGroup();
+
+    // Wait for the center hop to resolve (its expandable source FlowCard appears).
     await screen.findByTestId("fund-trail-expand-Counterparty-d0");
 
+    expect(screen.queryByTestId("fund-trail-cap-notice")).toBeNull();
+    expect(screen.queryByTestId("fund-trail-cap-notice-range")).toBeNull();
+  });
+
+  it("renders NO notice when results are not capped (with date range)", async () => {
+    computeOneHopSpy.mockResolvedValue(UNCAPPED_HOP);
+    renderPage();
+
+    activateDateRange();
+    await selectGroup();
+
+    await screen.findByTestId("fund-trail-expand-Counterparty-d0");
+
+    // Even with an active range, an uncapped result shows neither notice.
     expect(screen.queryByTestId("fund-trail-cap-notice")).toBeNull();
     expect(screen.queryByTestId("fund-trail-cap-notice-range")).toBeNull();
   });
