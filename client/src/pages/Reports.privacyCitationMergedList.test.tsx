@@ -41,8 +41,13 @@ import "fake-indexeddb/auto";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, fireEvent, cleanup, waitFor } from "@testing-library/react";
 
-import { db } from "@/lib/database";
-import { addTransaction, addParticipant } from "@/lib/data/transaction-crud";
+import { clearAllRecords } from "@/lib/data/record-crud";
+import {
+  addTransaction,
+  addParticipant,
+  clearTransactions,
+  clearParticipants,
+} from "@/lib/data/transaction-crud";
 import { runPrivacyAudit, type EntityCitation } from "@/lib/privacy-audit";
 import {
   resetActiveEntityList,
@@ -178,9 +183,9 @@ beforeEach(async () => {
   fetchSpy = vi.fn(() => Promise.reject(new Error("network access is forbidden")));
   vi.stubGlobal("fetch", fetchSpy);
 
-  await db.records.clear();
-  await db.blockchainTransactions.clear();
-  await db.transactionParticipants.clear();
+  await clearAllRecords({ skipNotification: true });
+  await clearTransactions({ skipNotification: true });
+  await clearParticipants({ skipNotification: true });
   await seedDirectContact();
   // The db `ready` hook seeds the `default` settings record; clear only the
   // snapshot field (updateSettings uses .update, a no-op on a missing row, so
@@ -199,9 +204,9 @@ afterEach(async () => {
   vi.unstubAllGlobals();
   await resetEntitySnapshot();
   resetActiveEntityList();
-  await db.records.clear();
-  await db.blockchainTransactions.clear();
-  await db.transactionParticipants.clear();
+  await clearAllRecords({ skipNotification: true });
+  await clearTransactions({ skipNotification: true });
+  await clearParticipants({ skipNotification: true });
 });
 
 const { PrivacyAuditReportPanel } = await import("./Reports");
