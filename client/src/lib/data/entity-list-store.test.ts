@@ -1148,6 +1148,52 @@ describe("buildEntitySnapshotPreview (merge mode)", () => {
     expect(preview.overrides.map((o) => o.incoming.address)).toEqual([ADDR.binance]);
     expect(preview.resultingCount).toBe(getBundledEntityCount() + 1);
   });
+
+  it("reports added, changed overrides, and unchanged overrides together", () => {
+    // Build a realistic mixed merge snapshot from real bundled entries:
+    //  - one brand-new address (not in the bundled list)
+    //  - one address that overwrites a bundled entry with a different
+    //    name/category (override, changed=true)
+    //  - one address that re-imports a bundled entry exactly (override,
+    //    changed=false)
+    const bundled = (JSON.parse(serializeActiveEntityList()).entries as EntityEntry[]);
+    // A bundled entry to re-import unchanged — any one that isn't the entry we
+    // deliberately overwrite below.
+    const unchangedBundled = bundled.find((e) => e.address !== ADDR.binance)!;
+
+    const NEW_ADDR = "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq";
+    const newEntry = addrEntry(NEW_ADDR, "darknet", "New Market");
+    const changedOverride = addrEntry(ADDR.binance, "mixer", "Overridden Name");
+
+    const preview = buildEntitySnapshotPreview(
+      [newEntry, changedOverride, unchangedBundled],
+      "merge",
+    );
+
+    expect(preview.mode).toBe("merge");
+
+    // One brand-new address, two addresses overwriting existing bundled entries.
+    expect(preview.added).toBe(1);
+    expect(preview.addedEntries.map((e) => e.address)).toEqual([NEW_ADDR]);
+    expect(preview.overridden).toBe(2);
+
+    // A merge never removes bundled entries.
+    expect(preview.removed).toBe(0);
+    expect(preview.removedEntries).toEqual([]);
+
+    // The two overrides carry the right per-entry `changed` flags: the entry
+    // with a different name/category is flagged changed, the identical
+    // re-import is not.
+    const overrideByAddr = new Map(
+      preview.overrides.map((o) => [o.incoming.address, o]),
+    );
+    expect(overrideByAddr.size).toBe(2);
+    expect(overrideByAddr.get(ADDR.binance)!.changed).toBe(true);
+    expect(overrideByAddr.get(unchangedBundled.address)!.changed).toBe(false);
+
+    // Only the one brand-new address grows the list.
+    expect(preview.resultingCount).toBe(getBundledEntityCount() + 1);
+  });
 });
 
 describe("prepareEntitySnapshot", () => {
