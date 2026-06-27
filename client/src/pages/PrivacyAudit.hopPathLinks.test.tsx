@@ -491,4 +491,63 @@ describe("FindingCard proximity hop-path deep-dive interaction", () => {
     expect(within(dialog).queryByTestId("container-boltzmann-result")).toBeNull();
     expect(lastWorker).toBeNull();
   });
+
+  // A single failure shows the error + Retry. But if the analysis keeps failing
+  // (failCount >= 2), the dialog escalates to extra recovery guidance ("try
+  // re-syncing the address…") and offers an expandable "Show details" panel with
+  // the condensed underlying reason. Drive the worker's onerror twice for the
+  // same txid and prove both the guidance and the details toggle appear.
+  it("shows extra recovery guidance and an expandable error detail after the analysis fails twice", async () => {
+    const hopPath = ["bc1qhopA", "bc1qhopB", "bc1qhopC"];
+    const hopTxids = [TX(1), TX(2)]; // one per pair → 2
+
+    renderCard(proximityFinding({ details: { hopPath, hopTxids } }));
+    fireEvent.click(screen.getByTestId("button-toggle-details"));
+
+    // Open the deep-dive for the second hop's txid.
+    const second8 = TX(2).slice(0, 8);
+    fireEvent.click(screen.getByTestId(`button-deep-dive-${second8}`));
+
+    const dialog = await screen.findByTestId("dialog-deep-dive");
+    expect(within(dialog).getByText(TX(2))).toBeTruthy();
+
+    // First auto-run: wait for the worker, then fail it.
+    await waitFor(() => {
+      expect(lastWorker).not.toBeNull();
+      expect(lastWorker!.postMessage).toHaveBeenCalled();
+    });
+    act(() => {
+      lastWorker!.onerror!({ message: "Boltzmann worker crashed: out of memory" });
+    });
+
+    // After a single failure: the error shows and Retry is offered, but the
+    // repeated-failure guidance has NOT appeared yet.
+    await within(dialog).findByTestId("text-deep-dive-message");
+    expect(within(dialog).queryByTestId("text-deep-dive-next-steps")).toBeNull();
+    const retry = within(dialog).getByTestId("button-retry-deep-dive");
+
+    // Retry re-runs the analysis for the same txid; wait for the worker to be
+    // posted to a second time, then fail it again.
+    const callsBefore = lastWorker!.postMessage.mock.calls.length;
+    fireEvent.click(retry);
+    await waitFor(() => {
+      expect(lastWorker!.postMessage.mock.calls.length).toBeGreaterThan(callsBefore);
+    });
+    act(() => {
+      lastWorker!.onerror!({ message: "Boltzmann worker crashed: out of memory" });
+    });
+
+    // Now that it has failed more than once, the extra recovery guidance appears.
+    const nextSteps = await within(dialog).findByTestId("text-deep-dive-next-steps");
+    expect(nextSteps.textContent).toMatch(/failed more than once/i);
+    expect(nextSteps.textContent).toMatch(/re-syncing the address/i);
+
+    // The condensed error reason is hidden until the user expands "Show details".
+    expect(within(dialog).queryByTestId("text-deep-dive-error-detail")).toBeNull();
+
+    fireEvent.click(within(dialog).getByTestId("button-toggle-deep-dive-detail"));
+
+    const detail = await within(dialog).findByTestId("text-deep-dive-error-detail");
+    expect(detail.textContent).toMatch(/out of memory/i);
+  });
 });
