@@ -18,8 +18,15 @@
 // still prove FindingCard passes the right txid to each link. DeepDiveDialog is
 // the real component from PrivacyAudit (when closed it only renders its trigger
 // button, data-testid button-deep-dive-<first8>).
-import { describe, it, expect, afterEach, vi } from "vitest";
-import { render, screen, fireEvent, cleanup, within } from "@testing-library/react";
+import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
+import {
+  render,
+  screen,
+  fireEvent,
+  cleanup,
+  within,
+  waitFor,
+} from "@testing-library/react";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { PrivacyFinding } from "@/lib/privacy-audit";
 
@@ -35,7 +42,32 @@ vi.mock("@/components/ClickableAddress", () => ({
   ),
 }));
 
+// Clicking a hop's deep-dive button opens DeepDiveDialog, which mounts the real
+// TransactionDeepDive and auto-runs its analysis. Stub the two data loaders it
+// calls (so there's no IndexedDB) and the Boltzmann Worker (so no real module
+// worker is spun up under jsdom), exactly as PrivacyAudit.deepDive.test.tsx does.
+vi.mock("@/lib/data/transaction-crud", () => ({
+  getTransactionByTxid: vi.fn(),
+}));
+vi.mock("@/lib/data/record-queries", () => ({
+  getParticipantsByTxids: vi.fn(),
+}));
+
+import { getTransactionByTxid } from "@/lib/data/transaction-crud";
+import { getParticipantsByTxids } from "@/lib/data/record-queries";
 import { FindingCard } from "./PrivacyAudit";
+
+const mockedGetTx = vi.mocked(getTransactionByTxid);
+const mockedGetParticipants = vi.mocked(getParticipantsByTxids);
+
+// A minimal Worker stub so the deep-dive's lazy Boltzmann worker can be created
+// under jsdom without loading the real module worker.
+class MockWorker {
+  onmessage: ((e: MessageEvent) => void) | null = null;
+  onerror: ((e: { message: string }) => void) | null = null;
+  postMessage = vi.fn();
+  terminate = vi.fn();
+}
 
 // Distinct 64-hex txids whose first 8 chars differ so every link/button gets a
 // unique data-testid.
@@ -144,5 +176,52 @@ describe("FindingCard proximity hop-path connecting transactions", () => {
     fireEvent.click(screen.getByTestId("button-toggle-details"));
 
     expect(screen.queryByTestId("container-hop-path")).toBeNull();
+  });
+});
+
+// Rendering the per-hop deep-dive button proves it's present, but the most useful
+// user action — clicking it to open the transaction deep-dive — was previously
+// untested. This drives the real DeepDiveDialog: clicking a hop's button must
+// open the deep-dive dialog (data-testid dialog-deep-dive) for that hop's txid.
+describe("FindingCard proximity hop-path deep-dive interaction", () => {
+  beforeEach(() => {
+    // The dialog auto-runs analysis on open; resolve the loaders and provide a
+    // Worker so nothing throws while we assert the dialog itself opened.
+    mockedGetTx.mockResolvedValue({ txid: TX(2), fee: 1_000 } as any);
+    mockedGetParticipants.mockResolvedValue([
+      { txid: TX(2), role: "input", address: "bc1qin", amount: 100_000, vout: 0 },
+      { txid: TX(2), role: "output", address: "bc1qout", amount: 99_000, vout: 0 },
+    ] as any);
+    vi.stubGlobal("Worker", MockWorker as unknown as typeof Worker);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.clearAllMocks();
+  });
+
+  it("opens the deep-dive dialog for the clicked hop's txid", async () => {
+    const hopPath = ["bc1qhopA", "bc1qhopB", "bc1qhopC"];
+    const hopTxids = [TX(1), TX(2)]; // one per pair → 2
+
+    renderCard(proximityFinding({ details: { hopPath, hopTxids } }));
+    fireEvent.click(screen.getByTestId("button-toggle-details"));
+
+    // The dialog is closed initially — only the per-hop trigger buttons exist.
+    expect(screen.queryByTestId("dialog-deep-dive")).toBeNull();
+
+    // Click the second hop's deep-dive button.
+    const second8 = TX(2).slice(0, 8);
+    fireEvent.click(screen.getByTestId(`button-deep-dive-${second8}`));
+
+    // The deep-dive dialog opens, scoped to that hop's txid.
+    const dialog = await screen.findByTestId("dialog-deep-dive");
+    expect(within(dialog).getByText(TX(2))).toBeTruthy();
+
+    // It auto-analyses the clicked txid (and only that one).
+    await waitFor(() => {
+      expect(mockedGetTx).toHaveBeenCalledWith(TX(2));
+    });
+    expect(mockedGetTx).not.toHaveBeenCalledWith(TX(1));
   });
 });
