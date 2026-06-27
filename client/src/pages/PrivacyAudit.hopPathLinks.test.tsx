@@ -424,4 +424,71 @@ describe("FindingCard proximity hop-path deep-dive interaction", () => {
     expect(within(dialog).queryByTestId("status-deep-dive-loading")).toBeNull();
     expect(within(dialog).queryByTestId("container-boltzmann-result")).toBeNull();
   });
+
+  it("surfaces a clear error and Retry affordance (not a stuck loading state) when the transaction's data fails to load", async () => {
+    // The data-load failure path: fetching the transaction throws before the
+    // worker is ever reached (the `catch (err)` block in analyse). The user
+    // must see a clear error rather than a dialog stuck loading forever.
+    mockedGetTx.mockRejectedValue(new Error("IndexedDB read failed"));
+
+    const hopPath = ["bc1qhopA", "bc1qhopB", "bc1qhopC"];
+    const hopTxids = [TX(1), TX(2)]; // one per pair → 2
+
+    renderCard(proximityFinding({ details: { hopPath, hopTxids } }));
+    fireEvent.click(screen.getByTestId("button-toggle-details"));
+
+    // Open the deep-dive for the second hop's txid.
+    const second8 = TX(2).slice(0, 8);
+    fireEvent.click(screen.getByTestId(`button-deep-dive-${second8}`));
+
+    const dialog = await screen.findByTestId("dialog-deep-dive");
+    expect(within(dialog).getByText(TX(2))).toBeTruthy();
+
+    // The loader is invoked and rejects — no worker is ever posted to.
+    await waitFor(() => {
+      expect(mockedGetTx).toHaveBeenCalledWith(TX(2));
+    });
+
+    // The user sees the data-load error notice rather than an empty/hung dialog…
+    const message = await within(dialog).findByTestId("text-deep-dive-message");
+    expect(message.textContent).toMatch(/couldn't load this transaction's data/i);
+
+    // …and is offered a Retry affordance to try again.
+    expect(within(dialog).getByTestId("button-retry-deep-dive")).toBeTruthy();
+
+    // The dialog is no longer stuck loading and no results were rendered.
+    expect(within(dialog).queryByTestId("status-deep-dive-loading")).toBeNull();
+    expect(within(dialog).queryByTestId("container-boltzmann-result")).toBeNull();
+    // The failure happened before the worker stage, so it was never created.
+    expect(lastWorker).toBeNull();
+  });
+
+  it("surfaces the same error when loading the transaction's participants fails", async () => {
+    // The other half of the data-load path: the transaction loads but its
+    // participants reject. This also lands in the `catch (err)` block.
+    mockedGetParticipants.mockRejectedValue(new Error("participant query failed"));
+
+    const hopPath = ["bc1qhopA", "bc1qhopB", "bc1qhopC"];
+    const hopTxids = [TX(1), TX(2)]; // one per pair → 2
+
+    renderCard(proximityFinding({ details: { hopPath, hopTxids } }));
+    fireEvent.click(screen.getByTestId("button-toggle-details"));
+
+    const second8 = TX(2).slice(0, 8);
+    fireEvent.click(screen.getByTestId(`button-deep-dive-${second8}`));
+
+    const dialog = await screen.findByTestId("dialog-deep-dive");
+    expect(within(dialog).getByText(TX(2))).toBeTruthy();
+
+    await waitFor(() => {
+      expect(mockedGetParticipants).toHaveBeenCalledWith([TX(2)]);
+    });
+
+    const message = await within(dialog).findByTestId("text-deep-dive-message");
+    expect(message.textContent).toMatch(/couldn't load this transaction's data/i);
+    expect(within(dialog).getByTestId("button-retry-deep-dive")).toBeTruthy();
+    expect(within(dialog).queryByTestId("status-deep-dive-loading")).toBeNull();
+    expect(within(dialog).queryByTestId("container-boltzmann-result")).toBeNull();
+    expect(lastWorker).toBeNull();
+  });
 });
