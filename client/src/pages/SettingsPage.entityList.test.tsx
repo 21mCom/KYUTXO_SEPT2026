@@ -121,6 +121,21 @@ async function selectEntityFile(name: string, contents: string) {
   fireEvent.change(input, { target: { files: [fakeFile(name, contents)] } });
 }
 
+// The warning/error UI renders AddressLink (clickable cited addresses), which
+// calls useRecordPreview and throws outside a RecordPreviewProvider. Wrap the
+// page in both providers so those clickable links can mount.
+function renderSettingsPage() {
+  return render(
+    <ActivityBusProvider>
+      <TooltipProvider>
+        <RecordPreviewProvider>
+          <SettingsPage />
+        </RecordPreviewProvider>
+      </TooltipProvider>
+    </ActivityBusProvider>,
+  );
+}
+
 beforeEach(async () => {
   // The real app always has a 'default' settings row; updateSettings is a no-op
   // when it's absent, so seed one before each test. A put replaces the whole
@@ -136,11 +151,7 @@ afterEach(() => {
 
 describe("SettingsPage — Privacy Audit Entity List panel", () => {
   it("imports a valid snapshot: preview shows counts, confirm flips source to imported", async () => {
-    render(
-      <ActivityBusProvider>
-        <SettingsPage />
-      </ActivityBusProvider>,
-    );
+    renderSettingsPage();
 
     // Starts on the bundled list.
     const badge = await screen.findByTestId("badge-entity-source");
@@ -255,11 +266,7 @@ describe("SettingsPage — Privacy Audit Entity List panel", () => {
   });
 
   it("merge mode: unions imported entries onto the bundled list and persists only user entries", async () => {
-    render(
-      <ActivityBusProvider>
-        <SettingsPage />
-      </ActivityBusProvider>,
-    );
+    renderSettingsPage();
 
     // Starts on the bundled list.
     await screen.findByTestId("badge-entity-source");
@@ -308,11 +315,7 @@ describe("SettingsPage — Privacy Audit Entity List panel", () => {
   });
 
   it("merge mode: override badge and note split genuinely-changed overrides from identical re-imports", async () => {
-    render(
-      <ActivityBusProvider>
-        <SettingsPage />
-      </ActivityBusProvider>,
-    );
+    renderSettingsPage();
 
     await screen.findByTestId("badge-entity-source");
 
@@ -365,11 +368,7 @@ describe("SettingsPage — Privacy Audit Entity List panel", () => {
   });
 
   it("warns about a mismatched source citation but still allows the import", async () => {
-    render(
-      <ActivityBusProvider>
-        <SettingsPage />
-      </ActivityBusProvider>,
-    );
+    renderSettingsPage();
 
     await screen.findByTestId("badge-entity-source");
 
@@ -478,11 +477,7 @@ describe("SettingsPage — Privacy Audit Entity List panel", () => {
   });
 
   it("surfaces per-entry errors for an invalid snapshot and applies nothing", async () => {
-    render(
-      <ActivityBusProvider>
-        <SettingsPage />
-      </ActivityBusProvider>,
-    );
+    renderSettingsPage();
     await screen.findByTestId("badge-entity-source");
 
     const badSnapshot = JSON.stringify([
@@ -522,11 +517,7 @@ describe("SettingsPage — Privacy Audit Entity List panel", () => {
     });
 
     try {
-      render(
-        <ActivityBusProvider>
-          <SettingsPage />
-        </ActivityBusProvider>,
-      );
+      renderSettingsPage();
       await screen.findByTestId("badge-entity-source");
 
       // Three entries that all fail the same way (invalid address) so they fall
@@ -569,11 +560,7 @@ describe("SettingsPage — Privacy Audit Entity List panel", () => {
     });
 
     try {
-      render(
-        <ActivityBusProvider>
-          <SettingsPage />
-        </ActivityBusProvider>,
-      );
+      renderSettingsPage();
       await screen.findByTestId("badge-entity-source");
 
       const ERROR_COUNT = 250;
@@ -604,11 +591,7 @@ describe("SettingsPage — Privacy Audit Entity List panel", () => {
   });
 
   it("stays responsive with hundreds of errors: virtualizes the list and applies nothing", async () => {
-    render(
-      <ActivityBusProvider>
-        <SettingsPage />
-      </ActivityBusProvider>,
-    );
+    renderSettingsPage();
     await screen.findByTestId("badge-entity-source");
 
     // Generate well over the virtualization threshold (100). Each entry has an
@@ -647,11 +630,7 @@ describe("SettingsPage — Privacy Audit Entity List panel", () => {
   });
 
   it("groups a mixed-error snapshot by problem type with the right counts, ordering, and expansion", async () => {
-    render(
-      <ActivityBusProvider>
-        <SettingsPage />
-      </ActivityBusProvider>,
-    );
+    renderSettingsPage();
     await screen.findByTestId("badge-entity-source");
 
     // A file that hits three different error kinds with different multiplicities
@@ -838,11 +817,7 @@ describe("SettingsPage — Privacy Audit Entity List panel", () => {
   });
 
   it("auto-expands the only group when every error is the same kind", async () => {
-    render(
-      <ActivityBusProvider>
-        <SettingsPage />
-      </ActivityBusProvider>,
-    );
+    renderSettingsPage();
     await screen.findByTestId("badge-entity-source");
 
     // Every entry has the same problem (invalid address), so there is a single
@@ -870,11 +845,7 @@ describe("SettingsPage — Privacy Audit Entity List panel", () => {
   });
 
   it("reverts to the bundled list and clears the persisted snapshot", async () => {
-    render(
-      <ActivityBusProvider>
-        <SettingsPage />
-      </ActivityBusProvider>,
-    );
+    renderSettingsPage();
     await screen.findByTestId("badge-entity-source");
 
     // Import a valid snapshot first.
@@ -917,11 +888,7 @@ describe("SettingsPage — Privacy Audit Entity List panel", () => {
       .mockImplementation(() => {});
 
     try {
-      render(
-        <ActivityBusProvider>
-          <SettingsPage />
-        </ActivityBusProvider>,
-      );
+      renderSettingsPage();
       await screen.findByTestId("badge-entity-source");
 
       fireEvent.click(screen.getByTestId("button-export-entities"));
