@@ -118,9 +118,9 @@ class MockWorker {
 const mockedGetTx = vi.mocked(getTransactionByTxid);
 const mockedGetParticipants = vi.mocked(getParticipantsByTxids);
 
-function renderDeepDive() {
+function renderDeepDive(coinjoinTxids: Set<string> = new Set<string>()) {
   return render(
-    <TransactionDeepDive txids={[TXID]} coinjoinTxids={new Set<string>()} />,
+    <TransactionDeepDive txids={[TXID]} coinjoinTxids={coinjoinTxids} />,
   );
 }
 
@@ -265,5 +265,71 @@ describe("TransactionDeepDive Boltzmann result rendering", () => {
 
     // No result container on the error path.
     expect(screen.queryByTestId("container-boltzmann-result")).toBeNull();
+  });
+});
+
+// ─── CoinJoin Sankey wiring ───────────────────────────────────────────────────
+//
+// The deep-dive renders the CoinJoin fund-flow Sankey
+// (container-coinjoin-sankey) ONLY when the analysed txid is in the
+// `coinjoinTxids` set passed to TransactionDeepDive. The buildSankey helper has
+// its own unit coverage, but the wiring at the TransactionDeepDive level — that
+// a coinjoin txid surfaces the Sankey *alongside* the Boltzmann result, and a
+// non-coinjoin txid does not — is asserted here using the same real
+// participants→compute→render path the Boltzmann tests use.
+describe("TransactionDeepDive CoinJoin Sankey wiring", () => {
+  // A CoinJoin-shaped tx: two equal inputs → two equal outputs. This both yields
+  // a genuine Boltzmann result and (when flagged) proportional Sankey links.
+  function seedCoinjoinShapedTx() {
+    mockedGetTx.mockResolvedValue({ txid: TXID, fee: 0 } as any);
+    mockedGetParticipants.mockResolvedValue([
+      { txid: TXID, role: "input", address: "bc1qin0", amount: 100_000, vout: 0 },
+      { txid: TXID, role: "input", address: "bc1qin1", amount: 100_000, vout: 1 },
+      { txid: TXID, role: "output", address: "bc1qout0", amount: 100_000, vout: 0 },
+      { txid: TXID, role: "output", address: "bc1qout1", amount: 100_000, vout: 1 },
+    ] as any);
+  }
+
+  it("surfaces the Sankey alongside the Boltzmann result when the txid is a CoinJoin", async () => {
+    seedCoinjoinShapedTx();
+
+    // The analysed txid is flagged as a CoinJoin.
+    renderDeepDive(new Set<string>([TXID]));
+    fireEvent.click(screen.getByTestId("button-analyse-deep-dive"));
+
+    await waitFor(() => {
+      expect(lastWorker).not.toBeNull();
+      expect(lastWorker!.postMessage).toHaveBeenCalled();
+    });
+
+    // Deliver the real Boltzmann result so the result container renders too.
+    act(() => {
+      lastWorker!.deliverReal();
+    });
+
+    // Both the Boltzmann result AND the CoinJoin Sankey are present.
+    expect(await screen.findByTestId("container-boltzmann-result")).toBeTruthy();
+    expect(await screen.findByTestId("container-coinjoin-sankey")).toBeTruthy();
+  });
+
+  it("does not render the Sankey for a non-CoinJoin txid (Boltzmann result still shows)", async () => {
+    // Same participant shape, but the txid is NOT flagged as a CoinJoin.
+    seedCoinjoinShapedTx();
+
+    renderDeepDive(new Set<string>());
+    fireEvent.click(screen.getByTestId("button-analyse-deep-dive"));
+
+    await waitFor(() => {
+      expect(lastWorker).not.toBeNull();
+      expect(lastWorker!.postMessage).toHaveBeenCalled();
+    });
+
+    act(() => {
+      lastWorker!.deliverReal();
+    });
+
+    // The Boltzmann result renders, but the Sankey is absent for a plain tx.
+    expect(await screen.findByTestId("container-boltzmann-result")).toBeTruthy();
+    expect(screen.queryByTestId("container-coinjoin-sankey")).toBeNull();
   });
 });
