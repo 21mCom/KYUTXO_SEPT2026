@@ -175,6 +175,9 @@ describe("Peel-chain graph colours — legible in both themes", () => {
     // background; the ⇄ CoinJoin glyph sits on the --chart-4 badge fill.
     const surfaceFor = (content: string): string => {
       if (content.includes("⇄")) return "hsl(var(--chart-4))";
+      // The "H1" hop-number label sits on the --primary node fill (white-on-
+      // primary), not the SVG background.
+      if (/^H\d+$/.test(content)) return "hsl(var(--primary))";
       return "hsl(var(--background))";
     };
 
@@ -183,10 +186,8 @@ describe("Peel-chain graph colours — legible in both themes", () => {
       if (!content) continue;
       // The "H1" hop-number label is white-on-primary: it follows the global
       // --primary / --primary-foreground button contract shared by every
-      // primary <Button> in the app, governed app-wide rather than by this
-      // diagram's peel palette. It is out of scope for the peel-colour task and
-      // intentionally not pinned here (changing it is a brand-wide decision).
-      if (/^H\d+$/.test(content)) continue;
+      // primary <Button> in the app. --primary was darkened to 38% L so this
+      // pair clears WCAG AA (4.5:1), so the label is now pinned here too.
       const fill = text.getAttribute("fill");
       expect(fill, `text "${content}" has no explicit fill`).toBeTruthy();
       const surface = surfaceFor(content);

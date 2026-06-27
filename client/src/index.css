@@ -32,7 +32,10 @@
   --popover: 0 0% 97%;
   --popover-foreground: 0 0% 10%;
   --popover-border: 0 0% 93%;
-  --primary: 25 95% 45%;
+  /* Darkened from 45% so white --primary-foreground text clears WCAG AA (4.5:1).
+     At 38% the contrast is ~4.61:1; at 45% it was only 3.43:1. Applied app-wide
+     via the token so every primary <Button> and the peel "H1" node stay legible. */
+  --primary: 25 95% 38%;
   --primary-foreground: 0 0% 98%;
   --secondary: 0 0% 94%;
   --secondary-foreground: 0 0% 10%;
@@ -116,7 +119,10 @@
   --popover: 0 0% 14%;
   --popover-foreground: 0 0% 95%;
   --popover-border: 0 0% 18%;
-  --primary: 25 95% 45%;
+  /* Darkened from 45% so white --primary-foreground text clears WCAG AA (4.5:1).
+     At 38% the contrast is ~4.61:1; at 45% it was only 3.43:1. Applied app-wide
+     via the token so every primary <Button> and the peel "H1" node stay legible. */
+  --primary: 25 95% 38%;
   --primary-foreground: 0 0% 98%;
   --secondary: 0 0% 18%;
   --secondary-foreground: 0 0% 95%;
