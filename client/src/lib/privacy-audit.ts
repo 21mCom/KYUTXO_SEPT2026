@@ -304,7 +304,7 @@ async function buildAuditContext(
 
 // ─── Existing heuristics (preserved) ─────────────────────────────────────────
 
-function detectScriptTypeMixing(ctx: AuditContext): PrivacyFinding[] {
+export function detectScriptTypeMixing(ctx: AuditContext): PrivacyFinding[] {
   const findings: PrivacyFinding[] = [];
   const entries = Array.from(ctx.participantsByTxid.entries());
 
@@ -346,7 +346,7 @@ function detectScriptTypeMixing(ctx: AuditContext): PrivacyFinding[] {
 const DUST_SATS = 1000;
 const STRICT_DUST_SATS = 546;
 
-function detectDustUTXOs(ctx: AuditContext): { findings: PrivacyFinding[]; warnings: PrivacyFinding[] } {
+export function detectDustUTXOs(ctx: AuditContext): { findings: PrivacyFinding[]; warnings: PrivacyFinding[] } {
   const findings: PrivacyFinding[] = [];
   const warnings: PrivacyFinding[] = [];
 
@@ -426,7 +426,7 @@ function detectDustUTXOs(ctx: AuditContext): { findings: PrivacyFinding[]; warni
   return { findings, warnings };
 }
 
-function detectDustSpending(ctx: AuditContext): PrivacyFinding[] {
+export function detectDustSpending(ctx: AuditContext): PrivacyFinding[] {
   const findings: PrivacyFinding[] = [];
   const entries = Array.from(ctx.participantsByTxid.entries());
 
@@ -466,7 +466,7 @@ function detectDustSpending(ctx: AuditContext): PrivacyFinding[] {
   return findings;
 }
 
-function detectConsolidationOrigin(ctx: AuditContext): PrivacyFinding[] {
+export function detectConsolidationOrigin(ctx: AuditContext): PrivacyFinding[] {
   const findings: PrivacyFinding[] = [];
   const entries = Array.from(ctx.participantsByTxid.entries());
 
@@ -507,7 +507,7 @@ function detectConsolidationOrigin(ctx: AuditContext): PrivacyFinding[] {
   return findings;
 }
 
-function detectExchangeOrigin(ctx: AuditContext): { findings: PrivacyFinding[]; warnings: PrivacyFinding[] } {
+export function detectExchangeOrigin(ctx: AuditContext): { findings: PrivacyFinding[]; warnings: PrivacyFinding[] } {
   const findings: PrivacyFinding[] = [];
   const warnings: PrivacyFinding[] = [];
   const entries = Array.from(ctx.participantsByTxid.entries());
@@ -573,7 +573,7 @@ function detectExchangeOrigin(ctx: AuditContext): { findings: PrivacyFinding[]; 
   return { findings, warnings };
 }
 
-function detectTaintedUTXOMerge(ctx: AuditContext): PrivacyFinding[] {
+export function detectTaintedUTXOMerge(ctx: AuditContext): PrivacyFinding[] {
   const findings: PrivacyFinding[] = [];
   const entries = Array.from(ctx.participantsByTxid.entries());
 
@@ -620,7 +620,7 @@ function detectTaintedUTXOMerge(ctx: AuditContext): PrivacyFinding[] {
 // ─── New Phase A heuristics ───────────────────────────────────────────────────
 
 /** Address reuse: same address appears as both an output AND is later reused as input */
-function detectAddressReuse(ctx: AuditContext): PrivacyFinding[] {
+export function detectAddressReuse(ctx: AuditContext): PrivacyFinding[] {
   const findings: PrivacyFinding[] = [];
   // Count how many txids each user address appears in
   const addressTxids = new Map<string, Set<string>>();
@@ -665,7 +665,7 @@ function detectAddressReuse(ctx: AuditContext): PrivacyFinding[] {
 }
 
 /** Round amount detection: outputs with suspiciously round BTC amounts hint at payments vs change */
-function detectRoundAmounts(ctx: AuditContext, coinjoiTxids: Set<string>): PrivacyFinding[] {
+export function detectRoundAmounts(ctx: AuditContext, coinjoiTxids: Set<string>): PrivacyFinding[] {
   const findings: PrivacyFinding[] = [];
   const ROUND_THRESHOLDS = [100_000, 500_000, 1_000_000, 5_000_000, 10_000_000, 50_000_000, 100_000_000];
 
@@ -697,7 +697,7 @@ function detectRoundAmounts(ctx: AuditContext, coinjoiTxids: Set<string>): Priva
 }
 
 /** Common-input-ownership heuristic: multiple inputs from different addresses → same wallet */
-function detectCommonInputOwnership(ctx: AuditContext, coinjoiTxids: Set<string>, multisigTxids: Set<string>): PrivacyFinding[] {
+export function detectCommonInputOwnership(ctx: AuditContext, coinjoiTxids: Set<string>, multisigTxids: Set<string>): PrivacyFinding[] {
   const findings: PrivacyFinding[] = [];
 
   for (const [txid, parts] of ctx.participantsByTxid) {
@@ -741,7 +741,7 @@ function detectCommonInputOwnership(ctx: AuditContext, coinjoiTxids: Set<string>
 }
 
 /** Unnecessary input: tx has more inputs than needed to cover the output + fee */
-function detectUnnecessaryInput(ctx: AuditContext, coinjoiTxids: Set<string>): PrivacyFinding[] {
+export function detectUnnecessaryInput(ctx: AuditContext, coinjoiTxids: Set<string>): PrivacyFinding[] {
   const findings: PrivacyFinding[] = [];
 
   for (const [txid, parts] of ctx.participantsByTxid) {
@@ -783,7 +783,7 @@ function detectUnnecessaryInput(ctx: AuditContext, coinjoiTxids: Set<string>): P
 }
 
 /** High activity: addresses with very many transactions are easily tracked */
-function detectHighActivity(ctx: AuditContext): PrivacyFinding[] {
+export function detectHighActivity(ctx: AuditContext): PrivacyFinding[] {
   const findings: PrivacyFinding[] = [];
   const HIGH_TX_THRESHOLD = 50;
 
@@ -817,7 +817,7 @@ function detectHighActivity(ctx: AuditContext): PrivacyFinding[] {
 }
 
 /** OP_RETURN metadata: any tx with OP_RETURN outputs leaks data on-chain */
-function detectOpReturn(ctx: AuditContext): PrivacyFinding[] {
+export function detectOpReturn(ctx: AuditContext): PrivacyFinding[] {
   const findings: PrivacyFinding[] = [];
   for (const [txid, tx] of ctx.transactions) {
     if (!tx.hasOpReturn) continue;
@@ -848,7 +848,7 @@ function detectOpReturn(ctx: AuditContext): PrivacyFinding[] {
 }
 
 /** Multisig/escrow detection: p2sh or p2wsh with multisig spending patterns */
-function detectMultisigEscrow(ctx: AuditContext): { findings: PrivacyFinding[]; multisigTxids: Set<string> } {
+export function detectMultisigEscrow(ctx: AuditContext): { findings: PrivacyFinding[]; multisigTxids: Set<string> } {
   const findings: PrivacyFinding[] = [];
   const multisigTxids = new Set<string>();
 
@@ -881,7 +881,7 @@ function detectMultisigEscrow(ctx: AuditContext): { findings: PrivacyFinding[]; 
 }
 
 /** UTXO set exposure: many small unspent UTXOs that map to distinct addresses */
-function detectUTXOSetExposure(ctx: AuditContext): PrivacyFinding[] {
+export function detectUTXOSetExposure(ctx: AuditContext): PrivacyFinding[] {
   const findings: PrivacyFinding[] = [];
   const spentOutpoints = new Set<string>();
 
@@ -928,7 +928,7 @@ function detectUTXOSetExposure(ctx: AuditContext): PrivacyFinding[] {
  * Detect Whirlpool-style CoinJoin: exactly 5 equal outputs (0.001, 0.01, 0.05, 0.5 BTC pools)
  * or any tx with exactly 5 outputs of the exact same amount.
  */
-function detectCoinJoin(ctx: AuditContext): {
+export function detectCoinJoin(ctx: AuditContext): {
   whirlpool: PrivacyFinding[];
   wasabi: PrivacyFinding[];
   joinmarket: PrivacyFinding[];
@@ -1021,7 +1021,7 @@ function detectCoinJoin(ctx: AuditContext): {
 }
 
 /** Post-mix spending: spending a CoinJoin output directly in a non-CoinJoin tx */
-function detectPostMixSpending(ctx: AuditContext, coinjoinTxids: Set<string>): PrivacyFinding[] {
+export function detectPostMixSpending(ctx: AuditContext, coinjoinTxids: Set<string>): PrivacyFinding[] {
   const findings: PrivacyFinding[] = [];
 
   // Find outputs of CoinJoin txs that are our addresses
@@ -1071,7 +1071,7 @@ function detectPostMixSpending(ctx: AuditContext, coinjoinTxids: Set<string>): P
 }
 
 /** Peel chain: a sequence of txs with 2 outputs where one is change (peel-chain pattern) */
-function detectPeelChain(ctx: AuditContext, coinjoinTxids: Set<string>): PrivacyFinding[] {
+export function detectPeelChain(ctx: AuditContext, coinjoinTxids: Set<string>): PrivacyFinding[] {
   const findings: PrivacyFinding[] = [];
 
   // Build a map of txid → single-our-output address (change address)
@@ -1134,7 +1134,7 @@ function detectPeelChain(ctx: AuditContext, coinjoinTxids: Set<string>): Privacy
 
 // ─── Phase B: Entity detection ────────────────────────────────────────────────
 
-function detectEntityContacts(ctx: AuditContext): PrivacyFinding[] {
+export function detectEntityContacts(ctx: AuditContext): PrivacyFinding[] {
   const findings: PrivacyFinding[] = [];
 
   // Collect all non-user addresses in our transactions
@@ -1507,7 +1507,7 @@ export const PROXIMITY_FINDING_TYPES = new Set<PrivacyFindingType>([
 
 // ─── Phase C: Wallet fingerprinting ──────────────────────────────────────────
 
-function detectFingerprintingIssues(ctx: AuditContext): {
+export function detectFingerprintingIssues(ctx: AuditContext): {
   findings: PrivacyFinding[];
   hasFingerprintData: boolean;
   needsResync: boolean;
@@ -1654,7 +1654,7 @@ function detectFingerprintingIssues(ctx: AuditContext): {
  * transactions, indicating possible recurring payment patterns that leak
  * behavioral metadata to an observer watching those recipient addresses.
  */
-function detectRecurringPayments(ctx: AuditContext): PrivacyFinding[] {
+export function detectRecurringPayments(ctx: AuditContext): PrivacyFinding[] {
   const findings: PrivacyFinding[] = [];
   // Map external-address → Set of txids it appears as an output in
   const externalOutputCount = new Map<string, Set<string>>();
@@ -1702,7 +1702,7 @@ function detectRecurringPayments(ctx: AuditContext): PrivacyFinding[] {
  * (block reward) transaction. Coinbase outputs are publicly associated with
  * mining pools and carry strong provenance metadata.
  */
-function detectCoinbaseOrigin(ctx: AuditContext): PrivacyFinding[] {
+export function detectCoinbaseOrigin(ctx: AuditContext): PrivacyFinding[] {
   const findings: PrivacyFinding[] = [];
 
   for (const [txid, tx] of ctx.transactions) {
