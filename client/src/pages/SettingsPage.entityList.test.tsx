@@ -1043,6 +1043,72 @@ describe("SettingsPage — Privacy Audit Entity List panel", () => {
     expect((await getSettings("default"))?.entityListSnapshot).toBeUndefined();
   });
 
+  it("a filter that matches nothing says so plainly: 'No matching entries.', zero rows, no open group, nothing applied", async () => {
+    renderSettingsPage();
+    await screen.findByTestId("badge-entity-source");
+
+    // A small mixed snapshot so there are multiple problem-type groups (each
+    // starts collapsed) to filter against.
+    //   - invalid-address  × 2 (entries 1, 2)
+    //   - unknown-category × 1 (entry 3)
+    //   - missing-name     × 1 (entry 4)
+    const mixed = JSON.stringify([
+      { address: "totally-invalid-a", name: "Bad One", category: "exchange" },
+      { address: "totally-invalid-b", name: "Bad Two", category: "exchange" },
+      { address: ADDR.a, name: "Bogus", category: "not-a-category" },
+      { address: ADDR.b, name: "", category: "exchange" },
+    ]);
+    await selectEntityFile("messy-paste.json", mixed);
+
+    await screen.findByTestId("container-entity-errors");
+
+    // Multiple groups => all collapsed, no rows mounted, no match-count line yet.
+    expect(screen.queryByTestId("text-entity-error-0")).toBeNull();
+    expect(screen.queryByTestId("text-entity-error-match-count")).toBeNull();
+
+    // --- Entry number nobody has => empty result ---
+    setErrorFilter("999");
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("text-entity-error-match-count").textContent,
+      ).toBe("No matching entries."),
+    );
+    // No offending row is mounted and every group is filtered away (not just
+    // collapsed) — so nothing looks expanded.
+    expect(screen.queryByTestId(/^text-entity-error-\d+$/)).toBeNull();
+    expect(screen.queryByTestId("group-entity-error-invalid-address")).toBeNull();
+    expect(screen.queryByTestId("group-entity-error-unknown-category")).toBeNull();
+    expect(screen.queryByTestId("group-entity-error-missing-name")).toBeNull();
+
+    // --- Reason text nobody matches => still empty ---
+    setErrorFilter("zzz-no-such-reason");
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("text-entity-error-match-count").textContent,
+      ).toBe("No matching entries."),
+    );
+    expect(screen.queryByTestId(/^text-entity-error-\d+$/)).toBeNull();
+
+    // --- A "problem type" that can't satisfy the non-matching text filter ---
+    // The text filter still rules everything out even once a kind is chosen.
+    setErrorKind("invalid-address");
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("text-entity-error-match-count").textContent,
+      ).toBe("No matching entries."),
+    );
+    expect(screen.queryByTestId(/^text-entity-error-\d+$/)).toBeNull();
+    expect(screen.queryByTestId("group-entity-error-invalid-address")).toBeNull();
+    expect(screen.queryByTestId("group-entity-error-unknown-category")).toBeNull();
+    expect(screen.queryByTestId("group-entity-error-missing-name")).toBeNull();
+
+    // Filtering is pure triage — nothing was ever applied: no preview dialog
+    // opened, still on the bundled list, and no snapshot was persisted.
+    expect(screen.queryByTestId("text-preview-incoming")).toBeNull();
+    expect(getActiveEntitySource()).toBe("bundled");
+    expect((await getSettings("default"))?.entityListSnapshot).toBeUndefined();
+  });
+
   it("exports the current list as a downloadable JSON file", async () => {
     const created: string[] = [];
     const revoked: string[] = [];
