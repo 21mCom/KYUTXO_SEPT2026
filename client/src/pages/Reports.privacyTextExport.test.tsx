@@ -340,4 +340,61 @@ describe("PrivacyAuditReportPanel — scope flows into the report", () => {
     // The report-wide scope caption matches the history exporter wording.
     expect(copied).toContain("Scope: Owner = Alice, Wallet = Cold Storage");
   });
+
+  it("keeps the scope caption locked to the audited scope after the filter changes post-scan", async () => {
+    render(<PrivacyAuditReportPanel />);
+
+    // Run the audit against the default "All addresses" scope.
+    fireEvent.click(screen.getByTestId("button-generate-privacy-report"));
+    await waitFor(() => screen.getByTestId("button-export-privacy-report-text"));
+    expect(screen.getByTestId("text-privacy-report-scope").textContent).toContain(
+      "Scope: All addresses",
+    );
+
+    // Now change the Owner/Wallet dropdowns WITHOUT re-running the audit.
+    fireEvent.change(screen.getByTestId("select-privacy-report-owner"), {
+      target: { value: "Alice" },
+    });
+    fireEvent.change(screen.getByTestId("select-privacy-report-wallet"), {
+      target: { value: "Cold Storage" },
+    });
+
+    // The on-screen caption must still describe the scope the displayed results
+    // were computed from, not the new (un-applied) dropdown selection.
+    expect(screen.getByTestId("text-privacy-report-scope").textContent).toContain(
+      "Scope: All addresses",
+    );
+    expect(screen.getByTestId("text-privacy-report-scope").textContent).not.toContain(
+      "Alice",
+    );
+  });
+
+  it("exports the audited scope, not the post-scan dropdown change", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    setClipboard({ writeText });
+
+    render(<PrivacyAuditReportPanel />);
+
+    // Run the audit against the default "All addresses" scope.
+    fireEvent.click(screen.getByTestId("button-generate-privacy-report"));
+    await waitFor(() => screen.getByTestId("button-copy-privacy-report-text"));
+
+    // Change the filters after the scan but before exporting.
+    fireEvent.change(screen.getByTestId("select-privacy-report-owner"), {
+      target: { value: "Alice" },
+    });
+    fireEvent.change(screen.getByTestId("select-privacy-report-wallet"), {
+      target: { value: "Cold Storage" },
+    });
+
+    fireEvent.click(screen.getByTestId("button-copy-privacy-report-text"));
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+
+    const copied = writeText.mock.calls[0][0] as string;
+    // The export reflects the scope the audit actually ran with.
+    expect(copied).toContain("Owner: All");
+    expect(copied).toContain("Wallet: All");
+    expect(copied).toContain("Scope: All addresses");
+    expect(copied).not.toContain("Scope: Owner = Alice, Wallet = Cold Storage");
+  });
 });

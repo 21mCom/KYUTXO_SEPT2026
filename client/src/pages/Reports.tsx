@@ -20,7 +20,7 @@ import {
   type EntityCitation,
 } from "@/lib/privacy-audit";
 import { renderSourceNote } from "@/lib/renderSourceNote";
-import { buildPrivacyReport, buildPrivacyTextReport, computeExportScopeLabel, copyPrivacyReportText, downloadPrivacyTextReport, formatScoreDelta, extractCitations } from "@/lib/privacy-report-export";
+import { buildPrivacyReport, buildPrivacyTextReport, computeExportScopeLabel, copyPrivacyReportText, downloadPrivacyTextReport, formatScoreDelta, extractCitations, type ExportScope } from "@/lib/privacy-report-export";
 import { buildPrintableReport, severityLabel, wireReportCopyButton } from "@/lib/privacy-report-html";
 import { getRecordsPageByTypeIdReverseKeyset } from "@/lib/data/record-crud";
 
@@ -53,6 +53,11 @@ export function PrivacyAuditReportPanel() {
   const [selectedWallet, setSelectedWallet] = useState("all");
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<PrivacyAuditResult | null>(null);
+  // The owner/wallet scope the displayed `result` was actually computed from,
+  // captured at generate time. The on-screen caption and every export read this
+  // — never the live dropdown — so changing the filter after a scan can never
+  // make them claim a scope the results don't match.
+  const [resultScope, setResultScope] = useState<ExportScope | null>(null);
   const [highlightedType, setHighlightedType] = useState<PrivacyFinding["type"] | null>(null);
   // Index (into the flat [...findings, ...warnings] list) of the finding that is
   // currently the navigation anchor. Lets the user step through several findings
@@ -120,8 +125,13 @@ export function PrivacyAuditReportPanel() {
   const generate = useCallback(async () => {
     setRunning(true);
     setResult(null);
+    setResultScope(null);
     setHighlightedType(null);
     setFocusedFindingIndex(null);
+    const scope: ExportScope = {
+      owner: selectedOwner === "all" ? null : selectedOwner,
+      wallet: selectedWallet === "all" ? null : selectedWallet,
+    };
     try {
       const allAddresses: string[] = [];
       let beforeId: number | undefined;
@@ -130,8 +140,8 @@ export function PrivacyAuditReportPanel() {
         if (page.length === 0) break;
         for (const r of page) {
           if (!r.inputString) continue;
-          if (selectedOwner !== "all" && r.owner !== selectedOwner) continue;
-          if (selectedWallet !== "all" && r.walletName !== selectedWallet) continue;
+          if (scope.owner !== null && r.owner !== scope.owner) continue;
+          if (scope.wallet !== null && r.walletName !== scope.wallet) continue;
           allAddresses.push(r.inputString);
         }
         if (page.length < 500) break;
@@ -146,6 +156,7 @@ export function PrivacyAuditReportPanel() {
 
       const audit = await runPrivacyAudit(allAddresses);
       setResult(audit);
+      setResultScope(scope);
     } catch (err) {
       toast({ variant: "destructive", title: "Report Failed", description: err instanceof Error ? err.message : "Unknown error." });
     } finally {
@@ -154,16 +165,15 @@ export function PrivacyAuditReportPanel() {
   }, [selectedOwner, selectedWallet, toast]);
 
   const exportJson = useCallback(() => {
-    if (!result) return;
+    if (!result || !resultScope) return;
     // Per-entity source citations are surfaced as a clean top-level field on
     // ENTITY_* findings via mapFinding (see lib/privacy-report-export). URLs in
     // sourceNote remain plain text — never fetched (offline-first).
     // buildPrivacyReport is the single source of truth for the export shape so
-    // the UI and its regression tests cannot drift.
-    const report = buildPrivacyReport(result, {
-      owner: selectedOwner === "all" ? null : selectedOwner,
-      wallet: selectedWallet === "all" ? null : selectedWallet,
-    });
+    // the UI and its regression tests cannot drift. Use the scope the audit was
+    // actually run with (resultScope), not the live dropdown, so the exported
+    // scope always matches the results.
+    const report = buildPrivacyReport(result, resultScope);
     const blob = new Blob([JSON.stringify(report, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -171,15 +181,12 @@ export function PrivacyAuditReportPanel() {
     a.download = `privacy-audit-report-${new Date().toISOString().slice(0, 10)}.json`;
     a.click();
     URL.revokeObjectURL(url);
-  }, [result, selectedOwner, selectedWallet]);
+  }, [result, resultScope]);
 
   const buildText = useCallback(() => {
-    if (!result) return null;
-    return buildPrivacyTextReport(result, {
-      owner: selectedOwner === "all" ? null : selectedOwner,
-      wallet: selectedWallet === "all" ? null : selectedWallet,
-    });
-  }, [result, selectedOwner, selectedWallet]);
+    if (!result || !resultScope) return null;
+    return buildPrivacyTextReport(result, resultScope);
+  }, [result, resultScope]);
 
   const exportText = useCallback(() => {
     const text = buildText();
@@ -194,11 +201,8 @@ export function PrivacyAuditReportPanel() {
   }, [buildText, toast]);
 
   const exportPdf = useCallback(() => {
-    if (!result) return;
-    const scope = {
-      owner: selectedOwner === "all" ? null : selectedOwner,
-      wallet: selectedWallet === "all" ? null : selectedWallet,
-    };
+    if (!result || !resultScope) return;
+    const scope = resultScope;
     const html = buildPrintableReport(result, scope);
     const win = window.open("", "_blank");
     if (!win) {
@@ -225,7 +229,7 @@ export function PrivacyAuditReportPanel() {
     setTimeout(() => {
       try { win.print(); } catch { /* user can print manually */ }
     }, 250);
-  }, [result, selectedOwner, selectedWallet, toast]);
+  }, [result, resultScope, toast]);
 
   const countBySeverity = (sev: PrivacySeverity) =>
     [...(result?.findings ?? []), ...(result?.warnings ?? [])].filter(f => f.severity === sev).length;
@@ -283,10 +287,7 @@ export function PrivacyAuditReportPanel() {
           {/* Report-wide scope caption — matches the history exporter wording so
               the user sees exactly what the export will say before exporting. */}
           <div className="text-sm font-medium" data-testid="text-privacy-report-scope">
-            {computeExportScopeLabel({
-              owner: selectedOwner === "all" ? null : selectedOwner,
-              wallet: selectedWallet === "all" ? null : selectedWallet,
-            })}
+            {computeExportScopeLabel(resultScope ?? { owner: null, wallet: null })}
           </div>
           {/* Score summary */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3" data-testid="container-privacy-report-summary">
