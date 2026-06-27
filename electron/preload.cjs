@@ -30,6 +30,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getDiskSpace: () =>
     ipcRenderer.invoke('get-disk-space'),
 
+  // Total byte size of all attachment files (pre-flight export size estimate).
+  getAttachmentsSize: () =>
+    ipcRenderer.invoke('get-attachments-size'),
+
   // Orphaned-attachment review folder (populated during restore when an
   // attachment's owning record is absent — never linked to any record).
   getNeedsReviewPath: () =>

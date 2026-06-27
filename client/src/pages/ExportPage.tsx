@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { getActivityBus } from "@/lib/activity-bus";
-import { Download, Lock, FileJson, AlertCircle, CheckCircle2, FolderOpen, FileSpreadsheet, Paperclip } from "lucide-react";
+import { Download, Lock, FileJson, AlertCircle, AlertTriangle, CheckCircle2, FolderOpen, FileSpreadsheet, Paperclip } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -8,6 +8,16 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Switch } from "@/components/ui/switch";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Progress } from "@/components/ui/progress";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
 import { db } from "@/lib/database";
 import { countAttachments } from "@/lib/data/attachments-crud";
@@ -17,7 +27,8 @@ import { countTransactions, countTransactionParticipants } from "@/lib/data/tran
 import { countAddressSyncState } from "@/lib/data/address-sync-crud";
 import { countUtxoLineage, countCustodySegments } from "@/lib/data/lineage-crud";
 import { isElectron, getElectronAPI } from "@/lib/electron";
-import { exportBackup } from "@/lib/backup/export";
+import { exportBackup, estimateExportBytes } from "@/lib/backup/export";
+import { evaluateDiskSpace } from "@/lib/backup/restore";
 import {
   MemorySink,
   BackupCancelledError,
@@ -86,6 +97,13 @@ export default function ExportPage() {
   const [categoryCount, setCategoryCount] = useState(0);
   const [vocabularyCount, setVocabularyCount] = useState(0);
   const [derivationTemplateCount, setDerivationTemplateCount] = useState(0);
+
+  // Pre-flight low-disk-space warning (Electron streaming export). When set, the
+  // export is paused and the user is asked to free space or continue anyway.
+  const [diskWarning, setDiskWarning] = useState<{ requiredBytes: number; freeBytes: number } | null>(null);
+  // When the user chooses "Export Anyway", this ref skips the disk check on the
+  // re-triggered export so we don't loop back into the same warning.
+  const bypassDiskCheckRef = useRef(false);
 
   const { toast } = useToast();
 
@@ -193,6 +211,48 @@ export default function ExportPage() {
       memoryAttachmentLimit: MEMORY_EXPORT_ATTACHMENT_LIMIT,
       countsKnown,
     };
+
+    // Pre-flight disk-space check (Electron only). A streaming export writes the
+    // backup straight to disk, so if the disk fills up partway through it leaves
+    // a truncated, unusable archive. Estimating the backup size (attachment file
+    // sizes — stored uncompressed in the ZIP — plus a per-row allowance for the
+    // compressed tables) and comparing it against free space lets the user free
+    // space BEFORE any partial archive is written. Best-effort: if either probe
+    // fails we let the export proceed rather than block it.
+    if (isElectron() && !bypassDiskCheckRef.current) {
+      try {
+        const api = getElectronAPI();
+        const [space, attachSize] = await Promise.all([
+          api.getDiskSpace(),
+          api.getAttachmentsSize(),
+        ]);
+        if (
+          space.success &&
+          typeof space.freeBytes === "number" &&
+          attachSize.success &&
+          typeof attachSize.totalBytes === "number"
+        ) {
+          const estimatedBytes = estimateExportBytes({
+            attachmentBytes: attachSize.totalBytes,
+            rowCount: totalRowCount,
+          });
+          const estimate = evaluateDiskSpace(estimatedBytes, space.freeBytes);
+          if (!estimate.sufficient) {
+            setExporting(false);
+            setProgress(0);
+            setProgressMessage("");
+            setDiskWarning({
+              requiredBytes: estimate.requiredBytes,
+              freeBytes: space.freeBytes,
+            });
+            return;
+          }
+        }
+      } catch {
+        // Probe failed — fall through and let the export proceed.
+      }
+    }
+    bypassDiskCheckRef.current = false;
 
     // Pick where the backup bytes go. The streaming-to-disk paths (Electron
     // desktop, browser File System Access API) never hold the whole archive in
@@ -327,6 +387,13 @@ export default function ExportPage() {
     if (estimate < 1024) return `${estimate} B`;
     if (estimate < 1024 * 1024) return `${(estimate / 1024).toFixed(1)} KB`;
     return `${(estimate / (1024 * 1024)).toFixed(1)} MB`;
+  };
+
+  const formatBytes = (bytes: number): string => {
+    if (!Number.isFinite(bytes) || bytes < 1024) return `${Math.max(0, Math.round(bytes))} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
   };
 
   return (
@@ -535,6 +602,45 @@ export default function ExportPage() {
           </Card>
         )}
       </div>
+
+      {/* Pre-flight low-disk-space warning. Shown BEFORE any bytes are written so
+          the user can free space without leaving a truncated archive behind. */}
+      <AlertDialog
+        open={diskWarning !== null}
+        onOpenChange={(open) => !open && setDiskWarning(null)}
+      >
+        <AlertDialogContent data-testid="dialog-export-disk-warning">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="h-5 w-5 text-destructive" />
+              Not enough free disk space
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {diskWarning
+                ? `This backup needs about ${formatBytes(diskWarning.requiredBytes)} of free space, but only ${formatBytes(diskWarning.freeBytes)} is available. Free up some space and try again, or export anyway — but if the disk fills up partway through, the backup file will be incomplete and unusable.`
+                : ""}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel
+              onClick={() => setDiskWarning(null)}
+              data-testid="button-cancel-export-disk-warning"
+            >
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                bypassDiskCheckRef.current = true;
+                setDiskWarning(null);
+                void handleExport();
+              }}
+              data-testid="button-proceed-export-disk-warning"
+            >
+              Export Anyway
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

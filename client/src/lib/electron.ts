@@ -202,6 +202,8 @@ interface ElectronAPI {
   isPortableMode: () => Promise<boolean>;
   // Free/total disk space on the attachments filesystem (pre-flight restore check)
   getDiskSpace: () => Promise<{ success: boolean; freeBytes?: number; totalBytes?: number; error?: string }>;
+  // Total byte size of all attachment files (pre-flight export size estimate)
+  getAttachmentsSize: () => Promise<{ success: boolean; totalBytes?: number; fileCount?: number; error?: string }>;
   // Needs Review folder (orphaned restore attachments)
   getNeedsReviewPath: () => Promise<string>;
   writeNeedsReview: (originalFilename: string, data: ArrayBuffer) => Promise<{ success: boolean; path?: string; error?: string }>;

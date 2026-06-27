@@ -249,6 +249,55 @@ function registerFileHandlers(ipcMain, { dataDir, attachmentsDir, needsReviewDir
     }
   });
 
+  // Sum the byte sizes of every attachment file on disk. Used as the dominant
+  // term in a pre-flight export size estimate: attachment files are stored
+  // UNCOMPRESSED in the v3 backup ZIP, so their total size is a solid lower
+  // bound on the bytes a streaming export will write to disk. Lets the user be
+  // warned about low disk space BEFORE a partial/truncated archive is written.
+  ipcMain.handle('get-attachments-size', async () => {
+    try {
+      if (!fs.existsSync(attachmentsDir)) {
+        return { success: true, totalBytes: 0, fileCount: 0 };
+      }
+      let totalBytes = 0;
+      let fileCount = 0;
+      const entries = await fs.promises.readdir(attachmentsDir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (entry.isDirectory()) {
+          const subDir = path.join(attachmentsDir, entry.name);
+          let names;
+          try {
+            names = await fs.promises.readdir(subDir);
+          } catch {
+            continue;
+          }
+          for (const name of names) {
+            try {
+              const stat = await fs.promises.stat(path.join(subDir, name));
+              if (stat.isFile()) {
+                totalBytes += stat.size;
+                fileCount += 1;
+              }
+            } catch {
+              // Skip files that vanished or cannot be stat'd.
+            }
+          }
+        } else if (entry.isFile()) {
+          try {
+            const stat = await fs.promises.stat(path.join(attachmentsDir, entry.name));
+            totalBytes += stat.size;
+            fileCount += 1;
+          } catch {
+            // Skip files that vanished or cannot be stat'd.
+          }
+        }
+      }
+      return { success: true, totalBytes, fileCount };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
   // Get the path of the Needs Review folder (for display in UI after restore).
   ipcMain.handle('get-needs-review-path', () => {
     return needsReviewDir;

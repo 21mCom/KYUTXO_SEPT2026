@@ -66,6 +66,38 @@ export interface ExportOptions {
   signal?: AbortSignal;
 }
 
+// Rough per-row disk allowance for the streamed DB tables in the backup ZIP.
+// Those NDJSON tables are deflate-compressed, so this is a conservative upper
+// bound on a row's on-disk footprint rather than its raw serialized size.
+// Attachment files (stored UNCOMPRESSED in the ZIP) usually dominate the total.
+export const EXPORT_BYTES_PER_ROW = 256;
+
+export interface ExportSizeEstimateInput {
+  // Total byte size of all attachment files (stored uncompressed in the ZIP).
+  attachmentBytes: number;
+  // Combined row count of every streamed DB table (records, transactions,
+  // participants, sync state, lineage, custody segments).
+  rowCount: number;
+  // Override the per-row allowance (defaults to EXPORT_BYTES_PER_ROW).
+  bytesPerRow?: number;
+}
+
+// Estimates the bytes an Electron streaming export will write to disk: the sum
+// of attachment file sizes plus a per-row allowance for the compressed NDJSON
+// tables. Used for a pre-flight disk-space check so the user can free space
+// BEFORE a partial/truncated archive is written, instead of discovering a
+// disk-full failure only after the export aborts mid-stream.
+export function estimateExportBytes(input: ExportSizeEstimateInput): number {
+  const attach = Number.isFinite(input.attachmentBytes)
+    ? Math.max(0, input.attachmentBytes)
+    : 0;
+  const rows = Number.isFinite(input.rowCount) ? Math.max(0, input.rowCount) : 0;
+  const perRow = Number.isFinite(input.bytesPerRow ?? NaN)
+    ? Math.max(0, input.bytesPerRow as number)
+    : EXPORT_BYTES_PER_ROW;
+  return Math.ceil(attach + rows * perRow);
+}
+
 type Row = { id?: number };
 type PageReader = (afterId: number, limit: number) => Promise<Row[]>;
 
