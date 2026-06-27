@@ -323,6 +323,15 @@ describe("BalanceOverview · Import missing history", () => {
     // Cancelled → the follow-up resolve pass must be skipped even though some
     // transactions were imported.
     expect(resolvePrevouts).not.toHaveBeenCalled();
+
+    // The finally block must clear the importing state so the button returns to
+    // its idle (non-spinning) label rather than being stuck on "Importing…".
+    await waitFor(() => {
+      const button = screen.getByTestId("button-import-missing-history");
+      expect(button.textContent).toContain("Import missing history");
+      expect(button.textContent).not.toContain("Importing");
+      expect((button as HTMLButtonElement).disabled).toBe(false);
+    });
   });
 
   it("shows the 'stopped before any imported' copy when cancelled before anything imported", async () => {
