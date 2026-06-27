@@ -46,6 +46,24 @@ export interface GroupFlow {
 export interface TrailHop {
   sources: GroupFlow[];
   destinations: GroupFlow[];
+  /** True when the result was capped to the most recent N transactions for performance */
+  isCapped?: boolean;
+  /** Number of transactions actually processed (after any cap) */
+  shownTxCount?: number;
+  /** Total number of transactions that touched the group's addresses */
+  totalTxCount?: number;
+}
+
+/**
+ * Default cap on the number of transactions computeOneHop will fully process.
+ * When a group's addresses touch more txids than this, only the most recent
+ * `txLimit` (by blockTime, descending) are loaded to keep the browser responsive.
+ */
+export const DEFAULT_TX_LIMIT = 2000;
+
+export interface ComputeOneHopOptions {
+  /** Max number of (most-recent) txids to process; defaults to DEFAULT_TX_LIMIT */
+  txLimit?: number;
 }
 
 /**
@@ -160,9 +178,12 @@ export async function computeOneHop(
   dimension: GroupingDimension,
   selfGroupLabel: string | null,
   dateRange?: DateRange,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  options?: ComputeOneHopOptions
 ): Promise<TrailHop> {
-  if (groupAddresses.length === 0) return { sources: [], destinations: [] };
+  if (groupAddresses.length === 0) {
+    return { sources: [], destinations: [], isCapped: false, shownTxCount: 0, totalTxCount: 0 };
+  }
 
   const addrSet = new Set(groupAddresses);
 
@@ -171,9 +192,9 @@ export async function computeOneHop(
   // -------------------------------------------------------------------------
 
   // Incoming via lineage: rows where createdAddress ∈ our addresses
-  const incomingLineage = await batchedLineageByAddress(groupAddresses, 'created', signal);
+  let incomingLineage = await batchedLineageByAddress(groupAddresses, 'created', signal);
   // Outgoing via lineage: rows where spentAddress ∈ our addresses
-  const outgoingLineage = await batchedLineageByAddress(groupAddresses, 'spent', signal);
+  let outgoingLineage = await batchedLineageByAddress(groupAddresses, 'spent', signal);
 
   if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
 
@@ -191,9 +212,9 @@ export async function computeOneHop(
   if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
 
   // txids where we are an output (incoming)
-  const incomingTxidsFromParticipants = new Set<string>();
+  let incomingTxidsFromParticipants = new Set<string>();
   // txids where we are an input (outgoing)
-  const outgoingTxidsFromParticipants = new Set<string>();
+  let outgoingTxidsFromParticipants = new Set<string>();
 
   for (const p of allParticipants) {
     if (p.role === 'output' && addrSet.has(p.address) && !incomingCoveredTxids.has(p.txid)) {
@@ -202,6 +223,53 @@ export async function computeOneHop(
     if (p.role === 'input' && addrSet.has(p.address) && !outgoingCoveredTxids.has(p.txid)) {
       outgoingTxidsFromParticipants.add(p.txid);
     }
+  }
+
+  // -------------------------------------------------------------------------
+  // Step 2.5: Cap workload to the most recent N txids on busy wallets
+  // -------------------------------------------------------------------------
+  // An exchange-style wallet can touch hundreds of thousands of participant
+  // rows. Resolve blockTimes up front so we can rank candidate txids by recency
+  // and, when the count exceeds the limit, only fully process the newest ones.
+  const candidateTxids = new Set<string>([
+    ...incomingCoveredTxids,
+    ...outgoingCoveredTxids,
+    ...incomingTxidsFromParticipants,
+    ...outgoingTxidsFromParticipants,
+  ]);
+  const totalTxCount = candidateTxids.size;
+  const txLimit = options?.txLimit ?? DEFAULT_TX_LIMIT;
+
+  const blockTimes = await loadBlockTimes([...candidateTxids]);
+  // Lineage rows carry their own blockTime; backfill any txid the
+  // blockchainTransactions lookup didn't cover so ranking stays accurate.
+  for (const l of incomingLineage) {
+    if (!blockTimes.has(l.consumingTxid)) blockTimes.set(l.consumingTxid, l.blockTime);
+  }
+  for (const l of outgoingLineage) {
+    if (!blockTimes.has(l.consumingTxid)) blockTimes.set(l.consumingTxid, l.blockTime);
+  }
+
+  if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+
+  let isCapped = false;
+  let shownTxCount = totalTxCount;
+  if (totalTxCount > txLimit) {
+    isCapped = true;
+    const keptTxids = new Set(
+      [...candidateTxids]
+        .sort((a, b) => (blockTimes.get(b) ?? 0) - (blockTimes.get(a) ?? 0))
+        .slice(0, txLimit)
+    );
+    shownTxCount = keptTxids.size;
+    incomingLineage = incomingLineage.filter(l => keptTxids.has(l.consumingTxid));
+    outgoingLineage = outgoingLineage.filter(l => keptTxids.has(l.consumingTxid));
+    incomingTxidsFromParticipants = new Set(
+      [...incomingTxidsFromParticipants].filter(t => keptTxids.has(t))
+    );
+    outgoingTxidsFromParticipants = new Set(
+      [...outgoingTxidsFromParticipants].filter(t => keptTxids.has(t))
+    );
   }
 
   const fallbackIncomingParticipants = incomingTxidsFromParticipants.size > 0
@@ -236,15 +304,6 @@ export async function computeOneHop(
   }
 
   const recordsByAddr = await getRecordsByAddresses([...externalAddresses]);
-
-  // Load blockTimes for all relevant txids
-  const allTxids = new Set([
-    ...incomingCoveredTxids,
-    ...outgoingCoveredTxids,
-    ...incomingTxidsFromParticipants,
-    ...outgoingTxidsFromParticipants,
-  ]);
-  const blockTimes = await loadBlockTimes([...allTxids]);
 
   if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
 
@@ -399,6 +458,9 @@ export async function computeOneHop(
   return {
     sources: sortFlows([...sourceMap.values()]),
     destinations: sortFlows([...destMap.values()]),
+    isCapped,
+    shownTxCount,
+    totalTxCount,
   };
 }
 

@@ -49,6 +49,33 @@ const DIMENSION_LABELS: Record<GroupingDimension, string> = {
 const MAX_DEPTH = 5;
 
 // ---------------------------------------------------------------------------
+// Cap notice — shown when a hop was truncated to the most recent N txs
+// ---------------------------------------------------------------------------
+
+function CapNotice({
+  shownTxCount,
+  totalTxCount,
+}: {
+  shownTxCount?: number;
+  totalTxCount?: number;
+}) {
+  return (
+    <div
+      className="flex items-start gap-2 rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground"
+      data-testid="fund-trail-cap-notice"
+    >
+      <Info className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+      <span>
+        Showing only the most recent{" "}
+        {shownTxCount != null ? shownTxCount.toLocaleString() : ""} transactions
+        {totalTxCount != null ? ` of ${totalTxCount.toLocaleString()}` : ""} to
+        keep things fast. Narrow your selection to trace older activity.
+      </span>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Detail Row — one address/txid/amount line inside an expanded flow
 // ---------------------------------------------------------------------------
 
@@ -263,6 +290,15 @@ function FlowCard({
               ? `Where ${flow.groupLabel} received from:`
               : `Where ${flow.groupLabel} sent to:`}
           </p>
+
+          {expandedHop.isCapped && (
+            <div className="mb-2">
+              <CapNotice
+                shownTxCount={expandedHop.shownTxCount}
+                totalTxCount={expandedHop.totalTxCount}
+              />
+            </div>
+          )}
 
           {direction === "source" && (
             <>
@@ -545,7 +581,16 @@ function TrailLayout({
   const rootVisited = new Set([centerLabel]);
 
   return (
-    <div className="flex flex-1 gap-4 p-6 min-h-0 overflow-auto">
+    <div className="flex flex-col flex-1 min-h-0 overflow-auto">
+      {centerHop.isCapped && (
+        <div className="px-6 pt-4">
+          <CapNotice
+            shownTxCount={centerHop.shownTxCount}
+            totalTxCount={centerHop.totalTxCount}
+          />
+        </div>
+      )}
+      <div className="flex flex-1 gap-4 p-6 min-h-0">
       {/* Sources column */}
       <div className="flex flex-col gap-3 flex-1 min-w-0">
         <div className="flex items-center gap-2 mb-1">
@@ -642,6 +687,7 @@ function TrailLayout({
             dateRange={dateRange}
           />
         ))}
+      </div>
       </div>
     </div>
   );
