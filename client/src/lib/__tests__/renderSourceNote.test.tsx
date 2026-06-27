@@ -193,6 +193,88 @@ describe("renderSourceNote parsing rules", () => {
   });
 });
 
+describe("renderSourceNote never linkifies dangerous URI schemes", () => {
+  // A free-text note is untrusted user input. Only http(s) URLs should ever
+  // become clickable links; any other scheme — most importantly the
+  // script-executing/exfiltration vectors below — must render as inert plain
+  // text. These tests pin that down so a regression that loosens the URL regex
+  // can't silently turn a malicious note into a script-running link.
+  const dangerousNotes: ReadonlyArray<readonly [string, string]> = [
+    ["javascript: (script execution)", "Click javascript:alert(1) now"],
+    [
+      "JavaScript: (mixed case bypass attempt)",
+      "Click JavaScript:alert(1) now",
+    ],
+    [
+      "data: (inline HTML/script payload)",
+      "Open data:text/html,<script>alert(1)</script> here",
+    ],
+    ["file: (local file access)", "See file:///etc/passwd for details"],
+    ["vbscript: (legacy script execution)", "Run vbscript:msgbox(1) here"],
+    [
+      "javascript: wrapped in a real sentence",
+      'He wrote "javascript:alert(document.cookie)" in the note.',
+    ],
+  ];
+
+  it.each(dangerousNotes)(
+    "renders a %s URI as plain text with no link",
+    (_label, note) => {
+      render(<div data-testid="note">{renderSourceNote(note)}</div>);
+
+      const container = screen.getByTestId("note");
+      // No anchor is produced for the dangerous scheme.
+      expect(within(container).queryByRole("link")).toBeNull();
+      // The note text is preserved verbatim (rendered inert as plain text).
+      expect(container.textContent).toBe(note);
+    },
+  );
+
+  it("only linkifies the http(s) URL, leaving an adjacent javascript: URI as plain text", () => {
+    const note =
+      "Safe https://example.com/x but danger javascript:alert(1) here";
+    render(<div data-testid="note">{renderSourceNote(note)}</div>);
+
+    const container = screen.getByTestId("note");
+    const links = within(container).getAllByRole("link");
+
+    // Exactly one link — the http(s) URL — and never the javascript: URI.
+    expect(links).toHaveLength(1);
+    expect(links[0].getAttribute("href")).toBe("https://example.com/x");
+    // The javascript: URI survives only as inert plain text inside the note.
+    expect(container.textContent).toBe(note);
+  });
+
+  it("linkifies both http:// and https:// schemes", () => {
+    const note = "Plain http://example.com/a and secure https://example.com/b";
+    render(<div data-testid="note">{renderSourceNote(note)}</div>);
+
+    const container = screen.getByTestId("note");
+    const links = within(container).getAllByRole("link");
+
+    expect(links).toHaveLength(2);
+    expect(links[0].getAttribute("href")).toBe("http://example.com/a");
+    expect(links[1].getAttribute("href")).toBe("https://example.com/b");
+  });
+
+  it("never produces an href that begins with javascript:, data:, file:, or vbscript:", () => {
+    const note =
+      "javascript:alert(1) data:text/html,x file:///etc/passwd vbscript:x and https://example.com/ok";
+    render(<div data-testid="note">{renderSourceNote(note)}</div>);
+
+    const container = screen.getByTestId("note");
+    // The only link is the http(s) one; assert no link carries a dangerous scheme.
+    for (const link of within(container).queryAllByRole("link")) {
+      const href = (link.getAttribute("href") ?? "").toLowerCase();
+      expect(href.startsWith("javascript:")).toBe(false);
+      expect(href.startsWith("data:")).toBe(false);
+      expect(href.startsWith("file:")).toBe(false);
+      expect(href.startsWith("vbscript:")).toBe(false);
+      expect(/^https?:\/\//.test(href)).toBe(true);
+    }
+  });
+});
+
 describe("renderSourceNote offline-first guarantees", () => {
   it("performs zero network requests when rendering a note containing URLs", () => {
     // Stub every render-time network entry point. If a regression ever pre-fetches
