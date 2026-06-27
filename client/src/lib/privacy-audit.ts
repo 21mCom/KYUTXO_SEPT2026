@@ -151,7 +151,7 @@ const PRIVACY_POSITIVE_TYPES = new Set<PrivacyFindingType>([
   "COINJOIN_JOINMARKET",
 ]);
 
-function computeScore(
+export function computeScore(
   findings: PrivacyFinding[],
   warnings: PrivacyFinding[]
 ): { score: number; grade: string; waterfall: ScoreWaterfallEntry[] } {
