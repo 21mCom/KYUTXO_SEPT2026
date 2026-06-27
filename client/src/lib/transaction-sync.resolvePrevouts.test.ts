@@ -338,3 +338,142 @@ describe("TransactionSyncService.resolvePrevouts → stop launches no new node f
     expect(result.fetchedFromNode).toBe(CONCURRENCY);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Task #947: a STOPPED global resolve must still recompute the SOURCE wallet
+// balances for the spends it did attribute. The recompute block runs over
+// resolvedAddressSet inside `if (resolvedParticipants.length > 0)` — it is NOT
+// gated on stats.cancelled — so the cached balance of an already-attributed
+// source address must drop in the same run even when the fetch loop was
+// aborted partway through. This guards against a regression that keeps the
+// partial attribution but leaves the source balances stale.
+//
+// Setup: source address S has a synced state + a funding output and a blank
+// spend input that is resolvable LOCALLY (no network). Plus enough fetch-only
+// inputs to enter the fetch loop, where we abort on the first getTransaction
+// call. S is resolved from the local cache regardless of the abort, so its
+// balance recompute must still run despite stats.cancelled being true.
+// ---------------------------------------------------------------------------
+
+const ADDR_S = "bc1qsourcecancelaaaaaaaaaaaaaaaaaaaaaaaaa2";
+const TX_FUND_S = "1".repeat(64); // funds S with 100000
+const TX_SPEND_S = "2".repeat(64); // S's coin gets spent here
+const CANCEL_FETCH_SRC = (n: number) => `9${n}`.padEnd(64, "a").slice(0, 64);
+const CANCEL_SPEND_TX = (n: number) => `8${n}`.padEnd(64, "b").slice(0, 64);
+
+describe("TransactionSyncService.resolvePrevouts → cancelled run still recomputes attributed source balances", () => {
+  beforeEach(async () => {
+    await testDb.records.clear();
+    await testDb.blockchainTransactions.clear();
+    await testDb.transactionParticipants.clear();
+    await testDb.addressSyncState.clear();
+  });
+
+  it("drops the source balance for a locally-attributed spend even after aborting mid-fetch", async () => {
+    // Source address S (synced + funded), plus a dummy record to keep the table
+    // non-trivial.
+    const sId = (await testDb.records.add(addrRecord(ADDR_S))) as number;
+
+    // S is a synced address, so recompute treats a zero balance as authoritative
+    // (a genuine spent-to-zero) rather than "not synced".
+    await testDb.addressSyncState.add({
+      address: ADDR_S,
+      recordId: sId,
+      lastSyncedHeight: 100,
+      lastSyncedAt: Date.now(),
+      txCount: 1,
+    } as AddressSyncState);
+
+    await testDb.blockchainTransactions.bulkAdd([
+      { txid: TX_FUND_S, blockHeight: 100, blockTime: 1000, syncedAt: Date.now() } as BlockchainTransaction,
+      { txid: TX_SPEND_S, blockHeight: 200, blockTime: 2000, syncedAt: Date.now() } as BlockchainTransaction,
+    ]);
+
+    // TX_FUND_S: output paying 100000 to S (vout 0). Stored locally so the spend
+    // below resolves WITHOUT any network fetch.
+    await testDb.transactionParticipants.add({
+      txid: TX_FUND_S,
+      role: "output",
+      vout: 0,
+      address: ADDR_S,
+      amount: 100000,
+      recordId: sId,
+    } as TransactionParticipant);
+
+    // TX_SPEND_S: blank input spending TX_FUND_S:0 (locally resolvable), plus an
+    // output to some destination.
+    await testDb.transactionParticipants.add({
+      txid: TX_SPEND_S,
+      role: "input",
+      address: "",
+      amount: 0,
+      prevTxid: TX_FUND_S,
+      prevVout: 0,
+    } as TransactionParticipant);
+    await testDb.transactionParticipants.add({
+      txid: TX_SPEND_S,
+      role: "output",
+      vout: 0,
+      address: "bc1qspenddestaaaaaaaaaaaaaaaaaaaaaaaaaaaa3",
+      amount: 99000,
+    } as TransactionParticipant);
+
+    // Six fetch-only spend inputs to force the fetch loop, where we abort on the
+    // first getTransaction call.
+    const fetchInputs: TransactionParticipant[] = [];
+    for (let i = 1; i <= 6; i++) {
+      fetchInputs.push({
+        txid: CANCEL_SPEND_TX(i),
+        role: "input",
+        address: "",
+        amount: 0,
+        prevTxid: CANCEL_FETCH_SRC(i),
+        prevVout: 0,
+      } as TransactionParticipant);
+    }
+    await testDb.transactionParticipants.bulkAdd(fetchInputs);
+
+    const controller = new AbortController();
+    const fetchCalls: string[] = [];
+
+    const service = new TransactionSyncService();
+    (service as any).provider = {
+      getTransaction: vi.fn(async (txid: string) => {
+        fetchCalls.push(txid);
+        // Abort on the very first fetch so the run is cancelled mid-flight.
+        if (fetchCalls.length === 1) controller.abort();
+        return {
+          vout: [
+            {
+              n: 0,
+              value: 30000,
+              scriptpubkey_address: `bc1qfetched${txid.slice(0, 6)}`,
+              scriptpubkey_type: "v0_p2wpkh",
+            },
+          ],
+        };
+      }),
+    };
+
+    const result = await service.resolvePrevouts(undefined, { signal: controller.signal });
+
+    // The run was cancelled mid-fetch...
+    expect(result.cancelled).toBe(true);
+    // ...but S's spend was attributed from the LOCAL cache (no fetch needed).
+    expect(result.resolvedAddresses).toContain(ADDR_S);
+    const sInput = await testDb.transactionParticipants
+      .where("[prevTxid+prevVout]")
+      .equals([TX_FUND_S, 0])
+      .first();
+    expect(sInput?.address).toBe(ADDR_S);
+    expect(sInput?.amount).toBe(100000);
+
+    // The critical assertion: despite stats.cancelled being true, S's cached
+    // balance was recomputed in the same run and dropped to 0 (100000 in -
+    // 100000 out). A regression that skips recompute on the cancelled path
+    // would leave cachedBalanceSats stale/undefined.
+    const sAfter = await testDb.records.get(sId);
+    expect(sAfter?.cachedBalanceSats).toBe(0);
+    expect(sAfter?.statsComputedAt).toBeTruthy();
+  });
+});
