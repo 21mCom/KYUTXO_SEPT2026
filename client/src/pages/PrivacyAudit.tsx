@@ -1360,6 +1360,10 @@ export function PrivacyHistoryCard() {
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
+  // True when the last "Select range" matched zero stored runs. Distinguishes
+  // an empty-range result from the "nothing picked = all runs" default so the
+  // hint can warn the user instead of silently reverting to all runs.
+  const [rangeMatchedNone, setRangeMatchedNone] = useState(false);
 
   const entryKey = useCallback(
     (entry: PrivacyAuditHistoryEntry) => entry.id ?? entry.timestamp,
@@ -1376,6 +1380,7 @@ export function PrivacyHistoryCard() {
   }, [history, selectedIds]);
 
   const toggleSelected = useCallback((key: number) => {
+    setRangeMatchedNone(false);
     setSelectedIds((prev) => {
       const next = new Set(prev);
       if (next.has(key)) {
@@ -1388,25 +1393,37 @@ export function PrivacyHistoryCard() {
   }, []);
 
   const selectAll = useCallback(() => {
+    setRangeMatchedNone(false);
     setSelectedIds(new Set((history ?? []).map((e) => e.id ?? e.timestamp)));
   }, [history]);
 
-  const clearSelection = useCallback(() => setSelectedIds(new Set()), []);
+  const clearSelection = useCallback(() => {
+    setRangeMatchedNone(false);
+    setSelectedIds(new Set());
+  }, []);
 
   // Convenience: check every run whose timestamp falls within the chosen date
-  // range (inclusive). Empty bounds are treated as open-ended.
+  // range (inclusive). Empty bounds are treated as open-ended. When the range
+  // matches no stored runs, leave the existing selection untouched and surface
+  // a clear, non-destructive message instead of silently reverting to the
+  // "export all runs" default.
   const selectRange = useCallback(() => {
     const list = history ?? [];
     const fromTs = fromDate ? new Date(`${fromDate}T00:00:00`).getTime() : -Infinity;
     const toTs = toDate ? new Date(`${toDate}T23:59:59.999`).getTime() : Infinity;
-    setSelectedIds(
-      new Set(
-        list
-          .filter((e) => e.timestamp >= fromTs && e.timestamp <= toTs)
-          .map((e) => e.id ?? e.timestamp),
-      ),
-    );
-  }, [history, fromDate, toDate]);
+    const matched = list.filter((e) => e.timestamp >= fromTs && e.timestamp <= toTs);
+    if (matched.length === 0) {
+      setRangeMatchedNone(true);
+      toast({
+        title: "No runs in that date range",
+        description:
+          "Nothing was selected. Adjust the dates or pick runs by hand — your current selection is unchanged.",
+      });
+      return;
+    }
+    setRangeMatchedNone(false);
+    setSelectedIds(new Set(matched.map((e) => e.id ?? e.timestamp)));
+  }, [history, fromDate, toDate, toast]);
 
   const chartData = useMemo(
     () =>
@@ -1638,7 +1655,10 @@ export function PrivacyHistoryCard() {
               id="history-from-date"
               type="date"
               value={fromDate}
-              onChange={(e) => setFromDate(e.target.value)}
+              onChange={(e) => {
+                setRangeMatchedNone(false);
+                setFromDate(e.target.value);
+              }}
               className="h-9 w-[10.5rem]"
               data-testid="input-history-from-date"
             />
@@ -1651,7 +1671,10 @@ export function PrivacyHistoryCard() {
               id="history-to-date"
               type="date"
               value={toDate}
-              onChange={(e) => setToDate(e.target.value)}
+              onChange={(e) => {
+                setRangeMatchedNone(false);
+                setToDate(e.target.value);
+              }}
               className="h-9 w-[10.5rem]"
               data-testid="input-history-to-date"
             />
@@ -1684,8 +1707,15 @@ export function PrivacyHistoryCard() {
               Clear selection
             </Button>
           </div>
-          <p className="w-full text-xs text-muted-foreground" data-testid="text-history-export-hint">
-            {selectedIds.size === 0
+          <p
+            className={`w-full text-xs ${
+              rangeMatchedNone ? "text-amber-600 dark:text-amber-400" : "text-muted-foreground"
+            }`}
+            data-testid="text-history-export-hint"
+          >
+            {rangeMatchedNone
+              ? "0 runs fall in that date range — selection unchanged. Adjust the dates or pick runs by hand."
+              : selectedIds.size === 0
               ? "No runs picked — exports will include all stored runs."
               : `Exports will include ${selectedIds.size} selected run${
                   selectedIds.size === 1 ? "" : "s"
