@@ -89,6 +89,8 @@ vi.mock("@/components/LegacyRecoveryPanel", () => ({ default: () => null }));
 
 const SettingsPage = (await import("./SettingsPage")).default;
 const { ActivityBusProvider } = await import("@/lib/activity-bus");
+const { RecordPreviewProvider } = await import("@/contexts/RecordPreviewContext");
+const { TooltipProvider } = await import("@/components/ui/tooltip");
 const { putSettings, getSettings } = await import("@/lib/data/settings-crud");
 const {
   resetActiveEntityList,
@@ -393,6 +395,86 @@ describe("SettingsPage — Privacy Audit Entity List panel", () => {
     // The import can still be confirmed despite the warning.
     fireEvent.click(screen.getByTestId("button-confirm-entity-import"));
     await waitFor(() => expect(getActiveEntitySource()).toBe("imported"));
+  });
+
+  it("renders each cited mismatch address as a clickable AddressLink (base58 + bech32)", async () => {
+    // The warning list renders cited addresses via <AddressLink>, which depends
+    // on RecordPreviewProvider (for the click-to-open behaviour). Wrap the page
+    // in it so the real link + copy controls mount.
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    const originalClipboard = navigator.clipboard;
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+
+    try {
+      render(
+        <TooltipProvider>
+          <RecordPreviewProvider>
+            <ActivityBusProvider>
+              <SettingsPage />
+            </ActivityBusProvider>
+          </RecordPreviewProvider>
+        </TooltipProvider>,
+      );
+
+      await screen.findByTestId("badge-entity-source");
+
+      // A single entry whose source note cites two OTHER addresses — one legacy
+      // base58 (mixed case, contains chars base58 excludes from bech32) and one
+      // bech32 — so both citation alphabets are exercised. AddressLink derives
+      // its test ids from the first 8 chars of each cited address.
+      const CITED_BASE58 = "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa";
+      const CITED_BECH32 = ADDR.b;
+      const snapshot = JSON.stringify([
+        {
+          address: ADDR.a,
+          name: "New Exchange",
+          category: "exchange",
+          sourceNote:
+            `https://www.walletexplorer.com/address/${CITED_BASE58} ` +
+            `https://www.walletexplorer.com/address/${CITED_BECH32}`,
+        },
+      ]);
+      await selectEntityFile("snapshot.json", snapshot);
+
+      // The warning surfaces both cited addresses as interactive AddressLinks
+      // (link button + copy button), not plain text.
+      await screen.findByTestId("container-entity-import-warnings");
+
+      const base58Link = await screen.findByTestId(
+        `link-address-${CITED_BASE58.slice(0, 8)}`,
+      );
+      const base58Copy = screen.getByTestId(
+        `button-copy-address-${CITED_BASE58.slice(0, 8)}`,
+      );
+      const bech32Link = screen.getByTestId(
+        `link-address-${CITED_BECH32.slice(0, 8)}`,
+      );
+      const bech32Copy = screen.getByTestId(
+        `button-copy-address-${CITED_BECH32.slice(0, 8)}`,
+      );
+      expect(base58Link).toBeTruthy();
+      expect(bech32Link).toBeTruthy();
+
+      // The copy controls copy the FULL cited address, proving these are real
+      // AddressLink controls wired to the clipboard rather than truncated labels.
+      fireEvent.click(base58Copy);
+      await waitFor(() => expect(writeText).toHaveBeenLastCalledWith(CITED_BASE58));
+      fireEvent.click(bech32Copy);
+      await waitFor(() => expect(writeText).toHaveBeenLastCalledWith(CITED_BECH32));
+
+      // The link itself is clickable (navigates to the record preview); with no
+      // matching record it resolves without throwing.
+      fireEvent.click(base58Link);
+      fireEvent.click(bech32Link);
+    } finally {
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: originalClipboard,
+      });
+    }
   });
 
   it("surfaces per-entry errors for an invalid snapshot and applies nothing", async () => {
