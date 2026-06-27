@@ -641,6 +641,120 @@ describe("SettingsPage — Privacy Audit Entity List panel", () => {
     expect((await getSettings("default"))?.entityListSnapshot).toBeUndefined();
   });
 
+  it("keeps one huge collapsed group virtualized while small groups stay closed", async () => {
+    render(
+      <ActivityBusProvider>
+        <SettingsPage />
+      </ActivityBusProvider>,
+    );
+    await screen.findByTestId("badge-entity-source");
+
+    // The realistic "messy paste": one problem type dominates with hundreds of
+    // occurrences while a couple of others have a handful. Because there are
+    // multiple groups, none auto-expands — the big group starts collapsed and
+    // only virtualizes its window after the user opens it.
+    //   - invalid-address  × 150 (bad address, valid name + category)
+    //   - unknown-category × 3   (valid address + name, bogus category)
+    //   - missing-name     × 1   (valid address + category, empty name)
+    // Reusing valid addresses across the unknown-category / missing-name entries
+    // is safe: only fully-valid entries are recorded for duplicate detection, so
+    // these never collapse into spurious duplicate-address errors.
+    const BIG_COUNT = 150;
+    const bigKind = Array.from({ length: BIG_COUNT }, (_, i) => ({
+      address: `totally-invalid-${i}`,
+      name: `Bad Addr ${i}`,
+      category: "exchange",
+    }));
+    const mixed = JSON.stringify([
+      ...bigKind,
+      { address: ADDR.a, name: "Bogus One", category: "not-a-category" },
+      { address: ADDR.b, name: "Bogus Two", category: "definitely-wrong" },
+      { address: ADDR.a, name: "Bogus Three", category: "nope" },
+      { address: ADDR.b, name: "", category: "exchange" },
+    ]);
+    await selectEntityFile("messy-paste.json", mixed);
+
+    // The container reports the full, uncapped total (150 + 3 + 1 = 154).
+    const TOTAL = BIG_COUNT + 4;
+    const container = await screen.findByTestId("container-entity-errors");
+    expect(container.textContent).toContain(`${TOTAL.toLocaleString()} problem`);
+
+    // All three problem-type groups are present, most-common first.
+    const order = screen
+      .getAllByTestId(/^group-entity-error-/)
+      .map((el) => el.getAttribute("data-testid"));
+    expect(order).toEqual([
+      "group-entity-error-invalid-address",
+      "group-entity-error-unknown-category",
+      "group-entity-error-missing-name",
+    ]);
+
+    // The big group's count badge shows the full count, not a virtualization cap.
+    expect(
+      screen.getByTestId("badge-entity-error-count-invalid-address").textContent,
+    ).toBe(BIG_COUNT.toLocaleString());
+    expect(
+      screen.getByTestId("badge-entity-error-count-unknown-category").textContent,
+    ).toBe("3");
+    expect(
+      screen.getByTestId("badge-entity-error-count-missing-name").textContent,
+    ).toBe("1");
+
+    // With multiple groups every group starts collapsed: no offending rows are
+    // mounted, and each heading reports aria-expanded="false".
+    expect(screen.queryByTestId("text-entity-error-0")).toBeNull();
+    expect(
+      screen
+        .getByTestId("button-entity-error-group-invalid-address")
+        .getAttribute("aria-expanded"),
+    ).toBe("false");
+    expect(
+      screen
+        .getByTestId("button-entity-error-group-unknown-category")
+        .getAttribute("aria-expanded"),
+    ).toBe("false");
+    expect(
+      screen
+        .getByTestId("button-entity-error-group-missing-name")
+        .getAttribute("aria-expanded"),
+    ).toBe("false");
+
+    // Expand only the big group. It exceeds the virtualization threshold, so it
+    // renders just a window of rows: the first rows mount, far rows do not, and
+    // the mounted count is far below the full total.
+    fireEvent.click(
+      screen.getByTestId("button-entity-error-group-invalid-address"),
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("text-entity-error-0")).toBeTruthy(),
+    );
+    expect(screen.getByTestId("text-entity-error-1")).toBeTruthy();
+    expect(screen.queryByTestId(`text-entity-error-${BIG_COUNT - 1}`)).toBeNull();
+    const mountedRows = screen.getAllByTestId(/^text-entity-error-\d+$/);
+    expect(mountedRows.length).toBeGreaterThan(0);
+    expect(mountedRows.length).toBeLessThan(BIG_COUNT);
+
+    // The revealed rows are the invalid-address failures, not another kind.
+    expect(container.textContent).toContain('Invalid Bitcoin address "totally-invalid-0"');
+
+    // The small groups stay collapsed even after opening the big one.
+    expect(
+      screen
+        .getByTestId("button-entity-error-group-unknown-category")
+        .getAttribute("aria-expanded"),
+    ).toBe("false");
+    expect(
+      screen
+        .getByTestId("button-entity-error-group-missing-name")
+        .getAttribute("aria-expanded"),
+    ).toBe("false");
+
+    // Nothing was applied — still on the bundled list, no persisted snapshot.
+    expect(screen.queryByTestId("text-preview-incoming")).toBeNull();
+    expect(getActiveEntitySource()).toBe("bundled");
+    expect((await getSettings("default"))?.entityListSnapshot).toBeUndefined();
+  });
+
   it("auto-expands the only group when every error is the same kind", async () => {
     render(
       <ActivityBusProvider>
