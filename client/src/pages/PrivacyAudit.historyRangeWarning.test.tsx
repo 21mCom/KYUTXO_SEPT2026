@@ -33,6 +33,7 @@ vi.mock("@/lib/data/privacy-history-crud", () => ({
 }));
 
 import type { PrivacyAuditHistoryEntry } from "@/lib/database";
+import { buildPrivacyHistoryCsv, buildPrivacyHistoryPdf } from "@/lib/privacy-history-export";
 import { PrivacyHistoryCard } from "./PrivacyAudit";
 
 // Three runs with distinct ids and timestamps spread across 2026 so the date
@@ -174,6 +175,56 @@ describe("PrivacyHistoryCard empty-date-range guard", () => {
     });
 
     expect(hintText()).not.toContain("0 runs fall in that date range");
+  });
+
+  it("confirms before falling back to all runs when exporting after an empty range with nothing selected", () => {
+    renderCard([RUN_JAN, RUN_MAR, RUN_JUN]);
+
+    // Trigger the empty-range warning with nothing hand-picked.
+    setRange("2026-09-01", "2026-12-31");
+    fireEvent.click(screen.getByTestId("button-history-select-range"));
+    expect(hintText()).toContain("0 runs fall in that date range");
+
+    // Clicking export must NOT export immediately; it opens a confirmation
+    // instead so the all-runs fallback is never a single accidental click.
+    fireEvent.click(screen.getByTestId("button-export-history-csv"));
+    expect(buildPrivacyHistoryCsv).not.toHaveBeenCalled();
+    expect(screen.getByTestId("dialog-export-fallback-confirm")).toBeTruthy();
+
+    // Confirming runs the all-runs export over the full history.
+    fireEvent.click(screen.getByTestId("button-export-fallback-confirm"));
+    expect(buildPrivacyHistoryCsv).toHaveBeenCalledTimes(1);
+    expect(buildPrivacyHistoryCsv).toHaveBeenCalledWith([RUN_JAN, RUN_MAR, RUN_JUN]);
+  });
+
+  it("cancelling the fallback confirmation aborts the export", () => {
+    renderCard([RUN_JAN, RUN_MAR, RUN_JUN]);
+
+    setRange("2026-09-01", "2026-12-31");
+    fireEvent.click(screen.getByTestId("button-history-select-range"));
+
+    fireEvent.click(screen.getByTestId("button-export-history-pdf"));
+    expect(screen.getByTestId("dialog-export-fallback-confirm")).toBeTruthy();
+
+    fireEvent.click(screen.getByTestId("button-export-fallback-cancel"));
+    expect(buildPrivacyHistoryPdf).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("dialog-export-fallback-confirm")).toBeNull();
+  });
+
+  it("exports directly without confirmation when runs are actually selected", () => {
+    renderCard([RUN_JAN, RUN_MAR, RUN_JUN]);
+
+    // Hand-pick a run, then trigger an empty range. selectedIds is non-empty so
+    // the export targets the selection, not the all-runs fallback.
+    fireEvent.click(screen.getByTestId("checkbox-history-select-2"));
+    setRange("2026-09-01", "2026-12-31");
+    fireEvent.click(screen.getByTestId("button-history-select-range"));
+    expect(hintText()).toContain("0 runs fall in that date range");
+
+    fireEvent.click(screen.getByTestId("button-export-history-csv"));
+    expect(screen.queryByTestId("dialog-export-fallback-confirm")).toBeNull();
+    expect(buildPrivacyHistoryCsv).toHaveBeenCalledTimes(1);
+    expect(buildPrivacyHistoryCsv).toHaveBeenCalledWith([RUN_MAR]);
   });
 
   it("selects the matching runs and clears the warning when a range DOES match", () => {

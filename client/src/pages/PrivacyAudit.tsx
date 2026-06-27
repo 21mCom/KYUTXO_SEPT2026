@@ -44,6 +44,16 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogTrigger } from "@/components/ui/dialog";
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
   BarChart,
   Bar,
   LineChart,
@@ -1615,7 +1625,13 @@ export function PrivacyHistoryCard() {
     }
   }, [toast]);
 
-  const handleExportCsv = useCallback(() => {
+  // After an empty-range "Select range" with nothing hand-picked, an export would
+  // silently fall back to the full history. Require an explicit confirmation in
+  // that state so the all-runs fallback is never a single accidental click.
+  const exportNeedsFallbackConfirm = rangeMatchedNone && selectedIds.size === 0;
+  const [pendingExport, setPendingExport] = useState<"csv" | "pdf" | null>(null);
+
+  const runCsvExport = useCallback(() => {
     const list = exportList;
     if (list.length === 0) return;
     try {
@@ -1642,7 +1658,7 @@ export function PrivacyHistoryCard() {
     }
   }, [exportList, toast]);
 
-  const handleExportPdf = useCallback(async () => {
+  const runPdfExport = useCallback(async () => {
     const list = exportList;
     if (list.length === 0) return;
     try {
@@ -1667,6 +1683,29 @@ export function PrivacyHistoryCard() {
       });
     }
   }, [exportList, toast]);
+
+  const handleExportCsv = useCallback(() => {
+    if (exportNeedsFallbackConfirm) {
+      setPendingExport("csv");
+      return;
+    }
+    runCsvExport();
+  }, [exportNeedsFallbackConfirm, runCsvExport]);
+
+  const handleExportPdf = useCallback(() => {
+    if (exportNeedsFallbackConfirm) {
+      setPendingExport("pdf");
+      return;
+    }
+    void runPdfExport();
+  }, [exportNeedsFallbackConfirm, runPdfExport]);
+
+  const confirmFallbackExport = useCallback(() => {
+    const kind = pendingExport;
+    setPendingExport(null);
+    if (kind === "csv") runCsvExport();
+    else if (kind === "pdf") void runPdfExport();
+  }, [pendingExport, runCsvExport, runPdfExport]);
 
   if (!history || history.length === 0) return null;
 
@@ -1750,6 +1789,35 @@ export function PrivacyHistoryCard() {
             Clear
           </Button>
         </div>
+        <AlertDialog
+          open={pendingExport !== null}
+          onOpenChange={(open) => {
+            if (!open) setPendingExport(null);
+          }}
+        >
+          <AlertDialogContent data-testid="dialog-export-fallback-confirm">
+            <AlertDialogHeader>
+              <AlertDialogTitle>Export all stored runs?</AlertDialogTitle>
+              <AlertDialogDescription>
+                The date range you picked matched 0 runs, so nothing is selected.
+                Exporting now will include all {history?.length ?? 0} stored run
+                {(history?.length ?? 0) === 1 ? "" : "s"}. Adjust the dates or pick
+                runs by hand to export a subset.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel data-testid="button-export-fallback-cancel">
+                Cancel
+              </AlertDialogCancel>
+              <AlertDialogAction
+                onClick={confirmFallbackExport}
+                data-testid="button-export-fallback-confirm"
+              >
+                Export all runs
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </CardHeader>
       <CardContent className="space-y-4">
         {chartData.length > 1 ? (
@@ -1856,7 +1924,7 @@ export function PrivacyHistoryCard() {
             data-testid="text-history-export-hint"
           >
             {rangeMatchedNone
-              ? "0 runs fall in that date range — selection unchanged. Adjust the dates or pick runs by hand."
+              ? "0 runs fall in that date range — selection unchanged. Adjust the dates or pick runs by hand. Exporting now will ask for confirmation first."
               : selectedIds.size === 0
               ? "No runs picked — exports will include all stored runs."
               : `Exports will include ${selectedIds.size} selected run${
