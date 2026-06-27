@@ -232,7 +232,7 @@ export function computeScore(
   return { score, grade, waterfall };
 }
 
-function scoreToGrade(score: number): string {
+export function scoreToGrade(score: number): string {
   if (score >= 97) return "A+";
   if (score >= 93) return "A";
   if (score >= 90) return "A-";

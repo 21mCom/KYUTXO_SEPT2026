@@ -17,7 +17,7 @@
 
 import { describe, it, expect } from "vitest";
 
-import { computeScore, type PrivacyFinding } from "./privacy-audit";
+import { computeScore, scoreToGrade, type PrivacyFinding } from "./privacy-audit";
 
 function makeLowProximityFinding(): PrivacyFinding {
   return {
@@ -283,5 +283,40 @@ describe("computeScore upper bound (never exceeds 100)", () => {
       expect(entry.delta).toBeLessThanOrEqual(0);
       expect(entry.runningScore).toBeLessThanOrEqual(100);
     }
+  });
+});
+
+// scoreToGrade maps a 0–100 score to one of 13 letter grades across 12
+// numeric thresholds (A+ from 97 down to D- at 60, with F below). An off-by-one
+// regression on any cutoff would silently mislabel a user's privacy grade, so we
+// pin every boundary directly: a score exactly AT the threshold must earn the
+// higher grade, and one point BELOW must drop to the next-lower grade.
+describe("scoreToGrade letter-grade boundaries", () => {
+  // [boundary score, grade at boundary, grade one point below boundary]
+  const boundaries: Array<[number, string, string]> = [
+    [97, "A+", "A"],
+    [93, "A", "A-"],
+    [90, "A-", "B+"],
+    [87, "B+", "B"],
+    [83, "B", "B-"],
+    [80, "B-", "C+"],
+    [77, "C+", "C"],
+    [73, "C", "C-"],
+    [70, "C-", "D+"],
+    [67, "D+", "D"],
+    [63, "D", "D-"],
+    [60, "D-", "F"],
+  ];
+
+  for (const [score, atGrade, belowGrade] of boundaries) {
+    it(`maps ${score} → ${atGrade} and ${score - 1} → ${belowGrade}`, () => {
+      expect(scoreToGrade(score)).toBe(atGrade);
+      expect(scoreToGrade(score - 1)).toBe(belowGrade);
+    });
+  }
+
+  it("maps the perfect and zero extremes", () => {
+    expect(scoreToGrade(100)).toBe("A+");
+    expect(scoreToGrade(0)).toBe("F");
   });
 });
