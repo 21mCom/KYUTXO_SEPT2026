@@ -32,7 +32,7 @@ function findingTypeLabel(type: string): string {
  * the existing per-row Owner/Wallet columns. Empty strings are treated the same
  * as unset so a blank owner/wallet never reads as a distinct filter.
  */
-function computePrivacyHistoryScopeLabel(
+export function computePrivacyHistoryScopeLabel(
   entries: PrivacyAuditHistoryEntry[],
 ): string | null {
   if (entries.length === 0) return null;

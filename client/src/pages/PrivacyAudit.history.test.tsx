@@ -21,11 +21,20 @@ vi.mock("dexie-react-hooks", () => ({
 }));
 
 // Spy on the export builders — this is the seam the test asserts against. CSV is
-// synchronous and PDF is async, mirroring the real signatures.
-vi.mock("@/lib/privacy-history-export", () => ({
-  buildPrivacyHistoryCsv: vi.fn(() => "csv,data"),
-  buildPrivacyHistoryPdf: vi.fn(async () => new Blob(["pdf"], { type: "application/pdf" })),
-}));
+// synchronous and PDF is async, mirroring the real signatures. The scope-label
+// helper is kept REAL (via importActual) so the on-screen badge is asserted
+// against the same derivation the exporter uses, which is the whole point of the
+// single-source-of-truth.
+vi.mock("@/lib/privacy-history-export", async () => {
+  const actual = await vi.importActual<
+    typeof import("@/lib/privacy-history-export")
+  >("@/lib/privacy-history-export");
+  return {
+    buildPrivacyHistoryCsv: vi.fn(() => "csv,data"),
+    buildPrivacyHistoryPdf: vi.fn(async () => new Blob(["pdf"], { type: "application/pdf" })),
+    computePrivacyHistoryScopeLabel: actual.computePrivacyHistoryScopeLabel,
+  };
+});
 
 // Clearing history is irrelevant here but is imported by the module.
 vi.mock("@/lib/data/privacy-history-crud", () => ({
@@ -340,6 +349,46 @@ describe("PrivacyHistoryCard scope badges", () => {
     expect(r.getByTestId("badge-history-scope-all").textContent).toContain("All");
     expect(r.queryByTestId("badge-history-scope-owner")).toBeNull();
     expect(r.queryByTestId("badge-history-scope-wallet")).toBeNull();
+  });
+
+  it("shows a report-wide export scope badge when every visible run shares one owner", () => {
+    const RUN_ALICE_2 = { ...makeRun(14, TS_MAR, 72), owner: "Alice" };
+    renderCard([RUN_OWNER_ONLY, RUN_ALICE_2]);
+
+    expect(screen.getByTestId("badge-history-export-scope").textContent).toContain(
+      "Scope: Owner = Alice",
+    );
+  });
+
+  it("shows 'Scope: All addresses' when every visible run is full-vault", () => {
+    const RUN_NEITHER_2 = makeRun(15, TS_MAR, 88);
+    renderCard([RUN_NEITHER, RUN_NEITHER_2]);
+
+    expect(screen.getByTestId("badge-history-export-scope").textContent).toContain(
+      "Scope: All addresses",
+    );
+  });
+
+  it("hides the report-wide export scope badge when runs span multiple scopes", () => {
+    renderCard([RUN_OWNER_ONLY, RUN_WALLET_ONLY]);
+
+    expect(screen.queryByTestId("badge-history-export-scope")).toBeNull();
+  });
+
+  it("tracks the selection: a mixed history narrowed to one scope shows the badge", () => {
+    const RUN_ALICE_2 = { ...makeRun(14, TS_MAR, 72), owner: "Alice" };
+    // History spans two owners, so with nothing selected the export covers both
+    // and there is no single scope.
+    renderCard([RUN_OWNER_ONLY, RUN_ALICE_2, RUN_BOTH]);
+    expect(screen.queryByTestId("badge-history-export-scope")).toBeNull();
+
+    // Pick only the two Alice-owned runs; now the export shares one scope.
+    fireEvent.click(screen.getByTestId("checkbox-history-select-10"));
+    fireEvent.click(screen.getByTestId("checkbox-history-select-14"));
+
+    expect(screen.getByTestId("badge-history-export-scope").textContent).toContain(
+      "Scope: Owner = Alice",
+    );
   });
 
   it("labels each row independently when all scope kinds are present at once", () => {

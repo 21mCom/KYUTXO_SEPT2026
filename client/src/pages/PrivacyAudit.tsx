@@ -61,7 +61,11 @@ import { renderSourceNote } from "@/lib/renderSourceNote";
 import { beginBulkOperation, endBulkOperation, db } from "@/lib/database";
 import type { Record as DbRecord, PrivacyAuditHistoryEntry, TransactionParticipant } from "@/lib/database";
 import { addPrivacyAuditHistoryEntry, clearPrivacyAuditHistory } from "@/lib/data/privacy-history-crud";
-import { buildPrivacyHistoryCsv, buildPrivacyHistoryPdf } from "@/lib/privacy-history-export";
+import {
+  buildPrivacyHistoryCsv,
+  buildPrivacyHistoryPdf,
+  computePrivacyHistoryScopeLabel,
+} from "@/lib/privacy-history-export";
 import { formatScoreDelta } from "@/lib/privacy-report-export";
 import { createTag } from "@/lib/data/vocabulary-crud";
 import { updateRecord, countRecordsByType, getRecordsPageByTypeIdReverseKeyset, getRecordsByInputStrings } from "@/lib/data/record-crud";
@@ -1499,6 +1503,15 @@ export function PrivacyHistoryCard() {
     return list.filter((e) => selectedIds.has(e.id ?? e.timestamp));
   }, [history, selectedIds]);
 
+  // The single report-wide scope label for the runs that will be exported, when
+  // they all share one owner/wallet filter (or are all full-vault). Reuses the
+  // exporter's own derivation so the on-screen badge cannot drift from the
+  // exported file. Null when the selected runs span multiple scopes.
+  const exportScopeLabel = useMemo(
+    () => computePrivacyHistoryScopeLabel(exportList),
+    [exportList],
+  );
+
   const toggleSelected = useCallback((key: number) => {
     setRangeMatchedNone(false);
     setSelectedIds((prev) => {
@@ -1701,6 +1714,15 @@ export function PrivacyHistoryCard() {
           </CardDescription>
         </div>
         <div className="flex items-center gap-1 flex-wrap">
+          {exportScopeLabel && (
+            <Badge
+              variant="secondary"
+              className="mr-1"
+              data-testid="badge-history-export-scope"
+            >
+              {exportScopeLabel}
+            </Badge>
+          )}
           <Button
             variant="outline"
             size="sm"
