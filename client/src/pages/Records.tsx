@@ -42,6 +42,8 @@ import { RecordDetailPanel } from "@/components/RecordDetailPanel";
 import { ClickableAddress } from "@/components/ClickableAddress";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { RecordFilters, ColumnFilter } from "@/components/RecordFilters";
+import { BehaviorFilter } from "@/components/BehaviorFilter";
+import { classifyBehavior, type BehaviorLabel } from "@/lib/behavior-profile";
 import { useTags } from "@/hooks/use-tags";
 import { useCategories } from "@/hooks/use-categories";
 import { useOwners } from "@/hooks/use-owners";
@@ -86,6 +88,13 @@ interface ConvertedRecord {
   maxSyncedDepth?: number;
   discoveredInTxid?: string;
   discoveredFromRecordId?: number;
+  // Cached on-chain stats carried through so RecordTable can render behavior
+  // badges and the page can filter by behavior label — all client-side, no scan.
+  cachedBalanceSats?: number;
+  cachedTxCount?: number;
+  cachedLastActivityTime?: number;
+  cachedUtxoCount?: number;
+  statsComputedAt?: number;
 }
 
 function convertRecord(r: DbRecord): ConvertedRecord {
@@ -112,6 +121,11 @@ function convertRecord(r: DbRecord): ConvertedRecord {
     maxSyncedDepth: r.maxSyncedDepth,
     discoveredInTxid: r.discoveredInTxid,
     discoveredFromRecordId: r.discoveredFromRecordId,
+    cachedBalanceSats: r.cachedBalanceSats,
+    cachedTxCount: r.cachedTxCount,
+    cachedLastActivityTime: r.cachedLastActivityTime,
+    cachedUtxoCount: r.cachedUtxoCount,
+    statsComputedAt: r.statsComputedAt,
   };
 }
 
@@ -197,6 +211,10 @@ export default function Records() {
   const [engineReadySignal, setEngineReadySignal] = useState(0);
   
   const [columnFilters, setColumnFilters] = useState<ColumnFilter[]>([]);
+  // Behavior-label filter (Dormant, Accumulator, etc.). Derived client-side from
+  // the cached on-chain stats already on each loaded record — no DB scan. Applied
+  // to the loaded page only, so it is intentionally absent from the load effect.
+  const [behaviorFilters, setBehaviorFilters] = useState<Set<BehaviorLabel>>(new Set());
   
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   
@@ -269,7 +287,7 @@ export default function Records() {
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [debouncedSearch, columnFilters, includeBlockchainDiscovered]);
+  }, [debouncedSearch, columnFilters, includeBlockchainDiscovered, behaviorFilters]);
 
   const loadVersionRef = useRef(0);
   const inFlightRef = useRef(0);
@@ -818,7 +836,24 @@ export default function Records() {
   // window. The full match count is still shown in the header.
   const displayTotalPages = Math.max(1, Math.ceil(navigableCount / PAGE_SIZE));
   const displayStartIndex = (currentPage - 1) * PAGE_SIZE;
-  const displayRecords = records;
+  // Behavior filtering is purely client-side over the loaded page, derived from
+  // the cached on-chain stats already on each record (same fields RecordTable
+  // uses for its behavior badge). No DB scan, so it never touches the load path.
+  const behaviorFilterActive = behaviorFilters.size > 0;
+  const displayRecords = useMemo(() => {
+    if (!behaviorFilterActive) return records;
+    return records.filter((r) => {
+      if (r.type !== 'address') return false;
+      const { label } = classifyBehavior({
+        synced: r.statsComputedAt != null,
+        balanceSats: r.cachedBalanceSats ?? 0,
+        txCount: r.cachedTxCount ?? 0,
+        utxoCount: r.cachedUtxoCount ?? 0,
+        lastActivityTime: r.cachedLastActivityTime ?? 0,
+      });
+      return behaviorFilters.has(label);
+    });
+  }, [records, behaviorFilters, behaviorFilterActive]);
 
   useEffect(() => {
     if (currentPage > displayTotalPages && displayTotalPages > 0) {
@@ -1012,6 +1047,11 @@ export default function Records() {
             onFiltersChange={setColumnFilters}
             uniqueValues={uniqueFilterValues}
           />
+
+          <BehaviorFilter
+            selected={behaviorFilters}
+            onChange={setBehaviorFilters}
+          />
         </div>
 
         <div className={`space-y-6 ${searchPendingClass(isSearchPending, 'Records')}`}>
@@ -1168,8 +1208,10 @@ export default function Records() {
                     </Button>
                   </div>
                 ) : displayRecords.length === 0 ? (
-                  <div className="text-center py-8 text-muted-foreground">
-                    {searchQuery 
+                  <div className="text-center py-8 text-muted-foreground" data-testid="text-records-empty">
+                    {behaviorFilterActive && records.length > 0
+                      ? "No records on this page match the selected behavior labels. Try another page, or adjust the behavior filter."
+                      : searchQuery
                       ? txidSearchResults.length > 0
                         ? "No address records found for this transaction. Addresses may not have been synced yet."
                         : "No records match your search"
@@ -1185,6 +1227,16 @@ export default function Records() {
                       selectedIds={selectedIds}
                       onSelectionChange={setSelectedIds}
                     />
+
+                    {behaviorFilterActive && (
+                      <div
+                        className="text-sm text-muted-foreground border-t pt-4 mt-4"
+                        data-testid="text-behavior-filter-notice"
+                      >
+                        Behavior filters apply to the {records.length.toLocaleString()} record{records.length !== 1 ? 's' : ''} loaded on this page
+                        ({displayRecords.length.toLocaleString()} match). Use the search or filters above to narrow the full set first.
+                      </div>
+                    )}
                     
                     {resultsTruncated && (
                       <div
