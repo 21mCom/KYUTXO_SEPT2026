@@ -80,6 +80,64 @@ describe("VaultManagement notes link rendering", () => {
     expect(link.textContent).toBe("https://cosigner.example.org/profile");
   });
 
+  it("opens cosigner-note links via window.open without fetching at render", () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+    const openSpy = vi.spyOn(window, "open").mockReturnValue(null);
+
+    const { getByTestId } = render(
+      <CosignerNotesDisplay notes="Profile https://cosigner.example.org" />,
+    );
+    // Render alone must never fetch or open anything.
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(openSpy).not.toHaveBeenCalled();
+
+    const link = getByTestId("text-cosigner-notes-0-0").querySelector(
+      "a",
+    ) as HTMLAnchorElement;
+    fireEvent.click(link);
+
+    expect(openSpy).toHaveBeenCalledTimes(1);
+    expect(openSpy).toHaveBeenCalledWith(
+      "https://cosigner.example.org",
+      "_blank",
+      "noopener,noreferrer",
+    );
+    expect(fetchSpy).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+
+  it("renders plain vault notes (no URL) without any link", () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const { getByTestId } = render(
+      <VaultNotesDisplay
+        userNotes="Cold storage backup kept in the safe"
+        onEdit={() => {}}
+      />,
+    );
+    const notes = getByTestId("text-vault-notes-0");
+    expect(notes.querySelector("a")).toBeNull();
+    expect(notes.textContent).toBe("Cold storage backup kept in the safe");
+    expect(fetchSpy).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+
+  it("renders plain cosigner notes (no URL) without any link", () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const { getByTestId } = render(
+      <CosignerNotesDisplay notes="Key held by a trusted family member" />,
+    );
+    const notes = getByTestId("text-cosigner-notes-0-0");
+    expect(notes.querySelector("a")).toBeNull();
+    expect(notes.textContent).toBe("Key held by a trusted family member");
+    expect(fetchSpy).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+
   it("opens vault-note links via window.open without fetching at render", () => {
     const fetchSpy = vi.fn();
     vi.stubGlobal("fetch", fetchSpy);
