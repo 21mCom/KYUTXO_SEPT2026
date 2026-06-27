@@ -1,34 +1,36 @@
 // @vitest-environment jsdom
 //
-// Expanded-hop CapNotice test — DEEP (depth >= 1) nesting.
+// Expanded-hop CapNotice test — DEEP (depth >= 2, near MAX_DEPTH) nesting.
 //
 // FundTrail.expandedCapNotice.test.tsx (source) and
-// FundTrail.expandedCapNoticeDest.test.tsx (dest) both expand a SINGLE hop at
+// FundTrail.expandedCapNoticeDest.test.tsx (dest) expand a SINGLE hop at
 // depth 0 and assert the expandedHop.isCapped CapNotice renders. But the very
-// same CapNotice block also renders for FlowCards nested at depth >= 1: a
-// FlowCard produced inside an expanded hop, then itself expanded. That
-// recursive case was untested, so a regression in deeper nesting could drop
-// the warning while depth-0 stayed green — leaving a user who is tracing two
-// hops deep to follow a silently-incomplete trail.
+// same CapNotice block also renders for FlowCards nested arbitrarily deep: a
+// FlowCard produced inside an expanded hop, then itself expanded, all the way
+// down to MAX_DEPTH (5). That deep recursive case was untested, so a regression
+// could drop the warning at depth 2+ while shallower levels stayed green —
+// leaving a user tracing a deep trail to follow a silently-incomplete picture.
 //
-// This test expands the depth-0 FlowCard, then expands one of the child
-// FlowCards it produced (depth 1), and asserts:
+// This test expands the depth-0 FlowCard and then keeps expanding the single
+// child FlowCard each hop produces, descending hop by hop down to DEEP_DEPTH
+// (4 — one short of MAX_DEPTH=5, the deepest level an Expand button is offered).
+// It then asserts, for the hop expanded at that deepest level:
 //
-//   - expanded depth-1 hop capped, NO date range -> all-time notice
+//   - deepest expanded hop capped, NO date range -> all-time notice
 //                                                   (testid `fund-trail-cap-notice`)
-//   - expanded depth-1 hop capped, date range    -> window-aware notice
+//   - deepest expanded hop capped, date range    -> window-aware notice
 //                                                   (testid `fund-trail-cap-notice-range`)
-//   - expanded depth-1 hop NOT capped            -> no notice at all
+//   - deepest expanded hop NOT capped            -> no notice at all
 //
-// In every capped case the notice text must reflect the depth-1 expanded hop's
+// In every capped case the notice text must reflect the deepest expanded hop's
 // shownTxCount / totalTxCount.
 //
 // We render the real FundTrail page but stub the engine seam: computeOneHop is
-// a spy returning, in order, the CENTER hop (one uncapped, expandable DEST
-// flow), the depth-0 EXPAND hop (one uncapped, expandable DEST flow), and
-// finally the depth-1 EXPAND hop (the per-test capped/uncapped result). Keeping
-// the first two hops uncapped guarantees any rendered notice belongs to the
-// depth-1 hop, not a shallower one.
+// a spy returning, in order, the CENTER hop, then one uncapped intermediate hop
+// per level descended (each producing exactly one expandable DEST child), and
+// finally the deepest hop (the per-test capped/uncapped result). Keeping every
+// shallower hop uncapped guarantees any rendered notice belongs to the deepest
+// hop, not a shallower one.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor, fireEvent, cleanup } from "@testing-library/react";
@@ -94,48 +96,45 @@ vi.mock("@/components/ui/select", async () => {
 
 // --- Engine seam: spy on computeOneHop, stub data loaders --------------------
 const GROUP = "Exchange";
-const DEPTH0_TARGET = "Counterparty"; // depth-0 dest FlowCard
-const DEPTH1_TARGET = "DeepCounterparty"; // depth-1 dest FlowCard (the one we expand)
 const SHOWN = 50;
 const TOTAL = 1234;
 
-// Center hop: one uncapped DEST flow -> a depth-0 FlowCard the user can expand.
-const CENTER_HOP: TrailHop = {
-  sources: [],
-  destinations: [
-    {
-      groupLabel: DEPTH0_TARGET,
-      dimension: "walletName",
-      totalSats: 100,
-      details: [{ address: "ext-cp", txid: "tx-cp", amount: 100, blockTime: 1000 }],
-      isUnknown: false,
-    },
-  ],
-  isCapped: false,
-  shownTxCount: 1,
-  totalTxCount: 1,
-};
+// The FlowCard rendered at depth d carries this (unique) label. Unique labels
+// keep each level's testid distinct and avoid the visited-cycle guard tripping.
+const labelAt = (d: number) => `Hop${d}`;
 
-// Depth-0 expand hop: one uncapped DEST flow -> a depth-1 FlowCard. Still
-// uncapped so any notice must belong to the depth-1 hop expanded next.
-const DEPTH0_EXPAND_HOP: TrailHop = {
-  sources: [],
-  destinations: [
-    {
-      groupLabel: DEPTH1_TARGET,
-      dimension: "walletName",
-      totalSats: 80,
-      details: [{ address: "ext-deep", txid: "tx-deep", amount: 80, blockTime: 2000 }],
-      isUnknown: false,
-    },
-  ],
-  isCapped: false,
-  shownTxCount: 1,
-  totalTxCount: 1,
-};
+// MAX_DEPTH in FundTrail.tsx is 5 (the last depth an Expand button is offered).
+// We descend to depth 4 — one short of that — so the deepest expanded hop is
+// about as deep as the UI ever lets a user go.
+const DEEP_DEPTH = 4;
 
-// Depth-1 expand hop: the case under test.
-const CAPPED_DEPTH1_HOP: TrailHop = {
+// One uncapped DEST flow whose groupLabel is the NEXT level's FlowCard label,
+// so expanding the card at depth `d` reveals an expandable card at depth d+1.
+function intermediateHop(d: number): TrailHop {
+  return {
+    sources: [],
+    destinations: [
+      {
+        groupLabel: labelAt(d + 1),
+        dimension: "walletName",
+        totalSats: 100,
+        details: [
+          { address: `ext-${d}`, txid: `tx-${d}`, amount: 100, blockTime: 1000 + d },
+        ],
+        isUnknown: false,
+      },
+    ],
+    isCapped: false,
+    shownTxCount: 1,
+    totalTxCount: 1,
+  };
+}
+
+// Center hop: one uncapped DEST flow -> the depth-0 FlowCard the user expands.
+const CENTER_HOP: TrailHop = intermediateHop(-1);
+
+// Deepest expand hop: the case under test (no further children).
+const CAPPED_DEEP_HOP: TrailHop = {
   sources: [],
   destinations: [],
   isCapped: true,
@@ -143,7 +142,7 @@ const CAPPED_DEPTH1_HOP: TrailHop = {
   totalTxCount: TOTAL,
 };
 
-const UNCAPPED_DEPTH1_HOP: TrailHop = {
+const UNCAPPED_DEEP_HOP: TrailHop = {
   sources: [],
   destinations: [],
   isCapped: false,
@@ -151,7 +150,7 @@ const UNCAPPED_DEPTH1_HOP: TrailHop = {
   totalTxCount: SHOWN,
 };
 
-const computeOneHopSpy = vi.fn(async (): Promise<TrailHop> => UNCAPPED_DEPTH1_HOP);
+const computeOneHopSpy = vi.fn(async (): Promise<TrailHop> => UNCAPPED_DEEP_HOP);
 
 vi.mock("@/lib/data/fund-trail-engine", async () => {
   const actual = await vi.importActual<typeof import("@/lib/data/fund-trail-engine")>(
@@ -198,15 +197,28 @@ function activateDateRange() {
   });
 }
 
-async function expandDepth0Flow() {
-  const btn = await screen.findByTestId(`fund-trail-expand-${DEPTH0_TARGET}-d0`);
+// Expand the FlowCard rendered at depth `d` (label Hop{d}).
+async function expandAt(d: number) {
+  const btn = await screen.findByTestId(`fund-trail-expand-${labelAt(d)}-d${d}`);
   fireEvent.click(btn);
 }
 
-async function expandDepth1Flow() {
-  // Produced inside the depth-0 expanded hop; renders at depth 1.
-  const btn = await screen.findByTestId(`fund-trail-expand-${DEPTH1_TARGET}-d1`);
-  fireEvent.click(btn);
+// Walk the trail from depth 0 down to (and including) DEEP_DEPTH, expanding the
+// single child at each level. The last expansion triggers the deepest hop.
+async function descendToDeepest() {
+  for (let d = 0; d <= DEEP_DEPTH; d++) {
+    await expandAt(d);
+  }
+}
+
+// Queue the engine responses: center hop, one intermediate hop per intervening
+// level (so each reveals the next expandable child), then the deepest hop.
+function queueHops(deepest: TrailHop) {
+  computeOneHopSpy.mockResolvedValueOnce(CENTER_HOP);
+  for (let d = 0; d < DEEP_DEPTH; d++) {
+    computeOneHopSpy.mockResolvedValueOnce(intermediateHop(d));
+  }
+  computeOneHopSpy.mockResolvedValue(deepest);
 }
 
 beforeEach(() => {
@@ -217,17 +229,13 @@ afterEach(() => {
   cleanup();
 });
 
-describe("FundTrail expanded-hop cap notice (deep / depth >= 1 nesting)", () => {
-  it("shows the all-time notice when the depth-1 expanded hop is capped (no date range)", async () => {
-    // 1) center hop, 2) depth-0 expand, 3+) depth-1 expand (capped).
-    computeOneHopSpy.mockResolvedValueOnce(CENTER_HOP);
-    computeOneHopSpy.mockResolvedValueOnce(DEPTH0_EXPAND_HOP);
-    computeOneHopSpy.mockResolvedValue(CAPPED_DEPTH1_HOP);
+describe("FundTrail expanded-hop cap notice (deep / near-MAX_DEPTH nesting)", () => {
+  it("shows the all-time notice when the deepest expanded hop is capped (no date range)", async () => {
+    queueHops(CAPPED_DEEP_HOP);
     renderPage();
 
     await selectGroup();
-    await expandDepth0Flow();
-    await expandDepth1Flow();
+    await descendToDeepest();
 
     const notice = await screen.findByTestId("fund-trail-cap-notice");
     const text = notice.textContent ?? "";
@@ -238,16 +246,13 @@ describe("FundTrail expanded-hop cap notice (deep / depth >= 1 nesting)", () => 
     expect(screen.queryByTestId("fund-trail-cap-notice-range")).toBeNull();
   });
 
-  it("shows the window-aware notice when the depth-1 expanded hop is capped AND a date range is active", async () => {
-    computeOneHopSpy.mockResolvedValueOnce(CENTER_HOP);
-    computeOneHopSpy.mockResolvedValueOnce(DEPTH0_EXPAND_HOP);
-    computeOneHopSpy.mockResolvedValue(CAPPED_DEPTH1_HOP);
+  it("shows the window-aware notice when the deepest expanded hop is capped AND a date range is active", async () => {
+    queueHops(CAPPED_DEEP_HOP);
     renderPage();
 
     activateDateRange();
     await selectGroup();
-    await expandDepth0Flow();
-    await expandDepth1Flow();
+    await descendToDeepest();
 
     const notice = await screen.findByTestId("fund-trail-cap-notice-range");
     const text = notice.textContent ?? "";
@@ -259,18 +264,15 @@ describe("FundTrail expanded-hop cap notice (deep / depth >= 1 nesting)", () => 
     expect(screen.queryByTestId("fund-trail-cap-notice")).toBeNull();
   });
 
-  it("renders NO notice when the depth-1 expanded hop is not capped", async () => {
-    computeOneHopSpy.mockResolvedValueOnce(CENTER_HOP);
-    computeOneHopSpy.mockResolvedValueOnce(DEPTH0_EXPAND_HOP);
-    computeOneHopSpy.mockResolvedValue(UNCAPPED_DEPTH1_HOP);
+  it("renders NO notice when the deepest expanded hop is not capped", async () => {
+    queueHops(UNCAPPED_DEEP_HOP);
     renderPage();
 
     await selectGroup();
-    await expandDepth0Flow();
-    await expandDepth1Flow();
+    await descendToDeepest();
 
-    // The depth-1 expanded section resolves to an empty-destinations message;
-    // wait for it so we know the expand hop finished before asserting no notice.
+    // The deepest expanded section resolves to an empty-destinations message;
+    // wait for it so we know the deepest hop finished before asserting no notice.
     await screen.findByText("No further destinations found.");
 
     expect(screen.queryByTestId("fund-trail-cap-notice")).toBeNull();
