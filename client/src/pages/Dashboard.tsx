@@ -146,7 +146,7 @@ export default function Dashboard() {
     loadEditingAttachments();
   }, [editingRecord?.id]);
 
-  const uniqueFilterValues = useMemo((): Record<string, string[]> => {
+  const uniqueFilterValues = useMemo((): globalThis.Record<string, string[]> => {
     const clean = (names: string[]) =>
       names.filter(n => n && n.trim() && !n.includes('[encrypted]')).sort();
     return {

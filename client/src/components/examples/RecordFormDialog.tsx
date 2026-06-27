@@ -13,7 +13,7 @@ export default function RecordFormDialogExample() {
       <RecordFormDialog
         open={open}
         onClose={() => setOpen(false)}
-        onSave={(data) => {
+        onSave={async (data) => {
           console.log("Saved:", data);
           setOpen(false);
         }}

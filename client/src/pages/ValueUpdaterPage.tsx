@@ -222,7 +222,7 @@ export default function ValueUpdaterPage() {
     setValuesScanCapped(false);
     try {
       const BATCH_SIZE = 2000;
-      const fieldCounters = new Map<string, Map<string, number>>();
+      const fieldCounters = new Map<FieldType, Map<string, number>>();
       for (const field of ALL_FIELDS_LIST) {
         fieldCounters.set(field, new Map());
       }
@@ -251,7 +251,7 @@ export default function ValueUpdaterPage() {
         if (hasMore) await new Promise(r => setTimeout(r, 0));
       }
 
-      const result = new Map<string, Array<{ value: string; count: number }>>();
+      const result = new Map<FieldType, UniqueValue[]>();
       for (const [field, counter] of fieldCounters.entries()) {
         result.set(field, Array.from(counter.entries())
           .map(([value, count]) => ({ value, count }))

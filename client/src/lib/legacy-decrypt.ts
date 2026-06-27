@@ -48,7 +48,7 @@ interface TableConfig<T> {
   // restore loop no longer uses it to decide which fields to write back — it now
   // restores every field found in the decrypted payload. Retained only as
   // documentation and as a reference for the recovery audit.
-  sensitiveFields: (keyof T)[];
+  sensitiveFields: readonly string[];
   // Runs after the decrypted fields are restored onto a row. Used to
   // recompute derived/index columns (e.g. inputStringLower) that depend on a
   // restored field — without this, indexed lookups silently miss the row.
@@ -700,7 +700,7 @@ export async function decryptLegacyRecords(
         if (updatedBatch.length > 0) {
           try {
             await withDbRetry(
-              () => config.table.bulkPut(updatedBatch as Parameters<typeof config.table.bulkPut>[0]),
+              () => config.table.bulkPut(updatedBatch as unknown as Parameters<typeof config.table.bulkPut>[0]),
               `Write ${config.name}`,
             );
             tableDecrypted += updatedBatch.length;
@@ -782,7 +782,7 @@ export interface StripMarkersResult {
 
 const LEGACY_MARKER_KEYS_TO_STRIP = ['_legacyEncryptedPayload', 'isEncrypted', 'encryptedPayload'] as const;
 
-function hasAnyLegacyMarker(row: Record<string, unknown>): boolean {
+function hasAnyLegacyMarker(row: globalThis.Record<string, unknown>): boolean {
   for (const key of LEGACY_MARKER_KEYS_TO_STRIP) {
     if (Object.prototype.hasOwnProperty.call(row, key)) {
       return true;
@@ -815,7 +815,7 @@ async function countRowsWithMarkers(
     }
     if (chunk.length === 0) break;
     lastProcessedId = (chunk[chunk.length - 1] as { id: number }).id;
-    count += chunk.filter(item => hasAnyLegacyMarker(item as unknown as Record<string, unknown>)).length;
+    count += chunk.filter(item => hasAnyLegacyMarker(item as unknown as globalThis.Record<string, unknown>)).length;
     if (chunk.length < BATCH_SIZE) hasMore = false;
     await new Promise(r => setTimeout(r, 0));
   }
@@ -904,7 +904,7 @@ export async function stripLegacyMarkers(
         });
 
         try {
-          await config.table.bulkPut(cleanedBatch as Parameters<typeof config.table.bulkPut>[0]);
+          await config.table.bulkPut(cleanedBatch as unknown as Parameters<typeof config.table.bulkPut>[0]);
           rowsCleaned += cleanedBatch.length;
         } catch (err) {
           const msg = `Failed to write ${config.name}: ${err instanceof Error ? err.message : String(err)}`;

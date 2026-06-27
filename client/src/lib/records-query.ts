@@ -250,6 +250,7 @@ export function buildIdentifierSearchCollection(
   residualPredicate: (record: DbRecord) => boolean,
 ): BuildRecordsQueryResult {
   const synthetic: ColumnFilter = {
+    id: "synthetic-identifier-search",
     field: "inputString",
     operator: "equals",
     value: identifier,

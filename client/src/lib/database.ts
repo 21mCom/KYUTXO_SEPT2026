@@ -318,7 +318,7 @@ export class KYUTXODatabase extends Dexie {
         let tableEncrypted = 0;
         console.log(`[v27 migration] Scanning ${tableName}...`);
         let tableFlaggedNoPayload = 0;
-        await tx.table(tableName).toCollection().modify((item: Record<string, unknown>) => {
+        await tx.table(tableName).toCollection().modify((item: globalThis.Record<string, unknown>) => {
           if (item.isEncrypted !== true) return;
           if (item.encryptedPayload) {
             tableEncrypted++;

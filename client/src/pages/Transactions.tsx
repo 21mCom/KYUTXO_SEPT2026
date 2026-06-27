@@ -1333,7 +1333,7 @@ export default function Transactions() {
                   <span className="text-muted-foreground">—</span>
                 )
               ) : (
-                <>{satsToBtc(stats.pageVolume)} BTC</>
+                <>{satsToBtc(stats.pageVolume ?? undefined)} BTC</>
               )}
             </CardTitle>
           </CardHeader>

@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useRef } from "react";
-import { useVirtualizer } from "@tanstack/react-virtual";
+import { useVirtualizer, type Virtualizer } from "@tanstack/react-virtual";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -200,9 +200,9 @@ async function runFilterQuery(
 const PREVIEW_ROW_HEIGHT = 40;
 const CONFIRM_ROW_HEIGHT = 44;
 
-function useResizeRemeasure(
+function useResizeRemeasure<TScroll extends Element>(
   parentRef: React.RefObject<HTMLElement | null>,
-  virtualizer: ReturnType<typeof useVirtualizer>,
+  virtualizer: Virtualizer<TScroll, Element>,
 ) {
   useEffect(() => {
     const el = parentRef.current;

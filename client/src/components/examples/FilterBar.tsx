@@ -3,7 +3,7 @@ import { FilterBar } from "../FilterBar";
 
 export default function FilterBarExample() {
   const [filter, setFilter] = useState<{
-    type?: "address" | "transaction" | "all";
+    type?: "address" | "transaction" | "other" | "all";
     tags: string[];
     categories: string[];
   }>({

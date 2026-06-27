@@ -8,7 +8,6 @@ import {
   ZipPassThrough,
   Unzip,
   UnzipInflate,
-  type ZipInputFile,
 } from "fflate";
 import type { BackupSink } from "./sink";
 
@@ -43,7 +42,7 @@ export class ZipStreamWriter {
     opts: { compress?: boolean } = {},
   ): Promise<void> {
     const compress = opts.compress !== false;
-    const file: ZipInputFile = compress
+    const file: ZipDeflate | ZipPassThrough = compress
       ? new ZipDeflate(name, { level: 6 })
       : new ZipPassThrough(name);
     this.zip.add(file);
