@@ -569,6 +569,36 @@ describe("buildFundTrailPdf", () => {
     expect(text).toContain("Carol");
   });
 
+  it("renders the per-group detail sub-tables when detailed", async () => {
+    const snapshot = richSnapshot();
+    const text = await extractPdfText(
+      await buildFundTrailPdf(snapshot, { detailed: true }),
+    );
+
+    // The detailed title distinguishes the document from the summary export.
+    expect(text).toContain("Fund Trail (detailed)");
+
+    // Each group gets a "label — amount" detail heading line. jspdf renders the
+    // em-dash separator as a single WinAnsi byte, so match the label and amount
+    // across the separator rather than the literal dash (one line, no newline).
+    expect(text).toMatch(
+      new RegExp(`Alice.*${formatBtc(100_000_000).replace(".", "\\.")}`),
+    );
+
+    // The detail sub-table carries the same data the CSV does: address, txid,
+    // an 8-decimal BTC amount (only the detail rows use this form), and ISO date.
+    expect(text).toContain("bc1qalice");
+    expect(text).toContain("src1");
+    expect(text).toContain("1.00000000");
+    expect(text).toContain(
+      new Date(1_700_000_000 * 1000).toISOString().slice(0, 10),
+    );
+
+    // The expanded "Carol" hop's detail rows must also be present.
+    expect(text).toContain("bc1qcarol");
+    expect(text).toContain("hop1");
+  });
+
   it("flattens the snapshot into the rows the table will render", () => {
     const snapshot = richSnapshot();
 
