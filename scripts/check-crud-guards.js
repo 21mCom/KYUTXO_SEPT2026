@@ -135,6 +135,7 @@ const ALWAYS_ALLOWED_FILES = new Set([
   path.resolve(ROOT, 'client/src/lib/transaction-sync.ts'),
   path.resolve(ROOT, 'client/src/lib/lineageEngine.ts'),
   path.resolve(ROOT, 'client/src/lib/provenance.ts'),
+  path.resolve(ROOT, 'client/src/lib/data/fund-trail-engine.ts'),
   path.resolve(ROOT, 'client/src/lib/attachments.ts'),
   path.resolve(ROOT, 'client/src/lib/lightning-detection.ts'),
   path.resolve(ROOT, 'client/src/lib/wallet-import/merge-utils.ts'),

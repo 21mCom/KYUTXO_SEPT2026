@@ -38,7 +38,8 @@ import {
   ShieldAlert,
   Eye,
   GitBranch,
-  FlaskConical
+  FlaskConical,
+  ChevronsLeftRight
 } from "lucide-react";
 import logoUrl from "@/assets/foot_1764929618997.png";
 import { version as APP_VERSION } from "../../../package.json";
@@ -108,6 +109,7 @@ const navGroups: NavGroup[] = [
       { title: "Provenance", url: "/provenance", icon: Map },
       { title: "Flow Visualizer", url: "/flow-visualizer", icon: Network },
       { title: "Network Analysis", url: "/network-analysis", icon: GitBranch },
+      { title: "Fund Trail", url: "/fund-trail", icon: ChevronsLeftRight },
       { title: "Data Stats", url: "/data-stats", icon: BarChart3 },
       { title: "Privacy Audit", url: "/privacy-audit", icon: Eye },
       { title: "Quantum Risk", url: "/quantum-risk", icon: ShieldAlert },
