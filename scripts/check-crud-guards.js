@@ -153,6 +153,8 @@ const ALWAYS_ALLOWED_FILES = new Set([
   path.resolve(ROOT, 'client/src/pages/Reports.privacyProximityCitationRenderEndToEnd.test.tsx'),
   path.resolve(ROOT, 'client/src/pages/Reports.privacyCitationImportedList.test.tsx'),
   path.resolve(ROOT, 'client/src/pages/Reports.privacyCitationMergedList.test.tsx'),
+  path.resolve(ROOT, 'client/src/pages/Reports.privacyCitationMergedOverride.test.tsx'),
+  path.resolve(ROOT, 'client/src/pages/Reports.privacyProximityScamDarknetCitationEndToEnd.test.tsx'),
   path.resolve(ROOT, 'client/src/pages/Reports.privacyMismatchedCitationImport.test.tsx'),
   path.resolve(ROOT, 'client/src/lib/privacy-audit.ts'),
   path.resolve(ROOT, 'client/src/lib/data/record-queries.ts'),
