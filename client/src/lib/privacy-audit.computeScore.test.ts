@@ -191,3 +191,49 @@ describe("computeScore privacy-positive (CoinJoin) findings", () => {
     expect(coinjoin.scoreDelta).toBe(0);
   });
 });
+
+// Heavy wallets can accumulate enough severe findings that the raw penalty total
+// would push the running score far below zero. computeScore clamps the running
+// score with Math.max(0, ...) so the final report can never show a negative or
+// nonsensical value. This guards that floor directly, bypassing Dexie seeding.
+describe("computeScore zero floor on heavy wallets", () => {
+  it("clamps the score to exactly 0 (never negative) under many severe findings", () => {
+    // Spread severe findings across multiple types so each becomes its own
+    // waterfall entry, and stack many within each so subsequent penalties pile
+    // on. The raw total here is far below zero:
+    //   CRITICAL: -25 + 9 × -12 = -133
+    //   HIGH:     -15 + 9 × -6  = -69
+    //   MEDIUM:   -8  + 9 × -3  = -35
+    //   raw running total ≈ 100 - 237 = -137 before clamping.
+    const findings: PrivacyFinding[] = [
+      ...makeFindings("ADDRESS_REUSE", "CRITICAL", 10),
+      ...makeFindings("ROUND_AMOUNT", "HIGH", 10),
+      ...makeFindings("PROXIMITY_EXCHANGE", "MEDIUM", 10),
+    ];
+
+    const { score, grade, waterfall } = computeScore(findings, []);
+
+    // The crux: even with a deeply negative raw total, the score floors at 0.
+    expect(score).toBe(0);
+    expect(score).toBeGreaterThanOrEqual(0);
+
+    // The grade maps accordingly — the lowest grade once the score bottoms out.
+    expect(grade).toBe("F");
+
+    // No running score in the waterfall is allowed to dip below zero either.
+    for (const entry of waterfall) {
+      expect(entry.runningScore).toBeGreaterThanOrEqual(0);
+    }
+  });
+
+  it("clamps to 0 even when a single overwhelming type exceeds the base score", () => {
+    // A single type with enough CRITICAL findings to blow past 100 on its own:
+    //   -25 + 19 × -12 = -253, well below the base score of 100.
+    const findings = makeFindings("ADDRESS_REUSE", "CRITICAL", 20);
+
+    const { score, grade } = computeScore(findings, []);
+
+    expect(score).toBe(0);
+    expect(grade).toBe("F");
+  });
+});
