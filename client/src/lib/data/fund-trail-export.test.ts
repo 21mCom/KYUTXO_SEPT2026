@@ -697,3 +697,98 @@ describe("buildFundTrailPdf at scale", () => {
     );
   });
 });
+
+// ---------------------------------------------------------------------------
+// PDF builder with maximally long values — full-length txids, over-long
+// taproot/descriptor-style addresses, and a long group label must wrap into the
+// fixed-width detail columns (overflow: "linebreak") rather than being clipped
+// or pushed off the page edge.
+// ---------------------------------------------------------------------------
+
+describe("buildFundTrailPdf with very long values", () => {
+  // A 90-char bech32m-style address (longer than any real taproot address) and
+  // a full 64-hex-char txid — the worst case for the fixed-width detail columns.
+  const longAddress = "bc1p" + "q".repeat(86);
+  const longTxid = "a".repeat(64);
+  const longGroupLabel =
+    "Very Long Wallet Name That Could Plausibly Come From A Descriptor " +
+    "Or An Imported Third Party Label " +
+    "x".repeat(60);
+
+  /**
+   * One "known" group carrying a single detail with the maximally long
+   * address/txid (so we can assert it round-trips), plus many bulk groups whose
+   * details are also maximally long so the detailed PDF must span many pages.
+   */
+  function longValueSnapshot() {
+    const knownGroup = flow({
+      groupLabel: longGroupLabel,
+      totalSats: 123_456_789,
+      details: [
+        detail({ address: longAddress, txid: longTxid, amount: 123_456_789 }),
+      ],
+    });
+    const sources: GroupFlow[] = [knownGroup];
+    for (let g = 0; g < 40; g++) {
+      const details: GroupFlowDetail[] = [];
+      for (let d = 0; d < 20; d++) {
+        details.push(
+          detail({
+            // Unique prefix kept within the 90/64 cap so dedup never collapses rows.
+            address: (`bc1p${g}-${d}-` + "q".repeat(90)).slice(0, 90),
+            txid: (`${g}-${d}-` + "a".repeat(64)).slice(0, 64),
+            amount: 1_000_000 + d,
+            blockTime: 1_700_000_000 + g * 1000 + d,
+          }),
+        );
+      }
+      sources.push(
+        flow({
+          groupLabel: `${longGroupLabel} #${g}`,
+          totalSats: details.reduce((s, x) => s + x.amount, 0),
+          details,
+        }),
+      );
+    }
+    const center: TrailHop = { sources, destinations: [] };
+    return buildFundTrailSnapshot(
+      "Big Wallet",
+      "walletName",
+      center,
+      new Map(),
+    );
+  }
+
+  it("paginates long addresses/txids/labels into a valid multi-page Blob without throwing", async () => {
+    const snapshot = longValueSnapshot();
+
+    const blob = await buildFundTrailPdf(snapshot, { detailed: true });
+
+    expect(blob).toBeInstanceOf(Blob);
+    expect(blob.type).toBe("application/pdf");
+    expect(blob.size).toBeGreaterThan(0);
+
+    const text = await blob.text();
+    // Real, cleanly-closed PDF (not blank/corrupt).
+    expect(text.slice(0, 5)).toBe("%PDF-");
+    expect(text.trimEnd().endsWith("%%EOF")).toBe(true);
+    // The long values force wrapping, which uses extra vertical space and must
+    // flow across multiple pages rather than overflowing a single one.
+    expect(pdfPageCount(text)).toBeGreaterThan(1);
+  });
+
+  it("wraps long addresses and full-length txids instead of clipping them", async () => {
+    const snapshot = longValueSnapshot();
+
+    const text = await extractPdfText(
+      await buildFundTrailPdf(snapshot, { detailed: true }),
+    );
+    // autotable's linebreak wrapping splits a long no-space value across several
+    // rendered lines; once whitespace/newlines are removed those chunks rejoin
+    // into the original string. If the value were truncated/clipped, the full
+    // address and txid would no longer be recoverable.
+    const normalized = text.replace(/\s+/g, "");
+    expect(normalized).toContain(longAddress);
+    expect(normalized).toContain(longTxid);
+  });
+});

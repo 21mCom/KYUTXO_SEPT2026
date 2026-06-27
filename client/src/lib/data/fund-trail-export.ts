@@ -329,17 +329,21 @@ export async function buildFundTrailPdf(
   const renderNodeDetails = (depth: number, node: ExportFlowNode) => {
     if (node.details.length === 0) return;
 
-    ensureSpace(16);
     doc.setFontSize(9);
-    doc.setTextColor(60);
     const prefix = depth > 0 ? "↳ " : "";
-    doc.text(
-      `${prefix}${node.groupLabel} — ${formatBtc(node.totalSats)}`,
-      16,
-      cursorY,
-    );
+    // Wrap the heading the same way the detail columns wrap, so a long group
+    // label (e.g. a descriptor-derived name) breaks onto extra lines instead of
+    // being pushed off the right page edge.
+    const headingText = `${prefix}${node.groupLabel} — ${formatBtc(node.totalSats)}`;
+    const headingMaxWidth = pageWidth - 16 - 14;
+    const headingLines = doc.splitTextToSize(headingText, headingMaxWidth);
+    const oneLineHeight = doc.getTextDimensions("X").h;
+    const headingHeight = doc.getTextDimensions(headingLines).h;
+    ensureSpace(headingHeight + 8);
+    doc.setTextColor(60);
+    doc.text(headingLines, 16, cursorY);
     doc.setTextColor(0);
-    cursorY += 2;
+    cursorY += headingHeight - oneLineHeight + 2;
 
     const detailBody = node.details.map((d) => [
       d.address,
