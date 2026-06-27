@@ -8,8 +8,12 @@ import type {
 import {
   buildFundTrailSnapshot,
   buildFundTrailCsv,
+  buildFundTrailPdf,
   fundTrailFilename,
   flowPath,
+  flattenNodes,
+  sumTopLevel,
+  type ExportFlowNode,
 } from "./fund-trail-export";
 
 // ---------------------------------------------------------------------------
@@ -338,5 +342,156 @@ describe("fundTrailFilename", () => {
   it("respects the requested extension", () => {
     expect(fundTrailFilename("Alice", "csv", date)).toMatch(/\.csv$/);
     expect(fundTrailFilename("Alice", "pdf", date)).toMatch(/\.pdf$/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PDF helpers — the row-building math that feeds the rendered table.
+// ---------------------------------------------------------------------------
+
+function node(overrides: Partial<ExportFlowNode> = {}): ExportFlowNode {
+  return {
+    groupLabel: "Alice",
+    totalSats: 100_000_000,
+    isUnknown: false,
+    details: [detail()],
+    children: [],
+    ...overrides,
+  };
+}
+
+describe("sumTopLevel", () => {
+  it("returns 0 for an empty side", () => {
+    expect(sumTopLevel([])).toBe(0);
+  });
+
+  it("sums only the top-level totals, ignoring children", () => {
+    const nodes = [
+      node({ totalSats: 50_000_000, children: [node({ totalSats: 999 })] }),
+      node({ totalSats: 25_000_000 }),
+    ];
+    expect(sumTopLevel(nodes)).toBe(75_000_000);
+  });
+});
+
+describe("flattenNodes", () => {
+  it("flattens a flat list at depth 0 in order", () => {
+    const out: { depth: number; node: ExportFlowNode }[] = [];
+    flattenNodes(
+      [node({ groupLabel: "A" }), node({ groupLabel: "B" })],
+      0,
+      out,
+    );
+    expect(out.map((o) => o.depth)).toEqual([0, 0]);
+    expect(out.map((o) => o.node.groupLabel)).toEqual(["A", "B"]);
+  });
+
+  it("assigns increasing depth to expanded hops (depth-first)", () => {
+    const tree = [
+      node({
+        groupLabel: "A",
+        children: [
+          node({
+            groupLabel: "A1",
+            children: [node({ groupLabel: "A1a" })],
+          }),
+        ],
+      }),
+      node({ groupLabel: "B" }),
+    ];
+    const out: { depth: number; node: ExportFlowNode }[] = [];
+    flattenNodes(tree, 0, out);
+    expect(out.map((o) => [o.node.groupLabel, o.depth])).toEqual([
+      ["A", 0],
+      ["A1", 1],
+      ["A1a", 2],
+      ["B", 0],
+    ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PDF builder — must resolve to a non-empty Blob without throwing, offline.
+// ---------------------------------------------------------------------------
+
+describe("buildFundTrailPdf", () => {
+  function richSnapshot() {
+    const center: TrailHop = {
+      sources: [
+        flow({
+          groupLabel: "Alice",
+          details: [detail({ address: "bc1qalice", txid: "src1" })],
+        }),
+      ],
+      destinations: [
+        flow({
+          groupLabel: "Bob",
+          totalSats: 50_000_000,
+          details: [
+            detail({ address: "bc1qbob", txid: "dst1", amount: 50_000_000 }),
+          ],
+        }),
+      ],
+    };
+    // One expanded hop off the "Alice" source so the table exercises indent depth.
+    const expandedHop: TrailHop = {
+      sources: [
+        flow({
+          groupLabel: "Carol",
+          details: [detail({ address: "bc1qcarol", txid: "hop1" })],
+        }),
+      ],
+      destinations: [],
+    };
+    const registry = new Map<string, TrailHop>();
+    registry.set(flowPath("", "source", "Alice"), expandedHop);
+    return buildFundTrailSnapshot("Center", "walletName", center, registry);
+  }
+
+  it("resolves to a non-empty PDF Blob without throwing", async () => {
+    const snapshot = richSnapshot();
+    const blob = await buildFundTrailPdf(snapshot);
+    expect(blob).toBeInstanceOf(Blob);
+    expect(blob.size).toBeGreaterThan(0);
+    expect(blob.type).toBe("application/pdf");
+    // Sanity-check the header bytes are a real PDF.
+    const header = await blob.slice(0, 5).text();
+    expect(header).toBe("%PDF-");
+  });
+
+  it("produces a valid PDF even when both sides are empty", async () => {
+    const center: TrailHop = { sources: [], destinations: [] };
+    const snapshot = buildFundTrailSnapshot(
+      "Alice",
+      "walletName",
+      center,
+      new Map(),
+    );
+    const blob = await buildFundTrailPdf(snapshot);
+    expect(blob.size).toBeGreaterThan(0);
+    expect(await blob.slice(0, 5).text()).toBe("%PDF-");
+  });
+
+  it("flattens the snapshot into the rows the table will render", () => {
+    const snapshot = richSnapshot();
+
+    // Sources: "Alice" at depth 0 with its expanded "Carol" hop at depth 1.
+    const sourceRows: { depth: number; node: ExportFlowNode }[] = [];
+    flattenNodes(snapshot.sources, 0, sourceRows);
+    expect(sourceRows.map((r) => [r.node.groupLabel, r.depth])).toEqual([
+      ["Alice", 0],
+      ["Carol", 1],
+    ]);
+
+    // Destinations: a single top-level "Bob" group.
+    const destRows: { depth: number; node: ExportFlowNode }[] = [];
+    flattenNodes(snapshot.destinations, 0, destRows);
+    expect(destRows.map((r) => [r.node.groupLabel, r.depth])).toEqual([
+      ["Bob", 0],
+    ]);
+
+    // In/out totals reflect only the center hop's top-level groups.
+    expect(sumTopLevel(snapshot.sources)).toBe(100_000_000);
+    expect(sumTopLevel(snapshot.destinations)).toBe(50_000_000);
   });
 });

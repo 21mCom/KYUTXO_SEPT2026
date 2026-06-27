@@ -187,7 +187,7 @@ export function buildFundTrailCsv(snapshot: FundTrailSnapshot): string {
 // ---------------------------------------------------------------------------
 
 /** Flatten a node tree into [indentDepth, node] pairs (depth-first, in order). */
-function flattenNodes(
+export function flattenNodes(
   nodes: ExportFlowNode[],
   depth: number,
   out: { depth: number; node: ExportFlowNode }[],
@@ -199,7 +199,7 @@ function flattenNodes(
 }
 
 /** Sum the top-level totals for a side (center hop in/out). */
-function sumTopLevel(nodes: ExportFlowNode[]): number {
+export function sumTopLevel(nodes: ExportFlowNode[]): number {
   return nodes.reduce((s, n) => s + n.totalSats, 0);
 }
 
