@@ -73,6 +73,8 @@ import {
 import {
   addUtxoLineage,
   addCustodySegment,
+  getAllUtxoLineage,
+  getExistingSegmentIds,
   type CreateUtxoLineageData,
   type CreateCustodySegmentData,
 } from "@/lib/data/lineage-crud";
@@ -347,27 +349,61 @@ export async function restoreLegacyPriceData(
   return priceDataAdded;
 }
 
+// Stable identity for a UTXO lineage edge (the spent input → created output it
+// records). utxoLineage has no unique index, so merge mode uses this to skip
+// rows that already exist rather than appending a duplicate edge.
+export function lineageIdentity(row: {
+  spentTxid?: unknown;
+  spentVout?: unknown;
+  createdTxid?: unknown;
+  createdVout?: unknown;
+}): string {
+  return `${row.spentTxid}:${row.spentVout}->${row.createdTxid}:${row.createdVout}`;
+}
+
 /**
- * Restore UTXO lineage rows and custody segments. The legacy path does NOT
- * de-dup either table in either mode and does NOT remap any id/FK: every row is
- * added with a fresh autoincrement id (the backup id is stripped). Custody
- * segments carry a UNIQUE `segmentId` index, so two backup rows sharing a
- * segmentId (or a merge over an already-present segmentId) would throw — the
- * legacy path never guarded this and relies on `replace` mode having cleared the
- * table first. Only `utxoLineage` rows are counted for the user (the "lineage"
- * count); custody segments are restored but not separately reported, matching
- * the original inline statistics.
+ * Restore UTXO lineage rows and custody segments. In BOTH modes the backup id is
+ * stripped (every row gets a fresh autoincrement id) and no id/FK is remapped.
+ *
+ * Custody segments carry a UNIQUE `segmentId` index. In `replace` mode the
+ * caller has cleared the tables first, so rows are appended as-is — two backup
+ * rows sharing a segmentId still throw (replace behaviour is unchanged). In
+ * `merge` mode a segment is skipped when its `segmentId` is already present in
+ * the vault, so a merge-restore over an already-present segment no longer
+ * violates the unique index and aborts the whole restore mid-way. utxoLineage
+ * has no unique index, but in merge mode rows whose `lineageIdentity` already
+ * exists are likewise skipped so a merge does not pile up duplicate edges.
+ *
+ * Only `utxoLineage` rows are counted for the user (the "lineage" count);
+ * custody segments are restored but not separately reported, matching the
+ * original inline statistics. Counts reflect rows actually written (skipped
+ * duplicates are not counted).
  */
 export async function restoreLegacyLineage(
   utxoLineage: any[] | undefined,
   custodySegments: any[] | undefined,
+  restoreMode: RestoreMode = "replace",
 ): Promise<{ lineageAdded: number; segmentsAdded: number }> {
   let lineageAdded = 0;
   let segmentsAdded = 0;
 
+  // In merge mode, gather the identities already present so duplicates are
+  // skipped instead of duplicated (lineage) or throwing (custody segments).
+  const existingLineageKeys = new Set<string>();
+  let existingSegmentIds = new Set<string>();
+  if (restoreMode === "merge") {
+    for (const l of await getAllUtxoLineage()) existingLineageKeys.add(lineageIdentity(l));
+    existingSegmentIds = await getExistingSegmentIds();
+  }
+
   if (utxoLineage && utxoLineage.length > 0) {
     for (const ul of utxoLineage) {
       const { id, ...ulData } = ul;
+      if (restoreMode === "merge") {
+        const key = lineageIdentity(ulData);
+        if (existingLineageKeys.has(key)) continue;
+        existingLineageKeys.add(key);
+      }
       await addUtxoLineage(ulData as CreateUtxoLineageData, { skipNotification: true });
       lineageAdded++;
     }
@@ -376,6 +412,11 @@ export async function restoreLegacyLineage(
   if (custodySegments && custodySegments.length > 0) {
     for (const cs of custodySegments) {
       const { id, ...csData } = cs;
+      if (restoreMode === "merge") {
+        const segmentId = csData.segmentId;
+        if (typeof segmentId === "string" && existingSegmentIds.has(segmentId)) continue;
+        if (typeof segmentId === "string") existingSegmentIds.add(segmentId);
+      }
       await addCustodySegment(csData as CreateCustodySegmentData, { skipNotification: true });
       segmentsAdded++;
     }

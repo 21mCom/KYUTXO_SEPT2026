@@ -53,7 +53,10 @@ import {
 import {
   bulkAddUtxoLineage,
   bulkAddCustodySegments,
+  getAllUtxoLineage,
+  getExistingSegmentIds,
 } from "@/lib/data/lineage-crud";
+import { lineageIdentity, type RestoreMode } from "./legacy-restore-misc";
 
 /**
  * Restore the `nodeSettings` singleton rows from a backup. Shared by BOTH the
@@ -295,6 +298,7 @@ export async function clearInlineTables(): Promise<void> {
 
 export async function restoreInlineTables(
   data: Record<string, unknown>,
+  restoreMode: RestoreMode = "replace",
 ): Promise<void> {
   const arr = (k: string): any[] => (Array.isArray(data[k]) ? (data[k] as any[]) : []);
   const now = Date.now();
@@ -411,18 +415,46 @@ export async function restoreInlineTables(
   // carry them as NDJSON (handled by the restore orchestrator) and won't have
   // them inline. But OLDER v3 backups stored them inline — restore those here
   // when present so upgrading the format never silently drops lineage data.
-  const lineageRows = arr("utxoLineage").map((ul) => {
+  //
+  // In replace mode the caller cleared these tables first, so rows are appended
+  // as-is. In merge mode segments whose unique `segmentId` already exists (and
+  // lineage edges already present) are skipped, so a merge over an
+  // already-present segment does not violate the unique index and abort the
+  // restore mid-way.
+  let lineageRows = arr("utxoLineage").map((ul) => {
     const { id, ...d } = ul;
     return d;
   });
-  if (lineageRows.length) {
-    await bulkAddUtxoLineage(lineageRows as any[], { skipNotification: true });
-  }
-
-  const segmentRows = arr("custodySegments").map((cs) => {
+  let segmentRows = arr("custodySegments").map((cs) => {
     const { id, ...d } = cs;
     return d;
   });
+
+  if (restoreMode === "merge") {
+    if (lineageRows.length) {
+      const existingLineageKeys = new Set<string>();
+      for (const l of await getAllUtxoLineage()) existingLineageKeys.add(lineageIdentity(l));
+      lineageRows = lineageRows.filter((d) => {
+        const key = lineageIdentity(d);
+        if (existingLineageKeys.has(key)) return false;
+        existingLineageKeys.add(key);
+        return true;
+      });
+    }
+    if (segmentRows.length) {
+      const existingSegmentIds = await getExistingSegmentIds();
+      segmentRows = segmentRows.filter((d) => {
+        const segmentId = d.segmentId;
+        if (typeof segmentId === "string" && existingSegmentIds.has(segmentId)) return false;
+        if (typeof segmentId === "string") existingSegmentIds.add(segmentId);
+        return true;
+      });
+    }
+  }
+
+  if (lineageRows.length) {
+    await bulkAddUtxoLineage(lineageRows as any[], { skipNotification: true });
+  }
   if (segmentRows.length) {
     await bulkAddCustodySegments(segmentRows as any[], { skipNotification: true });
   }

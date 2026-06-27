@@ -189,16 +189,86 @@ describe("legacy restore: utxo lineage + custody segments", () => {
     expect(await getAllCustodySegments()).toHaveLength(1);
   });
 
-  it("rejects a backup with duplicate custody segmentIds (unique index)", async () => {
-    // The legacy path never de-duped segments and relies on replace mode having
-    // cleared first; two rows sharing a segmentId violate the unique index. This
-    // documents that the unique constraint is genuinely enforced by the schema.
+  it("rejects a backup with duplicate custody segmentIds in replace mode (unique index)", async () => {
+    // In replace mode the caller has cleared first and rows are appended as-is;
+    // two rows sharing a segmentId violate the unique index. This documents that
+    // the unique constraint is genuinely enforced by the schema and that replace
+    // mode behaviour is unchanged.
     await expect(
       restoreLegacyLineage(undefined, [
         backupSegment(701, "dup-seg"),
         backupSegment(702, "dup-seg"),
       ]),
     ).rejects.toBeTruthy();
+  });
+
+  it("merge mode skips a custody segment whose segmentId already exists (no throw)", async () => {
+    // Seed the vault with an existing segment (as a prior restore/merge would).
+    const seed = await restoreLegacyLineage(undefined, [backupSegment(800, "seg-existing")]);
+    expect(seed.segmentsAdded).toBe(1);
+
+    // A merge whose backup re-includes that segmentId (plus a brand-new one)
+    // must complete WITHOUT throwing: the already-present segment is skipped and
+    // only the new one is added — the whole restore no longer aborts mid-way.
+    const result = await restoreLegacyLineage(
+      undefined,
+      [backupSegment(801, "seg-existing"), backupSegment(802, "seg-new")],
+      "merge",
+    );
+    expect(result.segmentsAdded).toBe(1);
+
+    const liveSegments = await getAllCustodySegments();
+    expect(liveSegments).toHaveLength(2);
+    expect(new Set(liveSegments.map((s) => s.segmentId))).toEqual(
+      new Set(["seg-existing", "seg-new"]),
+    );
+  });
+
+  it("merge mode dedups custody segments that share a segmentId WITHIN one backup", async () => {
+    // Two backup rows sharing a segmentId would throw in replace mode; in merge
+    // mode the second is skipped so the restore completes.
+    const result = await restoreLegacyLineage(
+      undefined,
+      [backupSegment(810, "dup-merge"), backupSegment(811, "dup-merge")],
+      "merge",
+    );
+    expect(result.segmentsAdded).toBe(1);
+    expect(await getAllCustodySegments()).toHaveLength(1);
+  });
+
+  it("merge mode skips a lineage edge that already exists", async () => {
+    // Seed an existing lineage edge.
+    const seed = await restoreLegacyLineage([backupLineage(900, "tx-dup")], undefined);
+    expect(seed.lineageAdded).toBe(1);
+
+    // A merge re-including that same edge (same spent/created identity) plus a
+    // new edge adds only the new one — no duplicate edge piles up.
+    const result = await restoreLegacyLineage(
+      [backupLineage(901, "tx-dup"), backupLineage(902, "tx-fresh")],
+      undefined,
+      "merge",
+    );
+    expect(result.lineageAdded).toBe(1);
+
+    const liveLineage = await getAllUtxoLineage();
+    expect(liveLineage).toHaveLength(2);
+    expect(new Set(liveLineage.map((l) => l.consumingTxid))).toEqual(
+      new Set(["tx-dup", "tx-fresh"]),
+    );
+  });
+
+  it("merge mode adds new lineage and segments to a non-empty vault without de-duping distinct rows", async () => {
+    await restoreLegacyLineage([backupLineage(950, "tx-seed")], [backupSegment(960, "seg-seed")]);
+
+    const result = await restoreLegacyLineage(
+      [backupLineage(951, "tx-a"), backupLineage(952, "tx-b")],
+      [backupSegment(961, "seg-a"), backupSegment(962, "seg-b")],
+      "merge",
+    );
+    expect(result.lineageAdded).toBe(2);
+    expect(result.segmentsAdded).toBe(2);
+    expect(await getAllUtxoLineage()).toHaveLength(3);
+    expect(await getAllCustodySegments()).toHaveLength(3);
   });
 
   it("no-ops cleanly when both inputs are empty/undefined", async () => {

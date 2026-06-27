@@ -2425,11 +2425,13 @@ export default function SettingsPage() {
       await restoreSettingsPreferences(backupSettings);
 
       // Restore UTXO lineage data and custody segments (v2.2.0+, not encrypted):
-      // append-only, no de-dup or id remapping (replace mode cleared the tables
-      // above). Custody segments have a unique `segmentId` index, so the legacy
-      // path relies on replace having cleared first. Shared with tests via the
+      // backup ids stripped, no id remapping. In replace mode the tables were
+      // cleared above and rows are appended as-is. In merge mode segments whose
+      // unique `segmentId` already exists (and lineage edges already present) are
+      // skipped, so a merge over an already-present segment no longer throws on
+      // the unique index and aborts the restore. Shared with tests via the
       // legacy-restore-misc helpers; only lineage rows are surfaced to the user.
-      const lineageResult = await restoreLegacyLineage(utxoLineage, custodySegments);
+      const lineageResult = await restoreLegacyLineage(utxoLineage, custodySegments, restoreMode);
       const lineageDataAdded = lineageResult.lineageAdded;
 
       // Restore blockchain transaction data (v2.2.0+, not encrypted): confirmed

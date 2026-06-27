@@ -193,6 +193,15 @@ export async function getCustodySegmentsAfterId(
   return db.custodySegments.where('id').above(afterId).limit(limit).toArray();
 }
 
+// Returns the set of `segmentId` values already present, read via the unique
+// `&segmentId` index (no full rows materialised). Used by merge-mode restore to
+// skip custody segments whose segmentId already exists — appending them would
+// otherwise violate the unique index and abort the whole restore mid-way.
+export async function getExistingSegmentIds(): Promise<Set<string>> {
+  const keys = await db.custodySegments.orderBy('segmentId').keys();
+  return new Set(keys as unknown as string[]);
+}
+
 export async function countUtxoLineage(): Promise<number> {
   return db.utxoLineage.count();
 }
