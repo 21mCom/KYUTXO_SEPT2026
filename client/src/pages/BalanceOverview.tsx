@@ -12,7 +12,7 @@ import {
 import { engineGetBalanceGroupSummaries, subscribeEngineReadiness } from "@/lib/engine/engine-client";
 import { evaluateEngineFreshness } from "@/lib/engine/engine-freshness";
 import { recomputeAddressStats } from "@/lib/data/address-stats";
-import { countUnresolvedPrevoutInputs, getUnresolvedSpendBreakdown, getMissingSourceTxids, getMissingSourceTxidDetails, type MissingSourceDetail } from "@/lib/data/transaction-crud";
+import { countUnresolvedPrevoutInputs, getUnresolvedSpendBreakdown, getMissingSourceTxids, getMissingSourceTxidDetails, buildMissingSourceJson, buildMissingSourceCsv, type MissingSourceDetail } from "@/lib/data/transaction-crud";
 import { transactionSyncService } from "@/lib/transaction-sync";
 import { runTxidBackfill } from "@/lib/txid-backfill";
 import { createProviderFromSettings } from "@/lib/blockchain-api";
@@ -989,6 +989,45 @@ export default function BalanceOverview() {
     );
   }, [missingDetails, copyText]);
 
+  // Save the missing-transaction list as a downloadable file. Works fully offline
+  // (just builds a Blob from the in-memory list) so it's consistent with the
+  // dialog itself — no provider or network needed.
+  const downloadMissing = useCallback(
+    (format: "json" | "csv") => {
+      if (!missingDetails || missingDetails.length === 0) return;
+      try {
+        const content =
+          format === "json"
+            ? buildMissingSourceJson(missingDetails)
+            : buildMissingSourceCsv(missingDetails);
+        const mime =
+          format === "json"
+            ? "application/json;charset=utf-8"
+            : "text/csv;charset=utf-8";
+        const stamp = new Date().toISOString().slice(0, 10);
+        const filename = `kyutxo-missing-transactions-${stamp}.${format}`;
+        const blob = new Blob([content], { type: mime });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = filename;
+        a.click();
+        URL.revokeObjectURL(url);
+        toast({
+          description: `Saved ${missingDetails.length.toLocaleString()} source transaction${missingDetails.length !== 1 ? "s" : ""} to ${filename}`,
+        });
+      } catch (err) {
+        console.warn("[BalanceOverview] Failed to download missing transactions:", err);
+        toast({
+          title: "Download failed",
+          description: "Couldn't save the file. Please try again.",
+          variant: "destructive",
+        });
+      }
+    },
+    [missingDetails, toast],
+  );
+
   const totalBalance = totals.sats;
   const totalAddresses = totals.addresses;
   const isBusy = phase !== "ready";
@@ -1242,16 +1281,34 @@ export default function BalanceOverview() {
             </>
           )}
 
-          <DialogFooter className="gap-2 sm:gap-2">
+          <DialogFooter className="flex-wrap gap-2 sm:gap-2">
             {missingDetails && missingDetails.length > 0 && (
-              <Button
-                variant="outline"
-                onClick={copyAllMissing}
-                data-testid="button-copy-all-missing"
-              >
-                <Copy className="h-4 w-4 mr-1.5" />
-                Copy all source ids
-              </Button>
+              <>
+                <Button
+                  variant="outline"
+                  onClick={copyAllMissing}
+                  data-testid="button-copy-all-missing"
+                >
+                  <Copy className="h-4 w-4 mr-1.5" />
+                  Copy all source ids
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => downloadMissing("json")}
+                  data-testid="button-download-missing-json"
+                >
+                  <Download className="h-4 w-4 mr-1.5" />
+                  Download JSON
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => downloadMissing("csv")}
+                  data-testid="button-download-missing-csv"
+                >
+                  <Download className="h-4 w-4 mr-1.5" />
+                  Download CSV
+                </Button>
+              </>
             )}
             <Button onClick={() => setMissingDialogOpen(false)} data-testid="button-close-missing-dialog">
               Close

@@ -509,6 +509,42 @@ export async function getMissingSourceTxidDetails(): Promise<MissingSourceDetail
     .sort((a, b) => (a.sourceTxid < b.sourceTxid ? -1 : a.sourceTxid > b.sourceTxid ? 1 : 0));
 }
 
+/**
+ * Serialise missing source details to a pretty-printed JSON string. Pure (no DOM,
+ * no DB) so it can be unit-tested and reused by the offline download action in the
+ * Balance page. Shape: `{ sourceTxid, spendingTxids }[]`, identical to the
+ * in-memory detail list.
+ */
+export function buildMissingSourceJson(details: MissingSourceDetail[]): string {
+  return JSON.stringify(
+    details.map((d) => ({ sourceTxid: d.sourceTxid, spendingTxids: d.spendingTxids })),
+    null,
+    2,
+  );
+}
+
+/** Quote a CSV field if it contains a comma, quote, or newline (RFC 4180). */
+function csvEscape(value: string): string {
+  if (/[",\r\n]/.test(value)) {
+    return `"${value.replace(/"/g, '""')}"`;
+  }
+  return value;
+}
+
+/**
+ * Serialise missing source details to a CSV string with a header row. One row per
+ * source transaction: the source txid plus its referencing spend txids joined by
+ * a space inside a single quoted cell, so the file opens cleanly in a spreadsheet.
+ * Pure (no DOM, no DB) for testability and offline reuse.
+ */
+export function buildMissingSourceCsv(details: MissingSourceDetail[]): string {
+  const lines = ["source_txid,referencing_spend_txids"];
+  for (const d of details) {
+    lines.push(`${csvEscape(d.sourceTxid)},${csvEscape(d.spendingTxids.join(" "))}`);
+  }
+  return lines.join("\r\n");
+}
+
 // =============================================================================
 // FRESHNESS FINGERPRINTS — compared against the native engine mirror before a
 // read is served from the engine. All reads below are index-only (count + the
