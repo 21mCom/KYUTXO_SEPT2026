@@ -10,8 +10,9 @@ import {
 
 /**
  * The shape of a single finding as it appears in the exported Privacy Audit
- * JSON report. `citations` is only present (as an array) for ENTITY_* findings;
- * it is omitted entirely for every other finding type.
+ * JSON report. `citations` is present (as an array) for direct (ENTITY_*) and
+ * indirect proximity (PROXIMITY_*) findings; it is omitted entirely for every
+ * other finding type.
  */
 export interface ExportedFinding {
   type: PrivacyFindingType;
@@ -41,14 +42,16 @@ export function formatScoreDelta(scoreDelta: number | undefined): string | null 
 
 /**
  * Surface per-entity source citations (name, address, category label and the
- * public attribution note) as a clean field on ENTITY_* findings so the citation
- * travels with the exported report. Returns `undefined` for non-entity findings
- * (and for entity findings with no citations) so the field is omitted from the
- * serialized JSON. URLs inside `sourceNote` are passed through as plain text —
- * they are never fetched (offline-first).
+ * public attribution note) as a clean field on entity findings so the citation
+ * travels with the exported report. Both direct (ENTITY_*) and indirect
+ * proximity (PROXIMITY_*) findings carry citations built from the public entity
+ * list, so both prefixes are surfaced here. Returns `undefined` for every other
+ * finding type (and for findings with no citations) so the field is omitted from
+ * the serialized JSON. URLs inside `sourceNote` are passed through as plain
+ * text — they are never fetched (offline-first).
  */
 export function extractCitations(f: PrivacyFinding): EntityCitation[] | undefined {
-  if (!f.type.startsWith("ENTITY_")) return undefined;
+  if (!f.type.startsWith("ENTITY_") && !f.type.startsWith("PROXIMITY_")) return undefined;
   const citations = (f.details as { citations?: EntityCitation[] }).citations;
   if (!citations || citations.length === 0) return undefined;
   return citations.map((c) => ({

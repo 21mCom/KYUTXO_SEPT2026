@@ -1329,6 +1329,15 @@ export function detectEntityProximity(ctx: AuditContext): PrivacyFinding[] {
     hopPath: string[];
     /** Connecting txid per hop; hopTxids[i] links hopPath[i] → hopPath[i+1]. */
     hopTxids: string[];
+    /**
+     * Per-entity source citations (name, category label, public attribution
+     * note) for the indirect counterparties in this group, deduped by address —
+     * mirrors detectEntityContacts so indirect (proximity) findings surface the
+     * same "why was this flagged" attribution as direct ones.
+     */
+    citations: EntityCitation[];
+    /** Addresses already represented in `citations` (dedupe guard). */
+    citationAddrs: Set<string>;
   }>();
 
   for (const ownedAddr of ctx.userAddresses) {
@@ -1380,6 +1389,12 @@ export function detectEntityProximity(ctx: AuditContext): PrivacyFinding[] {
                   p.address,
                 );
                 const key = `${entity.category}::${hop}`;
+                const citation: EntityCitation = {
+                  name: entity.name,
+                  address: p.address,
+                  categoryLabel: ENTITY_CATEGORY_LABELS[entity.category],
+                  sourceNote: entity.sourceNote,
+                };
                 const existing = grouped.get(key);
                 if (existing) {
                   existing.entityNames.add(entity.name);
@@ -1388,6 +1403,10 @@ export function detectEntityProximity(ctx: AuditContext): PrivacyFinding[] {
                   }
                   if (!existing.ownedAddresses.includes(ownedAddr)) {
                     existing.ownedAddresses.push(ownedAddr);
+                  }
+                  if (!existing.citationAddrs.has(p.address)) {
+                    existing.citationAddrs.add(p.address);
+                    existing.citations.push(citation);
                   }
                 } else {
                   grouped.set(key, {
@@ -1398,6 +1417,8 @@ export function detectEntityProximity(ctx: AuditContext): PrivacyFinding[] {
                     ownedAddresses: [ownedAddr],
                     hopPath,
                     hopTxids,
+                    citations: [citation],
+                    citationAddrs: new Set([p.address]),
                   });
                 }
               }
@@ -1439,6 +1460,7 @@ export function detectEntityProximity(ctx: AuditContext): PrivacyFinding[] {
         hopPath: group.hopPath,
         hopTxids: group.hopTxids,
         isProximity: true,
+        citations: group.citations,
       },
       correction:
         group.category === "scam" || group.category === "darknet"
