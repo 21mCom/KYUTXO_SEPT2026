@@ -10,7 +10,7 @@ import { render, screen, waitFor, cleanup } from "@testing-library/react";
 //      banner shows the count line (data-testid="text-unattributable-spends")
 //      and ends with a plain period (no "more history" note).
 //   2. When *every* unresolved spend is unattributable, the same line adds the
-//      "resolving needs more transaction history first" wording.
+//      "import their source history to attribute them." wording.
 //   3. When nothing is unattributable, the line is absent entirely.
 // The banner renders above the phase-based content, so we only need the two
 // spend-health effects to run — no engine fast path / row expansion required.
@@ -148,7 +148,7 @@ describe("BalanceOverview spend-warning unattributable line", () => {
 
     const line = await screen.findByTestId("text-unattributable-spends");
     expect(line.textContent).toContain("3 of these can't yet be tied to any tracked wallet");
-    expect(line.textContent).toContain("resolving needs more transaction history first");
+    expect(line.textContent).toContain("import their source history to attribute them.");
   });
 
   it("omits the unattributable line when every unresolved spend is attributable", async () => {
