@@ -821,6 +821,102 @@ describe("buildFundTrailPdf with very long values", () => {
     expect(normalized).toContain(longAddress);
     expect(normalized).toContain(longTxid);
   });
+
+  // A long group label could overflow the right page edge if its detail-section
+  // heading were drawn as one unwrapped run. The heading is now wrapped via
+  // doc.splitTextToSize, so it must render across multiple lines. We measure the
+  // heading's rendered line count straight from the (uncompressed) PDF content
+  // stream: the detail heading is the only run drawn at font size 9 (`/F1 9
+  // Tf`), and jspdf emits one `Tj` text-show operator per rendered line. Reading
+  // the operators (not the decoded text) makes the count immune to the em-dash
+  // separator being dropped by the font and to the "↳ " indent marker being
+  // emitted as a UTF-16 string on expanded hops.
+  async function headingLineCount(
+    blob: Blob,
+    labelMarker: string,
+  ): Promise<number> {
+    const latin1 = Buffer.from(await blob.arrayBuffer()).toString("latin1");
+    // Operators are newline-delimited, so a BT…ET block never contains a stray
+    // "\nET" inside its literals — the non-greedy match lands on the real end.
+    const blocks = latin1.match(/BT\n[\s\S]*?\nET/g) ?? [];
+    const heading = blocks.find(
+      (b) => b.includes("/F1 9 Tf") && b.includes(labelMarker),
+    );
+    if (!heading) return 0;
+    return (heading.match(/Tj\b/g) ?? []).length;
+  }
+
+  // A distinctive Latin1 chunk of the long label that lands on a wrapped line
+  // (so it identifies the heading block whether or not it was wrapped).
+  const labelMarker = "xxxxxxxxxx";
+
+  it("wraps a long top-level group-label heading across multiple lines", async () => {
+    const center: TrailHop = {
+      sources: [
+        flow({
+          groupLabel: longGroupLabel,
+          totalSats: 123_456_789,
+          // Short address/txid so only the heading (not the columns) wraps.
+          details: [detail({ address: "bc1qshort", txid: "short1" })],
+        }),
+      ],
+      destinations: [],
+    };
+    const snapshot = buildFundTrailSnapshot(
+      "Center",
+      "walletName",
+      center,
+      new Map(),
+    );
+
+    const blob = await buildFundTrailPdf(snapshot, { detailed: true });
+
+    // The long heading must render on more than one line; an unwrapped run that
+    // overflowed the page edge would render as exactly one line.
+    expect(await headingLineCount(blob, labelMarker)).toBeGreaterThan(1);
+  });
+
+  it("wraps a long expanded-hop heading too (robust to the ↳ indent marker)", async () => {
+    const center: TrailHop = {
+      sources: [
+        flow({
+          groupLabel: "Root",
+          details: [detail({ address: "bc1qroot", txid: "root1" })],
+        }),
+      ],
+      destinations: [],
+    };
+    // The long label lives on an expanded child hop, so its heading is drawn
+    // with the "↳ " indent prefix — a non-Latin1 glyph jspdf emits as UTF-16.
+    const expandedHop: TrailHop = {
+      sources: [
+        flow({
+          groupLabel: longGroupLabel,
+          totalSats: 123_456_789,
+          details: [detail({ address: "bc1qchild", txid: "child1" })],
+        }),
+      ],
+      destinations: [],
+    };
+    const registry = new Map<string, TrailHop>();
+    registry.set(flowPath("", "source", "Root"), expandedHop);
+    const snapshot = buildFundTrailSnapshot(
+      "Center",
+      "walletName",
+      center,
+      registry,
+    );
+
+    const blob = await buildFundTrailPdf(snapshot, { detailed: true });
+
+    // Despite the UTF-16 "↳ " indent run on its first line, the indented heading
+    // must still wrap onto multiple lines rather than overflow the page edge.
+    expect(await headingLineCount(blob, labelMarker)).toBeGreaterThan(1);
+
+    // Guard the measurement itself: a short, unwrapped heading ("Root") renders
+    // as exactly one line, proving the >1 assertion reflects real wrapping.
+    expect(await headingLineCount(blob, "Root")).toBe(1);
+  });
 });
 
 // ---------------------------------------------------------------------------
