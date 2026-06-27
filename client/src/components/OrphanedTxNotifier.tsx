@@ -36,6 +36,11 @@ export function OrphanedTxNotifier() {
             onClick={() => {
               sessionStorage.setItem("kyutxo:autoBackfill", "1");
               setLocation("/settings");
+              // If the user is ALREADY on /settings, the navigation above is a
+              // no-op and SettingsPage never remounts, so its mount effect would
+              // never consume the flag. Dispatch an event the page also listens
+              // for so "Fix now" works regardless of the current route.
+              window.dispatchEvent(new Event("kyutxo:autoBackfill"));
             }}
             data-testid="button-rebuild-missing-transactions"
           >

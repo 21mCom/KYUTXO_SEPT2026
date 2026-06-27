@@ -256,6 +256,36 @@ describe("SettingsPage — autoBackfill 'Fix now' flag", () => {
     expect(screen.queryByTestId("dialog-backfill-transactions")).toBeNull();
   });
 
+  it("auto-starts when 'Fix now' fires while already on the Settings page", async () => {
+    // The user is ALREADY on /settings (no flag at mount), so the mount effect
+    // consumes nothing. OrphanedTxNotifier then sets the flag and dispatches the
+    // kyutxo:autoBackfill window event — the page must react and auto-start.
+    render(
+      <ActivityBusProvider>
+        <SettingsPage />
+      </ActivityBusProvider>,
+    );
+
+    await screen.findByTestId("button-rebuild-transactions");
+    // Nothing fired on mount because the flag was not set.
+    await new Promise((res) => setTimeout(res, 30));
+    expect(detectSpy).not.toHaveBeenCalled();
+
+    // Simulate the "Fix now" click landing while already on this page.
+    sessionStorage.setItem("kyutxo:autoBackfill", "1");
+    window.dispatchEvent(new Event("kyutxo:autoBackfill"));
+
+    await waitFor(() => expect(detectSpy).toHaveBeenCalledTimes(1));
+    expect(await screen.findByTestId("dialog-backfill-transactions")).toBeTruthy();
+    // The one-shot flag is consumed so it can't re-trigger later.
+    expect(sessionStorage.getItem("kyutxo:autoBackfill")).toBeNull();
+
+    backfillGate();
+    await waitFor(() =>
+      expect(screen.queryByTestId("dialog-backfill-transactions")).toBeNull(),
+    );
+  });
+
   it("consumes the flag without firing a duplicate rebuild when one is already in progress", async () => {
     // Mount as if a rebuild were already running (isBackfilling true from the
     // first render), so the autoBackfill guard's `!isBackfilling` branch is hit.

@@ -941,6 +941,15 @@ export default function SettingsPage() {
   const [backfillResult, setBackfillResult] = useState<BackfillResult | null>(null);
   const backfillAbortRef = useRef<AbortController | null>(null);
   const rebuildSectionRef = useRef<HTMLDivElement | null>(null);
+  // Mirrors isBackfilling so the autoBackfill consumer (an event listener added
+  // once) can read the live value without stale-closure issues.
+  const isBackfillingRef = useRef(false);
+  // Set when "Fix now" arrives while a rebuild is already running, so the
+  // rebuild restarts once the current one finishes instead of being dropped.
+  const autoBackfillQueuedRef = useRef(false);
+  // Keep the ref in lockstep with the state so the once-added event listener
+  // always reads the live in-progress value.
+  isBackfillingRef.current = isBackfilling;
 
   // Resolve blank input addresses (whole-database one-off pass) state
   const [isResolvingInputs, setIsResolvingInputs] = useState(false);
@@ -1725,6 +1734,7 @@ export default function SettingsPage() {
   const handleManualBackfill = async () => {
     const controller = new AbortController();
     backfillAbortRef.current = controller;
+    isBackfillingRef.current = true;
     setIsBackfilling(true);
     setBackfillProgress(0);
     setBackfillMessage("Scanning for orphaned transaction records...");
@@ -1801,9 +1811,17 @@ export default function SettingsPage() {
       });
     } finally {
       backfillAbortRef.current = null;
+      isBackfillingRef.current = false;
       setIsBackfilling(false);
       setBackfillProgress(0);
       setBackfillMessage("");
+      // A "Fix now" that arrived mid-rebuild was queued rather than dropped;
+      // start it now that the current rebuild has finished.
+      if (autoBackfillQueuedRef.current) {
+        autoBackfillQueuedRef.current = false;
+        rebuildSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+        void handleManualBackfill();
+      }
     }
   };
 
@@ -1919,13 +1937,38 @@ export default function SettingsPage() {
   // When the user opens Settings via the startup "missing transaction data"
   // notification, a one-shot sessionStorage flag is set. Consume it here to
   // scroll to and automatically start the rebuild.
-  useEffect(() => {
+  //
+  // The flag can be set in two ways:
+  //  1. The user is NOT on Settings — "Fix now" navigates here and this effect
+  //     consumes the flag on mount.
+  //  2. The user is ALREADY on Settings — no remount happens, so OrphanedTxNotifier
+  //     dispatches a `kyutxo:autoBackfill` window event that this effect also
+  //     listens for. Without it, the flag would sit unconsumed and the rebuild
+  //     would silently never auto-start.
+  //
+  // A rebuild already in progress doesn't drop the request: the flag is still
+  // consumed and the rebuild is queued to restart when the current one finishes.
+  const consumeAutoBackfillRef = useRef<() => void>(() => {});
+  consumeAutoBackfillRef.current = () => {
     if (sessionStorage.getItem("kyutxo:autoBackfill") !== "1") return;
     sessionStorage.removeItem("kyutxo:autoBackfill");
     rebuildSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
-    if (!isBackfilling) {
-      handleManualBackfill();
+    if (isBackfillingRef.current) {
+      autoBackfillQueuedRef.current = true;
+      toast({
+        title: "Rebuild Queued",
+        description: "A transaction rebuild is already running. It will restart automatically once the current one finishes.",
+      });
+      return;
     }
+    void handleManualBackfill();
+  };
+
+  useEffect(() => {
+    consumeAutoBackfillRef.current();
+    const onAutoBackfill = () => consumeAutoBackfillRef.current();
+    window.addEventListener("kyutxo:autoBackfill", onAutoBackfill);
+    return () => window.removeEventListener("kyutxo:autoBackfill", onAutoBackfill);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
