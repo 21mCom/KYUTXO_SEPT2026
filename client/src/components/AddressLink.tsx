@@ -36,25 +36,19 @@ export function AddressLink({
   const [resolvedHasMetadata, setResolvedHasMetadata] = useState<boolean>(hasMetadata ?? false);
   const [isResolving, setIsResolving] = useState(false);
 
-  const handleCopy = useCallback((e: React.MouseEvent) => {
+  const handleCopy = useCallback(async (e: React.MouseEvent) => {
     e.stopPropagation();
-    const notifyFailure = () => {
+    try {
+      await navigator.clipboard.writeText(address);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+      toast({ description: "Address copied" });
+    } catch {
       toast({
         title: "Copy failed",
         description: "Could not copy the address to your clipboard.",
         variant: "destructive",
       });
-    };
-    try {
-      navigator.clipboard.writeText(address)
-        .then(() => {
-          setCopied(true);
-          setTimeout(() => setCopied(false), 2000);
-          toast({ description: "Address copied" });
-        })
-        .catch(notifyFailure);
-    } catch {
-      notifyFailure();
     }
   }, [address, toast]);
 

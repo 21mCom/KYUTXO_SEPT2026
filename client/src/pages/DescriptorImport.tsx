@@ -757,12 +757,20 @@ export default function DescriptorImport() {
     setSelectedChangeAddresses(new Set());
   };
 
-  const copyAddress = (address: string) => {
-    navigator.clipboard.writeText(address);
-    toast({
-      title: "Copied",
-      description: "Address copied to clipboard",
-    });
+  const copyAddress = async (address: string) => {
+    try {
+      await navigator.clipboard.writeText(address);
+      toast({
+        title: "Copied",
+        description: "Address copied to clipboard",
+      });
+    } catch {
+      toast({
+        title: "Copy failed",
+        description: "Could not copy to clipboard",
+        variant: "destructive",
+      });
+    }
   };
 
   return (

@@ -835,24 +835,18 @@ export default function BalanceOverview() {
   );
 
   const [copiedAddress, setCopiedAddress] = useState<string | null>(null);
-  const copyAddress = useCallback((address: string) => {
-    const notifyFailure = () => {
+  const copyAddress = useCallback(async (address: string) => {
+    try {
+      await navigator.clipboard.writeText(address);
+      setCopiedAddress(address);
+      setTimeout(() => setCopiedAddress(null), 2000);
+      toast({ description: "Address copied" });
+    } catch {
       toast({
         title: "Copy failed",
         description: "Could not copy the address to your clipboard.",
         variant: "destructive",
       });
-    };
-    try {
-      navigator.clipboard.writeText(address)
-        .then(() => {
-          setCopiedAddress(address);
-          setTimeout(() => setCopiedAddress(null), 2000);
-          toast({ description: "Address copied" });
-        })
-        .catch(notifyFailure);
-    } catch {
-      notifyFailure();
     }
   }, [toast]);
 

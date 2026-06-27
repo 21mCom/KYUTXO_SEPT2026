@@ -11,27 +11,21 @@ interface BitcoinAddressDisplayProps {
 }
 
 export function BitcoinAddressDisplay({ address, truncate = true, className = "" }: BitcoinAddressDisplayProps) {
-  const [copied, setCopied] = useState(false);
   const { toast } = useToast();
+  const [copied, setCopied] = useState(false);
 
-  const handleCopy = () => {
-    const notifyFailure = () => {
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(address);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+      toast({ description: "Address copied" });
+    } catch {
       toast({
         title: "Copy failed",
         description: "Could not copy the address to your clipboard.",
         variant: "destructive",
       });
-    };
-    try {
-      navigator.clipboard.writeText(address)
-        .then(() => {
-          setCopied(true);
-          setTimeout(() => setCopied(false), 2000);
-          toast({ description: "Address copied" });
-        })
-        .catch(notifyFailure);
-    } catch {
-      notifyFailure();
     }
   };
 
