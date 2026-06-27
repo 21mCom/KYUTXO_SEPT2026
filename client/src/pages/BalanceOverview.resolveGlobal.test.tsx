@@ -170,11 +170,12 @@ vi.mock("@/lib/data/transaction-crud", () => ({
 let resolveResult: { resolved: number };
 let resolveDeferred: { promise: Promise<void>; resolve: () => void } | null;
 let resolveShouldReject: boolean;
+let resolveRejectError: unknown;
 let lastOnProgress: ((resolved: number, total: number) => void) | undefined;
 const resolvePrevouts = vi.fn((onProgress: any) => {
   lastOnProgress = onProgress;
   if (resolveShouldReject) {
-    return Promise.reject(new Error("engine crashed mid-pass"));
+    return Promise.reject(resolveRejectError ?? new Error("engine crashed mid-pass"));
   }
   const payload = {
     resolved: resolveResult.resolved,
@@ -207,6 +208,7 @@ beforeEach(() => {
   resolveResult = { resolved: 0 };
   resolveDeferred = null;
   resolveShouldReject = false;
+  resolveRejectError = undefined;
   lastOnProgress = undefined;
   remainingAfterResolve = 0;
 });
@@ -286,6 +288,34 @@ describe("BalanceOverview global Resolve & Recompute", () => {
       expect(btn.textContent).not.toContain("Resolving…");
       expect((btn as HTMLButtonElement).disabled).toBe(false);
     });
+  });
+
+  it("surfaces a connectivity reason when the global resolve fails reaching the node", async () => {
+    resolveShouldReject = true;
+    resolveRejectError = new Error("Network request timed out after 30s. Check your node connection.");
+    await renderWithBanner();
+
+    fireEvent.click(screen.getByTestId("button-fix-prevouts"));
+
+    await waitFor(() => expect(toastCalls.length).toBeGreaterThan(0));
+    expect(toastCalls[0].title).toBe("Resolve failed");
+    expect(toastCalls[0].variant).toBe("destructive");
+    expect(toastCalls[0].description).toContain("Bitcoin node");
+    expect(toastCalls[0].description).not.toContain("internal error");
+  });
+
+  it("surfaces an internal-error reason for a non-connectivity global failure", async () => {
+    resolveShouldReject = true;
+    resolveRejectError = new Error("engine crashed mid-pass");
+    await renderWithBanner();
+
+    fireEvent.click(screen.getByTestId("button-fix-prevouts"));
+
+    await waitFor(() => expect(toastCalls.length).toBeGreaterThan(0));
+    expect(toastCalls[0].title).toBe("Resolve failed");
+    expect(toastCalls[0].variant).toBe("destructive");
+    expect(toastCalls[0].description).toContain("internal error");
+    expect(toastCalls[0].description).not.toContain("Bitcoin node");
   });
 
   it("updates the in-button progress label from the onProgress callback while resolving", async () => {

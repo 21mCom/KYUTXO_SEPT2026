@@ -167,11 +167,12 @@ vi.mock("@/lib/data/transaction-crud", () => ({
 let resolveResult: { resolved: number };
 let resolveDeferred: { promise: Promise<void>; resolve: () => void } | null;
 let resolveShouldReject: boolean;
+let resolveRejectError: unknown;
 let lastOnProgress: ((resolved: number, total: number) => void) | undefined;
 const resolvePrevouts = vi.fn((onProgress: any) => {
   lastOnProgress = onProgress;
   if (resolveShouldReject) {
-    return Promise.reject(new Error("node unreachable"));
+    return Promise.reject(resolveRejectError ?? new Error("node unreachable"));
   }
   const payload = {
     resolved: resolveResult.resolved,
@@ -205,6 +206,7 @@ beforeEach(() => {
   resolveResult = { resolved: 0 };
   resolveDeferred = null;
   resolveShouldReject = false;
+  resolveRejectError = undefined;
   lastOnProgress = undefined;
 });
 
@@ -283,6 +285,34 @@ describe("BalanceOverview per-wallet Resolve", () => {
       expect(btn.textContent).not.toContain("Resolving…");
       expect((btn as HTMLButtonElement).disabled).toBe(false);
     });
+  });
+
+  it("surfaces a connectivity reason when the group resolve fails reaching the node", async () => {
+    resolveShouldReject = true;
+    resolveRejectError = new Error("connect ECONNREFUSED 127.0.0.1:8332");
+    await expandGroupAndShowResolve();
+
+    fireEvent.click(screen.getByTestId(`button-resolve-${GROUP_NAME}`));
+
+    await waitFor(() => expect(toastCalls.length).toBeGreaterThan(0));
+    expect(toastCalls[0].title).toBe("Resolve failed");
+    expect(toastCalls[0].variant).toBe("destructive");
+    expect(toastCalls[0].description).toContain("Bitcoin node");
+    expect(toastCalls[0].description).not.toContain("internal error");
+  });
+
+  it("surfaces an internal-error reason for a non-connectivity group failure", async () => {
+    resolveShouldReject = true;
+    resolveRejectError = new Error("Cannot read properties of undefined (reading 'vout')");
+    await expandGroupAndShowResolve();
+
+    fireEvent.click(screen.getByTestId(`button-resolve-${GROUP_NAME}`));
+
+    await waitFor(() => expect(toastCalls.length).toBeGreaterThan(0));
+    expect(toastCalls[0].title).toBe("Resolve failed");
+    expect(toastCalls[0].variant).toBe("destructive");
+    expect(toastCalls[0].description).toContain("internal error");
+    expect(toastCalls[0].description).not.toContain("Bitcoin node");
   });
 
   it("updates the in-button progress label from the onProgress callback while resolving", async () => {

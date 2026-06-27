@@ -150,9 +150,10 @@ vi.mock("@/lib/data/transaction-crud", () => ({
 // outcome toast. Each test overrides the resolved count via resolveResult.
 let resolveResult: { resolved: number };
 let resolveShouldReject: boolean;
+let resolveRejectError: unknown;
 const resolvePrevouts = vi.fn(() => {
   if (resolveShouldReject) {
-    return Promise.reject(new Error("node unreachable"));
+    return Promise.reject(resolveRejectError ?? new Error("node unreachable"));
   }
   return Promise.resolve({ resolved: resolveResult.resolved, fetchedFromNode: 0, errors: 0, resolvedAddresses: [] });
 });
@@ -176,6 +177,7 @@ beforeEach(() => {
   resolvePrevouts.mockClear();
   resolveResult = { resolved: 0 };
   resolveShouldReject = false;
+  resolveRejectError = undefined;
 });
 
 afterEach(() => {
@@ -262,5 +264,33 @@ describe("BalanceOverview per-address Resolve", () => {
       expect(btn.textContent).not.toContain("Resolving…");
       expect((btn as HTMLButtonElement).disabled).toBe(false);
     });
+  });
+
+  it("surfaces a connectivity reason when the resolve fails reaching the node", async () => {
+    resolveShouldReject = true;
+    resolveRejectError = new Error("Network request timed out after 30s. Check your node connection.");
+    await expandGroupAndShowRows();
+
+    fireEvent.click(screen.getByTestId(`button-resolve-address-${PENDING_ADDRESS}`));
+
+    await waitFor(() => expect(toastCalls.length).toBeGreaterThan(0));
+    expect(toastCalls[0].title).toBe("Resolve failed");
+    expect(toastCalls[0].variant).toBe("destructive");
+    expect(toastCalls[0].description).toContain("Bitcoin node");
+    expect(toastCalls[0].description).not.toContain("internal error");
+  });
+
+  it("surfaces an internal-error reason for a non-connectivity failure", async () => {
+    resolveShouldReject = true;
+    resolveRejectError = new Error("QuotaExceededError: the database is full");
+    await expandGroupAndShowRows();
+
+    fireEvent.click(screen.getByTestId(`button-resolve-address-${PENDING_ADDRESS}`));
+
+    await waitFor(() => expect(toastCalls.length).toBeGreaterThan(0));
+    expect(toastCalls[0].title).toBe("Resolve failed");
+    expect(toastCalls[0].variant).toBe("destructive");
+    expect(toastCalls[0].description).toContain("internal error");
+    expect(toastCalls[0].description).not.toContain("Bitcoin node");
   });
 });
