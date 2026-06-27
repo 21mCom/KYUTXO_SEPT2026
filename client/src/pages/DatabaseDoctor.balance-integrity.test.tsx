@@ -278,6 +278,69 @@ describe("BalanceIntegrityCard - cancelling an in-flight check", () => {
 });
 
 describe("BalanceIntegrityCard - cancelling an in-flight recompute", () => {
+  it("returns to idle and skips the post-recompute re-check when cancelled while the recompute RESOLVES", async () => {
+    // First check finds a stale row so the Recompute button is offered.
+    detectMock.mockImplementation(async (opts) => {
+      if (opts.onStaleBatch) await opts.onStaleBatch([makeStaleRow(1)]);
+      return {
+        sampled: 2000,
+        staleCount: 1,
+        staleAddresses: [],
+        checkedAll: false,
+        cancelled: false,
+      } satisfies StaleBalanceCheckResult;
+    });
+    getWindowMock.mockResolvedValue([makeStaleRow(1)]);
+
+    // Hold the recompute mid-flight; it later RESOLVES (rather than rejects)
+    // after the user cancels. The card must detect the abort signal and reset
+    // to idle WITHOUT running the post-recompute re-check.
+    const recomputeGate = deferred<void>();
+    recomputeMock.mockImplementation(async (options) => {
+      options?.onProgress?.({ processed: 5, total: 10 });
+      await recomputeGate.promise;
+      return { updated: 1, cancelled: false };
+    });
+
+    render(<BalanceIntegrityCard />);
+
+    fireEvent.click(screen.getByTestId("button-run-balance-check"));
+
+    // The initial check ran once and offered Recompute.
+    const recomputeBtn = await screen.findByTestId("button-recompute-balances");
+    expect(detectMock).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(recomputeBtn);
+
+    // The recompute is in flight: progress shows and Cancel is offered.
+    await screen.findByTestId("text-balance-recompute-progress");
+    const cancelBtn = await screen.findByTestId("button-cancel-balance-check");
+    fireEvent.click(cancelBtn);
+
+    // Cancel resets the card to idle immediately.
+    await screen.findByTestId("text-balance-idle");
+    expect(screen.queryByTestId("text-balance-recompute-progress")).toBeNull();
+    expect(screen.queryByTestId("text-balance-verdict")).toBeNull();
+    expect(screen.queryByTestId("banner-balance-result")).toBeNull();
+
+    // Now let the aborted recompute RESOLVE. Because its abort signal already
+    // fired, the card must stay idle and must NOT launch the re-check.
+    recomputeGate.resolve();
+
+    await waitFor(() => {
+      expect(screen.getByTestId("text-balance-idle")).toBeTruthy();
+    });
+
+    // The post-recompute re-check never ran: detect was called only once.
+    expect(detectMock).toHaveBeenCalledTimes(1);
+    // No stale verdict / error / recompute progress leaks through after cancel.
+    expect(screen.queryByTestId("text-balance-verdict")).toBeNull();
+    expect(screen.queryByTestId("banner-balance-result")).toBeNull();
+    expect(screen.queryByTestId("banner-balance-error")).toBeNull();
+    expect(screen.queryByTestId("text-balance-recompute-progress")).toBeNull();
+    expect(screen.queryByTestId("button-recompute-balances")).toBeNull();
+  });
+
   it("returns to idle and shows NO error banner when the cancelled recompute's promise REJECTS", async () => {
     // First check finds a stale row so the Recompute button is offered.
     detectMock.mockImplementation(async (opts) => {
