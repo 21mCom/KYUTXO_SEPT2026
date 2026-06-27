@@ -419,6 +419,114 @@ describe("detectStaleCachedBalances", () => {
     // Only the first batch ever reported progress; the second never ran.
     expect(sampledReports).toEqual([200]);
   });
+
+  it("yields and reports progress once per 200-record batch across a multi-batch scan", async () => {
+    // Seed 650 synced, all-stale addresses so the scan spans four sampling
+    // batches: 200, 200, 200, then a final 50-record partial batch. The loop
+    // reads at most BATCH (200) records, samples them, reports progress via
+    // onProgress(sampled, total), then yields to the UI with setTimeout(0). A
+    // regression that dropped the per-batch yield or batched differently would
+    // change this progression and freeze the UI on large vaults.
+    const COUNT = 650;
+    const records: DbRecord[] = [];
+    const participants: TransactionParticipant[] = [];
+    const txs: BlockchainTransaction[] = [];
+    for (let i = 1; i <= COUNT; i++) {
+      // Zero-pad so the id-ordered scan and the address strings line up.
+      const addr = `progress-addr-${String(i).padStart(4, "0")}`;
+      const txid = `progress-tx-${i}`;
+      records.push(
+        mkAddr({
+          id: i,
+          inputString: addr,
+          statsComputedAt: 5000,
+          // Cached 0 but computed 1000 → every address is stale.
+          cachedBalanceSats: 0,
+        }),
+      );
+      participants.push(mkOutput(addr, txid, 1000));
+      txs.push(mkTx(txid, 100 + i));
+    }
+    await testDb.records.bulkAdd(records);
+    await testDb.transactionParticipants.bulkAdd(participants);
+    await testDb.blockchainTransactions.bulkAdd(txs);
+
+    const sampledReports: number[] = [];
+    const totalReports: Array<number | undefined> = [];
+    const onProgress = vi.fn((sampled: number, total?: number) => {
+      sampledReports.push(sampled);
+      totalReports.push(total);
+    });
+
+    const result = await detectStaleCachedBalances({
+      checkAll: true,
+      onProgress,
+    });
+
+    // Every synced address was scanned to completion.
+    expect(result.cancelled).toBe(false);
+    expect(result.sampled).toBe(COUNT);
+    expect(result.staleCount).toBe(COUNT);
+    expect(result.checkedAll).toBe(true);
+
+    // onProgress fired exactly once per batch (4 batches: 200/200/200/50) with
+    // a monotonically increasing running sampled count, the final call landing
+    // on the full total.
+    expect(onProgress).toHaveBeenCalledTimes(4);
+    expect(sampledReports).toEqual([200, 400, 600, 650]);
+
+    // In checkAll mode the denominator is reported alongside sampled on every
+    // call, so the UI can show real "X of TOTAL" progress.
+    expect(totalReports).toEqual([COUNT, COUNT, COUNT, COUNT]);
+  });
+
+  it("reports an undefined total for a capped (non-checkAll) sampling scan", async () => {
+    // Seed enough synced, all-stale addresses to span two sampling batches.
+    // Without checkAll the scan never counts the address table, so the total
+    // denominator stays undefined even though progress is still reported.
+    const COUNT = 250;
+    const records: DbRecord[] = [];
+    const participants: TransactionParticipant[] = [];
+    const txs: BlockchainTransaction[] = [];
+    for (let i = 1; i <= COUNT; i++) {
+      const addr = `capped-addr-${String(i).padStart(4, "0")}`;
+      const txid = `capped-tx-${i}`;
+      records.push(
+        mkAddr({
+          id: i,
+          inputString: addr,
+          statsComputedAt: 5000,
+          cachedBalanceSats: 0,
+        }),
+      );
+      participants.push(mkOutput(addr, txid, 1000));
+      txs.push(mkTx(txid, 100 + i));
+    }
+    await testDb.records.bulkAdd(records);
+    await testDb.transactionParticipants.bulkAdd(participants);
+    await testDb.blockchainTransactions.bulkAdd(txs);
+
+    const sampledReports: number[] = [];
+    const totalReports: Array<number | undefined> = [];
+    const onProgress = vi.fn((sampled: number, total?: number) => {
+      sampledReports.push(sampled);
+      totalReports.push(total);
+    });
+
+    // sampleLimit larger than COUNT so the scan runs to completion across batches.
+    const result = await detectStaleCachedBalances({
+      sampleLimit: 1000,
+      onProgress,
+    });
+
+    expect(result.cancelled).toBe(false);
+    expect(result.checkedAll).toBe(false);
+    expect(result.sampled).toBe(COUNT);
+    // Two batches: 200 then the final 50.
+    expect(sampledReports).toEqual([200, 250]);
+    // No checkAll → no denominator is ever computed or reported.
+    expect(totalReports).toEqual([undefined, undefined]);
+  });
 });
 
 describe("recomputeAddressStats then re-check", () => {
