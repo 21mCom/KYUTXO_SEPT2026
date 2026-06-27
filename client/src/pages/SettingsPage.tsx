@@ -3275,7 +3275,14 @@ export default function SettingsPage() {
                               <span>
                                 Source note for{" "}
                                 {w.address && (
-                                  <span className="font-mono break-all">"{w.address}"</span>
+                                  <>
+                                    "
+                                    <AddressLink
+                                      address={w.address}
+                                      showMetadataIndicator={false}
+                                    />
+                                    "
+                                  </>
                                 )}{" "}
                                 cites a different address
                                 {w.citedAddresses.length > 1 ? "es" : ""}:
