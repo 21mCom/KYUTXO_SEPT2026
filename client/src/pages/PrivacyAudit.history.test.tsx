@@ -200,3 +200,76 @@ describe("PrivacyHistoryCard export selection", () => {
     expect(lastCsvExportedIds().sort()).toEqual([1, 2, 3]);
   });
 });
+
+describe("PrivacyHistoryCard export download plumbing", () => {
+  // Intercept the anchor the handlers build for the download so we can assert
+  // the filename, that it was clicked, and that the object URL was cleaned up.
+  // jsdom would otherwise log "Not implemented: navigation" on a real click and
+  // mask any regression in this wiring.
+  let createElementSpy: ReturnType<typeof vi.spyOn>;
+  let capturedAnchor: HTMLAnchorElement | undefined;
+  let anchorClickSpy: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    capturedAnchor = undefined;
+    anchorClickSpy = vi.fn();
+    const realCreateElement = document.createElement.bind(document);
+    createElementSpy = vi
+      .spyOn(document, "createElement")
+      .mockImplementation((tagName: string, options?: ElementCreationOptions) => {
+        const el = realCreateElement(tagName, options);
+        if (tagName.toLowerCase() === "a") {
+          capturedAnchor = el as HTMLAnchorElement;
+          // Stub click() so jsdom never attempts the (unimplemented) navigation.
+          (el as HTMLAnchorElement).click = anchorClickSpy;
+        }
+        return el;
+      });
+  });
+
+  afterEach(() => {
+    createElementSpy.mockRestore();
+  });
+
+  it("offers a dated .csv file for download and revokes the object URL", () => {
+    renderCard([RUN_JAN, RUN_MAR, RUN_JUN]);
+
+    fireEvent.click(screen.getByTestId("button-export-history-csv"));
+
+    // A real download was triggered: object URL created, anchor clicked once.
+    expect(URL.createObjectURL).toHaveBeenCalledTimes(1);
+    expect(capturedAnchor).toBeDefined();
+    expect(capturedAnchor!.download).toMatch(
+      /^privacy-history-\d{4}-\d{2}-\d{2}\.csv$/,
+    );
+    expect(capturedAnchor!.href).toBe("blob:fake");
+    expect(anchorClickSpy).toHaveBeenCalledTimes(1);
+
+    // The object URL is cleaned up with the exact URL that was handed out.
+    expect(URL.revokeObjectURL).toHaveBeenCalledTimes(1);
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:fake");
+
+    // The anchor is detached from the document after the click.
+    expect(capturedAnchor!.isConnected).toBe(false);
+  });
+
+  it("offers a dated .pdf file for download and revokes the object URL", async () => {
+    renderCard([RUN_JAN, RUN_MAR, RUN_JUN]);
+
+    fireEvent.click(screen.getByTestId("button-export-history-pdf"));
+
+    // PDF builder is async, so the anchor click happens after it resolves.
+    await waitFor(() => expect(anchorClickSpy).toHaveBeenCalledTimes(1));
+
+    expect(URL.createObjectURL).toHaveBeenCalledTimes(1);
+    expect(capturedAnchor).toBeDefined();
+    expect(capturedAnchor!.download).toMatch(
+      /^privacy-history-\d{4}-\d{2}-\d{2}\.pdf$/,
+    );
+    expect(capturedAnchor!.href).toBe("blob:fake");
+
+    expect(URL.revokeObjectURL).toHaveBeenCalledTimes(1);
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:fake");
+    expect(capturedAnchor!.isConnected).toBe(false);
+  });
+});
