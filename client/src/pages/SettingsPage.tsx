@@ -569,6 +569,35 @@ function EntityErrorList({ errors }: { errors: EntitySnapshotError[] }) {
   // group (nothing to triage between).
   const autoOpen = filterActive || groups.length === 1;
 
+  // Open state lives here (not in each group) so a user's manual expand/collapse
+  // survives a group being filtered out of the DOM and brought back. `openMap`
+  // is the current visible state per kind; `userSetOpenRef` remembers only the
+  // choices the user made by hand, separate from the auto-open intent.
+  const [openMap, setOpenMap] = useState<Record<string, boolean>>({});
+  const userSetOpenRef = useRef<Record<string, boolean>>({});
+  useEffect(() => {
+    setOpenMap((prev) => {
+      const next: Record<string, boolean> = { ...prev };
+      for (const group of allGroups) {
+        // Auto-open forces every group open; when that intent clears a group
+        // falls back to the user's own choice (open only if they expanded it),
+        // so a manually-opened group survives the filter round-trip while a
+        // group that was only auto-expanded re-collapses to the baseline.
+        next[group.kind] = autoOpen
+          ? true
+          : userSetOpenRef.current[group.kind] === true;
+      }
+      return next;
+    });
+  }, [autoOpen, allGroups]);
+  const toggleGroup = (kind: string) => {
+    setOpenMap((prev) => {
+      const next = !prev[kind];
+      userSetOpenRef.current[kind] = next;
+      return { ...prev, [kind]: next };
+    });
+  };
+
   return (
     <div className="space-y-2" data-testid="list-entity-errors">
       <div className="flex flex-wrap items-center gap-2">
@@ -610,7 +639,8 @@ function EntityErrorList({ errors }: { errors: EntitySnapshotError[] }) {
         <EntityErrorGroupItem
           key={group.kind}
           group={group}
-          defaultOpen={autoOpen}
+          open={openMap[group.kind] ?? autoOpen}
+          onToggle={() => toggleGroup(group.kind)}
         />
       ))}
     </div>
@@ -620,22 +650,17 @@ function EntityErrorList({ errors }: { errors: EntitySnapshotError[] }) {
 /** A single collapsible problem-type group with its count and offending rows. */
 function EntityErrorGroupItem({
   group,
-  defaultOpen,
+  open,
+  onToggle,
 }: {
   group: EntityErrorGroup;
-  defaultOpen: boolean;
+  // Open state is controlled by the parent panel so a manual expand/collapse
+  // survives the group being filtered out of the DOM and brought back; see the
+  // openMap/userSetOpenRef logic in EntityErrorListPanel.
+  open: boolean;
+  onToggle: () => void;
 }) {
-  const [open, setOpen] = useState(defaultOpen);
   const { toast } = useToast();
-  // Track the auto-open intent in both directions: open when filtering forces
-  // groups open (defaultOpen flips true) so matched results appear without the
-  // user re-expanding each group, and collapse back when that intent clears
-  // (defaultOpen flips false) so a previously auto-expanded subset group does
-  // not stay stuck open after the filter is cleared, returning the panel to its
-  // clean collapsed baseline.
-  useEffect(() => {
-    setOpen(defaultOpen);
-  }, [defaultOpen]);
   const count = group.errors.length;
 
   // Copy actions operate on the full `group.errors` array, not just the rows
@@ -692,7 +717,7 @@ function EntityErrorGroupItem({
     >
       <button
         type="button"
-        onClick={() => setOpen((prev) => !prev)}
+        onClick={onToggle}
         className="w-full flex items-center gap-2 px-3 py-2 text-left hover-elevate"
         aria-expanded={open}
         data-testid={`button-entity-error-group-${group.kind}`}

@@ -1268,6 +1268,88 @@ describe("SettingsPage — Privacy Audit Entity List panel", () => {
     expect((await getSettings("default"))?.entityListSnapshot).toBeUndefined();
   });
 
+  it("remembers a manually-expanded group across a filter round-trip while an only-auto-expanded group still re-collapses", async () => {
+    renderSettingsPage();
+    await screen.findByTestId("badge-entity-source");
+
+    // Two distinct groups so we can drive them independently:
+    //   - invalid-address  × 1 (entry 1)  → the user will MANUALLY expand this
+    //   - unknown-category × 1 (entry 2)  → only ever auto-expanded by a filter
+    const mixed = JSON.stringify([
+      { address: "totally-invalid-a", name: "Bad One", category: "exchange" },
+      { address: ADDR.a, name: "Bogus", category: "not-a-category" },
+    ]);
+    await selectEntityFile("messy-paste.json", mixed);
+
+    await screen.findByTestId("container-entity-errors");
+
+    // Baseline: both groups present and collapsed.
+    expect(
+      screen
+        .getByTestId("button-entity-error-group-invalid-address")
+        .getAttribute("aria-expanded"),
+    ).toBe("false");
+    expect(
+      screen
+        .getByTestId("button-entity-error-group-unknown-category")
+        .getAttribute("aria-expanded"),
+    ).toBe("false");
+
+    // The user MANUALLY expands the invalid-address group (a deliberate choice,
+    // not driven by any filter). The unknown-category group is left untouched.
+    fireEvent.click(
+      screen.getByTestId("button-entity-error-group-invalid-address"),
+    );
+    expect(
+      screen
+        .getByTestId("button-entity-error-group-invalid-address")
+        .getAttribute("aria-expanded"),
+    ).toBe("true");
+
+    // Apply a filter that surfaces only the unknown-category entry. This forces
+    // the auto-open intent on, so the (still-mounted) unknown-category group
+    // auto-expands while the invalid-address group drops out of the DOM.
+    setErrorFilter("not-a-category");
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("text-entity-error-match-count").textContent,
+      ).toBe("1 matching entry."),
+    );
+    expect(
+      screen
+        .getByTestId("button-entity-error-group-unknown-category")
+        .getAttribute("aria-expanded"),
+    ).toBe("true");
+    expect(screen.queryByTestId("group-entity-error-invalid-address")).toBeNull();
+
+    // Clear the filter: the auto-open intent clears, completing the round-trip.
+    setErrorFilter("");
+    await waitFor(() =>
+      expect(screen.queryByTestId("text-entity-error-match-count")).toBeNull(),
+    );
+
+    // The manually-expanded group survives the round-trip — it is still open.
+    await waitFor(() =>
+      expect(
+        screen
+          .getByTestId("button-entity-error-group-invalid-address")
+          .getAttribute("aria-expanded"),
+      ).toBe("true"),
+    );
+    // The group that was only ever auto-expanded by the filter re-collapses to
+    // the baseline (Task #822 behavior preserved).
+    expect(
+      screen
+        .getByTestId("button-entity-error-group-unknown-category")
+        .getAttribute("aria-expanded"),
+    ).toBe("false");
+
+    // Triage only — nothing was applied.
+    expect(screen.queryByTestId("text-preview-incoming")).toBeNull();
+    expect(getActiveEntitySource()).toBe("bundled");
+    expect((await getSettings("default"))?.entityListSnapshot).toBeUndefined();
+  });
+
   it("combines the reason filter and problem-type dropdown with AND: only entries matching both survive, and a fragment from another kind drops the count to zero", async () => {
     renderSettingsPage();
     await screen.findByTestId("badge-entity-source");
