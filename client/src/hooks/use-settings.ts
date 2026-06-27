@@ -44,6 +44,7 @@ import {
   trimPrivacyAuditHistory,
 } from '@/lib/data/privacy-history-crud';
 import { DEFAULT_TX_LIMIT } from '@/lib/data/fund-trail-engine';
+import { DEFAULT_HOVER_TOOLTIP_PREFS, type HoverTooltipPrefs } from '@/lib/metadata-hover';
 
 export function useSettings() {
   const settings = useLiveQuery(() => getStoredSettings('default'));
@@ -59,8 +60,25 @@ export function useSettings() {
     showScoreBreakdown: settings?.showScoreBreakdown ?? false,
     disableOrphanCheck: settings?.disableOrphanCheck ?? false,
     fundTrailTxLimit: settings?.fundTrailTxLimit ?? DEFAULT_TX_LIMIT,
+    hoverTooltipPrefs: settings?.hoverTooltipPrefs
+      ? { ...DEFAULT_HOVER_TOOLTIP_PREFS, ...settings.hoverTooltipPrefs }
+      : DEFAULT_HOVER_TOOLTIP_PREFS,
     isLoading: settings === undefined,
   };
+}
+
+export async function updateHoverTooltipPrefs(
+  changes: Partial<HoverTooltipPrefs>
+): Promise<void> {
+  const settings = await getStoredSettings('default');
+  if (settings) {
+    const current = settings.hoverTooltipPrefs
+      ? { ...DEFAULT_HOVER_TOOLTIP_PREFS, ...settings.hoverTooltipPrefs }
+      : { ...DEFAULT_HOVER_TOOLTIP_PREFS };
+    await updateStoredSettings('default', {
+      hoverTooltipPrefs: { ...current, ...changes },
+    });
+  }
 }
 
 export function useCustomFields() {

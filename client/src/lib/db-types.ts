@@ -385,6 +385,20 @@ export interface Settings {
   // capping (trade-off between completeness and speed on busy wallets).
   // When unset, defaults to DEFAULT_TX_LIMIT (2000).
   fundTrailTxLimit?: number;
+  // Per-field toggles for the address/TXID hover tooltip. When unset, all fields
+  // default to visible and system tags (namespace-prefixed, e.g. quantum:*) are
+  // excluded. Stored as an optional sub-object so older vaults keep defaults.
+  hoverTooltipPrefs?: {
+    showWalletName: boolean;
+    showOwner: boolean;
+    showCategory: boolean;
+    showTags: boolean;
+    showNotes: boolean;
+    showSeedName: boolean;
+    showSoftware: boolean;
+    showPrivateKeyStatus: boolean;
+    includeSystemTags: boolean;
+  };
   // Optional user-supplied offline snapshot for the Privacy Audit entity list.
   // When present it is applied to the active list at runtime; the bundled list
   // remains the fallback (cleared via "reset to bundled"). `mode` records how

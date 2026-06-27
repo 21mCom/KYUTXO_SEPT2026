@@ -1,10 +1,18 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
 import { Copy, Check, FileText } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { getRecordsByInputString } from "@/lib/data/record-crud";
 import { useRecordPreview } from "@/contexts/RecordPreviewContext";
 import { useToast } from "@/hooks/use-toast";
+import { useSettings } from "@/hooks/use-settings";
+import {
+  resolveIdentifier,
+  getCachedRecord,
+  getHoverMetadataFields,
+  hasHoverMetadata,
+  type HoverMetadataField,
+} from "@/lib/metadata-hover";
+import { type Record as DbRecord } from "@/lib/database";
 
 interface AddressLinkProps {
   address: string;
@@ -18,104 +26,149 @@ interface AddressLinkProps {
   onNavigate?: (recordId: number) => void;
 }
 
-export function AddressLink({ 
-  address, 
+function MetadataTooltipBody({
+  identifier,
+  fields,
+  isLoading,
+}: {
+  identifier: string;
+  fields: HoverMetadataField[];
+  isLoading: boolean;
+}) {
+  return (
+    <div className="space-y-1 max-w-[280px]">
+      <p className="font-mono text-xs break-all text-muted-foreground">{identifier}</p>
+      {isLoading ? (
+        <p className="text-xs text-muted-foreground italic">Loading\u2026</p>
+      ) : fields.length > 0 ? (
+        <div className="space-y-0.5 pt-0.5">
+          {fields.map((f) => (
+            <div key={f.label} className="flex gap-1.5 text-xs">
+              <span className="text-muted-foreground shrink-0 w-20 text-right">{f.label}</span>
+              <span className="break-all">{f.value}</span>
+            </div>
+          ))}
+          <p className="text-xs text-muted-foreground pt-0.5">Click to view / edit</p>
+        </div>
+      ) : (
+        <p className="text-xs text-muted-foreground">Click to view / add metadata</p>
+      )}
+    </div>
+  );
+}
+
+export function AddressLink({
+  address,
   label,
   recordId,
   hasMetadata,
-  truncate = true, 
+  truncate = true,
   showCopy = true,
   showMetadataIndicator = true,
   className = "",
-  onNavigate
+  onNavigate,
 }: AddressLinkProps) {
   const { openRecordPreview, openRecordPreviewByAddress } = useRecordPreview();
   const { toast } = useToast();
+  const { hoverTooltipPrefs } = useSettings();
   const [copied, setCopied] = useState(false);
-  const [resolvedRecordId, setResolvedRecordId] = useState<number | null>(recordId ?? null);
-  const [resolvedHasMetadata, setResolvedHasMetadata] = useState<boolean>(hasMetadata ?? false);
+
+  const resolvedRef = useRef<DbRecord | null | undefined>(
+    recordId != null ? undefined : getCachedRecord(address)
+  );
+  const [tooltipRecord, setTooltipRecord] = useState<DbRecord | null | undefined>(
+    resolvedRef.current
+  );
   const [isResolving, setIsResolving] = useState(false);
+  const [tooltipOpen, setTooltipOpen] = useState(false);
 
-  const handleCopy = useCallback(async (e: React.MouseEvent) => {
-    e.stopPropagation();
-    try {
-      await navigator.clipboard.writeText(address);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-      toast({ description: "Address copied" });
-    } catch {
-      toast({
-        title: "Copy failed",
-        description: "Could not copy the address to your clipboard.",
-        variant: "destructive",
-      });
-    }
-  }, [address, toast]);
+  const computedFields =
+    tooltipRecord != null
+      ? getHoverMetadataFields(tooltipRecord, hoverTooltipPrefs)
+      : [];
 
-  const resolveRecord = useCallback(async (): Promise<{ recordId: number | null; hasMetadata: boolean }> => {
-    if (resolvedRecordId !== null) {
-      return { recordId: resolvedRecordId, hasMetadata: resolvedHasMetadata };
-    }
-    
-    if (isResolving) {
-      return { recordId: null, hasMetadata: false };
-    }
-    
-    setIsResolving(true);
-    try {
-      const rawRecords = await getRecordsByInputString(address);
-      if (rawRecords.length > 0) {
-        const record = rawRecords[0];
-        const foundRecordId = record.id!;
-        
-        const hasMeta = !!(
-          record.label ||
-          record.notes ||
-          (record.tags && record.tags.length > 0) ||
-          (record.categories && record.categories.length > 0) ||
-          record.owner !== 'Pending Review'
-        );
-        
-        setResolvedRecordId(foundRecordId);
-        setResolvedHasMetadata(hasMeta);
-        
-        return { recordId: foundRecordId, hasMetadata: hasMeta };
+  const recordHasMeta =
+    tooltipRecord != null
+      ? hasHoverMetadata(tooltipRecord, hoverTooltipPrefs)
+      : (hasMetadata ?? false);
+
+  const showIndicator = showMetadataIndicator && recordHasMeta;
+
+  const handleTooltipOpen = useCallback(
+    async (open: boolean) => {
+      setTooltipOpen(open);
+      if (!open) return;
+
+      const cached = getCachedRecord(address);
+      if (cached !== undefined) {
+        setTooltipRecord(cached);
+        resolvedRef.current = cached;
+        return;
       }
-      return { recordId: null, hasMetadata: false };
-    } catch (error) {
-      console.error('[AddressLink] Failed to resolve record:', error);
-      return { recordId: null, hasMetadata: false };
-    } finally {
-      setIsResolving(false);
-    }
-  }, [address, resolvedRecordId, resolvedHasMetadata, isResolving]);
 
-  const handleClick = useCallback(async (e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    
-    const { recordId: foundRecordId } = await resolveRecord();
-    
-    if (foundRecordId) {
-      if (onNavigate) {
-        onNavigate(foundRecordId);
+      setIsResolving(true);
+      try {
+        const record = await resolveIdentifier(address);
+        resolvedRef.current = record;
+        setTooltipRecord(record);
+      } finally {
+        setIsResolving(false);
+      }
+    },
+    [address]
+  );
+
+  const handleCopy = useCallback(
+    async (e: React.MouseEvent) => {
+      e.stopPropagation();
+      try {
+        await navigator.clipboard.writeText(address);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+        toast({ description: "Address copied" });
+      } catch {
+        toast({
+          title: "Copy failed",
+          description: "Could not copy the address to your clipboard.",
+          variant: "destructive",
+        });
+      }
+    },
+    [address, toast]
+  );
+
+  const handleClick = useCallback(
+    async (e: React.MouseEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+
+      let foundRecordId: number | null = recordId ?? null;
+      if (foundRecordId == null) {
+        const record = tooltipRecord ?? (await resolveIdentifier(address));
+        foundRecordId = record?.id ?? null;
+      }
+
+      if (foundRecordId) {
+        if (onNavigate) {
+          onNavigate(foundRecordId);
+        } else {
+          await openRecordPreview(foundRecordId);
+        }
       } else {
-        await openRecordPreview(foundRecordId);
+        await openRecordPreviewByAddress(address);
       }
-    } else {
-      await openRecordPreviewByAddress(address);
-    }
-  }, [address, onNavigate, resolveRecord, openRecordPreview, openRecordPreviewByAddress]);
+    },
+    [address, recordId, tooltipRecord, onNavigate, openRecordPreview, openRecordPreviewByAddress]
+  );
 
-  const displayAddress = truncate && address.length > 16
-    ? `${address.slice(0, 8)}...${address.slice(-6)}`
-    : address;
-
-  const showIndicator = showMetadataIndicator && (hasMetadata || resolvedHasMetadata);
+  const displayAddress =
+    truncate && address.length > 16
+      ? `${address.slice(0, 8)}\u2026${address.slice(-6)}`
+      : address;
 
   return (
     <span className={`inline-flex items-center gap-1 ${className}`}>
-      <Tooltip>
+      <Tooltip open={tooltipOpen} onOpenChange={handleTooltipOpen} delayDuration={400}>
         <TooltipTrigger asChild>
           <button
             onClick={handleClick}
@@ -132,23 +185,15 @@ export function AddressLink({
             )}
           </button>
         </TooltipTrigger>
-        <TooltipContent side="top" className="max-w-xs">
-          <div className="space-y-1">
-            <p className="font-mono text-xs break-all">{address}</p>
-            {label && <p className="text-xs text-muted-foreground">Label: {label}</p>}
-            {showIndicator && (
-              <p className="text-xs text-orange-500 flex items-center gap-1">
-                <FileText className="h-3 w-3" />
-                Has metadata - click to view/edit
-              </p>
-            )}
-            {!showIndicator && (
-              <p className="text-xs text-muted-foreground">Click to view/add metadata</p>
-            )}
-          </div>
+        <TooltipContent side="top">
+          <MetadataTooltipBody
+            identifier={address}
+            fields={computedFields}
+            isLoading={isResolving}
+          />
         </TooltipContent>
       </Tooltip>
-      
+
       {showCopy && (
         <Tooltip>
           <TooltipTrigger asChild>
@@ -167,7 +212,7 @@ export function AddressLink({
             </Button>
           </TooltipTrigger>
           <TooltipContent>
-            <p>{copied ? 'Copied!' : 'Copy address'}</p>
+            <p>{copied ? "Copied!" : "Copy address"}</p>
           </TooltipContent>
         </Tooltip>
       )}
