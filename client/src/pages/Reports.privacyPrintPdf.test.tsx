@@ -56,11 +56,22 @@ vi.mock("@/components/ui/select", async () => {
   };
 });
 
+// One owner/wallet pair carries HTML-special characters so we can prove the
+// printable scope line escapes them (see the escaping test below).
+const SPECIAL_OWNER = `A & <B>`;
+const SPECIAL_WALLET = `Vault "X" & <Y>`;
+
 vi.mock("@/hooks/use-owners", () => ({
-  useOwners: () => ({ owners: [{ name: "Alice" }, { name: "Bob" }], isLoading: false }),
+  useOwners: () => ({
+    owners: [{ name: "Alice" }, { name: "Bob" }, { name: SPECIAL_OWNER }],
+    isLoading: false,
+  }),
 }));
 vi.mock("@/hooks/use-wallet-names", () => ({
-  useWalletNames: () => ({ walletNames: [{ name: "Cold Storage" }], isLoading: false }),
+  useWalletNames: () => ({
+    walletNames: [{ name: "Cold Storage" }, { name: SPECIAL_WALLET }],
+    isLoading: false,
+  }),
 }));
 vi.mock("@/hooks/use-toast", () => ({
   useToast: () => ({ toast: toastSpy }),
@@ -116,6 +127,7 @@ vi.mock("@/lib/privacy-audit", async (importOriginal) => {
 });
 
 const { PrivacyAuditReportPanel } = await import("./Reports");
+const { getRecordsPageByTypeIdReverseKeyset } = await import("@/lib/data/record-crud");
 
 // ── Fake print window ────────────────────────────────────────────────────────
 // exportPdf opens a window, writes the printable HTML, then wires the in-window
@@ -405,5 +417,52 @@ describe("PrivacyAuditReportPanel — Print / PDF", () => {
     expect(copied).toContain("Wallet: Cold Storage");
     expect(copied).not.toContain("Owner: All");
     expect(copied).not.toContain("Wallet: All");
+  });
+
+  it("escapes HTML-special characters in the selected owner/wallet scope line", async () => {
+    const fake = makeFakeWindow();
+    vi.spyOn(window, "open").mockReturnValue(fake.win);
+
+    // The audit's address loop matches records by owner/wallet, so the scanned
+    // record must carry the special-char scope or generate() short-circuits with
+    // a "No Addresses" toast and never prints.
+    vi.mocked(getRecordsPageByTypeIdReverseKeyset).mockResolvedValueOnce([
+      {
+        id: 1,
+        type: "address",
+        inputString: "bc1qexampleaddress",
+        owner: SPECIAL_OWNER,
+        walletName: SPECIAL_WALLET,
+      },
+    ] as any);
+
+    render(<PrivacyAuditReportPanel />);
+
+    // Choose the owner/wallet whose names contain `<`, `>`, `&`, and quotes.
+    fireEvent.change(screen.getByTestId("select-privacy-report-owner"), {
+      target: { value: SPECIAL_OWNER },
+    });
+    fireEvent.change(screen.getByTestId("select-privacy-report-wallet"), {
+      target: { value: SPECIAL_WALLET },
+    });
+
+    fireEvent.click(screen.getByTestId("button-generate-privacy-report"));
+    await waitFor(() => screen.getByTestId("button-print-privacy-report"));
+
+    fireEvent.click(screen.getByTestId("button-print-privacy-report"));
+
+    const html = fake.getWritten();
+
+    // The scope line carries the HTML-escaped names, proving escapeHtml ran on
+    // the user-controlled owner/wallet before interpolation.
+    expect(html).toContain("Owner: A &amp; &lt;B&gt;");
+    expect(html).toContain("Wallet: Vault &quot;X&quot; &amp; &lt;Y&gt;");
+
+    // The raw, unescaped names must never appear in the written document — a
+    // regression in the escaping path would inject them straight into the markup.
+    expect(html).not.toContain(SPECIAL_OWNER);
+    expect(html).not.toContain(SPECIAL_WALLET);
+    expect(html).not.toContain("<B>");
+    expect(html).not.toContain("<Y>");
   });
 });
