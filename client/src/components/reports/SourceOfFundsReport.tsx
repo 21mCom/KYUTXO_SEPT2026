@@ -3,6 +3,14 @@ import { type Record as DBRecord, type TransactionParticipant, type BlockchainTr
 import { useAddressRecords } from "@/hooks/use-address-records";
 import { getParticipantsByAddress, getParticipantsByTxid, getTransactionByTxid } from "@/lib/dataFacade";
 import { getPriceDataByKey, getLatestPriceOnOrBefore } from "@/lib/data/price-data-crud";
+import { DEFAULT_TX_LIMIT } from "@/lib/data/fund-trail-engine";
+import {
+  type FundingSource,
+  type SourceOfFundsData,
+  buildSourceOfFundsText,
+  sourceOfFundsCapWarning,
+  sourceOfFundsFilename,
+} from "@/lib/data/source-of-funds-export";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -12,37 +20,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { AlertCircle, ArrowRight, Check, Download, ExternalLink, RefreshCw, Wallet } from "lucide-react";
+import { AlertCircle, AlertTriangle, ArrowRight, Check, Download, ExternalLink, RefreshCw, Wallet } from "lucide-react";
 import { formatBTC, truncateAddress } from "@/lib/bitcoin";
-
-interface FundingSource {
-  txid: string;
-  date: string;
-  blockHeight: number;
-  amountSats: number;
-  fromAddress: string;
-  fromLabel?: string;
-  fromOwner?: string;
-  isInternalTransfer: boolean;
-  priceAtTime?: number;
-  costBasisUSD?: number;
-}
-
-interface SourceOfFundsData {
-  address: string;
-  label: string;
-  owner?: string;
-  walletName?: string;
-  currentBalanceSats: number;
-  totalReceivedSats: number;
-  fundingSources: FundingSource[];
-  currentPriceUSD?: number;
-  currentValueUSD?: number;
-  totalCostBasisUSD?: number;
-  unrealizedGainUSD?: number;
-  internalTransferCount: number;
-  externalFundingCount: number;
-}
 
 export function SourceOfFundsReport() {
   const [selectedAddress, setSelectedAddress] = useState<string>("");
@@ -86,7 +65,16 @@ export function SourceOfFundsReport() {
 
       const participants = await getParticipantsByAddress(selectedAddress);
 
-      const inputTxids = Array.from(new Set(participants.filter(p => p.role === 'output').map(p => p.txid)));
+      const allInputTxids = Array.from(new Set(participants.filter(p => p.role === 'output').map(p => p.txid)));
+
+      // Guard against a busy address whose funding history is large enough to
+      // hang the browser: cap the per-transaction work at the same limit the
+      // Fund Trail uses. When truncation occurs we record shown/total counts so
+      // the exported declaration can warn the reader it is incomplete.
+      const totalTxCount = allInputTxids.length;
+      const isCapped = totalTxCount > DEFAULT_TX_LIMIT;
+      const inputTxids = isCapped ? allInputTxids.slice(0, DEFAULT_TX_LIMIT) : allInputTxids;
+      const shownTxCount = inputTxids.length;
 
       let totalReceivedSats = 0;
       let currentBalanceSats = 0;
@@ -176,6 +164,7 @@ export function SourceOfFundsReport() {
         unrealizedGainUSD,
         internalTransferCount: fundingSources.filter(s => s.isInternalTransfer).length,
         externalFundingCount: fundingSources.filter(s => !s.isInternalTransfer).length,
+        cap: { capped: isCapped, shownTxCount, totalTxCount },
       });
 
     } catch (error) {
@@ -188,51 +177,12 @@ export function SourceOfFundsReport() {
   function exportReport() {
     if (!reportData) return;
 
-    const lines: string[] = [
-      'SOURCE OF FUNDS DECLARATION',
-      '=' .repeat(50),
-      '',
-      `Address: ${reportData.address}`,
-      `Label: ${reportData.label}`,
-      reportData.owner ? `Owner: ${reportData.owner}` : '',
-      reportData.walletName ? `Wallet: ${reportData.walletName}` : '',
-      '',
-      'SUMMARY',
-      '-'.repeat(30),
-      `Current Balance: ${formatBTC(reportData.currentBalanceSats)} BTC`,
-      `Total Received: ${formatBTC(reportData.totalReceivedSats)} BTC`,
-      reportData.currentValueUSD ? `Current Value: $${reportData.currentValueUSD.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${currency}` : '',
-      reportData.totalCostBasisUSD ? `Cost Basis (External): $${reportData.totalCostBasisUSD.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${currency}` : '',
-      reportData.unrealizedGainUSD !== undefined ? `Unrealized Gain/Loss: $${reportData.unrealizedGainUSD.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${currency}` : '',
-      '',
-      `Internal Transfers: ${reportData.internalTransferCount}`,
-      `External Funding Events: ${reportData.externalFundingCount}`,
-      '',
-      'FUNDING SOURCES',
-      '-'.repeat(30),
-      '',
-    ];
-
-    for (const source of reportData.fundingSources) {
-      lines.push(`Date: ${source.date}`);
-      lines.push(`Transaction: ${source.txid}`);
-      lines.push(`Amount: ${formatBTC(source.amountSats)} BTC`);
-      lines.push(`From: ${source.fromLabel || truncateAddress(source.fromAddress, 15, 15)}`);
-      if (source.fromOwner) lines.push(`From Owner: ${source.fromOwner}`);
-      lines.push(`Type: ${source.isInternalTransfer ? 'INTERNAL TRANSFER (Non-taxable)' : 'EXTERNAL FUNDING'}`);
-      if (source.priceAtTime) lines.push(`Price at Time: $${source.priceAtTime.toLocaleString()} ${currency}`);
-      if (source.costBasisUSD) lines.push(`Cost Basis: $${source.costBasisUSD.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${currency}`);
-      lines.push('');
-    }
-
-    lines.push('');
-    lines.push(`Generated: ${new Date().toISOString()}`);
-
-    const blob = new Blob([lines.filter(l => l !== '').join('\n')], { type: 'text/plain' });
+    const text = buildSourceOfFundsText(reportData, currency);
+    const blob = new Blob([text], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `source-of-funds-${reportData.address.substring(0, 10)}-${new Date().toISOString().split('T')[0]}.txt`;
+    a.download = sourceOfFundsFilename(reportData.address);
     a.click();
     URL.revokeObjectURL(url);
   }
@@ -326,6 +276,16 @@ export function SourceOfFundsReport() {
       {reportData && (
         <div className="space-y-6">
           <Separator />
+
+          {reportData.cap.capped && (
+            <div
+              className="flex items-start gap-2 rounded-md border border-amber-500/50 bg-amber-500/10 p-3 text-sm text-amber-700 dark:text-amber-400"
+              data-testid="warning-report-capped"
+            >
+              <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
+              <span>{sourceOfFundsCapWarning(reportData.cap)}</span>
+            </div>
+          )}
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <Card>
