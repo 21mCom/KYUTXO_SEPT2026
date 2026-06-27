@@ -1953,9 +1953,47 @@ export default function SettingsPage() {
         return;
       }
 
-      // Legacy backups: no portable-preferences preview; restore directly.
-      setPrefPreview(null);
-      await handleRestore();
+      // Legacy backups: read the (possibly encrypted) settings rows WITHOUT
+      // touching the vault, then show the same configure -> confirm preview the
+      // v3 path uses. A wrong password fails here, before any destructive work.
+      const zip = await JSZip.loadAsync(restoreFile);
+      const backupFile = zip.file("backup.json");
+      if (!backupFile) {
+        throw new Error("Invalid backup file - missing backup.json");
+      }
+      const backup = JSON.parse(await backupFile.async("text"));
+
+      let legacyData = backup.data;
+      if (backup.encrypted) {
+        if (!restorePassword) {
+          toast({
+            variant: "destructive",
+            title: "Password required",
+            description: "Enter the password used to encrypt this backup.",
+          });
+          return;
+        }
+        try {
+          const salt = base64ToBuffer(backup.salt);
+          const backupKey = await deriveKey(restorePassword, salt);
+          legacyData = JSON.parse(await decrypt(backup.data, backupKey));
+        } catch {
+          // Wrong password (or corrupted payload) surfaces here, BEFORE any
+          // destructive work — stay on the configure stage.
+          toast({
+            variant: "destructive",
+            title: "Could not read backup",
+            description: "The password may be incorrect, or the backup is corrupted.",
+          });
+          return;
+        }
+      }
+
+      const legacySettings = Array.isArray(legacyData?.settings)
+        ? (legacyData.settings as any[])
+        : [];
+      setPrefPreview(previewSettingsPreferences(legacySettings));
+      setRestoreStage("confirm");
     } catch (error) {
       console.error("Failed to prepare restore:", error);
       toast({
