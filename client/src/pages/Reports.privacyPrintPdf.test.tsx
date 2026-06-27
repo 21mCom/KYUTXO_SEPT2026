@@ -154,6 +154,48 @@ const TINY_PENALTY_RESULT = {
   ],
 };
 
+// A finding whose description + correction, and an attached Source Citation's
+// entity name, category label, address and source note all carry HTML-special
+// characters (`<`, `>`, `&`, quotes). These strings flow from the bundled entity
+// list / on-chain data and must be HTML-escaped — never injected raw — into the
+// printable report. The type is an ENTITY_* one so extractCitations surfaces the
+// citation rows (it only does so for ENTITY_/PROXIMITY_ findings).
+const MALICIOUS_DESCRIPTION = `Reuse <b>desc</b> & "quoted" risk`;
+const MALICIOUS_CORRECTION = `Fix <i>now</i> & 'soon'`;
+const MALICIOUS_CITATION_NAME = `Evil <Exchange> & Co`;
+const MALICIOUS_CITATION_CATEGORY = `Cat <x> & "y"`;
+const MALICIOUS_CITATION_ADDRESS = `bc1q<addr>&"z"`;
+const MALICIOUS_CITATION_SOURCE = `Note <s> & 'link'`;
+
+const MALICIOUS_RESULT = {
+  ...mockResult,
+  findings: [
+    {
+      type: "ENTITY_EXCHANGE",
+      severity: "CRITICAL",
+      description: MALICIOUS_DESCRIPTION,
+      details: {
+        citations: [
+          {
+            name: MALICIOUS_CITATION_NAME,
+            categoryLabel: MALICIOUS_CITATION_CATEGORY,
+            address: MALICIOUS_CITATION_ADDRESS,
+            sourceNote: MALICIOUS_CITATION_SOURCE,
+          },
+        ],
+      },
+      correction: MALICIOUS_CORRECTION,
+      txids: ["tx1"],
+      addresses: ["bc1qentity"],
+      scoreDelta: -20,
+    },
+  ],
+  warnings: [],
+  scoreWaterfall: [
+    { label: "Base Score", findingType: "BASE", delta: 0, runningScore: 100, count: 0 },
+  ],
+};
+
 // The printable HTML embeds the generation time in two spots (the <title> date
 // and the "Generated …" subtitle). Normalize both so an exact-match comparison
 // isn't defeated by sub-second clock drift between the component's render and
@@ -532,5 +574,37 @@ describe("PrivacyAuditReportPanel — Print / PDF", () => {
     expect(html).not.toContain(SPECIAL_WALLET);
     expect(html).not.toContain("<B>");
     expect(html).not.toContain("<Y>");
+  });
+
+  it("escapes HTML-special characters in the finding description, correction, and Source Citation cells", async () => {
+    // The finding description/correction and the citation entity name, category,
+    // address and source note flow from the bundled entity list / on-chain data
+    // and could carry `<`, `>`, `&`, or quotes. They must reach the printed
+    // document HTML-escaped, never injected raw, or a regression in any
+    // escapeHtml call site would corrupt the report (or open an injection vector).
+    const fake = makeFakeWindow();
+    vi.spyOn(window, "open").mockReturnValue(fake.win);
+    vi.mocked(runPrivacyAudit).mockResolvedValueOnce(MALICIOUS_RESULT as any);
+
+    const { getByTestId } = await renderWithResult();
+    fireEvent.click(getByTestId("button-print-privacy-report"));
+
+    const html = fake.getWritten();
+
+    // The escaped forms of every user/data-controlled field are present.
+    expect(html).toContain(`Reuse &lt;b&gt;desc&lt;/b&gt; &amp; &quot;quoted&quot; risk`);
+    expect(html).toContain(`Fix &lt;i&gt;now&lt;/i&gt; &amp; &#39;soon&#39;`);
+    expect(html).toContain(`Evil &lt;Exchange&gt; &amp; Co`);
+    expect(html).toContain(`Cat &lt;x&gt; &amp; &quot;y&quot;`);
+    expect(html).toContain(`bc1q&lt;addr&gt;&amp;&quot;z&quot;`);
+    expect(html).toContain(`Note &lt;s&gt; &amp; &#39;link&#39;`);
+
+    // The raw, unescaped fragments must never appear in the written document — a
+    // regression in the escaping path would inject them straight into the markup.
+    expect(html).not.toContain("<b>desc</b>");
+    expect(html).not.toContain("<i>now</i>");
+    expect(html).not.toContain("<Exchange>");
+    expect(html).not.toContain("<addr>");
+    expect(html).not.toContain("<s>");
   });
 });
