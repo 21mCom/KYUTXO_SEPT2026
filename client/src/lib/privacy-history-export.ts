@@ -19,6 +19,37 @@ function findingTypeLabel(type: string): string {
 }
 
 /**
+ * Compute a single, report-wide scope label when every run in the export shares
+ * the same owner/wallet filter, so a reader can tell at a glance that the whole
+ * report is a filtered (or full-vault) view rather than scanning the per-row
+ * Owner/Wallet columns. Returns:
+ *   - "Scope: Owner = Alice"
+ *   - "Scope: Wallet = Cold Storage"
+ *   - "Scope: Owner = Bob, Wallet = Trading"
+ *   - "Scope: All addresses"   (every run is full-vault / unfiltered)
+ * Returns null when there are no runs, or when runs span more than one scope —
+ * in that mixed case there is no single truthful label, so callers fall back to
+ * the existing per-row Owner/Wallet columns. Empty strings are treated the same
+ * as unset so a blank owner/wallet never reads as a distinct filter.
+ */
+function computePrivacyHistoryScopeLabel(
+  entries: PrivacyAuditHistoryEntry[],
+): string | null {
+  if (entries.length === 0) return null;
+  const owner = entries[0].owner || undefined;
+  const wallet = entries[0].walletName || undefined;
+  for (const e of entries) {
+    if ((e.owner || undefined) !== owner || (e.walletName || undefined) !== wallet) {
+      return null; // mixed scopes — no single global label
+    }
+  }
+  const parts: string[] = [];
+  if (owner) parts.push(`Owner = ${owner}`);
+  if (wallet) parts.push(`Wallet = ${wallet}`);
+  return `Scope: ${parts.length ? parts.join(", ") : "All addresses"}`;
+}
+
+/**
  * Build a CSV export of stored Privacy Audit history runs. Each row is one
  * audit run; columns cover the run timestamp, score, grade, totals, severity
  * counts, scope, and one column per finding type encountered across all runs
@@ -81,7 +112,14 @@ export function buildPrivacyHistoryCsv(entries: PrivacyAuditHistoryEntry[]): str
   });
 
   const lines = [headers, ...rows].map((cols) => cols.map(csvCell).join(","));
-  return lines.join("\r\n");
+  const body = lines.join("\r\n");
+
+  // When every run shares one scope, prepend a single preamble line stating it
+  // so the filtered (or full-vault) nature of the whole report is unmistakable
+  // without scanning the per-row Owner/Wallet columns. Mixed scopes get no
+  // preamble — the per-row columns remain the source of truth.
+  const scopeLabel = computePrivacyHistoryScopeLabel(entries);
+  return scopeLabel ? `${csvCell(scopeLabel)}\r\n${body}` : body;
 }
 
 /** Union of finding types across every run, sorted by human label (stable). */
@@ -191,6 +229,11 @@ export async function buildPrivacyHistoryPdf(
   if (ordered.length > 0) {
     summaryParts.push(`latest ${ordered[0].score}/100 (${ordered[0].grade})`);
   }
+  // Lead the summary line with the report-wide scope when every run shares one,
+  // so a filtered (or full-vault) export is labelled prominently at the top.
+  // Mixed-scope exports get no global label (the per-run table columns stand).
+  const scopeLabel = computePrivacyHistoryScopeLabel(entries);
+  if (scopeLabel) summaryParts.unshift(scopeLabel);
   doc.text(summaryParts.join("  |  "), 14, 27);
   doc.setTextColor(0);
 

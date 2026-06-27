@@ -59,7 +59,7 @@ function makeEntry(overrides: Partial<PrivacyAuditHistoryEntry> = {}): PrivacyAu
   };
 }
 
-function parse(csv: string): string[][] {
+function parseRaw(csv: string): string[][] {
   return csv.split('\r\n').map((line) => {
     const cells: string[] = [];
     let cur = '';
@@ -89,6 +89,19 @@ function parse(csv: string): string[][] {
     cells.push(cur);
     return cells;
   });
+}
+
+/**
+ * Parse the CSV but drop a leading single-cell "Scope: ..." preamble line so
+ * tests that assert on the header/data rows stay positionally stable whether or
+ * not the export carries a report-wide scope label.
+ */
+function parse(csv: string): string[][] {
+  const rows = parseRaw(csv);
+  if (rows.length && rows[0].length === 1 && rows[0][0].startsWith('Scope:')) {
+    return rows.slice(1);
+  }
+  return rows;
 }
 
 describe('buildPrivacyHistoryCsv', () => {
@@ -169,6 +182,34 @@ describe('buildPrivacyHistoryCsv', () => {
         ['All', 'All'],
       ]),
     );
+  });
+
+  it('prepends a single-scope preamble line when every run shares one scope', () => {
+    // owner-only, wallet-only, both, and full-vault each yield a distinct
+    // report-wide label as the very first CSV line, ahead of the header row.
+    const cases = [
+      { entries: [makeEntry({ id: 1, owner: 'Alice' }), makeEntry({ id: 2, owner: 'Alice' })], label: 'Scope: Owner = Alice' },
+      { entries: [makeEntry({ id: 1, walletName: 'Cold Storage' })], label: 'Scope: Wallet = Cold Storage' },
+      { entries: [makeEntry({ id: 1, owner: 'Bob', walletName: 'Trading' })], label: 'Scope: Owner = Bob, Wallet = Trading' },
+      { entries: [makeEntry({ id: 1 }), makeEntry({ id: 2 })], label: 'Scope: All addresses' },
+    ];
+    for (const { entries, label } of cases) {
+      const raw = parseRaw(buildPrivacyHistoryCsv(entries));
+      expect(raw[0]).toEqual([label]); // first line is the lone scope cell
+      expect(raw[1][0]).toBe('Timestamp (ISO)'); // header follows immediately
+    }
+  });
+
+  it('omits the scope preamble when runs span more than one scope', () => {
+    const raw = parseRaw(
+      buildPrivacyHistoryCsv([
+        makeEntry({ id: 1, owner: 'Alice' }),
+        makeEntry({ id: 2, owner: 'Bob' }),
+      ]),
+    );
+    // No global label: the very first line is the header, not a "Scope:" line.
+    expect(raw[0][0]).toBe('Timestamp (ISO)');
+    expect(raw.every((r) => !(r.length === 1 && r[0].startsWith('Scope:')))).toBe(true);
   });
 
   it('creates a union column for every finding type and zero-fills missing ones', () => {
@@ -397,21 +438,21 @@ describe('buildPrivacyHistoryPdf summary line', () => {
 
   it('single run: uses the singular "audit run", omits the delta, shows the latest score', async () => {
     await buildPrivacyHistoryPdf([makeEntry({ score: 85, grade: 'A' })]);
-    expect(summaryText()).toBe('1 audit run  |  latest 85/100 (A)');
+    expect(summaryText()).toBe('Scope: All addresses  |  1 audit run  |  latest 85/100 (A)');
   });
 
   it('multi-run improving: plural runs, signed positive delta, latest score', async () => {
     const older = makeEntry({ id: 1, timestamp: Date.UTC(2026, 0, 1), score: 50, grade: 'C' });
     const newer = makeEntry({ id: 2, timestamp: Date.UTC(2026, 0, 2), score: 90, grade: 'A' });
     await buildPrivacyHistoryPdf([older, newer]);
-    expect(summaryText()).toBe('2 audit runs  |  +40 pts overall  |  latest 90/100 (A)');
+    expect(summaryText()).toBe('Scope: All addresses  |  2 audit runs  |  +40 pts overall  |  latest 90/100 (A)');
   });
 
   it('multi-run declining: plural runs, negative delta keeps its minus sign, latest score', async () => {
     const older = makeEntry({ id: 1, timestamp: Date.UTC(2026, 0, 1), score: 90, grade: 'A' });
     const newer = makeEntry({ id: 2, timestamp: Date.UTC(2026, 0, 2), score: 75, grade: 'B' });
     await buildPrivacyHistoryPdf([older, newer]);
-    expect(summaryText()).toBe('2 audit runs  |  -15 pts overall  |  latest 75/100 (B)');
+    expect(summaryText()).toBe('Scope: All addresses  |  2 audit runs  |  -15 pts overall  |  latest 75/100 (B)');
   });
 
   it('computes the delta chronologically regardless of input order', async () => {
@@ -419,14 +460,48 @@ describe('buildPrivacyHistoryPdf summary line', () => {
     const newer = makeEntry({ id: 2, timestamp: Date.UTC(2026, 0, 2), score: 90, grade: 'A' });
     // Pass newest-first to ensure the builder sorts before computing the delta.
     await buildPrivacyHistoryPdf([newer, older]);
-    expect(summaryText()).toBe('2 audit runs  |  +40 pts overall  |  latest 90/100 (A)');
+    expect(summaryText()).toBe('Scope: All addresses  |  2 audit runs  |  +40 pts overall  |  latest 90/100 (A)');
   });
 
   it('multi-run with no net change shows an unsigned zero delta', async () => {
     const older = makeEntry({ id: 1, timestamp: Date.UTC(2026, 0, 1), score: 80, grade: 'A' });
     const newer = makeEntry({ id: 2, timestamp: Date.UTC(2026, 0, 2), score: 80, grade: 'A' });
     await buildPrivacyHistoryPdf([older, newer]);
-    expect(summaryText()).toBe('2 audit runs  |  0 pts overall  |  latest 80/100 (A)');
+    expect(summaryText()).toBe('Scope: All addresses  |  2 audit runs  |  0 pts overall  |  latest 80/100 (A)');
+  });
+
+  it('leads with a single owner scope when every run shares it', async () => {
+    await buildPrivacyHistoryPdf([
+      makeEntry({ id: 1, timestamp: Date.UTC(2026, 0, 1), owner: 'Alice' }),
+      makeEntry({ id: 2, timestamp: Date.UTC(2026, 0, 2), owner: 'Alice' }),
+    ]);
+    expect(summaryText()?.startsWith('Scope: Owner = Alice  |  ')).toBe(true);
+  });
+
+  it('leads with a single wallet scope when every run shares it', async () => {
+    await buildPrivacyHistoryPdf([
+      makeEntry({ id: 1, timestamp: Date.UTC(2026, 0, 1), walletName: 'Cold Storage' }),
+      makeEntry({ id: 2, timestamp: Date.UTC(2026, 0, 2), walletName: 'Cold Storage' }),
+    ]);
+    expect(summaryText()?.startsWith('Scope: Wallet = Cold Storage  |  ')).toBe(true);
+  });
+
+  it('leads with a combined owner+wallet scope when every run shares both', async () => {
+    await buildPrivacyHistoryPdf([
+      makeEntry({ id: 1, timestamp: Date.UTC(2026, 0, 1), owner: 'Bob', walletName: 'Trading' }),
+      makeEntry({ id: 2, timestamp: Date.UTC(2026, 0, 2), owner: 'Bob', walletName: 'Trading' }),
+    ]);
+    expect(summaryText()?.startsWith('Scope: Owner = Bob, Wallet = Trading  |  ')).toBe(true);
+  });
+
+  it('omits any global scope label when runs span more than one scope', async () => {
+    await buildPrivacyHistoryPdf([
+      makeEntry({ id: 1, timestamp: Date.UTC(2026, 0, 1), owner: 'Alice' }),
+      makeEntry({ id: 2, timestamp: Date.UTC(2026, 0, 2), owner: 'Bob' }),
+    ]);
+    const text = summaryText();
+    expect(text?.includes('Scope:')).toBe(false);
+    expect(text).toBe('2 audit runs  |  0 pts overall  |  latest 85/100 (A)');
   });
 });
 
