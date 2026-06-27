@@ -219,7 +219,12 @@ export default function Records() {
   // Vault-wide per-behavior totals, materialized by a streamed background pass.
   // Shown beside each option in the behavior picker so the filter is actionable
   // even though it can only narrow the loaded page.
-  const { counts: behaviorCounts, computing: behaviorCountsComputing } = useBehaviorTally();
+  const {
+    counts: behaviorCounts,
+    computing: behaviorCountsComputing,
+    progress: behaviorCountsProgress,
+    cancel: cancelBehaviorCounts,
+  } = useBehaviorTally();
   
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   
@@ -1051,6 +1056,8 @@ export default function Records() {
             onChange={setBehaviorFilters}
             counts={behaviorCounts}
             countsComputing={behaviorCountsComputing}
+            countsProgress={behaviorCountsProgress}
+            onCancelCounts={cancelBehaviorCounts}
           />
         </div>
 

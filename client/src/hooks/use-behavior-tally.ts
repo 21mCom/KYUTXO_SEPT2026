@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { getSettings } from '@/lib/data/settings-crud';
 import { countRecordsByType } from '@/lib/data/record-crud';
@@ -22,6 +22,13 @@ export const BEHAVIOR_TALLY_MAX_AGE_MS = 24 * 60 * 60 * 1000;
  */
 const STALENESS_CHECK_INTERVAL_MS = 60 * 60 * 1000;
 
+export interface BehaviorTallyProgress {
+  /** Address records scanned so far in the in-flight pass. */
+  processed: number;
+  /** Total address records the pass will scan, or null until known. */
+  total: number | null;
+}
+
 export interface UseBehaviorTallyResult {
   /** Per-label totals across the whole vault, or null until first computed. */
   counts: BehaviorTallyCounts | null;
@@ -31,6 +38,10 @@ export interface UseBehaviorTallyResult {
   stale: boolean;
   /** When the persisted tally was last materialized (ms epoch), or null. */
   computedAt: number | null;
+  /** Coarse scan progress while {@link computing}; null when idle. */
+  progress: BehaviorTallyProgress | null;
+  /** Abort the in-flight pass. No-op when nothing is running. */
+  cancel: () => void;
 }
 
 /**
@@ -50,7 +61,9 @@ export function useBehaviorTally(enabled: boolean = true): UseBehaviorTallyResul
   const settings = useLiveQuery(() => getSettings('default'));
   const liveAddressCount = useLiveQuery(() => countRecordsByType('address'));
   const [computing, setComputing] = useState(false);
+  const [progress, setProgress] = useState<BehaviorTallyProgress | null>(null);
   const inFlightRef = useRef(false);
+  const controllerRef = useRef<AbortController | null>(null);
 
   // A ticking clock so a long-running mount re-evaluates age-based staleness even
   // when nothing else (settings/address count) changes to re-render the hook.
@@ -81,18 +94,30 @@ export function useBehaviorTally(enabled: boolean = true): UseBehaviorTallyResul
 
     inFlightRef.current = true;
     setComputing(true);
+    setProgress({ processed: 0, total: null });
     const controller = new AbortController();
+    controllerRef.current = controller;
 
     (async () => {
       try {
-        await materializeBehaviorTally({ signal: controller.signal });
+        await materializeBehaviorTally({
+          signal: controller.signal,
+          onProgress: (processed, total) => {
+            if (controller.signal.aborted) return;
+            setProgress({ processed, total });
+          },
+        });
       } catch (err) {
         if (!controller.signal.aborted) {
           console.error('[use-behavior-tally] compute failed', err);
         }
       } finally {
         inFlightRef.current = false;
+        if (controllerRef.current === controller) {
+          controllerRef.current = null;
+        }
         setComputing(false);
+        setProgress(null);
       }
     })();
 
@@ -102,10 +127,16 @@ export function useBehaviorTally(enabled: boolean = true): UseBehaviorTallyResul
     // `stale` already folds in addressCount, persisted fingerprint, and age.
   }, [enabled, stale]);
 
+  const cancel = useCallback(() => {
+    controllerRef.current?.abort();
+  }, []);
+
   return {
     counts: (persisted?.counts as BehaviorTallyCounts | undefined) ?? null,
     computing,
     stale,
     computedAt: persisted?.computedAt ?? null,
+    progress: computing ? progress : null,
+    cancel,
   };
 }

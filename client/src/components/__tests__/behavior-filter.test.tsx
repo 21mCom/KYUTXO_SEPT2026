@@ -53,4 +53,50 @@ describe("BehaviorFilter", () => {
     const next = onChange.mock.calls[0][0] as Set<BehaviorLabel>;
     expect(next.size).toBe(0);
   });
+
+  it("shows scanned / total progress while the tally is computing", () => {
+    const { getByTestId } = render(
+      <BehaviorFilter
+        selected={new Set<BehaviorLabel>()}
+        onChange={vi.fn()}
+        countsComputing
+        countsProgress={{ processed: 1200, total: 50000 }}
+      />,
+    );
+    fireEvent.click(getByTestId("button-toggle-behavior-filter"));
+    const indicator = getByTestId("text-behavior-counts-computing");
+    expect(indicator.textContent).toContain("1,200");
+    expect(indicator.textContent).toContain("50,000");
+  });
+
+  it("falls back to a generic counting label before the total is known", () => {
+    const { getByTestId } = render(
+      <BehaviorFilter
+        selected={new Set<BehaviorLabel>()}
+        onChange={vi.fn()}
+        countsComputing
+        countsProgress={{ processed: 0, total: null }}
+      />,
+    );
+    fireEvent.click(getByTestId("button-toggle-behavior-filter"));
+    expect(getByTestId("text-behavior-counts-computing").textContent).toContain(
+      "Counting",
+    );
+  });
+
+  it("invokes onCancelCounts when the Stop button is clicked", () => {
+    const onCancelCounts = vi.fn();
+    const { getByTestId } = render(
+      <BehaviorFilter
+        selected={new Set<BehaviorLabel>()}
+        onChange={vi.fn()}
+        countsComputing
+        countsProgress={{ processed: 10, total: 100 }}
+        onCancelCounts={onCancelCounts}
+      />,
+    );
+    fireEvent.click(getByTestId("button-toggle-behavior-filter"));
+    fireEvent.click(getByTestId("button-cancel-behavior-counts"));
+    expect(onCancelCounts).toHaveBeenCalledTimes(1);
+  });
 });

@@ -30,6 +30,10 @@ interface BehaviorFilterProps {
   counts?: BehaviorTallyCounts | null;
   /** True while the vault-wide tally is still being computed. */
   countsComputing?: boolean;
+  /** Coarse scan progress for the in-flight tally; null when idle. */
+  countsProgress?: { processed: number; total: number | null } | null;
+  /** Abort the in-flight tally. */
+  onCancelCounts?: () => void;
 }
 
 export function BehaviorFilter({
@@ -37,6 +41,8 @@ export function BehaviorFilter({
   onChange,
   counts,
   countsComputing,
+  countsProgress,
+  onCancelCounts,
 }: BehaviorFilterProps) {
   const toggle = (label: BehaviorLabel) => {
     const next = new Set(selected);
@@ -75,12 +81,26 @@ export function BehaviorFilter({
                 Across all addresses
               </span>
               {countsComputing && (
-                <span
-                  className="text-xs text-muted-foreground"
-                  data-testid="text-behavior-counts-computing"
-                >
-                  Counting…
-                </span>
+                <div className="flex items-center gap-1.5">
+                  <span
+                    className="text-xs text-muted-foreground tabular-nums"
+                    data-testid="text-behavior-counts-computing"
+                  >
+                    {countsProgress && countsProgress.total != null
+                      ? `Counting ${countsProgress.processed.toLocaleString()} / ${countsProgress.total.toLocaleString()}`
+                      : "Counting…"}
+                  </span>
+                  {onCancelCounts && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={onCancelCounts}
+                      data-testid="button-cancel-behavior-counts"
+                    >
+                      Stop
+                    </Button>
+                  )}
+                </div>
               )}
             </div>
             <div className="space-y-1">
