@@ -82,22 +82,37 @@ const MAX_DEPTH = 5;
 function CapNotice({
   shownTxCount,
   totalTxCount,
+  dateRange,
 }: {
   shownTxCount?: number;
   totalTxCount?: number;
+  dateRange?: DateRange;
 }) {
+  const rangeActive = !!dateRange;
   return (
     <div
       className="flex items-start gap-2 rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground"
-      data-testid="fund-trail-cap-notice"
+      data-testid={
+        rangeActive ? "fund-trail-cap-notice-range" : "fund-trail-cap-notice"
+      }
     >
       <Info className="h-3.5 w-3.5 mt-0.5 shrink-0" />
-      <span>
-        Showing only the most recent{" "}
-        {shownTxCount != null ? shownTxCount.toLocaleString() : ""} transactions
-        {totalTxCount != null ? ` of ${totalTxCount.toLocaleString()}` : ""} to
-        keep things fast. Narrow your selection to trace older activity.
-      </span>
+      {rangeActive ? (
+        <span>
+          Showing the{" "}
+          {shownTxCount != null ? shownTxCount.toLocaleString() : ""} most recent
+          {totalTxCount != null ? ` of ${totalTxCount.toLocaleString()}` : ""}{" "}
+          transactions in this date range, so the trail may be incomplete.
+          Narrow the window further to trace older activity.
+        </span>
+      ) : (
+        <span>
+          Showing only the most recent{" "}
+          {shownTxCount != null ? shownTxCount.toLocaleString() : ""} transactions
+          {totalTxCount != null ? ` of ${totalTxCount.toLocaleString()}` : ""} to
+          keep things fast. Narrow your selection to trace older activity.
+        </span>
+      )}
     </div>
   );
 }
@@ -356,6 +371,7 @@ function FlowCard({
               <CapNotice
                 shownTxCount={expandedHop.shownTxCount}
                 totalTxCount={expandedHop.totalTxCount}
+                dateRange={dateRange}
               />
             </div>
           )}
@@ -721,6 +737,7 @@ function TrailLayout({
           <CapNotice
             shownTxCount={centerHop.shownTxCount}
             totalTxCount={centerHop.totalTxCount}
+            dateRange={dateRange}
           />
         </div>
       )}
