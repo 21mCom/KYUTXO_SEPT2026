@@ -1206,6 +1206,90 @@ describe("SettingsPage — Privacy Audit Entity List panel", () => {
     expect((await getSettings("default"))?.entityListSnapshot).toBeUndefined();
   });
 
+  it("a numeric 'jump to entry #N' still obeys the problem-type dropdown: the same entry # is hidden under the wrong kind and surfaces only under its own kind", async () => {
+    renderSettingsPage();
+    await screen.findByTestId("badge-entity-source");
+
+    // A mixed snapshot where each kind owns a distinct slice of the GLOBAL,
+    // 1-based entry numbering (entry # = array index + 1), so a given entry
+    // number lives in exactly one problem-type group:
+    //   invalid-address  × 3  -> indices 0,1,2 -> entries 1,2,3
+    //   unknown-category × 2  -> indices 3,4   -> entries 4,5
+    //   missing-name     × 1  -> index   5     -> entry   6
+    // Reusing ADDR.a across the unknown-category (index 3) and missing-name
+    // (index 5) entries is safe: neither is fully valid, so neither is recorded
+    // for duplicate detection and ADDR.a never collapses into a spurious
+    // duplicate-address error.
+    const mixed = JSON.stringify([
+      { address: "totally-invalid-1", name: "Bad One", category: "exchange" },
+      { address: "totally-invalid-2", name: "Bad Two", category: "exchange" },
+      { address: "totally-invalid-3", name: "Bad Three", category: "exchange" },
+      { address: ADDR.a, name: "Cat One", category: "first-bad-cat" },
+      { address: ADDR.b, name: "Cat Two", category: "second-bad-cat" },
+      { address: ADDR.a, name: "", category: "exchange" },
+    ]);
+    await selectEntityFile("numeric-jump.json", mixed);
+
+    const container = await screen.findByTestId("container-entity-errors");
+    expect(container.textContent).toContain("6 problems");
+
+    // Entry 5 -> index 4 -> the unknown-category "second-bad-cat" row. Picking
+    // a DIFFERENT kind (invalid-address, which owns only entries 1–3) must make
+    // the numeric jump fall inside the kind filter, not bypass it: zero matches.
+    setErrorFilter("5");
+    setErrorKind("invalid-address");
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("text-entity-error-match-count").textContent,
+      ).toBe("No matching entries."),
+    );
+    expect(screen.queryAllByTestId(/^text-entity-error-\d+$/)).toHaveLength(0);
+    // The invalid-address group is filtered away entirely (entry 5 isn't in it),
+    // not merely collapsed — proving the entry-number jump didn't leak a row
+    // from the wrong group.
+    expect(screen.queryByTestId("group-entity-error-invalid-address")).toBeNull();
+    expect(screen.queryByTestId("group-entity-error-unknown-category")).toBeNull();
+    expect(screen.queryByTestId("group-entity-error-missing-name")).toBeNull();
+
+    // Now select the kind that actually contains entry 5: exactly that one row
+    // surfaces, with the matching entry # and reason text.
+    setErrorKind("unknown-category");
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("text-entity-error-match-count").textContent,
+      ).toBe("1 matching entry."),
+    );
+    let rows = screen.getAllByTestId(/^text-entity-error-\d+$/);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].textContent).toContain("Entry 5");
+    expect(rows[0].textContent).toContain('Unknown category "second-bad-cat"');
+    expect(screen.getByTestId("group-entity-error-unknown-category")).toBeTruthy();
+    expect(screen.queryByTestId("group-entity-error-invalid-address")).toBeNull();
+    expect(screen.queryByTestId("group-entity-error-missing-name")).toBeNull();
+
+    // Proof the zero count above was the AND with the wrong kind — not a bogus
+    // entry number: with the kind cleared back to "all", entry 5 still resolves
+    // to that same single unknown-category row.
+    setErrorKind("all");
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("text-entity-error-match-count").textContent,
+      ).toBe("1 matching entry."),
+    );
+    rows = screen.getAllByTestId(/^text-entity-error-\d+$/);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].textContent).toContain("Entry 5");
+    expect(rows[0].textContent).toContain('Unknown category "second-bad-cat"');
+    expect(screen.getByTestId("group-entity-error-unknown-category")).toBeTruthy();
+    expect(screen.queryByTestId("group-entity-error-invalid-address")).toBeNull();
+
+    // Throughout the triage nothing was applied — no preview dialog, still on
+    // the bundled list, and no persisted snapshot.
+    expect(screen.queryByTestId("text-preview-incoming")).toBeNull();
+    expect(getActiveEntitySource()).toBe("bundled");
+    expect((await getSettings("default"))?.entityListSnapshot).toBeUndefined();
+  });
+
   it("exports the current list as a downloadable JSON file", async () => {
     const created: string[] = [];
     const revoked: string[] = [];
