@@ -101,6 +101,12 @@ export class AttachmentWriteError extends Error {
 
 export interface AttachmentFileWriter {
   write(relPath: string, data: ArrayBuffer): Promise<void>;
+  // Optional: remove a previously-written attachment file. Used only to sweep
+  // files this restore wrote when the restore fails (or is cancelled) AFTER the
+  // destructive clear. clearVault only resets DB/inline tables, so without this
+  // sweep the files written before the failure would be stranded on disk as
+  // orphans. Best-effort: a failure to delete must not mask the primary error.
+  delete?(relPath: string): Promise<void>;
 }
 
 export interface RestoreProgress {
@@ -188,6 +194,12 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
   // prior state — instead we reset to a known-empty state (see clearVault).
   let cleared = false;
 
+  // Relative paths of attachment files this restore has SUCCESSFULLY written to
+  // disk. clearVault only wipes DB/inline tables, so if the restore fails or is
+  // cancelled after the destructive clear we must also sweep these files —
+  // otherwise they are stranded on disk as orphans (see sweepWrittenFiles).
+  const writtenFiles: string[] = [];
+
   const throwIfAborted = () => {
     if (opts.signal?.aborted) throw new BackupCancelledError();
   };
@@ -204,6 +216,25 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
     await clearUtxoLineage({ skipNotification: true });
     await clearCustodySegments({ skipNotification: true });
     await clearInlineFn();
+  }
+
+  // Best-effort removal of attachment files this restore wrote to disk. Called
+  // when a restore fails or is cancelled AFTER the destructive clear so those
+  // files are not left stranded as orphans (clearVault only touches the DB). A
+  // delete that itself fails must NOT mask the primary restore error — any file
+  // we cannot remove here remains discoverable by the attachment audit/repair
+  // tools, so we swallow per-file errors and keep going.
+  async function sweepWrittenFiles(): Promise<void> {
+    const del = opts.attachmentWriter.delete;
+    if (!del || writtenFiles.length === 0) return;
+    for (const relPath of writtenFiles) {
+      try {
+        await del.call(opts.attachmentWriter, relPath);
+      } catch {
+        // intentionally ignored — see comment above
+      }
+    }
+    writtenFiles.length = 0;
   }
 
   const total = () =>
@@ -369,6 +400,7 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
                 { cause: writeErr },
               );
             }
+            writtenFiles.push(relPath);
             counts.attachmentFiles += 1;
             processed += 1;
             report("Restoring attachment files...");
@@ -397,6 +429,9 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
       // partial state, so we fail CLOSED with a distinct hard error rather than
       // claiming a clean cancel.
       opts.onProgress?.({ percent: 0, phase: "Cancelling — clearing partial data..." });
+      // Sweep any attachment files this restore wrote so they are not stranded
+      // on disk once the DB is reset to empty (clearVault only wipes the DB).
+      await sweepWrittenFiles();
       try {
         await clearVault();
       } catch (cleanupErr) {
@@ -431,6 +466,9 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
     // unusable vault. If the reset itself fails, we still fail CLOSED with the
     // same distinct error rather than claiming success.
     opts.onProgress?.({ percent: 0, phase: "Restore failed — clearing partial data..." });
+    // Sweep any attachment files this restore wrote so they are not stranded
+    // on disk once the DB is reset to empty (clearVault only wipes the DB).
+    await sweepWrittenFiles();
     try {
       await clearVault();
     } catch (cleanupErr) {

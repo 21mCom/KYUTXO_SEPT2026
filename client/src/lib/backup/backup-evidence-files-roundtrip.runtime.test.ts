@@ -145,7 +145,9 @@ const attachmentIO = {
 };
 
 // Production-shaped attachment writer for restore: write bytes back to disk
-// through the same endpoint the real SettingsPage restore uses.
+// through the same endpoint the real SettingsPage restore uses. The `delete`
+// method mirrors the production SettingsPage writer (deleteFile via the DELETE
+// endpoint) so the post-failure sweep of stranded files can be exercised.
 const attachmentWriter = {
   async write(relativePath: string, fileData: ArrayBuffer): Promise<void> {
     const formData = new FormData();
@@ -160,7 +162,40 @@ const attachmentWriter = {
       throw new Error(err.error || res.statusText);
     }
   },
+  async delete(relativePath: string): Promise<void> {
+    const encoded = `attachments/${relativePath}`
+      .split("/")
+      .map((s) => encodeURIComponent(s))
+      .join("/");
+    const res = await fetch(`/api/attachments/${encoded}`, { method: "DELETE" });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || res.statusText);
+    }
+  },
 };
+
+// Count every attachment file currently on disk under the data dir, so a test
+// can assert whether a failed restore left orphaned bytes behind.
+async function countDiskFiles(): Promise<number> {
+  const root = path.join(tmpDataDir, "attachments");
+  let n = 0;
+  async function walk(dir: string): Promise<void> {
+    let entries: import("fs").Dirent[];
+    try {
+      entries = await fs.readdir(dir, { withFileTypes: true });
+    } catch {
+      return; // dir absent (fully wiped) — zero files
+    }
+    for (const e of entries) {
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) await walk(full);
+      else n += 1;
+    }
+  }
+  await walk(root);
+  return n;
+}
 
 function fileWithBytes(name: string, mime: string, text: string): File {
   return new File([new TextEncoder().encode(text)], name, { type: mime });
@@ -332,6 +367,11 @@ describe("v3 backup full pipeline: evidence files survive export -> wipe -> rest
   // restored and to restore again. This asserts both the distinct error AND that
   // the vault was actually reset (no lingering broken DB links / phantom docs).
   it("resets the vault and raises a distinct error when a file write fails after the clear", async () => {
+    // Start from a clean disk so countDiskFiles() reflects only THIS test's
+    // files (the prior test leaves its restored files on disk, and export's
+    // list-all walks the whole data dir).
+    await wipeDiskFiles();
+
     // 1. Put REAL files on disk for the evidence we will back up.
     const plan = [
       { title: "Coinbase Receipt 2021", filename: "receipt.txt", bytes: "RECEIPT-BYTES-COINBASE" },
@@ -426,5 +466,37 @@ describe("v3 backup full pipeline: evidence files survive export -> wipe -> rest
     // And the failing document is genuinely gone — there is no lingering link to
     // a file that was never written.
     expect(allEvidence.find((e) => e.title === failingTitle)).toBeUndefined();
+
+    // 8. Task #827: clearVault only wipes the DB/inline tables — the files this
+    //    restore had ALREADY written to disk before the failing write would be
+    //    stranded as orphans without the post-failure sweep. The flakyWriter
+    //    delegates `delete` to the real writer, so assert NOTHING is left on disk:
+    //    a write failure must not leak attachment files.
+    expect(await countDiskFiles()).toBe(0);
+
+    // 9. A later SUCCESSFUL restore from the same backup must produce a clean,
+    //    fully-openable vault — proving the failed attempt left no debris that
+    //    interferes with recovery. Re-seed the disk source files first (the
+    //    earlier wipe removed them) is unnecessary: the bytes ride inside the zip.
+    const result = await restoreV3Backup({
+      source: blobChunks(blob),
+      attachmentWriter,
+    });
+    expect(result.counts.attachmentFiles).toBe(plan.length);
+    expect(await countDiskFiles()).toBe(plan.length);
+
+    const recovered = await evidenceCrud.getAllEvidence();
+    const recoveredTitles = recovered.map((e) => e.title).sort();
+    expect(recoveredTitles).toEqual(plan.map((p) => p.title).sort());
+
+    const recoveredAttachments = await evidenceCrud.getAllEvidenceAttachments();
+    expect(recoveredAttachments).toHaveLength(plan.length);
+    const titleById = new Map(recovered.map((e) => [e.id!, e.title]));
+    const expectedBytesByTitle = new Map(plan.map((p) => [p.title, p.bytes]));
+    for (const att of recoveredAttachments) {
+      const linkedTitle = titleById.get(att.evidenceId);
+      const actualBytes = await fetchBytesViaPath(att.objectStoragePath, att.mimeType);
+      expect(actualBytes).toBe(expectedBytesByTitle.get(linkedTitle!));
+    }
   });
 });

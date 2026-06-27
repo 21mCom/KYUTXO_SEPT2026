@@ -24,3 +24,18 @@ announced after the cleanup clear actually succeeds.
 these three outcomes distinct — never swallow a cleanup error and still report a
 successful cancel. The three cases are locked by the restore cancellation
 contract tests; keep them green.
+
+**On-disk files:** `clearVault` is DB/inline-only — it does NOT touch attachment
+files on disk. A restore that fails or cancels AFTER the clear must also sweep
+the files it already wrote, or they strand as orphans. The restore tracks
+successfully-written relPaths (`writtenFiles`) and best-effort deletes them via
+the optional `AttachmentFileWriter.delete` before/around the cleanup clear; a
+delete failure is swallowed (audit/repair tools surface leftovers) and must
+never mask the primary error. Note: a *successful* restore over an existing
+vault still leaves the OLD vault's unreferenced files on disk (only overwritten
+paths get replaced) — that broader leak is unaddressed.
+
+**Test gotcha:** the `*-files-roundtrip.runtime.test.ts` suites share one
+`KYUTXO_DATA_DIR`, and export's `list-all` walks the whole dir — so files left
+by a prior test inflate a later test's export. Wipe disk at a test's start when
+asserting exact on-disk counts.

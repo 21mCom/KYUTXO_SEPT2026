@@ -116,7 +116,7 @@ import JSZip from "jszip";
 import { peekManifest, restoreV3Backup, RestoreInterruptedError, AttachmentWriteError, type AttachmentFileWriter } from "@/lib/backup/restore";
 import { BackupCancelledError, downloadBlob } from "@/lib/backup/sink";
 import { blobChunks } from "@/lib/backup/zip-stream";
-import { isV3Manifest, parseInline } from "@/lib/backup/format";
+import { isV3Manifest, parseInline, ATTACHMENTS_DIR } from "@/lib/backup/format";
 import VocabularyManager from "@/components/VocabularyManager";
 import { AddressLink } from "@/components/AddressLink";
 import StripMarkersPanel from "@/components/StripMarkersPanel";
@@ -2083,6 +2083,11 @@ export default function SettingsPage() {
                 throw new Error(errorData.error || response.statusText);
               }
             }
+          },
+          // Used only to sweep files this restore wrote if it fails/cancels
+          // after the destructive clear, so they are not stranded on disk.
+          async delete(relativePath) {
+            await deleteFile(`${ATTACHMENTS_DIR}/${relativePath}`);
           },
         };
 
