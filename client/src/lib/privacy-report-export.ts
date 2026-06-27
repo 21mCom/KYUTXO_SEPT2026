@@ -243,6 +243,41 @@ export function buildPrivacyTextReport(
   return lines.join("\n");
 }
 
+/** What a triggered text-report download produced, so callers/tests can assert
+ * the blob contents and filename without re-deriving them. */
+export interface PrivacyTextDownload {
+  blob: Blob;
+  filename: string;
+}
+
+/** Build the dated download filename for the plain-text report — the single
+ * source of truth for the `privacy-audit-report-<YYYY-MM-DD>.txt` pattern. */
+export function privacyTextReportFilename(date: Date = new Date()): string {
+  return `privacy-audit-report-${date.toISOString().slice(0, 10)}.txt`;
+}
+
+/**
+ * Extracted logic behind the in-app "Export Text" button on the Privacy Audit
+ * report. Wraps the already-built plain-text report in a text/plain Blob and
+ * triggers a browser download via a temporary anchor, creating and revoking the
+ * object URL. Returns the blob + filename so it can be unit-tested independently
+ * of the React component (mirrors copyPrivacyReportText for the Copy button).
+ */
+export function downloadPrivacyTextReport(
+  text: string,
+  date: Date = new Date(),
+): PrivacyTextDownload {
+  const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+  const filename = privacyTextReportFilename(date);
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+  return { blob, filename };
+}
+
 /**
  * The minimal toast callback shape the copy helper needs. The real
  * `useToast().toast` returns a handle object, but the helper only relies on the

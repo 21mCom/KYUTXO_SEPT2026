@@ -20,7 +20,7 @@ import {
   type EntityCitation,
 } from "@/lib/privacy-audit";
 import { renderSourceNote } from "@/lib/renderSourceNote";
-import { buildPrivacyReport, buildPrivacyTextReport, copyPrivacyReportText, formatScoreDelta } from "@/lib/privacy-report-export";
+import { buildPrivacyReport, buildPrivacyTextReport, copyPrivacyReportText, downloadPrivacyTextReport, formatScoreDelta } from "@/lib/privacy-report-export";
 import { buildPrintableReport, severityLabel, wireReportCopyButton } from "@/lib/privacy-report-html";
 import { getRecordsPageByTypeIdReverseKeyset } from "@/lib/data/record-crud";
 
@@ -139,14 +139,7 @@ export function PrivacyAuditReportPanel() {
   const exportText = useCallback(() => {
     const text = buildText();
     if (text == null) return;
-
-    const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `privacy-audit-report-${new Date().toISOString().slice(0, 10)}.txt`;
-    a.click();
-    URL.revokeObjectURL(url);
+    downloadPrivacyTextReport(text);
   }, [buildText]);
 
   const copyText = useCallback(async () => {
