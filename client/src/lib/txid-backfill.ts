@@ -667,18 +667,19 @@ async function resolveUnresolvedInputs(
 
   if (updated.length === 0) return { written: 0, resolvedAddresses: [] };
 
-  // Final bulk-write phase. Cancellation contract: a cancel halts further
-  // *network fetching* (the fetch loop above breaks on abort), but every prevout
-  // we already fetched and prepared here is committed rather than thrown away —
-  // the work is done and dropping it would waste the network round-trips and
-  // leave the count under-reporting work that actually completed. `updated` is
-  // therefore bounded by what was fetched before the abort, so this loop simply
-  // writes all of it; each completed batch leaves the DB consistent and a re-run
-  // resumes from any rows still unresolved. We report progress and yield between
-  // batches so the UI stays responsive even though we no longer bail mid-write.
-  // Track the addresses of rows we actually committed so the caller can
-  // recompute only their cached stats (the spending address's balance changes
-  // once its previously-blank spend input gets an address + amount).
+  // Final bulk-write phase. Cancellation contract: each batch is committed
+  // atomically (a whole row at a time), so the abort is honored only at batch
+  // boundaries — never mid-batch. We always commit the first batch (so a cancel
+  // that landed during the fetch phase still persists the prevouts we already
+  // fetched and prepared, rather than throwing that work away), then stop before
+  // starting any further batch once the signal is aborted. Every committed batch
+  // leaves the DB consistent and a re-run resumes from the rows still
+  // unresolved. Because we only ever break on a stable batch boundary, `written`
+  // is always a whole-batch multiple (or the full set) — never a mid-batch count
+  // that races the abort. We report progress and yield between batches so the UI
+  // stays responsive. Track the addresses of rows we actually committed so the
+  // caller can recompute only their cached stats (the spending address's balance
+  // changes once its previously-blank spend input gets an address + amount).
   const total = updated.length;
   let written = 0;
   const writtenAddresses = new Set<string>();
@@ -691,6 +692,10 @@ async function resolveUnresolvedInputs(
     }
     written += batch.length;
     onWriteProgress?.(written, total);
+    // Stop after the current (fully committed) batch once cancelled. The check
+    // is *after* the write so the first batch always lands and the DB is left
+    // consistent at a batch boundary; remaining rows are picked up on a re-run.
+    if (signal?.aborted) break;
     // Yield between batches so the UI stays responsive.
     await new Promise(resolve => setTimeout(resolve, 0));
   }

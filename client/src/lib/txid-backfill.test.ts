@@ -985,20 +985,29 @@ describe("runTxidBackfill (cancellation leaves a consistent DB)", () => {
     expect(seen).not.toContain(PREV_2);
     expect(seen).not.toContain(PREV_3);
 
-    // The interrupted write batch is discarded on cancel (each committed batch
-    // is consistent; a re-run resumes the rest), so nothing was resolved...
-    expect(result.prevoutsResolved).toBe(0);
+    // Per the resolution core's cancellation contract, the one prevout that was
+    // fetched before the abort is still committed (the write loop commits the
+    // first batch, then breaks at the batch boundary once it observes the
+    // cancel) — fetched work is never thrown away. Only the inputs whose
+    // prevouts were never fetched stay blank.
+    expect(result.prevoutsResolved).toBe(1);
 
-    // ...and every input is left exactly as first written — never partial.
+    // No input is ever left partially written: the PREV_1 input is fully
+    // resolved (address + amount), the PREV_2/PREV_3 inputs are untouched.
     const inputs = await testDb.transactionParticipants
       .where("txid")
       .equals(TXID_A)
       .and((p) => p.role === "input")
       .toArray();
     expect(inputs).toHaveLength(3);
-    for (const p of inputs) {
-      expect(p.address ?? "").toBe("");
-      expect(p.amount ?? 0).toBe(0);
+    const byPrev = new Map(inputs.map((p) => [p.prevTxid, p]));
+    const resolvedInput = byPrev.get(PREV_1);
+    expect(resolvedInput?.address).toBe(ADDR_PREV1);
+    expect(resolvedInput?.amount).toBe(30000);
+    for (const prev of [PREV_2, PREV_3]) {
+      const untouched = byPrev.get(prev);
+      expect(untouched?.address ?? "").toBe("");
+      expect(untouched?.amount ?? 0).toBe(0);
     }
   });
 });
