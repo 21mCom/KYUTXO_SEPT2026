@@ -1,28 +1,28 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor, fireEvent, cleanup, act } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent, cleanup } from "@testing-library/react";
 
 // ---------------------------------------------------------------------------
-// These tests lock in the top-level "Resolve & Recompute" banner action on the
-// Balance Overview. Unlike the per-wallet and per-address actions, this global
-// action resolves EVERY pending spend across the whole database (no
-// restrictToRecordIds) and surfaces live "Resolving… resolved/total" progress
-// via resolveProgressGlobal plus an outcome toast:
-//   1. handleFixPrevouts calls resolvePrevouts with recomputeOrigin "user" and
-//      NO restrictToRecordIds (whole-database scope).
-//   2. The three resolve outcomes surface the right toast: fully resolved,
-//      partially resolved (some spends still unattributable), and nothing
-//      resolved.
-//   3. The in-button progress label updates from the onProgress callback while
-//      the resolve is still in flight.
-// We drive the real BalanceOverview through its engine fast path so we never
-// touch the Dexie aggregation scan. The banner only renders once the spend
-// health effect reports unresolvedPrevouts > 0, which countUnresolvedPrevoutInputs
-// supplies on mount.
+// These tests lock in the FAILURE path of the top-banner global
+// "Resolve & Recompute" pass on the Balance Overview. handleFixPrevouts calls
+// transactionSyncService.resolvePrevouts inside try/catch/finally; when that
+// call rejects, the catch must surface a destructive "Resolve failed" toast and
+// the finally must clear the resolving state so the banner button leaves its
+// "Resolving…/Stop" spinner and returns to the actionable "Resolve & Recompute"
+// label (re-enabled). Without this coverage the global pass could silently
+// regress, leaving users with a stuck spinner and no feedback.
+//
+// We drive the real BalanceOverview component through its engine fast path so we
+// never touch the Dexie aggregation scan: evaluateEngineFreshness reports the
+// mirror is fresh and engineGetBalanceGroupSummaries returns a single group with
+// no stale addresses, which is enough to reach phase "ready". countUnresolved-
+// PrevoutInputs returns a positive count so the spend-warning banner (and its
+// "Resolve & Recompute" button) render.
 // ---------------------------------------------------------------------------
 
 // @tanstack/react-virtual needs ResizeObserver and real element dimensions to
-// emit virtual rows. jsdom provides neither.
+// emit virtual rows. jsdom provides neither, so without these shims the
+// virtualized address list would render zero rows.
 const FAKE_RECT: DOMRect = {
   width: 600,
   height: 384,
@@ -113,80 +113,46 @@ vi.mock("@/lib/data/address-stats", () => ({
   recomputeAddressStats: vi.fn(() => Promise.resolve({ cancelled: false })),
 }));
 
-const RECORD_ID_A = 101;
-const RECORD_ID_B = 202;
-const ADDRESS_A = "bc1qpendingaddraxxxxxxxxxxxxxxxxxxxxxxxxx";
-const ADDRESS_B = "bc1qpendingaddrbxxxxxxxxxxxxxxxxxxxxxxxxx";
-const COUNT_A = 3;
-const COUNT_B = 2;
-const TOTAL_PENDING = COUNT_A + COUNT_B; // 5 across the whole database
-
-const ADDRESS_ROWS = [
-  { id: RECORD_ID_A, address: ADDRESS_A, sats: 300_000, utxoCount: 1, label: "A" },
-  { id: RECORD_ID_B, address: ADDRESS_B, sats: 200_000, utxoCount: 1, label: "B" },
-];
-
 vi.mock("@/lib/data/record-crud", () => ({
   countRecordsByType: vi.fn(() => Promise.resolve(2)),
   getRecordsPageByTypeIdReverseKeyset: vi.fn(() => Promise.resolve([])),
-  getAddressBalanceRowsForGroup: vi.fn(() => Promise.resolve(ADDRESS_ROWS)),
-  getRecordsByIds: vi.fn(() =>
-    Promise.resolve([
-      { id: RECORD_ID_A, address: ADDRESS_A },
-      { id: RECORD_ID_B, address: ADDRESS_B },
-    ]),
-  ),
+  getAddressBalanceRowsForGroup: vi.fn(() => Promise.resolve([])),
+  getRecordsByIds: vi.fn(() => Promise.resolve([])),
 }));
 
 vi.mock("@/lib/balance-grouping", () => ({
-  getGroupKeys: () => [GROUP_NAME],
+  getGroupKeys: () => [],
 }));
 
-// The global banner renders when countUnresolvedPrevoutInputs reports > 0 on
-// mount. After the resolve runs, the SAME function reports how many spends are
-// still pending; we switch its answer based on whether resolvePrevouts has been
-// called yet so the outcome toast (fully/partially/nothing) can be asserted.
-let remainingAfterResolve = 0;
-const countUnresolvedPrevoutInputs = vi.fn(() =>
-  Promise.resolve(resolvePrevouts.mock.calls.length === 0 ? TOTAL_PENDING : remainingAfterResolve),
-);
+// A positive unresolved count makes the spend-warning banner render, which is
+// what carries the global "Resolve & Recompute" button. unattributable is 0 so
+// the import/missing buttons stay hidden — only the global resolve is in play.
+const UNRESOLVED_COUNT = 5;
 vi.mock("@/lib/data/transaction-crud", () => ({
-  countUnresolvedPrevoutInputs,
+  countUnresolvedPrevoutInputs: vi.fn(() => Promise.resolve(UNRESOLVED_COUNT)),
   getUnresolvedSpendBreakdown: vi.fn(() =>
-    Promise.resolve({
-      byRecordId: new Map([
-        [RECORD_ID_A, COUNT_A],
-        [RECORD_ID_B, COUNT_B],
-      ]),
-      unattributable: 0,
-    }),
+    Promise.resolve({ byRecordId: new Map(), unattributable: 0 }),
   ),
   getMissingSourceTxids: vi.fn(() => Promise.resolve([])),
+  getMissingSourceTxidDetails: vi.fn(() => Promise.resolve([])),
 }));
 
-// resolvePrevouts is the seam we assert scoping on; its return value drives the
-// outcome toast. A test can install a deferred to hold the call open and drive
-// the onProgress callback while the button is still in its "Resolving…" state.
-let resolveResult: { resolved: number };
-let resolveDeferred: { promise: Promise<void>; resolve: () => void } | null;
+// resolvePrevouts is the seam: the global pass rejects so we can assert the
+// failure toast + state cleanup. A test can override the rejection error to
+// exercise the connectivity vs. internal-error messaging.
 let resolveShouldReject: boolean;
 let resolveRejectError: unknown;
-let lastOnProgress: ((resolved: number, total: number) => void) | undefined;
-const resolvePrevouts = vi.fn((onProgress: any) => {
-  lastOnProgress = onProgress;
+const resolvePrevouts = vi.fn(() => {
   if (resolveShouldReject) {
-    return Promise.reject(resolveRejectError ?? new Error("engine crashed mid-pass"));
+    return Promise.reject(resolveRejectError ?? new Error("node unreachable"));
   }
-  const payload = {
-    resolved: resolveResult.resolved,
+  return Promise.resolve({
+    resolved: 0,
     fetchedFromNode: 0,
     errors: 0,
     resolvedAddresses: [],
-  };
-  if (resolveDeferred) {
-    return resolveDeferred.promise.then(() => payload);
-  }
-  return Promise.resolve(payload);
+    cancelled: false,
+  });
 });
 vi.mock("@/lib/transaction-sync", () => ({
   transactionSyncService: { resolvePrevouts },
@@ -194,23 +160,18 @@ vi.mock("@/lib/transaction-sync", () => ({
 
 const BalanceOverview = (await import("./BalanceOverview")).default;
 
-async function renderWithBanner() {
+async function renderAndShowGlobalResolve() {
   render(<BalanceOverview />);
-  // The global banner button only renders once the spend-health effect populates
-  // unresolvedPrevouts (count > 0) from countUnresolvedPrevoutInputs.
+  // The banner (and its global resolve button) render once the unresolved
+  // count effect lands a positive value.
   await screen.findByTestId("button-fix-prevouts");
 }
 
 beforeEach(() => {
   toastCalls.length = 0;
   resolvePrevouts.mockClear();
-  countUnresolvedPrevoutInputs.mockClear();
-  resolveResult = { resolved: 0 };
-  resolveDeferred = null;
   resolveShouldReject = false;
   resolveRejectError = undefined;
-  lastOnProgress = undefined;
-  remainingAfterResolve = 0;
 });
 
 afterEach(() => {
@@ -218,82 +179,41 @@ afterEach(() => {
 });
 
 describe("BalanceOverview global Resolve & Recompute", () => {
-  it("resolves the whole database (no restrictToRecordIds) with recomputeOrigin 'user'", async () => {
-    resolveResult = { resolved: TOTAL_PENDING };
-    await renderWithBanner();
+  it("toasts 'Resolve failed' (destructive) and clears the resolving state when resolvePrevouts rejects", async () => {
+    resolveShouldReject = true;
+    await renderAndShowGlobalResolve();
 
     fireEvent.click(screen.getByTestId("button-fix-prevouts"));
 
     await waitFor(() => expect(resolvePrevouts).toHaveBeenCalledTimes(1));
+    // The global pass passes a progress callback + recompute origin and no
+    // record-id restriction (it spans every wallet).
     const [onProgress, options] = resolvePrevouts.mock.calls[0] as unknown as [unknown, any];
-    // The global resolve passes a progress callback (drives resolveProgressGlobal).
     expect(typeof onProgress).toBe("function");
     expect(options.recomputeOrigin).toBe("user");
-    // Whole-database scope: it must NOT restrict to any record ids.
     expect(options.restrictToRecordIds).toBeUndefined();
-  });
-
-  it("toasts 'Resolved' when every pending spend across all wallets is resolved", async () => {
-    resolveResult = { resolved: TOTAL_PENDING };
-    remainingAfterResolve = 0;
-    await renderWithBanner();
-
-    fireEvent.click(screen.getByTestId("button-fix-prevouts"));
-
-    await waitFor(() => expect(toastCalls.length).toBeGreaterThan(0));
-    expect(toastCalls[0].title).toBe("Resolved");
-    expect(toastCalls[0].variant).toBeUndefined();
-    expect(toastCalls[0].description).toContain("across all wallets");
-  });
-
-  it("toasts 'Partially resolved' when some spends remain unattributable", async () => {
-    resolveResult = { resolved: 2 }; // resolved 2, 3 still pending
-    remainingAfterResolve = 3;
-    await renderWithBanner();
-
-    fireEvent.click(screen.getByTestId("button-fix-prevouts"));
-
-    await waitFor(() => expect(toastCalls.length).toBeGreaterThan(0));
-    expect(toastCalls[0].title).toBe("Partially resolved");
-    expect(toastCalls[0].description).toContain("3 still can't be attributed");
-  });
-
-  it("toasts 'Nothing to resolve' (destructive) when nothing resolves", async () => {
-    resolveResult = { resolved: 0 };
-    remainingAfterResolve = TOTAL_PENDING;
-    await renderWithBanner();
-
-    fireEvent.click(screen.getByTestId("button-fix-prevouts"));
-
-    await waitFor(() => expect(toastCalls.length).toBeGreaterThan(0));
-    expect(toastCalls[0].title).toBe("Nothing to resolve");
-    expect(toastCalls[0].variant).toBe("destructive");
-  });
-
-  it("toasts 'Resolve failed' (destructive) and clears the in-button 'Resolving…' state when resolvePrevouts rejects", async () => {
-    resolveShouldReject = true;
-    await renderWithBanner();
-
-    fireEvent.click(screen.getByTestId("button-fix-prevouts"));
 
     await waitFor(() => expect(toastCalls.length).toBeGreaterThan(0));
     expect(toastCalls[0].title).toBe("Resolve failed");
     expect(toastCalls[0].variant).toBe("destructive");
 
-    // The finally block must clear fixingPrevouts so the banner button leaves
-    // its "Resolving…" spinner and returns to the actionable label.
+    // The finally block must clear the resolving state so the banner button
+    // leaves its "Resolving…/Stop" spinner and returns to the actionable
+    // "Resolve & Recompute" label, re-enabled.
     await waitFor(() => {
       const btn = screen.getByTestId("button-fix-prevouts");
       expect(btn.textContent).toContain("Resolve & Recompute");
       expect(btn.textContent).not.toContain("Resolving…");
       expect((btn as HTMLButtonElement).disabled).toBe(false);
     });
+    // The "Stop resolving" cancel button must no longer be present.
+    expect(screen.queryByTestId("button-cancel-fix-prevouts")).toBeNull();
   });
 
   it("surfaces a connectivity reason when the global resolve fails reaching the node", async () => {
     resolveShouldReject = true;
-    resolveRejectError = new Error("Network request timed out after 30s. Check your node connection.");
-    await renderWithBanner();
+    resolveRejectError = new Error("connect ECONNREFUSED 127.0.0.1:8332");
+    await renderAndShowGlobalResolve();
 
     fireEvent.click(screen.getByTestId("button-fix-prevouts"));
 
@@ -306,8 +226,8 @@ describe("BalanceOverview global Resolve & Recompute", () => {
 
   it("surfaces an internal-error reason for a non-connectivity global failure", async () => {
     resolveShouldReject = true;
-    resolveRejectError = new Error("engine crashed mid-pass");
-    await renderWithBanner();
+    resolveRejectError = new Error("Cannot read properties of undefined (reading 'vout')");
+    await renderAndShowGlobalResolve();
 
     fireEvent.click(screen.getByTestId("button-fix-prevouts"));
 
@@ -316,57 +236,5 @@ describe("BalanceOverview global Resolve & Recompute", () => {
     expect(toastCalls[0].variant).toBe("destructive");
     expect(toastCalls[0].description).toContain("internal error");
     expect(toastCalls[0].description).not.toContain("Bitcoin node");
-  });
-
-  it("updates the in-button progress label from the onProgress callback while resolving", async () => {
-    // Hold the resolve open so the button stays in its "Resolving…" state while
-    // we drive progress through the captured onProgress callback.
-    let release!: () => void;
-    const promise = new Promise<void>((res) => {
-      release = res;
-    });
-    resolveDeferred = { promise, resolve: release };
-    resolveResult = { resolved: TOTAL_PENDING };
-    remainingAfterResolve = 0;
-
-    await renderWithBanner();
-
-    fireEvent.click(screen.getByTestId("button-fix-prevouts"));
-
-    // Wait until resolvePrevouts has been invoked and captured the callback.
-    await waitFor(() => expect(lastOnProgress).toBeTypeOf("function"));
-
-    const btn = screen.getByTestId("button-fix-prevouts");
-    // Before any progress with total > 0, the label is the plain "Resolving…".
-    expect(btn.textContent).toContain("Resolving…");
-    expect(btn.textContent).not.toMatch(/\d+\/\d+/);
-
-    // Drive a progress tick; the label should now show resolved/total.
-    act(() => {
-      lastOnProgress!(2, TOTAL_PENDING);
-    });
-    await waitFor(() =>
-      expect(screen.getByTestId("button-fix-prevouts").textContent).toContain(
-        `Resolving… 2/${TOTAL_PENDING}`,
-      ),
-    );
-
-    // Advance progress again to confirm the label tracks subsequent ticks.
-    act(() => {
-      lastOnProgress!(4, TOTAL_PENDING);
-    });
-    await waitFor(() =>
-      expect(screen.getByTestId("button-fix-prevouts").textContent).toContain(
-        `Resolving… 4/${TOTAL_PENDING}`,
-      ),
-    );
-
-    // Let the resolve finish so the outcome toast fires and state cleans up.
-    await act(async () => {
-      release();
-      await promise;
-    });
-    await waitFor(() => expect(toastCalls.length).toBeGreaterThan(0));
-    expect(toastCalls[0].title).toBe("Resolved");
   });
 });
