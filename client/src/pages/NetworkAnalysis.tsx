@@ -30,6 +30,7 @@ import {
 } from "@/lib/dataFacade";
 import type { Record as KRecord, TransactionParticipant } from "@/lib/db-types";
 import { useRecordPreview } from "@/contexts/RecordPreviewContext";
+import { createGraphNodeActivation } from "@/lib/graph-node-interaction";
 import {
   buildNetworkGraph,
   MAX_NODES,
@@ -570,28 +571,14 @@ export default function NetworkAnalysis() {
                         data-testid={`node-address-${node.id.slice(0, 8)}`}
                         role="button"
                         tabIndex={0}
-                        aria-label={`Address ${node.id} — click to highlight connections; double-click to open record`}
+                        aria-label={`Address ${node.id} — click or press Enter to open record and highlight connections`}
                         className="outline-none focus-visible:opacity-100"
                         style={{ cursor: 'pointer' }}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          const gNode = graph.nodes.find(n => n.id === node.id);
-                          setSelectedNode(prev => prev?.id === node.id ? null : gNode || null);
-                        }}
-                        onDoubleClick={(e) => {
-                          e.stopPropagation();
+                        {...createGraphNodeActivation<SVGGElement>(() => {
                           const gNode = graph.nodes.find(n => n.id === node.id);
                           setSelectedNode(gNode || null);
                           void openRecordPreviewByAddress(node.id);
-                        }}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter" || e.key === " ") {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            const gNode = graph.nodes.find(n => n.id === node.id);
-                            setSelectedNode(prev => prev?.id === node.id ? null : gNode || null);
-                          }
-                        }}
+                        })}
                         onMouseEnter={() => setHoveredNode(node.id)}
                         onMouseLeave={() => setHoveredNode(null)}
                       >

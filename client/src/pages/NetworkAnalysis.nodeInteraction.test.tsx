@@ -85,6 +85,11 @@ async function renderAndAnalyze() {
   });
 }
 
+// Clicking a graph node, or activating it from the keyboard (Enter/Space),
+// opens the underlying address record in one step (and highlights its
+// connections). These tests are the regression guard for that node-open
+// behavior, exercising the real click / Enter / Space handlers on the rendered
+// SVG node — they fail loudly if a node click stops opening the record.
 describe("NetworkAnalysis node interaction", () => {
   it("opens the node's record on a mouse click (passing the address)", async () => {
     await renderAndAnalyze();
