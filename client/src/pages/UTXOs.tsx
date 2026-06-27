@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useToast } from "@/hooks/use-toast";
+import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { PAGE_DEBOUNCE } from "@/config/debounce";
 import { useAsyncMemo, yieldToUI, checkAbort } from "@/hooks/use-async-memo";
@@ -168,23 +169,12 @@ type SortColumn = "amount" | "date" | "address" | "gain";
 type SortDirection = "asc" | "desc";
 
 export function CopyTxidButton({ txid }: { txid: string }) {
-  const [copied, setCopied] = useState(false);
-  const { toast } = useToast();
+  const { copy, isCopied } = useCopyToClipboard();
+  const copied = isCopied(txid);
 
-  const handleCopy = async (e: React.MouseEvent) => {
+  const handleCopy = (e: React.MouseEvent) => {
     e.stopPropagation();
-    try {
-      await navigator.clipboard.writeText(txid);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-      toast({ description: "Transaction ID copied" });
-    } catch {
-      toast({
-        title: "Copy failed",
-        description: "Could not copy the transaction ID to your clipboard.",
-        variant: "destructive",
-      });
-    }
+    copy(txid, { label: "Transaction ID" });
   };
 
   return (

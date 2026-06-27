@@ -3,7 +3,7 @@ import { Copy, Check, FileText, ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useRecordPreview } from "@/contexts/RecordPreviewContext";
-import { useToast } from "@/hooks/use-toast";
+import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
 import { useSettings } from "@/hooks/use-settings";
 import {
   resolveIdentifier,
@@ -81,9 +81,9 @@ export function TxidLink({
   onNavigate,
 }: TxidLinkProps) {
   const { openRecordPreview, openRecordPreviewByAddress } = useRecordPreview();
-  const { toast } = useToast();
+  const { copy, isCopied } = useCopyToClipboard();
   const { hoverTooltipPrefs } = useSettings();
-  const [copied, setCopied] = useState(false);
+  const copied = isCopied(txid);
 
   const resolvedRef = useRef<DbRecord | null | undefined>(
     recordId != null ? undefined : getCachedRecord(txid)
@@ -138,27 +138,9 @@ export function TxidLink({
   const handleCopy = useCallback(
     (e: React.MouseEvent) => {
       e.stopPropagation();
-      const notifyFailure = () => {
-        toast({
-          title: "Copy failed",
-          description: "Could not copy the transaction ID to your clipboard.",
-          variant: "destructive",
-        });
-      };
-      try {
-        navigator.clipboard
-          .writeText(txid)
-          .then(() => {
-            setCopied(true);
-            setTimeout(() => setCopied(false), 2000);
-            toast({ description: "Transaction ID copied" });
-          })
-          .catch(notifyFailure);
-      } catch {
-        notifyFailure();
-      }
+      copy(txid, { label: "Transaction ID" });
     },
-    [txid, toast]
+    [txid, copy]
   );
 
   const handleClick = useCallback(

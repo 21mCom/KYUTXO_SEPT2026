@@ -17,7 +17,7 @@ import { AttachmentList } from "./AttachmentList";
 import { AttachmentUpload } from "./AttachmentUpload";
 import { MetadataSourcesPanel } from "./MetadataSourcesPanel";
 import { renderSourceNote } from "@/lib/renderSourceNote";
-import { useToast } from "@/hooks/use-toast";
+import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
 import {
   Collapsible,
   CollapsibleContent,
@@ -293,8 +293,7 @@ export function TransactionHistorySection({ address }: { address: string }) {
   const [loading, setLoading] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [expandedTxid, setExpandedTxid] = useState<string | null>(null);
-  const [copiedTxid, setCopiedTxid] = useState<string | null>(null);
-  const { toast } = useToast();
+  const { copy, copiedKey: copiedTxid } = useCopyToClipboard();
 
   useEffect(() => {
     setEntries([]);
@@ -387,20 +386,8 @@ export function TransactionHistorySection({ address }: { address: string }) {
     loadHistory();
   }, [isOpen, loaded, address]);
 
-  const handleCopy = async (txid: string) => {
-    try {
-      await navigator.clipboard.writeText(txid);
-      setCopiedTxid(txid);
-      setTimeout(() => setCopiedTxid(null), 2000);
-      toast({ description: "Transaction ID copied" });
-    } catch {
-      console.error("Failed to copy txid");
-      toast({
-        title: "Copy failed",
-        description: "Could not copy the transaction ID to your clipboard.",
-        variant: "destructive",
-      });
-    }
+  const handleCopy = (txid: string) => {
+    copy(txid, { label: "Transaction ID" });
   };
 
   return (

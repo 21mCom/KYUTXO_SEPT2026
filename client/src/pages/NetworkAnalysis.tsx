@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
+import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
 import {
   Play,
   StopCircle,
@@ -668,29 +669,12 @@ function StatsPanel({ stats }: { stats: GraphStats }) {
 }
 
 export function CopyAddressButton({ address }: { address: string }) {
-  const [copied, setCopied] = useState(false);
-  const { toast } = useToast();
+  const { copy, isCopied } = useCopyToClipboard();
+  const copied = isCopied(address);
 
   const handleCopy = (e: React.MouseEvent | React.KeyboardEvent) => {
     e.stopPropagation();
-    const notifyFailure = () => {
-      toast({
-        title: "Copy failed",
-        description: "Could not copy the address to your clipboard.",
-        variant: "destructive",
-      });
-    };
-    try {
-      navigator.clipboard.writeText(address)
-        .then(() => {
-          setCopied(true);
-          setTimeout(() => setCopied(false), 2000);
-          toast({ description: "Address copied" });
-        })
-        .catch(notifyFailure);
-    } catch {
-      notifyFailure();
-    }
+    copy(address, { label: "Address" });
   };
 
   const handleCopyKeyDown = (e: React.KeyboardEvent<HTMLButtonElement>) => {

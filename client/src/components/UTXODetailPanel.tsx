@@ -35,7 +35,7 @@ import {
 import { Record as DbRecord, TransactionParticipant, BlockchainTransaction, PriceData } from "@/lib/database";
 import { getParticipantsByTxid, getTransactionByTxid, getRecordsByType } from "@/lib/dataFacade";
 import { cn } from "@/lib/utils";
-import { useToast } from "@/hooks/use-toast";
+import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
 
 interface UTXO {
   id: string;
@@ -88,8 +88,7 @@ function truncateAddress(addr: string): string {
 }
 
 export function UTXODetailPanel({ open, onClose, utxo, latestPrice }: UTXODetailPanelProps) {
-  const { toast } = useToast();
-  const [copiedValue, setCopiedValue] = useState<string | null>(null);
+  const { copy, copiedKey: copiedValue } = useCopyToClipboard();
   const [fundingInputs, setFundingInputs] = useState<FundingInput[]>([]);
   const [fundingTx, setFundingTx] = useState<BlockchainTransaction | null>(null);
   const [fundingOpen, setFundingOpen] = useState(true);
@@ -139,19 +138,8 @@ export function UTXODetailPanel({ open, onClose, utxo, latestPrice }: UTXODetail
     loadFundingTransaction();
   }, [open, utxo]);
 
-  const copyToClipboard = async (value: string, label: string = "Value") => {
-    try {
-      await navigator.clipboard.writeText(value);
-      setCopiedValue(value);
-      setTimeout(() => setCopiedValue(null), 2000);
-      toast({ description: `${label} copied` });
-    } catch {
-      toast({
-        title: "Copy failed",
-        description: `Could not copy the ${label.toLowerCase()} to your clipboard.`,
-        variant: "destructive",
-      });
-    }
+  const copyToClipboard = (value: string, label: string = "Value") => {
+    copy(value, { label });
   };
 
   const currentValue = useMemo(() => {
