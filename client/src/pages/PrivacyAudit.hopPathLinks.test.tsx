@@ -273,4 +273,59 @@ describe("FindingCard proximity hop-path deep-dive interaction", () => {
     expect(within(dialog).getByTestId("text-deep-dive-inputs").textContent).toBe("1");
     expect(within(dialog).getByTestId("text-deep-dive-outputs").textContent).toBe("1");
   });
+
+  it("renders the numeric Boltzmann figures when the worker returns a full result for the clicked hop", async () => {
+    const hopPath = ["bc1qhopA", "bc1qhopB", "bc1qhopC"];
+    const hopTxids = [TX(1), TX(2)]; // one per pair → 2
+
+    renderCard(proximityFinding({ details: { hopPath, hopTxids } }));
+    fireEvent.click(screen.getByTestId("button-toggle-details"));
+
+    // Open the deep-dive for the second hop's txid.
+    const second8 = TX(2).slice(0, 8);
+    fireEvent.click(screen.getByTestId(`button-deep-dive-${second8}`));
+
+    const dialog = await screen.findByTestId("dialog-deep-dive");
+    expect(within(dialog).getByText(TX(2))).toBeTruthy();
+
+    // The dialog auto-runs analysis: data loads and the worker is posted to.
+    await waitFor(() => {
+      expect(lastWorker).not.toBeNull();
+      expect(lastWorker!.postMessage).toHaveBeenCalled();
+    });
+
+    // Drive a full (non-tooComplex) result back, mirroring a normal transaction:
+    // entropy 2 bits, 4 interpretations, efficiency 0.5 against maxEntropy 4.
+    const calls = lastWorker!.postMessage.mock.calls;
+    const { id } = calls[calls.length - 1][0] as { id: string };
+    act(() => {
+      lastWorker!.onmessage!({
+        data: {
+          id,
+          result: {
+            entropy: 2,
+            entropyLabel: "Low",
+            interpretationCount: 4,
+            tooComplex: false,
+            linkMatrix: [],
+            efficiency: 0.5,
+            maxEntropy: 4,
+          },
+        },
+      } as MessageEvent);
+    });
+
+    // The user sees the actual privacy numbers (not the "too complex" notice):
+    // entropy, interpretation count and efficiency for the clicked hop's txid.
+    const boltzmann = await within(dialog).findByTestId("container-boltzmann-result");
+    expect(within(boltzmann).getByTestId("text-boltzmann-entropy").textContent).toBe(
+      "2.00 bits",
+    );
+    expect(
+      within(boltzmann).getByTestId("text-boltzmann-interpretations").textContent,
+    ).toBe("4");
+    expect(within(boltzmann).getByTestId("text-boltzmann-efficiency").textContent).toBe(
+      "50%",
+    );
+  });
 });
