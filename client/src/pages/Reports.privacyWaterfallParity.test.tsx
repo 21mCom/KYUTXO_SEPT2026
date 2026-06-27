@@ -23,9 +23,12 @@ import { render, fireEvent, cleanup, waitFor } from "@testing-library/react";
 import {
   buildPrivacyReport,
   buildPrivacyTextReport,
+  formatFindingLocator,
+  formatScoreDelta,
   type ExportScope,
 } from "@/lib/privacy-report-export";
 import { buildPrintableReport } from "@/lib/privacy-report-html";
+import type { PrivacyFinding } from "@/lib/privacy-audit";
 
 vi.mock("@/hooks/use-owners", () => ({
   useOwners: () => ({ owners: [], isLoading: false }),
@@ -230,5 +233,187 @@ describe("PrivacyAuditReportPanel — Score Breakdown parity across surfaces", (
         delta: "-12",
       });
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Per-finding (same-type) sub-row parity.
+//
+// The category-level parity above uses a fixture with empty findings/warnings,
+// so it never exercises the individual same-type findings enumerated UNDER each
+// aggregated category (the address/tx locator + per-finding score impact added
+// to all three exports). This block uses a fixture with real findings so those
+// nested sub-rows are actually compared across the text, HTML/PDF, and JSON
+// surfaces. It fails if any one surface drops, reorders, or reformats a finding
+// relative to the others.
+// ---------------------------------------------------------------------------
+
+// The em-dash impact separator used by the plain-text export's finding lines:
+// three spaces, an em dash, two spaces (matches buildPrivacyTextReport).
+const TEXT_IMPACT_SEP = "   —  ";
+
+function mkFinding(partial: Partial<PrivacyFinding>): PrivacyFinding {
+  return {
+    type: "ADDRESS_REUSE",
+    severity: "MEDIUM",
+    description: "desc",
+    details: {},
+    correction: "fix",
+    txids: [],
+    addresses: [],
+    ...partial,
+  };
+}
+
+// Two aggregated categories, each with multiple same-type findings carrying
+// BOTH addresses and txids, mixing every per-finding format branch:
+//   - multiple addresses/txids   → "(+N more)" suffixes in the locator
+//   - a sub-1-point penalty      → "<-1 pts" impact
+//   - a finding with no penalty  → "—" impact
+//   - findings AND warnings of the same type → exercises the findings-first
+//     ordering shared by findingsOfType across all surfaces.
+const reuseA = mkFinding({
+  type: "ADDRESS_REUSE",
+  addresses: ["bc1qaddr1a", "bc1qaddr1b"],
+  txids: ["txid1"],
+  scoreDelta: -8,
+});
+const reuseB = mkFinding({
+  type: "ADDRESS_REUSE",
+  addresses: ["bc1qaddr2"],
+  txids: ["txid2a", "txid2b", "txid2c"],
+  scoreDelta: -0.5,
+});
+const reuseWarn = mkFinding({
+  type: "ADDRESS_REUSE",
+  severity: "LOW",
+  addresses: ["bc1qaddr3"],
+  txids: ["txid3"],
+  // no scoreDelta → no penalty → "—" impact everywhere
+});
+const roundA = mkFinding({
+  type: "ROUND_AMOUNT",
+  addresses: ["bc1qround1"],
+  txids: ["txidR1"],
+  scoreDelta: -3,
+});
+const roundWarn = mkFinding({
+  type: "ROUND_AMOUNT",
+  severity: "LOW",
+  addresses: ["bc1qround2"],
+  txids: ["txidR2a", "txidR2b"],
+  scoreDelta: -2,
+});
+
+const findingsResult = {
+  findings: [reuseA, reuseB, roundA],
+  warnings: [reuseWarn, roundWarn],
+  transactionsAnalyzed: 9,
+  addressesScanned: 6,
+  isClean: false,
+  score: 85,
+  grade: "B",
+  scoreWaterfall: [
+    { label: "Base Score", findingType: "BASE", delta: 0, runningScore: 100, count: 0 },
+    { label: "Address Reuse", findingType: "ADDRESS_REUSE", delta: -10, runningScore: 90, count: 3 },
+    { label: "Round Amount", findingType: "ROUND_AMOUNT", delta: -5, runningScore: 85, count: 2 },
+  ],
+  needsResync: false,
+  fingerprintCoverage: 1,
+};
+
+/** A per-finding sub-row flattened into `category :: locator :: impact`, in the
+ * exact category/finding order each surface emits. Used to compare surfaces for
+ * any dropped, reordered, or reformatted finding. */
+type FindingRow = string;
+
+/** Derive the per-finding rows from the JSON export. The JSON carries the raw
+ * per-finding fields (addresses/txids/scoreDelta), so the locator/impact are
+ * reconstructed with the SAME shared helpers the text/HTML exports use. */
+function findingRowsFromJson(): FindingRow[] {
+  const report = buildPrivacyReport(findingsResult as never, SCOPE);
+  const out: FindingRow[] = [];
+  for (const entry of report.scoreWaterfall) {
+    for (const f of entry.findings) {
+      const locator = formatFindingLocator(f as unknown as PrivacyFinding);
+      const impact = formatScoreDelta(f.scoreDelta) ?? "—";
+      out.push(`${entry.label} :: ${locator} :: ${impact}`);
+    }
+  }
+  return out;
+}
+
+/** Parse the per-finding enumeration lines out of the plain-text export. */
+function findingRowsFromText(text: string): FindingRow[] {
+  const lines = text.split("\n");
+  const start = lines.indexOf("SCORE BREAKDOWN");
+  expect(start).toBeGreaterThanOrEqual(0);
+  const out: FindingRow[] = [];
+  let category = "";
+  for (let i = start + 2; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.trim() === "") break;
+    if (/^\s+\d+\.\s/.test(line)) {
+      const rest = line.replace(/^\s+\d+\.\s/, "");
+      const parts = rest.split(TEXT_IMPACT_SEP);
+      const locator = parts[0];
+      const impact = parts.length > 1 ? parts[1] : "—";
+      out.push(`${category} :: ${locator} :: ${impact}`);
+    } else if (/Count:/.test(line)) {
+      // stats line — skip
+    } else {
+      category = line.trim();
+    }
+  }
+  return out;
+}
+
+/** Parse the per-finding `.waterfall-finding-row` rows out of the HTML export. */
+function findingRowsFromHtml(html: string): FindingRow[] {
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  const rows = Array.from(
+    doc.querySelectorAll<HTMLElement>(".waterfall-table tbody tr"),
+  );
+  const out: FindingRow[] = [];
+  let category = "";
+  for (const tr of rows) {
+    if (tr.classList.contains("waterfall-finding-row")) {
+      const locator = tr.querySelector(".mono")!.textContent!.trim();
+      const impact = tr.querySelector(".wf-finding-impact")!.textContent!.trim();
+      out.push(`${category} :: ${locator} :: ${impact}`);
+    } else {
+      const cells = Array.from(tr.querySelectorAll("td"));
+      category = cells[0].textContent!.trim();
+    }
+  }
+  return out;
+}
+
+describe("Privacy Audit — per-finding sub-row parity across surfaces", () => {
+  it("enumerates the same locators and score impacts, in the same order, on every surface", () => {
+    const json = findingRowsFromJson();
+    const text = findingRowsFromText(
+      buildPrivacyTextReport(findingsResult as never, SCOPE, "fixed"),
+    );
+    const html = findingRowsFromHtml(
+      buildPrintableReport(findingsResult as never, SCOPE),
+    );
+
+    // The fixture must actually exercise nested sub-rows (otherwise this test
+    // would pass vacuously, the very gap it exists to close): more than one
+    // category with findings, and at least one category with multiple findings.
+    const expected: FindingRow[] = [
+      "Address Reuse :: addr bc1qaddr1a (+1 more)  ·  tx txid1 :: -8 pts",
+      "Address Reuse :: addr bc1qaddr2  ·  tx txid2a (+2 more) :: <-1 pts",
+      "Address Reuse :: addr bc1qaddr3  ·  tx txid3 :: —",
+      "Round Amount :: addr bc1qround1  ·  tx txidR1 :: -3 pts",
+      "Round Amount :: addr bc1qround2  ·  tx txidR2a (+1 more) :: -2 pts",
+    ];
+    expect(json).toEqual(expected);
+
+    // Parity: every surface must produce the identical ordered list. Any drop,
+    // reorder, or reformat on one surface breaks equality with the others.
+    expect(text).toEqual(json);
+    expect(html).toEqual(json);
   });
 });
