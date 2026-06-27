@@ -533,18 +533,47 @@ function groupEntityErrors(errors: EntitySnapshotError[]): EntityErrorGroup[] {
  * Triage open/closed state persisted *outside* the EntityErrorList component so
  * a user's manual expand/collapse choices survive the panel unmounting and
  * remounting (navigating away from Settings, re-running the import that
- * re-renders the list) within the same import session. It is module-level
- * (not localStorage/settings) on purpose: it resets on a full page reload, so a
- * brand-new app session never inherits stale triage state, while still keeping
- * choices stable across mounts within one session. Keyed by a content signature
- * of the import so a *different* import starts from the clean collapsed
- * baseline, while re-selecting the same file restores exactly what was open.
+ * re-renders the list) across sessions. Choices are written to localStorage
+ * under {@link TRIAGE_STORAGE_KEY} so they survive full page reloads. Keyed
+ * by a content signature of the import so a *different* import starts from the
+ * clean collapsed baseline, while re-selecting the same file restores exactly
+ * what was open.
  */
-const entityErrorOpenStateBySignature = new Map<string, Record<string, boolean>>();
+const TRIAGE_STORAGE_KEY = "kyutxo.entity-error-triage";
+
+function loadTriageFromStorage(): Map<string, Record<string, boolean>> {
+  try {
+    const raw = localStorage.getItem(TRIAGE_STORAGE_KEY);
+    if (!raw) return new Map();
+    const obj = JSON.parse(raw) as Record<string, Record<string, boolean>>;
+    return new Map(Object.entries(obj));
+  } catch {
+    return new Map();
+  }
+}
+
+function saveTriageToStorage(map: Map<string, Record<string, boolean>>): void {
+  try {
+    const obj: Record<string, Record<string, boolean>> = {};
+    map.forEach((v, k) => {
+      obj[k] = v;
+    });
+    localStorage.setItem(TRIAGE_STORAGE_KEY, JSON.stringify(obj));
+  } catch {
+    // Ignore write failures (private browsing, storage quota, etc.)
+  }
+}
+
+const entityErrorOpenStateBySignature = loadTriageFromStorage();
 
 /** Test seam: clears all remembered triage state so tests don't leak it. */
 export function resetEntityErrorOpenState() {
   entityErrorOpenStateBySignature.clear();
+  try {
+    localStorage.removeItem(TRIAGE_STORAGE_KEY);
+  } catch {
+    // Ignore
+  }
 }
 
 /**
@@ -648,11 +677,13 @@ function EntityErrorList({ errors }: { errors: EntitySnapshotError[] }) {
   }, [autoOpen, allGroups]);
   const toggleGroup = (kind: string) => {
     // Toggle off the currently-visible state so collapsing an auto-opened group
-    // works too. Persist the user's choices to module-level storage keyed by
-    // this import's signature so they outlive the panel's lifecycle.
+    // works too. Persist the user's choices to module-level storage (and
+    // localStorage) keyed by this import's signature so they outlive the panel
+    // lifecycle and survive page reloads.
     const next = !openMap[kind];
     userSetOpenRef.current = { ...userSetOpenRef.current, [kind]: next };
     entityErrorOpenStateBySignature.set(signature, { ...userSetOpenRef.current });
+    saveTriageToStorage(entityErrorOpenStateBySignature);
     setOpenMap((prev) => ({ ...prev, [kind]: next }));
   };
 
@@ -1262,10 +1293,10 @@ export default function SettingsPage() {
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
-    } catch {
+    } catch (err) {
       toast({
-        title: "Error",
-        description: "Failed to export the entity list",
+        title: "Export failed",
+        description: err instanceof Error ? err.message : "Could not write the entity list — please try again.",
         variant: "destructive",
       });
     }

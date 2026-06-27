@@ -43,7 +43,8 @@ import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
 import { useOwners } from "@/hooks/use-owners";
 import { useWalletNames } from "@/hooks/use-wallet-names";
 import { RecordFormDialog } from "@/components/RecordFormDialog";
-import { ClickableAddress } from "@/components/ClickableAddress";
+import { AddressLink } from "@/components/AddressLink";
+import { TxidLink } from "@/components/TxidLink";
 import { useTags } from "@/hooks/use-tags";
 import { useCategories } from "@/hooks/use-categories";
 import { useSeedNames } from "@/hooks/use-seed-names";
@@ -647,8 +648,9 @@ export default function AddressReuse() {
                                   {item.record.label}
                                 </span>
                               )}
-                              <ClickableAddress 
-                                address={item.address} 
+                              <AddressLink
+                                address={item.address}
+                                truncate
                                 className="text-sm text-muted-foreground"
                               />
                             </div>
@@ -766,8 +768,9 @@ export default function AddressReuse() {
                                         <span className="text-xs font-medium">OUT</span>
                                       </div>
                                     )}
-                                    <ClickableAddress 
-                                      address={tx.txid}
+                                    <TxidLink
+                                      txid={tx.txid}
+                                      truncate
                                       className="flex-1 min-w-0"
                                     />
                                   </div>

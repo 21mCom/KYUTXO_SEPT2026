@@ -49,7 +49,7 @@ import { useSeedNames } from "@/hooks/use-seed-names";
 import { useWalletSoftware } from "@/hooks/use-wallet-software";
 import { useCustomFields } from "@/hooks/use-settings";
 import { RecordFormDialog } from "@/components/RecordFormDialog";
-import { ClickableAddress } from "@/components/ClickableAddress";
+import { AddressLink } from "@/components/AddressLink";
 import { 
   ArrowDownLeft, 
   ArrowUpRight,
@@ -706,9 +706,10 @@ export default function Nudgie() {
             ) : (
               <ArrowDownLeft className="h-3 w-3 text-green-600 flex-shrink-0" />
             )}
-            <ClickableAddress 
-              address={addr.address} 
-              className="text-xs truncate"
+            <AddressLink
+              address={addr.address}
+              truncate
+              className="text-xs"
             />
           </div>
           <div className="flex items-center gap-1 flex-shrink-0">

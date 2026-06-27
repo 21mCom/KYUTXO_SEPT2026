@@ -2,7 +2,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Activity, X } from "lucide-react";
+import { Activity, RefreshCw, X } from "lucide-react";
 import {
   type BehaviorLabel,
   type BehaviorTallyCounts,
@@ -34,6 +34,12 @@ interface BehaviorFilterProps {
   countsProgress?: { processed: number; total: number | null } | null;
   /** Abort the in-flight tally. */
   onCancelCounts?: () => void;
+  /**
+   * Re-trigger a fresh recount, e.g. after the user cancelled a previous pass.
+   * When provided, a "Recount" button is shown whenever nothing is currently
+   * computing.
+   */
+  onRestartCounts?: () => void;
 }
 
 export function BehaviorFilter({
@@ -43,6 +49,7 @@ export function BehaviorFilter({
   countsComputing,
   countsProgress,
   onCancelCounts,
+  onRestartCounts,
 }: BehaviorFilterProps) {
   const toggle = (label: BehaviorLabel) => {
     const next = new Set(selected);
@@ -80,7 +87,7 @@ export function BehaviorFilter({
               <span className="text-xs font-medium text-muted-foreground">
                 Across all addresses
               </span>
-              {countsComputing && (
+              {countsComputing ? (
                 <div className="flex items-center gap-1.5">
                   <span
                     className="text-xs text-muted-foreground tabular-nums"
@@ -101,6 +108,16 @@ export function BehaviorFilter({
                     </Button>
                   )}
                 </div>
+              ) : onRestartCounts && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={onRestartCounts}
+                  data-testid="button-restart-behavior-counts"
+                >
+                  <RefreshCw className="h-3 w-3 mr-1" />
+                  Recount
+                </Button>
               )}
             </div>
             <div className="space-y-1">

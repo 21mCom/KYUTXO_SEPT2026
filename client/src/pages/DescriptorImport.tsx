@@ -109,6 +109,8 @@ export default function DescriptorImport() {
   const [showChangeAddresses, setShowChangeAddresses] = useState(false);
   const [isDerivingAddresses, setIsDerivingAddresses] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  /** Set when BSMS address verification fails; cleared when going back to step 1. */
+  const [bsmsMismatch, setBsmsMismatch] = useState<{ bsms: string; derived: string } | null>(null);
   const [saveProgress, setSaveProgress] = useState({ current: 0, total: 0 });
 
   const [seedName, setSeedName] = useState("");
@@ -362,11 +364,13 @@ export default function DescriptorImport() {
         if (bsmsFirstAddress && result.receive.length > 0 && receiveStartIndex === 0) {
           const derivedFirst = result.receive[0].address;
           if (derivedFirst === bsmsFirstAddress) {
+            setBsmsMismatch(null);
             toast({
               title: "Address verification passed",
               description: `First derived address matches BSMS file: ${bsmsFirstAddress.slice(0, 12)}...`,
             });
           } else {
+            setBsmsMismatch({ bsms: bsmsFirstAddress, derived: derivedFirst });
             toast({
               title: "Address verification failed",
               description: `First address mismatch! BSMS: ${bsmsFirstAddress.slice(0, 12)}... Derived: ${derivedFirst.slice(0, 12)}...`,
@@ -375,12 +379,14 @@ export default function DescriptorImport() {
           }
         } else if (bsmsFirstAddress && result.receive.length === 0) {
           // Can't verify - no receive addresses derived
+          setBsmsMismatch(null);
           toast({
             title: "Taproot addresses derived",
             description: `Generated ${result.change.length} change addresses. BSMS verification skipped (no receive addresses)`,
           });
         } else if (bsmsFirstAddress && receiveStartIndex !== 0) {
           // Derived addresses but not starting from 0 - warn user
+          setBsmsMismatch(null);
           toast({
             title: "Taproot addresses derived",
             description: `Generated ${result.receive.length} addresses. BSMS verification skipped (start index is not 0)`,
@@ -455,11 +461,13 @@ export default function DescriptorImport() {
         if (bsmsFirstAddress && result.receive.length > 0 && receiveStartIndex === 0) {
           const derivedFirst = result.receive[0].address;
           if (derivedFirst === bsmsFirstAddress) {
+            setBsmsMismatch(null);
             toast({
               title: "Address verification passed",
               description: `First derived address matches BSMS file: ${bsmsFirstAddress.slice(0, 12)}...`,
             });
           } else {
+            setBsmsMismatch({ bsms: bsmsFirstAddress, derived: derivedFirst });
             toast({
               title: "Address verification failed",
               description: `First address mismatch! BSMS: ${bsmsFirstAddress.slice(0, 12)}... Derived: ${derivedFirst.slice(0, 12)}...`,
@@ -468,12 +476,14 @@ export default function DescriptorImport() {
           }
         } else if (bsmsFirstAddress && result.receive.length === 0) {
           // Can't verify - no receive addresses derived
+          setBsmsMismatch(null);
           toast({
             title: "Addresses derived",
             description: `Generated ${result.change.length} change addresses. BSMS verification skipped (no receive addresses)`,
           });
         } else if (bsmsFirstAddress && receiveStartIndex !== 0) {
           // Derived addresses but not starting from 0 - warn user
+          setBsmsMismatch(null);
           toast({
             title: "Addresses derived",
             description: `Generated ${result.receive.length} addresses. BSMS verification skipped (start index is not 0)`,
@@ -957,6 +967,26 @@ export default function DescriptorImport() {
       
       {step === 2 && (multisigResult || taprootResult) && parsedDescriptor && (
         <div className="space-y-6">
+          {bsmsMismatch && (
+            <Alert variant="destructive" data-testid="alert-bsms-mismatch">
+              <AlertCircle className="h-4 w-4" />
+              <AlertTitle>Address verification failed</AlertTitle>
+              <AlertDescription>
+                <p className="mb-1">
+                  The first derived receive address does not match the BSMS file. Your
+                  descriptor or BSMS file may belong to different wallets.
+                </p>
+                <div className="mt-2 space-y-1 font-mono text-xs break-all">
+                  <p><span className="font-semibold">BSMS: </span>{bsmsMismatch.bsms}</p>
+                  <p><span className="font-semibold">Derived: </span>{bsmsMismatch.derived}</p>
+                </div>
+                <p className="mt-2 text-xs">
+                  You can still import if you know why they differ (e.g. custom derivation start index),
+                  but verify carefully before importing.
+                </p>
+              </AlertDescription>
+            </Alert>
+          )}
           <Card>
             <CardHeader>
               <CardTitle>Metadata</CardTitle>
@@ -1396,7 +1426,7 @@ export default function DescriptorImport() {
           </Card>
           
           <div className="flex justify-between">
-            <Button variant="outline" onClick={() => setStep(1)} data-testid="button-back-step1">
+            <Button variant="outline" onClick={() => { setStep(1); setBsmsMismatch(null); }} data-testid="button-back-step1">
               <ChevronLeft className="h-4 w-4 mr-2" />
               Back
             </Button>
@@ -1446,6 +1476,7 @@ export default function DescriptorImport() {
                     setMultisigResult(null);
                     setSelectedReceiveAddresses(new Set());
                     setSelectedChangeAddresses(new Set());
+                    setBsmsMismatch(null);
                   }}
                   data-testid="button-import-another"
                 >

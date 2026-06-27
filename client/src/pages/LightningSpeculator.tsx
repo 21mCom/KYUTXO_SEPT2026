@@ -8,7 +8,8 @@ import {
   getClassificationBadgeVariant
 } from "@/lib/lightning-detection";
 import { getOwners, getWalletNames, countTransactions } from "@/lib/dataFacade";
-import { ClickableAddress } from "@/components/ClickableAddress";
+import { AddressLink } from "@/components/AddressLink";
+import { TxidLink } from "@/components/TxidLink";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -336,8 +337,9 @@ export default function LightningSpeculator() {
                                 {getClassificationIcon(result.classification)}
                                 <div>
                                   <div className="flex items-center gap-2">
-                                    <ClickableAddress 
-                                      address={result.txid}
+                                    <TxidLink
+                                      txid={result.txid}
+                                      truncate
                                       className="flex-1 min-w-0"
                                     />
                                     <Badge variant={getClassificationBadgeVariant(result.classification)}>
@@ -412,8 +414,9 @@ export default function LightningSpeculator() {
                                         key={`${input.address}-${idx}`}
                                         className="flex items-center justify-between text-sm bg-muted/50 rounded px-2 py-1"
                                       >
-                                        <ClickableAddress 
+                                        <AddressLink
                                           address={input.address}
+                                          truncate
                                           className="text-xs flex-1 min-w-0"
                                         />
                                         <span className="text-muted-foreground">
@@ -435,8 +438,9 @@ export default function LightningSpeculator() {
                                         key={`${output.address}-${idx}`}
                                         className="flex items-center justify-between text-sm bg-muted/50 rounded px-2 py-1"
                                       >
-                                        <ClickableAddress 
+                                        <AddressLink
                                           address={output.address}
+                                          truncate
                                           className="text-xs flex-1 min-w-0"
                                         />
                                         <span className="text-muted-foreground">

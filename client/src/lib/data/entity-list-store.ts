@@ -150,6 +150,11 @@ export interface EntityListStatus {
   bundledCount: number;
   importedAt?: number;
   sourceLabel?: string;
+  /**
+   * Set when the persisted snapshot was loaded but some entries were invalid.
+   * The valid subset was kept; the invalid entries were silently skipped.
+   */
+  partialWarning?: { validCount: number; skippedCount: number };
 }
 
 /**
@@ -615,6 +620,11 @@ export async function resetEntitySnapshot(): Promise<void> {
  * Read any persisted snapshot from storage and apply it to the active list.
  * Called once at app startup. Falls back silently to the bundled list on any
  * error so startup is never disrupted.
+ *
+ * When a persisted snapshot has some invalid entries but at least one valid
+ * entry, the valid subset is kept and a `partialWarning` is included in the
+ * returned status so the UI can surface a non-fatal advisory to the user.
+ * Only when no entries survive validation does it fall back to the bundled list.
  */
 export async function loadEntitySnapshotFromStorage(): Promise<EntityListStatus> {
   try {
@@ -629,8 +639,24 @@ export async function loadEntitySnapshotFromStorage(): Promise<EntityListStatus>
         const applied =
           snap.mode === 'merge' ? mergeWithBundled(result.entries) : result.entries;
         setActiveEntityList(applied);
+      } else if (result.entries.length > 0) {
+        // Partial: some entries are valid, some are not. Keep the valid subset
+        // rather than reverting the whole list to the bundled fallback, which
+        // would silently discard all the user's correct entries due to one bad
+        // one. Surface a partialWarning in the status so the UI can warn.
+        const applied =
+          snap.mode === 'merge' ? mergeWithBundled(result.entries) : result.entries;
+        setActiveEntityList(applied);
+        const status = getEntityListStatus();
+        return {
+          ...status,
+          partialWarning: {
+            validCount: result.entries.length,
+            skippedCount: result.total - result.entries.length,
+          },
+        };
       } else {
-        // Persisted snapshot is somehow corrupt — fall back to bundled.
+        // No valid entries at all — fall back to the bundled list.
         resetActiveEntityList();
       }
     }

@@ -48,10 +48,17 @@ import { DEFAULT_TX_LIMIT } from '@/lib/data/fund-trail-engine';
 import { DEFAULT_HOVER_TOOLTIP_PREFS, type HoverTooltipPrefs } from '@/lib/metadata-hover';
 
 export function useSettings() {
-  const settings = useLiveQuery(() => getStoredSettings('default'));
+  // Wrap the query so undefined (not found) becomes null, keeping the dexie-
+  // react-hooks undefined sentinel meaning "still loading" — otherwise a
+  // missing settings row looks indistinguishable from a loading state and the
+  // component stays in the loading spinner forever.
+  const settings = useLiveQuery(async () => {
+    const s = await getStoredSettings('default');
+    return s ?? null;
+  });
   
   return {
-    settings: settings || null,
+    settings: settings ?? null,
     tableColumns: settings?.tableColumns || defaultTableColumns,
     customFieldColumns: settings?.customFieldColumns || {},
     fieldVisibility: settings?.fieldVisibility || defaultFieldVisibility,
@@ -196,12 +203,10 @@ export async function updateFundTrailTxLimit(value: number) {
 }
 
 export async function updateSourceOfFundsTxLimit(value: number) {
-  const settings = await getStoredSettings('default');
-  if (settings) {
-    await updateStoredSettings('default', {
-      sourceOfFundsTxLimit: value,
-    });
-  }
+  await ensureStoredSettings('default');
+  await updateStoredSettings('default', {
+    sourceOfFundsTxLimit: value,
+  });
 }
 
 export async function toggleCustomFieldColumn(slug: string) {
@@ -242,7 +247,7 @@ export async function addCustomField(name: string): Promise<number | undefined> 
 
 export async function updateCustomField(id: number, updates: Partial<Pick<CustomField, 'name' | 'enabled'>>) {
   const field = await getStoredCustomField(id);
-  if (!field) return;
+  if (!field) throw new Error(`Custom field ${id} not found`);
   
   const updateData: Partial<CustomField> = {};
   
@@ -268,9 +273,8 @@ export async function updateCustomField(id: number, updates: Partial<Pick<Custom
 
 export async function toggleCustomField(id: number) {
   const field = await getStoredCustomField(id);
-  if (field) {
-    await updateStoredCustomField(id, { enabled: !field.enabled });
-  }
+  if (!field) throw new Error(`Custom field ${id} not found`);
+  await updateStoredCustomField(id, { enabled: !field.enabled });
 }
 
 export async function deleteCustomField(id: number) {

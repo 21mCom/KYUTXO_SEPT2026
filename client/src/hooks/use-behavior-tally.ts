@@ -42,6 +42,12 @@ export interface UseBehaviorTallyResult {
   progress: BehaviorTallyProgress | null;
   /** Abort the in-flight pass. No-op when nothing is running. */
   cancel: () => void;
+  /**
+   * Explicitly request a fresh recompute, even if the hook would not auto-
+   * start one (e.g. after the user stopped the previous pass with cancel()).
+   * No-op if a pass is already in flight.
+   */
+  restart: () => void;
 }
 
 /**
@@ -64,6 +70,9 @@ export function useBehaviorTally(enabled: boolean = true): UseBehaviorTallyResul
   const [progress, setProgress] = useState<BehaviorTallyProgress | null>(null);
   const inFlightRef = useRef(false);
   const controllerRef = useRef<AbortController | null>(null);
+  // Bumped by restart() to force the effect to re-run even when `stale` has
+  // not changed (e.g. after the user cancelled the previous pass).
+  const [requestCount, setRequestCount] = useState(0);
 
   // A ticking clock so a long-running mount re-evaluates age-based staleness even
   // when nothing else (settings/address count) changes to re-render the hook.
@@ -89,7 +98,9 @@ export function useBehaviorTally(enabled: boolean = true): UseBehaviorTallyResul
 
   useEffect(() => {
     if (!enabled) return;
-    if (!stale) return;
+    // Proceed when the tally is stale (normal auto-trigger) OR when the user
+    // explicitly requested a restart via restart() (requestCount bump).
+    if (!stale && requestCount === 0) return;
     if (inFlightRef.current) return;
 
     inFlightRef.current = true;
@@ -125,10 +136,17 @@ export function useBehaviorTally(enabled: boolean = true): UseBehaviorTallyResul
       controller.abort();
     };
     // `stale` already folds in addressCount, persisted fingerprint, and age.
-  }, [enabled, stale]);
+    // `requestCount` lets restart() re-trigger the effect without a stale change.
+  }, [enabled, stale, requestCount]);
 
   const cancel = useCallback(() => {
     controllerRef.current?.abort();
+  }, []);
+
+  const restart = useCallback(() => {
+    if (!inFlightRef.current) {
+      setRequestCount((c) => c + 1);
+    }
   }, []);
 
   return {
@@ -138,5 +156,6 @@ export function useBehaviorTally(enabled: boolean = true): UseBehaviorTallyResul
     computedAt: persisted?.computedAt ?? null,
     progress: computing ? progress : null,
     cancel,
+    restart,
   };
 }

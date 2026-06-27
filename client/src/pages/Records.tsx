@@ -224,6 +224,7 @@ export default function Records() {
     computing: behaviorCountsComputing,
     progress: behaviorCountsProgress,
     cancel: cancelBehaviorCounts,
+    restart: restartBehaviorCounts,
   } = useBehaviorTally();
   
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -1058,6 +1059,7 @@ export default function Records() {
             countsComputing={behaviorCountsComputing}
             countsProgress={behaviorCountsProgress}
             onCancelCounts={cancelBehaviorCounts}
+            onRestartCounts={restartBehaviorCounts}
           />
         </div>
 

@@ -2,6 +2,7 @@ import { Switch, Route, Router, useLocation } from "wouter";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
+import { useToast } from "@/hooks/use-toast";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/AppSidebar";
@@ -123,14 +124,30 @@ function AppRoutes() {
 }
 
 // Loads any persisted offline entity-list snapshot into the active Privacy
-// Audit list once at startup. Falls back silently to the bundled list.
+// Audit list once at startup. Falls back silently to the bundled list. Shows
+// a non-blocking warning toast when the snapshot was partially invalid and
+// some entries were skipped (valid entries are still kept).
 function EntityListLoader() {
+  const { toast } = useToast();
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
         const { loadEntitySnapshotFromStorage } = await import("@/lib/data/entity-list-store");
-        if (!cancelled) await loadEntitySnapshotFromStorage();
+        if (!cancelled) {
+          const status = await loadEntitySnapshotFromStorage();
+          if (!cancelled && status.partialWarning) {
+            const { validCount, skippedCount } = status.partialWarning;
+            toast({
+              title: "Entity list: some entries skipped",
+              description:
+                `${skippedCount} invalid entr${skippedCount === 1 ? "y was" : "ies were"} ` +
+                `skipped; ${validCount} valid entr${validCount === 1 ? "y was" : "ies were"} kept. ` +
+                "Visit Settings › Privacy Audit Entity List to review or re-import.",
+              variant: "destructive",
+            });
+          }
+        }
       } catch {
         // Silent: loading the snapshot must never disrupt app startup.
       }
@@ -138,6 +155,7 @@ function EntityListLoader() {
     return () => {
       cancelled = true;
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   return null;
 }
