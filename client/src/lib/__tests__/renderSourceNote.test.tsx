@@ -37,6 +37,40 @@ describe("renderSourceNote parsing rules", () => {
     expect(container.textContent).toBe(note);
   });
 
+  it("keeps a closing paren and trailing period out of the href when a URL ends a sentence inside parentheses", () => {
+    const note = "Source: (see https://example.com/x).";
+    render(<div data-testid="note">{renderSourceNote(note)}</div>);
+
+    const container = screen.getByTestId("note");
+    const links = within(container).getAllByRole("link");
+    expect(links).toHaveLength(1);
+
+    // The closing paren and trailing period are excluded from the link target.
+    expect(links[0].getAttribute("href")).toBe("https://example.com/x");
+    // The visible link text matches the href exactly (no stray ")" or ".").
+    expect(links[0].textContent).toBe("https://example.com/x");
+    expect(links[0].textContent).toBe(links[0].getAttribute("href"));
+
+    // The ")" and "." are still present in the note as visible plain text.
+    expect(container.textContent).toBe(note);
+  });
+
+  it("stops the href at the closing paren even when followed by other bracket/quote characters", () => {
+    const note = 'He noted (https://example.com/path)" in the file.';
+    render(<div data-testid="note">{renderSourceNote(note)}</div>);
+
+    const container = screen.getByTestId("note");
+    const links = within(container).getAllByRole("link");
+    expect(links).toHaveLength(1);
+
+    // The link is cut at the closing paren; the trailing ")" and quote stay text.
+    expect(links[0].getAttribute("href")).toBe("https://example.com/path");
+    // The visible link text matches the href exactly.
+    expect(links[0].textContent).toBe(links[0].getAttribute("href"));
+
+    expect(container.textContent).toBe(note);
+  });
+
   it("renders a note with no URL as plain text (no link)", () => {
     const plain = "Just a regular note with no links.";
     render(<div data-testid="note">{renderSourceNote(plain)}</div>);
