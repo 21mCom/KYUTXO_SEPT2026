@@ -149,9 +149,13 @@ vi.mock("@/lib/data/transaction-crud", () => ({
 // resolvePrevouts is the seam we assert scoping on; its return value drives the
 // outcome toast. Each test overrides the resolved count via resolveResult.
 let resolveResult: { resolved: number };
-const resolvePrevouts = vi.fn(() =>
-  Promise.resolve({ resolved: resolveResult.resolved, fetchedFromNode: 0, errors: 0, resolvedAddresses: [] }),
-);
+let resolveShouldReject: boolean;
+const resolvePrevouts = vi.fn(() => {
+  if (resolveShouldReject) {
+    return Promise.reject(new Error("node unreachable"));
+  }
+  return Promise.resolve({ resolved: resolveResult.resolved, fetchedFromNode: 0, errors: 0, resolvedAddresses: [] });
+});
 vi.mock("@/lib/transaction-sync", () => ({
   transactionSyncService: { resolvePrevouts },
 }));
@@ -171,6 +175,7 @@ beforeEach(() => {
   toastCalls.length = 0;
   resolvePrevouts.mockClear();
   resolveResult = { resolved: 0 };
+  resolveShouldReject = false;
 });
 
 afterEach(() => {
@@ -237,5 +242,25 @@ describe("BalanceOverview per-address Resolve", () => {
     await waitFor(() => expect(toastCalls.length).toBeGreaterThan(0));
     expect(toastCalls[0].title).toBe("Nothing to resolve");
     expect(toastCalls[0].variant).toBe("destructive");
+  });
+
+  it("toasts 'Resolve failed' (destructive) and clears the resolving state when resolvePrevouts rejects", async () => {
+    resolveShouldReject = true;
+    await expandGroupAndShowRows();
+
+    fireEvent.click(screen.getByTestId(`button-resolve-address-${PENDING_ADDRESS}`));
+
+    await waitFor(() => expect(toastCalls.length).toBeGreaterThan(0));
+    expect(toastCalls[0].title).toBe("Resolve failed");
+    expect(toastCalls[0].variant).toBe("destructive");
+
+    // The finally block must clear the resolving state so the button leaves its
+    // "Resolving…" spinner and returns to the actionable "Resolve" label.
+    await waitFor(() => {
+      const btn = screen.getByTestId(`button-resolve-address-${PENDING_ADDRESS}`);
+      expect(btn.textContent).toContain("Resolve");
+      expect(btn.textContent).not.toContain("Resolving…");
+      expect((btn as HTMLButtonElement).disabled).toBe(false);
+    });
   });
 });

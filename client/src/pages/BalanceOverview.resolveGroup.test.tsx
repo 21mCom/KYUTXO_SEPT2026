@@ -166,9 +166,13 @@ vi.mock("@/lib/data/transaction-crud", () => ({
 // the onProgress callback while the button is still in its "Resolving…" state.
 let resolveResult: { resolved: number };
 let resolveDeferred: { promise: Promise<void>; resolve: () => void } | null;
+let resolveShouldReject: boolean;
 let lastOnProgress: ((resolved: number, total: number) => void) | undefined;
 const resolvePrevouts = vi.fn((onProgress: any) => {
   lastOnProgress = onProgress;
+  if (resolveShouldReject) {
+    return Promise.reject(new Error("node unreachable"));
+  }
   const payload = {
     resolved: resolveResult.resolved,
     fetchedFromNode: 0,
@@ -200,6 +204,7 @@ beforeEach(() => {
   resolvePrevouts.mockClear();
   resolveResult = { resolved: 0 };
   resolveDeferred = null;
+  resolveShouldReject = false;
   lastOnProgress = undefined;
 });
 
@@ -258,6 +263,26 @@ describe("BalanceOverview per-wallet Resolve", () => {
     await waitFor(() => expect(toastCalls.length).toBeGreaterThan(0));
     expect(toastCalls[0].title).toBe("Nothing to resolve");
     expect(toastCalls[0].variant).toBe("destructive");
+  });
+
+  it("toasts 'Resolve failed' (destructive) and clears the resolving state when resolvePrevouts rejects", async () => {
+    resolveShouldReject = true;
+    await expandGroupAndShowResolve();
+
+    fireEvent.click(screen.getByTestId(`button-resolve-${GROUP_NAME}`));
+
+    await waitFor(() => expect(toastCalls.length).toBeGreaterThan(0));
+    expect(toastCalls[0].title).toBe("Resolve failed");
+    expect(toastCalls[0].variant).toBe("destructive");
+
+    // The finally block must clear the resolving state so the button leaves its
+    // "Resolving…" spinner and returns to the actionable "Resolve" label.
+    await waitFor(() => {
+      const btn = screen.getByTestId(`button-resolve-${GROUP_NAME}`);
+      expect(btn.textContent).toContain("Resolve");
+      expect(btn.textContent).not.toContain("Resolving…");
+      expect((btn as HTMLButtonElement).disabled).toBe(false);
+    });
   });
 
   it("updates the in-button progress label from the onProgress callback while resolving", async () => {
