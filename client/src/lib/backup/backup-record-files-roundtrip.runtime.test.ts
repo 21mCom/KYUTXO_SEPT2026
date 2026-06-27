@@ -348,14 +348,20 @@ describe("v3 UNENCRYPTED backup full pipeline: record/transaction attachment fil
   // can fail for real-world reasons (disk full, permission denied, a path the
   // backend rejects). When that happens, restore MUST surface the failure —
   // never finish as if every file landed — because the inline DB tables
-  // (records + attachments) are already restored and now hold a link pointing at
-  // a file that was never written. A swallowed write error leaves the user with a
-  // record whose attachment looks present in the list but cannot be opened. This
-  // mirrors the evidence per-file failure guard in
+  // (records + attachments) are already restored, so a swallowed write error
+  // would leave the user with a record whose attachment looks present but cannot
+  // be opened. This mirrors the evidence per-file failure guard in
   // `backup-evidence-files-roundtrip.runtime.test.ts`, but for the general
-  // `db.attachments` (record/transaction) attachments. It asserts
-  // `restoreV3Backup` propagates the per-file failure and that the affected
-  // record attachment is genuinely unreadable afterwards.
+  // `db.attachments` (record/transaction) attachments.
+  //
+  // `restoreV3Backup` now FAILS CLOSED on any post-clear failure: it resets the
+  // vault to a known-empty state and rejects with a distinct hard error
+  // (RestoreInterruptedError) that carries the underlying write failure as its
+  // `cause`, rather than re-throwing the raw error or finishing as if every file
+  // landed. So this test asserts (a) the restore REJECTS, (b) the per-file write
+  // failure is genuinely propagated up the error's cause chain (not swallowed),
+  // and (c) the affected attachment is genuinely unreadable afterwards via its
+  // `objectStoragePath` (its bytes were never written to disk).
   it("propagates a per-file record attachment write failure instead of silently skipping it", async () => {
     // 1. Seed records + attachments (files written to disk) so a real export
     //    walks them, each with distinct, inputString-identifiable bytes.
@@ -365,6 +371,21 @@ describe("v3 UNENCRYPTED backup full pipeline: record/transaction attachment fil
       { type: "address", inputString: "bc1qaddresstwo", filename: "photo.txt", bytes: "PHOTO-BYTES-ADDR-TWO" },
     ];
     await seedRecordsWithAttachments(plan);
+
+    // Capture the failing record's attachment storage path BEFORE the wipe. The
+    // backup preserves objectStoragePath, so restore writes the failing file to
+    // this exact path — letting us prove afterwards that its bytes never landed.
+    const failingInput = "txid-aaaa-1111";
+    const failingBytes = "TXPROOF-BYTES-TX-AAAA";
+    const seededRecords = await recordCrud.getAllRecords();
+    const failingSeedRecord = seededRecords.find((r) => r.inputString === failingInput);
+    expect(failingSeedRecord).toBeTruthy();
+    const seededAttachments = await attachmentsCrud.getAllAttachments();
+    const failingSeedAttachment = seededAttachments.find(
+      (a) => a.recordId === failingSeedRecord!.id,
+    );
+    expect(failingSeedAttachment).toBeTruthy();
+    const failingStoragePath = failingSeedAttachment!.objectStoragePath;
 
     // 2. Export a real, full v3 UNENCRYPTED backup to a Blob.
     const sink = new MemorySink();
@@ -384,8 +405,6 @@ describe("v3 UNENCRYPTED backup full pipeline: record/transaction attachment fil
     // 4. Restore with a writer that fails on exactly ONE record's attachment file
     //    (the transaction proof), identified by its distinct bytes, and otherwise
     //    writes for real.
-    const failingInput = "txid-aaaa-1111";
-    const failingBytes = "TXPROOF-BYTES-TX-AAAA";
     const writeError = "simulated disk-full: attachment write rejected";
     let attemptedFailingWrite = false;
     const flakyWriter = {
@@ -400,26 +419,33 @@ describe("v3 UNENCRYPTED backup full pipeline: record/transaction attachment fil
     };
 
     // 5. The restore must REJECT — the write failure is propagated, not swallowed.
-    await expect(
-      restoreV3Backup({ source: blobChunks(blob), attachmentWriter: flakyWriter }),
-    ).rejects.toThrow(writeError);
+    let caught: unknown;
+    try {
+      await restoreV3Backup({ source: blobChunks(blob), attachmentWriter: flakyWriter });
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeTruthy();
     expect(attemptedFailingWrite).toBe(true);
 
-    // 6. The inline DB tables were already restored before the file write phase,
-    //    so the transaction record + its attachment link now exist — but the file
-    //    they point at was never written. Confirm the failing document is
-    //    genuinely unreadable (it does NOT open), proving the failure was not
-    //    misreported as a successful restore.
-    const allRecords = await recordCrud.getAllRecords();
-    const failingRecord = allRecords.find((r) => r.inputString === failingInput);
-    expect(failingRecord).toBeTruthy();
-    const allAttachments = await attachmentsCrud.getAllAttachments();
-    const failingAttachment = allAttachments.find(
-      (a) => a.recordId === failingRecord!.id,
-    );
-    expect(failingAttachment).toBeTruthy();
+    // The per-file failure must genuinely propagate: walk the error's cause chain
+    // and confirm the original write error message is present somewhere in it. A
+    // swallowed error would leave the chain free of this message (or not reject
+    // at all).
+    const messages: string[] = [];
+    let cursor: unknown = caught;
+    while (cursor instanceof Error) {
+      messages.push(cursor.message);
+      cursor = (cursor as { cause?: unknown }).cause;
+    }
+    expect(messages.some((m) => m.includes(writeError))).toBe(true);
+
+    // 6. Confirm the affected attachment is genuinely unreadable afterwards: its
+    //    bytes were never written to disk, so opening it via its (preserved)
+    //    objectStoragePath must fail. This proves the failure was not misreported
+    //    as a successful restore that silently dropped the file.
     await expect(
-      fetchBytesViaPath(failingAttachment!.objectStoragePath, failingAttachment!.mimeType),
+      fetchBytesViaPath(failingStoragePath, "text/plain"),
     ).rejects.toThrow();
   });
 });
