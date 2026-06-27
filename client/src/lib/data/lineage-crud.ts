@@ -209,3 +209,11 @@ export async function countUtxoLineage(): Promise<number> {
 export async function countCustodySegments(): Promise<number> {
   return db.custodySegments.count();
 }
+
+export async function getAllLineageSnapshots(): Promise<LineageSnapshot[]> {
+  return db.lineageSnapshots.toArray();
+}
+
+export async function countLineageSnapshots(): Promise<number> {
+  return db.lineageSnapshots.count();
+}
