@@ -1,22 +1,22 @@
 // @vitest-environment jsdom
 //
-// CHARACTERIZATION test pinning the CURRENT behaviour of a legacy (pre-v3) MERGE
-// restore when a backup's transaction collides by `txid` with one already in the
-// vault, but the backup carries RICHER participant data than the live row.
+// Behaviour test for a legacy (pre-v3) MERGE restore when a backup's transaction
+// collides by `txid` with one already in the vault, but the backup carries
+// RICHER participant data than the live row.
 //
 // `restoreLegacyTransactions` (legacy-restore.ts) de-dups transactions by `txid`
-// and only adds participants for transactions ACTUALLY inserted (it filters the
-// incoming participants to `restoredTxids`). A colliding txid is therefore
-// skipped wholesale — and with it, EVERY participant the backup held for that
-// txid is dropped, even when those participants contain detail the live row is
-// missing (resolved prevout addresses, amounts, or recordId links).
+// (a colliding txid keeps the live transaction row as-is), but in merge mode it
+// MERGES IN any participants the backup holds for that txid that the live row is
+// missing — resolved input prevouts, addresses, amounts, or recordId links —
+// keyed by a stable `txid+role+address+vout` key so existing live participants
+// are never duplicated. Backup participant recordIds are remapped through
+// `recordIdMap` so they link to the restored (existing) record.
 //
-// This test documents that gap on purpose: it seeds a pre-existing transaction
-// with only PARTIAL participants, then merge-restores a backup whose same-txid
-// transaction carries ADDITIONAL/richer participants, and asserts that the extra
-// backup participants are SILENTLY DROPPED (the live participants stay exactly as
-// seeded). Pinning this makes any future move to "merge in the missing
-// participants" a deliberate, tested change rather than a silent regression.
+// This test seeds a pre-existing transaction with only PARTIAL participants, then
+// merge-restores a backup whose same-txid transaction carries ADDITIONAL/richer
+// participants, and asserts that the missing backup participants are merged in
+// (the seeded live participant is kept, the new input prevout is added, and the
+// already-present output is NOT duplicated).
 
 import "fake-indexeddb/auto";
 
@@ -49,8 +49,8 @@ beforeEach(async () => {
   await clearEverything();
 });
 
-describe("legacy restore (MERGE mode): richer backup participants for a colliding txid are dropped", () => {
-  it("a backup's ADDITIONAL participants for an already-present txid are silently dropped; the live row keeps only its seeded participants", async () => {
+describe("legacy restore (MERGE mode): richer backup participants for a colliding txid are merged in", () => {
+  it("a backup's ADDITIONAL participants for an already-present txid are merged in; the live row keeps its seeded participant and is not duplicated", async () => {
     // 1. Seed the record the backup's richer participants would link to, so a
     //    "merge in missing participants" implementation would have a valid live
     //    record to remap onto. Filler records first advance the key generator so
@@ -127,22 +127,31 @@ describe("legacy restore (MERGE mode): richer backup participants for a collidin
       recordIdMap,
     );
 
-    // 5. The colliding transaction is skipped, so NO participants are added —
-    //    including the backup's richer input prevout and the recordId-linked
-    //    output. This is the documented gap.
+    // 5. The colliding transaction row itself is NOT re-inserted, but the
+    //    backup's MISSING participant (the input prevout) IS merged in. The
+    //    backup's output collides with the seeded one (same txid+role+address+
+    //    vout) and is therefore NOT duplicated — so exactly ONE participant is
+    //    added.
     expect(transactionsAdded).toBe(0);
-    expect(participantsAdded).toBe(0);
+    expect(participantsAdded).toBe(1);
 
-    // 6. The live transaction keeps EXACTLY its single seeded participant. The
-    //    backup's extra input prevout and recordId links were dropped.
+    // 6. The live transaction now holds BOTH the seeded output and the merged-in
+    //    input prevout. The seeded output is kept (not duplicated), and the new
+    //    input carries its resolved address/amount plus a recordId remapped to
+    //    the existing live record.
     const allParticipants = await getAllTransactionParticipants();
-    expect(allParticipants).toHaveLength(1);
-    expect(allParticipants[0].role).toBe("output");
-    expect(allParticipants[0].address).toBe("bc1qshared-output");
-    // No input prevout was merged in.
-    expect(allParticipants.some((p) => p.role === "input")).toBe(false);
-    // The surviving output never gained the backup's recordId link.
-    expect(allParticipants[0].recordId).toBeFalsy();
+    expect(allParticipants).toHaveLength(2);
+
+    const outputs = allParticipants.filter((p) => p.role === "output");
+    expect(outputs).toHaveLength(1);
+    expect(outputs[0].address).toBe("bc1qshared-output");
+
+    const inputs = allParticipants.filter((p) => p.role === "input");
+    expect(inputs).toHaveLength(1);
+    expect(inputs[0].address).toBe("bc1qresolved-prevout");
+    expect(inputs[0].amount).toBe(5500);
+    // The backup participant's recordId (1) was remapped to the live record id.
+    expect(inputs[0].recordId).toBe(richAddressLiveId);
 
     // 7. The seeded transaction row itself is untouched (backup's later syncedAt
     //    did not overwrite it).

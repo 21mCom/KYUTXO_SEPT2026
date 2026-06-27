@@ -33,6 +33,7 @@ import {
   bulkAddTransactions,
   bulkAddParticipants,
   getTransactionsByTxids,
+  getParticipantsByTxids,
   type CreateTransactionData,
 } from "@/lib/data/transaction-crud";
 import {
@@ -223,12 +224,33 @@ export async function restoreLegacyAttachments(
 }
 
 /**
+ * Build a stable de-dup key for a participant so the same logical input/output
+ * is never stored twice for a transaction. Keyed by `txid+role+address+vout`
+ * (vout uniquely identifies an output; for inputs it is normally undefined, so
+ * address+role disambiguate). The id is deliberately excluded — backup and live
+ * rows for the same participant carry different autoincrement ids.
+ */
+function participantKey(p: {
+  txid?: string;
+  role?: string;
+  address?: string;
+  vout?: number | null;
+}): string {
+  return `${p.txid ?? ""}|${p.role ?? ""}|${p.address ?? ""}|${p.vout ?? ""}`;
+}
+
+/**
  * Restore confirmed blockchain transactions and their input/output
  * participants. Transactions are de-duped by `txid` (existing rows in merge
- * mode, and within the incoming set in both modes). Participants are only added
- * for transactions actually inserted — so merge mode never duplicates
- * participants for transactions that already existed — and their `recordId` is
- * remapped through `recordIdMap`.
+ * mode, and within the incoming set in both modes).
+ *
+ * Participants are added for transactions actually inserted AND — in merge mode
+ * — merged into transactions that already existed (collided by `txid`): a backup
+ * may carry richer participant data the live row lacks (resolved input prevouts,
+ * addresses, amounts, or `recordId` links). For each collided txid, backup
+ * participants whose stable key (`txid+role+address+vout`) is not already present
+ * on the live row are added; existing live participants are never duplicated. All
+ * participants' `recordId` is remapped through `recordIdMap`.
  */
 export async function restoreLegacyTransactions(
   blockchainTransactions: any[] | undefined,
@@ -240,6 +262,9 @@ export async function restoreLegacyTransactions(
   let participantsAdded = 0;
 
   const restoredTxids = new Set<string>();
+  // Txids present in the backup that already exist in the vault (merge mode).
+  // Their transaction row is kept as-is, but their participants are merged in.
+  const collidedTxids = new Set<string>();
   if (blockchainTransactions && blockchainTransactions.length > 0) {
     const existingTxids = new Set<string>();
     if (restoreMode === "merge") {
@@ -255,7 +280,12 @@ export async function restoreLegacyTransactions(
 
     const txToAdd: CreateTransactionData[] = [];
     for (const tx of blockchainTransactions) {
-      if (!tx.txid || existingTxids.has(tx.txid) || restoredTxids.has(tx.txid)) continue;
+      if (!tx.txid) continue;
+      if (existingTxids.has(tx.txid)) {
+        collidedTxids.add(tx.txid);
+        continue;
+      }
+      if (restoredTxids.has(tx.txid)) continue;
       const { id, ...txData } = tx;
       txToAdd.push(txData as CreateTransactionData);
       restoredTxids.add(tx.txid);
@@ -264,17 +294,42 @@ export async function restoreLegacyTransactions(
     transactionsAdded = txToAdd.length;
   }
 
-  if (
-    transactionParticipants &&
-    transactionParticipants.length > 0 &&
-    restoredTxids.size > 0
-  ) {
-    const participantsToAdd = transactionParticipants
-      .filter((p: any) => p.txid && restoredTxids.has(p.txid))
-      .map((p: any) => {
-        const { id, ...pData } = p;
-        return { ...pData, recordId: remapRecordId(recordIdMap, pData.recordId) };
+  if (transactionParticipants && transactionParticipants.length > 0) {
+    // Pre-existing live participants for collided txids, so we can skip backup
+    // participants that already exist and only merge in the genuinely missing
+    // ones. Loaded once, in batches, keyed by the stable participant key.
+    const existingParticipantKeys = new Set<string>();
+    if (collidedTxids.size > 0) {
+      const collidedArr = Array.from(collidedTxids);
+      const PARTICIPANT_BATCH = 500;
+      for (let i = 0; i < collidedArr.length; i += PARTICIPANT_BATCH) {
+        const live = await getParticipantsByTxids(collidedArr.slice(i, i + PARTICIPANT_BATCH));
+        for (const lp of live) existingParticipantKeys.add(participantKey(lp));
+      }
+    }
+
+    // Track keys added during this restore so the incoming set never duplicates
+    // itself (covers both freshly inserted and merged-into transactions).
+    const addedKeys = new Set<string>();
+    const participantsToAdd = [];
+    for (const p of transactionParticipants) {
+      if (!p.txid) continue;
+      const isNew = restoredTxids.has(p.txid);
+      const isCollision = collidedTxids.has(p.txid);
+      if (!isNew && !isCollision) continue;
+
+      const key = participantKey(p);
+      // For collided txids, never re-add a participant the live row already has.
+      if (isCollision && existingParticipantKeys.has(key)) continue;
+      if (addedKeys.has(key)) continue;
+      addedKeys.add(key);
+
+      const { id, ...pData } = p;
+      participantsToAdd.push({
+        ...pData,
+        recordId: remapRecordId(recordIdMap, pData.recordId),
       });
+    }
     await bulkAddParticipants(participantsToAdd, { skipNotification: true });
     participantsAdded = participantsToAdd.length;
   }

@@ -270,6 +270,13 @@ export async function getParticipantsByRecordIds(
   return db.transactionParticipants.where('recordId').anyOf(recordIds).toArray();
 }
 
+export async function getParticipantsByTxids(
+  txids: string[]
+): Promise<TransactionParticipant[]> {
+  if (txids.length === 0) return [];
+  return db.transactionParticipants.where('txid').anyOf(txids).toArray();
+}
+
 /**
  * Count transactionParticipants that have no address (blank, null, or
  * undefined). These rows are created by blockchain sync when it encounters
