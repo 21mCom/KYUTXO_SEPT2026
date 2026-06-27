@@ -12,7 +12,7 @@
 // This suite pins the pure data-layer contract: the record-crud query path is
 // mocked so we can count and shape exactly what each batch fetches, and assert
 // the cache + subscriber behaviour deterministically.
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { Record as DbRecord } from "./database";
 
 // metadata-hover imports both query helpers at module load. We replace them so
@@ -199,6 +199,55 @@ describe("batchPreloadIdentifiers - oversize eviction", () => {
     // The most-recently inserted entries survive; the earliest are swept out.
     expect(getCachedRecord(ids[total - 1])?.inputString).toBe(ids[total - 1]);
     expect(getCachedRecord(ids[0])).toBeUndefined();
+  });
+});
+
+describe("getCachedRecord - TTL expiry", () => {
+  const CACHE_TTL_MS = 5 * 60 * 1000;
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("drops an entry once it is older than the TTL so the next read re-queries", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+
+    const id = "addr-ttl-expire";
+    getRecordsByInputString.mockResolvedValue([makeRecord(id)]);
+
+    // Warm the cache via the single-id resolve path (one query).
+    await resolveIdentifier(id);
+    expect(getRecordsByInputString).toHaveBeenCalledTimes(1);
+    expect(getCachedRecord(id)?.inputString).toBe(id);
+
+    // Advance the clock just past the TTL window: the entry must be evicted.
+    vi.setSystemTime(CACHE_TTL_MS + 1);
+    expect(getCachedRecord(id)).toBeUndefined();
+
+    // A subsequent resolve must re-query the DB rather than serve the stale entry.
+    await resolveIdentifier(id);
+    expect(getRecordsByInputString).toHaveBeenCalledTimes(2);
+    expect(getCachedRecord(id)?.inputString).toBe(id);
+  });
+
+  it("still serves a within-TTL entry without re-querying", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+
+    const id = "addr-ttl-fresh";
+    getRecordsByInputString.mockResolvedValue([makeRecord(id)]);
+
+    await resolveIdentifier(id);
+    expect(getRecordsByInputString).toHaveBeenCalledTimes(1);
+
+    // Advance the clock but stay inside the TTL window.
+    vi.setSystemTime(CACHE_TTL_MS - 1);
+    expect(getCachedRecord(id)?.inputString).toBe(id);
+
+    // resolveIdentifier serves the cached value; no second query is issued.
+    await resolveIdentifier(id);
+    expect(getRecordsByInputString).toHaveBeenCalledTimes(1);
   });
 });
 
