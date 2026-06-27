@@ -142,9 +142,19 @@ vi.mock("@/lib/data/transaction-crud", () => ({
 // exercise the connectivity vs. internal-error messaging.
 let resolveShouldReject: boolean;
 let resolveRejectError: unknown;
+// When set, resolvePrevouts returns this still-pending promise instead of
+// resolving immediately, letting a test hold the global pass open across a
+// Stop click and then settle it with cancelled: true.
+let resolveHeld: {
+  promise: Promise<unknown>;
+  settle: (value: unknown) => void;
+} | null;
 const resolvePrevouts = vi.fn(() => {
   if (resolveShouldReject) {
     return Promise.reject(resolveRejectError ?? new Error("node unreachable"));
+  }
+  if (resolveHeld) {
+    return resolveHeld.promise;
   }
   return Promise.resolve({
     resolved: 0,
@@ -157,6 +167,19 @@ const resolvePrevouts = vi.fn(() => {
 vi.mock("@/lib/transaction-sync", () => ({
   transactionSyncService: { resolvePrevouts },
 }));
+
+function makeHeldResolve() {
+  let settle: (value: unknown) => void = () => {};
+  const promise = new Promise<unknown>((res) => {
+    settle = res;
+  });
+  resolveHeld = { promise, settle };
+  return resolveHeld;
+}
+
+// Pull the mocked unresolved-count helper so the cancel test can change the
+// value the banner refreshes to once the stopped pass completes.
+const { countUnresolvedPrevoutInputs } = await import("@/lib/data/transaction-crud");
 
 const BalanceOverview = (await import("./BalanceOverview")).default;
 
@@ -172,6 +195,12 @@ beforeEach(() => {
   resolvePrevouts.mockClear();
   resolveShouldReject = false;
   resolveRejectError = undefined;
+  resolveHeld = null;
+  // Restore the default unresolved count; the cancel test overrides it after
+  // mount to assert the banner refreshes to the new value.
+  (countUnresolvedPrevoutInputs as ReturnType<typeof vi.fn>).mockResolvedValue(
+    UNRESOLVED_COUNT,
+  );
 });
 
 afterEach(() => {
@@ -236,5 +265,80 @@ describe("BalanceOverview global Resolve & Recompute", () => {
     expect(toastCalls[0].variant).toBe("destructive");
     expect(toastCalls[0].description).toContain("internal error");
     expect(toastCalls[0].description).not.toContain("Bitcoin node");
+  });
+
+  it("toasts 'Resolve stopped', keeps the spends already resolved, refreshes the unresolved count, and clears the resolving state when the user cancels mid-flight", async () => {
+    // Hold the global pass open so we can click Stop while it is still running.
+    const held = makeHeldResolve();
+    await renderAndShowGlobalResolve();
+
+    // The banner starts by reporting the original unresolved count.
+    expect(screen.getByTestId("banner-spend-warning").textContent).toContain(
+      `${UNRESOLVED_COUNT} spends`,
+    );
+
+    fireEvent.click(screen.getByTestId("button-fix-prevouts"));
+
+    // Starting the pass swaps the button for the in-flight "Stop" control and
+    // passes an abort signal the cancel handler can trip.
+    const stopButton = await screen.findByTestId("button-cancel-fix-prevouts");
+    const [, options] = resolvePrevouts.mock.calls[0] as unknown as [unknown, any];
+    expect(options.signal).toBeInstanceOf(AbortSignal);
+    expect(options.signal.aborted).toBe(false);
+
+    // Click Stop: this aborts the in-progress resolve. The button reflects the
+    // stopping state and the underlying signal is now aborted.
+    fireEvent.click(stopButton);
+    expect(options.signal.aborted).toBe(true);
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("button-cancel-fix-prevouts").textContent,
+      ).toContain("Stopping…"),
+    );
+
+    // The stopped pass refreshes the unresolved count to a new, lower value:
+    // spends resolved before the abort are kept, so fewer remain pending.
+    const REMAINING_AFTER_CANCEL = 3;
+    (countUnresolvedPrevoutInputs as ReturnType<typeof vi.fn>).mockResolvedValue(
+      REMAINING_AFTER_CANCEL,
+    );
+
+    // Settle the held resolve as cancelled, reporting the spends resolved before
+    // the user stopped (these are kept — no rollback).
+    held.settle({
+      resolved: 2,
+      fetchedFromNode: 2,
+      errors: 0,
+      resolvedAddresses: [],
+      cancelled: true,
+    });
+
+    // The cancellation path surfaces a non-destructive "Resolve stopped" toast
+    // that names the spends kept and the refreshed remaining count.
+    await waitFor(() => expect(toastCalls.length).toBeGreaterThan(0));
+    expect(toastCalls[0].title).toBe("Resolve stopped");
+    expect(toastCalls[0].variant).toBeUndefined();
+    expect(toastCalls[0].description).toContain("resolving 2 spends");
+    expect(toastCalls[0].description).toContain(
+      `${REMAINING_AFTER_CANCEL} still pending`,
+    );
+
+    // The finally block clears the resolving state: the banner button returns to
+    // the actionable "Resolve & Recompute" label (re-enabled) and the Stop
+    // button is gone.
+    await waitFor(() => {
+      const btn = screen.getByTestId("button-fix-prevouts");
+      expect(btn.textContent).toContain("Resolve & Recompute");
+      expect(btn.textContent).not.toContain("Resolving…");
+      expect(btn.textContent).not.toContain("Stopping…");
+      expect((btn as HTMLButtonElement).disabled).toBe(false);
+    });
+    expect(screen.queryByTestId("button-cancel-fix-prevouts")).toBeNull();
+
+    // The banner now reports the refreshed (lower) unresolved count, proving the
+    // post-cancel count refresh propagated to the UI.
+    expect(screen.getByTestId("banner-spend-warning").textContent).toContain(
+      `${REMAINING_AFTER_CANCEL} spends`,
+    );
   });
 });
