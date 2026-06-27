@@ -2,6 +2,7 @@ import { type Record as DbRecord } from './database';
 import { getRecordsByInputString } from './data/record-crud';
 
 export interface HoverTooltipPrefs {
+  showLabel: boolean;
   showWalletName: boolean;
   showOwner: boolean;
   showCategory: boolean;
@@ -14,6 +15,7 @@ export interface HoverTooltipPrefs {
 }
 
 export const DEFAULT_HOVER_TOOLTIP_PREFS: HoverTooltipPrefs = {
+  showLabel: true,
   showWalletName: true,
   showOwner: true,
   showCategory: true,
@@ -32,6 +34,17 @@ export function isSystemTag(tag: string): boolean {
 export interface HoverMetadataField {
   label: string;
   value: string;
+}
+
+export function getHoverLabel(
+  record: DbRecord,
+  prefs: Partial<HoverTooltipPrefs> = {}
+): string | null {
+  const p: HoverTooltipPrefs = { ...DEFAULT_HOVER_TOOLTIP_PREFS, ...prefs };
+  if (p.showLabel && record.label && record.label !== 'Unlabeled') {
+    return record.label;
+  }
+  return null;
 }
 
 export function getHoverMetadataFields(
@@ -90,7 +103,10 @@ export function hasHoverMetadata(
   record: DbRecord,
   prefs: Partial<HoverTooltipPrefs> = {}
 ): boolean {
-  return getHoverMetadataFields(record, prefs).length > 0;
+  return (
+    getHoverLabel(record, prefs) !== null ||
+    getHoverMetadataFields(record, prefs).length > 0
+  );
 }
 
 const IMPORTANCE_PRIORITY: Record<string, number> = {

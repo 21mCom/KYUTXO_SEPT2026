@@ -9,6 +9,7 @@ import {
   resolveIdentifier,
   getCachedRecord,
   getHoverMetadataFields,
+  getHoverLabel,
   hasHoverMetadata,
   type HoverMetadataField,
 } from "@/lib/metadata-hover";
@@ -28,15 +29,22 @@ interface AddressLinkProps {
 
 function MetadataTooltipBody({
   identifier,
+  hoverLabel,
   fields,
   isLoading,
 }: {
   identifier: string;
+  hoverLabel: string | null;
   fields: HoverMetadataField[];
   isLoading: boolean;
 }) {
   return (
     <div className="space-y-1 max-w-[280px]">
+      {hoverLabel && (
+        <p className="text-xs font-medium break-words" data-testid="text-hover-label">
+          {hoverLabel}
+        </p>
+      )}
       <p className="font-mono text-xs break-all text-muted-foreground">{identifier}</p>
       {isLoading ? (
         <p className="text-xs text-muted-foreground italic">Loading\u2026</p>
@@ -51,7 +59,9 @@ function MetadataTooltipBody({
           <p className="text-xs text-muted-foreground pt-0.5">Click to view / edit</p>
         </div>
       ) : (
-        <p className="text-xs text-muted-foreground">Click to view / add metadata</p>
+        <p className="text-xs text-muted-foreground">
+          {hoverLabel ? "Click to view / edit" : "Click to view / add metadata"}
+        </p>
       )}
     </div>
   );
@@ -86,6 +96,11 @@ export function AddressLink({
     tooltipRecord != null
       ? getHoverMetadataFields(tooltipRecord, hoverTooltipPrefs)
       : [];
+
+  const hoverLabel =
+    tooltipRecord != null
+      ? getHoverLabel(tooltipRecord, hoverTooltipPrefs)
+      : null;
 
   const recordHasMeta =
     tooltipRecord != null
@@ -188,6 +203,7 @@ export function AddressLink({
         <TooltipContent side="top">
           <MetadataTooltipBody
             identifier={address}
+            hoverLabel={hoverLabel}
             fields={computedFields}
             isLoading={isResolving}
           />

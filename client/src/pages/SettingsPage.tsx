@@ -3464,6 +3464,7 @@ export default function SettingsPage() {
           <CardContent className="space-y-3">
             {(
               [
+                { key: "showLabel", label: "Label" },
                 { key: "showWalletName", label: "Wallet Name" },
                 { key: "showOwner", label: "Owner" },
                 { key: "showSeedName", label: "Seed Name" },
