@@ -171,7 +171,22 @@ describe("SettingsPage — Privacy Audit History retention guard", () => {
   it("cancelling the dialog leaves the limit unchanged and deletes nothing", async () => {
     await seedRuns(60);
 
+    // The exact set of timestamps we seeded — after a cancel these must all
+    // still be present, untouched. (No silent partial deletion.)
+    const base = 1_700_000_000_000;
+    const seededTimestamps = Array.from(
+      { length: 60 },
+      (_, i) => base + i * 60_000,
+    );
+
     renderWithSettingsProviders(<SettingsPage />);
+
+    const select = (await screen.findByTestId(
+      "select-privacy-history-limit",
+    )) as HTMLSelectElement;
+    // The limit before any change (default 30, since none is persisted).
+    const priorLimit = select.value;
+    expect(priorLimit).toBe("30");
 
     await lowerLimitTo("10");
     fireEvent.click(await screen.findByTestId("button-cancel-history-trim"));
@@ -185,6 +200,19 @@ describe("SettingsPage — Privacy Audit History retention guard", () => {
     expect(await getPrivacyAuditHistoryCount()).toBe(60);
     expect((await getSettings("default"))?.privacyHistoryLimit).toBeUndefined();
     expect(toastSpy).not.toHaveBeenCalled();
+
+    // The surviving runs are EXACTLY the original seeded set — every timestamp
+    // is still there, nothing was partially deleted.
+    const remaining = await getPrivacyAuditHistory();
+    const remainingTimestamps = remaining.map((r) => r.timestamp).sort((a, b) => a - b);
+    expect(remainingTimestamps).toEqual(seededTimestamps);
+
+    // The Select snaps back to the prior limit (not the rejected value of 10),
+    // so a misclick is fully reversible.
+    expect(
+      (screen.getByTestId("select-privacy-history-limit") as HTMLSelectElement)
+        .value,
+    ).toBe(priorLimit);
   });
 
   it("confirming trims the runs and shows the removal toast", async () => {
