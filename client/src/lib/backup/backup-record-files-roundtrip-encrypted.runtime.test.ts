@@ -68,6 +68,7 @@ let getFileBlob: typeof import("@/lib/attachments").getFileBlob;
 let exportBackup: typeof import("./export").exportBackup;
 let restoreV3Backup: typeof import("./restore").restoreV3Backup;
 let MemorySink: typeof import("./sink").MemorySink;
+let BackupCancelledError: typeof import("./sink").BackupCancelledError;
 let blobChunks: typeof import("./zip-stream").blobChunks;
 let recordCrud: typeof import("@/lib/data/record-crud");
 let attachmentsCrud: typeof import("@/lib/data/attachments-crud");
@@ -114,6 +115,7 @@ beforeAll(async () => {
   exportBackup = (await import("./export")).exportBackup;
   restoreV3Backup = (await import("./restore")).restoreV3Backup;
   MemorySink = (await import("./sink")).MemorySink;
+  BackupCancelledError = (await import("./sink")).BackupCancelledError;
   blobChunks = (await import("./zip-stream")).blobChunks;
   recordCrud = await import("@/lib/data/record-crud");
   attachmentsCrud = await import("@/lib/data/attachments-crud");
@@ -510,5 +512,106 @@ describe("v3 ENCRYPTED backup full pipeline: record/transaction attachment files
     await expect(
       fetchBytesViaPath(failingStoragePath, "text/plain"),
     ).rejects.toThrow();
+  });
+
+  // Companion to the per-file write-failure guard above: instead of a write
+  // FAILING for a real-world reason, the user CANCELS mid-restore (via the
+  // AbortSignal) AFTER the destructive clear has already run and WHILE attachment
+  // file bytes are being written back to disk. At that point the old vault is
+  // gone and the inline DB tables (records + attachments) are already restored
+  // from the decrypted manifest, so a naive cancel would leave the vault
+  // half-restored: records present, only SOME attachment files on disk. The
+  // contract (see restore.ts) is the same as the generic cancel-after-clear case:
+  // restore MUST reject with a BackupCancelledError carrying
+  // `clearedBeforeCancel === true` (or a RestoreInterruptedError if the cleanup
+  // reset itself fails) and reset the vault to a VERIFIED-EMPTY state — no stray
+  // records, no stray attachment rows, and any file this restore already wrote
+  // swept back off disk so nothing is left stranded. This proves a cancelled
+  // ENCRYPTED restore can't leave a half-written attachment behind.
+  it("resets the vault to verified-empty when cancelled after the clear during attachment writes (encrypted)", async () => {
+    // 1. Seed records + attachments (3 files so the write phase spans multiple
+    //    ZIP entries) and export a real encrypted backup.
+    const plan: Plan[] = [
+      { type: "address", inputString: "bc1qcancelone", filename: "one.txt", bytes: "CANCEL-BYTES-ONE" },
+      { type: "transaction", inputString: "txid-cancel-2", filename: "two.txt", bytes: "CANCEL-BYTES-TWO" },
+      { type: "address", inputString: "bc1qcancelthree", filename: "three.txt", bytes: "CANCEL-BYTES-THREE" },
+    ];
+    await seedRecordsWithAttachments(plan);
+
+    // Capture EVERY attachment's storage path BEFORE the wipe so we can prove
+    // afterwards that none of them are readable: the one file the restore wrote
+    // before the cancel must be swept, and the rest were never written.
+    const seededPaths = (await attachmentsCrud.getAllAttachments()).map(
+      (a) => a.objectStoragePath,
+    );
+    expect(seededPaths).toHaveLength(plan.length);
+
+    const sink = new MemorySink();
+    await exportBackup({
+      sink: sink as any,
+      encrypted: true,
+      password: PASSWORD,
+      batchSize: 50,
+      attachmentIO,
+    });
+    const blob = sink.blob as Blob;
+    expect(blob.size).toBeGreaterThan(0);
+
+    // 2. WIPE everything: DB tables AND on-disk files.
+    await clearDbVault();
+    await wipeDiskFiles();
+
+    // 3. Restore with the correct password, but a writer that writes the FIRST
+    //    file for real and then trips the AbortSignal. The cancel therefore
+    //    arrives AFTER the destructive clear (inline tables already restored) and
+    //    DURING the attachment write phase: the NEXT attachment entry's abort
+    //    check fires before its bytes land. The writer also implements delete()
+    //    so restore can sweep the one file it already wrote off disk.
+    const controller = new AbortController();
+    let wroteOne = false;
+    const sweepWriter = {
+      async write(relativePath: string, fileData: ArrayBuffer): Promise<void> {
+        await attachmentWriter.write(relativePath, fileData);
+        wroteOne = true;
+        if (!controller.signal.aborted) controller.abort();
+      },
+      async delete(relativePath: string): Promise<void> {
+        const res = await fetch(`/api/attachments/${relativePath}`, {
+          method: "DELETE",
+        });
+        if (!res.ok) throw new Error(`delete failed: ${res.status}`);
+      },
+    };
+
+    let caught: unknown;
+    try {
+      await restoreV3Backup({
+        source: blobChunks(blob),
+        password: PASSWORD,
+        attachmentWriter: sweepWriter,
+        signal: controller.signal,
+      });
+    } catch (e) {
+      caught = e;
+    }
+
+    // 4. The cancel must have arrived during the write phase (at least one file
+    //    was written before the abort), and the restore must REJECT as a cancel
+    //    that happened AFTER the destructive clear.
+    expect(wroteOne).toBe(true);
+    expect(caught).toBeInstanceOf(BackupCancelledError);
+    expect((caught as InstanceType<typeof BackupCancelledError>).clearedBeforeCancel).toBe(true);
+
+    // 5. The vault must be VERIFIED-EMPTY — neither the old vault nor a partial
+    //    restore. No stray records, no stray attachment rows.
+    expect(await recordCrud.getAllRecords()).toHaveLength(0);
+    expect(await attachmentsCrud.getAllAttachments()).toHaveLength(0);
+
+    // 6. No attachment file may be left stranded on disk: every original storage
+    //    path is unreadable. The single file written before the cancel was swept;
+    //    the rest were never written.
+    for (const p of seededPaths) {
+      await expect(fetchBytesViaPath(p, "text/plain")).rejects.toThrow();
+    }
   });
 });
