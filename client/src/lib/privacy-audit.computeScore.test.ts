@@ -116,3 +116,78 @@ describe("computeScore subsequent (stacking) penalties", () => {
     expect(entry!.delta).toBe(-14);
   });
 });
+
+// Builds a CoinJoin (privacy-positive) finding. Using CoinJoin is GOOD privacy
+// behaviour: such findings must surface in the waterfall for visibility but must
+// never subtract from the score. severity is intentionally set to a penalising
+// tier to prove the positive-type carve-out wins regardless of severity.
+function makeCoinJoinFinding(
+  type: Extract<
+    PrivacyFinding["type"],
+    "COINJOIN_WHIRLPOOL" | "COINJOIN_WASABI" | "COINJOIN_JOINMARKET"
+  >
+): PrivacyFinding {
+  return {
+    type,
+    severity: "HIGH",
+    description: `Synthetic ${type} privacy-positive finding`,
+    details: {},
+    correction: "n/a",
+    txids: [`tx-${type.toLowerCase()}`],
+    addresses: [`bc1q${type.toLowerCase()}0000000000000000000000000000aa`],
+  };
+}
+
+describe("computeScore privacy-positive (CoinJoin) findings", () => {
+  it("never penalises CoinJoin findings: delta 0 and unchanged overall score", () => {
+    const whirlpool = makeCoinJoinFinding("COINJOIN_WHIRLPOOL");
+    const wasabi = makeCoinJoinFinding("COINJOIN_WASABI");
+    const joinmarket = makeCoinJoinFinding("COINJOIN_JOINMARKET");
+
+    const { score, waterfall } = computeScore(
+      [whirlpool, wasabi, joinmarket],
+      []
+    );
+
+    // Score is untouched by privacy-positive findings.
+    expect(score).toBe(100);
+
+    // Each CoinJoin type appears in the waterfall with delta 0...
+    for (const positive of [whirlpool, wasabi, joinmarket]) {
+      const entry = waterfall.find((w) => w.findingType === positive.type);
+      expect(entry).toBeTruthy();
+      expect(entry!.count).toBe(1);
+      expect(entry!.delta).toBe(0);
+      // ...and the finding records a zero score delta.
+      expect(positive.scoreDelta).toBe(0);
+    }
+  });
+
+  it("scores penalised findings only, leaving CoinJoin findings at delta 0", () => {
+    // One penalised MEDIUM finding (-8) mixed with a privacy-positive CoinJoin.
+    const penalised = makeFindings("ROUND_AMOUNT", "MEDIUM", 1);
+    const coinjoin = makeCoinJoinFinding("COINJOIN_WHIRLPOOL");
+
+    const { score, waterfall } = computeScore([...penalised, coinjoin], []);
+
+    // The overall score reflects ONLY the penalised finding (-8), unaffected by
+    // the positive one. A regression that penalised CoinJoin would drop this
+    // below 92.
+    expect(score).toBe(92);
+
+    const penalisedEntry = waterfall.find(
+      (w) => w.findingType === "ROUND_AMOUNT"
+    );
+    expect(penalisedEntry).toBeTruthy();
+    expect(penalisedEntry!.delta).toBe(-8);
+    expect(penalised[0].scoreDelta).toBe(-8);
+
+    // The CoinJoin finding is still present in the waterfall and stays neutral.
+    const positiveEntry = waterfall.find(
+      (w) => w.findingType === "COINJOIN_WHIRLPOOL"
+    );
+    expect(positiveEntry).toBeTruthy();
+    expect(positiveEntry!.delta).toBe(0);
+    expect(coinjoin.scoreDelta).toBe(0);
+  });
+});
