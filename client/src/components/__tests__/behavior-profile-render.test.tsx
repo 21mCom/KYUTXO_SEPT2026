@@ -5,8 +5,8 @@
 // addresses (neutral "Not Synced" state).
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { render, cleanup } from "@testing-library/react";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { cleanup } from "@testing-library/react";
+import { renderWithProviders } from "@/test/testProviders";
 
 vi.mock("@/lib/dataFacade", () => ({
   getRecordOrigins: vi.fn(async () => []),
@@ -40,10 +40,8 @@ function baseRecord(overrides: Record<string, unknown> = {}) {
 }
 
 function renderPanel(record: ReturnType<typeof baseRecord>) {
-  return render(
-    <TooltipProvider>
-      <RecordDetailPanel open={true} onClose={() => {}} record={record} />
-    </TooltipProvider>,
+  return renderWithProviders(
+    <RecordDetailPanel open={true} onClose={() => {}} record={record} />,
   );
 }
 

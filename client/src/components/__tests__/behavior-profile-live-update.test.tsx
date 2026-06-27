@@ -8,7 +8,7 @@
 
 import { describe, it, expect, afterEach } from "vitest";
 import { render, cleanup } from "@testing-library/react";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { TestProviders } from "@/test/testProviders";
 
 import { RecordCard } from "@/components/RecordCard";
 import { BEHAVIOR_LABEL_DISPLAY } from "@/lib/behavior-profile";
@@ -19,9 +19,7 @@ afterEach(() => {
   cleanup();
 });
 
-const wrapper = ({ children }: { children: React.ReactNode }) => (
-  <TooltipProvider>{children}</TooltipProvider>
-);
+const wrapper = TestProviders;
 
 describe("RecordCard behavior badge live update", () => {
   it("changes from 'Not Synced' to 'Accumulator' after cached stats are written", () => {

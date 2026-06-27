@@ -20,7 +20,6 @@
 // button, data-testid button-deep-dive-<first8>).
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import {
-  render,
   screen,
   fireEvent,
   cleanup,
@@ -28,7 +27,7 @@ import {
   waitFor,
   act,
 } from "@testing-library/react";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { renderWithProviders } from "@/test/testProviders";
 import type { PrivacyFinding } from "@/lib/privacy-audit";
 
 vi.mock("@/components/TxidLink", () => ({
@@ -94,10 +93,8 @@ function proximityFinding(overrides: Partial<PrivacyFinding> = {}): PrivacyFindi
 }
 
 function renderCard(finding: PrivacyFinding) {
-  return render(
-    <TooltipProvider>
-      <FindingCard finding={finding} coinjoinTxids={new Set<string>()} />
-    </TooltipProvider>,
+  return renderWithProviders(
+    <FindingCard finding={finding} coinjoinTxids={new Set<string>()} />,
   );
 }
 

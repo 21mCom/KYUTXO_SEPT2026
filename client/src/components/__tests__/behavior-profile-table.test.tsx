@@ -5,8 +5,8 @@
 // scenario that occurs in Dashboard when stats columns are toggled off.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { render, cleanup } from "@testing-library/react";
-import { TestProviders } from "@/test/testProviders";
+import { cleanup } from "@testing-library/react";
+import { renderWithProviders } from "@/test/testProviders";
 
 vi.mock("@/lib/dataFacade", () => ({
   getRecordOrigins: vi.fn(async () => []),
@@ -60,16 +60,14 @@ function makeRecord(overrides: Record<string, unknown> = {}) {
 }
 
 function renderTable(record: ReturnType<typeof makeRecord>, extraProps: Record<string, unknown> = {}) {
-  return render(
-    <TestProviders>
-      <RecordTable
-        records={[record]}
-        onRecordClick={() => {}}
-        onRecordEdit={() => {}}
-        onRecordDelete={() => {}}
-        {...extraProps}
-      />
-    </TestProviders>,
+  return renderWithProviders(
+    <RecordTable
+      records={[record]}
+      onRecordClick={() => {}}
+      onRecordEdit={() => {}}
+      onRecordDelete={() => {}}
+      {...extraProps}
+    />,
   );
 }
 

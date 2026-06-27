@@ -8,8 +8,8 @@
 // NEVER fetched merely by rendering. Plain text (no URL) renders without a
 // link.
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { render, screen, fireEvent, cleanup, within } from "@testing-library/react";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { screen, fireEvent, cleanup, within } from "@testing-library/react";
+import { renderWithProviders } from "@/test/testProviders";
 import type { PrivacyFinding } from "@/lib/privacy-audit";
 import { FindingCard } from "./PrivacyAudit";
 
@@ -27,10 +27,8 @@ function baseFinding(overrides: Partial<PrivacyFinding> = {}): PrivacyFinding {
 }
 
 function renderCard(finding: PrivacyFinding) {
-  return render(
-    <TooltipProvider>
-      <FindingCard finding={finding} coinjoinTxids={new Set<string>()} />
-    </TooltipProvider>,
+  return renderWithProviders(
+    <FindingCard finding={finding} coinjoinTxids={new Set<string>()} />,
   );
 }
 

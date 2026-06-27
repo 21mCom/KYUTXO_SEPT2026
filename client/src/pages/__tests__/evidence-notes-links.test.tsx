@@ -10,14 +10,13 @@
 // preview dialog surface, both fed by the same shared util.
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
-  render,
   screen,
   fireEvent,
   cleanup,
   within,
   waitFor,
 } from "@testing-library/react";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { renderWithProviders } from "@/test/testProviders";
 
 // Reimplement Dexie's live query hook with a plain promise-resolving effect so
 // the page renders our fixture evidence without ever touching IndexedDB. This
@@ -99,11 +98,7 @@ function makeEvidence(overrides: Partial<EvidenceFixture> = {}): EvidenceFixture
 
 async function renderEvidence(list: EvidenceFixture[]) {
   getAllEvidenceMock.mockResolvedValue(list);
-  const utils = render(
-    <TooltipProvider>
-      <EvidencePage />
-    </TooltipProvider>,
-  );
+  const utils = renderWithProviders(<EvidencePage />);
   // Wait for the live query to resolve and the cards to render.
   await waitFor(() => {
     for (const ev of list) {

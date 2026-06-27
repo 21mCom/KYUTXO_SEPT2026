@@ -23,13 +23,12 @@ import {
   vi,
 } from "vitest";
 import {
-  render,
   screen,
   fireEvent,
   cleanup,
   waitFor,
 } from "@testing-library/react";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { renderWithProviders } from "@/test/testProviders";
 
 const { toastSpy } = vi.hoisted(() => ({ toastSpy: vi.fn() }));
 vi.mock("@/hooks/use-toast", () => ({
@@ -140,11 +139,7 @@ afterEach(() => {
 });
 
 async function renderWithStaleRows() {
-  const utils = render(
-    <TooltipProvider>
-      <BalanceIntegrityCard />
-    </TooltipProvider>,
-  );
+  const utils = renderWithProviders(<BalanceIntegrityCard />);
   fireEvent.click(screen.getByTestId("button-run-balance-check"));
   // Wait for the (stubbed) scan to stream rows in and the export buttons to show.
   await waitFor(() => screen.getByTestId("button-export-stale-csv"));

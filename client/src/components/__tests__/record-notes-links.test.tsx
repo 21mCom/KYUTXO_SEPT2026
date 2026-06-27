@@ -6,8 +6,8 @@
 // click (window.open) and is NEVER fetched at load time. Notes without a URL
 // must still render as plain text.
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { render, screen, fireEvent, cleanup, within } from "@testing-library/react";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { screen, fireEvent, cleanup, within } from "@testing-library/react";
+import { renderWithProviders } from "@/test/testProviders";
 
 // The detail panel's effects call into the data layer; stub it so rendering a
 // record never touches IndexedDB or the network. Each function resolves to an
@@ -39,10 +39,8 @@ function baseRecord(overrides: Partial<PanelRecord> = {}): PanelRecord {
 }
 
 function renderPanel(record: PanelRecord) {
-  return render(
-    <TooltipProvider>
-      <RecordDetailPanel open={true} onClose={() => {}} record={record} />
-    </TooltipProvider>,
+  return renderWithProviders(
+    <RecordDetailPanel open={true} onClose={() => {}} record={record} />,
   );
 }
 

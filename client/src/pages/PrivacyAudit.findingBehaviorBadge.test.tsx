@@ -17,8 +17,8 @@
 
 import { useEffect, useState } from "react";
 import { describe, it, expect, afterEach, vi } from "vitest";
-import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
+import { renderWithProviders } from "@/test/testProviders";
 import type { PrivacyFinding } from "@/lib/privacy-audit";
 
 // FindingCard maps addresses → behavior inside a useLiveQuery. Dexie's
@@ -101,10 +101,8 @@ function finding(overrides: Partial<PrivacyFinding> = {}): PrivacyFinding {
 }
 
 function renderCard(f: PrivacyFinding) {
-  return render(
-    <TooltipProvider>
-      <FindingCard finding={f} coinjoinTxids={new Set<string>()} />
-    </TooltipProvider>,
+  return renderWithProviders(
+    <FindingCard finding={f} coinjoinTxids={new Set<string>()} />,
   );
 }
 

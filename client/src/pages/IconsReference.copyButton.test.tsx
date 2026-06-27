@@ -1,19 +1,15 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, cleanup, act } from "@testing-library/react";
+import { screen, fireEvent, cleanup, act } from "@testing-library/react";
 
 const { toastMock } = vi.hoisted(() => ({ toastMock: vi.fn() }));
 vi.mock("@/hooks/use-toast", () => ({ useToast: () => ({ toast: toastMock }) }));
 
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { renderWithProviders } from "@/test/testProviders";
 import IconsReference from "./IconsReference";
 
 function renderPage() {
-  return render(
-    <TooltipProvider>
-      <IconsReference />
-    </TooltipProvider>,
-  );
+  return renderWithProviders(<IconsReference />);
 }
 
 // The first lucide icon in the reference grid. Card test ids are the

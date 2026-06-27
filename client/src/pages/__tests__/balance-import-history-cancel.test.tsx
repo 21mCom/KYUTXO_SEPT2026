@@ -26,13 +26,12 @@ import {
   vi,
 } from "vitest";
 import {
-  render,
   screen,
   fireEvent,
   cleanup,
   waitFor,
 } from "@testing-library/react";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { renderWithProviders } from "@/test/testProviders";
 import type { ApiTransaction } from "@/lib/blockchain-api";
 
 // ── Toast capture ────────────────────────────────────────────────────────────
@@ -201,11 +200,7 @@ afterEach(() => {
 });
 
 function renderBalanceOverview() {
-  return render(
-    <TooltipProvider>
-      <BalanceOverview />
-    </TooltipProvider>,
-  );
+  return renderWithProviders(<BalanceOverview />);
 }
 
 describe("BalanceOverview — cancelling an in-progress history import", () => {

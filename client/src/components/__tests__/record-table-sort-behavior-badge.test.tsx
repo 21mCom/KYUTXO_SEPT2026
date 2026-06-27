@@ -8,8 +8,8 @@
 // cached stats — not the label of whatever row previously sat in that position.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { render, cleanup, fireEvent } from "@testing-library/react";
-import { TestProviders } from "@/test/testProviders";
+import { cleanup, fireEvent } from "@testing-library/react";
+import { renderWithProviders } from "@/test/testProviders";
 
 vi.mock("@/lib/dataFacade", () => ({
   getRecordOrigins: vi.fn(async () => []),
@@ -108,11 +108,7 @@ const EXPECTED_LABEL: Record<string, string> = {
 };
 
 function renderTable() {
-  return render(
-    <TestProviders>
-      <RecordTable records={RECORDS} />
-    </TestProviders>,
-  );
+  return renderWithProviders(<RecordTable records={RECORDS} />);
 }
 
 function rowOrder(container: HTMLElement): string[] {
