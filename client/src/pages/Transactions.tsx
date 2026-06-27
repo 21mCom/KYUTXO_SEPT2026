@@ -55,6 +55,7 @@ import {
 } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { fetchParticipantsByTxids } from "@/lib/participant-repo";
+import { batchPreloadIdentifiers } from "@/lib/metadata-hover";
 import { AddressLink } from "@/components/AddressLink";
 import { TxidLink } from "@/components/TxidLink";
 import { searchPendingClass } from "@/lib/search-pending-class";
@@ -372,6 +373,20 @@ function VirtualizedTransactionList({
     const start = parseInt(startStr);
     const end = parseInt(endStr);
 
+    const txidsVisible: string[] = [];
+    for (let i = start; i <= end; i++) {
+      const tx = transactions[i];
+      if (tx) txidsVisible.push(tx.txid);
+    }
+    if (txidsVisible.length > 0) batchPreloadIdentifiers(txidsVisible);
+
+    const addressesVisible: string[] = [];
+    for (const txid of txidsVisible) {
+      const parts = participantCacheRef.current.get(txid) ?? [];
+      for (const p of parts) addressesVisible.push(p.address);
+    }
+    if (addressesVisible.length > 0) batchPreloadIdentifiers(addressesVisible);
+
     const cache = participantCacheRef.current;
     const pending = pendingLoadsRef.current;
     const txidsToLoad: string[] = [];
@@ -427,6 +442,8 @@ function VirtualizedTransactionList({
               stats.linkedAddresses.add(p.address);
             }
           }
+          const newAddresses = participants.map(p => p.address);
+          if (newAddresses.length > 0) batchPreloadIdentifiers(newAddresses);
           setCacheVersion(v => v + 1);
           onStatsChange?.({
             loadedVolume: stats.volume,

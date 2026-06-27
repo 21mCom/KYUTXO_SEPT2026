@@ -65,6 +65,7 @@ import { useToast } from "@/hooks/use-toast";
 import { searchPendingClass } from "@/lib/search-pending-class";
 import { buildRecordsCollection, buildIdentifierSearchCollection, looksLikeBitcoinIdentifier, fetchRecordsPage } from "@/lib/records-query";
 import { getActivityBus } from "@/lib/activity-bus";
+import { batchPreloadIdentifiers } from "@/lib/metadata-hover";
 
 interface ConvertedRecord {
   id: string;
@@ -724,6 +725,7 @@ export default function Records() {
                   .map(p => p.address),
               }));
               setTxidSearchResults(txResults);
+              batchPreloadIdentifiers(txids);
               
               const participantAddresses = new Set(participants.map(p => p.address));
               const relatedRawRecords = await getRecordsByInputStrings(Array.from(participantAddresses));

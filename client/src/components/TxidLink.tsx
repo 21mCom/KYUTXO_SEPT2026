@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import { Copy, Check, FileText, ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -8,6 +8,7 @@ import { useSettings } from "@/hooks/use-settings";
 import {
   resolveIdentifier,
   getCachedRecord,
+  subscribeCacheEntry,
   getHoverMetadataFields,
   getHoverLabel,
   hasHoverMetadata,
@@ -93,6 +94,22 @@ export function TxidLink({
   );
   const [isResolving, setIsResolving] = useState(false);
   const [tooltipOpen, setTooltipOpen] = useState(false);
+
+  useEffect(() => {
+    if (resolvedRef.current !== undefined) return;
+    const cached = getCachedRecord(txid);
+    if (cached !== undefined) {
+      resolvedRef.current = cached;
+      setTooltipRecord(cached);
+      return;
+    }
+    return subscribeCacheEntry(txid, (record) => {
+      if (resolvedRef.current === undefined) {
+        resolvedRef.current = record;
+        setTooltipRecord(record);
+      }
+    });
+  }, [txid]);
 
   const computedFields =
     tooltipRecord != null

@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import { Copy, Check, FileText } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -8,6 +8,7 @@ import { useSettings } from "@/hooks/use-settings";
 import {
   resolveIdentifier,
   getCachedRecord,
+  subscribeCacheEntry,
   getHoverMetadataFields,
   getHoverLabel,
   hasHoverMetadata,
@@ -91,6 +92,22 @@ export function AddressLink({
   );
   const [isResolving, setIsResolving] = useState(false);
   const [tooltipOpen, setTooltipOpen] = useState(false);
+
+  useEffect(() => {
+    if (resolvedRef.current !== undefined) return;
+    const cached = getCachedRecord(address);
+    if (cached !== undefined) {
+      resolvedRef.current = cached;
+      setTooltipRecord(cached);
+      return;
+    }
+    return subscribeCacheEntry(address, (record) => {
+      if (resolvedRef.current === undefined) {
+        resolvedRef.current = record;
+        setTooltipRecord(record);
+      }
+    });
+  }, [address]);
 
   const computedFields =
     tooltipRecord != null

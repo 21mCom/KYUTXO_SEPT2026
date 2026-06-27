@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import {
   Table,
   TableBody,
@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { MoreVertical, ArrowUp, ArrowDown, ArrowUpDown, Settings2, Paperclip, Key, RefreshCw } from "lucide-react";
 import { classifyBehavior, BEHAVIOR_LABEL_DISPLAY } from "@/lib/behavior-profile";
+import { batchPreloadIdentifiers } from "@/lib/metadata-hover";
 import { AddressLink } from "./AddressLink";
 import { TxidLink } from "./TxidLink";
 import { RecordTypeBadge } from "./RecordTypeBadge";
@@ -222,6 +223,18 @@ export function RecordTable({
   const addressStats = (precomputedAddressStats && precomputedAddressStats.size > 0)
     ? precomputedAddressStats
     : localAddressStats;
+
+  // Preload metadata cache for every visible record so the note indicator
+  // appears automatically without requiring a hover on each row.
+  const prevPreloadIdsRef = useRef<string>('');
+  useEffect(() => {
+    if (records.length === 0) return;
+    const ids = records.map(r => r.inputString).filter(Boolean);
+    const key = ids.join(',');
+    if (key === prevPreloadIdsRef.current) return;
+    prevPreloadIdsRef.current = key;
+    batchPreloadIdentifiers(ids);
+  }, [records]);
   const statsLoading = precomputedAddressStats ? (externalStatsLoading ?? false) : false;
 
   useEffect(() => {

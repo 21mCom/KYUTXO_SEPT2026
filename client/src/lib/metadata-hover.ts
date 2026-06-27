@@ -1,5 +1,5 @@
 import { type Record as DbRecord } from './database';
-import { getRecordsByInputString } from './data/record-crud';
+import { getRecordsByInputString, getRecordsByInputStrings } from './data/record-crud';
 
 export interface HoverTooltipPrefs {
   showLabel: boolean;
@@ -157,6 +157,40 @@ const CACHE_TTL_MS = 5 * 60 * 1000;
 const MAX_CACHE_SIZE = 2000;
 const CACHE_EVICT_TO = Math.floor(MAX_CACHE_SIZE * 0.8);
 
+/**
+ * Subscribers notified when a cache entry is populated (by resolveIdentifier
+ * or batchPreloadIdentifiers). Key is the lowercased identifier.
+ */
+const _subscribers = new Map<string, Set<(record: DbRecord | null) => void>>();
+
+/**
+ * Subscribe to be notified when the cache entry for `identifier` is populated.
+ * Returns an unsubscribe function. The callback fires once when the entry is
+ * resolved; callers that still need updates should re-subscribe (or just read
+ * the cache directly on future renders).
+ */
+export function subscribeCacheEntry(
+  identifier: string,
+  callback: (record: DbRecord | null) => void
+): () => void {
+  const key = identifier.toLowerCase();
+  if (!_subscribers.has(key)) _subscribers.set(key, new Set());
+  _subscribers.get(key)!.add(callback);
+  return () => {
+    const subs = _subscribers.get(key);
+    if (subs) {
+      subs.delete(callback);
+      if (subs.size === 0) _subscribers.delete(key);
+    }
+  };
+}
+
+function notifySubscribers(key: string, record: DbRecord | null): void {
+  const subs = _subscribers.get(key);
+  if (!subs || subs.size === 0) return;
+  for (const cb of Array.from(subs)) cb(record);
+}
+
 function evictOldestEntries(): void {
   if (_cache.size <= CACHE_EVICT_TO) return;
   // Map iterates in insertion order; collect entries sorted by resolvedAt so
@@ -195,6 +229,7 @@ export async function resolveIdentifier(identifier: string): Promise<DbRecord | 
       const best = records.length > 0 ? selectBestRecord(records) : null;
       if (_cache.size >= MAX_CACHE_SIZE) evictOldestEntries();
       _cache.set(key, { record: best, resolvedAt: Date.now() });
+      notifySubscribers(key, best);
       return best;
     } catch {
       return null;
@@ -209,4 +244,81 @@ export async function resolveIdentifier(identifier: string): Promise<DbRecord | 
 
 export function invalidateCachedRecord(identifier: string): void {
   _cache.delete(identifier.toLowerCase());
+}
+
+/**
+ * Batch-preload cache entries for a list of identifiers. Uses a single DB
+ * query per batch (up to 50 identifiers) instead of one query per identifier.
+ * Identifiers already cached or in-flight are skipped. Notifies any
+ * subscribers once each entry is resolved so AddressLink/TxidLink components
+ * can show the indicator without a hover.
+ */
+const PRELOAD_BATCH_SIZE = 50;
+
+export function batchPreloadIdentifiers(identifiers: string[]): void {
+  const toFetch: string[] = [];
+  const seen = new Set<string>();
+  for (const id of identifiers) {
+    if (!id) continue;
+    const key = id.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if (getCachedRecord(id) !== undefined) continue;
+    if (_inFlight.has(key)) continue;
+    toFetch.push(id);
+  }
+  if (toFetch.length === 0) return;
+
+  for (let i = 0; i < toFetch.length; i += PRELOAD_BATCH_SIZE) {
+    void _runBatchFetch(toFetch.slice(i, i + PRELOAD_BATCH_SIZE));
+  }
+}
+
+async function _runBatchFetch(ids: string[]): Promise<void> {
+  type Resolver = (r: DbRecord | null) => void;
+  const resolvers = new Map<string, Resolver>();
+  const validIds: string[] = [];
+
+  for (const id of ids) {
+    const key = id.toLowerCase();
+    if (_inFlight.has(key)) continue;
+    if (getCachedRecord(id) !== undefined) continue;
+    const p = new Promise<DbRecord | null>(resolve => {
+      resolvers.set(key, resolve);
+    });
+    _inFlight.set(key, p);
+    validIds.push(id);
+  }
+
+  if (validIds.length === 0) return;
+
+  try {
+    const records = await getRecordsByInputStrings(validIds);
+
+    const byKey = new Map<string, DbRecord[]>();
+    for (const r of records) {
+      const key = r.inputString?.toLowerCase();
+      if (!key) continue;
+      if (!byKey.has(key)) byKey.set(key, []);
+      byKey.get(key)!.push(r);
+    }
+
+    for (const id of validIds) {
+      const key = id.toLowerCase();
+      const recs = byKey.get(key) ?? [];
+      const best = recs.length > 0 ? selectBestRecord(recs) : null;
+      if (_cache.size >= MAX_CACHE_SIZE) evictOldestEntries();
+      _cache.set(key, { record: best, resolvedAt: Date.now() });
+      notifySubscribers(key, best);
+      resolvers.get(key)?.(best);
+    }
+  } catch {
+    for (const [, resolve] of resolvers) {
+      resolve(null);
+    }
+  } finally {
+    for (const id of validIds) {
+      _inFlight.delete(id.toLowerCase());
+    }
+  }
 }

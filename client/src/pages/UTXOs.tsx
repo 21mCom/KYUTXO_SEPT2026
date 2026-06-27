@@ -65,6 +65,7 @@ import { cn } from "@/lib/utils";
 import { UTXODetailPanel } from "@/components/UTXODetailPanel";
 import { AddressLink } from "@/components/AddressLink";
 import { TxidLink } from "@/components/TxidLink";
+import { batchPreloadIdentifiers } from "@/lib/metadata-hover";
 import { ScrollPositionIndicator } from "@/components/ScrollPositionIndicator";
 import { searchPendingClass } from "@/lib/search-pending-class";
 
@@ -1192,6 +1193,26 @@ export default function UTXOs() {
     overscan: 20,
     measureElement: (el) => el.getBoundingClientRect().height,
   });
+
+  const utxoVirtualItems = utxoVirtualizer.getVirtualItems();
+  const utxoVisibleRangeKey = utxoVirtualItems.length > 0
+    ? `${utxoVirtualItems[0].index}-${utxoVirtualItems[utxoVirtualItems.length - 1].index}`
+    : '';
+
+  useEffect(() => {
+    if (!utxoVisibleRangeKey || flattenedRows.length === 0) return;
+    const [startStr, endStr] = utxoVisibleRangeKey.split('-');
+    const start = parseInt(startStr);
+    const end = parseInt(endStr);
+    const ids: string[] = [];
+    for (let i = start; i <= end; i++) {
+      const row = flattenedRows[i];
+      if (!row) continue;
+      if (row.kind === 'group') ids.push(row.group.address);
+      else if (row.kind === 'utxo') ids.push(row.utxo.txid);
+    }
+    if (ids.length > 0) batchPreloadIdentifiers(ids);
+  }, [utxoVisibleRangeKey, flattenedRows]);
 
   const totalSats = filteredGroups.reduce((sum, g) => sum + g.totalSats, 0);
   const totalUtxoCount = filteredGroups.reduce((sum, g) => sum + g.utxos.length, 0);
