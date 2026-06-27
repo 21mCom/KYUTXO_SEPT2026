@@ -117,7 +117,7 @@ const { createOwner, createWalletName } = await import(
 );
 const { clearAllRecords } = await import("@/lib/data/record-crud");
 const { clearAllTransactionData } = await import("@/lib/data/transaction-crud");
-const { clearPrivacyAuditHistory } = await import(
+const { clearPrivacyAuditHistory, getPrivacyAuditHistory } = await import(
   "@/lib/data/privacy-history-crud"
 );
 const { clearSettings } = await import("@/lib/data/settings-crud");
@@ -312,5 +312,78 @@ describe("Privacy Audit owner/wallet filter scoping", () => {
 
     await findByText("No Matching Records");
     expect(runPrivacyAuditSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe("Privacy Audit history entry owner/wallet tagging", () => {
+  it("tags the saved history entry with the selected owner (wallet left undefined)", async () => {
+    await seedFixture();
+    const { getByTestId } = renderPage();
+
+    await waitFor(() => {
+      const select = getByTestId("select-owner") as HTMLSelectElement;
+      expect(
+        Array.from(select.options).some((o) => o.value === "Alice"),
+      ).toBe(true);
+    });
+
+    fireEvent.change(getByTestId("select-owner"), {
+      target: { value: "Alice" },
+    });
+    fireEvent.click(getByTestId("button-run-audit"));
+
+    await waitFor(() => expect(runPrivacyAuditSpy).toHaveBeenCalledTimes(1));
+
+    await waitFor(async () => {
+      const history = await getPrivacyAuditHistory();
+      expect(history).toHaveLength(1);
+    });
+    const history = await getPrivacyAuditHistory();
+    expect(history[0].owner).toBe("Alice");
+    expect(history[0].walletName).toBeUndefined();
+  });
+
+  it("tags the saved history entry with the selected wallet (owner left undefined)", async () => {
+    await seedFixture();
+    const { getByTestId } = renderPage();
+
+    await waitFor(() => {
+      const select = getByTestId("select-wallet") as HTMLSelectElement;
+      expect(
+        Array.from(select.options).some((o) => o.value === "Cold"),
+      ).toBe(true);
+    });
+
+    fireEvent.change(getByTestId("select-wallet"), {
+      target: { value: "Cold" },
+    });
+    fireEvent.click(getByTestId("button-run-audit"));
+
+    await waitFor(() => expect(runPrivacyAuditSpy).toHaveBeenCalledTimes(1));
+
+    await waitFor(async () => {
+      const history = await getPrivacyAuditHistory();
+      expect(history).toHaveLength(1);
+    });
+    const history = await getPrivacyAuditHistory();
+    expect(history[0].walletName).toBe("Cold");
+    expect(history[0].owner).toBeUndefined();
+  });
+
+  it("leaves owner and walletName undefined on the history entry when no filter is selected", async () => {
+    await seedFixture();
+    const { getByTestId } = renderPage();
+
+    fireEvent.click(getByTestId("button-run-audit"));
+
+    await waitFor(() => expect(runPrivacyAuditSpy).toHaveBeenCalledTimes(1));
+
+    await waitFor(async () => {
+      const history = await getPrivacyAuditHistory();
+      expect(history).toHaveLength(1);
+    });
+    const history = await getPrivacyAuditHistory();
+    expect(history[0].owner).toBeUndefined();
+    expect(history[0].walletName).toBeUndefined();
   });
 });
