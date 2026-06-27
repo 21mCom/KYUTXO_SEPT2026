@@ -13,9 +13,29 @@ export function renderSourceNote(note: string): React.ReactNode {
   let match: RegExpExecArray | null;
   while ((match = urlRegex.exec(note)) !== null) {
     const raw = match[0];
-    // Keep trailing punctuation out of the link target, but render it as text.
-    const trailing = raw.match(/[.,;]+$/)?.[0] ?? "";
-    const url = trailing ? raw.slice(0, raw.length - trailing.length) : raw;
+    // Keep trailing punctuation and stray closing wrappers (quotes/brackets that
+    // aren't matched by an opening paren the regex already stops at) out of the
+    // link target, but render them as visible text. A trailing "]" is only a
+    // wrapper when it's unbalanced — valid IPv6 host literals (e.g.
+    // http://[::1]) legitimately end with "]" and must be left intact.
+    let url = raw;
+    let trailing = "";
+    for (;;) {
+      const last = url[url.length - 1];
+      if (last === undefined) break;
+      if (".,;\"'>".includes(last)) {
+        trailing = last + trailing;
+        url = url.slice(0, -1);
+      } else if (last === "]") {
+        const open = (url.match(/\[/g) ?? []).length;
+        const close = (url.match(/\]/g) ?? []).length;
+        if (close <= open) break;
+        trailing = last + trailing;
+        url = url.slice(0, -1);
+      } else {
+        break;
+      }
+    }
     if (match.index > lastIndex) {
       parts.push(note.slice(lastIndex, match.index));
     }

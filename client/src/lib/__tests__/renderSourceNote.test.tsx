@@ -84,6 +84,104 @@ describe("renderSourceNote parsing rules", () => {
     expect(container.textContent).toBe(note);
   });
 
+  it("keeps a trailing double-quote out of the href when a URL is wrapped in quotes", () => {
+    const note = 'See "https://example.com/x" for details.';
+    render(<div data-testid="note">{renderSourceNote(note)}</div>);
+
+    const container = screen.getByTestId("note");
+    const links = within(container).getAllByRole("link");
+    expect(links).toHaveLength(1);
+
+    // The trailing double-quote is excluded from the link target.
+    expect(links[0].getAttribute("href")).toBe("https://example.com/x");
+    // The visible link text matches the href exactly (no stray quote).
+    expect(links[0].textContent).toBe(links[0].getAttribute("href"));
+
+    // The wrapping quotes are still present as visible plain text.
+    expect(container.textContent).toBe(note);
+  });
+
+  it("keeps a trailing square bracket out of the href when a URL is wrapped in brackets", () => {
+    const note = "See [https://example.com/x] for details.";
+    render(<div data-testid="note">{renderSourceNote(note)}</div>);
+
+    const container = screen.getByTestId("note");
+    const links = within(container).getAllByRole("link");
+    expect(links).toHaveLength(1);
+
+    // The trailing "]" is excluded from the link target.
+    expect(links[0].getAttribute("href")).toBe("https://example.com/x");
+    // The visible link text matches the href exactly (no stray "]").
+    expect(links[0].textContent).toBe(links[0].getAttribute("href"));
+
+    // The wrapping brackets are still present as visible plain text.
+    expect(container.textContent).toBe(note);
+  });
+
+  it("keeps a trailing angle bracket out of the href when a URL is wrapped in angle brackets", () => {
+    const note = "See <https://example.com/x> for details.";
+    render(<div data-testid="note">{renderSourceNote(note)}</div>);
+
+    const container = screen.getByTestId("note");
+    const links = within(container).getAllByRole("link");
+    expect(links).toHaveLength(1);
+
+    // The trailing ">" is excluded from the link target.
+    expect(links[0].getAttribute("href")).toBe("https://example.com/x");
+    // The visible link text matches the href exactly (no stray ">").
+    expect(links[0].textContent).toBe(links[0].getAttribute("href"));
+
+    // The wrapping angle brackets are still present as visible plain text.
+    expect(container.textContent).toBe(note);
+  });
+
+  it("keeps a trailing single-quote out of the href when a URL is wrapped in single quotes", () => {
+    const note = "See 'https://example.com/x' for details.";
+    render(<div data-testid="note">{renderSourceNote(note)}</div>);
+
+    const container = screen.getByTestId("note");
+    const links = within(container).getAllByRole("link");
+    expect(links).toHaveLength(1);
+
+    // The trailing single-quote is excluded from the link target.
+    expect(links[0].getAttribute("href")).toBe("https://example.com/x");
+    // The visible link text matches the href exactly (no stray quote).
+    expect(links[0].textContent).toBe(links[0].getAttribute("href"));
+
+    // The wrapping single quotes are still present as visible plain text.
+    expect(container.textContent).toBe(note);
+  });
+
+  it("keeps a valid IPv6-literal URL's closing bracket inside the href", () => {
+    const note = "Local node at http://[::1] is reachable.";
+    render(<div data-testid="note">{renderSourceNote(note)}</div>);
+
+    const container = screen.getByTestId("note");
+    const links = within(container).getAllByRole("link");
+    expect(links).toHaveLength(1);
+
+    // The IPv6 host literal's closing "]" is part of the URL and must stay.
+    expect(links[0].getAttribute("href")).toBe("http://[::1]");
+    expect(links[0].textContent).toBe(links[0].getAttribute("href"));
+
+    expect(container.textContent).toBe(note);
+  });
+
+  it("strips only the wrapping bracket around a bracketed IPv6-literal URL", () => {
+    const note = "Local node at [http://[::1]] is reachable.";
+    render(<div data-testid="note">{renderSourceNote(note)}</div>);
+
+    const container = screen.getByTestId("note");
+    const links = within(container).getAllByRole("link");
+    expect(links).toHaveLength(1);
+
+    // Only the unbalanced wrapping "]" is removed; the IPv6 "]" stays.
+    expect(links[0].getAttribute("href")).toBe("http://[::1]");
+    expect(links[0].textContent).toBe(links[0].getAttribute("href"));
+
+    expect(container.textContent).toBe(note);
+  });
+
   it("renders a note with no URL as plain text (no link)", () => {
     const plain = "Just a regular note with no links.";
     render(<div data-testid="note">{renderSourceNote(plain)}</div>);
