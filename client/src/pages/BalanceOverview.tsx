@@ -12,7 +12,7 @@ import {
 import { engineGetBalanceGroupSummaries, subscribeEngineReadiness } from "@/lib/engine/engine-client";
 import { evaluateEngineFreshness } from "@/lib/engine/engine-freshness";
 import { recomputeAddressStats } from "@/lib/data/address-stats";
-import { countUnresolvedPrevoutInputs, getUnresolvedSpendBreakdown, getMissingSourceTxids } from "@/lib/data/transaction-crud";
+import { countUnresolvedPrevoutInputs, getUnresolvedSpendBreakdown, getMissingSourceTxids, getMissingSourceTxidDetails, type MissingSourceDetail } from "@/lib/data/transaction-crud";
 import { transactionSyncService } from "@/lib/transaction-sync";
 import { runTxidBackfill } from "@/lib/txid-backfill";
 import { createProviderFromSettings } from "@/lib/blockchain-api";
@@ -30,6 +30,15 @@ import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogFooter,
+  DialogTitle,
+  DialogDescription,
+} from "@/components/ui/dialog";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import {
   Loader2,
   ChevronDown,
   ChevronRight,
@@ -39,6 +48,7 @@ import {
   AlertTriangle,
   Download,
   X,
+  ListChecks,
 } from "lucide-react";
 import { SiBitcoin } from "react-icons/si";
 
@@ -317,6 +327,12 @@ export default function BalanceOverview() {
   // can cancel a long import partway through. Any transactions already imported
   // are kept; cancelling only stops further fetches.
   const importAbortRef = useRef<AbortController | null>(null);
+  // Offline path: the list of missing source txids (with the spending txids that
+  // reference them) shown in a dialog so fully-offline users can import them by
+  // hand. `null` until the dialog is opened and the list has been computed.
+  const [missingDialogOpen, setMissingDialogOpen] = useState(false);
+  const [missingDetails, setMissingDetails] = useState<MissingSourceDetail[] | null>(null);
+  const [missingLoading, setMissingLoading] = useState(false);
   // Unresolved spends that map to no tracked source record (prevout not locally
   // known, or its output belongs to no tracked address). These overstate the
   // overall balance but no single wallet card can reflect them.
@@ -925,6 +941,49 @@ export default function BalanceOverview() {
     }
   }, [toast]);
 
+  // Open the "missing transactions" dialog and compute the list. Works fully
+  // offline — it reads only local participant data and needs no provider.
+  const openMissingDialog = useCallback(async () => {
+    setMissingDialogOpen(true);
+    setMissingLoading(true);
+    try {
+      const details = await getMissingSourceTxidDetails();
+      setMissingDetails(details);
+    } catch (err) {
+      console.warn("[BalanceOverview] Failed to compute missing source txids:", err);
+      setMissingDetails([]);
+      toast({
+        title: "Couldn't build the list",
+        description: "Something went wrong reading the missing transactions. Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setMissingLoading(false);
+    }
+  }, [toast]);
+
+  const copyText = useCallback(async (text: string, label: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      toast({ description: label });
+    } catch {
+      toast({
+        title: "Copy failed",
+        description: "Could not copy to your clipboard.",
+        variant: "destructive",
+      });
+    }
+  }, [toast]);
+
+  const copyAllMissing = useCallback(() => {
+    if (!missingDetails || missingDetails.length === 0) return;
+    const text = missingDetails.map((d) => d.sourceTxid).join("\n");
+    void copyText(
+      text,
+      `Copied ${missingDetails.length.toLocaleString()} source transaction id${missingDetails.length !== 1 ? "s" : ""}`,
+    );
+  }, [missingDetails, copyText]);
+
   const totalBalance = totals.sats;
   const totalAddresses = totals.addresses;
   const isBusy = phase !== "ready";
@@ -1024,6 +1083,19 @@ export default function BalanceOverview() {
               <Button
                 size="sm"
                 variant="outline"
+                onClick={openMissingDialog}
+                disabled={importingHistory || fixingPrevouts}
+                data-testid="button-view-missing-transactions"
+                className="border-yellow-400 dark:border-yellow-600 text-yellow-800 dark:text-yellow-200"
+              >
+                <ListChecks className="h-3 w-3 mr-1.5" />
+                View missing transactions
+              </Button>
+            )}
+            {unattributableSpends > 0 && (
+              <Button
+                size="sm"
+                variant="outline"
                 onClick={handleImportMissingHistory}
                 disabled={importingHistory || fixingPrevouts}
                 data-testid="button-import-missing-history"
@@ -1085,6 +1157,94 @@ export default function BalanceOverview() {
           </div>
         </div>
       )}
+
+      <Dialog open={missingDialogOpen} onOpenChange={setMissingDialogOpen}>
+        <DialogContent className="max-w-2xl" data-testid="dialog-missing-transactions">
+          <DialogHeader>
+            <DialogTitle>Missing source transactions</DialogTitle>
+            <DialogDescription>
+              These source transactions aren't in your vault yet. Import them (for example from a
+              wallet export) so KYUTXO can match their outputs to your spends and correct the
+              affected balances. No internet connection is needed.
+            </DialogDescription>
+          </DialogHeader>
+
+          {missingLoading ? (
+            <div className="flex flex-col items-center justify-center py-12 gap-3">
+              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+              <p className="text-sm text-muted-foreground">Finding missing transactions…</p>
+            </div>
+          ) : !missingDetails || missingDetails.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-12 gap-2">
+              <Check className="h-6 w-6 text-muted-foreground/60" />
+              <p className="text-sm text-muted-foreground" data-testid="text-no-missing-transactions">
+                Nothing to import — these spends' source addresses aren't tracked, so more history
+                won't tie them to a wallet.
+              </p>
+            </div>
+          ) : (
+            <>
+              <p className="text-xs text-muted-foreground" data-testid="text-missing-count">
+                {missingDetails.length.toLocaleString()} source transaction
+                {missingDetails.length !== 1 ? "s" : ""} to import.
+              </p>
+              <ScrollArea className="h-[320px] rounded-md border">
+                <div className="divide-y">
+                  {missingDetails.map((d) => (
+                    <div
+                      key={d.sourceTxid}
+                      className="flex items-start gap-2 p-3"
+                      data-testid={`row-missing-${d.sourceTxid}`}
+                    >
+                      <div className="flex-1 min-w-0">
+                        <p
+                          className="text-xs font-mono break-all"
+                          data-testid={`text-missing-source-${d.sourceTxid}`}
+                        >
+                          {d.sourceTxid}
+                        </p>
+                        {d.spendingTxids.length > 0 && (
+                          <p className="text-xs text-muted-foreground mt-1 break-all">
+                            Referenced by{" "}
+                            {d.spendingTxids.length === 1
+                              ? d.spendingTxids[0]
+                              : `${d.spendingTxids.length.toLocaleString()} spends: ${d.spendingTxids.join(", ")}`}
+                          </p>
+                        )}
+                      </div>
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="flex-none"
+                        onClick={() => copyText(d.sourceTxid, "Transaction id copied")}
+                        data-testid={`button-copy-missing-${d.sourceTxid}`}
+                      >
+                        <Copy className="h-3 w-3" />
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              </ScrollArea>
+            </>
+          )}
+
+          <DialogFooter className="gap-2 sm:gap-2">
+            {missingDetails && missingDetails.length > 0 && (
+              <Button
+                variant="outline"
+                onClick={copyAllMissing}
+                data-testid="button-copy-all-missing"
+              >
+                <Copy className="h-4 w-4 mr-1.5" />
+                Copy all source ids
+              </Button>
+            )}
+            <Button onClick={() => setMissingDialogOpen(false)} data-testid="button-close-missing-dialog">
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <div className="flex-1 overflow-auto p-4">
         {phase === "backfilling" ? (

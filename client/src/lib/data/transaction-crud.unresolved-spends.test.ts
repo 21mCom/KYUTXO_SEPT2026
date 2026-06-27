@@ -64,7 +64,7 @@ vi.mock("@/lib/database", async () => {
   };
 });
 
-const { getUnresolvedSpendsByRecordId, getUnresolvedSpendBreakdown } = await import("./transaction-crud");
+const { getUnresolvedSpendsByRecordId, getUnresolvedSpendBreakdown, getMissingSourceTxidDetails } = await import("./transaction-crud");
 
 // ---- Fixtures --------------------------------------------------------------
 
@@ -279,5 +279,72 @@ describe("getUnresolvedSpendBreakdown", () => {
 
     expect(Object.fromEntries(byRecordId)).toEqual({ 42: 1 });
     expect(unattributable).toBe(2);
+  });
+});
+
+describe("getMissingSourceTxidDetails", () => {
+  it("returns an empty array when there are no unresolved inputs", async () => {
+    await testDb.transactionParticipants.bulkAdd([mkOutput("txA", 0, { recordId: 1 })]);
+
+    const result = await getMissingSourceTxidDetails();
+
+    expect(result).toEqual([]);
+  });
+
+  it("lists missing source txids with the spending txids that reference them", async () => {
+    await testDb.transactionParticipants.bulkAdd([
+      mkUnresolvedInput("spend1", "txMissing", 0),
+      mkUnresolvedInput("spend2", "txMissing", 1),
+    ]);
+
+    const result = await getMissingSourceTxidDetails();
+
+    expect(result).toEqual([
+      { sourceTxid: "txMissing", spendingTxids: ["spend1", "spend2"] },
+    ]);
+  });
+
+  it("excludes source txids whose prevout output is already stored locally", async () => {
+    await testDb.transactionParticipants.bulkAdd([
+      mkOutput("txLocal", 0, { recordId: 5 }),
+      mkUnresolvedInput("spendLocal", "txLocal", 0),
+      mkUnresolvedInput("spendMissing", "txGone", 0),
+    ]);
+
+    const result = await getMissingSourceTxidDetails();
+
+    expect(result).toEqual([
+      { sourceTxid: "txGone", spendingTxids: ["spendMissing"] },
+    ]);
+  });
+
+  it("treats a missing vout as missing even when another vout of the same tx is local", async () => {
+    await testDb.transactionParticipants.bulkAdd([
+      mkOutput("txSrc", 0, { recordId: 9 }),
+      // vout 1 of the same source tx is NOT stored locally.
+      mkUnresolvedInput("spendKnown", "txSrc", 0),
+      mkUnresolvedInput("spendUnknown", "txSrc", 1),
+    ]);
+
+    const result = await getMissingSourceTxidDetails();
+
+    expect(result).toEqual([
+      { sourceTxid: "txSrc", spendingTxids: ["spendUnknown"] },
+    ]);
+  });
+
+  it("dedupes and sorts spending txids and sorts results by source txid", async () => {
+    await testDb.transactionParticipants.bulkAdd([
+      mkUnresolvedInput("zspend", "txB", 0),
+      mkUnresolvedInput("aspend", "txB", 1),
+      mkUnresolvedInput("aspend", "txA", 0),
+    ]);
+
+    const result = await getMissingSourceTxidDetails();
+
+    expect(result).toEqual([
+      { sourceTxid: "txA", spendingTxids: ["aspend"] },
+      { sourceTxid: "txB", spendingTxids: ["aspend", "zspend"] },
+    ]);
   });
 });

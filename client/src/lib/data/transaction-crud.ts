@@ -442,6 +442,73 @@ export async function getMissingSourceTxids(): Promise<string[]> {
   return Array.from(missing);
 }
 
+/**
+ * A single missing source transaction together with the spending transactions in
+ * the vault that reference it. This is the offline-user equivalent of
+ * {@link getMissingSourceTxids}: rather than fetching the missing history from a
+ * provider, the user is given the exact list of source txids to import manually
+ * (e.g. from a wallet export), along with the spending txids that depend on each
+ * one so they can locate the right transactions.
+ */
+export interface MissingSourceDetail {
+  /** The source transaction id whose output is not stored locally. */
+  sourceTxid: string;
+  /** Distinct spending transaction ids that reference this source output. */
+  spendingTxids: string[];
+}
+
+/**
+ * Like {@link getMissingSourceTxids} but also returns, for each missing source
+ * transaction, the spending txids in the vault that reference it. Useful for the
+ * offline path where the user imports the missing history manually and needs a
+ * concrete, copyable list of which transactions to find. Results are sorted by
+ * source txid for stable display.
+ */
+export async function getMissingSourceTxidDetails(): Promise<MissingSourceDetail[]> {
+  const unresolvedInputs = await db.transactionParticipants
+    .where('role').equals('input')
+    .filter(p => (!p.address || p.address.trim() === '') && p.prevTxid !== undefined && p.prevVout !== undefined)
+    .toArray();
+  if (unresolvedInputs.length === 0) return [];
+
+  const prevTxids = new Set<string>();
+  for (const inp of unresolvedInputs) {
+    if (inp.prevTxid) prevTxids.add(inp.prevTxid);
+  }
+  const prevTxidArr = Array.from(prevTxids);
+  const localOutputKeys = new Set<string>();
+  for (let i = 0; i < prevTxidArr.length; i += 500) {
+    const batch = prevTxidArr.slice(i, i + 500);
+    const outputs = await db.transactionParticipants
+      .where('txid').anyOf(batch)
+      .and(p => p.role === 'output')
+      .toArray();
+    for (const o of outputs) {
+      if (o.vout !== undefined) localOutputKeys.add(`${o.txid}:${o.vout}`);
+    }
+  }
+
+  const spendingBySource = new Map<string, Set<string>>();
+  for (const inp of unresolvedInputs) {
+    if (!inp.prevTxid) continue;
+    const key = `${inp.prevTxid}:${inp.prevVout}`;
+    if (localOutputKeys.has(key)) continue;
+    let set = spendingBySource.get(inp.prevTxid);
+    if (!set) {
+      set = new Set<string>();
+      spendingBySource.set(inp.prevTxid, set);
+    }
+    if (inp.txid) set.add(inp.txid);
+  }
+
+  return Array.from(spendingBySource.entries())
+    .map(([sourceTxid, spending]) => ({
+      sourceTxid,
+      spendingTxids: Array.from(spending).sort(),
+    }))
+    .sort((a, b) => (a.sourceTxid < b.sourceTxid ? -1 : a.sourceTxid > b.sourceTxid ? 1 : 0));
+}
+
 // =============================================================================
 // FRESHNESS FINGERPRINTS — compared against the native engine mirror before a
 // read is served from the engine. All reads below are index-only (count + the
