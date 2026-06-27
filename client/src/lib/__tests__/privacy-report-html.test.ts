@@ -253,6 +253,75 @@ describe('printable HTML report — sections present', () => {
   });
 });
 
+describe('printable HTML report — finding-type label fallback', () => {
+  it('prints the raw type string (escaped) when the type is missing from FINDING_TYPE_LABELS', () => {
+    const html = buildPrintableReport(
+      makeResult({
+        findings: [
+          {
+            ...ENTITY_FINDING,
+            type: 'A_BRAND_NEW_UNMAPPED_TYPE',
+            details: {},
+          } as unknown as PrivacyFinding,
+        ],
+        warnings: [],
+      }),
+      { owner: null, wallet: null },
+      FIXED_NOW,
+    );
+
+    // The unmapped type falls back to the raw enum string in the finding title.
+    expect(html).toContain('<span class="finding-title">A_BRAND_NEW_UNMAPPED_TYPE</span>');
+    // The title must never collapse to "undefined" or an empty span.
+    expect(html).not.toContain('<span class="finding-title">undefined</span>');
+    expect(html).not.toContain('<span class="finding-title"></span>');
+  });
+
+  it('escapes the raw type string when it contains markup characters', () => {
+    const html = buildPrintableReport(
+      makeResult({
+        findings: [
+          {
+            ...ENTITY_FINDING,
+            type: '<img src=x onerror=alert(1)>',
+            details: {},
+          } as unknown as PrivacyFinding,
+        ],
+        warnings: [],
+      }),
+      { owner: null, wallet: null },
+      FIXED_NOW,
+    );
+
+    expect(html).toContain(
+      '<span class="finding-title">&lt;img src=x onerror=alert(1)&gt;</span>',
+    );
+    // The raw payload must never survive unescaped in the finding title.
+    expect(html).not.toContain('<span class="finding-title"><img src=x onerror=alert(1)></span>');
+  });
+
+  it('uses the mapped label (not the raw type) when the type is present in FINDING_TYPE_LABELS', () => {
+    const html = buildPrintableReport(
+      makeResult({
+        findings: [
+          {
+            ...ENTITY_FINDING,
+            type: 'SCRIPT_TYPE_MIXING',
+            details: {},
+          } as unknown as PrivacyFinding,
+        ],
+        warnings: [],
+      }),
+      { owner: null, wallet: null },
+      FIXED_NOW,
+    );
+
+    // The friendly mapped label wins over the raw enum string.
+    expect(html).toContain('<span class="finding-title">Script Type Mixing</span>');
+    expect(html).not.toContain('<span class="finding-title">SCRIPT_TYPE_MIXING</span>');
+  });
+});
+
 describe('printable HTML report — escaping of user-controlled values', () => {
   it('escapes owner and wallet names', () => {
     const html = buildPrintableReport(
