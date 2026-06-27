@@ -1495,4 +1495,50 @@ describe("buildFundTrailCsv vs detailed buildFundTrailPdf parity", () => {
     expect(pdfAddresses).toEqual(csvAddresses);
     expect(pdfTxids).toEqual(csvTxids);
   });
+
+  it("renders exactly the same (address, txid) pairs in both exports", async () => {
+    const snapshot = paritySnapshot();
+
+    // CSV: each data row pairs its address (column 3) with its txid (column 4).
+    // Comparing pairs — not two independent sets — catches a regression that
+    // keeps the same addresses and txids overall but re-associates them (e.g. a
+    // detail row rendered against the wrong group/txid).
+    const csvRows = parseCsv(buildFundTrailCsv(snapshot)).slice(1);
+    const csvPairs = new Set(csvRows.map((r) => `${r[3]}\t${r[4]}`));
+
+    // Guard the fixture: the snapshot must yield every interesting pair (center
+    // sources, destination, the unknown group, and the expanded hop) so the
+    // cross-check below is non-trivial.
+    expect(csvPairs).toEqual(
+      new Set([
+        "bc1qxalice\ttxxalice",
+        "bc1qxunknown\ttxxunknown",
+        "bc1qxbob\ttxxbob",
+        "bc1qxcarol\ttxxcarol",
+      ]),
+    );
+
+    // Detailed PDF: each detail row renders its cells as adjacent literals in
+    // column order (address, txid, …), so an address line is immediately
+    // followed by its txid line. Walk the rendered lines pairing each address
+    // with the txid that follows it to recover the exact (address, txid) pairs.
+    const pdfText = await extractPdfText(
+      await buildFundTrailPdf(snapshot, { detailed: true }),
+    );
+    const pdfLines = pdfText.split("\n").map((l) => l.trim());
+    const pdfPairs = new Set<string>();
+    let pendingAddr: string | null = null;
+    for (const line of pdfLines) {
+      if (ADDR_RE.test(line)) {
+        pendingAddr = line;
+      } else if (TXID_RE.test(line) && pendingAddr) {
+        pdfPairs.add(`${pendingAddr}\t${line}`);
+        pendingAddr = null;
+      }
+    }
+
+    // The set of pairs must match exactly: neither format may drop, duplicate,
+    // or re-pair a flow the other carries.
+    expect(pdfPairs).toEqual(csvPairs);
+  });
 });
