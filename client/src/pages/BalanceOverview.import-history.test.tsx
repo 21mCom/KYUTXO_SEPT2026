@@ -291,6 +291,67 @@ describe("BalanceOverview · Import missing history", () => {
     });
   });
 
+  it("keeps what was imported and shows the 'kept N' copy when cancelled mid-run", async () => {
+    primeBannerState({ unresolved: 5, unattributable: 5 });
+    getMissingSourceTxids.mockResolvedValue(["txMissing1", "txMissing2"]);
+    getNodeSettings.mockResolvedValue({ id: "default", type: "esplora" });
+    getBlockHeight.mockResolvedValue(800000);
+    // Simulate the user clicking "Cancel" while the backfill is in flight: the
+    // run's signal becomes aborted but two source transactions were already
+    // imported and must be kept.
+    runTxidBackfill.mockImplementation(async () => {
+      await waitFor(() =>
+        expect(screen.getByTestId("button-cancel-import-history")).toBeTruthy(),
+      );
+      fireEvent.click(screen.getByTestId("button-cancel-import-history"));
+      return { rebuilt: 2, failed: 0 };
+    });
+
+    await renderAndWaitForBanner();
+    fireEvent.click(screen.getByTestId("button-import-missing-history"));
+
+    await waitFor(() =>
+      expect(toastSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: "Import cancelled",
+          description: expect.stringContaining(
+            "Kept 2 source transactions imported so far",
+          ),
+        }),
+      ),
+    );
+    // Cancelled → the follow-up resolve pass must be skipped even though some
+    // transactions were imported.
+    expect(resolvePrevouts).not.toHaveBeenCalled();
+  });
+
+  it("shows the 'stopped before any imported' copy when cancelled before anything imported", async () => {
+    primeBannerState();
+    getMissingSourceTxids.mockResolvedValue(["txMissing1"]);
+    getNodeSettings.mockResolvedValue({ id: "default", type: "esplora" });
+    getBlockHeight.mockResolvedValue(800000);
+    runTxidBackfill.mockImplementation(async () => {
+      await waitFor(() =>
+        expect(screen.getByTestId("button-cancel-import-history")).toBeTruthy(),
+      );
+      fireEvent.click(screen.getByTestId("button-cancel-import-history"));
+      return { rebuilt: 0, failed: 0 };
+    });
+
+    await renderAndWaitForBanner();
+    fireEvent.click(screen.getByTestId("button-import-missing-history"));
+
+    await waitFor(() =>
+      expect(toastSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: "Import cancelled",
+          description: "Stopped before any source transactions were imported.",
+        }),
+      ),
+    );
+    expect(resolvePrevouts).not.toHaveBeenCalled();
+  });
+
   it("reports when no history could be imported (all fetches failed)", async () => {
     primeBannerState();
     getMissingSourceTxids.mockResolvedValue(["txMissing1"]);
