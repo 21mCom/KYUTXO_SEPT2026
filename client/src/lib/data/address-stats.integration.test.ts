@@ -21,6 +21,7 @@ class TestDb extends Dexie {
   transactionParticipants!: Table<TransactionParticipant, number>;
   blockchainTransactions!: Table<BlockchainTransaction, number>;
   addressSyncState!: Table<AddressSyncState, number>;
+  settings!: Table<{ id: string } & Record<string, unknown>, string>;
   constructor(name: string) {
     super(name);
     // Mirrors the current records + sync schema in client/src/lib/database.ts.
@@ -36,6 +37,9 @@ class TestDb extends Dexie {
       transactionParticipants:
         "++id, [txid+role], txid, role, address, recordId, [prevTxid+prevVout]",
       addressSyncState: "++id, &address, recordId, lastSyncedAt",
+      // A full-table recompute (no id/address filter) refreshes the vault-wide
+      // behavior tally at the end, which reads/writes the default settings row.
+      settings: "id",
     });
   }
 }
@@ -99,6 +103,7 @@ async function resetDb() {
   await testDb.transactionParticipants.clear();
   await testDb.blockchainTransactions.clear();
   await testDb.addressSyncState.clear();
+  await testDb.settings.clear();
 }
 
 beforeEach(async () => {
@@ -972,5 +977,194 @@ describe("recomputeAddressStats not-synced reset path", () => {
     expect(fixed?.cachedUtxoCount).toBe(1);
     expect(fixed?.statsComputedAt).toBeTypeOf("number");
     expect(fixed?.statsComputedAt).not.toBe(9000);
+  });
+});
+
+describe("recomputeAddressStats across a mostly-unsynced vault", () => {
+  it("pages the whole table, resets the unsynced majority to 'not synced', and reports progress per batch", async () => {
+    // Real large vaults are mostly unsynced: thousands of imported addresses
+    // that were never fetched (no participants, no addressSyncState) sit between
+    // the rare synced ones. A full-table recompute (no id/address filter) pages
+    // the [type+id] index in batchSize chunks, yielding once per batch. This
+    // locks that it pages over the unsynced majority without choking, recomputes
+    // the sparse synced rows, RESETS every unsynced row back to "not synced"
+    // (stripping any stale cache that lingered on it), and reports progress once
+    // per batch with the real total.
+    const COUNT = 650; // four batches at batchSize 200: 200/200/200/50
+    const SYNC_EVERY = 50; // ids 50,100,…,650 → 13 synced rows, sparse across all four batches
+    const records: DbRecord[] = [];
+    const participants: TransactionParticipant[] = [];
+    const txs: BlockchainTransaction[] = [];
+    const syncStates: AddressSyncState[] = [];
+    const syncedIds: number[] = [];
+    const unsyncedIds: number[] = [];
+    for (let i = 1; i <= COUNT; i++) {
+      const addr = `mix-addr-${String(i).padStart(4, "0")}`;
+      const isSynced = i % SYNC_EVERY === 0;
+      if (isSynced) {
+        syncedIds.push(i);
+        const txid = `mix-tx-${i}`;
+        participants.push(mkOutput(addr, txid, 1000));
+        txs.push(mkTx(txid, 100 + i));
+        syncStates.push({
+          address: addr,
+          recordId: i,
+          lastSyncedAt: 1000,
+        } as unknown as AddressSyncState);
+        records.push(
+          mkAddr({
+            id: i,
+            inputString: addr,
+            // Stale cache that the recompute should refresh to the real 1000.
+            statsComputedAt: 5000,
+            cachedBalanceSats: 0,
+          }),
+        );
+      } else {
+        unsyncedIds.push(i);
+        // No participants and no addressSyncState, but carrying leftover stale
+        // cache fields that MUST be stripped (reset to "not synced").
+        records.push(
+          mkAddr({
+            id: i,
+            inputString: addr,
+            statsComputedAt: 7000,
+            cachedBalanceSats: 4242,
+            cachedTxCount: 9,
+            cachedLastActivityTime: 8888,
+            cachedUtxoCount: 5,
+          }),
+        );
+      }
+    }
+    await testDb.records.bulkAdd(records);
+    await testDb.transactionParticipants.bulkAdd(participants);
+    await testDb.blockchainTransactions.bulkAdd(txs);
+    await testDb.addressSyncState.bulkAdd(syncStates);
+    // The full-table path refreshes the behavior tally at the end, which needs
+    // a default settings row to write onto.
+    await testDb.settings.put({ id: "default" });
+
+    const processedReports: number[] = [];
+    const totalReports: number[] = [];
+    const onProgress = vi.fn((p: { processed: number; total: number }) => {
+      processedReports.push(p.processed);
+      totalReports.push(p.total);
+    });
+
+    const result = await recomputeAddressStats({ batchSize: 200, onProgress });
+
+    // Ran to completion; every one of the 650 rows was written (synced rows get
+    // fresh stats, unsynced rows get reset — both count as updates).
+    expect(result.cancelled).toBe(false);
+    expect(result.updated).toBe(COUNT);
+
+    // Progress fires once up front (processed 0) then once per batch with a
+    // running, monotonically increasing count, always against the real total.
+    expect(onProgress).toHaveBeenCalledTimes(5);
+    expect(processedReports).toEqual([0, 200, 400, 600, 650]);
+    expect(totalReports).toEqual([COUNT, COUNT, COUNT, COUNT, COUNT]);
+
+    // Every synced row (sampled across all four batches) carries the freshly
+    // computed 1000-sat balance with a refreshed statsComputedAt.
+    for (const id of syncedIds) {
+      const rec = await testDb.records.get(id);
+      expect(rec?.cachedBalanceSats).toBe(1000);
+      expect(rec?.cachedTxCount).toBe(1);
+      expect(rec?.cachedUtxoCount).toBe(1);
+      expect(rec?.statsComputedAt).toBeTypeOf("number");
+      expect(rec?.statsComputedAt).not.toBe(5000);
+    }
+
+    // Every unsynced row was reset to "not synced": all cache fields stripped,
+    // verified across rows landing in each of the four batches.
+    for (const id of unsyncedIds) {
+      const rec = await testDb.records.get(id);
+      expect(rec).toBeDefined();
+      expect(rec).not.toHaveProperty("cachedBalanceSats");
+      expect(rec).not.toHaveProperty("cachedTxCount");
+      expect(rec).not.toHaveProperty("cachedLastActivityTime");
+      expect(rec).not.toHaveProperty("cachedUtxoCount");
+      expect(rec).not.toHaveProperty("statsComputedAt");
+    }
+  });
+
+  it("still pages and reports progress for an entirely-unsynced batch (unlike the sampling scan, which skips no-sample pages)", async () => {
+    // Documents the recompute's contract when a WHOLE batch is unsynced. The
+    // balance-integrity sampling scan (detectStaleCachedBalances) deliberately
+    // skips firing onProgress for a page that sampled nothing. The recompute is
+    // different on purpose: it must visit and RESET every unsynced row, so it
+    // reports progress for EVERY batch — including a fully-unsynced one — and
+    // the processed denominator advances over it like any other batch.
+    const COUNT = 400; // two batches at batchSize 200
+    const records: DbRecord[] = [];
+    const participants: TransactionParticipant[] = [];
+    const txs: BlockchainTransaction[] = [];
+    const syncStates: AddressSyncState[] = [];
+    for (let i = 1; i <= COUNT; i++) {
+      const addr = `whole-addr-${String(i).padStart(4, "0")}`;
+      // First batch (ids 1–200) is ENTIRELY unsynced; second batch (201–400) is
+      // entirely synced. This isolates the all-unsynced-batch behavior.
+      const isSynced = i > 200;
+      if (isSynced) {
+        const txid = `whole-tx-${i}`;
+        participants.push(mkOutput(addr, txid, 2000));
+        txs.push(mkTx(txid, 100 + i));
+        syncStates.push({
+          address: addr,
+          recordId: i,
+          lastSyncedAt: 1000,
+        } as unknown as AddressSyncState);
+        records.push(
+          mkAddr({ id: i, inputString: addr, statsComputedAt: 5000, cachedBalanceSats: 0 }),
+        );
+      } else {
+        records.push(
+          mkAddr({
+            id: i,
+            inputString: addr,
+            statsComputedAt: 7000,
+            cachedBalanceSats: 999,
+            cachedTxCount: 3,
+            cachedLastActivityTime: 6000,
+            cachedUtxoCount: 2,
+          }),
+        );
+      }
+    }
+    await testDb.records.bulkAdd(records);
+    await testDb.transactionParticipants.bulkAdd(participants);
+    await testDb.blockchainTransactions.bulkAdd(txs);
+    await testDb.addressSyncState.bulkAdd(syncStates);
+    await testDb.settings.put({ id: "default" });
+
+    const processedReports: number[] = [];
+    const onProgress = vi.fn((p: { processed: number; total: number }) => {
+      processedReports.push(p.processed);
+    });
+
+    const result = await recomputeAddressStats({ batchSize: 200, onProgress });
+
+    expect(result.cancelled).toBe(false);
+    expect(result.updated).toBe(COUNT);
+
+    // Progress is reported for the all-unsynced first batch too, so the
+    // denominator advances over it (0 → 200 → 400). The recompute never skips a
+    // batch the way the sampling scan skips no-sample pages.
+    expect(onProgress).toHaveBeenCalledTimes(3);
+    expect(processedReports).toEqual([0, 200, 400]);
+
+    // The entirely-unsynced first batch was reset row-by-row.
+    const firstBatchSample = await testDb.records.get(1);
+    expect(firstBatchSample).not.toHaveProperty("cachedBalanceSats");
+    expect(firstBatchSample).not.toHaveProperty("statsComputedAt");
+    const firstBatchLast = await testDb.records.get(200);
+    expect(firstBatchLast).not.toHaveProperty("cachedBalanceSats");
+    expect(firstBatchLast).not.toHaveProperty("statsComputedAt");
+
+    // The synced second batch was recomputed to its real balance.
+    const secondBatchSample = await testDb.records.get(201);
+    expect(secondBatchSample?.cachedBalanceSats).toBe(2000);
+    expect(secondBatchSample?.statsComputedAt).not.toBe(5000);
   });
 });
