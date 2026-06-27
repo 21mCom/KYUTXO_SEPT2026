@@ -203,18 +203,35 @@ export function sumTopLevel(nodes: ExportFlowNode[]): number {
   return nodes.reduce((s, n) => s + n.totalSats, 0);
 }
 
+/** Options controlling what the Fund Trail PDF includes. */
+export interface FundTrailPdfOptions {
+  /**
+   * When true, embed the per-group deduplicated detail rows (address, txid,
+   * amount, date) beneath the summary, so the PDF carries the same information
+   * the CSV does. Output paginates across pages as needed.
+   */
+  detailed?: boolean;
+}
+
 /**
- * Build an offline single-page PDF summary of the Fund Trail snapshot that
- * mirrors the on-screen layout: a center-node header with total in/out, then a
- * Sources section and a Destinations section listing each group (indented by hop
- * depth) with its amount and address count.
+ * Build an offline PDF summary of the Fund Trail snapshot that mirrors the
+ * on-screen layout: a center-node header with total in/out, then a Sources
+ * section and a Destinations section listing each group (indented by hop depth)
+ * with its amount and address count.
+ *
+ * When `options.detailed` is set, each group additionally lists its
+ * deduplicated detail rows (address, txid, amount, date) — the same data the
+ * CSV contains — so the document is self-contained for hand-off. Long output
+ * paginates gracefully across multiple pages rather than overflowing one page.
  *
  * Fully offline — jspdf/autotable are bundled, so no external resources are
  * fetched.
  */
 export async function buildFundTrailPdf(
   snapshot: FundTrailSnapshot,
+  options: FundTrailPdfOptions = {},
 ): Promise<Blob> {
+  const detailed = options.detailed ?? false;
   const jsPDFModule = await import("jspdf");
   const autoTableModule = await import("jspdf-autotable");
   const jsPDF = jsPDFModule.default;
@@ -225,7 +242,7 @@ export async function buildFundTrailPdf(
   const pageHeight = doc.internal.pageSize.getHeight();
 
   doc.setFontSize(18);
-  doc.text("Fund Trail", 14, 20);
+  doc.text(detailed ? "Fund Trail (detailed)" : "Fund Trail", 14, 20);
 
   const totalIn = sumTopLevel(snapshot.sources);
   const totalOut = sumTopLevel(snapshot.destinations);
@@ -246,12 +263,28 @@ export async function buildFundTrailPdf(
 
   let cursorY = 40;
 
+  const getFinalY = (): number => {
+    const lastTable = (doc as unknown as { lastAutoTable?: { finalY: number } })
+      .lastAutoTable;
+    return lastTable?.finalY ?? cursorY;
+  };
+
+  /** Start a fresh page when there isn't room for at least `needed` mm. */
+  const ensureSpace = (needed: number) => {
+    if (cursorY + needed > pageHeight - 14) {
+      doc.addPage();
+      cursorY = 20;
+    }
+  };
+
   const renderSection = (
     title: string,
     nodes: ExportFlowNode[],
     emptyText: string,
   ) => {
+    ensureSpace(20);
     doc.setFontSize(12);
+    doc.setTextColor(0);
     doc.text(title, 14, cursorY);
     cursorY += 3;
 
@@ -283,20 +316,74 @@ export async function buildFundTrailPdf(
         2: { halign: "right" },
       },
     });
-    const lastTable = (doc as unknown as { lastAutoTable?: { finalY: number } })
-      .lastAutoTable;
-    cursorY = (lastTable?.finalY ?? cursorY) + 8;
+    cursorY = getFinalY() + 8;
+
+    if (detailed) {
+      for (const { depth, node } of flat) {
+        renderNodeDetails(depth, node);
+      }
+    }
+  };
+
+  /** Render one group's deduplicated detail rows as a labeled sub-table. */
+  const renderNodeDetails = (depth: number, node: ExportFlowNode) => {
+    if (node.details.length === 0) return;
+
+    ensureSpace(16);
+    doc.setFontSize(9);
+    doc.setTextColor(60);
+    const prefix = depth > 0 ? "↳ " : "";
+    doc.text(
+      `${prefix}${node.groupLabel} — ${formatBtc(node.totalSats)}`,
+      16,
+      cursorY,
+    );
+    doc.setTextColor(0);
+    cursorY += 2;
+
+    const detailBody = node.details.map((d) => [
+      d.address,
+      d.txid,
+      btcAmount(d.amount),
+      isoDate(d.blockTime),
+    ]);
+
+    autoTable(doc, {
+      startY: cursorY,
+      margin: { left: 16 },
+      head: [["Address", "Txid", "Amount (BTC)", "Date"]],
+      body: detailBody,
+      styles: { fontSize: 7, cellPadding: 1, overflow: "linebreak" },
+      headStyles: { fillColor: [120, 120, 120] },
+      columnStyles: {
+        0: { cellWidth: 55 },
+        1: { cellWidth: 75 },
+        2: { halign: "right" },
+        3: { halign: "right" },
+      },
+    });
+    cursorY = getFinalY() + 6;
   };
 
   renderSection("Sources (incoming)", snapshot.sources, "No incoming transactions found.");
   renderSection("Destinations (outgoing)", snapshot.destinations, "No outgoing transactions found.");
 
-  doc.setFontSize(8);
-  doc.setTextColor(120);
-  doc.text(`Generated: ${new Date().toLocaleString()}`, 14, pageHeight - 10);
-  doc.text("KYUTXO — generated offline", pageWidth - 14, pageHeight - 10, {
-    align: "right",
-  });
+  // Footer on every page (page count is known only after all content is laid out).
+  const pageCount = doc.getNumberOfPages();
+  const generated = new Date().toLocaleString();
+  for (let p = 1; p <= pageCount; p++) {
+    doc.setPage(p);
+    doc.setFontSize(8);
+    doc.setTextColor(120);
+    doc.text(`Generated: ${generated}`, 14, pageHeight - 10);
+    doc.text(
+      `KYUTXO — generated offline  ·  Page ${p} of ${pageCount}`,
+      pageWidth - 14,
+      pageHeight - 10,
+      { align: "right" },
+    );
+  }
+  doc.setTextColor(0);
 
   return doc.output("blob");
 }

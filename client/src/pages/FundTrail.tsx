@@ -657,7 +657,7 @@ function TrailLayout({
   }).current;
 
   const handleExport = useCallback(
-    async (format: "csv" | "pdf") => {
+    async (format: "csv" | "pdf" | "pdf-detailed") => {
       setIsExporting(true);
       try {
         const snapshot = buildFundTrailSnapshot(
@@ -673,12 +673,18 @@ function TrailLayout({
             fundTrailFilename(centerLabel, "csv"),
           );
         } else {
-          const blob = await buildFundTrailPdf(snapshot);
+          const detailed = format === "pdf-detailed";
+          const blob = await buildFundTrailPdf(snapshot, { detailed });
           triggerDownload(blob, fundTrailFilename(centerLabel, "pdf"));
         }
         toast({
           title: "Export ready",
-          description: `Fund Trail exported as ${format.toUpperCase()}.`,
+          description:
+            format === "csv"
+              ? "Fund Trail exported as CSV."
+              : format === "pdf-detailed"
+                ? "Fund Trail exported as detailed PDF."
+                : "Fund Trail exported as PDF.",
         });
       } catch (err) {
         console.error("[FundTrail] export error", err);
@@ -750,6 +756,13 @@ function TrailLayout({
             >
               <FileText className="h-4 w-4 mr-2" />
               Export as PDF
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onClick={() => handleExport("pdf-detailed")}
+              data-testid="fund-trail-export-pdf-detailed"
+            >
+              <FileText className="h-4 w-4 mr-2" />
+              Export as detailed PDF
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
