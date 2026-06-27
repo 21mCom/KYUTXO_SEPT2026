@@ -5,6 +5,7 @@ import type {
   GroupFlowDetail,
   TrailHop,
 } from "./fund-trail-engine";
+import { formatBtc } from "./fund-trail-engine";
 import {
   buildFundTrailSnapshot,
   buildFundTrailCsv,
@@ -87,6 +88,72 @@ function parseCsv(csv: string): string[][] {
     rows.push(row);
   }
   return rows;
+}
+
+// ---------------------------------------------------------------------------
+// PDF text extraction — a minimal reader for jspdf's (uncompressed) content
+// streams. jspdf stores most text as Latin1 literal strings `(text)`, but runs
+// containing non-Latin1 glyphs (e.g. the "↳" indent marker on expanded hops)
+// are emitted as UTF-16BE. This recovers the rendered text from both forms so
+// tests can assert on what the PDF actually says, not just that bytes exist.
+// ---------------------------------------------------------------------------
+
+function unescapePdfLiteral(raw: string): string {
+  let out = "";
+  for (let i = 0; i < raw.length; i++) {
+    const c = raw[i];
+    if (c !== "\\") {
+      out += c;
+      continue;
+    }
+    const next = raw[i + 1];
+    if (next === undefined) break;
+    if (next >= "0" && next <= "7") {
+      let oct = next;
+      i++;
+      for (let k = 0; k < 2; k++) {
+        const d = raw[i + 1];
+        if (d >= "0" && d <= "7") {
+          oct += d;
+          i++;
+        } else {
+          break;
+        }
+      }
+      out += String.fromCharCode(parseInt(oct, 8));
+    } else {
+      const escapes: Record<string, string> = {
+        n: "\n",
+        r: "\r",
+        t: "\t",
+        b: "\b",
+        f: "\f",
+      };
+      out += escapes[next] ?? next;
+      i++;
+    }
+  }
+  return out;
+}
+
+function decodePdfBytes(bytes: string): string {
+  // A run carrying any NUL byte is a UTF-16BE string; decode it as pairs.
+  if (!bytes.includes("\u0000")) return bytes;
+  let out = "";
+  for (let i = 0; i + 1 < bytes.length; i += 2) {
+    out += String.fromCharCode(
+      (bytes.charCodeAt(i) << 8) | bytes.charCodeAt(i + 1),
+    );
+  }
+  return out;
+}
+
+async function extractPdfText(blob: Blob): Promise<string> {
+  const latin1 = Buffer.from(await blob.arrayBuffer()).toString("latin1");
+  const literals = latin1.match(/\((?:[^()\\]|\\.)*\)/g) ?? [];
+  return literals
+    .map((lit) => decodePdfBytes(unescapePdfLiteral(lit.slice(1, -1))))
+    .join("\n");
 }
 
 describe("buildFundTrailCsv", () => {
@@ -470,6 +537,36 @@ describe("buildFundTrailPdf", () => {
     const blob = await buildFundTrailPdf(snapshot);
     expect(blob.size).toBeGreaterThan(0);
     expect(await blob.slice(0, 5).text()).toBe("%PDF-");
+  });
+
+  it("renders the section headings, center label, and in/out totals as PDF text", async () => {
+    const snapshot = richSnapshot();
+    const text = await extractPdfText(await buildFundTrailPdf(snapshot));
+
+    // Center node identity.
+    expect(text).toContain(snapshot.centerLabel);
+    // Both section headings must survive into the rendered document.
+    expect(text).toContain("Sources");
+    expect(text).toContain("Destinations");
+    // The in/out totals must be labeled and formatted, not transposed.
+    const totalIn = formatBtc(sumTopLevel(snapshot.sources));
+    const totalOut = formatBtc(sumTopLevel(snapshot.destinations));
+    expect(totalIn).toBe("1.00 BTC");
+    expect(totalOut).toBe("0.50 BTC");
+    expect(text).toContain(`${totalIn} in`);
+    expect(text).toContain(`${totalOut} out`);
+  });
+
+  it("renders top-level and expanded-hop group labels in the table body", async () => {
+    const snapshot = richSnapshot();
+    const text = await extractPdfText(await buildFundTrailPdf(snapshot));
+
+    // Top-level source and destination groups.
+    expect(text).toContain("Alice");
+    expect(text).toContain("Bob");
+    // The expanded "Carol" hop is indented (with "↳"), forcing jspdf to emit a
+    // UTF-16 run — it must still appear in the rendered table body.
+    expect(text).toContain("Carol");
   });
 
   it("flattens the snapshot into the rows the table will render", () => {
