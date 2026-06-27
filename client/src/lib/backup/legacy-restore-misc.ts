@@ -23,10 +23,13 @@
 //     restore, so each backup evidence id is mapped to its new live id and the
 //     attachments' `evidenceId` is remapped through that map; without this an old
 //     backup would orphan/mislink every evidence file (mirrors the v3 path).
-//   - price data: no de-dup and no id/FK remapping in either mode — every row is
-//     added with a fresh autoincrement id (the backup id is stripped). The
-//     legacy path relies on `replace` mode having cleared the table first to
-//     avoid duplicates on the non-unique `[date+currency+asset]` index.
+//   - price data: no id/FK remapping in either mode — every row is added with a
+//     fresh autoincrement id (the backup id is stripped). In `merge` mode a row
+//     whose `[date+currency+asset]` already exists is skipped (the index is NOT
+//     unique, so without this guard merging an overlapping backup silently
+//     doubles up the daily price rows); `replace` mode adds every row (the
+//     caller cleared the table first). Shared with the v3 inline path via the
+//     `restorePriceDataRows` helper so the two paths can never diverge.
 //   - utxo lineage + custody segments: no de-dup and no id/FK remapping in
 //     either mode — every row is added with a fresh autoincrement id. Custody
 //     segments carry a UNIQUE `segmentId` index, so a backup with two rows
@@ -66,10 +69,7 @@ import {
   bulkAddEvidence,
   addEvidenceAttachment,
 } from "@/lib/data/evidence-crud";
-import {
-  addPriceData,
-  type CreatePriceData,
-} from "@/lib/data/price-data-crud";
+import { restorePriceDataRows } from "@/lib/data/price-data-crud";
 import {
   addUtxoLineage,
   addCustodySegment,
@@ -327,26 +327,20 @@ export async function restoreLegacyEvidence(
 }
 
 /**
- * Restore daily price data rows. The legacy path does NOT de-dup in either mode
- * and does NOT remap any id/FK: every row is added with a fresh autoincrement id
- * (the backup id is stripped). The `[date+currency+asset]` index is NOT unique,
- * so duplicates would not throw — `replace` mode relies on the table having been
- * cleared first to avoid re-adding the same rows. Returns the number added (the
- * "prices" count surfaced to the user).
+ * Restore daily price data rows. Delegates to the shared `restorePriceDataRows`
+ * so the legacy path and the v3 inline path can never diverge. The backup id is
+ * always stripped (fresh autoincrement id). In `merge` mode a row whose
+ * `[date+currency+asset]` already exists is skipped (the index is NOT unique, so
+ * without this guard merging a backup that overlaps the current vault's dates
+ * silently doubles up the daily price rows); in `replace` mode every row is
+ * added (the caller clears the table first), matching the original append-only
+ * behaviour. Returns the number added (the "prices" count surfaced to the user).
  */
 export async function restoreLegacyPriceData(
   priceData: any[] | undefined,
+  restoreMode: RestoreMode = "replace",
 ): Promise<number> {
-  let priceDataAdded = 0;
-  if (!priceData || priceData.length === 0) return priceDataAdded;
-
-  for (const pd of priceData) {
-    const { id, ...pdData } = pd;
-    await addPriceData(pdData as CreatePriceData, { skipNotification: true });
-    priceDataAdded++;
-  }
-
-  return priceDataAdded;
+  return restorePriceDataRows(priceData, restoreMode);
 }
 
 // Stable identity for a UTXO lineage edge (the spent input → created output it

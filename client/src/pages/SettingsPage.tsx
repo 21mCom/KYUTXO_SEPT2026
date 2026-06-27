@@ -2409,10 +2409,12 @@ export default function SettingsPage() {
       const evidenceAdded = evidenceResult.evidenceAdded;
       const evidenceAttachmentsAdded = evidenceResult.evidenceAttachmentsAdded;
 
-      // Restore price data (v2.2.0+, not encrypted): append-only, no de-dup or
-      // id remapping (replace mode cleared the table above). Shared with tests
-      // via the legacy-restore-misc helpers.
-      const priceDataAdded = await restoreLegacyPriceData(priceData);
+      // Restore price data (v2.2.0+, not encrypted): no id remapping. In merge
+      // mode rows whose [date+currency+asset] already exists are skipped so an
+      // overlapping backup doesn't double up daily price rows; replace mode
+      // cleared the table above and adds every row. Shared with the v3 inline
+      // path via restorePriceDataRows so the two paths can never diverge.
+      const priceDataAdded = await restoreLegacyPriceData(priceData, restoreMode);
 
       // Restore node settings (v2.2.0+, not encrypted). Uses the shared helper
       // so the legacy path and the v3 streaming path can never diverge in how

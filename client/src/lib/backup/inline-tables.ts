@@ -43,7 +43,11 @@ import {
   clearEvidence,
   clearEvidenceAttachments,
 } from "@/lib/data/evidence-crud";
-import { getAllPriceData, addPriceData, clearPriceData } from "@/lib/data/price-data-crud";
+import {
+  getAllPriceData,
+  restorePriceDataRows,
+  clearPriceData,
+} from "@/lib/data/price-data-crud";
 import { getAllSettings, getSettings, updateSettings } from "@/lib/data/settings-crud";
 import {
   getAllNodeSettings,
@@ -403,10 +407,11 @@ export async function restoreInlineTables(
     );
   }
 
-  for (const pd of arr("priceData")) {
-    const { id, ...d } = pd;
-    await addPriceData(d, { skipNotification: true });
-  }
+  // The v3 restore orchestrator always clears the vault first, so this runs in
+  // effective "replace" mode (every row added). Routed through the shared
+  // restorePriceDataRows helper so the v3 and legacy paths can never diverge in
+  // how price rows are de-duplicated.
+  await restorePriceDataRows(arr("priceData"), "replace");
 
   await restoreNodeSettingsRows(arr("nodeSettings"));
   await restoreSettingsPreferences(arr("settings"));

@@ -12,7 +12,11 @@
 // fake-indexeddb (mirroring the other legacy/v3 round-trip tests) and assert the
 // invariants the legacy path depended on:
 //   - price data: every row added with a FRESH autoincrement id (backup id
-//     stripped); no de-dup; the returned count matches the rows written.
+//     stripped); the returned count matches the rows written. Replace mode (the
+//     default) adds every row; merge mode skips any row whose
+//     [date+currency+asset] already exists (both pre-existing in the vault and
+//     duplicated within the same backup) so an overlapping merge can't double up
+//     the daily price rows.
 //   - utxo lineage: every row added with a fresh id; counted as "lineage".
 //   - custody segments: every row added with a fresh id; restored but NOT
 //     counted toward the user-facing "lineage" number; the unique `segmentId`
@@ -126,9 +130,10 @@ describe("legacy restore: price data", () => {
     expect(byDate.get("2024-01-02")!.close).toBe(43000);
   });
 
-  it("does NOT de-dup: the same date/currency/asset can be added twice", async () => {
-    // The [date+currency+asset] index is not unique, so the legacy append-only
-    // path adds duplicates rather than skipping them.
+  it("replace mode does NOT de-dup: the same date/currency/asset can be added twice", async () => {
+    // The [date+currency+asset] index is not unique, and replace mode (the
+    // default) relies on the table having been cleared first, so it adds every
+    // row rather than skipping duplicates.
     const added = await restoreLegacyPriceData([
       backupPrice(201, "2024-02-01"),
       backupPrice(202, "2024-02-01"),
@@ -138,9 +143,70 @@ describe("legacy restore: price data", () => {
     expect(live.filter((p) => p.date === "2024-02-01")).toHaveLength(2);
   });
 
+  it("merge mode skips rows whose date+currency+asset already exists in the vault", async () => {
+    // Seed the vault with one day (as if a prior restore/import added it).
+    await restoreLegacyPriceData([backupPrice(1, "2024-03-01", { close: 60000 })]);
+    expect(await getAllPriceData()).toHaveLength(1);
+
+    // Merging a backup whose 2024-03-01 overlaps the existing row must skip that
+    // row (no doubling) and add only the genuinely new 2024-03-02.
+    const added = await restoreLegacyPriceData(
+      [
+        backupPrice(2, "2024-03-01", { close: 99999 }),
+        backupPrice(3, "2024-03-02", { close: 61000 }),
+      ],
+      "merge",
+    );
+    expect(added).toBe(1);
+
+    const live = await getAllPriceData();
+    expect(live).toHaveLength(2);
+    // The pre-existing row is untouched (its original close survives; the
+    // overlapping backup row was skipped, not applied).
+    expect(live.filter((p) => p.date === "2024-03-01")).toHaveLength(1);
+    expect(live.find((p) => p.date === "2024-03-01")!.close).toBe(60000);
+    expect(live.filter((p) => p.date === "2024-03-02")).toHaveLength(1);
+  });
+
+  it("merge mode also de-dups duplicate days WITHIN one backup", async () => {
+    // An internally-duplicated backup must not re-add the same day twice in a
+    // single merge — the skip-set is extended as rows are added.
+    const added = await restoreLegacyPriceData(
+      [
+        backupPrice(10, "2024-04-01"),
+        backupPrice(11, "2024-04-01"),
+        backupPrice(12, "2024-04-02"),
+      ],
+      "merge",
+    );
+    expect(added).toBe(2);
+    const live = await getAllPriceData();
+    expect(live).toHaveLength(2);
+    expect(live.filter((p) => p.date === "2024-04-01")).toHaveLength(1);
+  });
+
+  it("merge mode distinguishes by currency and asset, not just date", async () => {
+    await restoreLegacyPriceData([
+      backupPrice(20, "2024-05-01", { currency: "USD", asset: "BTC" }),
+    ]);
+    // Same date but a different currency / asset is NOT a duplicate.
+    const added = await restoreLegacyPriceData(
+      [
+        backupPrice(21, "2024-05-01", { currency: "EUR", asset: "BTC" }),
+        backupPrice(22, "2024-05-01", { currency: "USD", asset: "ETH" }),
+        backupPrice(23, "2024-05-01", { currency: "USD", asset: "BTC" }), // dup
+      ],
+      "merge",
+    );
+    expect(added).toBe(2);
+    expect(await getAllPriceData()).toHaveLength(3);
+  });
+
   it("no-ops cleanly on an empty/undefined array", async () => {
     await expect(restoreLegacyPriceData([])).resolves.toBe(0);
     await expect(restoreLegacyPriceData(undefined)).resolves.toBe(0);
+    await expect(restoreLegacyPriceData([], "merge")).resolves.toBe(0);
+    await expect(restoreLegacyPriceData(undefined, "merge")).resolves.toBe(0);
     expect(await getAllPriceData()).toHaveLength(0);
   });
 });

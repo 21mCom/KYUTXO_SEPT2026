@@ -99,3 +99,72 @@ export async function getPriceDataByDateCurrencyAssetKeys(
     .anyOf(keys)
     .toArray();
 }
+
+export type PriceRestoreMode = 'merge' | 'replace';
+
+// Build the de-dup key for the non-unique [date+currency+asset] index. The NUL
+// separator can never appear in any of the three string components, so distinct
+// triples can never collide on the same key.
+function priceDedupKey(date: unknown, currency: unknown, asset: unknown): string {
+  return `${date}\u0000${currency}\u0000${asset}`;
+}
+
+/**
+ * Restore daily price rows from a backup. SINGLE source of truth shared by BOTH
+ * the legacy (pre-v3) restore path and the v3 inline path so they can never
+ * diverge.
+ *
+ * The backup `id` is always stripped (every row gets a fresh autoincrement id).
+ *
+ * In MERGE mode, a row whose `[date+currency+asset]` already exists is skipped:
+ * the index is NOT unique, so without this guard merging a backup that overlaps
+ * the current vault's dates silently doubles up the daily price rows (which
+ * skews any USD valuation that reads price history). The skip-set is seeded from
+ * the rows already in the table AND extended as we add, so an internally
+ * duplicated backup can't re-add the same day within one merge either.
+ *
+ * In REPLACE mode every row is added (the caller cleared the table first), which
+ * preserves the original append-only behaviour exactly.
+ *
+ * Returns the number of rows actually written.
+ */
+export async function restorePriceDataRows(
+  priceData: any[] | undefined,
+  restoreMode: PriceRestoreMode
+): Promise<number> {
+  if (!priceData || priceData.length === 0) return 0;
+
+  const seen = new Set<string>();
+
+  if (restoreMode === 'merge') {
+    const keys: [string, string, string][] = [];
+    for (const pd of priceData) {
+      if (
+        pd &&
+        typeof pd.date === 'string' &&
+        typeof pd.currency === 'string' &&
+        typeof pd.asset === 'string'
+      ) {
+        keys.push([pd.date, pd.currency, pd.asset]);
+      }
+    }
+    const existing = await getPriceDataByDateCurrencyAssetKeys(keys);
+    for (const e of existing) {
+      seen.add(priceDedupKey(e.date, e.currency, e.asset));
+    }
+  }
+
+  let added = 0;
+  for (const pd of priceData) {
+    const { id, ...pdData } = pd;
+    if (restoreMode === 'merge') {
+      const key = priceDedupKey(pdData.date, pdData.currency, pdData.asset);
+      if (seen.has(key)) continue;
+      seen.add(key);
+    }
+    await addPriceData(pdData as CreatePriceData, { skipNotification: true });
+    added++;
+  }
+
+  return added;
+}
