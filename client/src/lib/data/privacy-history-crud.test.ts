@@ -162,6 +162,91 @@ describe("retention trimming", () => {
     const all = await getPrivacyAuditHistory();
     expect(all[0].timestamp).toBe(1000);
   });
+
+  it("honors a custom settings.privacyHistoryLimit when adding entries", async () => {
+    const customLimit = 5;
+    await setRetentionLimit(customLimit);
+
+    // Add well beyond the custom limit; each add should trim to it.
+    const total = customLimit + 6;
+    for (let i = 1; i <= total; i++) {
+      await addPrivacyAuditHistoryEntry(mkEntry(i * 1000));
+    }
+
+    expect(await testDb.privacyAuditHistory.count()).toBe(customLimit);
+
+    const all = await getPrivacyAuditHistory();
+    // Only the most-recent `customLimit` runs survive; oldest removed first.
+    expect(all.map((e) => e.timestamp)).toEqual([
+      7000, 8000, 9000, 10000, 11000,
+    ]);
+  });
+});
+
+describe("retention limit fallback", () => {
+  // An invalid (non-positive, non-finite, or non-numeric) stored limit must
+  // fall back to DEFAULT_PRIVACY_HISTORY_LIMIT rather than disabling trimming
+  // or trimming to a bogus size.
+  const invalidLimits: Array<[string, unknown]> = [
+    ["zero", 0],
+    ["negative", -10],
+    ["NaN", Number.NaN],
+    ["Infinity", Number.POSITIVE_INFINITY],
+    ["a non-number", "30" as unknown],
+    ["null", null],
+  ];
+
+  for (const [label, value] of invalidLimits) {
+    it(`falls back to the default when the stored limit is ${label}`, async () => {
+      await testDb.settings.put({
+        id: "default",
+        privacyHistoryLimit: value,
+      } as Settings);
+
+      const overBy = 3;
+      const total = DEFAULT_PRIVACY_HISTORY_LIMIT + overBy;
+      for (let i = 1; i <= total; i++) {
+        await addPrivacyAuditHistoryEntry(mkEntry(i * 1000));
+      }
+
+      // Trimming applies the default, not the invalid value.
+      expect(await testDb.privacyAuditHistory.count()).toBe(
+        DEFAULT_PRIVACY_HISTORY_LIMIT,
+      );
+
+      const all = await getPrivacyAuditHistory();
+      expect(all[0].timestamp).toBe((overBy + 1) * 1000);
+      expect(all[all.length - 1].timestamp).toBe(total * 1000);
+    });
+  }
+
+  it("falls back to the default when the settings row is missing entirely", async () => {
+    // No settings row at all (getSettings returns undefined).
+    await testDb.settings.clear();
+
+    const overBy = 2;
+    const total = DEFAULT_PRIVACY_HISTORY_LIMIT + overBy;
+    for (let i = 1; i <= total; i++) {
+      await addPrivacyAuditHistoryEntry(mkEntry(i * 1000));
+    }
+
+    expect(await testDb.privacyAuditHistory.count()).toBe(
+      DEFAULT_PRIVACY_HISTORY_LIMIT,
+    );
+  });
+
+  it("floors a fractional custom limit", async () => {
+    // A fractional stored limit (e.g. 4.9) should floor to 4.
+    await setRetentionLimit(4.9);
+
+    for (let i = 1; i <= 10; i++) {
+      await addPrivacyAuditHistoryEntry(mkEntry(i * 1000));
+    }
+
+    expect(await testDb.privacyAuditHistory.count()).toBe(4);
+    const all = await getPrivacyAuditHistory();
+    expect(all.map((e) => e.timestamp)).toEqual([7000, 8000, 9000, 10000]);
+  });
 });
 
 describe("trimPrivacyAuditHistory", () => {
