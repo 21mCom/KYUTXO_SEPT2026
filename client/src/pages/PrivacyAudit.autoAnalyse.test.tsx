@@ -159,3 +159,52 @@ describe("TransactionDeepDive auto-run — opened from a finding", () => {
     expect(screen.queryByTestId("container-boltzmann-result")).toBeNull();
   });
 });
+
+describe("TransactionDeepDive auto-run — opened from a stale finding", () => {
+  it("auto-runs once and shows the 'no participant data' message (no heatmap) when participants can't be loaded", async () => {
+    // A flagged finding may point at a transaction whose participants are gone
+    // (e.g. the address was never re-synced). analyse() should land on a clear
+    // explanation, not a blank panel or a heatmap.
+    mockedGetParticipants.mockResolvedValue([]);
+
+    render(<TransactionDeepDive txids={[TXID]} coinjoinTxids={new Set<string>()} autoAnalyse />);
+
+    // The auto-run fires on its own and surfaces the empty-data message.
+    const message = await screen.findByTestId("text-deep-dive-message");
+    expect(message.textContent).toContain("No participant data available for this transaction");
+
+    // It loaded the data exactly once — the auto-run guard held.
+    expect(mockedGetParticipants).toHaveBeenCalledTimes(1);
+
+    // With no inputs/outputs the Boltzmann worker is never created, so no
+    // analysis, no heatmap, and no summary render.
+    expect(lastWorker).toBeNull();
+    expect(screen.queryByTestId("container-boltzmann-result")).toBeNull();
+    expect(screen.queryByTestId("container-boltzmann-heatmap")).toBeNull();
+    expect(screen.queryByTestId("container-deep-dive-summary")).toBeNull();
+
+    // Empty data isn't a failure — there's nothing to retry, just re-sync.
+    expect(screen.queryByTestId("button-retry-deep-dive")).toBeNull();
+  });
+
+  it("auto-runs once and shows a load-failure message with a Retry affordance when participants reject", async () => {
+    // If the participant load itself throws, the catch branch should explain the
+    // failure and offer a retry rather than leaving a blank panel.
+    mockedGetParticipants.mockRejectedValue(new Error("indexeddb unavailable"));
+
+    render(<TransactionDeepDive txids={[TXID]} coinjoinTxids={new Set<string>()} autoAnalyse />);
+
+    const message = await screen.findByTestId("text-deep-dive-message");
+    expect(message.textContent).toContain("Couldn't load this transaction's data.");
+
+    // The auto-run fired exactly once and never reached the worker.
+    expect(mockedGetParticipants).toHaveBeenCalledTimes(1);
+    expect(lastWorker).toBeNull();
+
+    // No heatmap or results — and because a load failure is retryable, the
+    // Retry button is offered.
+    expect(screen.queryByTestId("container-boltzmann-result")).toBeNull();
+    expect(screen.queryByTestId("container-boltzmann-heatmap")).toBeNull();
+    expect(await screen.findByTestId("button-retry-deep-dive")).toBeTruthy();
+  });
+});
