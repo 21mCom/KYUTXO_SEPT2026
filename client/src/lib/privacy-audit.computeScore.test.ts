@@ -50,3 +50,69 @@ describe("computeScore LOW proximity first-penalty", () => {
     expect(finding.scoreDelta).toBe(-3);
   });
 });
+
+// Builds N findings that share a type (so computeScore groups them into a single
+// waterfall entry) and a severity (so they stack within the same tier). The
+// first finding of the tier pays SEVERITY_FIRST_PENALTY; every additional one
+// pays the intentionally smaller SEVERITY_SUBSEQUENT_PENALTY.
+function makeFindings(
+  type: PrivacyFinding["type"],
+  severity: PrivacyFinding["severity"],
+  count: number
+): PrivacyFinding[] {
+  return Array.from({ length: count }, (_, i) => ({
+    type,
+    severity,
+    description: `Synthetic ${severity} ${type} finding #${i + 1}`,
+    details: {},
+    correction: "n/a",
+    txids: [`tx-${type}-${i + 1}`],
+    addresses: [`bc1q${type.toLowerCase()}${i}0000000000000000000000000000aa`],
+  }));
+}
+
+describe("computeScore subsequent (stacking) penalties", () => {
+  it("stacks LOW findings as first + N × subsequent: -3 + -1 = -4", () => {
+    const findings = makeFindings("ADDRESS_REUSE", "LOW", 2);
+
+    const { score, waterfall } = computeScore(findings, []);
+
+    const entry = waterfall.find((w) => w.findingType === "ADDRESS_REUSE");
+    expect(entry).toBeTruthy();
+    expect(entry!.count).toBe(2);
+    // First LOW finding pays -3, the second pays the smaller -1 subsequent penalty.
+    expect(entry!.delta).toBe(-4);
+
+    expect(score).toBe(96);
+    // Each finding records its share of the grouped delta.
+    for (const f of findings) {
+      expect(f.scoreDelta).toBe(-2);
+    }
+  });
+
+  it("stacks MEDIUM findings as first + N × subsequent: -8 + -3 = -11", () => {
+    const findings = makeFindings("ROUND_AMOUNT", "MEDIUM", 2);
+
+    const { score, waterfall } = computeScore(findings, []);
+
+    const entry = waterfall.find((w) => w.findingType === "ROUND_AMOUNT");
+    expect(entry).toBeTruthy();
+    expect(entry!.count).toBe(2);
+    // First MEDIUM finding pays -8, the second pays the smaller -3 subsequent
+    // penalty. A tier-swap regression (e.g. using LOW's -1) would break this.
+    expect(entry!.delta).toBe(-11);
+
+    expect(score).toBe(89);
+  });
+
+  it("keeps shrinking penalties for three+ findings: -8 + 2 × -3 = -14", () => {
+    const findings = makeFindings("ROUND_AMOUNT", "MEDIUM", 3);
+
+    const { waterfall } = computeScore(findings, []);
+
+    const entry = waterfall.find((w) => w.findingType === "ROUND_AMOUNT");
+    expect(entry).toBeTruthy();
+    expect(entry!.count).toBe(3);
+    expect(entry!.delta).toBe(-14);
+  });
+});
