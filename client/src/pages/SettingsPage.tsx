@@ -113,7 +113,7 @@ import {
   setAttachmentPathsMigrated,
 } from "@/lib/vault";
 import JSZip from "jszip";
-import { peekManifest, restoreV3Backup, RestoreInterruptedError, type AttachmentFileWriter } from "@/lib/backup/restore";
+import { peekManifest, restoreV3Backup, RestoreInterruptedError, AttachmentWriteError, type AttachmentFileWriter } from "@/lib/backup/restore";
 import { BackupCancelledError, downloadBlob } from "@/lib/backup/sink";
 import { blobChunks } from "@/lib/backup/zip-stream";
 import { isV3Manifest, parseInline } from "@/lib/backup/format";
@@ -2591,6 +2591,41 @@ export default function SettingsPage() {
             description: "No changes were made — your existing data is intact.",
           });
         }
+        return;
+      }
+      // A single attachment file could not be written (e.g. the disk is full or
+      // the write endpoint rejected the file). This can surface either directly
+      // (raw AttachmentWriteError) or wrapped as the cause of a
+      // RestoreInterruptedError once the vault has been reset to empty. In both
+      // cases give a specific, plain-language message that tells the user what
+      // to do next, instead of a raw endpoint error.
+      const attachmentWriteFailure =
+        error instanceof AttachmentWriteError
+          ? error
+          : error instanceof RestoreInterruptedError &&
+              error.cause instanceof AttachmentWriteError
+            ? error.cause
+            : null;
+      if (attachmentWriteFailure) {
+        console.error("Restore failed writing an attachment:", attachmentWriteFailure);
+        setRestoreProgress(0);
+        setRestoreMessage("");
+        toast({
+          variant: "destructive",
+          title: "Restore Failed — Couldn't Write Attachment",
+          description:
+            "Restore failed while saving an attachment file — your disk may be full or the file was rejected. The vault was reset to empty, so no partial data was left behind. Free up some disk space, then run the restore again.",
+        });
+        // The reset-to-empty contract clears everything, so re-evaluate the
+        // once-per-session orphan check after reload, the same as other paths.
+        resetOrphanCheckGate();
+        setTimeout(() => {
+          setRestoreDialogOpen(false);
+          setRestoreFile(null);
+          setRestorePassword("");
+          setBackupInfo(null);
+          window.location.reload();
+        }, 3000);
         return;
       }
       // Cancelled after the clear, but the vault could NOT be reset to a clean

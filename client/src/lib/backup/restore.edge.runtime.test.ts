@@ -19,7 +19,13 @@ import JSZip from "jszip";
 
 import { db } from "@/lib/database";
 import { exportBackup, type AttachmentFileIO } from "./export";
-import { restoreV3Backup, peekManifest, type AttachmentFileWriter } from "./restore";
+import {
+  restoreV3Backup,
+  peekManifest,
+  RestoreInterruptedError,
+  AttachmentWriteError,
+  type AttachmentFileWriter,
+} from "./restore";
 import { MemorySink, type BackupSink } from "./sink";
 import { blobChunks } from "./zip-stream";
 import { isV3Manifest } from "./format";
@@ -194,6 +200,17 @@ async function exportEncrypted(password: string): Promise<Blob> {
   return sink.blob as Blob;
 }
 
+async function exportPlain(): Promise<Blob> {
+  const sink = new MemorySink();
+  await exportBackup({
+    sink: sink as BackupSink,
+    encrypted: false,
+    batchSize: BATCH,
+    attachmentIO,
+  });
+  return sink.blob as Blob;
+}
+
 beforeEach(async () => {
   sourceFiles = new Map();
   restoredFiles = new Map();
@@ -338,5 +355,46 @@ describe("legacy pre-v3 backups route away from the v3 restore", () => {
     const after = await liveCounts();
     expect(after).toEqual(before);
     expect(restoredFiles.size).toBe(0);
+  });
+});
+
+describe("a failing attachment write surfaces a specific error after clear", () => {
+  it("wraps the write failure as RestoreInterruptedError(cause=AttachmentWriteError) and resets the vault", async () => {
+    await seedVault();
+    const blob = await exportPlain();
+    expect((await liveCounts()).records).toBe(N_REC);
+
+    // Simulate a disk-full / rejected-file failure on the FIRST attachment file
+    // write. Attachment files are written last (after the destructive clear), so
+    // this exercises the fail-after-clear path that resets the vault to empty.
+    const failingWriter: AttachmentFileWriter = {
+      async write() {
+        throw new Error("ENOSPC: no space left on device");
+      },
+    };
+
+    let caught: unknown;
+    try {
+      await restoreV3Backup({
+        source: blobChunks(blob),
+        attachmentWriter: failingWriter,
+      });
+    } catch (err) {
+      caught = err;
+    }
+
+    expect(caught).toBeInstanceOf(RestoreInterruptedError);
+    expect((caught as RestoreInterruptedError).cause).toBeInstanceOf(
+      AttachmentWriteError,
+    );
+    const cause = (caught as RestoreInterruptedError).cause as AttachmentWriteError;
+    expect(cause.relPath).toBeTruthy();
+    expect(cause.message).toMatch(/no space left/i);
+
+    // The fail-after-clear contract resets the vault to a verified-empty state.
+    const after = await liveCounts();
+    expect(after.records).toBe(0);
+    expect(after.attachments).toBe(0);
+    expect(after.transactions).toBe(0);
   });
 });

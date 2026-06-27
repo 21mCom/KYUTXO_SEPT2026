@@ -82,6 +82,23 @@ export class RestoreInterruptedError extends Error {
   }
 }
 
+// Thrown when writing a single attachment file fails (e.g. the disk is full or
+// the write endpoint rejected the file). Carries the attachment's relative path
+// and the underlying error so the UI can give the user a specific, actionable
+// message instead of a raw endpoint error. After the destructive clear this is
+// surfaced as the `cause` of a RestoreInterruptedError.
+export class AttachmentWriteError extends Error {
+  relPath: string;
+  constructor(relPath: string, message: string, options?: { cause?: unknown }) {
+    super(message);
+    this.name = "AttachmentWriteError";
+    this.relPath = relPath;
+    if (options?.cause !== undefined) {
+      (this as { cause?: unknown }).cause = options.cause;
+    }
+  }
+}
+
 export interface AttachmentFileWriter {
   write(relPath: string, data: ArrayBuffer): Promise<void>;
 }
@@ -339,7 +356,19 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
               bytes.byteOffset,
               bytes.byteOffset + bytes.byteLength,
             ) as ArrayBuffer;
-            await opts.attachmentWriter.write(relPath, ab);
+            try {
+              await opts.attachmentWriter.write(relPath, ab);
+            } catch (writeErr) {
+              // Tag the failure with its kind + path so the caller can show a
+              // specific "disk may be full / file rejected" message rather than
+              // a raw endpoint error. Cancellation must NOT be reclassified.
+              if (writeErr instanceof BackupCancelledError) throw writeErr;
+              throw new AttachmentWriteError(
+                relPath,
+                writeErr instanceof Error ? writeErr.message : String(writeErr),
+                { cause: writeErr },
+              );
+            }
             counts.attachmentFiles += 1;
             processed += 1;
             report("Restoring attachment files...");
