@@ -132,6 +132,15 @@ const SRC_GRANDCHILD = "Dave"; // next hop under Carol (source side)
 const DST = "Bob"; // expandable destination group on the center hop
 const DST_CHILD = "Erin"; // next hop under Bob (destination side)
 
+// Same-label-on-both-sides scenario: a center group ("Mirror") whose source and
+// destination sides both expose the *same* group label ("Shared"). The registry
+// must keep these two registrations distinct (source/Shared vs dest/Shared) so
+// the export nests each side's own next hop independently.
+const MIRROR = "Mirror"; // center group with the same label on both sides
+const SHARED = "Shared"; // group label present on BOTH the source and dest side
+const SHARED_SRC_CHILD = "InflowA"; // next hop under Shared, source side
+const SHARED_DST_CHILD = "OutflowB"; // next hop under Shared, destination side
+
 function mkFlow(groupLabel: string, addr: string, txid: string): GroupFlow {
   return {
     groupLabel,
@@ -164,6 +173,18 @@ const HOPS: Record<string, TrailHop> = {
   [SRC]: mkHop([mkFlow(SRC_CHILD, "addr-carol", "tx-carol")], []),
   [SRC_CHILD]: mkHop([mkFlow(SRC_GRANDCHILD, "addr-dave", "tx-dave")], []),
   [DST]: mkHop([], [mkFlow(DST_CHILD, "addr-erin", "tx-erin")]),
+  // Mirror center: the SAME label ("Shared") appears as both a source and a
+  // destination of the center node.
+  [MIRROR]: mkHop(
+    [mkFlow(SHARED, "addr-shared-src", "tx-shared-src")],
+    [mkFlow(SHARED, "addr-shared-dst", "tx-shared-dst")],
+  ),
+  // Expanding "Shared" yields one further hop on each side; buildNode picks the
+  // matching side per registration direction.
+  [SHARED]: mkHop(
+    [mkFlow(SHARED_SRC_CHILD, "addr-inflowa", "tx-inflowa")],
+    [mkFlow(SHARED_DST_CHILD, "addr-outflowb", "tx-outflowb")],
+  ),
 };
 
 const computeOneHopSpy = vi.fn(
@@ -180,7 +201,7 @@ vi.mock("@/lib/data/fund-trail-engine", async () => {
   >("@/lib/data/fund-trail-engine");
   return {
     ...actual,
-    listGroupValues: vi.fn(async () => [ROOT]),
+    listGroupValues: vi.fn(async () => [ROOT, MIRROR]),
     getAddressesForGroup: vi.fn(async () => [{ inputString: "addr-1" }]),
     computeOneHop: (...args: unknown[]) =>
       (computeOneHopSpy as unknown as (...a: unknown[]) => Promise<TrailHop>)(
@@ -216,6 +237,34 @@ async function selectRootGroup() {
   });
   await screen.findByTestId(`fund-trail-expand-${SRC}-d0`);
   await screen.findByTestId(`fund-trail-expand-${DST}-d0`);
+}
+
+/** Pick the Mirror group; wait until the same "Shared" label renders on both sides. */
+async function selectMirrorGroup() {
+  await waitFor(() => {
+    const sel = screen.getByTestId(
+      "fund-trail-group-select",
+    ) as HTMLSelectElement;
+    expect(Array.from(sel.options).some((o) => o.value === MIRROR)).toBe(true);
+  });
+  fireEvent.change(screen.getByTestId("fund-trail-group-select"), {
+    target: { value: MIRROR },
+  });
+  // The same label is rendered once in the source column and once in the dest
+  // column, so two d0 cards/expand buttons share the testid.
+  await waitFor(() => {
+    expect(
+      screen.getAllByTestId(`fund-trail-expand-${SHARED}-d0`),
+    ).toHaveLength(2);
+  });
+}
+
+/**
+ * The same-label d0 cards collide on testid, so query them as a pair. The source
+ * column renders before the destination column, so [0] = source, [1] = dest.
+ */
+function sharedExpandButtons(): HTMLElement[] {
+  return screen.getAllByTestId(`fund-trail-expand-${SHARED}-d0`);
 }
 
 function clickExportCsv() {
@@ -331,5 +380,90 @@ describe("FundTrail export registry wiring", () => {
       (n) => n.groupLabel === SRC,
     );
     expect(aliceNode!.children).toEqual([]);
+  });
+
+  it("keeps same-label hops distinct when expandable on both sides", async () => {
+    renderPage();
+    await selectMirrorGroup();
+
+    // Expand the source-side "Shared" → reveals its source-side child.
+    fireEvent.click(sharedExpandButtons()[0]);
+    await screen.findByTestId(`fund-trail-flow-card-${SHARED_SRC_CHILD}-d1`);
+
+    // Expand the destination-side "Shared" → reveals its destination-side child.
+    // Re-query: the source expansion re-rendered the tree.
+    fireEvent.click(sharedExpandButtons()[1]);
+    await screen.findByTestId(`fund-trail-flow-card-${SHARED_DST_CHILD}-d1`);
+
+    await clickExportCsv();
+
+    const srcKey = flowPath("", "source", SHARED); // "source/Shared"
+    const dstKey = flowPath("", "dest", SHARED); // "dest/Shared"
+    // The two registrations for the same label must not collide.
+    expect(srcKey).not.toEqual(dstKey);
+    expect(captured.expandedHops!.has(srcKey)).toBe(true);
+    expect(captured.expandedHops!.has(dstKey)).toBe(true);
+
+    // The export nests each side's own next hop under the correct side only.
+    const srcNode = captured.snapshot!.sources.find(
+      (n) => n.groupLabel === SHARED,
+    )!;
+    const dstNode = captured.snapshot!.destinations.find(
+      (n) => n.groupLabel === SHARED,
+    )!;
+    expect(srcNode).toBeDefined();
+    expect(dstNode).toBeDefined();
+    expect(srcNode.children.map((c) => c.groupLabel)).toEqual([
+      SHARED_SRC_CHILD,
+    ]);
+    expect(dstNode.children.map((c) => c.groupLabel)).toEqual([
+      SHARED_DST_CHILD,
+    ]);
+  });
+
+  it("collapsing one side leaves the other side's same-label hop intact", async () => {
+    renderPage();
+    await selectMirrorGroup();
+
+    // Expand both sides of the shared label.
+    fireEvent.click(sharedExpandButtons()[0]);
+    await screen.findByTestId(`fund-trail-flow-card-${SHARED_SRC_CHILD}-d1`);
+    fireEvent.click(sharedExpandButtons()[1]);
+    await screen.findByTestId(`fund-trail-flow-card-${SHARED_DST_CHILD}-d1`);
+
+    await clickExportCsv();
+    const srcKey = flowPath("", "source", SHARED);
+    const dstKey = flowPath("", "dest", SHARED);
+    expect(captured.expandedHops!.has(srcKey)).toBe(true);
+    expect(captured.expandedHops!.has(dstKey)).toBe(true);
+
+    // Collapse only the source side (the Expand button toggles).
+    captured.snapshot = null;
+    fireEvent.click(sharedExpandButtons()[0]);
+    await waitFor(() => {
+      expect(
+        screen.queryByTestId(`fund-trail-flow-card-${SHARED_SRC_CHILD}-d1`),
+      ).toBeNull();
+    });
+    // The destination side's expanded child is still on screen.
+    expect(
+      screen.getByTestId(`fund-trail-flow-card-${SHARED_DST_CHILD}-d1`),
+    ).toBeTruthy();
+
+    await clickExportCsv();
+    // Source side dropped, destination side preserved.
+    expect(captured.expandedHops!.has(srcKey)).toBe(false);
+    expect(captured.expandedHops!.has(dstKey)).toBe(true);
+
+    const srcNode = captured.snapshot!.sources.find(
+      (n) => n.groupLabel === SHARED,
+    )!;
+    const dstNode = captured.snapshot!.destinations.find(
+      (n) => n.groupLabel === SHARED,
+    )!;
+    expect(srcNode.children).toEqual([]);
+    expect(dstNode.children.map((c) => c.groupLabel)).toEqual([
+      SHARED_DST_CHILD,
+    ]);
   });
 });
