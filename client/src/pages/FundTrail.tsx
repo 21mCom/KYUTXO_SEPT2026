@@ -1,4 +1,11 @@
-import { useState, useCallback } from "react";
+import {
+  useState,
+  useCallback,
+  useRef,
+  useEffect,
+  useContext,
+  createContext,
+} from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   ChevronDown,
@@ -9,6 +16,9 @@ import {
   Info,
   ChevronsLeftRight,
   X,
+  Download,
+  FileText,
+  FileSpreadsheet,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -19,6 +29,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { useToast } from "@/hooks/use-toast";
 import { useRecordPreview } from "@/contexts/RecordPreviewContext";
 import {
   type GroupingDimension,
@@ -34,6 +51,14 @@ import {
   UNKNOWN_SOURCE_LABEL,
   UNKNOWN_DEST_LABEL,
 } from "@/lib/data/fund-trail-engine";
+import {
+  buildFundTrailSnapshot,
+  buildFundTrailCsv,
+  buildFundTrailPdf,
+  fundTrailFilename,
+  triggerDownload,
+  flowPath,
+} from "@/lib/data/fund-trail-export";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -74,6 +99,22 @@ function CapNotice({
     </div>
   );
 }
+
+// ---------------------------------------------------------------------------
+// Expanded-hop registry — lets the Export action capture hops the user opened
+// ---------------------------------------------------------------------------
+
+/**
+ * Each FlowCard reports the hop it has expanded (keyed by its path) into this
+ * registry so the page-level Export can serialize the *currently-displayed*
+ * trail, including any expanded hops, without lifting all that state up.
+ */
+interface ExpandedHopRegistry {
+  register: (path: string, hop: TrailHop) => void;
+  unregister: (path: string) => void;
+}
+
+const ExpandedHopContext = createContext<ExpandedHopRegistry | null>(null);
 
 // ---------------------------------------------------------------------------
 // Detail Row — one address/txid/amount line inside an expanded flow
@@ -145,6 +186,7 @@ function FlowCard({
   depth,
   visitedLabels,
   dateRange,
+  path,
 }: {
   flow: GroupFlow;
   direction: "source" | "dest";
@@ -152,12 +194,25 @@ function FlowCard({
   depth: number;
   visitedLabels: Set<string>;
   dateRange?: DateRange;
+  path: string;
 }) {
   const [showDetails, setShowDetails] = useState(false);
   const [isExpanding, setIsExpanding] = useState(false);
   const [expandedHop, setExpandedHop] = useState<TrailHop | null>(null);
   // Track visited labels within this branch (child of visitedLabels)
   const [branchVisited] = useState<Set<string>>(() => new Set(visitedLabels));
+
+  // Report our expanded hop to the page-level registry so Export can capture it.
+  const hopRegistry = useContext(ExpandedHopContext);
+  useEffect(() => {
+    if (!hopRegistry) return;
+    if (expandedHop) {
+      hopRegistry.register(path, expandedHop);
+    } else {
+      hopRegistry.unregister(path);
+    }
+    return () => hopRegistry.unregister(path);
+  }, [hopRegistry, path, expandedHop]);
 
   const uniqueDetails = deduplicateDetails(flow.details);
 
@@ -317,6 +372,7 @@ function FlowCard({
                       depth={depth + 1}
                       visitedLabels={nextVisited}
                       dateRange={dateRange}
+                      path={flowPath(path, "source", f.groupLabel)}
                     />
                   ))}
                 </div>
@@ -341,6 +397,7 @@ function FlowCard({
                       depth={depth + 1}
                       visitedLabels={nextVisited}
                       dateRange={dateRange}
+                      path={flowPath(path, "dest", f.groupLabel)}
                     />
                   ))}
                 </div>
@@ -572,6 +629,8 @@ function TrailLayout({
   centerHop: TrailHop;
   dateRange?: DateRange;
 }) {
+  const { toast } = useToast();
+  const [isExporting, setIsExporting] = useState(false);
   const hasSources = centerHop.sources.length > 0;
   const hasDests = centerHop.destinations.length > 0;
   const totalIn = centerHop.sources.reduce((s, f) => s + f.totalSats, 0);
@@ -580,7 +639,54 @@ function TrailLayout({
   // The center label itself is always in the visited set for children
   const rootVisited = new Set([centerLabel]);
 
+  // Registry of hops the FlowCard tree has expanded, keyed by path, so Export
+  // can capture the currently-displayed trail including any expanded hops.
+  const expandedHopsRef = useRef<Map<string, TrailHop>>(new Map());
+  const hopRegistry: ExpandedHopRegistry = useRef<ExpandedHopRegistry>({
+    register: (path, hop) => expandedHopsRef.current.set(path, hop),
+    unregister: (path) => expandedHopsRef.current.delete(path),
+  }).current;
+
+  const handleExport = useCallback(
+    async (format: "csv" | "pdf") => {
+      setIsExporting(true);
+      try {
+        const snapshot = buildFundTrailSnapshot(
+          centerLabel,
+          dimension,
+          centerHop,
+          expandedHopsRef.current,
+        );
+        if (format === "csv") {
+          const csv = buildFundTrailCsv(snapshot);
+          triggerDownload(
+            new Blob([csv], { type: "text/csv;charset=utf-8" }),
+            fundTrailFilename(centerLabel, "csv"),
+          );
+        } else {
+          const blob = await buildFundTrailPdf(snapshot);
+          triggerDownload(blob, fundTrailFilename(centerLabel, "pdf"));
+        }
+        toast({
+          title: "Export ready",
+          description: `Fund Trail exported as ${format.toUpperCase()}.`,
+        });
+      } catch (err) {
+        console.error("[FundTrail] export error", err);
+        toast({
+          variant: "destructive",
+          title: "Export failed",
+          description: "Couldn't generate the export. Please try again.",
+        });
+      } finally {
+        setIsExporting(false);
+      }
+    },
+    [centerLabel, dimension, centerHop, toast],
+  );
+
   return (
+    <ExpandedHopContext.Provider value={hopRegistry}>
     <div className="flex flex-col flex-1 min-h-0 overflow-auto">
       {centerHop.isCapped && (
         <div className="px-6 pt-4">
@@ -590,7 +696,44 @@ function TrailLayout({
           />
         </div>
       )}
-      <div className="flex flex-1 gap-4 p-6 min-h-0">
+      {/* Export toolbar */}
+      <div className="flex items-center justify-end px-6 pt-4">
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={isExporting || (!hasSources && !hasDests)}
+              data-testid="fund-trail-export-button"
+            >
+              {isExporting ? (
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              ) : (
+                <Download className="h-4 w-4 mr-2" />
+              )}
+              Export
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem
+              onClick={() => handleExport("csv")}
+              data-testid="fund-trail-export-csv"
+            >
+              <FileSpreadsheet className="h-4 w-4 mr-2" />
+              Export as CSV
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onClick={() => handleExport("pdf")}
+              data-testid="fund-trail-export-pdf"
+            >
+              <FileText className="h-4 w-4 mr-2" />
+              Export as PDF
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+
+    <div className="flex flex-1 gap-4 px-6 pb-6 pt-2 min-h-0 overflow-auto">
       {/* Sources column */}
       <div className="flex flex-col gap-3 flex-1 min-w-0">
         <div className="flex items-center gap-2 mb-1">
@@ -620,6 +763,7 @@ function TrailLayout({
             depth={0}
             visitedLabels={rootVisited}
             dateRange={dateRange}
+            path={flowPath("", "source", flow.groupLabel)}
           />
         ))}
       </div>
@@ -685,11 +829,13 @@ function TrailLayout({
             depth={0}
             visitedLabels={rootVisited}
             dateRange={dateRange}
+            path={flowPath("", "dest", flow.groupLabel)}
           />
         ))}
       </div>
       </div>
     </div>
+    </ExpandedHopContext.Provider>
   );
 }
 
