@@ -60,6 +60,51 @@ export interface SourceOfFundsData {
   cap: SourceOfFundsCapInfo;
 }
 
+/** A funding transaction paired with the block height it confirmed at. */
+export interface DatedFundingTxid {
+  txid: string;
+  blockHeight: number;
+}
+
+/**
+ * Choose which funding transactions to retain when a busy address has more
+ * funding history than the per-report cap allows.
+ *
+ * For a Source of Funds declaration the OLDEST funding is usually the most
+ * important (original provenance / cost basis), while the most recent funding
+ * describes the address's current state. Rather than keeping whatever order the
+ * database index happened to return, we sort deterministically by block height
+ * (oldest first, tie-broken by txid) and retain a documented split: the oldest
+ * half of the cap plus the newest half. This guarantees the original provenance
+ * is never silently dropped while still capturing recent activity.
+ *
+ * Returns the kept txids in oldest-first order. When the input already fits
+ * inside the cap, every txid is returned (still sorted oldest-first).
+ */
+export function selectFundingTxidsUnderCap(
+  entries: DatedFundingTxid[],
+  limit: number,
+): string[] {
+  const sorted = [...entries].sort((a, b) =>
+    a.blockHeight !== b.blockHeight
+      ? a.blockHeight - b.blockHeight
+      : a.txid < b.txid
+        ? -1
+        : a.txid > b.txid
+          ? 1
+          : 0,
+  );
+
+  if (limit <= 0) return [];
+  if (sorted.length <= limit) return sorted.map((e) => e.txid);
+
+  const oldestCount = Math.ceil(limit / 2);
+  const newestCount = limit - oldestCount;
+  const oldest = sorted.slice(0, oldestCount);
+  const newest = newestCount > 0 ? sorted.slice(sorted.length - newestCount) : [];
+  return [...oldest, ...newest].map((e) => e.txid);
+}
+
 /**
  * Human-readable warning line describing how much of the funding history is
  * missing. Returns null when nothing was capped, so an uncapped export stays

@@ -1,9 +1,11 @@
 import { describe, it, expect } from "vitest";
 
 import {
+  type DatedFundingTxid,
   type FundingSource,
   type SourceOfFundsData,
   buildSourceOfFundsText,
+  selectFundingTxidsUnderCap,
   sourceOfFundsCapWarning,
   sourceOfFundsFilename,
 } from "./source-of-funds-export";
@@ -81,6 +83,61 @@ describe("buildSourceOfFundsText", () => {
     expect(text).toContain("9,999");
     // The summary also records the truncation with counts.
     expect(text).toContain("Funding Transactions Shown: 2,000 of 9,999 (truncated)");
+  });
+});
+
+describe("selectFundingTxidsUnderCap", () => {
+  function dated(txid: string, blockHeight: number): DatedFundingTxid {
+    return { txid, blockHeight };
+  }
+
+  it("returns every txid (oldest-first) when the input fits within the cap", () => {
+    const entries = [
+      dated("c", 800_300),
+      dated("a", 800_100),
+      dated("b", 800_200),
+    ];
+    expect(selectFundingTxidsUnderCap(entries, 10)).toEqual(["a", "b", "c"]);
+  });
+
+  it("keeps a documented split of the oldest and newest funding when capped", () => {
+    // 10 transactions, oldest (h0) .. newest (h9), cap of 4.
+    const entries = Array.from({ length: 10 }, (_, i) =>
+      dated(`tx${i}`, 800_000 + i),
+    );
+    const kept = selectFundingTxidsUnderCap(entries, 4);
+    // ceil(4/2)=2 oldest + floor(4/2)=2 newest, never the arbitrary middle.
+    expect(kept).toEqual(["tx0", "tx1", "tx8", "tx9"]);
+  });
+
+  it("never silently drops the earliest funding source", () => {
+    const entries = Array.from({ length: 50 }, (_, i) =>
+      dated(`tx${i}`, 900_000 - i), // shuffled heights: tx0 is newest, tx49 oldest
+    );
+    const kept = selectFundingTxidsUnderCap(entries, 6);
+    // tx49 is the oldest by block height and must be retained.
+    expect(kept).toContain("tx49");
+    // tx0 is the newest and must also be retained.
+    expect(kept).toContain("tx0");
+    expect(kept).toHaveLength(6);
+  });
+
+  it("orders deterministically by block height, tie-broken by txid", () => {
+    const entries = [
+      dated("zzz", 800_000),
+      dated("aaa", 800_000),
+      dated("mmm", 800_000),
+    ];
+    expect(selectFundingTxidsUnderCap(entries, 10)).toEqual(["aaa", "mmm", "zzz"]);
+  });
+
+  it("returns an empty list for a non-positive cap", () => {
+    expect(selectFundingTxidsUnderCap([dated("a", 1)], 0)).toEqual([]);
+  });
+
+  it("keeps the single oldest when the cap is one", () => {
+    const entries = [dated("new", 800_500), dated("old", 800_001)];
+    expect(selectFundingTxidsUnderCap(entries, 1)).toEqual(["old"]);
   });
 });
 

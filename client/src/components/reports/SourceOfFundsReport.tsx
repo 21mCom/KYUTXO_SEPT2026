@@ -1,13 +1,14 @@
 import { useState, useMemo } from "react";
 import { type Record as DBRecord, type TransactionParticipant, type BlockchainTransaction, type PriceData, USER_CURATED_TIERS } from "@/lib/database";
 import { useAddressRecords } from "@/hooks/use-address-records";
-import { getParticipantsByAddress, getParticipantsByTxid, getTransactionByTxid } from "@/lib/dataFacade";
+import { getParticipantsByAddress, getParticipantsByTxid, getTransactionByTxid, getTransactionsByTxids } from "@/lib/dataFacade";
 import { getPriceDataByKey, getLatestPriceOnOrBefore } from "@/lib/data/price-data-crud";
 import { DEFAULT_TX_LIMIT } from "@/lib/data/fund-trail-engine";
 import {
   type FundingSource,
   type SourceOfFundsData,
   buildSourceOfFundsText,
+  selectFundingTxidsUnderCap,
   sourceOfFundsCapWarning,
   sourceOfFundsFilename,
 } from "@/lib/data/source-of-funds-export";
@@ -73,7 +74,22 @@ export function SourceOfFundsReport() {
       // the exported declaration can warn the reader it is incomplete.
       const totalTxCount = allInputTxids.length;
       const isCapped = totalTxCount > DEFAULT_TX_LIMIT;
-      const inputTxids = isCapped ? allInputTxids.slice(0, DEFAULT_TX_LIMIT) : allInputTxids;
+
+      // When capped, the retained slice must be chosen deterministically and
+      // meaningfully rather than left to whatever order the index returned.
+      // For a Source of Funds declaration the oldest funding carries the most
+      // weight (original provenance / cost basis), so we order by confirmed
+      // block height and keep a documented split of the oldest + newest funding
+      // (see selectFundingTxidsUnderCap). One indexed bulk lookup gets the
+      // heights — far cheaper than the full per-transaction enrichment loop.
+      let inputTxids: string[];
+      if (isCapped) {
+        const fundingTxs = await getTransactionsByTxids(allInputTxids);
+        const datedTxids = fundingTxs.map(tx => ({ txid: tx.txid, blockHeight: tx.blockHeight }));
+        inputTxids = selectFundingTxidsUnderCap(datedTxids, DEFAULT_TX_LIMIT);
+      } else {
+        inputTxids = allInputTxids;
+      }
       const shownTxCount = inputTxids.length;
 
       let totalReceivedSats = 0;
