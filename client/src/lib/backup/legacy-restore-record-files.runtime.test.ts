@@ -61,6 +61,7 @@ let getAllRecords: typeof import("@/lib/data/record-crud").getAllRecords;
 let clearAllRecords: typeof import("@/lib/data/record-crud").clearAllRecords;
 let getAllAttachments: typeof import("@/lib/data/attachments-crud").getAllAttachments;
 let clearAttachments: typeof import("@/lib/data/attachments-crud").clearAttachments;
+let getRecordsByInputStrings: typeof import("@/lib/data/record-crud").getRecordsByInputStrings;
 
 beforeAll(async () => {
   tmpDataDir = await fs.mkdtemp(path.join(os.tmpdir(), "kyutxo-record-att-"));
@@ -96,6 +97,7 @@ beforeAll(async () => {
   bulkCreateRecords = recordCrud.bulkCreateRecords;
   getAllRecords = recordCrud.getAllRecords;
   clearAllRecords = recordCrud.clearAllRecords;
+  getRecordsByInputStrings = recordCrud.getRecordsByInputStrings;
   const attCrud = await import("@/lib/data/attachments-crud");
   getAllAttachments = attCrud.getAllAttachments;
   clearAttachments = attCrud.clearAttachments;
@@ -247,5 +249,189 @@ describe("legacy restore: record attachment files open via their restored path",
     await expect(
       fetchBytesViaPath(atts[0].objectStoragePath, atts[0].mimeType),
     ).rejects.toThrow();
+  });
+});
+
+describe("legacy restore (MERGE mode): merged attachments bind to the right pre-existing record", () => {
+  it("each merged attachment fetches the file of the SAME pre-existing record it links to (no same-id collision)", async () => {
+    // The merge danger: a backup record carries id N, and a pre-existing live
+    // record happens to ALSO have id N but a DIFFERENT inputString. Merge mode
+    // must link the attachment to the record whose `inputString` MATCHES (which
+    // here has a different live id), never to the same-id "decoy" record.
+    //
+    // We force that collision DETERMINISTICALLY: instead of assuming the backup
+    // ids land on specific live ids (clearAllRecords() does NOT reset Dexie's
+    // autoincrement, so seeded ids are unpredictable across tests), we read back
+    // the actual live ids of the decoy records and USE THOSE as the backup ids.
+    // The matching records have different live ids, so a same-id-link bug would
+    // bind each attachment to a decoy.
+
+    // 1. Seed decoy records whose inputStrings DO NOT appear in the backup.
+    //    Their live ids become the backup record ids below, so each backup id
+    //    collides with a decoy that must never receive a merged attachment.
+    const decoyIds = await bulkCreateRecords(
+      [
+        { type: "address", inputString: "decoy-one", label: "Decoy 1", tags: [], categories: [] } as any,
+        { type: "address", inputString: "decoy-two", label: "Decoy 2", tags: [], categories: [] } as any,
+        { type: "address", inputString: "decoy-three", label: "Decoy 3", tags: [], categories: [] } as any,
+      ],
+      { skipNotification: true, skipVocabularySync: true },
+    );
+    expect(decoyIds).toHaveLength(3);
+
+    // 2. Seed the REAL pre-existing records the backup will collide with by
+    //    inputString. Their live ids are assigned AFTER the decoys, so they
+    //    differ from the decoy (= backup) ids — the same-id collision is live.
+    //    backupId is bound to the decoy id so the collision is guaranteed.
+    const plan = [
+      { backupId: decoyIds[0], inputString: "bc1qmerge-receipt", label: "Merge Receipt", filename: "receipt.txt", bytes: "MERGE-RECEIPT-BYTES-1" },
+      { backupId: decoyIds[1], inputString: "txid-merge-wire", label: "Merge Wire", filename: "wire.txt", bytes: "MERGE-WIRE-BYTES-2" },
+      { backupId: decoyIds[2], inputString: "bc1qmerge-cold", label: "Merge Cold", filename: "photo.txt", bytes: "MERGE-PHOTO-BYTES-3" },
+    ];
+    const matchIds = await bulkCreateRecords(
+      plan.map((p) => ({
+        type: p.inputString.startsWith("txid") ? "transaction" : "address",
+        inputString: p.inputString,
+        label: `Existing ${p.label}`,
+        tags: [],
+        categories: [],
+      })) as any,
+      { skipNotification: true, skipVocabularySync: true },
+    );
+    expect(matchIds).toHaveLength(3);
+
+    const existingMatches = await getRecordsByInputStrings(plan.map((p) => p.inputString));
+    expect(existingMatches).toHaveLength(3);
+    const liveIdByInputString = new Map(existingMatches.map((r) => [r.inputString, r.id!]));
+
+    // Assert the collision precondition is REAL and deterministic: for each
+    // plan entry the backup id equals a decoy's live id, and that decoy's
+    // inputString differs from the matching record's (so linking by id is wrong),
+    // while the matching record's live id differs from the backup id.
+    const decoyInputStringById = new Map([
+      [decoyIds[0], "decoy-one"],
+      [decoyIds[1], "decoy-two"],
+      [decoyIds[2], "decoy-three"],
+    ]);
+    for (const p of plan) {
+      expect(decoyInputStringById.has(p.backupId)).toBe(true);
+      expect(decoyInputStringById.get(p.backupId)).not.toBe(p.inputString);
+      expect(liveIdByInputString.get(p.inputString)).not.toBe(p.backupId);
+    }
+
+    // 3. Put REAL files on disk for each backup attachment, with distinct bytes.
+    const pathByBackupId = new Map<number, string>();
+    for (const p of plan) {
+      const storagePath = await uploadFile(fileWithBytes(p.filename, "text/plain", p.bytes));
+      pathByBackupId.set(p.backupId, storagePath);
+    }
+
+    // 4. Build the legacy backup payload: records keyed by backup ids 1/2/3,
+    //    each with one attachment referencing that backup id.
+    const backupRecords = plan.map((p) => ({
+      id: p.backupId,
+      type: p.inputString.startsWith("txid") ? "transaction" : "address",
+      inputString: p.inputString,
+      label: p.label,
+      tags: [],
+      categories: [],
+    }));
+    const backupAttachments = plan.map((p) => ({
+      id: p.backupId * 10,
+      recordId: p.backupId,
+      filename: p.filename,
+      mimeType: "text/plain",
+      size: p.bytes.length,
+      objectStoragePath: pathByBackupId.get(p.backupId)!,
+    }));
+
+    // 5. Run the REAL merge restore path. All three backup records collide by
+    //    inputString, so NO new records are created — the backup ids are mapped
+    //    to the pre-existing matching live ids.
+    const recordIdMap = new Map<number, number>();
+    const recResult = await restoreLegacyRecords(backupRecords, "merge", recordIdMap);
+    expect(recResult.recordsAdded).toBe(0);
+    expect(recResult.recordsSkipped).toBe(3);
+    for (const p of plan) {
+      expect(recordIdMap.get(p.backupId)).toBe(liveIdByInputString.get(p.inputString));
+    }
+
+    const attAdded = await restoreLegacyAttachments(backupAttachments, "merge", recordIdMap);
+    expect(attAdded).toBe(3);
+
+    // 6. No new records were created by the merge (decoys + matches only).
+    const allRecords = await getAllRecords();
+    expect(allRecords).toHaveLength(6);
+
+    // 7. End-to-end assertion: for EACH merged attachment, open the file via its
+    //    objectStoragePath and confirm the bytes belong to the SAME record it is
+    //    linked to — and that record is a real match, never a decoy.
+    const inputStringById = new Map(allRecords.map((r) => [r.id!, r.inputString]));
+    const expectedBytesByInputString = new Map(plan.map((p) => [p.inputString, p.bytes]));
+    const decoyInputStrings = new Set(["decoy-one", "decoy-two", "decoy-three"]);
+
+    const restoredAttachments = await getAllAttachments();
+    expect(restoredAttachments).toHaveLength(3);
+
+    for (const att of restoredAttachments) {
+      const linkedInputString = inputStringById.get(att.recordId);
+      // Must link to a real matching record, never a same-id decoy.
+      expect(decoyInputStrings.has(linkedInputString ?? "")).toBe(false);
+      expect(expectedBytesByInputString.has(linkedInputString ?? "")).toBe(true);
+
+      const actualBytes = await fetchBytesViaPath(att.objectStoragePath, att.mimeType);
+      expect(actualBytes).toBe(expectedBytesByInputString.get(linkedInputString!));
+    }
+  });
+
+  it("a repeated merge de-dups by objectStoragePath and never creates duplicate attachment rows", async () => {
+    // Seed one pre-existing record the backup collides with by inputString.
+    await bulkCreateRecords(
+      [{ type: "address", inputString: "bc1qmerge-dedup", label: "Existing Dedup", tags: [], categories: [] } as any],
+      { skipNotification: true, skipVocabularySync: true },
+    );
+
+    const storagePath = await uploadFile(
+      fileWithBytes("dedup.txt", "text/plain", "MERGE-DEDUP-BYTES"),
+    );
+
+    const backupRecords = [
+      { id: 99, type: "address", inputString: "bc1qmerge-dedup", label: "Dedup", tags: [], categories: [] },
+    ];
+    const backupAttachments = [
+      {
+        id: 990,
+        recordId: 99,
+        filename: "dedup.txt",
+        mimeType: "text/plain",
+        size: "MERGE-DEDUP-BYTES".length,
+        objectStoragePath: storagePath,
+      },
+    ];
+
+    // First merge: record skipped (already exists), attachment added once.
+    const map1 = new Map<number, number>();
+    const rec1 = await restoreLegacyRecords(backupRecords, "merge", map1);
+    expect(rec1.recordsSkipped).toBe(1);
+    expect(await restoreLegacyAttachments(backupAttachments, "merge", map1)).toBe(1);
+    expect(await getAllAttachments()).toHaveLength(1);
+
+    // Second merge of the SAME backup: attachment de-duped by objectStoragePath,
+    // so no duplicate file row is created.
+    const map2 = new Map<number, number>();
+    await restoreLegacyRecords(backupRecords, "merge", map2);
+    expect(await restoreLegacyAttachments(backupAttachments, "merge", map2)).toBe(0);
+
+    const atts = await getAllAttachments();
+    expect(atts).toHaveLength(1);
+
+    // The single surviving attachment still opens and points at the correct
+    // pre-existing record's file bytes.
+    const allRecords = await getAllRecords();
+    const linked = allRecords.find((r) => r.id === atts[0].recordId);
+    expect(linked?.inputString).toBe("bc1qmerge-dedup");
+    expect(await fetchBytesViaPath(atts[0].objectStoragePath, atts[0].mimeType)).toBe(
+      "MERGE-DEDUP-BYTES",
+    );
   });
 });
