@@ -410,6 +410,12 @@ export function buildSankey(inputs: TransactionParticipant[], outputs: Transacti
 
 // ─── Transaction deep-dive (heatmap + summary + CoinJoin Sankey) ───────────────
 
+// How long the Boltzmann worker may sit idle (after a result or error is
+// delivered) before it is torn down. The worker is recreated lazily on the next
+// analysis, so releasing it here just frees the thread when nothing is running —
+// while still keeping it warm for rapid, back-to-back analyses within the window.
+const WORKER_IDLE_TEARDOWN_MS = 30_000;
+
 interface DeepDiveData {
   inputs: TransactionParticipant[];
   outputs: TransactionParticipant[];
@@ -451,9 +457,32 @@ export function TransactionDeepDive({
   const workerRef = useRef<Worker | null>(null);
   const pendingIdRef = useRef<string | null>(null);
   const autoRunRef = useRef(false);
+  const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Cancel any pending idle teardown — called whenever a fresh analysis starts so
+  // we never terminate a worker we're about to use again.
+  const cancelIdleTeardown = useCallback(() => {
+    if (idleTimerRef.current !== null) {
+      clearTimeout(idleTimerRef.current);
+      idleTimerRef.current = null;
+    }
+  }, []);
+
+  // Schedule the worker to be released after it has been idle for a while. The
+  // next analysis recreates it transparently via the lazy-create path, so this
+  // just stops a long-lived (but inactive) panel from holding a worker forever.
+  const scheduleIdleTeardown = useCallback(() => {
+    cancelIdleTeardown();
+    idleTimerRef.current = setTimeout(() => {
+      idleTimerRef.current = null;
+      workerRef.current?.terminate();
+      workerRef.current = null;
+    }, WORKER_IDLE_TEARDOWN_MS);
+  }, [cancelIdleTeardown]);
 
   const analyse = useCallback(async (txid: string) => {
     if (!txid) return;
+    cancelIdleTeardown();
     setLoading(true);
     setResult(null);
     setData(null);
@@ -469,6 +498,8 @@ export function TransactionDeepDive({
       if (inputs.length === 0 || outputs.length === 0) {
         setMessage("No participant data available for this transaction — re-sync the address to load its inputs and outputs.");
         setLoading(false);
+        // A worker may linger from a previous analysis — let it be reclaimed.
+        if (workerRef.current) scheduleIdleTeardown();
         return;
       }
 
@@ -495,6 +526,8 @@ export function TransactionDeepDive({
         if (e.data.id !== pendingIdRef.current) return;
         setResult(e.data.result ?? null);
         setLoading(false);
+        // Analysis finished — release the worker once it has sat idle a while.
+        scheduleIdleTeardown();
       };
       worker.onerror = (e: ErrorEvent) => {
         setMessage("Couldn't analyse this transaction — the calculation failed unexpectedly.");
@@ -502,6 +535,8 @@ export function TransactionDeepDive({
         setFailCount(c => c + 1);
         setCanRetry(true);
         setLoading(false);
+        // Nothing is running now — let the idle worker be reclaimed too.
+        scheduleIdleTeardown();
       };
       worker.postMessage({ id, inputs: bInputs, outputs: bOutputs, fee });
     } catch (err) {
@@ -510,8 +545,10 @@ export function TransactionDeepDive({
       setFailCount(c => c + 1);
       setCanRetry(true);
       setLoading(false);
+      // A worker may linger from a previous analysis — let it be reclaimed.
+      if (workerRef.current) scheduleIdleTeardown();
     }
-  }, [coinjoinTxids]);
+  }, [coinjoinTxids, cancelIdleTeardown, scheduleIdleTeardown]);
 
   // When opened directly from a finding, run the analysis immediately for the
   // pre-selected transaction so the user lands on results, not an empty panel.
@@ -523,11 +560,16 @@ export function TransactionDeepDive({
   }, [autoAnalyse, selectedTxid, analyse]);
 
   // Tear down the Boltzmann worker when the panel unmounts. The worker is
-  // created lazily on first analyse and reused, but never terminated — without
-  // this it keeps running (and could deliver late messages to a now-unmounted
-  // component) after the deep-dive is closed or navigated away from.
+  // created lazily on first analyse and reused, then released after an idle
+  // period (see scheduleIdleTeardown) — but it may still be alive at unmount
+  // (mid-analysis or within the idle window), so terminate it here too and clear
+  // any pending idle timer so it never fires against a now-unmounted component.
   useEffect(() => {
     return () => {
+      if (idleTimerRef.current !== null) {
+        clearTimeout(idleTimerRef.current);
+        idleTimerRef.current = null;
+      }
       workerRef.current?.terminate();
       workerRef.current = null;
     };

@@ -650,3 +650,113 @@ describe("TransactionDeepDive worker teardown", () => {
     expect(lastWorker!.terminate).toHaveBeenCalledTimes(1);
   });
 });
+
+// The worker is created lazily on first analyse and reused, but it must not be
+// held forever on a long-lived panel that has gone idle. After an analysis
+// settles (a result delivered or an error), the worker is released once it has
+// sat idle for WORKER_IDLE_TEARDOWN_MS (30s). A new analysis transparently
+// recreates it via the existing lazy-create path.
+describe("TransactionDeepDive worker idle teardown", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("terminates the worker after it sits idle following a delivered result", async () => {
+    mockedGetTx.mockResolvedValue({ txid: TXID, fee: 1_000 } as any);
+    mockedGetParticipants.mockResolvedValue(validParticipants());
+
+    renderDeepDive();
+
+    // Run an analysis so the worker is created and posted to.
+    fireEvent.click(screen.getByTestId("button-analyse-deep-dive"));
+    await vi.waitFor(() => {
+      expect(lastWorker).not.toBeNull();
+      expect(lastWorker!.postMessage).toHaveBeenCalled();
+    });
+
+    // Deliver a result. The worker must NOT be torn down immediately — it stays
+    // warm for a follow-up analysis within the idle window.
+    const { id } = lastWorker!.postMessage.mock.calls[0][0] as { id: string };
+    act(() => {
+      lastWorker!.onmessage!({
+        data: { id, result: { tooComplex: true } },
+      } as MessageEvent);
+    });
+    expect(lastWorker!.terminate).not.toHaveBeenCalled();
+
+    // Once the idle window elapses with nothing running, the worker is released.
+    act(() => {
+      vi.advanceTimersByTime(30_000);
+    });
+    expect(lastWorker!.terminate).toHaveBeenCalledTimes(1);
+  });
+
+  it("releases the worker after it sits idle following an error", async () => {
+    mockedGetTx.mockResolvedValue({ txid: TXID, fee: 1_000 } as any);
+    mockedGetParticipants.mockResolvedValue(validParticipants());
+
+    renderDeepDive();
+
+    fireEvent.click(screen.getByTestId("button-analyse-deep-dive"));
+    await vi.waitFor(() => {
+      expect(lastWorker).not.toBeNull();
+      expect(lastWorker!.postMessage).toHaveBeenCalled();
+    });
+
+    // The worker errors. It must not be torn down right away (Retry reuses it),
+    // but once idle past the window it is released.
+    act(() => {
+      lastWorker!.onerror!({ message: "transient worker hiccup" } as any);
+    });
+    expect(lastWorker!.terminate).not.toHaveBeenCalled();
+
+    act(() => {
+      vi.advanceTimersByTime(30_000);
+    });
+    expect(lastWorker!.terminate).toHaveBeenCalledTimes(1);
+  });
+
+  it("a new analysis cancels a pending idle teardown and reuses the worker", async () => {
+    mockedGetTx.mockResolvedValue({ txid: TXID, fee: 1_000 } as any);
+    mockedGetParticipants.mockResolvedValue(validParticipants());
+
+    renderDeepDive();
+
+    // First analysis → result delivered → idle teardown scheduled.
+    fireEvent.click(screen.getByTestId("button-analyse-deep-dive"));
+    await vi.waitFor(() => {
+      expect(lastWorker).not.toBeNull();
+      expect(lastWorker!.postMessage).toHaveBeenCalledTimes(1);
+    });
+    const firstWorker = lastWorker!;
+    const { id } = firstWorker.postMessage.mock.calls[0][0] as { id: string };
+    act(() => {
+      firstWorker.onmessage!({
+        data: { id, result: { tooComplex: true } },
+      } as MessageEvent);
+    });
+
+    // Before the idle window elapses, start a second analysis. The pending
+    // teardown must be cancelled and the SAME worker reused (no new Worker
+    // constructed, no terminate).
+    act(() => {
+      vi.advanceTimersByTime(10_000);
+    });
+    fireEvent.click(screen.getByTestId("button-analyse-deep-dive"));
+    await vi.waitFor(() => {
+      expect(firstWorker.postMessage).toHaveBeenCalledTimes(2);
+    });
+    expect(lastWorker).toBe(firstWorker);
+    expect(firstWorker.terminate).not.toHaveBeenCalled();
+
+    // The original idle window would have fired by now had it not been cancelled.
+    act(() => {
+      vi.advanceTimersByTime(25_000);
+    });
+    expect(firstWorker.terminate).not.toHaveBeenCalled();
+  });
+});
