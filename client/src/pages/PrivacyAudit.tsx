@@ -79,8 +79,7 @@ import {
 import { formatScoreDelta } from "@/lib/privacy-report-export";
 import { createTag } from "@/lib/data/vocabulary-crud";
 import { updateRecord, countRecordsByType, getRecordsPageByTypeIdReverseKeyset, getRecordsByInputStrings } from "@/lib/data/record-crud";
-import { getTransactionByTxid } from "@/lib/data/transaction-crud";
-import { getParticipantsByTxids } from "@/lib/data/record-queries";
+import { getTransactionByTxid, getParticipantsByTxids } from "@/lib/data/transaction-crud";
 import { useSettings, updatePeelChainViewMode, updateShowScoreBreakdown } from "@/hooks/use-settings";
 import { useTags } from "@/hooks/use-tags";
 import { useOwners } from "@/hooks/use-owners";

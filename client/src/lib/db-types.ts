@@ -385,6 +385,10 @@ export interface Settings {
   // capping (trade-off between completeness and speed on busy wallets).
   // When unset, defaults to DEFAULT_TX_LIMIT (2000).
   fundTrailTxLimit?: number;
+  // Max number of funding transactions the Source of Funds Report processes per
+  // report run before capping (mirrors the Fund Trail limit control).
+  // When unset, defaults to DEFAULT_TX_LIMIT (2000).
+  sourceOfFundsTxLimit?: number;
   // Per-field toggles for the address/TXID hover tooltip. When unset, all fields
   // default to visible and system tags (namespace-prefixed, e.g. quantum:*) are
   // excluded. Stored as an optional sub-object so older vaults keep defaults.

@@ -341,6 +341,7 @@ export async function computeStatsForAddresses(
   const txMap = await loadBlockTimes(txids);
 
   const addrAgg = new Map<string, AddressAgg>();
+  let aggRowsSinceYield = 0;
   for (const p of participants) {
     const agg = addrAgg.get(p.address) || { outputSats: 0, inputSats: 0, lastTxTime: 0, txids: new Set<string>(), outputs: [], inputs: [] };
     const blockTime = txMap.get(p.txid) || 0;
@@ -354,6 +355,13 @@ export async function computeStatsForAddresses(
     if (blockTime > agg.lastTxTime) agg.lastTxTime = blockTime;
     agg.txids.add(p.txid);
     addrAgg.set(p.address, agg);
+    // Yield periodically so a single very busy address (tens of thousands of
+    // participant rows) can't block the UI between the batch-level yields.
+    if (++aggRowsSinceYield >= ROW_YIELD_INTERVAL) {
+      aggRowsSinceYield = 0;
+      await yieldToEventLoop();
+      if (isAborted(signal)) return out;
+    }
   }
 
   addrAgg.forEach((agg, address) => {

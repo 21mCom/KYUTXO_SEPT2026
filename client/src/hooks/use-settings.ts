@@ -61,6 +61,7 @@ export function useSettings() {
     showScoreBreakdown: settings?.showScoreBreakdown ?? false,
     disableOrphanCheck: settings?.disableOrphanCheck ?? false,
     fundTrailTxLimit: settings?.fundTrailTxLimit ?? DEFAULT_TX_LIMIT,
+    sourceOfFundsTxLimit: settings?.sourceOfFundsTxLimit ?? DEFAULT_TX_LIMIT,
     hoverTooltipPrefs: settings?.hoverTooltipPrefs
       ? { ...DEFAULT_HOVER_TOOLTIP_PREFS, ...settings.hoverTooltipPrefs }
       : DEFAULT_HOVER_TOOLTIP_PREFS,
@@ -192,6 +193,15 @@ export async function updateFundTrailTxLimit(value: number) {
   await updateStoredSettings('default', {
     fundTrailTxLimit: value,
   });
+}
+
+export async function updateSourceOfFundsTxLimit(value: number) {
+  const settings = await getStoredSettings('default');
+  if (settings) {
+    await updateStoredSettings('default', {
+      sourceOfFundsTxLimit: value,
+    });
+  }
 }
 
 export async function toggleCustomFieldColumn(slug: string) {

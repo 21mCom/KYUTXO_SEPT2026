@@ -148,6 +148,27 @@ const _cache = new Map<string, CacheEntry>();
 const _inFlight = new Map<string, Promise<DbRecord | null>>();
 
 const CACHE_TTL_MS = 5 * 60 * 1000;
+/**
+ * Maximum number of entries the hover-metadata cache may hold. When a new
+ * entry would exceed this limit the oldest 20 % of entries are swept out
+ * first so a long scrolling session through tens of thousands of distinct
+ * addresses can't grow the cache without bound.
+ */
+const MAX_CACHE_SIZE = 2000;
+const CACHE_EVICT_TO = Math.floor(MAX_CACHE_SIZE * 0.8);
+
+function evictOldestEntries(): void {
+  if (_cache.size <= CACHE_EVICT_TO) return;
+  // Map iterates in insertion order; collect entries sorted by resolvedAt so
+  // the stalest are removed first, which is more useful than pure FIFO.
+  const entries = Array.from(_cache.entries()).sort(
+    (a, b) => a[1].resolvedAt - b[1].resolvedAt
+  );
+  const toRemove = _cache.size - CACHE_EVICT_TO;
+  for (let i = 0; i < toRemove; i++) {
+    _cache.delete(entries[i][0]);
+  }
+}
 
 export function getCachedRecord(identifier: string): DbRecord | null | undefined {
   const key = identifier.toLowerCase();
@@ -172,6 +193,7 @@ export async function resolveIdentifier(identifier: string): Promise<DbRecord | 
     try {
       const records = await getRecordsByInputString(identifier);
       const best = records.length > 0 ? selectBestRecord(records) : null;
+      if (_cache.size >= MAX_CACHE_SIZE) evictOldestEntries();
       _cache.set(key, { record: best, resolvedAt: Date.now() });
       return best;
     } catch {

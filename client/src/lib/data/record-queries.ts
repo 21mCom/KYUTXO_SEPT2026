@@ -23,10 +23,6 @@ export async function getParticipantsByTxid(txid: string): Promise<TransactionPa
   return db.transactionParticipants.where('txid').equals(txid).toArray();
 }
 
-export async function getParticipantsByTxids(txids: string[]): Promise<TransactionParticipant[]> {
-  return db.transactionParticipants.where('txid').anyOf(txids).toArray();
-}
-
 export async function getParticipantsByAddress(address: string): Promise<TransactionParticipant[]> {
   return db.transactionParticipants.where('address').equals(address).toArray();
 }

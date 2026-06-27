@@ -26,6 +26,7 @@ import {
   updateCancelConfirmThreshold,
   updatePrivacyHistoryLimit,
   updateFundTrailTxLimit,
+  updateSourceOfFundsTxLimit,
   updateHoverTooltipPrefs,
 } from "@/hooks/use-settings";
 import {
@@ -894,7 +895,7 @@ function formatBytes(bytes: number): string {
 }
 
 export default function SettingsPage() {
-  const { settings, fieldVisibility, cancelConfirmThreshold, privacyHistoryLimit, disableOrphanCheck, fundTrailTxLimit, hoverTooltipPrefs, isLoading: settingsLoading } = useSettings();
+  const { settings, fieldVisibility, cancelConfirmThreshold, privacyHistoryLimit, disableOrphanCheck, fundTrailTxLimit, sourceOfFundsTxLimit, hoverTooltipPrefs, isLoading: settingsLoading } = useSettings();
   const { customFields, isLoading: customFieldsLoading } = useCustomFields();
   const { toast } = useToast();
 
@@ -3407,6 +3408,55 @@ export default function SettingsPage() {
                   <SelectItem value="5000" data-testid="option-fund-trail-limit-5000">5,000</SelectItem>
                   <SelectItem value="10000" data-testid="option-fund-trail-limit-10000">10,000</SelectItem>
                   <SelectItem value="25000" data-testid="option-fund-trail-limit-25000">25,000</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Shield className="h-5 w-5" />
+              Source of Funds Report
+            </CardTitle>
+            <CardDescription>
+              Control how many funding transactions the Source of Funds Report processes per run
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="flex items-center justify-between gap-4 flex-wrap">
+              <div>
+                <Label className="text-base">Transactions per report</Label>
+                <p className="text-sm text-muted-foreground">
+                  On busy addresses only the most important funding transactions are processed. A higher limit is more complete but slower.
+                </p>
+              </div>
+              <Select
+                value={String(sourceOfFundsTxLimit)}
+                onValueChange={async (val) => {
+                  try {
+                    await updateSourceOfFundsTxLimit(Number(val));
+                  } catch {
+                    toast({
+                      title: "Error",
+                      description: "Failed to update transaction limit",
+                      variant: "destructive",
+                    });
+                  }
+                }}
+                disabled={settingsLoading}
+              >
+                <SelectTrigger className="w-[180px]" data-testid="select-source-of-funds-tx-limit">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="500" data-testid="option-sof-limit-500">500</SelectItem>
+                  <SelectItem value="1000" data-testid="option-sof-limit-1000">1,000</SelectItem>
+                  <SelectItem value="2000" data-testid="option-sof-limit-2000">2,000 (default)</SelectItem>
+                  <SelectItem value="5000" data-testid="option-sof-limit-5000">5,000</SelectItem>
+                  <SelectItem value="10000" data-testid="option-sof-limit-10000">10,000</SelectItem>
+                  <SelectItem value="25000" data-testid="option-sof-limit-25000">25,000</SelectItem>
                 </SelectContent>
               </Select>
             </div>
