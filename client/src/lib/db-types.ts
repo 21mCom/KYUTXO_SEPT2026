@@ -381,6 +381,10 @@ export interface Settings {
   // When true, the startup scan for transaction records missing on-chain data
   // ("orphaned" txids) is skipped entirely. Defaults to false (check enabled).
   disableOrphanCheck?: boolean;
+  // Max number of most-recent transactions the Fund Trail loads per hop before
+  // capping (trade-off between completeness and speed on busy wallets).
+  // When unset, defaults to DEFAULT_TX_LIMIT (2000).
+  fundTrailTxLimit?: number;
   // Optional user-supplied offline snapshot for the Privacy Audit entity list.
   // When present it is applied to the active list at runtime; the bundled list
   // remains the fallback (cleared via "reset to bundled"). `mode` records how

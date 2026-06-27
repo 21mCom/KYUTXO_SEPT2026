@@ -1058,6 +1058,7 @@ db.on('ready', async () => {
       cancelConfirmThreshold: 75,
       privacyHistoryLimit: 30,
       disableOrphanCheck: false,
+      fundTrailTxLimit: 2000,
     });
   } else {
     // Migrations for existing settings
@@ -1126,6 +1127,10 @@ db.on('ready', async () => {
 
     if ((settings as any).privacyHistoryLimit === undefined) {
       updates.privacyHistoryLimit = 30;
+    }
+
+    if ((settings as any).fundTrailTxLimit === undefined) {
+      updates.fundTrailTxLimit = 2000;
     }
     
     if (Object.keys(updates).length > 0) {

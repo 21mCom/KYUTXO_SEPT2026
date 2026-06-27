@@ -7,6 +7,7 @@ import {
   createContext,
 } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useSettings } from "@/hooks/use-settings";
 import {
   ChevronDown,
   ChevronRight,
@@ -196,6 +197,7 @@ function FlowCard({
   dateRange?: DateRange;
   path: string;
 }) {
+  const { fundTrailTxLimit } = useSettings();
   const [showDetails, setShowDetails] = useState(false);
   const [isExpanding, setIsExpanding] = useState(false);
   const [expandedHop, setExpandedHop] = useState<TrailHop | null>(null);
@@ -251,7 +253,9 @@ function FlowCard({
       // Mark this group as visited before computing to prevent cycles
       branchVisited.add(flow.groupLabel);
 
-      const hop = await computeOneHop(addresses, dimension, selfLabel, dateRange);
+      const hop = await computeOneHop(addresses, dimension, selfLabel, dateRange, undefined, {
+        txLimit: fundTrailTxLimit,
+      });
       setExpandedHop(hop);
     } catch (err) {
       console.error('[FundTrail] expand error', err);
@@ -259,7 +263,7 @@ function FlowCard({
     } finally {
       setIsExpanding(false);
     }
-  }, [isExpanded, flow, dimension, unknownAddresses, branchVisited, dateRange]);
+  }, [isExpanded, flow, dimension, unknownAddresses, branchVisited, dateRange, fundTrailTxLimit]);
 
   // The next level's visited set includes everything visited so far + this node
   const nextVisited = new Set(branchVisited);
@@ -431,6 +435,7 @@ function toDateRange(startDate: string, endDate: string): DateRange | undefined 
 }
 
 export default function FundTrail() {
+  const { fundTrailTxLimit } = useSettings();
   const [dimension, setDimension] = useState<GroupingDimension>("walletName");
   const [selectedGroup, setSelectedGroup] = useState<string>("");
   const [startDate, setStartDate] = useState<string>("");
@@ -467,6 +472,7 @@ export default function FundTrail() {
       selectedGroup,
       dateRange?.start ?? null,
       dateRange?.end ?? null,
+      fundTrailTxLimit,
     ],
     enabled: !!selectedGroup,
     queryFn: async () => {
@@ -474,7 +480,9 @@ export default function FundTrail() {
       const addresses = records
         .map(r => r.inputString)
         .filter((s): s is string => !!s);
-      return computeOneHop(addresses, dimension, selectedGroup, dateRange);
+      return computeOneHop(addresses, dimension, selectedGroup, dateRange, undefined, {
+        txLimit: fundTrailTxLimit,
+      });
     },
   });
 

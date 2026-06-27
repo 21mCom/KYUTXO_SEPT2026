@@ -43,6 +43,7 @@ import {
   DEFAULT_PRIVACY_HISTORY_LIMIT,
   trimPrivacyAuditHistory,
 } from '@/lib/data/privacy-history-crud';
+import { DEFAULT_TX_LIMIT } from '@/lib/data/fund-trail-engine';
 
 export function useSettings() {
   const settings = useLiveQuery(() => getStoredSettings('default'));
@@ -57,6 +58,7 @@ export function useSettings() {
     peelChainViewMode: settings?.peelChainViewMode ?? 'graph',
     showScoreBreakdown: settings?.showScoreBreakdown ?? false,
     disableOrphanCheck: settings?.disableOrphanCheck ?? false,
+    fundTrailTxLimit: settings?.fundTrailTxLimit ?? DEFAULT_TX_LIMIT,
     isLoading: settings === undefined,
   };
 }
@@ -164,6 +166,15 @@ export async function updateDisableOrphanCheck(value: boolean) {
   if (settings) {
     await updateStoredSettings('default', {
       disableOrphanCheck: value,
+    });
+  }
+}
+
+export async function updateFundTrailTxLimit(value: number) {
+  const settings = await getStoredSettings('default');
+  if (settings) {
+    await updateStoredSettings('default', {
+      fundTrailTxLimit: value,
     });
   }
 }

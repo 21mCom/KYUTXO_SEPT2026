@@ -25,6 +25,7 @@ import {
   updateCustomField,
   updateCancelConfirmThreshold,
   updatePrivacyHistoryLimit,
+  updateFundTrailTxLimit,
 } from "@/hooks/use-settings";
 import {
   Select,
@@ -769,7 +770,7 @@ function VirtualizedEntityErrorList({ errors }: { errors: EntitySnapshotError[] 
 }
 
 export default function SettingsPage() {
-  const { settings, fieldVisibility, cancelConfirmThreshold, privacyHistoryLimit, disableOrphanCheck, isLoading: settingsLoading } = useSettings();
+  const { settings, fieldVisibility, cancelConfirmThreshold, privacyHistoryLimit, disableOrphanCheck, fundTrailTxLimit, isLoading: settingsLoading } = useSettings();
   const { customFields, isLoading: customFieldsLoading } = useCustomFields();
   const { toast } = useToast();
 
@@ -2932,6 +2933,55 @@ export default function SettingsPage() {
                   <SelectItem value="50" data-testid="option-threshold-50">50%</SelectItem>
                   <SelectItem value="75" data-testid="option-threshold-75">75% (default)</SelectItem>
                   <SelectItem value="90" data-testid="option-threshold-90">90%</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Shield className="h-5 w-5" />
+              Fund Trail
+            </CardTitle>
+            <CardDescription>
+              Control how many transactions the Fund Trail loads per hop
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="flex items-center justify-between gap-4 flex-wrap">
+              <div>
+                <Label className="text-base">Recent transactions per hop</Label>
+                <p className="text-sm text-muted-foreground">
+                  On busy wallets only the most recent transactions are shown per hop. A higher limit traces more history but is slower.
+                </p>
+              </div>
+              <Select
+                value={String(fundTrailTxLimit)}
+                onValueChange={async (val) => {
+                  try {
+                    await updateFundTrailTxLimit(Number(val));
+                  } catch {
+                    toast({
+                      title: "Error",
+                      description: "Failed to update transaction limit",
+                      variant: "destructive",
+                    });
+                  }
+                }}
+                disabled={settingsLoading}
+              >
+                <SelectTrigger className="w-[180px]" data-testid="select-fund-trail-tx-limit">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="500" data-testid="option-fund-trail-limit-500">500</SelectItem>
+                  <SelectItem value="1000" data-testid="option-fund-trail-limit-1000">1,000</SelectItem>
+                  <SelectItem value="2000" data-testid="option-fund-trail-limit-2000">2,000 (default)</SelectItem>
+                  <SelectItem value="5000" data-testid="option-fund-trail-limit-5000">5,000</SelectItem>
+                  <SelectItem value="10000" data-testid="option-fund-trail-limit-10000">10,000</SelectItem>
+                  <SelectItem value="25000" data-testid="option-fund-trail-limit-25000">25,000</SelectItem>
                 </SelectContent>
               </Select>
             </div>
