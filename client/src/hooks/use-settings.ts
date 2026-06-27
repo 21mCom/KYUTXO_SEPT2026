@@ -150,15 +150,18 @@ export async function updateCancelConfirmThreshold(value: number) {
 
 export async function updatePrivacyHistoryLimit(value: number): Promise<number> {
   const settings = await getStoredSettings('default');
-  if (settings) {
-    await updateStoredSettings('default', {
-      privacyHistoryLimit: value,
-    });
-    // Immediately remove any runs beyond the new limit (oldest first) so
-    // lowering the limit takes effect right away rather than on next audit.
-    return await trimPrivacyAuditHistory(value);
+  if (!settings) {
+    // No 'default' settings row means updateStoredSettings would be a silent
+    // no-op: the limit wouldn't persist and no runs would be trimmed. Throw so
+    // callers warn the user instead of falsely reporting success (or nothing).
+    throw new Error('Cannot save retention limit: settings are unavailable');
   }
-  return 0;
+  await updateStoredSettings('default', {
+    privacyHistoryLimit: value,
+  });
+  // Immediately remove any runs beyond the new limit (oldest first) so
+  // lowering the limit takes effect right away rather than on next audit.
+  return await trimPrivacyAuditHistory(value);
 }
 
 export async function updatePeelChainViewMode(mode: 'graph' | 'list') {
