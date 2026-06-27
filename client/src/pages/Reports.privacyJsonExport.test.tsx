@@ -234,4 +234,29 @@ describe("PrivacyAuditReportPanel — scope flows into the JSON", () => {
     const parsed = JSON.parse(await (createObjectURL.mock.calls[0][0] as Blob).text());
     expect(parsed.scope).toEqual({ owner: "Alice", wallet: "Cold Storage" });
   });
+
+  it("exports the audited scope, not the post-scan dropdown change", async () => {
+    render(<PrivacyAuditReportPanel />);
+
+    // Run the audit against the default "All addresses" scope.
+    fireEvent.click(screen.getByTestId("button-generate-privacy-report"));
+    await waitFor(() => screen.getByTestId("button-export-privacy-report"));
+
+    // Change the filters after the scan but before exporting.
+    fireEvent.change(screen.getByTestId("select-privacy-report-owner"), {
+      target: { value: "Alice" },
+    });
+    fireEvent.change(screen.getByTestId("select-privacy-report-wallet"), {
+      target: { value: "Cold Storage" },
+    });
+
+    fireEvent.click(screen.getByTestId("button-export-privacy-report"));
+    await waitFor(() => expect(createObjectURL).toHaveBeenCalledTimes(1));
+
+    const parsed = JSON.parse(await (createObjectURL.mock.calls[0][0] as Blob).text());
+    // The serialized scope reflects the scope the audit actually ran with
+    // (null/null = All), not the new (un-applied) dropdown selection.
+    expect(parsed.scope).toEqual({ owner: null, wallet: null });
+    expect(parsed.scope).not.toEqual({ owner: "Alice", wallet: "Cold Storage" });
+  });
 });

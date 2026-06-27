@@ -534,6 +534,37 @@ describe("PrivacyAuditReportPanel — Print / PDF", () => {
     expect(copied).not.toContain("Wallet: All");
   });
 
+  it("writes the audited scope into the printable HTML, not the post-scan dropdown change", async () => {
+    const fake = makeFakeWindow();
+    vi.spyOn(window, "open").mockReturnValue(fake.win);
+
+    render(<PrivacyAuditReportPanel />);
+
+    // Run the audit against the default "All addresses" scope.
+    fireEvent.click(screen.getByTestId("button-generate-privacy-report"));
+    await waitFor(() => screen.getByTestId("button-print-privacy-report"));
+
+    // Change the Owner/Wallet dropdowns after the scan but before printing.
+    fireEvent.change(screen.getByTestId("select-privacy-report-owner"), {
+      target: { value: "Alice" },
+    });
+    fireEvent.change(screen.getByTestId("select-privacy-report-wallet"), {
+      target: { value: "Cold Storage" },
+    });
+
+    fireEvent.click(screen.getByTestId("button-print-privacy-report"));
+
+    // The printable HTML's scope reflects the scope the audit actually ran with
+    // (All), not the new (un-applied) dropdown selection.
+    const html = fake.getWritten();
+    expect(html).toContain("Owner: All");
+    expect(html).toContain("Wallet: All");
+    expect(html).toContain("Scope: All addresses");
+    expect(html).not.toContain("Owner: Alice");
+    expect(html).not.toContain("Wallet: Cold Storage");
+    expect(html).not.toContain("Scope: Owner = Alice, Wallet = Cold Storage");
+  });
+
   it("escapes HTML-special characters in the selected owner/wallet scope line", async () => {
     const fake = makeFakeWindow();
     vi.spyOn(window, "open").mockReturnValue(fake.win);
