@@ -15,6 +15,60 @@ import "fake-indexeddb/auto";
 import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from "vitest";
 import { render, screen, waitFor, cleanup } from "@testing-library/react";
 
+// ---------------------------------------------------------------------------
+// react useState harness.
+//
+// The autoBackfill effect (SettingsPage) auto-starts the rebuild only when
+// `!isBackfilling`, but its dependency array is `[]`, so the guard reads the
+// FIRST render's `isBackfilling` — which is always the `useState(false)`
+// initial value. In production this branch can therefore only be exercised if
+// `isBackfilling` is true from the very first render. To prove the guard's
+// contract (flag still consumed, no duplicate rebuild fired, in-progress
+// dialog stays visible) we intercept `useState` so a single, auto-discovered
+// boolean state can be forced to start as `true`.
+//
+// Discovery (active=true, forceTrueAt=null): the first `useState(false)` whose
+// setter is called with `true` during mount is `setIsBackfilling(true)` — the
+// component's only mount effect is the autoBackfill effect, and the heavy
+// sibling panels are stubbed to null, so nothing else flips a false-init bool
+// true first. We record that state's call index, then re-mount forcing it true.
+//
+// The harness is inert (pure passthrough) unless `active` is set, so the other
+// tests in this file are unaffected.
+// ---------------------------------------------------------------------------
+const harness = vi.hoisted(() => ({
+  active: false,
+  cursor: 0,
+  forceTrueAt: null as number | null,
+  backfillingIndex: null as number | null,
+  firstIndexBySetter: new WeakMap<object, number>(),
+}));
+
+vi.mock("react", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("react")>();
+  const useState = (initial?: unknown) => {
+    if (!harness.active || initial !== false) {
+      return (actual.useState as any)(initial);
+    }
+    const index = harness.cursor++;
+    const [value, setValue] = (actual.useState as any)(
+      harness.forceTrueAt === index ? true : false,
+    );
+    if (!harness.firstIndexBySetter.has(setValue)) {
+      harness.firstIndexBySetter.set(setValue, index);
+    }
+    const wrapped = (next: unknown) => {
+      if (next === true && harness.backfillingIndex === null) {
+        const i = harness.firstIndexBySetter.get(setValue);
+        if (i !== undefined) harness.backfillingIndex = i;
+      }
+      return setValue(next);
+    };
+    return [value, wrapped];
+  };
+  return { ...actual, useState };
+});
+
 beforeAll(() => {
   (globalThis as any).ResizeObserver = class {
     observe() {}
@@ -97,7 +151,50 @@ beforeEach(async () => {
 
 afterEach(() => {
   cleanup();
+  // Leave the harness inert for the next (passthrough) test. The discovered
+  // index is structural, so it is cached across tests on purpose.
+  harness.active = false;
+  harness.forceTrueAt = null;
+  harness.cursor = 0;
 });
+
+// Mounts SettingsPage with the flag set and lets the rebuild auto-start once,
+// capturing the call-index of the `isBackfilling` state. Cached after first run.
+async function discoverBackfillingIndex(): Promise<number> {
+  if (harness.backfillingIndex !== null) return harness.backfillingIndex;
+
+  harness.active = true;
+  harness.cursor = 0;
+  harness.forceTrueAt = null;
+  sessionStorage.setItem("kyutxo:autoBackfill", "1");
+
+  const view = render(
+    <ActivityBusProvider>
+      <SettingsPage />
+    </ActivityBusProvider>,
+  );
+
+  await waitFor(() => expect(detectSpy).toHaveBeenCalledTimes(1));
+  const index = harness.backfillingIndex;
+  expect(index).not.toBeNull();
+
+  // Settle + tear down this discovery mount before the real assertion mount.
+  backfillGate();
+  await waitFor(() =>
+    expect(view.queryByTestId("dialog-backfill-transactions")).toBeNull(),
+  );
+  view.unmount();
+  cleanup();
+
+  harness.active = false;
+  harness.cursor = 0;
+  detectSpy.mockClear();
+  toastSpy.mockClear();
+  backfillGate = () => {};
+  sessionStorage.clear();
+
+  return index as number;
+}
 
 describe("SettingsPage — autoBackfill 'Fix now' flag", () => {
   it("auto-starts the rebuild when the autoBackfill flag is set on mount", async () => {
@@ -157,5 +254,39 @@ describe("SettingsPage — autoBackfill 'Fix now' flag", () => {
     await new Promise((res) => setTimeout(res, 50));
     expect(detectSpy).not.toHaveBeenCalled();
     expect(screen.queryByTestId("dialog-backfill-transactions")).toBeNull();
+  });
+
+  it("consumes the flag without firing a duplicate rebuild when one is already in progress", async () => {
+    // Mount as if a rebuild were already running (isBackfilling true from the
+    // first render), so the autoBackfill guard's `!isBackfilling` branch is hit.
+    const index = await discoverBackfillingIndex();
+    harness.active = true;
+    harness.cursor = 0;
+    harness.forceTrueAt = index;
+
+    sessionStorage.setItem("kyutxo:autoBackfill", "1");
+
+    render(
+      <ActivityBusProvider>
+        <SettingsPage />
+      </ActivityBusProvider>,
+    );
+
+    // Self-validates the forced state took effect: the in-progress dialog is
+    // shown to the user purely from `isBackfilling` being true. If the captured
+    // index were wrong, this dialog would be absent and the test would fail.
+    expect(await screen.findByTestId("dialog-backfill-transactions")).toBeTruthy();
+
+    // The one-shot flag is still consumed even though the guard prevents a new
+    // rebuild — a later visit must not re-trigger.
+    expect(sessionStorage.getItem("kyutxo:autoBackfill")).toBeNull();
+
+    // Give the mount effects a tick: the engine must NOT be invoked, so no
+    // duplicate rebuild stacks on top of the one already running.
+    await new Promise((res) => setTimeout(res, 50));
+    expect(detectSpy).not.toHaveBeenCalled();
+
+    // The user is never left without feedback: the in-progress dialog stays up.
+    expect(screen.queryByTestId("dialog-backfill-transactions")).toBeTruthy();
   });
 });
