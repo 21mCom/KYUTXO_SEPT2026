@@ -28,8 +28,25 @@ vi.mock("@/lib/data/record-queries", () => ({
 
 import { getTransactionByTxid } from "@/lib/data/transaction-crud";
 import { getParticipantsByTxids } from "@/lib/data/record-queries";
-import { TransactionDeepDive } from "./PrivacyAudit";
+import { TransactionDeepDive, probColor } from "./PrivacyAudit";
 import type { BoltzmannResult } from "@/lib/boltzmann";
+
+// Parse the hue out of an "hsl(H, S%, L%)" string for assertions. probColor
+// returns hsl() strings directly, so this works on its raw output.
+function hueOf(color: string): number {
+  const m = /^hsl\((\d+),/.exec(color);
+  if (!m) throw new Error(`not an hsl() color: ${color}`);
+  return Number(m[1]);
+}
+
+// jsdom serialises an inline hsl() background to "rgb(r, g, b)", so cells read
+// back through the DOM need an rgb parser. "greenness" (g - r) rises as the
+// hue moves from red (probable) toward green (unlikely).
+function greennessOf(color: string): number {
+  const m = /^rgb\((\d+),\s*(\d+),\s*(\d+)\)/.exec(color);
+  if (!m) throw new Error(`not an rgb() color: ${color}`);
+  return Number(m[2]) - Number(m[1]);
+}
 
 const TXID = "b".repeat(64);
 
@@ -112,6 +129,27 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
+describe("probColor — probability → hue mapping", () => {
+  it("maps 0 to green (~hsl 130)", () => {
+    expect(hueOf(probColor(0))).toBe(130);
+  });
+
+  it("maps 0.5 to yellow (~hsl 65)", () => {
+    expect(hueOf(probColor(0.5))).toBe(65);
+  });
+
+  it("maps 1 to red (~hsl 0)", () => {
+    expect(hueOf(probColor(1))).toBe(0);
+  });
+
+  it("decreases hue monotonically as probability rises (green → red)", () => {
+    const hues = [0, 0.25, 0.5, 0.75, 1].map((p) => hueOf(probColor(p)));
+    for (let i = 1; i < hues.length; i++) {
+      expect(hues[i]).toBeLessThan(hues[i - 1]);
+    }
+  });
+});
+
 describe("TransactionDeepDive success path — heatmap", () => {
   it("renders the link-probability heatmap with a cell per input/output pair", async () => {
     await analyseWith(successResult());
@@ -151,6 +189,38 @@ describe("TransactionDeepDive success path — heatmap", () => {
     // A successful analysis shows no failure affordances.
     expect(screen.queryByTestId("text-deep-dive-message")).toBeNull();
     expect(screen.queryByTestId("button-retry-deep-dive")).toBeNull();
+  });
+
+  it("colour-codes cells by probability: high-probability cells get a colour, zero renders the muted placeholder", async () => {
+    await analyseWith(successResult());
+
+    await screen.findByTestId("container-boltzmann-heatmap");
+
+    // p=1 → red end of the scale: the cell is filled and red dominates green.
+    const hot = screen.getByTestId("cell-heatmap-0-0") as HTMLElement;
+    expect(hot.style.backgroundColor).not.toBe("");
+    expect(greennessOf(hot.style.backgroundColor)).toBeLessThan(0);
+
+    // p=0.5 → yellow midpoint, with a colour applied.
+    const warm = screen.getByTestId("cell-heatmap-0-1") as HTMLElement;
+    expect(warm.style.backgroundColor).not.toBe("");
+
+    // p=0.25 → greener than the 0.5 cell (closer to the unlikely/green end).
+    const cool = screen.getByTestId("cell-heatmap-1-0") as HTMLElement;
+    expect(cool.style.backgroundColor).not.toBe("");
+    expect(greennessOf(cool.style.backgroundColor)).toBeGreaterThan(
+      greennessOf(warm.style.backgroundColor),
+    );
+    // And the 0.5 cell is in turn greener than the 1.0 (red) cell.
+    expect(greennessOf(warm.style.backgroundColor)).toBeGreaterThan(
+      greennessOf(hot.style.backgroundColor),
+    );
+
+    // p=0 → no inline colour at all; renders the muted "–" placeholder.
+    const empty = screen.getByTestId("cell-heatmap-1-1") as HTMLElement;
+    expect(empty.style.backgroundColor).toBe("");
+    expect(empty.textContent).toBe("–");
+    expect(empty.className).toContain("bg-muted/30");
   });
 
   it("omits the heatmap when the result has an empty linkMatrix (but still shows the summary)", async () => {

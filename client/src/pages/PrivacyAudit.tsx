@@ -269,8 +269,8 @@ function WaterfallChart({ entries }: { entries: ScoreWaterfallEntry[] }) {
 
 // ─── Boltzmann heatmap ────────────────────────────────────────────────────────
 
-function probColor(p: number): string {
-  // 0 = green (hsl 130), 0.5 = yellow (hsl 50), 1 = red (hsl 0)
+export function probColor(p: number): string {
+  // 0 = green (hsl 130), 0.5 = yellow (hsl 65), 1 = red (hsl 0)
   const hue = Math.round(130 - p * 130);
   const sat = 70;
   const lit = 42;
