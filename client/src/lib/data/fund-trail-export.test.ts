@@ -1304,3 +1304,98 @@ describe("buildFundTrailPdf detail/summary address consistency", () => {
     expect(Number(summaryCountCell)).toBe(renderedRows);
   });
 });
+
+// ---------------------------------------------------------------------------
+// CSV-vs-detailed-PDF parity — the CSV and the detailed PDF are meant to carry
+// identical data (address/txid for every deduplicated flow), but they derive
+// their rows independently and can drift: one could include an expanded hop or
+// unknown group the other omits. This builds a single snapshot covering all the
+// interesting cases (center sources, destinations, an expanded hop, and an
+// unknown group) and cross-checks the two outputs against that one snapshot.
+// ---------------------------------------------------------------------------
+
+describe("buildFundTrailCsv vs detailed buildFundTrailPdf parity", () => {
+  // Addresses/txids use distinctive, exact-match patterns that only ever appear
+  // in a CSV address/txid cell or a PDF detail row — never inside a group label,
+  // amount, date, header, or any other chrome — so they can be set-compared
+  // between the two outputs without false positives.
+  const ADDR_RE = /^bc1qx[a-z]+$/;
+  const TXID_RE = /^txx[a-z]+$/;
+
+  function paritySnapshot() {
+    const center: TrailHop = {
+      sources: [
+        flow({
+          groupLabel: "Alice",
+          details: [detail({ address: "bc1qxalice", txid: "txxalice" })],
+        }),
+        flow({
+          groupLabel: "Unknown",
+          isUnknown: true,
+          details: [detail({ address: "bc1qxunknown", txid: "txxunknown" })],
+        }),
+      ],
+      destinations: [
+        flow({
+          groupLabel: "Bob",
+          totalSats: 50_000_000,
+          details: [
+            detail({
+              address: "bc1qxbob",
+              txid: "txxbob",
+              amount: 50_000_000,
+            }),
+          ],
+        }),
+      ],
+    };
+    // One expanded hop off the "Alice" source so an extra deduplicated flow
+    // exists that lives only in the expanded tree.
+    const expandedHop: TrailHop = {
+      sources: [
+        flow({
+          groupLabel: "Carol",
+          details: [detail({ address: "bc1qxcarol", txid: "txxcarol" })],
+        }),
+      ],
+      destinations: [],
+    };
+    const registry = new Map<string, TrailHop>();
+    registry.set(flowPath("", "source", "Alice"), expandedHop);
+    return buildFundTrailSnapshot("Center", "walletName", center, registry);
+  }
+
+  it("renders exactly the same addresses and txids in both exports", async () => {
+    const snapshot = paritySnapshot();
+
+    // CSV: address is column 3, txid is column 4 (skip the header row).
+    const csvRows = parseCsv(buildFundTrailCsv(snapshot)).slice(1);
+    const csvAddresses = new Set(csvRows.map((r) => r[3]));
+    const csvTxids = new Set(csvRows.map((r) => r[4]));
+
+    // The snapshot covers every interesting case, so the CSV must carry all of
+    // them — guards against a fixture that accidentally collapses a flow.
+    expect(csvAddresses).toEqual(
+      new Set(["bc1qxalice", "bc1qxunknown", "bc1qxbob", "bc1qxcarol"]),
+    );
+    expect(csvTxids).toEqual(
+      new Set(["txxalice", "txxunknown", "txxbob", "txxcarol"]),
+    );
+
+    // Detailed PDF: collect the address/txid tokens it actually rendered. The
+    // detail sub-tables emit each cell as its own literal, so address and txid
+    // tokens land on their own lines and match the exact patterns.
+    const pdfText = await extractPdfText(
+      await buildFundTrailPdf(snapshot, { detailed: true }),
+    );
+    const pdfLines = pdfText.split("\n").map((l) => l.trim());
+    const pdfAddresses = new Set(pdfLines.filter((l) => ADDR_RE.test(l)));
+    const pdfTxids = new Set(pdfLines.filter((l) => TXID_RE.test(l)));
+
+    // The two outputs must agree exactly: every address/txid the CSV carries is
+    // rendered in the PDF, and the PDF adds nothing the CSV omits (neither side
+    // silently drops the expanded hop or the unknown group).
+    expect(pdfAddresses).toEqual(csvAddresses);
+    expect(pdfTxids).toEqual(csvTxids);
+  });
+});
