@@ -492,12 +492,18 @@ describe("a failing attachment write surfaces a specific error after clear", () 
     const blob = await exportPlain();
     expect((await liveCounts()).records).toBe(N_REC);
 
-    // Simulate a disk-full / rejected-file failure on the FIRST attachment file
-    // write. Attachment files are written last (after the destructive clear), so
-    // this exercises the fail-after-clear path that resets the vault to empty.
+    // Simulate a disk-full / rejected-file failure on the SECOND attachment file
+    // write (the first succeeds). Attachment files are written last (after the
+    // destructive clear), so this exercises the fail-after-clear path that resets
+    // the vault to empty, and lets us assert the count of files written before
+    // the failure.
+    let writeCalls = 0;
     const failingWriter: AttachmentFileWriter = {
       async write() {
-        throw new Error("ENOSPC: no space left on device");
+        writeCalls += 1;
+        if (writeCalls >= 2) {
+          throw new Error("ENOSPC: no space left on device");
+        }
       },
     };
 
@@ -518,6 +524,8 @@ describe("a failing attachment write surfaces a specific error after clear", () 
     const cause = (caught as RestoreInterruptedError).cause as AttachmentWriteError;
     expect(cause.relPath).toBeTruthy();
     expect(cause.message).toMatch(/no space left/i);
+    // One attachment file was successfully written before the failure.
+    expect(cause.filesWrittenBefore).toBe(1);
 
     // The fail-after-clear contract resets the vault to a verified-empty state.
     const after = await liveCounts();

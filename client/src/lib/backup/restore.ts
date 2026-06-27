@@ -89,10 +89,19 @@ export class RestoreInterruptedError extends Error {
 // surfaced as the `cause` of a RestoreInterruptedError.
 export class AttachmentWriteError extends Error {
   relPath: string;
-  constructor(relPath: string, message: string, options?: { cause?: unknown }) {
+  // How many attachment files this restore had SUCCESSFULLY written to disk
+  // before this one failed. Lets the UI tell the user how far the restore got
+  // (useful for diagnosing a single corrupt file vs. a disk that filled up).
+  filesWrittenBefore: number;
+  constructor(
+    relPath: string,
+    message: string,
+    options?: { cause?: unknown; filesWrittenBefore?: number },
+  ) {
     super(message);
     this.name = "AttachmentWriteError";
     this.relPath = relPath;
+    this.filesWrittenBefore = options?.filesWrittenBefore ?? 0;
     if (options?.cause !== undefined) {
       (this as { cause?: unknown }).cause = options.cause;
     }
@@ -442,7 +451,7 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
               throw new AttachmentWriteError(
                 relPath,
                 writeErr instanceof Error ? writeErr.message : String(writeErr),
-                { cause: writeErr },
+                { cause: writeErr, filesWrittenBefore: counts.attachmentFiles },
               );
             }
             writtenFiles.push(relPath);

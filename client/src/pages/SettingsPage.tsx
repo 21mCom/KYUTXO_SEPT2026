@@ -2699,11 +2699,17 @@ export default function SettingsPage() {
         console.error("Restore failed writing an attachment:", attachmentWriteFailure);
         setRestoreProgress(0);
         setRestoreMessage("");
+        const writtenBefore = attachmentWriteFailure.filesWrittenBefore;
+        const filesSavedMsg =
+          writtenBefore === 1
+            ? "1 attachment file was saved before the failure."
+            : `${writtenBefore} attachment files were saved before the failure.`;
         toast({
           variant: "destructive",
           title: "Restore Failed — Couldn't Write Attachment",
           description:
-            "Restore failed while saving an attachment file — your disk may be full or the file was rejected. The vault was reset to empty, so no partial data was left behind. Free up some disk space, then run the restore again.",
+            `Restore failed while saving the attachment file "${attachmentWriteFailure.relPath}" — your disk may be full or the file was rejected. ` +
+            `${filesSavedMsg} The vault was reset to empty, so no partial data was left behind. Free up some disk space, then run the restore again.`,
         });
         // The reset-to-empty contract clears everything, so re-evaluate the
         // once-per-session orphan check after reload, the same as other paths.
