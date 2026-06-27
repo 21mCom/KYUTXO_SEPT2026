@@ -401,6 +401,19 @@ export interface Settings {
     mode?: 'replace' | 'merge';
     entries: EntityListSnapshotEntry[];
   };
+  // Device-local, derived cache of the vault-wide behavior-label tally (how many
+  // addresses fall into each behavior label). Materialized by a streamed
+  // background pass over the cached address stats — never holds the whole vault
+  // in memory and never touches the network. `addressCount` is a freshness
+  // fingerprint: when the live address count diverges the tally is recomputed.
+  // Not a portable preference, so it is intentionally excluded from backup
+  // restore (it is recomputed lazily after a restore).
+  behaviorTally?: {
+    computedAt: number;
+    addressCount: number;
+    syncedCount: number;
+    counts: { [label: string]: number };
+  };
 }
 
 // Mirrors `EntityEntry` from privacy-entity-list.ts. Defined locally so the

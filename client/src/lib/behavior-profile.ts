@@ -231,6 +231,61 @@ export function classifyBehavior(input: BehaviorInput): BehaviorProfile {
   };
 }
 
+/**
+ * Cached on-chain stat fields as stored on an address record. Every field is
+ * optional/nullable to tolerate records that predate a given column.
+ */
+export interface CachedAddressStats {
+  statsComputedAt?: number | null;
+  cachedBalanceSats?: number | null;
+  cachedTxCount?: number | null;
+  cachedUtxoCount?: number | null;
+  cachedLastActivityTime?: number | null;
+}
+
+/**
+ * Map an address record's cached stats directly to its behavior label. Thin
+ * wrapper over {@link classifyBehavior} so every consumer (the Records filter,
+ * the vault-wide tally, etc.) classifies identically — there is a single source
+ * of truth for the rules. `synced` is derived from `statsComputedAt`.
+ */
+export function behaviorLabelFromCachedStats(
+  s: CachedAddressStats,
+  nowSeconds?: number,
+): BehaviorLabel {
+  return classifyBehavior({
+    synced: s.statsComputedAt != null,
+    balanceSats: s.cachedBalanceSats ?? 0,
+    txCount: s.cachedTxCount ?? 0,
+    utxoCount: s.cachedUtxoCount ?? 0,
+    lastActivityTime: s.cachedLastActivityTime ?? 0,
+    nowSeconds,
+  }).label;
+}
+
+/** A count of how many addresses fall into each behavior label. */
+export type BehaviorTallyCounts = Record<BehaviorLabel, number>;
+
+/** All behavior labels, used to build a zeroed tally. */
+export const ALL_BEHAVIOR_LABELS: BehaviorLabel[] = [
+  'not-enough-data',
+  'dormant',
+  'high-activity',
+  'accumulator',
+  'distributor',
+  'consolidator',
+  'fragmented',
+  'active',
+  'used',
+];
+
+/** A fresh tally with every label set to zero. */
+export function emptyBehaviorTally(): BehaviorTallyCounts {
+  const out = {} as BehaviorTallyCounts;
+  for (const label of ALL_BEHAVIOR_LABELS) out[label] = 0;
+  return out;
+}
+
 /** Display name for each label. */
 export const BEHAVIOR_LABEL_DISPLAY: Record<BehaviorLabel, string> = {
   'not-enough-data': 'Not Synced',

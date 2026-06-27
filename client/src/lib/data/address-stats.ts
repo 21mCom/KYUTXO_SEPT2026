@@ -1,6 +1,12 @@
 import Dexie from 'dexie';
 import { db, notifyDbChange, type TransactionParticipant } from '../database';
 import { bulkUpdateAddressStats, type AddressStatsCacheValues } from './record-crud';
+import { getSettings, updateSettings } from './settings-crud';
+import {
+  behaviorLabelFromCachedStats,
+  emptyBehaviorTally,
+  type BehaviorTallyCounts,
+} from '../behavior-profile';
 
 /**
  * Local-only per-address stats recompute.
@@ -456,5 +462,123 @@ export async function recomputeAddressStats(
     notifyDbChange('records', options.origin ? { origin: options.origin } : undefined);
   }
 
+  // A full recompute (no id/address filter) has just refreshed the cached stats
+  // for the entire vault, so this is the cheapest moment to refresh the
+  // vault-wide behavior tally. Partial recomputes (sync, selection) leave the
+  // tally to be refreshed lazily by the freshness fingerprint. Best-effort: a
+  // tally failure must never fail the stats recompute itself.
+  const fullRecompute =
+    !(options.recordIds && options.recordIds.length > 0) &&
+    !(options.addresses && options.addresses.length > 0);
+  if (fullRecompute && !isAborted(options.signal)) {
+    try {
+      await materializeBehaviorTally({ signal: options.signal });
+    } catch (err) {
+      console.error('[address-stats] behavior tally refresh failed', err);
+    }
+  }
+
   return { updated, cancelled: isAborted(options.signal) };
+}
+
+// ── Vault-wide behavior tally ───────────────────────────────────────────────
+//
+// A precomputed count of how many addresses fall into each behavior label
+// (Dormant, Accumulator, High Activity, …). The Records behavior filter
+// classifies records client-side from cached stats, which only works on the
+// loaded page; this tally answers "how many of each do I have in total?" without
+// scanning the whole vault in memory on every render. It is a streamed,
+// cancellable, local-only pass that reads only the cached stat columns already
+// on each address record (no participant joins, no network) and yields between
+// batches so it never freezes large vaults.
+
+export interface BehaviorTallyResult {
+  counts: BehaviorTallyCounts;
+  /** Total address records scanned (freshness fingerprint). */
+  addressCount: number;
+  /** How many of those had been synced (statsComputedAt set). */
+  syncedCount: number;
+  cancelled: boolean;
+}
+
+export interface BehaviorTallyOptions {
+  signal?: AbortSignal;
+  onProgress?: (processed: number, total: number) => void;
+  /** Page size for scanning address records. */
+  batchSize?: number;
+}
+
+/**
+ * Stream through every address record, classify each from its cached stats, and
+ * return the per-label totals. Pure local read; never holds the whole table in
+ * memory (pages the [type+id] index) and yields between batches.
+ */
+export async function computeBehaviorTally(
+  options: BehaviorTallyOptions = {},
+): Promise<BehaviorTallyResult> {
+  const counts = emptyBehaviorTally();
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  const batchSize = options.batchSize ?? 1000;
+  let addressCount = 0;
+  let syncedCount = 0;
+  let lastId = 0;
+
+  const total = await db.records.where('type').equals('address').count();
+  options.onProgress?.(0, total);
+
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    if (isAborted(options.signal)) {
+      return { counts, addressCount, syncedCount, cancelled: true };
+    }
+
+    const batch = await db.records
+      .where('[type+id]')
+      .between(['address', lastId], ['address', Dexie.maxKey], false, true)
+      .limit(batchSize)
+      .toArray();
+
+    if (batch.length === 0) break;
+    lastId = batch[batch.length - 1].id!;
+
+    for (const rec of batch) {
+      addressCount += 1;
+      if (rec.statsComputedAt != null) syncedCount += 1;
+      counts[behaviorLabelFromCachedStats(rec, nowSeconds)] += 1;
+    }
+
+    options.onProgress?.(addressCount, total);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    if (batch.length < batchSize) break;
+  }
+
+  return { counts, addressCount, syncedCount, cancelled: isAborted(options.signal) };
+}
+
+/** Persist a freshly computed tally onto the default settings row. */
+async function persistBehaviorTally(result: BehaviorTallyResult): Promise<void> {
+  const settings = await getSettings('default');
+  if (!settings) return; // Settings not initialised yet; nothing to attach to.
+  await updateSettings('default', {
+    behaviorTally: {
+      computedAt: Date.now(),
+      addressCount: result.addressCount,
+      syncedCount: result.syncedCount,
+      counts: result.counts,
+    },
+  });
+}
+
+/**
+ * Compute the vault-wide behavior tally and persist it to settings. Returns the
+ * result; a cancelled pass is not persisted (the stale tally is left intact).
+ */
+export async function materializeBehaviorTally(
+  options: BehaviorTallyOptions = {},
+): Promise<BehaviorTallyResult> {
+  const result = await computeBehaviorTally(options);
+  if (!result.cancelled) {
+    await persistBehaviorTally(result);
+  }
+  return result;
 }

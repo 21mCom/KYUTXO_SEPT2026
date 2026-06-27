@@ -3,7 +3,11 @@ import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Activity, X } from "lucide-react";
-import { type BehaviorLabel, BEHAVIOR_LABEL_DISPLAY } from "@/lib/behavior-profile";
+import {
+  type BehaviorLabel,
+  type BehaviorTallyCounts,
+  BEHAVIOR_LABEL_DISPLAY,
+} from "@/lib/behavior-profile";
 
 // Display order for the picker: most useful behaviors first, "Not Synced" last
 // so the includable/excludable not-synced state is always reachable.
@@ -22,9 +26,18 @@ const BEHAVIOR_FILTER_ORDER: BehaviorLabel[] = [
 interface BehaviorFilterProps {
   selected: Set<BehaviorLabel>;
   onChange: (next: Set<BehaviorLabel>) => void;
+  /** Vault-wide count per behavior label, shown beside each option. */
+  counts?: BehaviorTallyCounts | null;
+  /** True while the vault-wide tally is still being computed. */
+  countsComputing?: boolean;
 }
 
-export function BehaviorFilter({ selected, onChange }: BehaviorFilterProps) {
+export function BehaviorFilter({
+  selected,
+  onChange,
+  counts,
+  countsComputing,
+}: BehaviorFilterProps) {
   const toggle = (label: BehaviorLabel) => {
     const next = new Set(selected);
     if (next.has(label)) {
@@ -56,7 +69,20 @@ export function BehaviorFilter({ selected, onChange }: BehaviorFilterProps) {
               )}
             </Button>
           </PopoverTrigger>
-          <PopoverContent className="w-56 p-2" align="start">
+          <PopoverContent className="w-64 p-2" align="start">
+            <div className="flex items-center justify-between gap-2 px-2 pb-1">
+              <span className="text-xs font-medium text-muted-foreground">
+                Across all addresses
+              </span>
+              {countsComputing && (
+                <span
+                  className="text-xs text-muted-foreground"
+                  data-testid="text-behavior-counts-computing"
+                >
+                  Counting…
+                </span>
+              )}
+            </div>
             <div className="space-y-1">
               {BEHAVIOR_FILTER_ORDER.map((label) => (
                 <label
@@ -70,6 +96,16 @@ export function BehaviorFilter({ selected, onChange }: BehaviorFilterProps) {
                     data-testid={`checkbox-behavior-${label}`}
                   />
                   <span className="text-sm">{BEHAVIOR_LABEL_DISPLAY[label]}</span>
+                  <span
+                    className="ml-auto text-xs tabular-nums text-muted-foreground"
+                    data-testid={`count-behavior-${label}`}
+                  >
+                    {counts
+                      ? (counts[label] ?? 0).toLocaleString()
+                      : countsComputing
+                        ? "…"
+                        : ""}
+                  </span>
                 </label>
               ))}
             </div>

@@ -43,7 +43,8 @@ import { ClickableAddress } from "@/components/ClickableAddress";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { RecordFilters, ColumnFilter } from "@/components/RecordFilters";
 import { BehaviorFilter } from "@/components/BehaviorFilter";
-import { classifyBehavior, type BehaviorLabel } from "@/lib/behavior-profile";
+import { behaviorLabelFromCachedStats, type BehaviorLabel } from "@/lib/behavior-profile";
+import { useBehaviorTally } from "@/hooks/use-behavior-tally";
 import { useTags } from "@/hooks/use-tags";
 import { useCategories } from "@/hooks/use-categories";
 import { useOwners } from "@/hooks/use-owners";
@@ -215,6 +216,10 @@ export default function Records() {
   // the cached on-chain stats already on each loaded record — no DB scan. Applied
   // to the loaded page only, so it is intentionally absent from the load effect.
   const [behaviorFilters, setBehaviorFilters] = useState<Set<BehaviorLabel>>(new Set());
+  // Vault-wide per-behavior totals, materialized by a streamed background pass.
+  // Shown beside each option in the behavior picker so the filter is actionable
+  // even though it can only narrow the loaded page.
+  const { counts: behaviorCounts, computing: behaviorCountsComputing } = useBehaviorTally();
   
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   
@@ -844,14 +849,7 @@ export default function Records() {
     if (!behaviorFilterActive) return records;
     return records.filter((r) => {
       if (r.type !== 'address') return false;
-      const { label } = classifyBehavior({
-        synced: r.statsComputedAt != null,
-        balanceSats: r.cachedBalanceSats ?? 0,
-        txCount: r.cachedTxCount ?? 0,
-        utxoCount: r.cachedUtxoCount ?? 0,
-        lastActivityTime: r.cachedLastActivityTime ?? 0,
-      });
-      return behaviorFilters.has(label);
+      return behaviorFilters.has(behaviorLabelFromCachedStats(r));
     });
   }, [records, behaviorFilters, behaviorFilterActive]);
 
@@ -1051,6 +1049,8 @@ export default function Records() {
           <BehaviorFilter
             selected={behaviorFilters}
             onChange={setBehaviorFilters}
+            counts={behaviorCounts}
+            countsComputing={behaviorCountsComputing}
           />
         </div>
 

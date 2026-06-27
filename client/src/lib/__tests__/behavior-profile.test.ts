@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { classifyBehavior, BEHAVIOR_LABEL_DISPLAY, type BehaviorInput } from '../behavior-profile';
+import {
+  classifyBehavior,
+  BEHAVIOR_LABEL_DISPLAY,
+  behaviorLabelFromCachedStats,
+  emptyBehaviorTally,
+  ALL_BEHAVIOR_LABELS,
+  type BehaviorInput,
+} from '../behavior-profile';
 
 const NOW = 1_700_000_000; // fixed reference time (seconds)
 
@@ -286,5 +293,51 @@ describe('classifyBehavior', () => {
       expect(r1.label).toBe(r2.label);
       expect(r1.summarySentence).toBe(r2.summarySentence);
     });
+  });
+});
+
+describe('behaviorLabelFromCachedStats', () => {
+  it('treats a missing statsComputedAt as not-synced', () => {
+    expect(
+      behaviorLabelFromCachedStats({ cachedTxCount: 5 }, NOW),
+    ).toBe('not-enough-data');
+  });
+
+  it('matches classifyBehavior for synced cached stats', () => {
+    const label = behaviorLabelFromCachedStats(
+      { statsComputedAt: 1, cachedTxCount: 80, cachedLastActivityTime: NOW - 1000 },
+      NOW,
+    );
+    expect(label).toBe('high-activity');
+    expect(label).toBe(
+      classifyBehavior(
+        input({ synced: true, txCount: 80, lastActivityTime: NOW - 1000 }),
+      ).label,
+    );
+  });
+
+  it('tolerates null cached fields', () => {
+    expect(
+      behaviorLabelFromCachedStats(
+        {
+          statsComputedAt: 1,
+          cachedBalanceSats: null,
+          cachedTxCount: null,
+          cachedUtxoCount: null,
+          cachedLastActivityTime: null,
+        },
+        NOW,
+      ),
+    ).toBe('not-enough-data');
+  });
+});
+
+describe('emptyBehaviorTally', () => {
+  it('returns a zero count for every label', () => {
+    const tally = emptyBehaviorTally();
+    expect(Object.keys(tally).sort()).toEqual([...ALL_BEHAVIOR_LABELS].sort());
+    for (const label of ALL_BEHAVIOR_LABELS) {
+      expect(tally[label]).toBe(0);
+    }
   });
 });
