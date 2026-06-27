@@ -328,4 +328,61 @@ describe("FindingCard proximity hop-path deep-dive interaction", () => {
       "50%",
     );
   });
+
+  it("shows a dash (not a fake 0%) for efficiency when the transaction can't be meaningfully scored", async () => {
+    const hopPath = ["bc1qhopA", "bc1qhopB", "bc1qhopC"];
+    const hopTxids = [TX(1), TX(2)]; // one per pair → 2
+
+    renderCard(proximityFinding({ details: { hopPath, hopTxids } }));
+    fireEvent.click(screen.getByTestId("button-toggle-details"));
+
+    // Open the deep-dive for the second hop's txid.
+    const second8 = TX(2).slice(0, 8);
+    fireEvent.click(screen.getByTestId(`button-deep-dive-${second8}`));
+
+    const dialog = await screen.findByTestId("dialog-deep-dive");
+    expect(within(dialog).getByText(TX(2))).toBeTruthy();
+
+    // The dialog auto-runs analysis: data loads and the worker is posted to.
+    await waitFor(() => {
+      expect(lastWorker).not.toBeNull();
+      expect(lastWorker!.postMessage).toHaveBeenCalled();
+    });
+
+    // Drive a full result whose maxEntropy is 0 — a transaction that can't be
+    // meaningfully scored. Efficiency is 0 too, but the UI must NOT print "0%"
+    // (which would falsely imply the worst possible privacy); it shows "—".
+    const calls = lastWorker!.postMessage.mock.calls;
+    const { id } = calls[calls.length - 1][0] as { id: string };
+    act(() => {
+      lastWorker!.onmessage!({
+        data: {
+          id,
+          result: {
+            entropy: 0,
+            entropyLabel: "None",
+            interpretationCount: 1,
+            tooComplex: false,
+            linkMatrix: [],
+            efficiency: 0,
+            maxEntropy: 0,
+          },
+        },
+      } as MessageEvent);
+    });
+
+    // Entropy and interpretation count still render their figures…
+    const boltzmann = await within(dialog).findByTestId("container-boltzmann-result");
+    expect(within(boltzmann).getByTestId("text-boltzmann-entropy").textContent).toBe(
+      "0.00 bits",
+    );
+    expect(
+      within(boltzmann).getByTestId("text-boltzmann-interpretations").textContent,
+    ).toBe("1");
+
+    // …but efficiency shows a dash rather than a misleading 0%.
+    const efficiency = within(boltzmann).getByTestId("text-boltzmann-efficiency");
+    expect(efficiency.textContent).toBe("—");
+    expect(efficiency.textContent).not.toBe("0%");
+  });
 });
