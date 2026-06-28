@@ -673,14 +673,14 @@ export function RecordTable({
                 {tableColumns.tags && (
                   <TableCell>
                     <div className="flex flex-wrap gap-1">
-                      {record.tags.slice(0, 2).map((tag) => (
+                      {(record.tags ?? []).slice(0, 2).map((tag) => (
                         <Badge key={tag} variant="outline" className="text-xs">
                           {tag}
                         </Badge>
                       ))}
-                      {record.tags.length > 2 && (
+                      {(record.tags ?? []).length > 2 && (
                         <Badge variant="outline" className="text-xs">
-                          +{record.tags.length - 2}
+                          +{(record.tags ?? []).length - 2}
                         </Badge>
                       )}
                     </div>
