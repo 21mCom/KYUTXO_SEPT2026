@@ -56,7 +56,8 @@ vi.mock("@/lib/database", async () => {
   return { ...actual, db: testDb };
 });
 
-const { updateRecord, deleteRecord } = await import("./record-crud");
+const { updateRecord, deleteRecord, createRecord, bulkCreateRecords } =
+  await import("./record-crud");
 const { mergeRecordData } = await import("../wallet-import/merge-utils");
 const {
   subscribeCacheEntry,
@@ -296,5 +297,80 @@ describe("duplicate merge -> hover cache invalidation", () => {
 
     unsubSurviving();
     unsubDropped();
+  });
+});
+
+describe("create -> hover cache invalidation", () => {
+  it("re-resolves a subscribed identifier that cached 'no record' when createRecord adds it", async () => {
+    // A transaction counterparty link can be on screen (subscribed) before any
+    // record exists for it; that link resolves to null and caches it. When the
+    // user creates a record for that identifier, the orange FileText indicator
+    // must appear immediately — no hover, no 5-minute wait.
+    const identifier = "bc1qfreshcreate";
+
+    invalidateCachedRecord(identifier);
+    await resolveIdentifier(identifier);
+    expect(getCachedRecord(identifier)).toBeNull();
+
+    const cb = vi.fn();
+    const unsub = subscribeCacheEntry(identifier, cb);
+
+    await createRecord(
+      {
+        type: "address",
+        inputString: identifier,
+        label: "Newly Created",
+        notes: "has a note now",
+        tags: [],
+        categories: [],
+      } as Parameters<typeof createRecord>[0],
+      { skipVocabularySync: true },
+    );
+    await settle();
+
+    expect(cb).toHaveBeenCalled();
+    const last = cb.mock.calls[cb.mock.calls.length - 1][0] as DbRecord | null;
+    expect(last?.label).toBe("Newly Created");
+    expect(last?.notes).toBe("has a note now");
+    expect(getCachedRecord(identifier)?.label).toBe("Newly Created");
+    unsub();
+  });
+
+  it("re-resolves EVERY identifier that cached 'no record' when bulkCreateRecords adds them", async () => {
+    // Importers add many new rows at once via bulkCreateRecords. Every visible
+    // link that previously cached null must refresh to the new record.
+    const identifiers = ["bc1qbulknew1", "bc1qbulknew2", "bc1qbulknew3"];
+
+    const cbs = identifiers.map(() => vi.fn());
+    const unsubs: Array<() => void> = [];
+    for (let i = 0; i < identifiers.length; i++) {
+      invalidateCachedRecord(identifiers[i]);
+      await resolveIdentifier(identifiers[i]);
+      expect(getCachedRecord(identifiers[i])).toBeNull();
+      unsubs.push(subscribeCacheEntry(identifiers[i], cbs[i]));
+    }
+
+    await bulkCreateRecords(
+      identifiers.map((identifier) => ({
+        type: "address",
+        inputString: identifier,
+        label: "Imported",
+        notes: "from import",
+        tags: [],
+        categories: [],
+      })) as Parameters<typeof bulkCreateRecords>[0],
+      { skipVocabularySync: true },
+    );
+    await settle();
+
+    for (let i = 0; i < identifiers.length; i++) {
+      expect(cbs[i]).toHaveBeenCalled();
+      const last = cbs[i].mock.calls[cbs[i].mock.calls.length - 1][0] as
+        | DbRecord
+        | null;
+      expect(last?.label).toBe("Imported");
+      expect(getCachedRecord(identifiers[i])?.label).toBe("Imported");
+      unsubs[i]();
+    }
   });
 });

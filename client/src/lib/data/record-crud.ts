@@ -111,7 +111,13 @@ export async function createRecord(
   }
   
   const id = await db.records.add(record);
-  
+
+  // Drop any cached "no record" hover-metadata entry for this identifier so a
+  // visible AddressLink/TxidLink (e.g. a transaction counterparty rendered
+  // before this record existed) shows its orange FileText indicator / tooltip
+  // immediately instead of staying absent for up to the cache TTL.
+  if (record.inputString) invalidateHoverCache(record.inputString);
+
   if (!options?.skipNotification) {
     notifyDbChange('records');
   }
@@ -175,6 +181,17 @@ export async function bulkCreateRecords(
         console.warn('[bulkCreateRecords] Vocabulary sync failed:', err);
       });
     }
+
+    // Drop any cached "no record" hover-metadata entries for the newly created
+    // identifiers so visible AddressLink/TxidLinks (e.g. transaction
+    // counterparties rendered before these records existed) show their orange
+    // FileText indicator / tooltip immediately instead of staying absent for up
+    // to the cache TTL.
+    invalidateHoverCacheMany(
+      fullRecords
+        .map((r) => r.inputString)
+        .filter((s): s is string => !!s),
+    );
 
     if (!options?.skipNotification) {
       notifyDbChange('records');
