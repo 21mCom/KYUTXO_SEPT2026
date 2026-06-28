@@ -343,6 +343,67 @@ describe("computeAnnualActivity — blank-address spend via the prevout fallback
     expect(row.txCount).toBe(1);
   });
 
+  it("counts an unknown-sender spend across the full receive→spend lifecycle (both unresolved counts)", () => {
+    // The canonical regression case for Task #1182's recovery path.
+    //
+    // Year 2023 (RECV): MINE receives a 100k UTXO. Its only input source is a
+    // blank-address external input, so the receipt's sender is unresolved →
+    // unresolvedReceivedFromCount must be 1.
+    //
+    // Year 2024 (SPEND): a later tx spends that exact UTXO via an input whose
+    // address is "" and amount is 0, with prevTxid/prevVout pointing back at
+    // RECV:0. The address index misses it entirely; the spend is recoverable
+    // ONLY through spendingTxids + spentOutputAmounts. The 100k spend must land
+    // in 2024 and unresolvedSentToCount must be 1.
+    const RECV = SRC_A;
+    const SPEND = SELF;
+    const participants = [
+      // RECV tx: blank external input funds MINE's new UTXO.
+      mkInput(RECV, "", 0, SRC_B, 0, 1),
+      mkOutput(RECV, MINE, 100_000, 0, 2),
+      // SPEND tx: blank input spends RECV:0; pays an external recipient.
+      mkInput(SPEND, "", 0, RECV, 0, 3),
+      mkOutput(SPEND, EXT_Y, 95_000, 0, 4),
+    ];
+
+    const result = computeAnnualActivity({
+      addresses: [MINE],
+      txids: [RECV, SPEND],
+      txMap: new Map([
+        [RECV, mkTx(RECV, TIME_2023)],
+        [SPEND, mkTx(SPEND, TIME_2024)],
+      ]),
+      allTxParticipants: participantMap(participants),
+      // Only the SPEND tx is a recovered blank-input spend of our UTXO.
+      spendingTxids: new Set([SPEND]),
+      spentOutputAmounts: new Map([
+        [`${SPEND}:${RECV}:0`, { amount: 100_000, address: MINE }],
+      ]),
+      outputAmountLookup: new Map(),
+    });
+
+    expect(result.combinedYearRows).toHaveLength(2);
+    const byYear = Object.fromEntries(result.combinedYearRows.map((r) => [r.year, r]));
+    // Receipt lands in 2023.
+    expect(byYear[2023]).toMatchObject({ txCount: 1, receivedSats: 100_000, spentSats: 0 });
+    // Recovered spend lands in 2024 (correct year, full amount).
+    expect(byYear[2024]).toMatchObject({ txCount: 1, receivedSats: 0, spentSats: 100_000 });
+
+    // Per-address breakdown mirrors the combined totals.
+    const mine = result.perAddress.find((a) => a.address === MINE)!;
+    expect(mine.hasData).toBe(true);
+    const mineByYear = Object.fromEntries(mine.yearRows.map((r) => [r.year, r]));
+    expect(mineByYear[2023]).toMatchObject({ receivedSats: 100_000, spentSats: 0 });
+    expect(mineByYear[2024]).toMatchObject({ receivedSats: 0, spentSats: 100_000 });
+
+    // Both ends of the lifecycle had blank-address sources → both counts are 1.
+    expect(result.unresolvedReceivedFromCount).toBe(1);
+    expect(result.unresolvedSentToCount).toBe(1);
+
+    // The genuine external recipient of the spend is still recorded.
+    expect(result.sentTo.map((e) => e.address)).toContain(EXT_Y);
+  });
+
   it("flags unresolvedSentToCount and lists the real external recipient for a blank-input spend", () => {
     // SELF spends a UTXO of MINE via a blank input and pays an external address.
     const participants = [
