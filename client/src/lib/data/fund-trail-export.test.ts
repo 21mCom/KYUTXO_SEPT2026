@@ -17,6 +17,8 @@ import {
   flowPath,
   flattenNodes,
   sumTopLevel,
+  summarizeIntermediaryChain,
+  MAX_INTERMEDIARY_ADDRESSES,
   type ExportFlowNode,
 } from "./fund-trail-export";
 
@@ -1750,5 +1752,107 @@ describe("buildMultiHopFundTrailSnapshot intermediary path", () => {
     expect(text).toContain("DeepSource");
     expect(text).toContain("via:");
     expect(text).toContain("bc1qmid1 > bc1qmid2");
+  });
+});
+
+describe("summarizeIntermediaryChain", () => {
+  it("joins a short chain in full with no summary suffix", () => {
+    const addrs = ["bc1qa", "bc1qb", "bc1qc"];
+    expect(summarizeIntermediaryChain(addrs)).toBe("bc1qa > bc1qb > bc1qc");
+  });
+
+  it("returns an empty string for an empty chain", () => {
+    expect(summarizeIntermediaryChain([])).toBe("");
+  });
+
+  it("shows the full chain when exactly at the cap", () => {
+    const addrs = Array.from(
+      { length: MAX_INTERMEDIARY_ADDRESSES },
+      (_, i) => `addr${i}`,
+    );
+    const out = summarizeIntermediaryChain(addrs);
+    expect(out).toBe(addrs.join(" > "));
+    expect(out).not.toContain("more");
+  });
+
+  it("caps a long chain to the first N and appends a (+M more) summary", () => {
+    const addrs = Array.from({ length: 250 }, (_, i) => `addr${i}`);
+    const out = summarizeIntermediaryChain(addrs);
+    const shown = out.split(" (+")[0].split(" > ");
+    expect(shown).toHaveLength(MAX_INTERMEDIARY_ADDRESSES);
+    expect(shown[0]).toBe("addr0");
+    expect(shown[MAX_INTERMEDIARY_ADDRESSES - 1]).toBe(
+      `addr${MAX_INTERMEDIARY_ADDRESSES - 1}`,
+    );
+    // The elided tail count is reported so nothing looks silently dropped.
+    expect(out.endsWith(`(+${250 - MAX_INTERMEDIARY_ADDRESSES} more)`)).toBe(
+      true,
+    );
+    // The very last address is past the cap and must not be listed inline.
+    expect(out).not.toContain("addr249 ");
+  });
+
+  it("honors a custom maxShown", () => {
+    const addrs = ["a", "b", "c", "d", "e"];
+    expect(summarizeIntermediaryChain(addrs, 2)).toBe("a > b (+3 more)");
+  });
+});
+
+describe("long intermediary chains in exports", () => {
+  function longChainResult(chainLength: number): MultiHopTrailResult {
+    const path = Array.from({ length: chainLength }, (_, i) => `bc1qmid${i}`);
+    return {
+      sources: [
+        {
+          groupLabel: "DeepSource",
+          dimension: "walletName",
+          hopDepth: chainLength + 1,
+          direction: "source",
+          totalSats: 40_000_000,
+          details: [
+            detail({ address: "bc1qdeep", txid: "src2", amount: 40_000_000 }),
+          ],
+          isUnknown: false,
+          pathAddresses: path,
+        },
+      ],
+      destinations: [],
+      caps: [],
+    };
+  }
+
+  it("summarizes a very long chain in the CSV cell instead of listing all", () => {
+    const snapshot = buildMultiHopFundTrailSnapshot(
+      "Center",
+      "walletName",
+      longChainResult(300),
+    );
+    const rows = parseCsv(buildFundTrailCsv(snapshot)).slice(1);
+    const deepRow = rows.find((r) => r[5] === "bc1qdeep")!;
+    const cell = deepRow[3];
+    expect(cell.endsWith(`(+${300 - MAX_INTERMEDIARY_ADDRESSES} more)`)).toBe(
+      true,
+    );
+    expect(cell.split(" (+")[0].split(" > ")).toHaveLength(
+      MAX_INTERMEDIARY_ADDRESSES,
+    );
+    // A late address beyond the cap must not appear in the cell.
+    expect(cell).not.toContain("bc1qmid299");
+  });
+
+  it("summarizes a very long chain in the PDF via: line, matching the CSV", async () => {
+    const snapshot = buildMultiHopFundTrailSnapshot(
+      "Center",
+      "walletName",
+      longChainResult(300),
+    );
+    const text = await extractPdfText(await buildFundTrailPdf(snapshot));
+    expect(text).toContain("via:");
+    // The "(+N more)" summary may wrap across lines in the cell, so assert on
+    // its tokens rather than the contiguous phrase. The count matches the CSV.
+    expect(text).toContain(String(300 - MAX_INTERMEDIARY_ADDRESSES));
+    expect(text).toContain("more)");
+    expect(text).toContain("bc1qmid0");
+    expect(text).not.toContain("bc1qmid299");
   });
 });

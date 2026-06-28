@@ -83,6 +83,35 @@ const DIMENSION_LABELS: Record<GroupingDimension, string> = {
 };
 
 /**
+ * Maximum number of intermediary addresses shown inline in an exported chain
+ * before the remainder is summarized. On busy wallets the engine aggregates
+ * *all* unknown addresses at each hop into a single bucket, so a chain can hold
+ * hundreds of addresses — far too many for a scannable CSV cell or PDF "via:"
+ * line. We keep the leading addresses (the ones nearest the center, most useful
+ * for reconstructing the path) and replace the tail with a "(+N more)" summary.
+ */
+export const MAX_INTERMEDIARY_ADDRESSES = 10;
+
+/**
+ * Render an intermediary-address chain for export, capping very long chains.
+ * Addresses are joined with " > "; when the chain exceeds `maxShown`, only the
+ * first `maxShown` are listed followed by "(+N more)" so the total length stays
+ * scannable while still reporting how many addresses were elided. Shared by the
+ * CSV and PDF builders so both formats summarize identically.
+ */
+export function summarizeIntermediaryChain(
+  addresses: string[],
+  maxShown: number = MAX_INTERMEDIARY_ADDRESSES,
+): string {
+  if (addresses.length <= maxShown) {
+    return addresses.join(" > ");
+  }
+  const shown = addresses.slice(0, maxShown).join(" > ");
+  const remaining = addresses.length - maxShown;
+  return `${shown} (+${remaining} more)`;
+}
+
+/**
  * Stable path key for a flow, matching the keys the FlowCard tree registers its
  * expanded hops under. The root direction prefix lets the snapshot builder pick
  * the correct side (sources vs destinations) of each expanded hop.
@@ -291,10 +320,11 @@ function collectCsvRows(
     if (includeHopDepth) {
       // Multi-hop snapshots carry hop_depth plus the chain of unknown
       // intermediary addresses traversed to reach this node, so an auditor can
-      // reconstruct the path. The chain is joined with " > "; csvCell handles
-      // any quoting needed for the combined value.
+      // reconstruct the path. The chain is summarized (first N + "(+M more)")
+      // for very long chains so the cell stays scannable; csvCell handles any
+      // quoting needed for the combined value.
       row.push(String(node.hopDepth ?? 1));
-      row.push((node.pathAddresses ?? []).join(" > "));
+      row.push(summarizeIntermediaryChain(node.pathAddresses ?? []));
     }
     row.push(btcAmount(d.amount), d.address, d.txid, isoDate(d.blockTime));
     rows.push(row);
@@ -494,7 +524,9 @@ export async function buildFundTrailPdf(
       // was reached. Wraps within the cell (overflow: linebreak below).
       const path = node.pathAddresses ?? [];
       const pathLine =
-        path.length > 0 ? `\n${indentPrefix}    via: ${path.join(" > ")}` : "";
+        path.length > 0
+          ? `\n${indentPrefix}    via: ${summarizeIntermediaryChain(path)}`
+          : "";
       return [
         `${indentPrefix}${hopPrefix}${node.groupLabel}${pathLine}`,
         formatBtc(node.totalSats),
