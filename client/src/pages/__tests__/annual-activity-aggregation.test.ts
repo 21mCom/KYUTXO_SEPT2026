@@ -617,4 +617,82 @@ describe("computeAnnualActivity — two pasted addresses trade in one tx", () =>
     expect(result.sentTo).toHaveLength(0);
     expect(result.receivedFrom).toHaveLength(0);
   });
+
+  it("splits totals correctly when an owned address is BOTH input and output alongside other owned co-inputs/co-outputs", () => {
+    // CONSOL tx: owned address MINE_A appears on BOTH sides — it spends a 100k
+    // UTXO (input) AND receives a 90k change output (output). Two more owned
+    // addresses join the same tx: MINE_B is an additional owned input (60k) and
+    // MINE_C an additional owned output (50k). 20k goes to fee.
+    //   Inputs (spent):    A=100k, B=60k   → combined spent 160k
+    //   Outputs (received): A=90k,  C=50k   → combined received 140k
+    // This exercises the per-address dedup (seen) interacting with cross-address
+    // summation simultaneously: A's input and output must each be counted once,
+    // B's spend and C's receipt must add into the combined totals, the tx must
+    // count exactly once, the per-address rows must split each leg correctly, and
+    // no owned address may list another (or itself) as a counterparty.
+    const participants = [
+      mkInput(CONSOL, MINE_A, 100_000, SRC_A, 0, 1),
+      mkInput(CONSOL, MINE_B, 60_000, SRC_B, 0, 2),
+      mkOutput(CONSOL, MINE_A, 90_000, 0, 3), // change back to A (A is on both sides)
+      mkOutput(CONSOL, MINE_C, 50_000, 1, 4),
+    ];
+
+    const result = computeAnnualActivity({
+      addresses: [MINE_A, MINE_B, MINE_C],
+      txids: [CONSOL],
+      txMap: new Map([[CONSOL, mkTx(CONSOL, TIME_2024)]]),
+      allTxParticipants: participantMap(participants),
+      spendingTxids: new Set(),
+      spentOutputAmounts: new Map(),
+      outputAmountLookup: new Map(),
+    });
+
+    // Combined: one 2024 row counted exactly once, each leg summed independently.
+    expect(result.combinedYearRows).toHaveLength(1);
+    const row = result.combinedYearRows[0];
+    expect(row.year).toBe(2024);
+    expect(row.spentSats).toBe(160_000); // 100k (A) + 60k (B)
+    expect(row.receivedSats).toBe(140_000); // 90k (A change) + 50k (C)
+    expect(row.txCount).toBe(1);
+
+    // Per-address split: A both spent and received, B spent only, C received only.
+    const a = result.perAddress.find((p) => p.address === MINE_A)!;
+    const b = result.perAddress.find((p) => p.address === MINE_B)!;
+    const c = result.perAddress.find((p) => p.address === MINE_C)!;
+    expect(a.hasData).toBe(true);
+    expect(b.hasData).toBe(true);
+    expect(c.hasData).toBe(true);
+    expect(a.yearRows).toHaveLength(1);
+    expect(b.yearRows).toHaveLength(1);
+    expect(c.yearRows).toHaveLength(1);
+    expect(a.yearRows[0]).toMatchObject({
+      year: 2024,
+      txCount: 1,
+      receivedSats: 90_000, // change back to itself
+      spentSats: 100_000, // its own input
+    });
+    expect(b.yearRows[0]).toMatchObject({
+      year: 2024,
+      txCount: 1,
+      receivedSats: 0,
+      spentSats: 60_000,
+    });
+    expect(c.yearRows[0]).toMatchObject({
+      year: 2024,
+      txCount: 1,
+      receivedSats: 50_000,
+      spentSats: 0,
+    });
+
+    // No owned address lists another (or itself) as a counterparty: with only
+    // owned addresses on both sides, both counterparty lists are empty.
+    const sentToAddrs = result.sentTo.map((e) => e.address);
+    const receivedFromAddrs = result.receivedFrom.map((e) => e.address);
+    for (const owned of [MINE_A, MINE_B, MINE_C]) {
+      expect(sentToAddrs).not.toContain(owned);
+      expect(receivedFromAddrs).not.toContain(owned);
+    }
+    expect(result.sentTo).toHaveLength(0);
+    expect(result.receivedFrom).toHaveLength(0);
+  });
 });
