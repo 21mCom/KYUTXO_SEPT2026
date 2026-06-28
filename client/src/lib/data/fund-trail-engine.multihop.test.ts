@@ -226,6 +226,9 @@ describe("computeMultiHopKnown", () => {
     const deepNode = hop2Sources.find(n => n.groupLabel === "DeepSource")!;
     expect(deepNode.hopDepth).toBe(2);
     expect(deepNode.direction).toBe("source");
+    // The path to DeepSource runs through the unknown intermediary address, so
+    // pathAddresses records that chain for auditors.
+    expect(deepNode.pathAddresses).toContain(unknownAddr);
   });
 
   it("surfaces a known entity at hop 2 in forward direction", async () => {

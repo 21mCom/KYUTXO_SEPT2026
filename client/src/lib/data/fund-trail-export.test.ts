@@ -4,10 +4,13 @@ import type {
   GroupFlow,
   GroupFlowDetail,
   TrailHop,
+  HopNode,
+  MultiHopTrailResult,
 } from "./fund-trail-engine";
 import { formatBtc } from "./fund-trail-engine";
 import {
   buildFundTrailSnapshot,
+  buildMultiHopFundTrailSnapshot,
   buildFundTrailCsv,
   buildFundTrailPdf,
   fundTrailFilename,
@@ -1650,5 +1653,102 @@ describe("buildFundTrailCsv vs detailed buildFundTrailPdf parity", () => {
     // blank when unknown) the detailed PDF renders must exactly match the CSV's
     // cells — neither path may round, blank, or reformat them differently.
     expect(pdfByPair).toEqual(csvByPair);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Multi-hop snapshot — the intermediary path column / inline chain.
+// ---------------------------------------------------------------------------
+
+describe("buildMultiHopFundTrailSnapshot intermediary path", () => {
+  function hopNode(overrides: Partial<HopNode> = {}): HopNode {
+    return {
+      groupLabel: "Alice",
+      dimension: "walletName",
+      hopDepth: 1,
+      direction: "source",
+      totalSats: 100_000_000,
+      details: [detail()],
+      isUnknown: false,
+      ...overrides,
+    };
+  }
+
+  function multiHopResult(): MultiHopTrailResult {
+    return {
+      sources: [
+        // Direct hop-1 counterparty — no intermediaries.
+        hopNode({
+          groupLabel: "Alice",
+          hopDepth: 1,
+          details: [detail({ address: "bc1qalice", txid: "src1" })],
+        }),
+        // Hop-2 entity reached through two unknown intermediary addresses.
+        hopNode({
+          groupLabel: "DeepSource",
+          hopDepth: 2,
+          totalSats: 40_000_000,
+          details: [
+            detail({ address: "bc1qdeep", txid: "src2", amount: 40_000_000 }),
+          ],
+          pathAddresses: ["bc1qmid1", "bc1qmid2"],
+        }),
+      ],
+      destinations: [],
+      caps: [],
+    };
+  }
+
+  it("carries pathAddresses from HopNode onto the export node", () => {
+    const snapshot = buildMultiHopFundTrailSnapshot(
+      "Center",
+      "walletName",
+      multiHopResult(),
+    );
+    const deep = snapshot.sources.find((n) => n.groupLabel === "DeepSource")!;
+    expect(deep.pathAddresses).toEqual(["bc1qmid1", "bc1qmid2"]);
+    const direct = snapshot.sources.find((n) => n.groupLabel === "Alice")!;
+    expect(direct.pathAddresses).toBeUndefined();
+  });
+
+  it("adds an intermediary_addresses column to the multi-hop CSV header", () => {
+    const snapshot = buildMultiHopFundTrailSnapshot(
+      "Center",
+      "walletName",
+      multiHopResult(),
+    );
+    const csv = buildFundTrailCsv(snapshot);
+    expect(csv.split("\r\n")[0]).toBe(
+      "direction,group,hop_depth,intermediary_addresses,amount_btc,address,txid,date",
+    );
+  });
+
+  it("lists the chain of intermediary addresses for a deep hop, blank for direct", () => {
+    const snapshot = buildMultiHopFundTrailSnapshot(
+      "Center",
+      "walletName",
+      multiHopResult(),
+    );
+    const rows = parseCsv(buildFundTrailCsv(snapshot)).slice(1);
+
+    const deepRow = rows.find((r) => r[5] === "bc1qdeep")!;
+    expect(deepRow[2]).toBe("2"); // hop_depth
+    expect(deepRow[3]).toBe("bc1qmid1 > bc1qmid2"); // intermediary_addresses
+
+    const directRow = rows.find((r) => r[5] === "bc1qalice")!;
+    expect(directRow[2]).toBe("1");
+    expect(directRow[3]).toBe(""); // no intermediaries for a direct counterparty
+  });
+
+  it("renders the intermediary chain inline beneath the hop group in the PDF", async () => {
+    const snapshot = buildMultiHopFundTrailSnapshot(
+      "Center",
+      "walletName",
+      multiHopResult(),
+    );
+    const text = await extractPdfText(await buildFundTrailPdf(snapshot));
+    expect(text).toContain("DeepSource");
+    expect(text).toContain("via:");
+    expect(text).toContain("bc1qmid1 > bc1qmid2");
   });
 });

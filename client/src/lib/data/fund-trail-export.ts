@@ -40,6 +40,13 @@ export interface ExportFlowNode {
    * preserved for those.
    */
   hopDepth?: number;
+  /**
+   * Ordered chain of unknown intermediary addresses traversed between the
+   * center and this node (multi-hop snapshots only). Lets the export show
+   * *through which* addresses the entity was reached. Empty/undefined for
+   * direct hop-1 counterparties and single-hop snapshots.
+   */
+  pathAddresses?: string[];
 }
 
 /**
@@ -143,6 +150,7 @@ export function buildMultiHopFundTrailSnapshot(
     details: deduplicateDetails(hn.details),
     children: [],
     hopDepth: hn.hopDepth,
+    pathAddresses: hn.pathAddresses,
   });
 
   const sources = result.sources.map(toNode);
@@ -279,18 +287,16 @@ function collectCsvRows(
   includeHopDepth: boolean,
 ): void {
   for (const d of node.details) {
-    const row = [
-      direction === "source" ? "incoming" : "outgoing",
-      node.groupLabel,
-      btcAmount(d.amount),
-      d.address,
-      d.txid,
-      isoDate(d.blockTime),
-    ];
+    const row = [direction === "source" ? "incoming" : "outgoing", node.groupLabel];
     if (includeHopDepth) {
-      // Insert hop_depth after direction+group, before amount_btc
-      row.splice(2, 0, String(node.hopDepth ?? 1));
+      // Multi-hop snapshots carry hop_depth plus the chain of unknown
+      // intermediary addresses traversed to reach this node, so an auditor can
+      // reconstruct the path. The chain is joined with " > "; csvCell handles
+      // any quoting needed for the combined value.
+      row.push(String(node.hopDepth ?? 1));
+      row.push((node.pathAddresses ?? []).join(" > "));
     }
+    row.push(btcAmount(d.amount), d.address, d.txid, isoDate(d.blockTime));
     rows.push(row);
   }
   for (const child of node.children) {
@@ -300,17 +306,20 @@ function collectCsvRows(
 
 /**
  * Build a CSV export of the Fund Trail snapshot. Columns: direction, group,
- * [hop_depth,] amount_btc, address, txid, date. One row per address flow,
- * covering the center node's sources and destinations plus every expanded hop.
- * hop_depth is included only for multi-hop snapshots (where any node has
- * hopDepth set) so the existing single-hop CSV format is preserved.
+ * [hop_depth, intermediary_addresses,] amount_btc, address, txid, date. One row
+ * per address flow, covering the center node's sources and destinations plus
+ * every expanded hop. hop_depth and intermediary_addresses are included only
+ * for multi-hop snapshots (where any node has hopDepth set) so the existing
+ * single-hop CSV format is preserved. intermediary_addresses lists the chain of
+ * unknown addresses traversed (joined with " > ") between the center and the
+ * surfaced entity, so auditors can reconstruct the path.
  * Fully offline — no external resources.
  */
 export function buildFundTrailCsv(snapshot: FundTrailSnapshot): string {
   const allNodes = [...snapshot.sources, ...snapshot.destinations];
   const includeHopDepth = allNodes.some(n => n.hopDepth != null);
   const headers = includeHopDepth
-    ? ["direction", "group", "hop_depth", "amount_btc", "address", "txid", "date"]
+    ? ["direction", "group", "hop_depth", "intermediary_addresses", "amount_btc", "address", "txid", "date"]
     : ["direction", "group", "amount_btc", "address", "txid", "date"];
   const rows: string[][] = [];
   for (const node of snapshot.sources) {
@@ -480,8 +489,14 @@ export async function buildFundTrailPdf(
     const body = flat.map(({ depth, node }) => {
       const hopPrefix = node.hopDepth != null ? `Hop ${node.hopDepth}: ` : "";
       const indentPrefix = `${"    ".repeat(depth)}${depth > 0 ? "↳ " : ""}`;
+      // Show the chain of unknown intermediary addresses inline beneath the hop
+      // group label so an auditor can trace through which addresses the entity
+      // was reached. Wraps within the cell (overflow: linebreak below).
+      const path = node.pathAddresses ?? [];
+      const pathLine =
+        path.length > 0 ? `\n${indentPrefix}    via: ${path.join(" > ")}` : "";
       return [
-        `${indentPrefix}${hopPrefix}${node.groupLabel}`,
+        `${indentPrefix}${hopPrefix}${node.groupLabel}${pathLine}`,
         formatBtc(node.totalSats),
         String(node.details.length),
       ];
@@ -491,9 +506,10 @@ export async function buildFundTrailPdf(
       startY: cursorY,
       head: [["Group", "Amount", "Addresses"]],
       body,
-      styles: { fontSize: 8, cellPadding: 1.5 },
+      styles: { fontSize: 8, cellPadding: 1.5, overflow: "linebreak" },
       headStyles: { fillColor: [41, 128, 185] },
       columnStyles: {
+        0: { cellWidth: 120 },
         1: { halign: "right" },
         2: { halign: "right" },
       },
