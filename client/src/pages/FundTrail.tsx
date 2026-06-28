@@ -614,6 +614,7 @@ function MultiHopTrailLayout({
   forwardHops: number;
 }) {
   const { toast } = useToast();
+  const { intermediaryAddressCap } = useSettings();
   const [isExporting, setIsExporting] = useState(false);
 
   const hasSources = multiHopResult.sources.length > 0;
@@ -642,14 +643,19 @@ function MultiHopTrailLayout({
           multiHopResult,
         );
         if (format === "csv") {
-          const csv = buildFundTrailCsv(snapshot);
+          const csv = buildFundTrailCsv(snapshot, {
+            maxIntermediaryAddresses: intermediaryAddressCap,
+          });
           triggerDownload(
             new Blob([csv], { type: "text/csv;charset=utf-8" }),
             fundTrailFilename(centerLabel, "csv"),
           );
         } else {
           const detailed = format === "pdf-detailed";
-          const blob = await buildFundTrailPdf(snapshot, { detailed });
+          const blob = await buildFundTrailPdf(snapshot, {
+            detailed,
+            maxIntermediaryAddresses: intermediaryAddressCap,
+          });
           triggerDownload(blob, fundTrailFilename(centerLabel, "pdf"));
         }
         toast({
@@ -672,7 +678,7 @@ function MultiHopTrailLayout({
         setIsExporting(false);
       }
     },
-    [centerLabel, dimension, multiHopResult, toast],
+    [centerLabel, dimension, multiHopResult, intermediaryAddressCap, toast],
   );
 
   const dateRangeLabel = formatDateRange(dateRange);
@@ -967,7 +973,7 @@ function toDateRange(startDate: string, endDate: string): DateRange | undefined 
 }
 
 export default function FundTrail() {
-  const { fundTrailTxLimit } = useSettings();
+  const { fundTrailTxLimit, intermediaryAddressCap } = useSettings();
 
   // --- Source mode: trace by group or by a single address ---
   const [sourceMode, setSourceMode] = useState<"group" | "address">("group");
@@ -1569,6 +1575,7 @@ function TrailLayout({
   dateRange?: DateRange;
 }) {
   const { toast } = useToast();
+  const { intermediaryAddressCap } = useSettings();
   const [isExporting, setIsExporting] = useState(false);
   const hasSources = centerHop.sources.length > 0;
   const hasDests = centerHop.destinations.length > 0;
@@ -1597,14 +1604,19 @@ function TrailLayout({
           expandedHopsRef.current,
         );
         if (format === "csv") {
-          const csv = buildFundTrailCsv(snapshot);
+          const csv = buildFundTrailCsv(snapshot, {
+            maxIntermediaryAddresses: intermediaryAddressCap,
+          });
           triggerDownload(
             new Blob([csv], { type: "text/csv;charset=utf-8" }),
             fundTrailFilename(centerLabel, "csv"),
           );
         } else {
           const detailed = format === "pdf-detailed";
-          const blob = await buildFundTrailPdf(snapshot, { detailed });
+          const blob = await buildFundTrailPdf(snapshot, {
+            detailed,
+            maxIntermediaryAddresses: intermediaryAddressCap,
+          });
           triggerDownload(blob, fundTrailFilename(centerLabel, "pdf"));
         }
         toast({
@@ -1627,7 +1639,7 @@ function TrailLayout({
         setIsExporting(false);
       }
     },
-    [centerLabel, dimension, centerHop, toast],
+    [centerLabel, dimension, centerHop, intermediaryAddressCap, toast],
   );
 
   const dateRangeLabel = formatDateRange(dateRange);

@@ -68,6 +68,10 @@ function formatDeviceValue(key: string, settings: any): string | null {
       return `${settings.privacyHistoryLimit} runs`;
     case "fundTrailTxLimit":
       return `${settings.fundTrailTxLimit.toLocaleString()} per hop`;
+    case "intermediaryAddressCap":
+      return `${settings.intermediaryAddressCap.toLocaleString()} addresses`;
+    case "sourceOfFundsTxLimit":
+      return `${settings.sourceOfFundsTxLimit.toLocaleString()} transactions`;
     case "entityListSnapshot": {
       const snap = settings.entityListSnapshot;
       if (!snap || !Array.isArray(snap.entries)) return null;
@@ -160,6 +164,8 @@ describe("settings-preferences preview/restore parity", () => {
       cancelConfirmThreshold: 90,
       privacyHistoryLimit: 100,
       fundTrailTxLimit: 5000,
+      intermediaryAddressCap: 25,
+      sourceOfFundsTxLimit: 5000,
       entityListSnapshot: { entries: [{ address: "a" }] },
     };
 

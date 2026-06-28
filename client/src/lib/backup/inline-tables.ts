@@ -140,6 +140,15 @@ const PORTABLE_PREFERENCES: PortablePreferenceDescriptor[] = [
     format: (v) => `${(v as number).toLocaleString()} per hop`,
   },
   {
+    key: "intermediaryAddressCap",
+    label: "Fund Trail export intermediary-address cap",
+    extract: (s) =>
+      typeof s.intermediaryAddressCap === "number" && Number.isFinite(s.intermediaryAddressCap)
+        ? s.intermediaryAddressCap
+        : undefined,
+    format: (v) => `${(v as number).toLocaleString()} addresses`,
+  },
+  {
     key: "sourceOfFundsTxLimit",
     label: "Source of Funds report cap",
     extract: (s) =>

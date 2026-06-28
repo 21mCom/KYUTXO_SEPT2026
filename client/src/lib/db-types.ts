@@ -389,6 +389,11 @@ export interface Settings {
   // report run before capping (mirrors the Fund Trail limit control).
   // When unset, defaults to DEFAULT_TX_LIMIT (2000).
   sourceOfFundsTxLimit?: number;
+  // Max number of intermediary (unknown) addresses listed inline in a Fund Trail
+  // export chain before the remainder is summarized as "(+N more)". Lets auditors
+  // tune readability vs. completeness. When unset, defaults to
+  // DEFAULT_INTERMEDIARY_ADDRESS_CAP (MAX_INTERMEDIARY_ADDRESSES, 10).
+  intermediaryAddressCap?: number;
   // Per-field toggles for the address/TXID hover tooltip. When unset, all fields
   // default to visible and system tags (namespace-prefixed, e.g. quantum:*) are
   // excluded. Stored as an optional sub-object so older vaults keep defaults.
@@ -472,6 +477,7 @@ export function createDefaultSettings(id: string = 'default'): Settings {
     privacyHistoryLimit: 30,
     disableOrphanCheck: false,
     fundTrailTxLimit: 2000,
+    intermediaryAddressCap: 10,
   };
 }
 

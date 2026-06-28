@@ -45,6 +45,7 @@ import {
   trimPrivacyAuditHistory,
 } from '@/lib/data/privacy-history-crud';
 import { DEFAULT_TX_LIMIT } from '@/lib/data/fund-trail-engine';
+import { DEFAULT_INTERMEDIARY_ADDRESS_CAP } from '@/lib/data/fund-trail-export';
 import { DEFAULT_HOVER_TOOLTIP_PREFS, type HoverTooltipPrefs } from '@/lib/metadata-hover';
 
 export function useSettings() {
@@ -69,6 +70,7 @@ export function useSettings() {
     disableOrphanCheck: settings?.disableOrphanCheck ?? false,
     fundTrailTxLimit: settings?.fundTrailTxLimit ?? DEFAULT_TX_LIMIT,
     sourceOfFundsTxLimit: settings?.sourceOfFundsTxLimit ?? DEFAULT_TX_LIMIT,
+    intermediaryAddressCap: settings?.intermediaryAddressCap ?? DEFAULT_INTERMEDIARY_ADDRESS_CAP,
     hoverTooltipPrefs: settings?.hoverTooltipPrefs
       ? { ...DEFAULT_HOVER_TOOLTIP_PREFS, ...settings.hoverTooltipPrefs }
       : DEFAULT_HOVER_TOOLTIP_PREFS,
@@ -206,6 +208,13 @@ export async function updateSourceOfFundsTxLimit(value: number) {
   await ensureStoredSettings('default');
   await updateStoredSettings('default', {
     sourceOfFundsTxLimit: value,
+  });
+}
+
+export async function updateIntermediaryAddressCap(value: number) {
+  await ensureStoredSettings('default');
+  await updateStoredSettings('default', {
+    intermediaryAddressCap: value,
   });
 }
 

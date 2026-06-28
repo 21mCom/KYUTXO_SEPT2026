@@ -27,6 +27,7 @@ import {
   updatePrivacyHistoryLimit,
   updateFundTrailTxLimit,
   updateSourceOfFundsTxLimit,
+  updateIntermediaryAddressCap,
   updateHoverTooltipPrefs,
 } from "@/hooks/use-settings";
 import {
@@ -927,7 +928,7 @@ function formatBytes(bytes: number): string {
 }
 
 export default function SettingsPage() {
-  const { settings, fieldVisibility, cancelConfirmThreshold, privacyHistoryLimit, disableOrphanCheck, fundTrailTxLimit, sourceOfFundsTxLimit, hoverTooltipPrefs, isLoading: settingsLoading } = useSettings();
+  const { settings, fieldVisibility, cancelConfirmThreshold, privacyHistoryLimit, disableOrphanCheck, fundTrailTxLimit, sourceOfFundsTxLimit, intermediaryAddressCap, hoverTooltipPrefs, isLoading: settingsLoading } = useSettings();
   const { customFields, isLoading: customFieldsLoading } = useCustomFields();
   const { toast } = useToast();
 
@@ -2313,6 +2314,7 @@ export default function SettingsPage() {
       cancelConfirmThreshold?: number;
       privacyHistoryLimit?: number;
       fundTrailTxLimit?: number;
+      intermediaryAddressCap?: number;
       entityListSnapshot?: unknown;
     };
     let preRestorePrefs: PortablePrefsSnapshot | null = null;
@@ -2452,6 +2454,7 @@ export default function SettingsPage() {
               cancelConfirmThreshold: cur.cancelConfirmThreshold,
               privacyHistoryLimit: cur.privacyHistoryLimit,
               fundTrailTxLimit: cur.fundTrailTxLimit,
+              intermediaryAddressCap: cur.intermediaryAddressCap,
               entityListSnapshot: cur.entityListSnapshot,
             };
           }
@@ -3598,6 +3601,40 @@ export default function SettingsPage() {
                   <SelectItem value="5000" data-testid="option-fund-trail-limit-5000">5,000</SelectItem>
                   <SelectItem value="10000" data-testid="option-fund-trail-limit-10000">10,000</SelectItem>
                   <SelectItem value="25000" data-testid="option-fund-trail-limit-25000">25,000</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex items-center justify-between gap-4 flex-wrap">
+              <div>
+                <Label className="text-base">Intermediary addresses in exports</Label>
+                <p className="text-sm text-muted-foreground">
+                  How many intermediary addresses a CSV or PDF export lists for each chain before summarizing the rest as "(+N more)". A higher cap is more complete but less scannable.
+                </p>
+              </div>
+              <Select
+                value={String(intermediaryAddressCap)}
+                onValueChange={async (val) => {
+                  try {
+                    await updateIntermediaryAddressCap(Number(val));
+                  } catch {
+                    toast({
+                      title: "Error",
+                      description: "Failed to update intermediary-address cap",
+                      variant: "destructive",
+                    });
+                  }
+                }}
+                disabled={settingsLoading}
+              >
+                <SelectTrigger className="w-[180px]" data-testid="select-intermediary-address-cap">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="5" data-testid="option-intermediary-cap-5">5</SelectItem>
+                  <SelectItem value="10" data-testid="option-intermediary-cap-10">10 (default)</SelectItem>
+                  <SelectItem value="25" data-testid="option-intermediary-cap-25">25</SelectItem>
+                  <SelectItem value="50" data-testid="option-intermediary-cap-50">50</SelectItem>
+                  <SelectItem value="100" data-testid="option-intermediary-cap-100">100</SelectItem>
                 </SelectContent>
               </Select>
             </div>

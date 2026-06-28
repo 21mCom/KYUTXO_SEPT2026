@@ -93,6 +93,35 @@ const DIMENSION_LABELS: Record<GroupingDimension, string> = {
 export const MAX_INTERMEDIARY_ADDRESSES = 10;
 
 /**
+ * Default cap used when no user preference is supplied. Aliased to
+ * MAX_INTERMEDIARY_ADDRESSES so the historic default is preserved, while giving
+ * the Settings store / hook a stable name to import for its fallback value.
+ */
+export const DEFAULT_INTERMEDIARY_ADDRESS_CAP = MAX_INTERMEDIARY_ADDRESSES;
+
+/** Options shared by the CSV and PDF builders. */
+export interface FundTrailExportOptions {
+  /**
+   * Maximum number of intermediary addresses listed inline in an exported chain
+   * before the remainder is summarized as "(+N more)". When omitted, the historic
+   * default (MAX_INTERMEDIARY_ADDRESSES) is used.
+   */
+  maxIntermediaryAddresses?: number;
+}
+
+/**
+ * Normalize a user-supplied intermediary-address cap into a safe positive
+ * integer, falling back to the default when the value is missing or invalid
+ * (NaN, non-finite, or < 1). Shared so CSV and PDF apply the cap identically.
+ */
+function resolveIntermediaryCap(maxShown?: number): number {
+  if (typeof maxShown === "number" && Number.isFinite(maxShown) && maxShown >= 1) {
+    return Math.floor(maxShown);
+  }
+  return DEFAULT_INTERMEDIARY_ADDRESS_CAP;
+}
+
+/**
  * Render an intermediary-address chain for export, capping very long chains.
  * Addresses are joined with " > "; when the chain exceeds `maxShown`, only the
  * first `maxShown` are listed followed by "(+N more)" so the total length stays
@@ -314,6 +343,7 @@ function collectCsvRows(
   direction: "source" | "destination",
   rows: string[][],
   includeHopDepth: boolean,
+  maxIntermediaryAddresses: number,
 ): void {
   for (const d of node.details) {
     const row = [direction === "source" ? "incoming" : "outgoing", node.groupLabel];
@@ -324,13 +354,13 @@ function collectCsvRows(
       // for very long chains so the cell stays scannable; csvCell handles any
       // quoting needed for the combined value.
       row.push(String(node.hopDepth ?? 1));
-      row.push(summarizeIntermediaryChain(node.pathAddresses ?? []));
+      row.push(summarizeIntermediaryChain(node.pathAddresses ?? [], maxIntermediaryAddresses));
     }
     row.push(btcAmount(d.amount), d.address, d.txid, isoDate(d.blockTime));
     rows.push(row);
   }
   for (const child of node.children) {
-    collectCsvRows(child, direction, rows, includeHopDepth);
+    collectCsvRows(child, direction, rows, includeHopDepth, maxIntermediaryAddresses);
   }
 }
 
@@ -345,7 +375,11 @@ function collectCsvRows(
  * surfaced entity, so auditors can reconstruct the path.
  * Fully offline — no external resources.
  */
-export function buildFundTrailCsv(snapshot: FundTrailSnapshot): string {
+export function buildFundTrailCsv(
+  snapshot: FundTrailSnapshot,
+  options: FundTrailExportOptions = {},
+): string {
+  const maxIntermediaryAddresses = resolveIntermediaryCap(options.maxIntermediaryAddresses);
   const allNodes = [...snapshot.sources, ...snapshot.destinations];
   const includeHopDepth = allNodes.some(n => n.hopDepth != null);
   const headers = includeHopDepth
@@ -353,10 +387,10 @@ export function buildFundTrailCsv(snapshot: FundTrailSnapshot): string {
     : ["direction", "group", "amount_btc", "address", "txid", "date"];
   const rows: string[][] = [];
   for (const node of snapshot.sources) {
-    collectCsvRows(node, "source", rows, includeHopDepth);
+    collectCsvRows(node, "source", rows, includeHopDepth, maxIntermediaryAddresses);
   }
   for (const node of snapshot.destinations) {
-    collectCsvRows(node, "destination", rows, includeHopDepth);
+    collectCsvRows(node, "destination", rows, includeHopDepth, maxIntermediaryAddresses);
   }
   const lines = [headers, ...rows].map((cols) => cols.map(csvCell).join(","));
   // Prepend the cap warning as a comment line above the header when the trail
@@ -402,7 +436,7 @@ export function sumTopLevel(nodes: ExportFlowNode[]): number {
 }
 
 /** Options controlling what the Fund Trail PDF includes. */
-export interface FundTrailPdfOptions {
+export interface FundTrailPdfOptions extends FundTrailExportOptions {
   /**
    * When true, embed the per-group deduplicated detail rows (address, txid,
    * amount, date) beneath the summary, so the PDF carries the same information
@@ -430,6 +464,7 @@ export async function buildFundTrailPdf(
   options: FundTrailPdfOptions = {},
 ): Promise<Blob> {
   const detailed = options.detailed ?? false;
+  const maxIntermediaryAddresses = resolveIntermediaryCap(options.maxIntermediaryAddresses);
   const jsPDFModule = await import("jspdf");
   const autoTableModule = await import("jspdf-autotable");
   const jsPDF = jsPDFModule.default;
@@ -525,7 +560,7 @@ export async function buildFundTrailPdf(
       const path = node.pathAddresses ?? [];
       const pathLine =
         path.length > 0
-          ? `\n${indentPrefix}    via: ${summarizeIntermediaryChain(path)}`
+          ? `\n${indentPrefix}    via: ${summarizeIntermediaryChain(path, maxIntermediaryAddresses)}`
           : "";
       return [
         `${indentPrefix}${hopPrefix}${node.groupLabel}${pathLine}`,
