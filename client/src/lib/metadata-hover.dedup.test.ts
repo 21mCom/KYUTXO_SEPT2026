@@ -58,6 +58,13 @@ const queryLog: string[] = [];
 // returns the override's promise instead of hitting testDb, letting a test take
 // precise control of resolution timing to reproduce a write/hover race.
 const queryOverrides = new Map<string, () => Promise<DbRecord[]>>();
+// Optional per-batch query override. Keyed by the sorted, joined list of
+// identifiers a batch fetch requests, letting a test take precise control of
+// the batch (getRecordsByInputStrings) resolution timing to reproduce a
+// batch-preload / record-edit race.
+const batchQueryLog: string[][] = [];
+const batchQueryOverrides = new Map<string, () => Promise<DbRecord[]>>();
+const batchKey = (values: string[]) => [...values].sort().join("|");
 vi.mock("@/lib/data/record-crud", async () => {
   const actual =
     await vi.importActual<typeof import("@/lib/data/record-crud")>("@/lib/data/record-crud");
@@ -69,11 +76,22 @@ vi.mock("@/lib/data/record-crud", async () => {
       if (override) return override();
       return actual.getRecordsByInputString(inputString);
     },
+    getRecordsByInputStrings: async (values: string[]) => {
+      batchQueryLog.push(values);
+      const override = batchQueryOverrides.get(batchKey(values));
+      if (override) return override();
+      return actual.getRecordsByInputStrings(values);
+    },
   };
 });
 
-const { resolveIdentifier, getCachedRecord, invalidateCachedRecord, subscribeCacheEntry } =
-  await import("./metadata-hover");
+const {
+  resolveIdentifier,
+  getCachedRecord,
+  invalidateCachedRecord,
+  subscribeCacheEntry,
+  batchPreloadIdentifiers,
+} = await import("./metadata-hover");
 
 const VAULT_SIZE = 12_000;
 const addrAt = (i: number) => `addr-${i.toString().padStart(6, "0")}`;
@@ -113,6 +131,8 @@ afterAll(async () => {
 beforeEach(() => {
   queryLog.length = 0;
   queryOverrides.clear();
+  batchQueryLog.length = 0;
+  batchQueryOverrides.clear();
 });
 
 describe("resolveIdentifier query-storm guard (12k-record vault)", () => {
@@ -248,6 +268,63 @@ describe("resolveIdentifier query-storm guard (12k-record vault)", () => {
     // fresh cache entry.
     resolveStale([staleRecord]);
     await stalePending;
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(getCachedRecord(addr)?.label).toBe("New");
+
+    unsub();
+    invalidateCachedRecord(addr);
+  });
+
+  // Same race as above, but the stale read comes from the BATCH preload path
+  // (_runBatchFetch via getRecordsByInputStrings) instead of a single hover.
+  // During fast scrolling a batch preload can read the DB *before* a record
+  // edit commits; if that batch result lands AFTER invalidateCachedRecord's
+  // fresh re-resolution it must not overwrite the cache with stale data and
+  // leave the note icon wrong until the next hover. The per-key generation
+  // guard in _runBatchFetch prevents the stale write.
+  it("a stale in-flight batch preload cannot overwrite a fresh post-write resolution", async () => {
+    const addr = addrAt(505);
+    const staleRecord = { id: 5, inputString: addr, label: "Old" } as DbRecord;
+    const freshRecord = { id: 5, inputString: addr, label: "New" } as DbRecord;
+
+    // Manually-controlled deferreds so we can decide resolution order: the batch
+    // fetch (stale) and the single fresh re-resolution.
+    let resolveStaleBatch!: (r: DbRecord[]) => void;
+    const staleBatchPromise = new Promise<DbRecord[]>((res) => {
+      resolveStaleBatch = res;
+    });
+    batchQueryOverrides.set(batchKey([addr]), () => staleBatchPromise);
+
+    let resolveFresh!: (r: DbRecord[]) => void;
+    const freshPromise = new Promise<DbRecord[]>((res) => {
+      resolveFresh = res;
+    });
+    queryOverrides.set(addr, () => freshPromise);
+
+    // Start clean and keep a subscriber attached so invalidate re-resolves for a
+    // "visible" link rather than just clearing.
+    invalidateCachedRecord(addr);
+    const unsub = subscribeCacheEntry(addr, () => {});
+
+    // (1) A batch preload begins and reads the DB *before* the write commits.
+    batchPreloadIdentifiers([addr]);
+    // Let the batch fetch start (it kicks off getRecordsByInputStrings async).
+    await new Promise((r) => setTimeout(r, 0));
+    expect(batchQueryLog.length).toBe(1);
+
+    // (2) A record edit commits and invalidates the cache. Because a subscriber
+    // is attached, this kicks off a fresh re-resolution via the single path.
+    invalidateCachedRecord(addr);
+
+    // (3) The fresh re-resolution completes first and populates the cache.
+    resolveFresh([freshRecord]);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(getCachedRecord(addr)?.label).toBe("New");
+
+    // (4) The original (stale) batch fetch finishes LATE. It must NOT clobber
+    // the fresh cache entry.
+    resolveStaleBatch([staleRecord]);
     await new Promise((r) => setTimeout(r, 0));
 
     expect(getCachedRecord(addr)?.label).toBe("New");
