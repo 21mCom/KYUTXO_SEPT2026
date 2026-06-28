@@ -67,6 +67,24 @@ export interface ComputeOneHopOptions {
 }
 
 /**
+ * Number of in-memory scan iterations to process between yields. A single hop
+ * over an address with a huge number of transactions can still walk hundreds of
+ * thousands of participant/lineage rows synchronously; yielding every
+ * `SCAN_YIELD_EVERY` iterations lets the browser paint and lets us observe
+ * cancellation *within* one wide hop, not just between hops.
+ */
+const SCAN_YIELD_EVERY = 5000;
+
+/**
+ * Hands control back to the event loop and observes cancellation. Throws an
+ * AbortError if the signal has fired so callers unwind immediately.
+ */
+async function scanYield(signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+  await new Promise(r => setTimeout(r, 0));
+}
+
+/**
  * Optional date-range filter for fund-trail computation.
  * Both bounds are Unix timestamps in seconds (matching blockTime). Either may
  * be omitted for an open-ended window; `undefined`/no range means "all time".
@@ -226,6 +244,7 @@ export async function computeOneHop(
   // txids where we are an input (outgoing)
   let outgoingTxidsFromParticipants = new Set<string>();
 
+  let scanned = 0;
   for (const p of allParticipants) {
     if (p.role === 'output' && addrSet.has(p.address) && !incomingCoveredTxids.has(p.txid)) {
       incomingTxidsFromParticipants.add(p.txid);
@@ -233,6 +252,7 @@ export async function computeOneHop(
     if (p.role === 'input' && addrSet.has(p.address) && !outgoingCoveredTxids.has(p.txid)) {
       outgoingTxidsFromParticipants.add(p.txid);
     }
+    if (++scanned % SCAN_YIELD_EVERY === 0) await scanYield(signal);
   }
 
   // -------------------------------------------------------------------------
@@ -342,7 +362,9 @@ export async function computeOneHop(
   const sourceMap = new Map<string, GroupFlow>();
 
   // 4a: From lineage rows
+  let scanned4a = 0;
   for (const l of incomingLineage) {
+    if (++scanned4a % SCAN_YIELD_EVERY === 0) await scanYield(signal);
     if (addrSet.has(l.spentAddress)) continue; // same group
 
     const record = recordsByAddr.get(l.spentAddress);
@@ -375,7 +397,9 @@ export async function computeOneHop(
 
   // 4b: From participant fallback (grouped by txid)
   const incomingTxParts = groupByTxid(fallbackIncomingParticipants);
+  let scanned4b = 0;
   for (const [txid, txParts] of incomingTxParts) {
+    if (++scanned4b % SCAN_YIELD_EVERY === 0) await scanYield(signal);
     const isIncoming = txParts.some(p => p.role === 'output' && addrSet.has(p.address));
     if (!isIncoming) continue;
 
@@ -417,7 +441,9 @@ export async function computeOneHop(
   const destMap = new Map<string, GroupFlow>();
 
   // 5a: From lineage rows
+  let scanned5a = 0;
   for (const l of outgoingLineage) {
+    if (++scanned5a % SCAN_YIELD_EVERY === 0) await scanYield(signal);
     if (addrSet.has(l.createdAddress)) continue; // change back to same group
 
     const record = recordsByAddr.get(l.createdAddress);
@@ -448,7 +474,9 @@ export async function computeOneHop(
 
   // 5b: From participant fallback
   const outgoingTxParts = groupByTxid(fallbackOutgoingParticipants);
+  let scanned5b = 0;
   for (const [txid, txParts] of outgoingTxParts) {
+    if (++scanned5b % SCAN_YIELD_EVERY === 0) await scanYield(signal);
     const isOutgoing = txParts.some(p => p.role === 'input' && addrSet.has(p.address));
     if (!isOutgoing) continue;
 
