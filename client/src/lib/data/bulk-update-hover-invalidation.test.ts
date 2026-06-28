@@ -44,6 +44,27 @@ vi.mock("@/lib/database", async () => {
   return { ...actual, db: testDb };
 });
 
+// Optional per-identifier override for getRecordsByInputString. When set, the
+// wrapped read returns the override's promise instead of hitting testDb, letting
+// a test take precise control of resolution timing to reproduce a slow
+// in-flight hover resolve racing a bulkUpdateRecords invalidation. All other
+// record-crud exports (bulkUpdateRecords, clearAllRecords, ...) stay REAL so the
+// end-to-end write -> invalidate -> re-resolve wiring is exercised genuinely.
+const queryOverrides = new Map<string, () => Promise<DbRecord[]>>();
+vi.mock("@/lib/data/record-crud", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/data/record-crud")>(
+    "@/lib/data/record-crud",
+  );
+  return {
+    ...actual,
+    getRecordsByInputString: async (inputString: string) => {
+      const override = queryOverrides.get(inputString);
+      if (override) return override();
+      return actual.getRecordsByInputString(inputString);
+    },
+  };
+});
+
 const { bulkUpdateRecords, clearAllRecords } = await import("./record-crud");
 const {
   subscribeCacheEntry,
@@ -87,6 +108,7 @@ afterAll(() => {
 
 beforeEach(async () => {
   await testDb.records.clear();
+  queryOverrides.clear();
 });
 
 describe("bulkUpdateRecords -> hover cache invalidation", () => {
@@ -195,6 +217,103 @@ describe("bulkUpdateRecords -> hover cache invalidation", () => {
 
     unsubOld();
     unsubNew();
+  });
+
+  // Generation-guard race, driven end-to-end through the REAL bulkUpdateRecords
+  // invalidation path (invalidateHoverCacheMany -> invalidateCachedRecords).
+  //
+  // A visible link starts a hover resolve that reads the DB *before* a Bulk
+  // Editor write commits, so it carries pre-write (stale) data. That read is
+  // slow and finishes LAST — after bulkUpdateRecords commits and its
+  // invalidation kicks off a fresh re-resolution that reads the post-write
+  // value. The per-key generation counter must ensure the slow stale read
+  // cannot re-pin the old note/label into the cache or notify a subscriber with
+  // it. Without the guard a large bulk edit could silently leave a stale note
+  // icon / tooltip until the next hover.
+  it("a slow in-flight resolve finishing after a bulk run cannot re-pin stale data", async () => {
+    const identifier = "bc1qbulkrace";
+    const id = await seedRecord({
+      inputString: identifier,
+      inputStringLower: identifier.toLowerCase(),
+      notes: "",
+      label: "Unlabeled",
+    });
+
+    // The stale in-flight read reflects the seeded, pre-write record.
+    const staleRecord = {
+      id,
+      type: "address",
+      inputString: identifier,
+      inputStringLower: identifier.toLowerCase(),
+      notes: "",
+      label: "Unlabeled",
+      tags: [],
+      categories: [],
+      createdAt: 0,
+      updatedAt: 0,
+    } as DbRecord;
+
+    // First getRecordsByInputString call (the slow hover resolve) is held until
+    // we release it. We delete the override on first use so the SECOND call —
+    // the fresh re-resolution that bulkUpdateRecords triggers — falls through to
+    // the real testDb read and sees the committed post-write value.
+    let releaseStale!: (rows: DbRecord[]) => void;
+    const stalePromise = new Promise<DbRecord[]>((res) => {
+      releaseStale = res;
+    });
+    queryOverrides.set(identifier, () => {
+      queryOverrides.delete(identifier);
+      return stalePromise;
+    });
+
+    // Start from a clean cache (no subscriber yet, so this just clears + bumps
+    // the generation; it does not re-resolve).
+    invalidateCachedRecord(identifier);
+
+    // (1) A visible link's hover starts a resolve that reads the DB *before* the
+    // write. It is held pending by the override above.
+    const stalePending = resolveIdentifier(identifier);
+    await Promise.resolve();
+
+    // A visible AddressLink/TxidLink subscribes for live updates.
+    const cb = vi.fn();
+    const unsub = subscribeCacheEntry(identifier, cb);
+
+    // (2) The Bulk Editor commits a note change mid-flight. Its
+    // invalidateHoverCacheMany bumps the generation, drops the slow in-flight
+    // read, and (because a subscriber is attached) kicks off a fresh
+    // re-resolution that reads the post-write value.
+    await bulkUpdateRecords([{ id, changes: { notes: "now has a note" } }], {
+      skipVocabularySync: true,
+    });
+    await settle();
+
+    // (3) The fresh re-resolution has already populated the cache + subscriber
+    // with the NEW value.
+    expect(getCachedRecord(identifier)?.notes).toBe("now has a note");
+    const afterBulk = cb.mock.calls[cb.mock.calls.length - 1][0] as
+      | DbRecord
+      | null;
+    expect(afterBulk?.notes).toBe("now has a note");
+
+    // (4) The original (stale) resolve finishes LAST, carrying pre-write data.
+    releaseStale([staleRecord]);
+    const staleResult = await stalePending;
+    await settle();
+
+    // It really did carry the pre-write value...
+    expect(staleResult?.notes).toBe("");
+    // ...but the generation guard kept it from re-pinning stale data: the cache
+    // and the subscriber still reflect the NEW post-write value.
+    expect(getCachedRecord(identifier)?.notes).toBe("now has a note");
+    const last = cb.mock.calls[cb.mock.calls.length - 1][0] as DbRecord | null;
+    expect(last?.notes).toBe("now has a note");
+    // The subscriber was never notified with the stale (empty-note) value.
+    expect(
+      cb.mock.calls.some(([rec]) => (rec as DbRecord | null)?.notes === ""),
+    ).toBe(false);
+
+    unsub();
   });
 });
 
