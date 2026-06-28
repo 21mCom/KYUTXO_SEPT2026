@@ -695,4 +695,93 @@ describe("computeAnnualActivity — two pasted addresses trade in one tx", () =>
     expect(result.sentTo).toHaveLength(0);
     expect(result.receivedFrom).toHaveLength(0);
   });
+
+  it("recovers a 0-amount owned both-sides input via the prevout lookup alongside other owned co-inputs/co-outputs", () => {
+    // CONSOL tx: owned address MINE_A appears on BOTH sides — it spends a UTXO
+    // (input) whose amount is stored as 0 and must be recovered through the
+    // prevout lookup (outputAmountLookup), AND receives a 90k change output. Two
+    // more owned addresses join the same tx: MINE_B is an additional owned input
+    // (60k, resolved directly) and MINE_C an additional owned output (50k).
+    //   Inputs (spent):    A=100k (recovered via lookup), B=60k → combined 160k
+    //   Outputs (received): A=90k (change), C=50k             → combined 140k
+    // This is the cross-address summation path (multiple owned in/out in one tx,
+    // plus an owned address on both sides) combined with the prevout-resolution
+    // path (a 0-amount input recovered via outputAmountLookup) at once.
+    //
+    // Additionally, the SAME prevout that A's resolved input consumed (SRC_A:0)
+    // also appears in spentOutputAmounts with CONSOL flagged as a spending tx.
+    // seenPrevouts must record A's prevout when its amount is recovered so the
+    // blank-address fallback does NOT add the spend a second time.
+    const participants = [
+      mkInput(CONSOL, MINE_A, 0, SRC_A, 0, 1), // 0-amount input → resolved via lookup
+      mkInput(CONSOL, MINE_B, 60_000, SRC_B, 0, 2), // resolved directly
+      mkOutput(CONSOL, MINE_A, 90_000, 0, 3), // change back to A (A on both sides)
+      mkOutput(CONSOL, MINE_C, 50_000, 1, 4),
+    ];
+
+    const result = computeAnnualActivity({
+      addresses: [MINE_A, MINE_B, MINE_C],
+      txids: [CONSOL],
+      txMap: new Map([[CONSOL, mkTx(CONSOL, TIME_2024)]]),
+      allTxParticipants: participantMap(participants),
+      // CONSOL is also flagged as a spending tx and the same prevout shows up in
+      // spentOutputAmounts — seenPrevouts must prevent a double count.
+      spendingTxids: new Set([CONSOL]),
+      spentOutputAmounts: new Map([
+        [`${CONSOL}:${SRC_A}:0`, { amount: 100_000, address: MINE_A }],
+      ]),
+      outputAmountLookup: new Map([[`${SRC_A}:0`, 100_000]]),
+    });
+
+    // Combined: one 2024 row counted once; A's spend is the RECOVERED 100k.
+    expect(result.combinedYearRows).toHaveLength(1);
+    const row = result.combinedYearRows[0];
+    expect(row.year).toBe(2024);
+    expect(row.spentSats).toBe(160_000); // 100k (A, recovered) + 60k (B)
+    expect(row.receivedSats).toBe(140_000); // 90k (A change) + 50k (C)
+    expect(row.txCount).toBe(1);
+
+    // Per-address split: A both spent (recovered) and received, B spent, C received.
+    const a = result.perAddress.find((p) => p.address === MINE_A)!;
+    const b = result.perAddress.find((p) => p.address === MINE_B)!;
+    const c = result.perAddress.find((p) => p.address === MINE_C)!;
+    expect(a.hasData).toBe(true);
+    expect(b.hasData).toBe(true);
+    expect(c.hasData).toBe(true);
+    expect(a.yearRows).toHaveLength(1);
+    expect(b.yearRows).toHaveLength(1);
+    expect(c.yearRows).toHaveLength(1);
+    expect(a.yearRows[0]).toMatchObject({
+      year: 2024,
+      txCount: 1,
+      receivedSats: 90_000, // change back to itself
+      spentSats: 100_000, // its own input, recovered from the prevout lookup
+    });
+    expect(b.yearRows[0]).toMatchObject({
+      year: 2024,
+      txCount: 1,
+      receivedSats: 0,
+      spentSats: 60_000,
+    });
+    expect(c.yearRows[0]).toMatchObject({
+      year: 2024,
+      txCount: 1,
+      receivedSats: 50_000,
+      spentSats: 0,
+    });
+
+    // A direct (address-resolved) input exists for the prevout, so the fallback
+    // path must not flag this as an unresolved spend.
+    expect(result.unresolvedSentToCount).toBe(0);
+
+    // No owned address lists another (or itself) as a counterparty.
+    const sentToAddrs = result.sentTo.map((e) => e.address);
+    const receivedFromAddrs = result.receivedFrom.map((e) => e.address);
+    for (const owned of [MINE_A, MINE_B, MINE_C]) {
+      expect(sentToAddrs).not.toContain(owned);
+      expect(receivedFromAddrs).not.toContain(owned);
+    }
+    expect(result.sentTo).toHaveLength(0);
+    expect(result.receivedFrom).toHaveLength(0);
+  });
 });
