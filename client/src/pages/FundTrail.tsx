@@ -36,8 +36,10 @@ import {
 } from "@/components/ui/select";
 import {
   DropdownMenu,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useToast } from "@/hooks/use-toast";
@@ -616,6 +618,9 @@ function MultiHopTrailLayout({
   const { toast } = useToast();
   const { intermediaryAddressCap } = useSettings();
   const [isExporting, setIsExporting] = useState(false);
+  // Opt-in: when on, exports list every traversed intermediary address instead
+  // of the scannable "(+N more)" summary, so an auditor gets the complete path.
+  const [fullChains, setFullChains] = useState(false);
 
   const hasSources = multiHopResult.sources.length > 0;
   const hasDests = multiHopResult.destinations.length > 0;
@@ -645,6 +650,7 @@ function MultiHopTrailLayout({
         if (format === "csv") {
           const csv = buildFundTrailCsv(snapshot, {
             maxIntermediaryAddresses: intermediaryAddressCap,
+            fullChains,
           });
           triggerDownload(
             new Blob([csv], { type: "text/csv;charset=utf-8" }),
@@ -655,6 +661,7 @@ function MultiHopTrailLayout({
           const blob = await buildFundTrailPdf(snapshot, {
             detailed,
             maxIntermediaryAddresses: intermediaryAddressCap,
+            fullChains,
           });
           triggerDownload(blob, fundTrailFilename(centerLabel, "pdf"));
         }
@@ -678,7 +685,7 @@ function MultiHopTrailLayout({
         setIsExporting(false);
       }
     },
-    [centerLabel, dimension, multiHopResult, intermediaryAddressCap, toast],
+    [centerLabel, dimension, multiHopResult, intermediaryAddressCap, fullChains, toast],
   );
 
   const dateRangeLabel = formatDateRange(dateRange);
@@ -745,6 +752,15 @@ function MultiHopTrailLayout({
               <FileText className="h-4 w-4 mr-2" />
               Export as detailed PDF
             </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuCheckboxItem
+              checked={fullChains}
+              onCheckedChange={(v) => setFullChains(v === true)}
+              onSelect={(e) => e.preventDefault()}
+              data-testid="fund-trail-export-full-chains"
+            >
+              Include full intermediary chains
+            </DropdownMenuCheckboxItem>
           </DropdownMenuContent>
         </DropdownMenu>
       </div>

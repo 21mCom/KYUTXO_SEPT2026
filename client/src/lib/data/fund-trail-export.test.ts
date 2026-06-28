@@ -1855,4 +1855,51 @@ describe("long intermediary chains in exports", () => {
     expect(text).toContain("bc1qmid0");
     expect(text).not.toContain("bc1qmid299");
   });
+
+  it("lists every address in the CSV cell when fullChains is opt-in", () => {
+    const snapshot = buildMultiHopFundTrailSnapshot(
+      "Center",
+      "walletName",
+      longChainResult(300),
+    );
+    const rows = parseCsv(
+      buildFundTrailCsv(snapshot, { fullChains: true }),
+    ).slice(1);
+    const deepRow = rows.find((r) => r[5] === "bc1qdeep")!;
+    const cell = deepRow[3];
+    // The complete, untruncated chain — no summary suffix, every address present.
+    expect(cell).not.toContain("more)");
+    expect(cell.split(" > ")).toHaveLength(300);
+    expect(cell).toContain("bc1qmid0");
+    expect(cell).toContain("bc1qmid299");
+  });
+
+  it("lists every address in the PDF via: line when fullChains is opt-in", async () => {
+    const snapshot = buildMultiHopFundTrailSnapshot(
+      "Center",
+      "walletName",
+      longChainResult(300),
+    );
+    const text = await extractPdfText(
+      await buildFundTrailPdf(snapshot, { fullChains: true }),
+    );
+    expect(text).toContain("via:");
+    expect(text).not.toContain("more)");
+    expect(text).toContain("bc1qmid0");
+    expect(text).toContain("bc1qmid299");
+  });
+
+  it("default export stays summarized (fullChains is opt-in only)", () => {
+    const snapshot = buildMultiHopFundTrailSnapshot(
+      "Center",
+      "walletName",
+      longChainResult(300),
+    );
+    const defaultCsv = buildFundTrailCsv(snapshot);
+    const explicitOff = buildFundTrailCsv(snapshot, { fullChains: false });
+    // Omitting the option behaves identically to fullChains:false, and both
+    // summarize — preserving the scannable default for existing callers.
+    expect(defaultCsv).toBe(explicitOff);
+    expect(defaultCsv).toContain("more)");
+  });
 });

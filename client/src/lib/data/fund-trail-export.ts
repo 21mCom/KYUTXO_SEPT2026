@@ -107,6 +107,14 @@ export interface FundTrailExportOptions {
    * default (MAX_INTERMEDIARY_ADDRESSES) is used.
    */
   maxIntermediaryAddresses?: number;
+  /**
+   * When true, the intermediary chain lists *every* traversed address (joined
+   * with " > ") instead of summarizing long chains to the leading addresses plus
+   * "(+N more)". Overrides `maxIntermediaryAddresses` (treated as no cap). Off by
+   * default so the export stays scannable; auditors reconstructing a complete
+   * path can opt in. Only affects multi-hop snapshots (which carry pathAddresses).
+   */
+  fullChains?: boolean;
 }
 
 /**
@@ -351,8 +359,11 @@ function collectCsvRows(
       // Multi-hop snapshots carry hop_depth plus the chain of unknown
       // intermediary addresses traversed to reach this node, so an auditor can
       // reconstruct the path. The chain is summarized (first N + "(+M more)")
-      // for very long chains so the cell stays scannable; csvCell handles any
-      // quoting needed for the combined value.
+      // for very long chains so the cell stays scannable, unless the caller
+      // raised the cap (or set fullChains, which passes Infinity here) — then
+      // every traversed address is written so an auditor gets the complete,
+      // untruncated path; csvCell handles any quoting needed for the combined
+      // value.
       row.push(String(node.hopDepth ?? 1));
       row.push(summarizeIntermediaryChain(node.pathAddresses ?? [], maxIntermediaryAddresses));
     }
@@ -372,14 +383,20 @@ function collectCsvRows(
  * for multi-hop snapshots (where any node has hopDepth set) so the existing
  * single-hop CSV format is preserved. intermediary_addresses lists the chain of
  * unknown addresses traversed (joined with " > ") between the center and the
- * surfaced entity, so auditors can reconstruct the path.
+ * surfaced entity, so auditors can reconstruct the path. By default long chains
+ * are summarized to the leading addresses plus "(+N more)"; pass
+ * `options.fullChains` to write every traversed address untruncated.
  * Fully offline — no external resources.
  */
 export function buildFundTrailCsv(
   snapshot: FundTrailSnapshot,
   options: FundTrailExportOptions = {},
 ): string {
-  const maxIntermediaryAddresses = resolveIntermediaryCap(options.maxIntermediaryAddresses);
+  // fullChains opts out of truncation entirely (Infinity cap); otherwise the
+  // user-configurable cap (or the historic default) applies.
+  const maxIntermediaryAddresses = options.fullChains
+    ? Infinity
+    : resolveIntermediaryCap(options.maxIntermediaryAddresses);
   const allNodes = [...snapshot.sources, ...snapshot.destinations];
   const includeHopDepth = allNodes.some(n => n.hopDepth != null);
   const headers = includeHopDepth
@@ -443,6 +460,13 @@ export interface FundTrailPdfOptions extends FundTrailExportOptions {
    * the CSV does. Output paginates across pages as needed.
    */
   detailed?: boolean;
+  /**
+   * When true, the inline "via:" intermediary chain lists *every* traversed
+   * address instead of summarizing long chains to the leading addresses plus
+   * "(+N more)". Mirrors the CSV's fullChains option so both formats behave
+   * consistently. Off by default to keep the document scannable.
+   */
+  fullChains?: boolean;
 }
 
 /**
@@ -464,7 +488,11 @@ export async function buildFundTrailPdf(
   options: FundTrailPdfOptions = {},
 ): Promise<Blob> {
   const detailed = options.detailed ?? false;
-  const maxIntermediaryAddresses = resolveIntermediaryCap(options.maxIntermediaryAddresses);
+  // fullChains opts out of truncation entirely (Infinity cap); otherwise the
+  // user-configurable cap (or the historic default) applies.
+  const maxIntermediaryAddresses = options.fullChains
+    ? Infinity
+    : resolveIntermediaryCap(options.maxIntermediaryAddresses);
   const jsPDFModule = await import("jspdf");
   const autoTableModule = await import("jspdf-autotable");
   const jsPDF = jsPDFModule.default;
