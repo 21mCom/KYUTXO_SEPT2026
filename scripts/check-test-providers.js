@@ -55,6 +55,7 @@ const ALLOWED_FILES = new Set([
   path.resolve(ROOT, 'client/src/components/__tests__/copy-txid-confirmation.test.tsx'),
   path.resolve(ROOT, 'client/src/components/__tests__/hover-label-indicator.test.tsx'),
   path.resolve(ROOT, 'client/src/components/__tests__/preload-indicator.test.tsx'),
+  path.resolve(ROOT, 'client/src/components/__tests__/ttl-refresh-indicator.test.tsx'),
 ]);
 
 // Matches an inline JSX opening tag, e.g. `<TooltipProvider>` or
