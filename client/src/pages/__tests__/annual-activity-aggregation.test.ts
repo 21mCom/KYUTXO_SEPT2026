@@ -24,6 +24,8 @@ const SRC_B = "dddd000000000000000000000000000000000000000000000000000000000004"
 const MINE = "bc1qmine0000000000000000000000000000000000";
 const MINE_A = "bc1qmineaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const MINE_B = "bc1qminebbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+const MINE_C = "bc1qminecccccccccccccccccccccccccccccccccc";
+const MINE_D = "bc1qminedddddddddddddddddddddddddddddddddd";
 const EXT_Y = "bc1qexternalyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy";
 const EXT_Z = "bc1qexternalzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz";
 
@@ -473,5 +475,85 @@ describe("computeAnnualActivity — two pasted addresses trade in one tx", () =>
     expect(sentToAddrs).not.toContain(MINE_B);
     expect(receivedFromAddrs).not.toContain(MINE_A);
     expect(receivedFromAddrs).not.toContain(MINE_B);
+  });
+
+  it("sums all owned inputs and all owned outputs for a multi-input multi-output internal move", () => {
+    // CONSOL tx: a batched/coinjoin-style internal move where TWO owned addresses
+    // (MINE_A + MINE_B) are inputs and TWO different owned addresses (MINE_C +
+    // MINE_D) are outputs, all in the same transaction. Inputs: A=100k, B=60k
+    // (160k total spent). Outputs: C=90k, D=55k (145k total received); 15k fee.
+    // Combined spent must sum BOTH owned inputs, combined received must sum BOTH
+    // owned outputs, the tx counts exactly once, the per-address rows split
+    // cleanly (each input addr spends only, each output addr receives only), and
+    // no owned address may appear as another owned address's counterparty.
+    const participants = [
+      mkInput(CONSOL, MINE_A, 100_000, SRC_A, 0, 1),
+      mkInput(CONSOL, MINE_B, 60_000, SRC_B, 0, 2),
+      mkOutput(CONSOL, MINE_C, 90_000, 0, 3),
+      mkOutput(CONSOL, MINE_D, 55_000, 1, 4),
+    ];
+
+    const result = computeAnnualActivity({
+      addresses: [MINE_A, MINE_B, MINE_C, MINE_D],
+      txids: [CONSOL],
+      txMap: new Map([[CONSOL, mkTx(CONSOL, TIME_2024)]]),
+      allTxParticipants: participantMap(participants),
+      spendingTxids: new Set(),
+      spentOutputAmounts: new Map(),
+      outputAmountLookup: new Map(),
+    });
+
+    // Combined: one 2024 row counted exactly once, totals add ALL owned legs.
+    expect(result.combinedYearRows).toHaveLength(1);
+    const row = result.combinedYearRows[0];
+    expect(row.year).toBe(2024);
+    expect(row.spentSats).toBe(160_000); // 100k (A) + 60k (B)
+    expect(row.receivedSats).toBe(145_000); // 90k (C) + 55k (D)
+    expect(row.txCount).toBe(1);
+
+    // Per-address split: inputs spend only, outputs receive only.
+    const a = result.perAddress.find((p) => p.address === MINE_A)!;
+    const b = result.perAddress.find((p) => p.address === MINE_B)!;
+    const c = result.perAddress.find((p) => p.address === MINE_C)!;
+    const d = result.perAddress.find((p) => p.address === MINE_D)!;
+    expect(a.hasData).toBe(true);
+    expect(b.hasData).toBe(true);
+    expect(c.hasData).toBe(true);
+    expect(d.hasData).toBe(true);
+    expect(a.yearRows[0]).toMatchObject({
+      year: 2024,
+      txCount: 1,
+      receivedSats: 0,
+      spentSats: 100_000,
+    });
+    expect(b.yearRows[0]).toMatchObject({
+      year: 2024,
+      txCount: 1,
+      receivedSats: 0,
+      spentSats: 60_000,
+    });
+    expect(c.yearRows[0]).toMatchObject({
+      year: 2024,
+      txCount: 1,
+      receivedSats: 90_000,
+      spentSats: 0,
+    });
+    expect(d.yearRows[0]).toMatchObject({
+      year: 2024,
+      txCount: 1,
+      receivedSats: 55_000,
+      spentSats: 0,
+    });
+
+    // No owned address appears as any other owned address's counterparty: with
+    // only owned addresses on both sides, both counterparty lists are empty.
+    const sentToAddrs = result.sentTo.map((e) => e.address);
+    const receivedFromAddrs = result.receivedFrom.map((e) => e.address);
+    for (const owned of [MINE_A, MINE_B, MINE_C, MINE_D]) {
+      expect(sentToAddrs).not.toContain(owned);
+      expect(receivedFromAddrs).not.toContain(owned);
+    }
+    expect(result.sentTo).toHaveLength(0);
+    expect(result.receivedFrom).toHaveLength(0);
   });
 });
