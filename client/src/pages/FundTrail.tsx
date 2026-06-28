@@ -917,6 +917,36 @@ function MultiHopProgressBanner({
 }
 
 // ---------------------------------------------------------------------------
+// MultiHopCancelledNotice — persistent, non-spinning banner shown after a
+// trace is cancelled, summarizing how deep it got so the partial trail below
+// is not mistaken for a complete result.
+// ---------------------------------------------------------------------------
+
+function MultiHopCancelledNotice({
+  cancelled,
+}: {
+  cancelled: MultiHopProgress;
+}) {
+  const directionLabel =
+    cancelled.direction === "dest" ? "destinations" : "sources";
+  const depth = cancelled.depth;
+  const maxDepth = cancelled.maxDepth;
+
+  return (
+    <div
+      className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-muted/40 px-4 py-2 text-sm text-muted-foreground"
+      data-testid="fund-trail-multihop-cancelled"
+    >
+      <AlertCircle className="h-4 w-4 shrink-0" />
+      <span data-testid="fund-trail-multihop-cancelled-text">
+        Trace stopped while tracing {directionLabel} — reached hop {depth} of{" "}
+        {maxDepth}. Results below are partial and may be incomplete.
+      </span>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main Page
 // ---------------------------------------------------------------------------
 
@@ -956,6 +986,13 @@ export default function FundTrail() {
   // when a trace finishes; retained after a cancel so the partial trail stays
   // on screen.
   const [multiHopProgress, setMultiHopProgress] = useState<MultiHopProgress | null>(
+    null,
+  );
+
+  // Snapshot of how far the trace got when the user cancelled it. Drives a
+  // persistent, non-spinning notice above the trail so a partial result is not
+  // mistaken for a complete one. Cleared when a new trace starts.
+  const [cancelledTrace, setCancelledTrace] = useState<MultiHopProgress | null>(
     null,
   );
 
@@ -1086,8 +1123,9 @@ export default function FundTrail() {
     placeholderData: keepPreviousData,
     queryFn: async ({ signal }) => {
       // Reset progress at the start so a stale partial from a previous trace
-      // never lingers under the new one.
+      // never lingers under the new one. Also drop any leftover cancel notice.
       setMultiHopProgress(null);
+      setCancelledTrace(null);
       const onProgress = (p: MultiHopProgress) => {
         // Ignore late callbacks from a trace that has since been aborted.
         if (signal?.aborted) return;
@@ -1135,6 +1173,9 @@ export default function FundTrail() {
   // observes between hops and throws AbortError. The partial results gathered so
   // far remain on screen because we keep multiHopProgress around on cancel.
   const handleCancelMultiHop = useCallback(() => {
+    // Snapshot how far the trace got before aborting so the persistent notice
+    // can report it; the live progress banner disappears once fetching stops.
+    setCancelledTrace(multiHopProgress);
     queryClient.cancelQueries({
       queryKey: [
         "fund-trail-multihop",
@@ -1159,6 +1200,7 @@ export default function FundTrail() {
     fundTrailTxLimit,
     backwardHops,
     forwardHops,
+    multiHopProgress,
   ]);
 
   // A recompute is in flight when the active query is fetching a new window/
@@ -1445,6 +1487,11 @@ export default function FundTrail() {
                 progress={multiHopProgress}
                 onCancel={handleCancelMultiHop}
               />
+            </div>
+          )}
+          {!isMultiHopTracing && cancelledTrace && (
+            <div className="px-6 pt-4">
+              <MultiHopCancelledNotice cancelled={cancelledTrace} />
             </div>
           )}
           {multiHopDisplay ? (
