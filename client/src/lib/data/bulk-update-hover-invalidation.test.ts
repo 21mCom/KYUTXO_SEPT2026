@@ -51,6 +51,13 @@ vi.mock("@/lib/database", async () => {
 // record-crud exports (bulkUpdateRecords, clearAllRecords, ...) stay REAL so the
 // end-to-end write -> invalidate -> re-resolve wiring is exercised genuinely.
 const queryOverrides = new Map<string, () => Promise<DbRecord[]>>();
+// Optional per-batch override for getRecordsByInputStrings (the batch preload
+// path, _runBatchFetch). Keyed by the sorted, joined list of identifiers a batch
+// fetch requests, letting a test hold a slow in-flight batch read while a real
+// bulkUpdateRecords write commits, to drive the batch generation guard
+// end-to-end. All other record-crud exports stay REAL.
+const batchQueryOverrides = new Map<string, () => Promise<DbRecord[]>>();
+const batchKey = (values: string[]) => [...values].sort().join("|");
 vi.mock("@/lib/data/record-crud", async () => {
   const actual = await vi.importActual<typeof import("@/lib/data/record-crud")>(
     "@/lib/data/record-crud",
@@ -62,6 +69,11 @@ vi.mock("@/lib/data/record-crud", async () => {
       if (override) return override();
       return actual.getRecordsByInputString(inputString);
     },
+    getRecordsByInputStrings: async (values: string[]) => {
+      const override = batchQueryOverrides.get(batchKey(values));
+      if (override) return override();
+      return actual.getRecordsByInputStrings(values);
+    },
   };
 });
 
@@ -71,6 +83,7 @@ const {
   getCachedRecord,
   resolveIdentifier,
   invalidateCachedRecord,
+  batchPreloadIdentifiers,
 } = await import("../metadata-hover");
 
 // The invalidation hop is fire-and-forget: record-crud dynamic-imports
@@ -109,6 +122,7 @@ afterAll(() => {
 beforeEach(async () => {
   await testDb.records.clear();
   queryOverrides.clear();
+  batchQueryOverrides.clear();
 });
 
 describe("bulkUpdateRecords -> hover cache invalidation", () => {
@@ -305,6 +319,100 @@ describe("bulkUpdateRecords -> hover cache invalidation", () => {
     expect(staleResult?.notes).toBe("");
     // ...but the generation guard kept it from re-pinning stale data: the cache
     // and the subscriber still reflect the NEW post-write value.
+    expect(getCachedRecord(identifier)?.notes).toBe("now has a note");
+    const last = cb.mock.calls[cb.mock.calls.length - 1][0] as DbRecord | null;
+    expect(last?.notes).toBe("now has a note");
+    // The subscriber was never notified with the stale (empty-note) value.
+    expect(
+      cb.mock.calls.some(([rec]) => (rec as DbRecord | null)?.notes === ""),
+    ).toBe(false);
+
+    unsub();
+  });
+
+  // Same generation-guard race as above, but the stale read comes from the BATCH
+  // preload path (batchPreloadIdentifiers -> _runBatchFetch via
+  // getRecordsByInputStrings) instead of a single hover resolve — driven
+  // end-to-end through the REAL bulkUpdateRecords invalidation path.
+  //
+  // During fast scrolling a batch preload can read the DB *before* a Bulk Editor
+  // write commits, so it carries pre-write (stale) data. That batch read is slow
+  // and finishes LAST — after bulkUpdateRecords commits and its invalidation
+  // kicks off a fresh single re-resolution that reads the post-write value. The
+  // per-key generation guard in _runBatchFetch must ensure the slow stale batch
+  // result cannot re-pin the old note into the cache or notify a subscriber with
+  // it. Without the guard a fast scroll across a just-bulk-edited range could
+  // silently leave a stale note icon / tooltip until the next hover.
+  it("a slow in-flight batch preload finishing after a bulk run cannot re-pin stale data", async () => {
+    const identifier = "bc1qbatchbulkrace";
+    const id = await seedRecord({
+      inputString: identifier,
+      inputStringLower: identifier.toLowerCase(),
+      notes: "",
+      label: "Unlabeled",
+    });
+
+    // The stale in-flight batch read reflects the seeded, pre-write record.
+    const staleRecord = {
+      id,
+      type: "address",
+      inputString: identifier,
+      inputStringLower: identifier.toLowerCase(),
+      notes: "",
+      label: "Unlabeled",
+      tags: [],
+      categories: [],
+      createdAt: 0,
+      updatedAt: 0,
+    } as DbRecord;
+
+    // The batch fetch (getRecordsByInputStrings) is held until we release it. The
+    // fresh re-resolution that bulkUpdateRecords triggers goes through the SINGLE
+    // getRecordsByInputString path (no override set for it), so it falls through
+    // to the real testDb read and sees the committed post-write value.
+    let releaseStale!: (rows: DbRecord[]) => void;
+    const stalePromise = new Promise<DbRecord[]>((res) => {
+      releaseStale = res;
+    });
+    batchQueryOverrides.set(batchKey([identifier]), () => stalePromise);
+
+    // Start from a clean cache (no subscriber yet, so this just clears + bumps
+    // the generation; it does not re-resolve).
+    invalidateCachedRecord(identifier);
+
+    // A visible AddressLink/TxidLink subscribes for live updates.
+    const cb = vi.fn();
+    const unsub = subscribeCacheEntry(identifier, cb);
+
+    // (1) A fast scroll fires a batch preload that reads the DB *before* the
+    // write. Its batch fetch is held pending by the override above.
+    batchPreloadIdentifiers([identifier]);
+    await Promise.resolve();
+
+    // (2) The Bulk Editor commits a note change mid-flight. Its
+    // invalidateHoverCacheMany bumps the generation, drops the slow in-flight
+    // batch read's slot, and (because a subscriber is attached) kicks off a fresh
+    // single re-resolution that reads the post-write value.
+    await bulkUpdateRecords([{ id, changes: { notes: "now has a note" } }], {
+      skipVocabularySync: true,
+    });
+    await settle();
+
+    // (3) The fresh re-resolution has already populated the cache + subscriber
+    // with the NEW value.
+    expect(getCachedRecord(identifier)?.notes).toBe("now has a note");
+    const afterBulk = cb.mock.calls[cb.mock.calls.length - 1][0] as
+      | DbRecord
+      | null;
+    expect(afterBulk?.notes).toBe("now has a note");
+
+    // (4) The original (stale) batch fetch finishes LAST, carrying pre-write data.
+    releaseStale([staleRecord]);
+    await settle();
+
+    // The generation guard in _runBatchFetch kept the stale batch result from
+    // re-pinning stale data: the cache and the subscriber still reflect the NEW
+    // post-write value.
     expect(getCachedRecord(identifier)?.notes).toBe("now has a note");
     const last = cb.mock.calls[cb.mock.calls.length - 1][0] as DbRecord | null;
     expect(last?.notes).toBe("now has a note");
