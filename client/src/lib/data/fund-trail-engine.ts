@@ -553,6 +553,31 @@ export interface MultiHopTrailResult {
   caps: MultiHopCapEntry[];
 }
 
+/**
+ * Incremental progress reported while a multi-hop trail is being computed.
+ *
+ * The traversal runs backward (sources) first, then forward (destinations).
+ * `phase` distinguishes the moment a hop *starts* ("tracing", emitted before the
+ * potentially slow computeOneHop call so the UI can show "Tracing hop N…") from
+ * the moment all work is finished ("done"). `sources`/`destinations`/`caps`
+ * carry the *partial* results accumulated so far, so the caller can render
+ * already-completed hops while deeper hops are still loading. They are fresh
+ * shallow copies on every emission, safe to store directly in React state.
+ */
+export interface MultiHopProgress {
+  direction: 'source' | 'dest';
+  /** Current hop depth being traced (1-based). */
+  depth: number;
+  /** Max depth for the direction currently being traced. */
+  maxDepth: number;
+  phase: 'tracing' | 'done';
+  sources: HopNode[];
+  destinations: HopNode[];
+  caps: MultiHopCapEntry[];
+}
+
+export type MultiHopProgressCallback = (progress: MultiHopProgress) => void;
+
 /** Hard upper limit on hop depth for the multi-hop trail, to protect performance. */
 export const MAX_HOP_DEPTH = 5;
 
@@ -578,6 +603,7 @@ export async function computeMultiHopKnown(
   dateRange?: DateRange,
   signal?: AbortSignal,
   options?: ComputeOneHopOptions,
+  onProgress?: MultiHopProgressCallback,
 ): Promise<MultiHopTrailResult> {
   const clampedBack = Math.min(Math.max(1, backwardHops), MAX_HOP_DEPTH);
   const clampedFwd = Math.min(Math.max(1, forwardHops), MAX_HOP_DEPTH);
@@ -586,11 +612,27 @@ export async function computeMultiHopKnown(
   const destinations: HopNode[] = [];
   const caps: MultiHopCapEntry[] = [];
 
+  // Emit a fresh snapshot of everything accumulated so far. Copies are shallow
+  // but new arrays, so storing them straight into React state is safe.
+  const emit = onProgress
+    ? (direction: 'source' | 'dest', depth: number, maxDepth: number, phase: 'tracing' | 'done') => {
+        onProgress({
+          direction,
+          depth,
+          maxDepth,
+          phase,
+          sources: [...sources],
+          destinations: [...destinations],
+          caps: [...caps],
+        });
+      }
+    : undefined;
+
   // Backward: who funded the center?
   await traceHopDirection(
     'source', centerAddresses, selfGroupLabel,
     clampedBack, dimension, dateRange, signal, options,
-    sources, caps,
+    sources, caps, emit,
   );
 
   if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
@@ -599,8 +641,11 @@ export async function computeMultiHopKnown(
   await traceHopDirection(
     'dest', centerAddresses, selfGroupLabel,
     clampedFwd, dimension, dateRange, signal, options,
-    destinations, caps,
+    destinations, caps, emit,
   );
+
+  // Final emission so listeners can drop any "tracing" indicator.
+  emit?.('dest', clampedFwd, clampedFwd, 'done');
 
   return { sources, destinations, caps };
 }
@@ -620,6 +665,7 @@ async function traceHopDirection(
   options: ComputeOneHopOptions | undefined,
   result: HopNode[],
   caps: MultiHopCapEntry[],
+  emit?: (direction: 'source' | 'dest', depth: number, maxDepth: number, phase: 'tracing' | 'done') => void,
 ): Promise<void> {
   let pendingAddresses = [...startAddresses];
   // Never re-visit a known group label (cycle protection + deduplication)
@@ -641,6 +687,16 @@ async function traceHopDirection(
   for (let depth = 1; depth <= maxDepth; depth++) {
     if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
     if (pendingAddresses.length === 0) break;
+
+    // Announce the hop *before* the (potentially slow) computeOneHop call so a
+    // "Tracing hop N…" indicator can appear while the work runs. The extra
+    // macrotask yield lets the browser paint that indicator before we block on
+    // the synchronous portions of computeOneHop.
+    if (emit) {
+      emit(direction, depth, maxDepth, 'tracing');
+      await new Promise(r => setTimeout(r, 0));
+      if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+    }
 
     // At depth > 1 the "center" is the unknown intermediary addresses which
     // have no group label — pass null so computeOneHop doesn't self-filter.
@@ -666,6 +722,10 @@ async function traceHopDirection(
       visitedGroups.add(flow.groupLabel);
       result.push({ ...flow, hopDepth: depth, direction, pathAddresses: pathSnapshot() });
     }
+
+    // Surface the partial results gathered at this depth so already-completed
+    // hops render while deeper hops are still loading.
+    emit?.(direction, depth, maxDepth, 'tracing');
 
     // Handle unknown remainder
     const unknownFlow = flows.find(f => f.isUnknown);

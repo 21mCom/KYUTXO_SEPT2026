@@ -6,7 +6,7 @@ import {
   useContext,
   createContext,
 } from "react";
-import { useQuery, keepPreviousData } from "@tanstack/react-query";
+import { useQuery, useQueryClient, keepPreviousData } from "@tanstack/react-query";
 import { useSettings } from "@/hooks/use-settings";
 import {
   ChevronDown,
@@ -23,6 +23,7 @@ import {
   FileText,
   FileSpreadsheet,
   MapPin,
+  Ban,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -48,6 +49,7 @@ import {
   type DateRange,
   type HopNode,
   type MultiHopTrailResult,
+  type MultiHopProgress,
   listGroupValues,
   getAddressesForGroup,
   getRecordByAddress,
@@ -874,6 +876,47 @@ function MultiHopTrailLayout({
 }
 
 // ---------------------------------------------------------------------------
+// MultiHopProgressBanner — live "Tracing hop N of M…" status with a Cancel
+// control, shown while a multi-hop trail is being computed.
+// ---------------------------------------------------------------------------
+
+function MultiHopProgressBanner({
+  progress,
+  onCancel,
+}: {
+  progress: MultiHopProgress | null;
+  onCancel: () => void;
+}) {
+  const directionLabel =
+    progress?.direction === "dest" ? "destinations" : "sources";
+  const depth = progress?.depth ?? 1;
+  const maxDepth = progress?.maxDepth ?? 1;
+
+  return (
+    <div
+      className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-border bg-muted/40 px-4 py-2"
+      data-testid="fund-trail-multihop-progress"
+    >
+      <div className="flex items-center gap-2 text-sm text-muted-foreground min-w-0">
+        <Loader2 className="h-4 w-4 animate-spin shrink-0" />
+        <span data-testid="fund-trail-multihop-progress-text">
+          Tracing {directionLabel} — hop {depth} of {maxDepth}…
+        </span>
+      </div>
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={onCancel}
+        data-testid="fund-trail-multihop-cancel"
+      >
+        <Ban className="h-4 w-4 mr-2" />
+        Cancel
+      </Button>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main Page
 // ---------------------------------------------------------------------------
 
@@ -901,10 +944,20 @@ export default function FundTrail() {
   const [addressInput, setAddressInput] = useState<string>("");
   const [addressError, setAddressError] = useState<string | null>(null);
 
+  const queryClient = useQueryClient();
+
   // --- Hop depth controls (1 = same as single-hop; >1 = auto multi-hop) ---
   const [backwardHops, setBackwardHops] = useState(1);
   const [forwardHops, setForwardHops] = useState(1);
   const isMultiHop = backwardHops > 1 || forwardHops > 1;
+
+  // Live progress for the multi-hop trace: which hop depth is currently being
+  // traced, plus a snapshot of the partial results already gathered. Cleared
+  // when a trace finishes; retained after a cancel so the partial trail stays
+  // on screen.
+  const [multiHopProgress, setMultiHopProgress] = useState<MultiHopProgress | null>(
+    null,
+  );
 
   const trimmedAddress = addressInput.trim();
   const isAddressValid =
@@ -1031,35 +1084,82 @@ export default function FundTrail() {
     ],
     enabled: isActive && isMultiHop,
     placeholderData: keepPreviousData,
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
+      // Reset progress at the start so a stale partial from a previous trace
+      // never lingers under the new one.
+      setMultiHopProgress(null);
+      const onProgress = (p: MultiHopProgress) => {
+        // Ignore late callbacks from a trace that has since been aborted.
+        if (signal?.aborted) return;
+        setMultiHopProgress(p.phase === "done" ? null : p);
+      };
+      const txOptions = { txLimit: fundTrailTxLimit };
+      let result: MultiHopTrailResult;
       if (sourceMode === "address") {
-        return computeMultiHopKnown(
+        result = await computeMultiHopKnown(
           [trimmedAddress],
           dimension,
           null,
           backwardHops,
           forwardHops,
           dateRange,
-          undefined,
-          { txLimit: fundTrailTxLimit },
+          signal,
+          txOptions,
+          onProgress,
+        );
+      } else {
+        const records = await getAddressesForGroup(dimension, selectedGroup);
+        const addresses = records
+          .map(r => r.inputString)
+          .filter((s): s is string => !!s);
+        result = await computeMultiHopKnown(
+          addresses,
+          dimension,
+          selectedGroup,
+          backwardHops,
+          forwardHops,
+          dateRange,
+          signal,
+          txOptions,
+          onProgress,
         );
       }
-      const records = await getAddressesForGroup(dimension, selectedGroup);
-      const addresses = records
-        .map(r => r.inputString)
-        .filter((s): s is string => !!s);
-      return computeMultiHopKnown(
-        addresses,
-        dimension,
-        selectedGroup,
-        backwardHops,
-        forwardHops,
-        dateRange,
-        undefined,
-        { txLimit: fundTrailTxLimit },
-      );
+      // Trace finished cleanly — drop the live progress indicator.
+      setMultiHopProgress(null);
+      return result;
     },
   });
+
+  // Cancel the in-flight multi-hop trace. queryClient.cancelQueries aborts the
+  // AbortSignal react-query passes into queryFn, which computeMultiHopKnown
+  // observes between hops and throws AbortError. The partial results gathered so
+  // far remain on screen because we keep multiHopProgress around on cancel.
+  const handleCancelMultiHop = useCallback(() => {
+    queryClient.cancelQueries({
+      queryKey: [
+        "fund-trail-multihop",
+        sourceMode,
+        sourceMode === "group" ? dimension : "address",
+        sourceMode === "group" ? selectedGroup : trimmedAddress,
+        dateRange?.start ?? null,
+        dateRange?.end ?? null,
+        fundTrailTxLimit,
+        backwardHops,
+        forwardHops,
+      ],
+    });
+  }, [
+    queryClient,
+    sourceMode,
+    dimension,
+    selectedGroup,
+    trimmedAddress,
+    dateRange?.start,
+    dateRange?.end,
+    fundTrailTxLimit,
+    backwardHops,
+    forwardHops,
+  ]);
 
   // A recompute is in flight when the active query is fetching a new window/
   // limit but we still have a previous trail on screen (placeholderData).
@@ -1068,6 +1168,27 @@ export default function FundTrail() {
     : isFetchingCenter && (isCenterPlaceholder || !isLoadingCenter) && isActive;
 
   const isLoadingActive = isMultiHop ? isLoadingMultiHop : isLoadingCenter;
+
+  // Multi-hop trace is actively running (initial trace or a recompute). While
+  // this is true we show the progress banner + Cancel control.
+  const isMultiHopTracing = isMultiHop && isActive && isFetchingMultiHop;
+
+  // What to render in multi-hop mode: the finished result when we have one,
+  // otherwise the latest partial snapshot so already-completed hops are visible
+  // while deeper hops are still loading (or after a cancel).
+  const multiHopDisplay: MultiHopTrailResult | null =
+    multiHopResult ??
+    (multiHopProgress
+      ? {
+          sources: multiHopProgress.sources,
+          destinations: multiHopProgress.destinations,
+          caps: multiHopProgress.caps,
+        }
+      : null);
+
+  // Dim the trail only when refreshing a previously-completed result; a growing
+  // partial (first trace) should read as live progress, not a stale view.
+  const dimMultiHop = isMultiHopTracing && !!multiHopResult;
 
   // Label and display info for the center node
   const centerLabel =
@@ -1298,7 +1419,7 @@ export default function FundTrail() {
           </Select>
         </div>
 
-        {isRecomputing ? (
+        {isRecomputing && !isMultiHop ? (
           <span
             className="flex items-center gap-2 text-xs text-muted-foreground pb-2.5"
             data-testid="fund-trail-recomputing"
@@ -1312,31 +1433,50 @@ export default function FundTrail() {
       {/* Body */}
       {!isActive ? (
         <EmptyState sourceMode={sourceMode} dimension={dimension} />
+      ) : isMultiHop ? (
+        <div
+          className="flex flex-col flex-1 min-h-0"
+          aria-busy={isMultiHopTracing}
+          data-testid="fund-trail-body"
+        >
+          {isMultiHopTracing && (
+            <div className="px-6 pt-4">
+              <MultiHopProgressBanner
+                progress={multiHopProgress}
+                onCancel={handleCancelMultiHop}
+              />
+            </div>
+          )}
+          {multiHopDisplay ? (
+            <div
+              className={
+                dimMultiHop
+                  ? "flex flex-col flex-1 min-h-0 opacity-60 transition-opacity"
+                  : "flex flex-col flex-1 min-h-0 transition-opacity"
+              }
+            >
+              <MultiHopTrailLayout
+                centerLabel={centerLabel}
+                centerDisplayMode={sourceMode}
+                centerRecordLabel={centerRecordLabel}
+                dimension={dimension}
+                multiHopResult={multiHopDisplay}
+                dateRange={dateRange}
+                backwardHops={backwardHops}
+                forwardHops={forwardHops}
+              />
+            </div>
+          ) : (
+            <div className="flex flex-col items-center justify-center flex-1 gap-3 text-muted-foreground">
+              <Loader2 className="h-8 w-8 animate-spin" />
+              <p className="text-sm">Computing fund trail…</p>
+            </div>
+          )}
+        </div>
       ) : isLoadingActive ? (
         <div className="flex flex-col items-center justify-center flex-1 gap-3 text-muted-foreground">
           <Loader2 className="h-8 w-8 animate-spin" />
           <p className="text-sm">Computing fund trail…</p>
-        </div>
-      ) : isMultiHop ? (
-        <div
-          className={
-            isRecomputing
-              ? "flex flex-col flex-1 opacity-60 transition-opacity"
-              : "flex flex-col flex-1 transition-opacity"
-          }
-          aria-busy={isRecomputing}
-          data-testid="fund-trail-body"
-        >
-          <MultiHopTrailLayout
-            centerLabel={centerLabel}
-            centerDisplayMode={sourceMode}
-            centerRecordLabel={centerRecordLabel}
-            dimension={dimension}
-            multiHopResult={multiHopResult ?? { sources: [], destinations: [], caps: [] }}
-            dateRange={dateRange}
-            backwardHops={backwardHops}
-            forwardHops={forwardHops}
-          />
         </div>
       ) : (
         <div
