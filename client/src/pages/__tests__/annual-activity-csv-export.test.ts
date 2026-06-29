@@ -73,6 +73,19 @@ describe("buildAnnualActivityCsv", () => {
     expect(csv).toContain("4 transaction(s) had input sources that could not be resolved");
   });
 
+  it("warns about understated spent totals when unresolvedInputAmountCount > 0", () => {
+    const withUnresolved: ReportData = { ...SAMPLE, unresolvedInputAmountCount: 3 };
+    const csv = buildAnnualActivityCsv(withUnresolved, ["bc1qaddr1"], GENERATED_AT);
+    expect(csv).toContain(
+      "Warning: 3 input amount(s) could not be resolved because the funding transaction(s) were never synced. Spent totals may be understated.",
+    );
+  });
+
+  it("omits the understated-spent-totals warning when unresolvedInputAmountCount is 0", () => {
+    const csv = buildAnnualActivityCsv(SAMPLE, ["bc1qaddr1"], GENERATED_AT);
+    expect(csv).not.toContain("Spent totals may be understated");
+  });
+
   it("escapes cells that contain commas or quotes", () => {
     const tricky: ReportData = {
       ...SAMPLE,

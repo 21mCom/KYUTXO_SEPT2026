@@ -114,6 +114,14 @@ export function buildAnnualActivityCsv(data: ReportData, addresses: string[], ge
   lines.push(
     csvRow(["Addresses with data", data.perAddress.filter((p) => p.hasData).length]),
   );
+  if (data.unresolvedInputAmountCount > 0) {
+    lines.push("");
+    lines.push(
+      csvRow([
+        `Warning: ${data.unresolvedInputAmountCount} input amount(s) could not be resolved because the funding transaction(s) were never synced. Spent totals may be understated.`,
+      ]),
+    );
+  }
   lines.push("");
 
   lines.push(csvRow(["Combined Annual Activity"]));
@@ -602,16 +610,27 @@ export default function AnnualActivityReport() {
       const subtitle = `${usedAddresses.length} address${usedAddresses.length !== 1 ? "es" : ""} analyzed | ${addressesWithData} with data`;
       doc.text(subtitle, 14, 28);
 
+      let headerOffset = 0;
+      if (reportData.unresolvedInputAmountCount > 0) {
+        doc.setFontSize(9);
+        const warning = doc.splitTextToSize(
+          `Warning: ${reportData.unresolvedInputAmountCount.toLocaleString()} input amount${reportData.unresolvedInputAmountCount !== 1 ? "s" : ""} could not be resolved because the funding transaction${reportData.unresolvedInputAmountCount !== 1 ? "s were" : " was"} never synced. Spent totals may be understated.`,
+          pageWidth - 28,
+        ) as string[];
+        doc.text(warning, 14, 34);
+        headerOffset = warning.length * 4 + 2;
+      }
+
       // ── Combined Annual Activity ─────────────────────────────────────────
       doc.setFontSize(13);
-      doc.text("Combined Annual Activity", 14, 40);
+      doc.text("Combined Annual Activity", 14, 40 + headerOffset);
 
       if (reportData.combinedYearRows.length === 0) {
         doc.setFontSize(9);
         doc.text(
           "No synced transaction data for any of the provided addresses.",
           14,
-          47,
+          47 + headerOffset,
         );
       } else {
         const combinedBody = reportData.combinedYearRows.map((r) => [
@@ -628,7 +647,7 @@ export default function AnnualActivityReport() {
           formatBTC(total.spentSats),
         ]);
         autoTable(doc, {
-          startY: 44,
+          startY: 44 + headerOffset,
           head: [["Year", "Transactions", "BTC Received", "BTC Spent"]],
           body: combinedBody,
           styles: { fontSize: 8, cellPadding: 2 },
