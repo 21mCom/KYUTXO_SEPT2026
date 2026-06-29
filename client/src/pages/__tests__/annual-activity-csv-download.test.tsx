@@ -39,6 +39,7 @@ const { TX1, ADDR, BLOCK_TIME_2023, OUTPUT_PARTICIPANT } = vi.hoisted(() => {
 vi.mock("@/lib/dataFacade", () => ({
   getParticipantsByAddresses: vi.fn(() => Promise.resolve([OUTPUT_PARTICIPANT])),
   getParticipantsByTxids: vi.fn(() => Promise.resolve([OUTPUT_PARTICIPANT])),
+  getRecordsByIndexedFieldAnyOfFiltered: vi.fn(() => Promise.resolve([])),
 }));
 
 vi.mock("@/lib/data/transaction-crud", () => ({

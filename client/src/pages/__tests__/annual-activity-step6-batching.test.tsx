@@ -155,6 +155,7 @@ const {
 vi.mock("@/lib/dataFacade", () => ({
   getParticipantsByAddresses,
   getParticipantsByTxids,
+  getRecordsByIndexedFieldAnyOfFiltered: vi.fn(() => Promise.resolve([])),
 }));
 
 vi.mock("@/lib/data/transaction-crud", () => ({

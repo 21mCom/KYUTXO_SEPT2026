@@ -25,6 +25,7 @@ const {
   getParticipantsByTxids,
   getParticipantsByPrevOutKeys,
   getTransactionsByTxids,
+  getRecordsByIndexedFieldAnyOfFiltered,
 } = vi.hoisted(() => {
   // 3 pasted-address spends, each input amount=0 pointing to a prevout whose
   // funding tx is NEVER returned by the data layer → 3 unresolved prevouts that
@@ -83,6 +84,9 @@ const {
     return Promise.resolve(out);
   });
   const getParticipantsByPrevOutKeys = vi.fn(() => Promise.resolve([]));
+  // No address records imported by default → every unresolved owning address is
+  // unsyncable. Individual tests override this to simulate imported records.
+  const getRecordsByIndexedFieldAnyOfFiltered = vi.fn(() => Promise.resolve([] as any[]));
   const getTransactionsByTxids = vi.fn((txids: string[]) =>
     Promise.resolve(
       txids
@@ -100,6 +104,7 @@ const {
     getParticipantsByTxids,
     getParticipantsByPrevOutKeys,
     getTransactionsByTxids,
+    getRecordsByIndexedFieldAnyOfFiltered,
   };
 });
 
@@ -127,6 +132,7 @@ vi.mock("@tanstack/react-virtual", () => ({
 vi.mock("@/lib/dataFacade", () => ({
   getParticipantsByAddresses,
   getParticipantsByTxids,
+  getRecordsByIndexedFieldAnyOfFiltered,
 }));
 
 vi.mock("@/lib/data/transaction-crud", () => ({
@@ -149,6 +155,8 @@ beforeEach(() => {
   getParticipantsByTxids.mockClear();
   getParticipantsByPrevOutKeys.mockClear();
   getTransactionsByTxids.mockClear();
+  getRecordsByIndexedFieldAnyOfFiltered.mockClear();
+  getRecordsByIndexedFieldAnyOfFiltered.mockResolvedValue([] as any[]);
 });
 
 afterEach(() => {
@@ -189,5 +197,33 @@ describe("AnnualActivityReport — unresolved input amount warning", () => {
     expect(list.textContent).toContain(spendTxid(0));
     // Owning address (the pasted address) is shown so auditors know whose spend is off.
     expect(list.textContent).toContain(MINE);
+  });
+
+  it("warns that the owning address is unsyncable when it was never imported", async () => {
+    // Default mock returns no matching address records → the single owning
+    // address (MINE) cannot be synced.
+    generateReport();
+
+    await screen.findByTestId("warning-unresolved-input-amounts");
+    fireEvent.click(screen.getByTestId("button-toggle-unresolved-details"));
+
+    const notice = await screen.findByTestId("text-unsyncable-owning-addresses");
+    expect(notice.textContent).toContain("1 of 1 cannot be synced");
+    expect(notice.textContent).toContain("not imported");
+  });
+
+  it("does not warn about unsyncable addresses when the owning address is imported", async () => {
+    // Simulate the owning address having a matching imported record.
+    getRecordsByIndexedFieldAnyOfFiltered.mockResolvedValue([
+      { id: 1, type: "address", inputStringLower: MINE.toLowerCase() },
+    ] as any[]);
+    generateReport();
+
+    await screen.findByTestId("warning-unresolved-input-amounts");
+    fireEvent.click(screen.getByTestId("button-toggle-unresolved-details"));
+
+    // The sync button is still present, but no unsyncable notice.
+    await screen.findByTestId("button-sync-unresolved");
+    expect(screen.queryByTestId("text-unsyncable-owning-addresses")).toBeNull();
   });
 });

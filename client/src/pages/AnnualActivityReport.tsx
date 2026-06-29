@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef, useCallback } from "react";
+import { useState, useMemo, useRef, useCallback, useEffect } from "react";
 import { useLocation } from "wouter";
 import { Loader2, ChevronDown, ChevronRight, AlertCircle, CalendarRange, FileDown, FileText, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -10,10 +10,10 @@ import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { formatBTC } from "@/lib/bitcoin";
-import { getParticipantsByAddresses, getParticipantsByTxids } from "@/lib/dataFacade";
+import { getParticipantsByAddresses, getParticipantsByTxids, getRecordsByIndexedFieldAnyOfFiltered } from "@/lib/dataFacade";
 import { getTransactionsByTxids, getParticipantsByPrevOutKeys } from "@/lib/data/transaction-crud";
 import { AddressLink } from "@/components/AddressLink";
-import { setPendingSyncAddresses } from "@/lib/sync/pendingSyncTargets";
+import { setPendingSyncAddresses, partitionTargetedAddresses } from "@/lib/sync/pendingSyncTargets";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { TransactionParticipant, BlockchainTransaction } from "@/lib/database";
 
@@ -702,6 +702,45 @@ export default function AnnualActivityReport() {
     return out;
   }, [reportData]);
 
+  /**
+   * Owning addresses behind the unresolved inputs that have no matching address
+   * record in the database — they were never imported, so a sync can't resolve
+   * them. Detected the same way as the Transaction Sync page (case-insensitive
+   * `inputStringLower` lookup + `partitionTargetedAddresses`) so the two views
+   * agree on which funding sources are unsyncable. Computed asynchronously; a
+   * cancel flag guards against stale reportData updates clobbering the result.
+   */
+  const [skippedOwningAddresses, setSkippedOwningAddresses] = useState<string[]>([]);
+  useEffect(() => {
+    if (unresolvedOwningAddresses.length === 0) {
+      setSkippedOwningAddresses([]);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      const lower = Array.from(
+        new Set(unresolvedOwningAddresses.map((a) => a.trim().toLowerCase()).filter(Boolean)),
+      );
+      const matched = await getRecordsByIndexedFieldAnyOfFiltered(
+        "inputStringLower",
+        lower,
+        (r) => r.type === "address",
+        lower.length,
+      );
+      if (cancelled) return;
+      const matchedLower = new Set(
+        matched
+          .map((r) => r.inputStringLower)
+          .filter((s): s is string => typeof s === "string"),
+      );
+      const { skipped } = partitionTargetedAddresses(unresolvedOwningAddresses, matchedLower);
+      if (!cancelled) setSkippedOwningAddresses(skipped);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [unresolvedOwningAddresses]);
+
   const handleSyncUnresolved = useCallback(() => {
     if (unresolvedOwningAddresses.length === 0) return;
     setPendingSyncAddresses(unresolvedOwningAddresses);
@@ -1336,6 +1375,17 @@ export default function AnnualActivityReport() {
                           Sync these funding transactions ({unresolvedOwningAddresses.length}{" "}
                           address{unresolvedOwningAddresses.length !== 1 ? "es" : ""})
                         </Button>
+                      )}
+                      {skippedOwningAddresses.length > 0 && (
+                        <p
+                          className="text-xs font-medium mb-2"
+                          data-testid="text-unsyncable-owning-addresses"
+                        >
+                          {skippedOwningAddresses.length} of {unresolvedOwningAddresses.length}{" "}
+                          cannot be synced — not imported. Import{" "}
+                          {skippedOwningAddresses.length !== 1 ? "these addresses" : "this address"}{" "}
+                          first, then sync.
+                        </p>
                       )}
                       <UnresolvedInputList inputs={reportData.unresolvedInputs} />
                     </div>
