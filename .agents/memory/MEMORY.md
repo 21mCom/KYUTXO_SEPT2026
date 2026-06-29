@@ -38,3 +38,4 @@
 - [Browser-seed Transactions page](browser-seed-transactions-reload.md) — default tx list/search only scans curated txs; page useLiveQuery ignores dynamic-import writes — seed then reload ONCE before rendering the link, live createRecord after.
 - [Fund Trail layout variants](fund-trail-layout-variants.md) — caps are hop-level never per-node; variants are pure adapter fns (no DOM measure); stacked/Sankey scale off densest column sum not max single flow.
 - [Mockup canvas presentation](mockup-canvas-presentation.md) — presentArtifact artifactId = artifact PATH ("artifacts/mockup-sandbox"); PWA SW serves stale preview screenshots, add a ?cachebust= token.
+- [RecordDetailPanel render paths](record-detail-panel-paths.md) — clicking a link opens the GLOBAL preview (RecordPreviewContext), which hand-builds panelRecord and silently drops unlisted fields; add new panel fields to both builders.

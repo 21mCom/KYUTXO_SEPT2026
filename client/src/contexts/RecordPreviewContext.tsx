@@ -108,6 +108,14 @@ interface RecordForPanel {
   costBasisUsd?: number;
   // Address counterparty metadata
   counterpartyType?: CounterpartyType;
+  // Cached on-chain stats (populated after sync/recompute) — required so the
+  // detail panel's behavior badge matches the records list (e.g. a synced but
+  // empty address reads "Synced — No Activity", not "Not Synced").
+  cachedBalanceSats?: number;
+  cachedTxCount?: number;
+  cachedLastActivityTime?: number;
+  cachedUtxoCount?: number;
+  statsComputedAt?: number;
 }
 
 export function RecordPreviewProvider({ children }: { children: ReactNode }) {
@@ -203,6 +211,11 @@ export function RecordPreviewProvider({ children }: { children: ReactNode }) {
         dispositionType: dbRecord.dispositionType || undefined,
         costBasisUsd: dbRecord.costBasisUsd,
         counterpartyType: dbRecord.counterpartyType || undefined,
+        cachedBalanceSats: dbRecord.cachedBalanceSats,
+        cachedTxCount: dbRecord.cachedTxCount,
+        cachedLastActivityTime: dbRecord.cachedLastActivityTime,
+        cachedUtxoCount: dbRecord.cachedUtxoCount,
+        statsComputedAt: dbRecord.statsComputedAt,
       };
 
       setRecord(panelRecord);
@@ -268,6 +281,11 @@ export function RecordPreviewProvider({ children }: { children: ReactNode }) {
         dispositionType: dbRecord.dispositionType || undefined,
         costBasisUsd: dbRecord.costBasisUsd,
         counterpartyType: dbRecord.counterpartyType || undefined,
+        cachedBalanceSats: dbRecord.cachedBalanceSats,
+        cachedTxCount: dbRecord.cachedTxCount,
+        cachedLastActivityTime: dbRecord.cachedLastActivityTime,
+        cachedUtxoCount: dbRecord.cachedUtxoCount,
+        statsComputedAt: dbRecord.statsComputedAt,
       };
 
       setRecord(panelRecord);
