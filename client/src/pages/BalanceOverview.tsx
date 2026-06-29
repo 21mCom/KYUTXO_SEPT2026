@@ -12,7 +12,7 @@ import {
 } from "@/lib/data/record-crud";
 import { engineGetBalanceGroupSummaries, subscribeEngineReadiness } from "@/lib/engine/engine-client";
 import { evaluateEngineFreshness } from "@/lib/engine/engine-freshness";
-import { recomputeAddressStats, countHeuristicMatchedAddresses } from "@/lib/data/address-stats";
+import { recomputeAddressStats, countHeuristicMatchedAddresses, getHeuristicMatchedAddresses } from "@/lib/data/address-stats";
 import { getSettings, updateSettings } from "@/lib/data/settings-crud";
 import { countUnresolvedPrevoutInputs, getUnresolvedSpendBreakdown, getMissingSourceTxids, getMissingSourceTxidDetails, buildMissingSourceJson, buildMissingSourceCsv, type MissingSourceDetail } from "@/lib/data/transaction-crud";
 import { transactionSyncService } from "@/lib/transaction-sync";
@@ -371,6 +371,14 @@ export default function BalanceOverview() {
   // banner can cancel a long-running resolve without rolling back partial work.
   const fixPrevoutsAbortRef = useRef<AbortController | null>(null);
   const [cancellingFixPrevouts, setCancellingFixPrevouts] = useState(false);
+  // True while re-syncing the heuristic-matched addresses (the heuristic-mode
+  // banner's "Re-sync addresses" action). Each address is re-fetched so it
+  // collects exact prevout data and is promoted off the FIFO fallback.
+  const [resyncingHeuristic, setResyncingHeuristic] = useState(false);
+  // Per-address progress for the heuristic re-sync: { processed, total }.
+  const [heuristicResyncProgress, setHeuristicResyncProgress] = useState<{ processed: number; total: number } | null>(null);
+  const [cancellingResyncHeuristic, setCancellingResyncHeuristic] = useState(false);
+  const resyncHeuristicAbortRef = useRef<AbortController | null>(null);
   const resolveAbortByGroupRef = useRef<Map<string, AbortController>>(new Map());
   const resolveAbortByRecordRef = useRef<Map<number, AbortController>>(new Map());
   const [cancellingGroups, setCancellingGroups] = useState<Set<string>>(new Set());
@@ -864,6 +872,126 @@ export default function BalanceOverview() {
     if (fixPrevoutsAbortRef.current) {
       setCancellingFixPrevouts(true);
       fixPrevoutsAbortRef.current.abort();
+    }
+  }, []);
+
+  // Re-sync every address whose UTXO stats still use the FIFO heuristic (the
+  // heuristic-mode banner's one-click action). Re-fetching each address from the
+  // configured provider collects exact prevout data and runs a prevout-resolve
+  // pass, promoting the address off the FIFO fallback. Once an address is no
+  // longer heuristic the dbSignal-driven recount drops the banner on its own;
+  // we also recount explicitly when the run finishes.
+  const handleResyncHeuristic = useCallback(async () => {
+    const controller = new AbortController();
+    resyncHeuristicAbortRef.current = controller;
+    setCancellingResyncHeuristic(false);
+    setResyncingHeuristic(true);
+    setHeuristicResyncProgress(null);
+    try {
+      const addresses = await getHeuristicMatchedAddresses(controller.signal);
+      if (addresses.length === 0) {
+        toast({
+          title: "Nothing to re-sync",
+          description: "These addresses are already using exact matching.",
+        });
+        return;
+      }
+
+      const nodeSettings = await getNodeSettings("default");
+      if (!nodeSettings) {
+        toast({
+          title: "No blockchain provider configured",
+          description:
+            "Configure a provider in Settings to re-sync these addresses.",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      try {
+        const probe = createProviderFromSettings(nodeSettings);
+        await probe.getBlockHeight();
+      } catch (connErr) {
+        console.warn("[BalanceOverview] Provider unreachable for heuristic re-sync:", connErr);
+        toast({
+          title: "Can't reach the blockchain provider",
+          description:
+            "Check your connection or provider settings in Settings, then try again.",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      transactionSyncService.updateProvider(nodeSettings);
+
+      setHeuristicResyncProgress({ processed: 0, total: addresses.length });
+      let synced = 0;
+      let failed = 0;
+      for (const address of addresses) {
+        if (controller.signal.aborted) break;
+        try {
+          const result = await transactionSyncService.syncSingleAddress(address);
+          if (result.success) synced += 1;
+          else failed += 1;
+        } catch (err) {
+          console.warn(`[BalanceOverview] Heuristic re-sync failed for ${address}:`, err);
+          failed += 1;
+        }
+        setHeuristicResyncProgress({ processed: synced + failed, total: addresses.length });
+      }
+
+      const cancelled = controller.signal.aborted;
+      // Recount so the banner reflects reality immediately; the dbSignal effect
+      // also recounts, but doing it here avoids a flash of the stale count.
+      const remaining = await countHeuristicMatchedAddresses();
+      setHeuristicAddressCount(remaining);
+      if (remaining === 0) setHeuristicWarningDismissed(false);
+
+      if (cancelled) {
+        toast({
+          title: "Re-sync stopped",
+          description:
+            synced > 0
+              ? `Re-synced ${synced.toLocaleString()} address${synced !== 1 ? "es" : ""}. ${remaining.toLocaleString()} still use estimated matching.`
+              : "Stopped before any addresses were re-synced.",
+        });
+      } else if (failed > 0) {
+        toast({
+          title: synced > 0 ? "Partially re-synced" : "Re-sync failed",
+          description:
+            synced > 0
+              ? `Re-synced ${synced.toLocaleString()} address${synced !== 1 ? "es" : ""}, but ${failed.toLocaleString()} couldn't be re-synced. ${remaining.toLocaleString()} still use estimated matching.`
+              : "None of the addresses could be re-synced. Check your provider settings and try again.",
+          variant: synced > 0 ? undefined : "destructive",
+        });
+      } else {
+        toast({
+          title: "Re-synced",
+          description: `Re-synced ${synced.toLocaleString()} address${synced !== 1 ? "es" : ""} with exact matching.`,
+        });
+      }
+    } catch (err) {
+      console.warn("[BalanceOverview] Heuristic re-sync failed:", err);
+      toast({
+        title: "Re-sync failed",
+        description: "Couldn't re-sync the affected addresses. Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      resyncHeuristicAbortRef.current = null;
+      setCancellingResyncHeuristic(false);
+      setResyncingHeuristic(false);
+      setHeuristicResyncProgress(null);
+    }
+  }, [toast]);
+
+  // Cancel the in-progress heuristic re-sync. Aborting stops further fetching
+  // cleanly between addresses; addresses already re-synced keep their new exact
+  // data, and the heuristic count refreshes in the completion path above.
+  const handleCancelResyncHeuristic = useCallback(() => {
+    if (resyncHeuristicAbortRef.current) {
+      setCancellingResyncHeuristic(true);
+      resyncHeuristicAbortRef.current.abort();
     }
   }, []);
 
@@ -1377,11 +1505,38 @@ export default function BalanceOverview() {
               {heuristicAddressCount!.toLocaleString()} address{heuristicAddressCount !== 1 ? "es" : ""} {heuristicAddressCount !== 1 ? "were" : "was"} synced
               before exact spend data was collected, so their balances are guessed by matching
               same-value amounts. This can be wrong for coinjoin or batch transactions. Re-sync
-              {heuristicAddressCount !== 1 ? " these addresses" : " this address"} from the Records
-              page to switch to exact matching.
+              {heuristicAddressCount !== 1 ? " these addresses" : " this address"} to fetch exact
+              spend data and switch to precise matching.
             </p>
           </div>
           <div className="flex items-center gap-2 flex-none flex-wrap justify-end">
+            {resyncingHeuristic ? (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={handleCancelResyncHeuristic}
+                disabled={cancellingResyncHeuristic}
+                data-testid="button-cancel-resync-heuristic"
+                className="border-yellow-400 dark:border-yellow-600 text-yellow-800 dark:text-yellow-200"
+              >
+                <StopCircle className="h-3 w-3 mr-1.5" />
+                {cancellingResyncHeuristic
+                  ? "Stopping…"
+                  : heuristicResyncProgress && heuristicResyncProgress.total > 0
+                    ? `Stop (${heuristicResyncProgress.processed.toLocaleString()}/${heuristicResyncProgress.total.toLocaleString()})`
+                    : "Stop re-syncing"}
+              </Button>
+            ) : (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={handleResyncHeuristic}
+                data-testid="button-resync-heuristic"
+                className="border-yellow-400 dark:border-yellow-600 text-yellow-800 dark:text-yellow-200"
+              >
+                Re-sync {heuristicAddressCount !== 1 ? "addresses" : "address"}
+              </Button>
+            )}
             <button
               onClick={() => setHeuristicWarningDismissed(true)}
               className="text-yellow-600/60 dark:text-yellow-400/60 hover:text-yellow-700 dark:hover:text-yellow-300 transition-colors"

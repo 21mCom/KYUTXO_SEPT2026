@@ -351,7 +351,43 @@ export function computeUtxoCountForAddress(
  * spent address, so memory stays bounded by the number of spent addresses.
  */
 export async function countHeuristicMatchedAddresses(signal?: AbortSignal): Promise<number> {
-  // address -> whether ANY of its inputs carried prevout data so far.
+  const hasPrevoutByAddress = await buildHasPrevoutByAddress(signal);
+  if (isAborted(signal)) return 0;
+
+  let count = 0;
+  hasPrevoutByAddress.forEach((hasPrevout) => {
+    if (!hasPrevout) count += 1;
+  });
+  return count;
+}
+
+/**
+ * Return the address strings still computed with the FIFO heuristic (the same
+ * set `countHeuristicMatchedAddresses` counts). Used by the Balance page's
+ * heuristic-mode banner so the user can re-sync exactly those addresses in one
+ * action, promoting each to exact prevout matching. Pure local read; never
+ * touches the network.
+ */
+export async function getHeuristicMatchedAddresses(signal?: AbortSignal): Promise<string[]> {
+  const hasPrevoutByAddress = await buildHasPrevoutByAddress(signal);
+  if (isAborted(signal)) return [];
+
+  const addresses: string[] = [];
+  hasPrevoutByAddress.forEach((hasPrevout, address) => {
+    if (!hasPrevout) addresses.push(address);
+  });
+  return addresses;
+}
+
+/**
+ * Scan the `input`-role participant rows once and build a map of
+ * address -> whether ANY of its inputs carried prevout data. An address mapped
+ * to `false` has spent but has no exact prevout data, so its UTXO stats fall
+ * back to FIFO same-amount pairing (the heuristic). Blank-address inputs
+ * (unresolved spends) are ignored. Memory stays bounded by the number of
+ * distinct spent addresses.
+ */
+async function buildHasPrevoutByAddress(signal?: AbortSignal): Promise<Map<string, boolean>> {
   const hasPrevoutByAddress = new Map<string, boolean>();
   await db.transactionParticipants
     .where('role').equals('input')
@@ -366,14 +402,7 @@ export async function countHeuristicMatchedAddresses(signal?: AbortSignal): Prom
         hasPrevoutByAddress.set(addr, true);
       }
     });
-
-  if (isAborted(signal)) return 0;
-
-  let count = 0;
-  hasPrevoutByAddress.forEach((hasPrevout) => {
-    if (!hasPrevout) count += 1;
-  });
-  return count;
+  return hasPrevoutByAddress;
 }
 
 async function loadBlockTimes(txids: string[]): Promise<Map<string, number>> {
