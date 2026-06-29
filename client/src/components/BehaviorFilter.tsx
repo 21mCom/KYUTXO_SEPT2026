@@ -9,8 +9,8 @@ import {
   BEHAVIOR_LABEL_DISPLAY,
 } from "@/lib/behavior-profile";
 
-// Display order for the picker: most useful behaviors first, "Not Synced" last
-// so the includable/excludable not-synced state is always reachable.
+// Display order for the picker: most useful behaviors first, "Not Synced" and
+// "Synced — No Activity" last so the empty/unchecked states are always reachable.
 const BEHAVIOR_FILTER_ORDER: BehaviorLabel[] = [
   "dormant",
   "active",
@@ -20,6 +20,7 @@ const BEHAVIOR_FILTER_ORDER: BehaviorLabel[] = [
   "consolidator",
   "fragmented",
   "used",
+  "synced-no-activity",
   "not-enough-data",
 ];
 

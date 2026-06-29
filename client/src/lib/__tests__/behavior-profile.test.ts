@@ -31,12 +31,21 @@ describe('classifyBehavior', () => {
       expect(result.reasons.length).toBeGreaterThan(0);
     });
 
-    it('returns not-enough-data when synced but txCount is 0', () => {
-      const result = classifyBehavior(input({ synced: true, txCount: 0 }));
+    it('returns not-enough-data when both synced=false and txCount=0', () => {
+      const result = classifyBehavior(input({ synced: false, txCount: 0 }));
       expect(result.label).toBe('not-enough-data');
     });
+  });
 
-    it('returns not-enough-data when both synced=false and txCount=0', () => {
+  describe('synced-no-activity', () => {
+    it('returns synced-no-activity when synced but txCount is 0', () => {
+      const result = classifyBehavior(input({ synced: true, txCount: 0 }));
+      expect(result.label).toBe('synced-no-activity');
+      expect(result.summarySentence).toContain('synced');
+      expect(result.reasons.length).toBeGreaterThan(0);
+    });
+
+    it('does NOT return synced-no-activity when not synced (uses not-enough-data instead)', () => {
       const result = classifyBehavior(input({ synced: false, txCount: 0 }));
       expect(result.label).toBe('not-enough-data');
     });
@@ -273,8 +282,8 @@ describe('classifyBehavior', () => {
 
     it('BEHAVIOR_LABEL_DISPLAY covers every possible label', () => {
       const labels = [
-        'not-enough-data', 'dormant', 'high-activity', 'accumulator',
-        'distributor', 'consolidator', 'fragmented', 'active', 'used',
+        'not-enough-data', 'synced-no-activity', 'dormant', 'high-activity',
+        'accumulator', 'distributor', 'consolidator', 'fragmented', 'active', 'used',
       ] as const;
       for (const label of labels) {
         expect(BEHAVIOR_LABEL_DISPLAY[label]).toBeTruthy();
@@ -316,7 +325,7 @@ describe('behaviorLabelFromCachedStats', () => {
     );
   });
 
-  it('tolerates null cached fields', () => {
+  it('tolerates null cached fields — synced with all-null counts yields synced-no-activity', () => {
     expect(
       behaviorLabelFromCachedStats(
         {
@@ -328,7 +337,7 @@ describe('behaviorLabelFromCachedStats', () => {
         },
         NOW,
       ),
-    ).toBe('not-enough-data');
+    ).toBe('synced-no-activity');
   });
 });
 

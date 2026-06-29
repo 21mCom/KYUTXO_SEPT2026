@@ -6,22 +6,24 @@
  * access, no AI — every label traces back to observable thresholds below.
  *
  * Rule priority (first match wins):
- *   1. not-enough-data — not synced, or synced but zero transactions
- *   2. dormant        — synced + txs, last activity > DORMANT_YEARS ago
- *   3. high-activity  — txCount >= HIGH_ACTIVITY_TX_THRESHOLD (regardless of recency)
- *   4. accumulator    — positive balance + utxoCount >= MIN_UTXO_ACCUMULATOR +
- *                       high UTXO-to-tx ratio (holds value, rarely spends)
- *   5. distributor    — txCount >= MIN_TX_DISTRIBUTOR + low utxo count +
- *                       near-zero balance (sends out frequently)
- *   6. consolidator   — txCount >= MIN_TX_CONSOLIDATOR + utxoCount <=
- *                       MAX_UTXO_CONSOLIDATOR (merged many inputs into few)
- *   7. fragmented     — utxoCount >= FRAGMENTED_UTXO_THRESHOLD (dust/privacy split)
- *   8. active         — last activity within ACTIVE_MONTHS
- *   9. used           — catch-all: has tx history, no strong pattern
+ *   1. not-enough-data    — not synced (never checked)
+ *   1b. synced-no-activity — synced but zero transactions found
+ *   2. dormant            — synced + txs, last activity > DORMANT_YEARS ago
+ *   3. high-activity      — txCount >= HIGH_ACTIVITY_TX_THRESHOLD (regardless of recency)
+ *   4. accumulator        — positive balance + utxoCount >= MIN_UTXO_ACCUMULATOR +
+ *                           high UTXO-to-tx ratio (holds value, rarely spends)
+ *   5. distributor        — txCount >= MIN_TX_DISTRIBUTOR + low utxo count +
+ *                           near-zero balance (sends out frequently)
+ *   6. consolidator       — txCount >= MIN_TX_CONSOLIDATOR + utxoCount <=
+ *                           MAX_UTXO_CONSOLIDATOR (merged many inputs into few)
+ *   7. fragmented         — utxoCount >= FRAGMENTED_UTXO_THRESHOLD (dust/privacy split)
+ *   8. active             — last activity within ACTIVE_MONTHS
+ *   9. used               — catch-all: has tx history, no strong pattern
  */
 
 export type BehaviorLabel =
   | 'not-enough-data'
+  | 'synced-no-activity'
   | 'dormant'
   | 'high-activity'
   | 'accumulator'
@@ -105,7 +107,7 @@ export function classifyBehavior(input: BehaviorInput): BehaviorProfile {
     nowSeconds = Math.floor(Date.now() / 1000),
   } = input;
 
-  // 1. Not enough data
+  // 1. Not enough data — never been synced
   if (!synced) {
     return {
       label: 'not-enough-data',
@@ -113,10 +115,11 @@ export function classifyBehavior(input: BehaviorInput): BehaviorProfile {
       reasons: ['No synced transactions found'],
     };
   }
+  // 1b. Synced but no transactions found — distinct from never-checked
   if (txCount === 0) {
     return {
-      label: 'not-enough-data',
-      summarySentence: 'Stats are synced but no transactions have been found for this address yet.',
+      label: 'synced-no-activity',
+      summarySentence: 'This address has been synced and confirmed to have no transactions on record.',
       reasons: ['Synced with 0 transactions on record'],
     };
   }
@@ -269,6 +272,7 @@ export type BehaviorTallyCounts = Record<BehaviorLabel, number>;
 /** All behavior labels, used to build a zeroed tally. */
 export const ALL_BEHAVIOR_LABELS: BehaviorLabel[] = [
   'not-enough-data',
+  'synced-no-activity',
   'dormant',
   'high-activity',
   'accumulator',
@@ -289,6 +293,7 @@ export function emptyBehaviorTally(): BehaviorTallyCounts {
 /** Display name for each label. */
 export const BEHAVIOR_LABEL_DISPLAY: Record<BehaviorLabel, string> = {
   'not-enough-data': 'Not Synced',
+  'synced-no-activity': 'Synced \u2014 No Activity',
   'dormant': 'Dormant',
   'high-activity': 'High Activity',
   'accumulator': 'Accumulator',

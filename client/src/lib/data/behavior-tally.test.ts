@@ -56,7 +56,7 @@ beforeAll(async () => {
   await testDb.records.bulkAdd([
     // Not synced (no statsComputedAt).
     addr({ inputString: "a1" }),
-    // Synced but zero transactions → not-enough-data.
+    // Synced but zero transactions → synced-no-activity.
     addr({ inputString: "a2", statsComputedAt: NOW, cachedTxCount: 0 }),
     // Dormant: last activity > 3 years ago.
     addr({
@@ -100,10 +100,11 @@ describe("computeBehaviorTally", () => {
     // a1 has no statsComputedAt; the other four do.
     expect(syncedCount).toBe(4);
 
-    expect(counts["not-enough-data"]).toBe(2); // a1 (not synced) + a2 (0 tx)
-    expect(counts["dormant"]).toBe(1); // a3
-    expect(counts["high-activity"]).toBe(1); // a4
-    expect(counts["active"]).toBe(1); // a5
+    expect(counts["not-enough-data"]).toBe(1);      // a1 (not synced)
+    expect(counts["synced-no-activity"]).toBe(1);   // a2 (synced, 0 txs)
+    expect(counts["dormant"]).toBe(1);              // a3
+    expect(counts["high-activity"]).toBe(1);        // a4
+    expect(counts["active"]).toBe(1);               // a5
 
     const total = Object.values(counts).reduce((s, n) => s + n, 0);
     expect(total).toBe(addressCount);

@@ -647,7 +647,7 @@ export function RecordTable({
                       return (
                         <Badge
                           variant={bp.label === 'not-enough-data' ? 'outline' : 'secondary'}
-                          className="text-xs w-fit"
+                          className={`text-xs w-fit${bp.label === 'synced-no-activity' ? ' opacity-70' : ''}`}
                           title={bp.summarySentence}
                           data-testid={`badge-behavior-${record.id}`}
                         >

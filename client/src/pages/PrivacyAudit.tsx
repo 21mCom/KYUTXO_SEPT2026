@@ -2871,7 +2871,7 @@ export function FindingCard({ finding, coinjoinTxids }: { finding: PrivacyFindin
                     return (
                       <span key={addr} className="inline-flex items-center gap-1">
                         <ClickableAddress address={addr} />
-                        {bp && bp.label !== 'not-enough-data' && (
+                        {bp && bp.label !== 'not-enough-data' && bp.label !== 'synced-no-activity' && (
                           <Badge
                             variant="secondary"
                             className="text-xs w-fit"
