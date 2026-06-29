@@ -441,6 +441,11 @@ export interface Settings {
     syncedCount: number;
     counts: { [label: string]: number };
   };
+  // Tracks which version of the balance formula was used to populate
+  // cachedBalanceSats. Version 2 = unspent-output sum (never negative).
+  // When absent (or < 2), the Balance page triggers a full recompute so
+  // stale cached values (old received-minus-spent formula) are corrected.
+  balanceFormulaVersion?: number;
 }
 
 // Canonical shape of a freshly-created 'default' settings row. This is the single

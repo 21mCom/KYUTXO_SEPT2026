@@ -408,7 +408,7 @@ function setEngineMeta(db: EngineDb, key: string, value: string): void {
 //       vaultN, vaultName, vaultNotes} for Vaults + Wallet Overview aggregates.
 // ---------------------------------------------------------------------------
 
-export const ENGINE_SCHEMA_VERSION = 2;
+export const ENGINE_SCHEMA_VERSION = 3;
 const SCHEMA_VERSION_KEY = 'schemaVersion';
 
 /** Schema version stamped by the last successful finalize; 0 if never written. */
@@ -853,16 +853,12 @@ export function getAddressAggregates(db: EngineDb, addresses: string[]): Map<str
 
     const aggRows = selectRows<{
       address: string;
-      outSats: number;
-      inSats: number;
       txCount: number;
       lastTime: number | null;
     }>(
       db,
       `
       SELECT p.address AS address,
-             SUM(CASE WHEN p.role='output' THEN p.amount ELSE 0 END) AS outSats,
-             SUM(CASE WHEN p.role='input'  THEN p.amount ELSE 0 END) AS inSats,
              COUNT(DISTINCT p.txid) AS txCount,
              MAX(t.blockTime) AS lastTime
       FROM transactionParticipants p
@@ -876,17 +872,22 @@ export function getAddressAggregates(db: EngineDb, addresses: string[]): Map<str
     for (const r of aggRows) {
       out.set(r.address, {
         address: r.address,
-        balanceSats: (r.outSats ?? 0) - (r.inSats ?? 0),
+        balanceSats: 0,
         txCount: r.txCount ?? 0,
         lastActivityTime: r.lastTime ?? 0,
         utxoCount: 0,
       });
     }
 
-    const utxoRows = selectRows<{ address: string; utxoCount: number }>(
+    // Compute balance as sum of unspent output amounts (never negative) and
+    // UTXO count in a single anti-join pass. This matches computeUtxoStatsForAddress
+    // in address-stats.ts (exact-prevout mode only; synced data carries prevouts).
+    const utxoRows = selectRows<{ address: string; utxoCount: number; balanceSats: number }>(
       db,
       `
-      SELECT o.address AS address, COUNT(*) AS utxoCount
+      SELECT o.address AS address,
+             COUNT(*) AS utxoCount,
+             COALESCE(SUM(o.amount), 0) AS balanceSats
       FROM transactionParticipants o
       JOIN blockchainTransactions t ON t.txid = o.txid
       WHERE o.role = 'output'
@@ -904,15 +905,18 @@ export function getAddressAggregates(db: EngineDb, addresses: string[]): Map<str
 
     for (const r of utxoRows) {
       const existing = out.get(r.address);
-      if (existing) existing.utxoCount = r.utxoCount ?? 0;
-      else
+      if (existing) {
+        existing.utxoCount = r.utxoCount ?? 0;
+        existing.balanceSats = r.balanceSats ?? 0;
+      } else {
         out.set(r.address, {
           address: r.address,
-          balanceSats: 0,
+          balanceSats: r.balanceSats ?? 0,
           txCount: 0,
           lastActivityTime: 0,
           utxoCount: r.utxoCount ?? 0,
         });
+      }
     }
   }
 

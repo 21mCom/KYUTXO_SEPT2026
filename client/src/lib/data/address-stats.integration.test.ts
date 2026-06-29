@@ -1218,3 +1218,64 @@ describe("recomputeAddressStats across a mostly-unsynced vault", () => {
     expect(secondBatchSample?.statsComputedAt).not.toBe(5000);
   });
 });
+
+// ---------------------------------------------------------------------------
+// New formula: balance = sum of UNSPENT outputs (never negative)
+// ---------------------------------------------------------------------------
+
+describe("recomputeAddressStats UTXO-balance formula: exact-mode spend reduces balance correctly", () => {
+  it("balance equals sum of unspent output amounts after a spend", async () => {
+    // addr receives 600 sats at tx-r:0 and 700 sats at tx-r:1, then spends
+    // tx-r:0 via tx-s. After the spend only tx-r:1 (700 sats) is unspent.
+    const addr = "exact-spend-addr";
+    await testDb.records.add(
+      mkAddr({ id: 1, inputString: addr, statsComputedAt: 0, cachedBalanceSats: 99999 }),
+    );
+    await testDb.blockchainTransactions.bulkAdd([mkTx("tx-r", 1000), mkTx("tx-s", 1001)]);
+    await testDb.transactionParticipants.bulkAdd([
+      { txid: "tx-r", address: addr, role: "output", amount: 600, vout: 0 } as unknown as TransactionParticipant,
+      { txid: "tx-r", address: addr, role: "output", amount: 700, vout: 1 } as unknown as TransactionParticipant,
+      // input spending outpoint tx-r:0
+      { txid: "tx-s", address: addr, role: "input", amount: 600, prevTxid: "tx-r", prevVout: 0 } as unknown as TransactionParticipant,
+    ]);
+    await testDb.addressSyncState.add({ address: addr, recordId: 1, lastSyncedAt: 1000 } as unknown as AddressSyncState);
+
+    const result = await recomputeAddressStats({ addresses: [addr] });
+    expect(result.cancelled).toBe(false);
+
+    const rec = await testDb.records.get(1);
+    // Only tx-r:1 (700 sats) is unspent
+    expect(rec?.cachedBalanceSats).toBe(700);
+    expect(rec?.cachedUtxoCount).toBe(1);
+  });
+});
+
+describe("recomputeAddressStats UTXO-balance formula: balance is never negative", () => {
+  it("returns 0 when the address spent more sats than it received (old formula would go negative)", async () => {
+    // addr receives 1000 sats at tx-r:0. It then spends tx-r:0 AND also
+    // references an external prevout (external-tx:0, 2000 sats) that is not in
+    // local transaction data. The old received-minus-spent formula would give
+    // 1000 − 3000 = −2000; the new unspent-output sum gives 0.
+    const addr = "neg-balance-addr";
+    await testDb.records.add(
+      mkAddr({ id: 1, inputString: addr, statsComputedAt: 0, cachedBalanceSats: 0 }),
+    );
+    await testDb.blockchainTransactions.bulkAdd([mkTx("tx-r-neg", 2000), mkTx("tx-s-neg", 2001)]);
+    await testDb.transactionParticipants.bulkAdd([
+      mkOutput(addr, "tx-r-neg", 1000, 0),
+      // Spends the local output
+      { txid: "tx-s-neg", address: addr, role: "input", amount: 1000, prevTxid: "tx-r-neg", prevVout: 0 } as unknown as TransactionParticipant,
+      // Also spends an external output (not in local data) — old formula subtracts this
+      { txid: "tx-s-neg", address: addr, role: "input", amount: 2000, prevTxid: "external-tx", prevVout: 0 } as unknown as TransactionParticipant,
+    ]);
+    await testDb.addressSyncState.add({ address: addr, recordId: 1, lastSyncedAt: 1000 } as unknown as AddressSyncState);
+
+    const result = await recomputeAddressStats({ addresses: [addr] });
+    expect(result.cancelled).toBe(false);
+
+    const rec = await testDb.records.get(1);
+    // All locally-known outputs are spent → 0 unspent → balance = 0, never negative
+    expect(rec?.cachedBalanceSats).toBe(0);
+    expect(rec?.cachedUtxoCount).toBe(0);
+  });
+});

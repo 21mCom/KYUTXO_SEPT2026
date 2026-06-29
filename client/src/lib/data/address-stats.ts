@@ -233,23 +233,23 @@ function yieldToEventLoop(): Promise<void> {
 const ROW_YIELD_INTERVAL = 50;
 
 /**
- * Count the unspent outputs (UTXOs) currently held by a single address from its
- * own output/input participant rows. This mirrors BalanceOverview's former
- * in-page logic, but evaluated per-address so the result is independent of how
- * addresses are batched:
+ * Compute the count and summed value of unspent outputs for a single address.
+ *
+ * Two modes (same as BalanceOverview's UTXO logic):
  *   - Exact mode (the address has at least one input carrying prevout data):
  *     an output is unspent unless its outpoint (txid:vout) is referenced by one
  *     of this address's inputs.
  *   - Heuristic mode (no prevout data): pair each output with a later input of
  *     the same amount (FIFO by block time); unmatched outputs are unspent.
  * Outputs whose transaction has no known block time (unconfirmed/missing) are
- * ignored, matching the page's prior behaviour.
+ * ignored. The returned `balanceSats` is always >= 0 (a sum of output amounts
+ * can never be negative).
  */
-export function computeUtxoCountForAddress(
+function computeUtxoStatsForAddress(
   outputs: TransactionParticipant[],
   inputs: TransactionParticipant[],
   blockTimeOf: (txid: string) => number,
-): number {
+): { count: number; balanceSats: number } {
   const spentOutpoints = new Set<string>();
   for (const inp of inputs) {
     if (inp.prevTxid !== undefined && inp.prevVout !== undefined) {
@@ -260,13 +260,15 @@ export function computeUtxoCountForAddress(
   const hasExactData = spentOutpoints.size > 0;
   if (hasExactData) {
     let count = 0;
+    let balanceSats = 0;
     for (const output of outputs) {
       if ((blockTimeOf(output.txid) || 0) <= 0) continue;
       const outpoint = `${output.txid}:${output.vout ?? 0}`;
       if (spentOutpoints.has(outpoint)) continue;
       count += 1;
+      balanceSats += output.amount;
     }
-    return count;
+    return { count, balanceSats };
   }
 
   const outputsWithTime = outputs
@@ -286,6 +288,7 @@ export function computeUtxoCountForAddress(
 
   const matchedIndex = new Map<number, number>();
   let count = 0;
+  let balanceSats = 0;
   for (const { output, blockTime } of outputsWithTime) {
     const candidates = inputsByAmount.get(output.amount) || [];
     const start = matchedIndex.get(output.amount) || 0;
@@ -297,9 +300,23 @@ export function computeUtxoCountForAddress(
       matchedIndex.set(output.amount, spendIdx + 1);
     } else {
       count += 1;
+      balanceSats += output.amount;
     }
   }
-  return count;
+  return { count, balanceSats };
+}
+
+/**
+ * Count the unspent outputs (UTXOs) currently held by a single address from its
+ * own output/input participant rows. Delegates to `computeUtxoStatsForAddress`;
+ * use that function directly when you also need the unspent balance sum.
+ */
+export function computeUtxoCountForAddress(
+  outputs: TransactionParticipant[],
+  inputs: TransactionParticipant[],
+  blockTimeOf: (txid: string) => number,
+): number {
+  return computeUtxoStatsForAddress(outputs, inputs, blockTimeOf).count;
 }
 
 async function loadBlockTimes(txids: string[]): Promise<Map<string, number>> {
@@ -365,11 +382,12 @@ export async function computeStatsForAddresses(
   }
 
   addrAgg.forEach((agg, address) => {
+    const utxoStats = computeUtxoStatsForAddress(agg.outputs, agg.inputs, (txid) => txMap.get(txid) || 0);
     out.set(address, {
-      balanceSats: agg.outputSats - agg.inputSats,
+      balanceSats: utxoStats.balanceSats,
       lastActivityTime: agg.lastTxTime,
       txCount: agg.txids.size,
-      utxoCount: computeUtxoCountForAddress(agg.outputs, agg.inputs, (txid) => txMap.get(txid) || 0),
+      utxoCount: utxoStats.count,
     });
   });
 

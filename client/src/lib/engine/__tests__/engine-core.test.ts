@@ -399,13 +399,54 @@ describe("engine-core: UTXO exact anti-join parity vs computeUtxoCountForAddress
     expect(agg?.utxoCount ?? 0).toBe(expected);
   });
 
-  it("computes balance, txCount and lastActivity per address", () => {
+  it("computes balance as unspent-output sum, txCount and lastActivity per address", () => {
     const a = getAddressAggregates(db, ["A"]).get("A")!;
-    // balance = outputs(500+600+700) - inputs(500) = 1300
+    // A outputs: txA1:0=500 (spent), txA1:1=600 (unspent), txA2:0=700 (unspent)
+    // balance = sum of unspent outputs = 600 + 700 = 1300
     expect(a.balanceSats).toBe(1300);
     // txids touching A: txA1, txA2, txAspend = 3
     expect(a.txCount).toBe(3);
     expect(a.lastActivityTime).toBe(1200);
+  });
+
+  it("balance is sum of unspent outputs for all addresses, never negative", () => {
+    // B: both outputs spent → 0 UTXOs, 0 balance (not negative)
+    const b = getAddressAggregates(db, ["B"]).get("B")!;
+    expect(b.utxoCount).toBe(0);
+    expect(b.balanceSats).toBe(0);
+
+    // C: 2 outputs, never spent → balance = 1000 + 1100 = 2100
+    const c = getAddressAggregates(db, ["C"]).get("C")!;
+    expect(c.utxoCount).toBe(2);
+    expect(c.balanceSats).toBe(2100);
+
+    // D: output with no block time → excluded → 0 UTXOs, 0 balance
+    const d = getAddressAggregates(db, ["D"]).get("D")!;
+    expect(d.utxoCount).toBe(0);
+    expect(d.balanceSats).toBe(0);
+  });
+
+  it("balance never goes negative when an address has more attributed spends than receipts", () => {
+    // Simulate an address that received one output but whose prevout data
+    // references another external output not in local data. The old formula
+    // (received − spent) would produce a negative number; the new formula
+    // (sum of unspent outputs via anti-join) always returns 0 or more.
+    const freshDb2 = createInMemoryEngineDb();
+    createSchema(freshDb2);
+    // address "E" receives 1000 sats in tx-e1:0
+    insertTransactions(freshDb2, [tx(10, "tx-e1", 5000), tx(11, "tx-e-spend", 6000)]);
+    insertParticipants(freshDb2, [
+      out("tx-e1", "E", 0, 1000),
+      // E spends tx-e1:0 (its own output)
+      inp("tx-e-spend", "E", 1000, "tx-e1", 0),
+      // E also has an input referencing an external txid NOT in local data.
+      // This is what the old formula would subtract, producing a negative balance.
+      inp("tx-e-spend", "E", 2000, "external-tx", 0),
+    ]);
+    const e = getAddressAggregates(freshDb2, ["E"]).get("E")!;
+    // Both outputs of E are either spent or external → 0 unspent → balance = 0
+    expect(e.balanceSats).toBe(0);
+    expect(e.utxoCount).toBe(0);
   });
 });
 

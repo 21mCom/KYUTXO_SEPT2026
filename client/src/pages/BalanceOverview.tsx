@@ -13,6 +13,7 @@ import {
 import { engineGetBalanceGroupSummaries, subscribeEngineReadiness } from "@/lib/engine/engine-client";
 import { evaluateEngineFreshness } from "@/lib/engine/engine-freshness";
 import { recomputeAddressStats } from "@/lib/data/address-stats";
+import { getSettings, updateSettings } from "@/lib/data/settings-crud";
 import { countUnresolvedPrevoutInputs, getUnresolvedSpendBreakdown, getMissingSourceTxids, getMissingSourceTxidDetails, buildMissingSourceJson, buildMissingSourceCsv, type MissingSourceDetail } from "@/lib/data/transaction-crud";
 import { transactionSyncService } from "@/lib/transaction-sync";
 import { runTxidBackfill } from "@/lib/txid-backfill";
@@ -421,6 +422,41 @@ export default function BalanceOverview() {
       if (thisId !== computationId.current) return;
       setAddressRecordCount(total);
       setAggProgress({ processed: 0, total });
+
+      // Check whether cached balances were computed with the old formula
+      // (received − spent). Version 2 = unspent-output sum (never negative).
+      // This must run before the engine fast path: engine group summaries read
+      // cachedBalanceSats directly, so they would serve stale totals if we
+      // didn't recompute first.
+      const settings = await getSettings('default');
+      const needsFormulaUpgrade = !settings?.balanceFormulaVersion || settings.balanceFormulaVersion < 2;
+      if (thisId !== computationId.current || signal.aborted) return;
+
+      if (needsFormulaUpgrade) {
+        setPhase("backfilling");
+        setBackfillProgress({ processed: 0, total });
+        const res = await recomputeAddressStats({
+          signal,
+          skipNotification: true,
+          origin: "user",
+          onProgress: (p) => {
+            if (thisId === computationId.current) {
+              setBackfillProgress({ processed: p.processed, total: p.total });
+            }
+          },
+        });
+        if (thisId !== computationId.current || signal.aborted || res.cancelled) return;
+
+        // Mark the formula as upgraded so subsequent loads skip this recompute.
+        try {
+          await updateSettings('default', { balanceFormulaVersion: 2 }, { skipNotification: true });
+        } catch {
+          // Best-effort; the recompute already ran so balances are correct.
+        }
+
+        setPhase("loading");
+        setAggProgress({ processed: 0, total });
+      }
 
       // Engine fast path: when the native read-engine mirror is fresh for the
       // 'records' scope, compute group summaries + grand totals in SQL. We only
