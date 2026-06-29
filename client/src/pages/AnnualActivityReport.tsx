@@ -10,6 +10,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { formatBTC } from "@/lib/bitcoin";
+import { sanitizePdfText } from "@/lib/pdfText";
 import { getParticipantsByAddresses, getParticipantsByTxids, getRecordsByIndexedFieldAnyOfFiltered } from "@/lib/dataFacade";
 import { getTransactionsByTxids, getParticipantsByPrevOutKeys } from "@/lib/data/transaction-crud";
 import { AddressLink } from "@/components/AddressLink";
@@ -862,7 +863,7 @@ export default function AnnualActivityReport() {
         cursorY += 6;
         doc.setFontSize(9);
         doc.setFont("courier", "normal");
-        const addrLines = doc.splitTextToSize(pa.address, pageWidth - 28) as string[];
+        const addrLines = doc.splitTextToSize(sanitizePdfText(pa.address), pageWidth - 28) as string[];
         doc.text(addrLines, 14, cursorY);
         cursorY += addrLines.length * 4;
         doc.setFont("helvetica", "normal");
@@ -931,7 +932,7 @@ export default function AnnualActivityReport() {
         autoTable(doc, {
           startY: cursorY + 4,
           head: [["Address", "Transactions"]],
-          body: entries.map((e) => [e.address, e.txCount.toLocaleString()]),
+          body: entries.map((e) => [sanitizePdfText(e.address), e.txCount.toLocaleString()]),
           styles: { fontSize: 8, cellPadding: 2 },
           headStyles: { fillColor: [41, 128, 185] },
           margin: { left: 14, right: 14 },
@@ -968,10 +969,10 @@ export default function AnnualActivityReport() {
           startY: cursorY + 2,
           head: [["Spending Txid", "Funding Txid", "Output", "Owning Address"]],
           body: reportData.unresolvedInputs.map((u) => [
-            u.spendingTxid,
-            u.prevTxid,
+            sanitizePdfText(u.spendingTxid),
+            sanitizePdfText(u.prevTxid),
             String(u.prevVout),
-            u.address || "(unknown)",
+            sanitizePdfText(u.address || "(unknown)"),
           ]),
           styles: { fontSize: 6, cellPadding: 1.5, overflow: "linebreak" },
           headStyles: { fillColor: [41, 128, 185] },

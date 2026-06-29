@@ -20,6 +20,7 @@ import {
   deduplicateDetails,
   formatBtc,
 } from "./fund-trail-engine";
+import { sanitizePdfText } from "../pdfText";
 
 // ---------------------------------------------------------------------------
 // Snapshot model
@@ -467,26 +468,6 @@ export interface FundTrailPdfOptions extends FundTrailExportOptions {
    * consistently. Off by default to keep the document scannable.
    */
   fullChains?: boolean;
-}
-
-/**
- * Replace any character outside the WinAnsi (Windows-1252) 8-bit range with a
- * safe ASCII substitute so jsPDF's Standard-14 Helvetica font never falls back
- * to a UTF-16BE byte-stream, which renders as garbled glyphs in most PDF viewers.
- *
- * Characters in U+0000–U+00FF are left intact because jsPDF maps them through
- * the WinAnsi code page, which covers all Latin-1 symbols including the em-dash
- * (U+2014 → WinAnsi 0x97) already used throughout this builder. Characters at
- * U+0100 and above — including the "↳" hop-indent marker (U+21B3) and any
- * non-Latin user-supplied names — are replaced with "?" so they stay renderable
- * without requiring an embedded Unicode font.
- */
-function sanitizePdfText(str: string): string {
-  let out = "";
-  for (let i = 0; i < str.length; i++) {
-    out += str.charCodeAt(i) <= 0xff ? str[i] : "?";
-  }
-  return out;
 }
 
 /**

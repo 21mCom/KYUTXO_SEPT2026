@@ -14,6 +14,7 @@ import {
 import { getParticipantsByTxid, bulkAddUtxoLineage, addCustodySegment } from './dataFacade';
 import { getActivityBus } from './activity-bus';
 import { format } from 'date-fns';
+import { sanitizePdfText } from './pdfText';
 
 // Generate a simple UUID for segment IDs
 function generateSegmentId(): string {
@@ -1043,7 +1044,7 @@ export async function downloadEvidenceBundlePdf(bundle: EvidenceBundle, filename
   doc.setTextColor(60);
   doc.setFontSize(9);
   y += 8;
-  doc.text(`Bundle ID: ${bundle.bundleId}`, margin + 5, y);
+  doc.text(sanitizePdfText(`Bundle ID: ${bundle.bundleId}`), margin + 5, y);
   y += 6;
   doc.text(`Generated: ${new Date(bundle.generatedAt).toLocaleString()}`, margin + 5, y);
   y += 6;
@@ -1095,7 +1096,7 @@ export async function downloadEvidenceBundlePdf(bundle: EvidenceBundle, filename
     doc.setFontSize(11);
     doc.setFont('helvetica', 'bold');
     doc.setTextColor(0);
-    doc.text(`Segment ${i + 1}: ${segment.segmentId}`, margin + 3, y + 2);
+    doc.text(sanitizePdfText(`Segment ${i + 1}: ${segment.segmentId}`), margin + 3, y + 2);
     y += 12;
     
     doc.setFontSize(9);
@@ -1121,13 +1122,13 @@ export async function downloadEvidenceBundlePdf(bundle: EvidenceBundle, filename
       const originAddress = segment.origin.address.length > 40 
         ? segment.origin.address.slice(0, 20) + '...' + segment.origin.address.slice(-10)
         : segment.origin.address;
-      doc.text(`  Address: ${originAddress}`, margin, y);
+      doc.text(sanitizePdfText(`  Address: ${originAddress}`), margin, y);
       y += 5;
       
       const originTxid = segment.origin.txid.length > 40
         ? segment.origin.txid.slice(0, 20) + '...' + segment.origin.txid.slice(-10)
         : segment.origin.txid;
-      doc.text(`  TXID: ${originTxid}`, margin, y);
+      doc.text(sanitizePdfText(`  TXID: ${originTxid}`), margin, y);
       y += 5;
       
       doc.text(`  Date: ${new Date(segment.origin.date).toLocaleDateString()}`, margin, y);
@@ -1146,7 +1147,7 @@ export async function downloadEvidenceBundlePdf(bundle: EvidenceBundle, filename
         const currentAddress = segment.current.address.length > 40 
           ? segment.current.address.slice(0, 20) + '...' + segment.current.address.slice(-10)
           : segment.current.address;
-        doc.text(`  Address: ${currentAddress}`, margin, y);
+        doc.text(sanitizePdfText(`  Address: ${currentAddress}`), margin, y);
         y += 5;
       }
       
@@ -1169,7 +1170,7 @@ export async function downloadEvidenceBundlePdf(bundle: EvidenceBundle, filename
         const txid = link.txid.length > 40 
           ? link.txid.slice(0, 16) + '...'
           : link.txid;
-        doc.text(`  ${j + 1}. ${txid} (${link.confidenceLevel})`, margin, y);
+        doc.text(sanitizePdfText(`  ${j + 1}. ${txid} (${link.confidenceLevel})`), margin, y);
         y += 5;
       }
       
