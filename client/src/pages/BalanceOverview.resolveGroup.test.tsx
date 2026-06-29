@@ -110,6 +110,7 @@ vi.mock("@/lib/engine/engine-freshness", () => ({
 
 vi.mock("@/lib/data/address-stats", () => ({
   recomputeAddressStats: vi.fn(() => Promise.resolve({ cancelled: false })),
+  countHeuristicMatchedAddresses: vi.fn(() => Promise.resolve(0)),
 }));
 
 // Two pending records, BOTH in GROUP_NAME. The group resolve must scope to the

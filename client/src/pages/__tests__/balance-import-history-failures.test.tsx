@@ -76,6 +76,7 @@ vi.mock("@/lib/data/record-crud", () => ({
 
 vi.mock("@/lib/data/address-stats", () => ({
   recomputeAddressStats: vi.fn(async () => ({ cancelled: false })),
+  countHeuristicMatchedAddresses: vi.fn(() => Promise.resolve(0)),
 }));
 
 // The resolve+recompute pass must NEVER run on an early-exit branch — the import

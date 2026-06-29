@@ -244,6 +244,21 @@ const ROW_YIELD_INTERVAL = 50;
  * Outputs whose transaction has no known block time (unconfirmed/missing) are
  * ignored. The returned `balanceSats` is always >= 0 (a sum of output amounts
  * can never be negative).
+ *
+ * HEURISTIC-MODE LIMITATION (coinjoin / batch transactions):
+ * The FIFO same-amount pairing is only a guess. It is correct for ordinary
+ * wallet activity, but it can mis-pair when a single address has MULTIPLE
+ * outputs of the SAME value — exactly the shape coinjoins and batched payouts
+ * produce. In that case any same-value later input is paired against the
+ * earliest unmatched output regardless of which output was truly spent, so an
+ * output that is actually still unspent can be marked spent (and vice-versa).
+ * The result is an inflated or deflated UTXO count and balance for that address.
+ * This branch only runs for addresses synced BEFORE prevout data was collected;
+ * the exact branch above (and the native read-engine's prevout anti-join) are
+ * not affected. Re-syncing such an address collects prevout data and promotes it
+ * to exact mode, which is the correct fix. `countHeuristicMatchedAddresses`
+ * counts how many addresses are still on this fallback so the Balance page can
+ * nudge the user to re-sync them.
  */
 function computeUtxoStatsForAddress(
   outputs: TransactionParticipant[],
@@ -317,6 +332,48 @@ export function computeUtxoCountForAddress(
   blockTimeOf: (txid: string) => number,
 ): number {
   return computeUtxoStatsForAddress(outputs, inputs, blockTimeOf).count;
+}
+
+/**
+ * Count tracked addresses whose UTXO stats are still computed with the FIFO
+ * heuristic rather than exact prevout matching. An address is "heuristic" when
+ * it has spent (has input participants attributed to it) but NONE of those
+ * inputs carry prevout data (`prevTxid`/`prevVout`) — the exact condition under
+ * which `computeUtxoStatsForAddress` falls back to same-amount FIFO pairing,
+ * which can mis-pair coinjoin/batch outputs and over- or under-state a balance.
+ *
+ * Receive-only addresses (no spends) are never counted: with no inputs there is
+ * nothing to mis-pair. Blank-address inputs (unresolved spends, surfaced by the
+ * separate "unattributed spends" warning) are ignored here.
+ *
+ * Pure local read over the `input`-role participant rows; never touches the
+ * network. Streams a single cursor and holds only one boolean per distinct
+ * spent address, so memory stays bounded by the number of spent addresses.
+ */
+export async function countHeuristicMatchedAddresses(signal?: AbortSignal): Promise<number> {
+  // address -> whether ANY of its inputs carried prevout data so far.
+  const hasPrevoutByAddress = new Map<string, boolean>();
+  await db.transactionParticipants
+    .where('role').equals('input')
+    .each((p) => {
+      const addr = p.address?.trim();
+      if (!addr) return;
+      const thisHasPrevout = p.prevTxid !== undefined && p.prevVout !== undefined;
+      const prior = hasPrevoutByAddress.get(addr);
+      if (prior === undefined) {
+        hasPrevoutByAddress.set(addr, thisHasPrevout);
+      } else if (thisHasPrevout && !prior) {
+        hasPrevoutByAddress.set(addr, true);
+      }
+    });
+
+  if (isAborted(signal)) return 0;
+
+  let count = 0;
+  hasPrevoutByAddress.forEach((hasPrevout) => {
+    if (!hasPrevout) count += 1;
+  });
+  return count;
 }
 
 async function loadBlockTimes(txids: string[]): Promise<Map<string, number>> {

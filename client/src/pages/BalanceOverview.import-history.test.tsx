@@ -56,6 +56,7 @@ vi.mock("@/lib/engine/engine-freshness", () => ({
 }));
 vi.mock("@/lib/data/address-stats", () => ({
   recomputeAddressStats: vi.fn().mockResolvedValue({ cancelled: false }),
+  countHeuristicMatchedAddresses: vi.fn(() => Promise.resolve(0)),
 }));
 
 // ── The collaborators handleImportMissingHistory actually drives ────────────

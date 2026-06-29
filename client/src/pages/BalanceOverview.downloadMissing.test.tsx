@@ -92,6 +92,7 @@ vi.mock("@/lib/engine/engine-freshness", () => ({
 
 vi.mock("@/lib/data/address-stats", () => ({
   recomputeAddressStats: vi.fn(() => Promise.resolve({ cancelled: false })),
+  countHeuristicMatchedAddresses: vi.fn(() => Promise.resolve(0)),
 }));
 
 vi.mock("@/lib/data/record-crud", () => ({

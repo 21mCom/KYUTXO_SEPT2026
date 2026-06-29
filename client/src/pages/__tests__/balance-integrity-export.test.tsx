@@ -66,6 +66,7 @@ vi.mock("@/lib/data/address-stats", () => ({
     },
   ),
   recomputeAddressStats: vi.fn(async () => undefined),
+  countHeuristicMatchedAddresses: vi.fn(() => Promise.resolve(0)),
 }));
 
 // Wrap the real exportStaleReport so a test can hold it open and observe the

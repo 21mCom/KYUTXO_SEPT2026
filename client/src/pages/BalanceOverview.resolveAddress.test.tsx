@@ -106,6 +106,7 @@ vi.mock("@/lib/engine/engine-freshness", () => ({
 
 vi.mock("@/lib/data/address-stats", () => ({
   recomputeAddressStats: vi.fn(() => Promise.resolve({ cancelled: false })),
+  countHeuristicMatchedAddresses: vi.fn(() => Promise.resolve(0)),
 }));
 
 // Two addresses in the group. PENDING_RECORD_ID has pending spends; the other

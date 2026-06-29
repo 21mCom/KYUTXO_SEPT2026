@@ -12,7 +12,7 @@ import {
 } from "@/lib/data/record-crud";
 import { engineGetBalanceGroupSummaries, subscribeEngineReadiness } from "@/lib/engine/engine-client";
 import { evaluateEngineFreshness } from "@/lib/engine/engine-freshness";
-import { recomputeAddressStats } from "@/lib/data/address-stats";
+import { recomputeAddressStats, countHeuristicMatchedAddresses } from "@/lib/data/address-stats";
 import { getSettings, updateSettings } from "@/lib/data/settings-crud";
 import { countUnresolvedPrevoutInputs, getUnresolvedSpendBreakdown, getMissingSourceTxids, getMissingSourceTxidDetails, buildMissingSourceJson, buildMissingSourceCsv, type MissingSourceDetail } from "@/lib/data/transaction-crud";
 import { transactionSyncService } from "@/lib/transaction-sync";
@@ -319,6 +319,11 @@ export default function BalanceOverview() {
   // Spend health: unresolved prevout inputs (blank-address inputs with prevTxid/prevVout).
   const [unresolvedPrevouts, setUnresolvedPrevouts] = useState<number | null>(null);
   const [spendWarningDismissed, setSpendWarningDismissed] = useState(false);
+  // Addresses still computed with the FIFO heuristic (synced before prevout data
+  // was collected). Their balances can be wrong for coinjoin/batch transactions;
+  // re-syncing them promotes each to exact prevout matching.
+  const [heuristicAddressCount, setHeuristicAddressCount] = useState<number | null>(null);
+  const [heuristicWarningDismissed, setHeuristicWarningDismissed] = useState(false);
   const [fixingPrevouts, setFixingPrevouts] = useState(false);
   // True while fetching + importing the missing source transactions behind
   // unattributable spends (the "Import missing history" banner action).
@@ -540,6 +545,19 @@ export default function BalanceOverview() {
       if (!cancelled) {
         setUnresolvedPrevouts(count);
         if (count === 0) setSpendWarningDismissed(false);
+      }
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [dbSignal]);
+
+  // Heuristic-mode health: count addresses whose stats still use FIFO matching
+  // (no prevout data). Pure local read; recomputed whenever the db changes.
+  useEffect(() => {
+    let cancelled = false;
+    countHeuristicMatchedAddresses().then((count) => {
+      if (!cancelled) {
+        setHeuristicAddressCount(count);
+        if (count === 0) setHeuristicWarningDismissed(false);
       }
     }).catch(() => {});
     return () => { cancelled = true; };
@@ -1179,6 +1197,11 @@ export default function BalanceOverview() {
     unresolvedPrevouts !== null &&
     unresolvedPrevouts > 0;
 
+  const showHeuristicWarning =
+    !heuristicWarningDismissed &&
+    heuristicAddressCount !== null &&
+    heuristicAddressCount > 0;
+
   return (
     <div className="flex flex-col h-full">
       <div className="flex-none p-4 pb-2 border-b">
@@ -1333,6 +1356,36 @@ export default function BalanceOverview() {
               onClick={() => setSpendWarningDismissed(true)}
               className="text-yellow-600/60 dark:text-yellow-400/60 hover:text-yellow-700 dark:hover:text-yellow-300 transition-colors"
               data-testid="button-dismiss-spend-warning"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {showHeuristicWarning && (
+        <div
+          className="flex-none flex items-start gap-3 px-4 py-3 border-b bg-yellow-50 dark:bg-yellow-950/30"
+          data-testid="banner-heuristic-warning"
+        >
+          <AlertTriangle className="h-4 w-4 text-yellow-600 dark:text-yellow-400 mt-0.5 flex-none" />
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-medium text-yellow-800 dark:text-yellow-200">
+              Some balances use estimated UTXO matching — they may be inaccurate
+            </p>
+            <p className="text-xs text-yellow-700/80 dark:text-yellow-300/70 mt-0.5">
+              {heuristicAddressCount!.toLocaleString()} address{heuristicAddressCount !== 1 ? "es" : ""} {heuristicAddressCount !== 1 ? "were" : "was"} synced
+              before exact spend data was collected, so their balances are guessed by matching
+              same-value amounts. This can be wrong for coinjoin or batch transactions. Re-sync
+              {heuristicAddressCount !== 1 ? " these addresses" : " this address"} from the Records
+              page to switch to exact matching.
+            </p>
+          </div>
+          <div className="flex items-center gap-2 flex-none flex-wrap justify-end">
+            <button
+              onClick={() => setHeuristicWarningDismissed(true)}
+              className="text-yellow-600/60 dark:text-yellow-400/60 hover:text-yellow-700 dark:hover:text-yellow-300 transition-colors"
+              data-testid="button-dismiss-heuristic-warning"
             >
               <X className="h-4 w-4" />
             </button>

@@ -74,6 +74,7 @@ vi.mock("@/lib/data/record-crud", () => ({
 
 vi.mock("@/lib/data/address-stats", () => ({
   recomputeAddressStats: vi.fn(async () => ({ cancelled: false })),
+  countHeuristicMatchedAddresses: vi.fn(() => Promise.resolve(0)),
 }));
 
 // The crux of assertion #2: the post-import resolve pass MUST run when the
