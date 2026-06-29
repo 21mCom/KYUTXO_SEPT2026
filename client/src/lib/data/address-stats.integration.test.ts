@@ -923,6 +923,62 @@ describe("recomputeAddressStats mid-run cancellation", () => {
 });
 
 describe("recomputeAddressStats not-synced reset path", () => {
+  it("leaves statsComputedAt undefined for a clean address without an addressSyncState entry", async () => {
+    // A genuinely never-synced address: no cached stats and no addressSyncState
+    // entry. A manual recompute (e.g. the Database Doctor "recompute" button)
+    // must NOT accidentally stamp statsComputedAt on it, which would make the UI
+    // report a "not synced" address as synced.
+    await testDb.records.add(
+      mkAddr({
+        id: 1,
+        inputString: "addr-clean-unsynced",
+      }),
+    );
+
+    const recompute = await recomputeAddressStats({ addresses: ["addr-clean-unsynced"] });
+    expect(recompute.cancelled).toBe(false);
+
+    const after = await testDb.records.get(1);
+    expect(after).toBeDefined();
+    // Still never-synced: no stats stamp and no cache fields appeared.
+    expect(after?.statsComputedAt).toBeUndefined();
+    expect(after).not.toHaveProperty("cachedBalanceSats");
+    expect(after).not.toHaveProperty("cachedTxCount");
+    expect(after).not.toHaveProperty("cachedLastActivityTime");
+    expect(after).not.toHaveProperty("cachedUtxoCount");
+  });
+
+  it("stamps statsComputedAt for a clean address WITH an addressSyncState entry even with zero txs", async () => {
+    // A never-cached address that has, however, been synced (it has an
+    // addressSyncState entry) but turned up zero transactions. A recompute must
+    // stamp statsComputedAt so the UI distinguishes a genuine zero balance from
+    // "not synced".
+    await testDb.records.add(
+      mkAddr({
+        id: 1,
+        inputString: "addr-clean-synced",
+      }),
+    );
+    await testDb.addressSyncState.add({
+      address: "addr-clean-synced",
+      recordId: 1,
+      lastSyncedAt: 1000,
+    } as unknown as AddressSyncState);
+
+    const recompute = await recomputeAddressStats({ addresses: ["addr-clean-synced"] });
+    expect(recompute.cancelled).toBe(false);
+    expect(recompute.updated).toBe(1);
+
+    const after = await testDb.records.get(1);
+    expect(after).toBeDefined();
+    // Synced-but-empty → genuine zero balance with a fresh stats stamp.
+    expect(after?.statsComputedAt).toBeTypeOf("number");
+    expect(after?.cachedBalanceSats).toBe(0);
+    expect(after?.cachedTxCount).toBe(0);
+    expect(after?.cachedLastActivityTime).toBe(0);
+    expect(after?.cachedUtxoCount).toBe(0);
+  });
+
   it("strips the cache fields when an address has no participants AND no sync state", async () => {
     // Stale cache values linger on a record that has neither fetched
     // transaction data nor an addressSyncState entry → it must reset to
