@@ -33,3 +33,14 @@ first `overflow-y:auto/scroll` parent); each has overflowY auto + scrollHeight >
 clientHeight + scrollTop moves; and scrolling a column to the bottom does NOT
 reintroduce page overflow. Re-run with sidebar collapsed (`button-sidebar-toggle`).
 Confirmed passing both states.
+
+**jsdom complement, NOT a substitute:** the named break vectors
+(min-h-0 / flex-1 / overflow-y-auto dropped, h-screen reintroduced) are all
+structural CSS-class changes, so a class-assertion render test (walk hop-card →
+nearest overflow-y scroll ancestor; expect exactly 2 columns each carrying those
+classes; assert no h-screen in the trail body) catches them in CI without pixels.
+Worth having as a fast tripwire, but jsdom computes NO layout — it cannot prove
+the page itself doesn't scroll or that a column actually overflows-then-scrolls.
+The browser recipe above stays the source of truth for real overflow and is the
+deliverable when a task asks to *measure* it; pair the two, don't swap one for
+the other.
