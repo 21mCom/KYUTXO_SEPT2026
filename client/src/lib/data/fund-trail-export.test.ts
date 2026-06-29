@@ -1881,6 +1881,51 @@ describe("buildMultiHopFundTrailSnapshot intermediary path", () => {
     expect(text).toContain("via:");
     expect(text).toContain("bc1qmid1 > bc1qmid2");
   });
+
+  it("never emits UTF-16BE runs for a non-Latin multi-hop group label", async () => {
+    // The multi-hop snapshot path sets node.hopDepth, exercising the distinct
+    // "Hop N:" prefix branch in renderSection plus the inline "via:" path line —
+    // a rendering surface not covered by the buildFundTrailSnapshot tests. A
+    // non-Latin hop group label flowing through that branch must stay within the
+    // WinAnsi single-byte path (no UTF-16BE runs, which render as garbled text).
+    const result: MultiHopTrailResult = {
+      sources: [
+        // Hop-2 entity with a non-Latin label, reached via unknown intermediaries
+        // so both the "Hop N:" prefix and the "via:" path line are rendered.
+        hopNode({
+          groupLabel: "投資 (Wei)", // non-Latin chars outside WinAnsi
+          hopDepth: 2,
+          totalSats: 40_000_000,
+          details: [
+            detail({ address: "bc1qdeep", txid: "src2", amount: 40_000_000 }),
+          ],
+          pathAddresses: ["bc1qmid1", "bc1qmid2"],
+        }),
+      ],
+      destinations: [],
+      caps: [],
+    };
+    const snapshot = buildMultiHopFundTrailSnapshot(
+      "Center",
+      "walletName",
+      result,
+    );
+
+    const blob = await buildFundTrailPdf(snapshot, { detailed: true });
+
+    // No UTF-16BE runs anywhere in the multi-hop document.
+    expect(await pdfHasUtf16beRuns(blob)).toBe(false);
+
+    const text = await extractPdfText(blob);
+    // The "Hop N:" prefix and "via:" path line still render their ASCII parts.
+    expect(text).toContain("Hop 2:");
+    expect(text).toContain("via:");
+    expect(text).toContain("bc1qmid1 > bc1qmid2");
+    // The non-Latin label's ASCII tail survives; the non-Latin chars are
+    // replaced with the safe "?" substitute.
+    expect(text).toContain("(Wei)");
+    expect(text).toContain("?");
+  });
 });
 
 describe("summarizeIntermediaryChain", () => {
