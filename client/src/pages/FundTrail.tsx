@@ -24,6 +24,8 @@ import {
   FileSpreadsheet,
   MapPin,
   Ban,
+  Maximize2,
+  Minimize2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -1049,6 +1051,18 @@ export default function FundTrail() {
     setAddressError(null);
   }, []);
 
+  // --- Full-screen overlay ---
+  const [isFullScreen, setIsFullScreen] = useState(false);
+
+  useEffect(() => {
+    if (!isFullScreen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setIsFullScreen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [isFullScreen]);
+
   // --- Group controls ---
   const [dimension, setDimension] = useState<GroupingDimension>("walletName");
   const [selectedGroup, setSelectedGroup] = useState<string>("");
@@ -1260,6 +1274,14 @@ export default function FundTrail() {
   // partial (first trace) should read as live progress, not a stale view.
   const dimMultiHop = isMultiHopTracing && !!multiHopResult;
 
+  // Auto-close full-screen if the overlay would have nothing to show (user
+  // switched to single-hop or cleared the active selection).
+  useEffect(() => {
+    if (isFullScreen && (!isMultiHop || !multiHopDisplay)) {
+      setIsFullScreen(false);
+    }
+  }, [isFullScreen, isMultiHop, multiHopDisplay]);
+
   // Label and display info for the center node
   const centerLabel =
     sourceMode === "address" ? trimmedAddress : selectedGroup;
@@ -1272,11 +1294,11 @@ export default function FundTrail() {
       : null;
 
   return (
-    <div className="flex flex-col h-full overflow-auto">
+    <div className="flex flex-col h-full overflow-hidden">
       {/* Header */}
-      <div className="border-b border-border px-6 py-4">
-        <h1 className="text-xl font-semibold">Fund Trail</h1>
-        <p className="text-sm text-muted-foreground mt-1">
+      <div className="border-b border-border px-6 py-3">
+        <h1 className="text-lg font-semibold">Fund Trail</h1>
+        <p className="text-xs text-muted-foreground mt-0.5">
           Trace where coins came from and went. Set source and destination hop
           depth to automatically surface known entities through unknown
           intermediaries — or keep depth at 1 and expand hops manually.
@@ -1515,6 +1537,21 @@ export default function FundTrail() {
           </div>
         )}
 
+        {isMultiHop && multiHopDisplay && (
+          <div className="flex flex-col gap-1 self-end">
+            <Button
+              size="default"
+              variant="outline"
+              onClick={() => setIsFullScreen(true)}
+              data-testid="fund-trail-expand"
+              title="Expand to full screen (or press Esc to exit)"
+            >
+              <Maximize2 className="h-4 w-4 mr-1.5" />
+              Expand
+            </Button>
+          </div>
+        )}
+
         {isRecomputing && !isMultiHop ? (
           <span
             className="flex items-center gap-2 text-xs text-muted-foreground pb-2.5"
@@ -1596,8 +1633,8 @@ export default function FundTrail() {
         <div
           className={
             isRecomputing
-              ? "flex flex-col flex-1 opacity-60 transition-opacity"
-              : "flex flex-col flex-1 transition-opacity"
+              ? "flex flex-col flex-1 min-h-0 opacity-60 transition-opacity"
+              : "flex flex-col flex-1 min-h-0 transition-opacity"
           }
           aria-busy={isRecomputing}
           data-testid="fund-trail-body"
@@ -1610,6 +1647,134 @@ export default function FundTrail() {
             centerHop={centerHop ?? { sources: [], destinations: [] }}
             dateRange={dateRange}
           />
+        </div>
+      )}
+
+      {/* Full-screen overlay */}
+      {isFullScreen && isMultiHop && multiHopDisplay && (
+        <div
+          className="fixed inset-0 z-[9999] flex flex-col bg-background"
+          data-testid="fund-trail-fullscreen"
+        >
+          {/* Slim toolbar */}
+          <div className="shrink-0 border-b border-border bg-background flex items-center gap-3 px-4 py-2 flex-wrap">
+            <span className="text-sm font-medium text-foreground mr-1">
+              Fund Trail
+            </span>
+
+            <Select
+              value={fundTrailLayout}
+              onValueChange={v => updateFundTrailLayout(v as FundTrailLayout)}
+            >
+              <SelectTrigger
+                className="w-52"
+                data-testid="fund-trail-fullscreen-layout-select"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent className="z-[10000]">
+                {FUND_TRAIL_LAYOUT_OPTIONS.map(opt => (
+                  <SelectItem key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+
+            <div className="flex items-center gap-1.5">
+              <span className="text-xs text-muted-foreground">Sources</span>
+              <Select
+                value={String(backwardHops)}
+                onValueChange={v => setBackwardHops(Number(v))}
+              >
+                <SelectTrigger className="w-16" data-testid="fund-trail-fullscreen-backward-hops">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className="z-[10000]">
+                  {Array.from({ length: MAX_HOP_DEPTH }, (_, i) => i + 1).map(n => (
+                    <SelectItem key={n} value={String(n)}>{n}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="flex items-center gap-1.5">
+              <span className="text-xs text-muted-foreground">Destinations</span>
+              <Select
+                value={String(forwardHops)}
+                onValueChange={v => setForwardHops(Number(v))}
+              >
+                <SelectTrigger className="w-16" data-testid="fund-trail-fullscreen-forward-hops">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className="z-[10000]">
+                  {Array.from({ length: MAX_HOP_DEPTH }, (_, i) => i + 1).map(n => (
+                    <SelectItem key={n} value={String(n)}>{n}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            {hasDateFilter ? (
+              <span className="text-xs text-muted-foreground" data-testid="fund-trail-fullscreen-date-status">
+                {startDate && endDate
+                  ? `${startDate} – ${endDate}`
+                  : startDate
+                    ? `From ${startDate}`
+                    : `To ${endDate}`}
+              </span>
+            ) : (
+              <span className="text-xs text-muted-foreground italic" data-testid="fund-trail-fullscreen-date-status">
+                All time
+              </span>
+            )}
+
+            {isMultiHopTracing && (
+              <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                Computing…
+              </span>
+            )}
+
+            <div className="ml-auto">
+              <Button
+                size="default"
+                variant="outline"
+                onClick={() => setIsFullScreen(false)}
+                data-testid="fund-trail-exit-fullscreen"
+              >
+                <Minimize2 className="h-4 w-4 mr-1.5" />
+                Exit full screen
+              </Button>
+            </div>
+          </div>
+
+          {/* Layout content */}
+          <div className="flex-1 min-h-0 overflow-hidden">
+            {fundTrailLayout === "classic" ? (
+              <div className="flex flex-col h-full overflow-auto">
+                <MultiHopTrailLayout
+                  centerLabel={centerLabel}
+                  centerDisplayMode={sourceMode}
+                  centerRecordLabel={centerRecordLabel}
+                  dimension={dimension}
+                  multiHopResult={multiHopDisplay}
+                  dateRange={dateRange}
+                  backwardHops={backwardHops}
+                  forwardHops={forwardHops}
+                />
+              </div>
+            ) : (
+              <MultiHopVariantLayout
+                layout={fundTrailLayout}
+                data={buildFundTrailViewData(
+                  multiHopDisplay,
+                  centerLabel,
+                  dimension,
+                )}
+              />
+            )}
+          </div>
         </div>
       )}
     </div>
