@@ -76,6 +76,12 @@ import {
   flowPath,
 } from "@/lib/data/fund-trail-export";
 import { AddressLink } from "@/components/AddressLink";
+import { MultiHopVariantLayout } from "@/components/fund-trail/MultiHopVariantLayout";
+import {
+  buildFundTrailViewData,
+  FUND_TRAIL_LAYOUT_OPTIONS,
+  type FundTrailLayout,
+} from "@/components/fund-trail/view-data";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -1001,6 +1007,8 @@ export default function FundTrail() {
   // --- Hop depth controls (1 = same as single-hop; >1 = auto multi-hop) ---
   const [backwardHops, setBackwardHops] = useState(1);
   const [forwardHops, setForwardHops] = useState(1);
+  const [fundTrailLayout, setFundTrailLayout] =
+    useState<FundTrailLayout>("classic");
   const isMultiHop = backwardHops > 1 || forwardHops > 1;
 
   // Live progress for the multi-hop trace: which hop depth is currently being
@@ -1483,6 +1491,32 @@ export default function FundTrail() {
           </Select>
         </div>
 
+        {isMultiHop && (
+          <div className="flex flex-col gap-1">
+            <label className="text-xs text-muted-foreground font-medium">
+              Layout
+            </label>
+            <Select
+              value={fundTrailLayout}
+              onValueChange={v => setFundTrailLayout(v as FundTrailLayout)}
+            >
+              <SelectTrigger
+                className="w-52"
+                data-testid="fund-trail-layout-select"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {FUND_TRAIL_LAYOUT_OPTIONS.map(opt => (
+                  <SelectItem key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        )}
+
         {isRecomputing && !isMultiHop ? (
           <span
             className="flex items-center gap-2 text-xs text-muted-foreground pb-2.5"
@@ -1524,16 +1558,29 @@ export default function FundTrail() {
                   : "flex flex-col flex-1 min-h-0 transition-opacity"
               }
             >
-              <MultiHopTrailLayout
-                centerLabel={centerLabel}
-                centerDisplayMode={sourceMode}
-                centerRecordLabel={centerRecordLabel}
-                dimension={dimension}
-                multiHopResult={multiHopDisplay}
-                dateRange={dateRange}
-                backwardHops={backwardHops}
-                forwardHops={forwardHops}
-              />
+              {fundTrailLayout === "classic" ? (
+                <MultiHopTrailLayout
+                  centerLabel={centerLabel}
+                  centerDisplayMode={sourceMode}
+                  centerRecordLabel={centerRecordLabel}
+                  dimension={dimension}
+                  multiHopResult={multiHopDisplay}
+                  dateRange={dateRange}
+                  backwardHops={backwardHops}
+                  forwardHops={forwardHops}
+                />
+              ) : (
+                <div className="flex-1 min-h-0 overflow-hidden">
+                  <MultiHopVariantLayout
+                    layout={fundTrailLayout}
+                    data={buildFundTrailViewData(
+                      multiHopDisplay,
+                      centerLabel,
+                      dimension,
+                    )}
+                  />
+                </div>
+              )}
             </div>
           ) : (
             <div className="flex flex-col items-center justify-center flex-1 gap-3 text-muted-foreground">

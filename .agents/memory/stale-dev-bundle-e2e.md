@@ -24,3 +24,11 @@ application" workflow) to force a fresh build, then re-run the e2e before
 spending time hunting a non-existent bug. Each testing-skill run uses a fresh
 browser context, so a fresh context alone does NOT guarantee a fresh bundle —
 the dev server itself must rebuild.
+
+**Same trap, different tool — the `typecheck` workflow:** the registered
+`typecheck` validation step (`npm run check` = `tsc`) can report a phantom
+failure citing code you ALREADY deleted (e.g. errors on a just-removed block)
+right after an edit, due to a stale incremental `tsconfig.tsbuildinfo` /
+snapshot. Ground truth = a fresh local run: `rm -f tsconfig.tsbuildinfo && npx
+tsc`. If that's EXIT 0 and the file content confirms the fix, the workflow log
+is stale — re-trigger it rather than "fixing" already-correct code.
