@@ -43,3 +43,38 @@ export function consumePendingSyncAddresses(): string[] | null {
 export function hasPendingSyncAddresses(): boolean {
   return pendingAddresses !== null && pendingAddresses.length > 0;
 }
+
+/** Result of splitting flagged addresses into those with/without a DB record. */
+export interface TargetedAddressPartition {
+  /** Lowercased, de-duplicated addresses requested (drops blanks). */
+  requested: string[];
+  /** Original-casing addresses that had no matching address record. */
+  skipped: string[];
+}
+
+/**
+ * Split a set of flagged owning addresses into the ones that matched an address
+ * record and the ones that did not. De-duplicates case-insensitively while
+ * preserving each address's first-seen original casing for display. `matchedLower`
+ * is the set of `inputStringLower` values found in the database.
+ *
+ * Used by the targeted sync to tell the auditor which funding addresses were
+ * skipped because they were never imported.
+ */
+export function partitionTargetedAddresses(
+  addresses: string[],
+  matchedLower: Set<string>,
+): TargetedAddressPartition {
+  const originalByLower = new Map<string, string>();
+  for (const raw of addresses) {
+    const trimmed = raw.trim();
+    if (!trimmed) continue;
+    const key = trimmed.toLowerCase();
+    if (!originalByLower.has(key)) originalByLower.set(key, trimmed);
+  }
+  const requested = Array.from(originalByLower.keys());
+  const skipped = requested
+    .filter((key) => !matchedLower.has(key))
+    .map((key) => originalByLower.get(key) ?? key);
+  return { requested, skipped };
+}

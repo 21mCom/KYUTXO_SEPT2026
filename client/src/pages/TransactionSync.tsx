@@ -38,7 +38,7 @@ import { transactionSyncService, type SyncProgress, type SyncResult, type SyncOp
 import { getActivityBus } from "@/lib/activity-bus";
 import type { Record as DbRecord, PausedSyncState, SkippedAddress, AddressBlacklist, SyncProtectionSettings } from "@/lib/database";
 import { DEFAULT_SYNC_PROTECTION, db } from "@/lib/database";
-import { consumePendingSyncAddresses } from "@/lib/sync/pendingSyncTargets";
+import { consumePendingSyncAddresses, partitionTargetedAddresses } from "@/lib/sync/pendingSyncTargets";
 import { useNodeSettings } from "@/hooks/use-node-settings";
 import { getProviderDisplayName, getProviderPrivacyInfo } from "@/lib/blockchain-api";
 import { Link } from "wouter";
@@ -106,6 +106,9 @@ export default function TransactionSync() {
   // unresolved funding-transaction list). When present, we sync just these
   // owning addresses so the report's unresolved count can drop after rerun.
   const [targetedAddresses, setTargetedAddresses] = useState<string[] | null>(null);
+  // Flagged owning addresses from the report that had no matching address record
+  // and so could not be synced — surfaced to the auditor with a clear next step.
+  const [skippedTargetAddresses, setSkippedTargetAddresses] = useState<string[]>([]);
   const targetedConsumedRef = useRef(false);
 
   // Build current source selection from state
@@ -317,13 +320,32 @@ export default function TransactionSync() {
       .map((r) => r.id)
       .filter((id): id is number => typeof id === 'number');
 
+    // Determine which flagged owning addresses had no matching address record.
+    // These can't be synced because they were never imported — surface them so
+    // the auditor knows which funding sources to import first.
+    const matchedLower = new Set(
+      matched
+        .map((r) => r.inputStringLower)
+        .filter((s): s is string => typeof s === 'string'),
+    );
+    const { requested, skipped } = partitionTargetedAddresses(addresses, matchedLower);
+    setSkippedTargetAddresses(skipped);
+
     if (recordIds.length === 0) {
       toast({
         title: "No Matching Addresses",
-        description: "None of the flagged owning addresses were found in your database.",
+        description: `None of the ${requested.length} flagged owning address${requested.length !== 1 ? 'es' : ''} were found in your database. Import them first, then sync.`,
         variant: "destructive",
       });
       return 0;
+    }
+
+    if (skipped.length > 0) {
+      toast({
+        title: "Some Addresses Skipped",
+        description: `Syncing ${recordIds.length} of ${requested.length} flagged addresses. ${skipped.length} were not found in your database and were skipped — see details below.`,
+        variant: "destructive",
+      });
     }
 
     const options: SyncOptions = {
@@ -613,10 +635,58 @@ export default function TransactionSync() {
             <RefreshCw className="h-4 w-4" />
             <AlertTitle>Syncing funding transactions from report</AlertTitle>
             <AlertDescription>
-              Syncing {targetedAddresses.length} owning address
+              Syncing {targetedAddresses.length - skippedTargetAddresses.length} of{" "}
+              {targetedAddresses.length} owning address
               {targetedAddresses.length !== 1 ? "es" : ""} flagged by the Annual Activity Report
               as unresolved funding sources. Once complete, regenerate the report to update the
               unresolved count.
+            </AlertDescription>
+          </Alert>
+        )}
+
+        {/* Flagged addresses that couldn't be synced because they were never imported */}
+        {skippedTargetAddresses.length > 0 && (
+          <Alert variant="destructive" data-testid="alert-skipped-targeted">
+            <AlertCircle className="h-4 w-4" />
+            <AlertTitle>
+              {skippedTargetAddresses.length} flagged address
+              {skippedTargetAddresses.length !== 1 ? "es" : ""} skipped — not in your database
+            </AlertTitle>
+            <AlertDescription>
+              <p className="mb-2">
+                These funding addresses were flagged by the report but have no matching address
+                record, so they couldn't be synced. Import them first, then run this sync again
+                to resolve the remaining spend gaps.
+              </p>
+              <ScrollArea className="max-h-40 rounded-md border p-2">
+                <ul className="space-y-1">
+                  {skippedTargetAddresses.map((addr) => (
+                    <li
+                      key={addr}
+                      className="font-mono text-xs break-all"
+                      title={addr}
+                      data-testid={`text-skipped-address-${addr}`}
+                    >
+                      {addr}
+                    </li>
+                  ))}
+                </ul>
+              </ScrollArea>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <Link href="/import">
+                  <Button variant="outline" size="sm" data-testid="button-import-skipped">
+                    Import addresses
+                  </Button>
+                </Link>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setSkippedTargetAddresses([])}
+                  data-testid="button-dismiss-skipped-targeted"
+                >
+                  Dismiss
+                </Button>
+              </div>
             </AlertDescription>
           </Alert>
         )}
