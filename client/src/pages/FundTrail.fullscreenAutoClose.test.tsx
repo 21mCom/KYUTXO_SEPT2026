@@ -18,6 +18,7 @@ import {
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { TrailHop } from "@/lib/data/fund-trail-engine";
+import { computeMultiHopKnown } from "@/lib/data/fund-trail-engine";
 import {
   makeMultiHopFixture,
   FIXTURE_CENTER_LABEL,
@@ -175,6 +176,42 @@ describe("FundTrail full-screen auto-close", () => {
     fireEvent.change(screen.getByTestId("fund-trail-backward-hops"), {
       target: { value: "2" },
     });
+    fireEvent.change(screen.getByTestId("fund-trail-forward-hops"), {
+      target: { value: "3" },
+    });
+
+    await waitFor(() =>
+      expect(screen.getByTestId("fund-trail-expand")).toBeTruthy(),
+    );
+    expect(screen.queryByTestId("fund-trail-fullscreen")).toBeNull();
+  });
+
+  it("resets isFullScreen when the multi-hop trail empties out mid-session", async () => {
+    await enterFullScreen();
+
+    // The trail result empties out while we stay in multi-hop mode: the
+    // underlying recompute now yields no trail (null) and there is no
+    // in-progress snapshot, so multiHopDisplay becomes null even though
+    // isMultiHop is still true. The overlay must NOT get stuck blank.
+    vi.mocked(computeMultiHopKnown).mockResolvedValue(
+      null as unknown as Awaited<ReturnType<typeof computeMultiHopKnown>>,
+    );
+
+    // Trigger a recompute that keeps us in multi-hop mode (backward stays 2).
+    fireEvent.change(screen.getByTestId("fund-trail-forward-hops"), {
+      target: { value: "2" },
+    });
+
+    // The full-screen overlay must auto-close rather than getting stuck blank.
+    await waitFor(() =>
+      expect(screen.queryByTestId("fund-trail-fullscreen")).toBeNull(),
+    );
+
+    // Restore a real trail in multi-hop mode. The render guard alone would
+    // re-show a still-open overlay, so this proves the auto-close effect
+    // actually reset the isFullScreen *state*: the overlay must NOT reappear
+    // until the user explicitly expands again (Expand is back in the toolbar).
+    vi.mocked(computeMultiHopKnown).mockResolvedValue(makeMultiHopFixture());
     fireEvent.change(screen.getByTestId("fund-trail-forward-hops"), {
       target: { value: "3" },
     });
