@@ -30,6 +30,7 @@ const SAMPLE: ReportData = {
   unresolvedReceivedFromCount: 4,
   unresolvedSentToCount: 0,
   noDataAddresses: ["bc1qaddr2"],
+  unresolvedInputAmountCount: 0,
 };
 
 describe("buildAnnualActivityCsv", () => {
@@ -90,6 +91,7 @@ describe("buildAnnualActivityCsv", () => {
       unresolvedReceivedFromCount: 0,
       unresolvedSentToCount: 0,
       noDataAddresses: [],
+      unresolvedInputAmountCount: 0,
     };
     const csv = buildAnnualActivityCsv(empty, [], GENERATED_AT);
     expect(csv).toContain("No synced transaction data for any of the provided addresses.");

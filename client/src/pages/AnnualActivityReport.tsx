@@ -41,6 +41,12 @@ export interface ReportData {
   unresolvedReceivedFromCount: number;
   unresolvedSentToCount: number;
   noDataAddresses: string[];
+  /**
+   * Count of spent-input prevouts that remained unresolved (amount 0) after the
+   * Step 6 backfill — their funding transaction was never synced, so their value
+   * could not be looked up. When > 0, spent totals may be understated.
+   */
+  unresolvedInputAmountCount: number;
 }
 
 function buildYearRowsFromMaps(
@@ -200,6 +206,7 @@ export function computeAnnualActivity(params: {
   spendingTxids: Set<string>;
   spentOutputAmounts: Map<string, { amount: number; address: string }>;
   outputAmountLookup: Map<string, number>;
+  unresolvedInputAmountCount?: number;
 }): ReportData {
   const {
     addresses,
@@ -209,6 +216,7 @@ export function computeAnnualActivity(params: {
     spendingTxids,
     spentOutputAmounts,
     outputAmountLookup,
+    unresolvedInputAmountCount = 0,
   } = params;
   const addressSet = new Set(addresses);
 
@@ -408,6 +416,7 @@ export function computeAnnualActivity(params: {
     unresolvedReceivedFromCount: unresolvedReceivedFromTxids.size,
     unresolvedSentToCount: unresolvedSentToTxids.size,
     noDataAddresses,
+    unresolvedInputAmountCount,
   };
 }
 
@@ -940,6 +949,14 @@ export default function AnnualActivityReport() {
         }
       }
 
+      // Count prevouts that STILL couldn't be resolved after the backfill — their
+      // funding tx was never synced, so their input amount stays 0 and the spent
+      // total silently under-counts. Surfaced to the user as a non-blocking notice.
+      let unresolvedInputAmountCount = 0;
+      for (const key of unresolvedPrevOuts) {
+        if (!outputAmountLookup.has(key)) unresolvedInputAmountCount += 1;
+      }
+
       // ── Steps 7-9: aggregate received/spent + counterparties (pure) ──────
       const reportData = computeAnnualActivity({
         addresses,
@@ -949,6 +966,7 @@ export default function AnnualActivityReport() {
         spendingTxids,
         spentOutputAmounts,
         outputAmountLookup,
+        unresolvedInputAmountCount,
       });
 
       setReportData(reportData);
@@ -1060,6 +1078,27 @@ export default function AnnualActivityReport() {
                       </li>
                     ))}
                   </ul>
+                </div>
+              </div>
+            )}
+
+            {reportData.unresolvedInputAmountCount > 0 && (
+              <div
+                className="flex items-start gap-2 rounded-md border border-amber-500/50 bg-amber-500/10 p-3 text-sm text-amber-700 dark:text-amber-400"
+                data-testid="warning-unresolved-input-amounts"
+              >
+                <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
+                <div>
+                  <p className="font-medium mb-1">
+                    {reportData.unresolvedInputAmountCount} input amount
+                    {reportData.unresolvedInputAmountCount !== 1 ? "s" : ""} could not be resolved —
+                    spent totals may be understated.
+                  </p>
+                  <p>
+                    The funding transaction
+                    {reportData.unresolvedInputAmountCount !== 1 ? "s were" : " was"} never synced.
+                    Sync the funding transactions for full accuracy.
+                  </p>
                 </div>
               </div>
             )}

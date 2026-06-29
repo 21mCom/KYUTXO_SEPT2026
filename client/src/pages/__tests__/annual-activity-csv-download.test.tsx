@@ -167,6 +167,7 @@ describe("AnnualActivityReport — Export CSV download", () => {
         unresolvedReceivedFromCount: 0,
         unresolvedSentToCount: 0,
         noDataAddresses: [],
+        unresolvedInputAmountCount: 0,
       },
       [ADDR],
       new Date(),
