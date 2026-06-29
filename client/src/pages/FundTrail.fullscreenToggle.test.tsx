@@ -204,4 +204,28 @@ describe("FundTrail full-screen open/close flow", () => {
       expect(screen.queryByTestId("fund-trail-fullscreen")).toBeNull(),
     );
   });
+
+  // Auto-teardown guard: when the trail drops back to a single hop the overlay
+  // would have nothing multi-hop to show, so the effect that watches isMultiHop
+  // must close it automatically. Without that effect the user would be trapped
+  // in an empty full-screen view with no manual way back.
+  it("auto-exits the overlay when the trail drops to a single hop", async () => {
+    await reachExpandControl();
+    fireEvent.click(screen.getByTestId("fund-trail-expand"));
+    await waitFor(() =>
+      expect(screen.getByTestId("fund-trail-fullscreen")).toBeTruthy(),
+    );
+
+    // Lower both hop selects back to 1 so isMultiHop becomes false.
+    fireEvent.change(screen.getByTestId("fund-trail-backward-hops"), {
+      target: { value: "1" },
+    });
+    fireEvent.change(screen.getByTestId("fund-trail-forward-hops"), {
+      target: { value: "1" },
+    });
+
+    await waitFor(() =>
+      expect(screen.queryByTestId("fund-trail-fullscreen")).toBeNull(),
+    );
+  });
 });
