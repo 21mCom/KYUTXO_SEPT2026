@@ -11,13 +11,16 @@
 //   - the fallback where hopTxids is missing/empty still renders the path
 //     (the addresses) without throwing and without any tx links/buttons.
 //
-// TxidLink and ClickableAddress are leaf components with their own IndexedDB /
+// TxidLink and AddressLink are leaf components with their own IndexedDB /
 // context dependencies that are tested independently, so they are stubbed here
 // to keep this focused on FindingCard's per-hop rendering logic. The stubs
 // preserve the real data-testid shape (link-txid-<first8>) so the assertions
 // still prove FindingCard passes the right txid to each link. DeepDiveDialog is
 // the real component from PrivacyAudit (when closed it only renders its trigger
 // button, data-testid button-deep-dive-<first8>).
+// renderWithProviders mounts RecordPreviewProvider, whose vocabulary hooks query
+// the real Dexie database at mount; provide an in-memory IndexedDB for jsdom.
+import "fake-indexeddb/auto";
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import {
   screen,
@@ -36,8 +39,8 @@ vi.mock("@/components/TxidLink", () => ({
   ),
 }));
 
-vi.mock("@/components/ClickableAddress", () => ({
-  ClickableAddress: ({ address }: { address: string }) => (
+vi.mock("@/components/AddressLink", () => ({
+  AddressLink: ({ address }: { address: string }) => (
     <span data-testid={`address-${address}`}>{address}</span>
   ),
 }));
@@ -48,8 +51,6 @@ vi.mock("@/components/ClickableAddress", () => ({
 // worker is spun up under jsdom), exactly as PrivacyAudit.deepDive.test.tsx does.
 vi.mock("@/lib/data/transaction-crud", () => ({
   getTransactionByTxid: vi.fn(),
-}));
-vi.mock("@/lib/data/record-queries", () => ({
   getParticipantsByTxids: vi.fn(),
 }));
 

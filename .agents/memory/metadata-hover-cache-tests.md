@@ -18,7 +18,16 @@ case 1 populate the cache and case 2 start with the indicator already showing �
 the "hidden until hover" assertion then fails. (The UTXOs row test dodges this by
 rendering a different row — group=AddressLink only, utxo=TxidLink only — per case.)
 
-**How to apply:** When asserting the hover-resolves-then-indicator-appears flow,
-call `invalidateCachedRecord(id)` (exported from `metadata-hover.ts`) for every
-identifier in both `beforeEach` and `afterEach`, or use unique identifiers per
-case. There is no global cache-clear export — invalidate per identifier.
+A second, subtler symptom: AddressLink/TxidLink's *no-record click* navigates to
+`/records?search=...` (via `openRecordPreviewByAddress`). If an earlier "record
+exists" case in the same file already cached that identifier, the later "no record"
+case starts with a stale `tooltipRecord`, so the click opens a panel instead of
+navigating and the navigation assertion fails. (This is exactly how the
+ClickableAddress→AddressLink/TxidLink migration broke `PrivacyAudit.peelList`'s two
+nav tests, since the old ClickableAddress never touched this cache.)
+
+**How to apply:** When asserting either the hover-resolves-then-indicator flow OR
+the no-record-navigates flow, clear the cache between cases. Use
+`clearCachedRecords()` (whole-cache reset, exported from `metadata-hover.ts`) in
+`beforeEach`/`afterEach`, or `invalidateCachedRecord(id)` per identifier, or use
+unique identifiers per case.

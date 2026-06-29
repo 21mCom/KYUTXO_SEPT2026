@@ -14,7 +14,8 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { BitcoinAddressDisplay } from "./BitcoinAddressDisplay";
+import { AddressLink } from "./AddressLink";
+import { TxidLink } from "./TxidLink";
 import { RecordTypeBadge } from "./RecordTypeBadge";
 import { AttachmentList } from "./AttachmentList";
 import { AttachmentUpload } from "./AttachmentUpload";
@@ -722,7 +723,19 @@ export function RecordDetailPanel({
                   </Button>
                 )}
               </div>
-              <BitcoinAddressDisplay address={record.inputString} truncate={false} />
+              {record.type === "transaction" ? (
+                <TxidLink
+                  txid={record.inputString}
+                  recordId={record.id ? Number(record.id) : null}
+                  truncate={false}
+                />
+              ) : (
+                <AddressLink
+                  address={record.inputString}
+                  recordId={record.id ? Number(record.id) : null}
+                  truncate={false}
+                />
+              )}
             </div>
 
             {record.type === 'address' && (() => {
@@ -1048,7 +1061,7 @@ export function RecordDetailPanel({
                   {record.discoveredInTxid && (
                     <div>
                       <span className="text-xs text-muted-foreground">Discovered in Transaction</span>
-                      <BitcoinAddressDisplay address={record.discoveredInTxid} truncate={true} />
+                      <TxidLink txid={record.discoveredInTxid} truncate={true} />
                     </div>
                   )}
                   {record.discoveredFromRecordId !== undefined && (

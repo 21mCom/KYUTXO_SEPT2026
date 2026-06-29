@@ -33,8 +33,6 @@ import {
 
 vi.mock("@/lib/data/transaction-crud", () => ({
   getTransactionByTxid: vi.fn(),
-}));
-vi.mock("@/lib/data/record-queries", () => ({
   getParticipantsByTxids: vi.fn(),
 }));
 

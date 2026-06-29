@@ -21,8 +21,6 @@ import { render, screen, fireEvent, cleanup, waitFor, act } from "@testing-libra
 
 vi.mock("@/lib/data/transaction-crud", () => ({
   getTransactionByTxid: vi.fn(),
-}));
-vi.mock("@/lib/data/record-queries", () => ({
   getParticipantsByTxids: vi.fn(),
 }));
 

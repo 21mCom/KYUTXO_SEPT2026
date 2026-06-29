@@ -61,9 +61,6 @@ vi.mock("@/lib/database", async (importOriginal) => {
   };
 });
 
-vi.mock("./BitcoinAddressDisplay", () => ({
-  BitcoinAddressDisplay: ({ address }: { address: string }) => <span>{address}</span>,
-}));
 
 import { RecordTable } from "./RecordTable";
 

@@ -86,7 +86,7 @@ import { useOwners } from "@/hooks/use-owners";
 import { useWalletNames } from "@/hooks/use-wallet-names";
 import { useToast } from "@/hooks/use-toast";
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
-import { ClickableAddress } from "@/components/ClickableAddress";
+import { AddressLink } from "@/components/AddressLink";
 import { TxidLink } from "@/components/TxidLink";
 import { classifyBehavior, BEHAVIOR_LABEL_DISPLAY, type BehaviorProfile } from "@/lib/behavior-profile";
 import { useRecordPreview } from "@/contexts/RecordPreviewContext";
@@ -1434,7 +1434,7 @@ export function PeelChainView({ txids, changeAddresses, coinjoinTxids }: { txids
                     {(step.payment / 1e8).toFixed(6)} BTC
                   </div>
                   <div className="mt-1">
-                    <ClickableAddress address={step.paymentAddress} />
+                    <AddressLink address={step.paymentAddress} truncate={false} />
                   </div>
                 </div>
                 <div className="bg-muted/40 rounded p-2">
@@ -1443,7 +1443,7 @@ export function PeelChainView({ txids, changeAddresses, coinjoinTxids }: { txids
                     {(step.change / 1e8).toFixed(6)} BTC
                   </div>
                   <div className="mt-1">
-                    <ClickableAddress address={step.changeAddress} />
+                    <AddressLink address={step.changeAddress} truncate={false} />
                   </div>
                 </div>
               </div>
@@ -2841,7 +2841,7 @@ export function FindingCard({ finding, coinjoinTxids }: { finding: PrivacyFindin
                 <div className="flex flex-col gap-1 mt-1">
                   {hopPath.map((addr, i) => (
                     <div key={`${addr}-${i}`} className="flex flex-col gap-1">
-                      <ClickableAddress address={addr} />
+                      <AddressLink address={addr} truncate={false} />
                       {i < hopPath.length - 1 && (
                         <div className="flex flex-wrap items-center gap-1 pl-4 text-muted-foreground">
                           <CornerDownRight className="h-3 w-3 shrink-0" />
@@ -2870,7 +2870,7 @@ export function FindingCard({ finding, coinjoinTxids }: { finding: PrivacyFindin
                     const bp = addressBehaviors?.get(addr);
                     return (
                       <span key={addr} className="inline-flex items-center gap-1">
-                        <ClickableAddress address={addr} />
+                        <AddressLink address={addr} truncate={false} />
                         {bp && bp.label !== 'not-enough-data' && bp.label !== 'synced-no-activity' && (
                           <Badge
                             variant="secondary"

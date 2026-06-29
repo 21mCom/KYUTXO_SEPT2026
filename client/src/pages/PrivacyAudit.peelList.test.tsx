@@ -36,6 +36,7 @@ import {
 } from "@testing-library/react";
 import { Router } from "wouter";
 import { memoryLocation } from "wouter/memory-location";
+import { clearCachedRecords } from "@/lib/metadata-hover";
 
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { db, type Settings } from "@/lib/database";
@@ -105,6 +106,9 @@ async function waitForToggle(getByTestId: (id: string) => HTMLElement) {
 }
 
 beforeEach(async () => {
+  // AddressLink/TxidLink read a module-level resolve cache; clear it so a prior
+  // test's resolved record can't leak in as a stale hit and suppress navigation.
+  clearCachedRecords();
   await db.records.clear();
   await db.blockchainTransactions.clear();
   await db.transactionParticipants.clear();
@@ -118,6 +122,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   cleanup();
+  clearCachedRecords();
   await db.records.clear();
   await db.blockchainTransactions.clear();
   await db.transactionParticipants.clear();
@@ -214,10 +219,11 @@ describe("PeelChainView list mode", () => {
   });
 });
 
-// Both list addresses share the same `clickable-address-{slice}` testid prefix
+// Both list addresses share the same `link-address-{slice}` testid prefix
 // (PAYMENT_ADDR and CHANGE_ADDR both start with "bc1qpeel"), so we locate each
-// ClickableAddress by its full address text inside the hop card and click that
-// span directly.
+// AddressLink by its full address text inside the hop card and click that
+// element directly. (AddressLink is rendered with truncate={false} here so the
+// full address text is present in the DOM.)
 describe("PeelChainView list mode address navigation", () => {
   const PAYMENT_LABEL = "External Payment Address Record";
 

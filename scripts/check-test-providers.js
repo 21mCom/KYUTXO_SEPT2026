@@ -76,7 +76,6 @@ const SHARED_HARNESS = /\b(?:renderWithProviders|TestProviders|renderWithSetting
 const KNOWN_TOOLTIP_COMPONENTS = [
   'AddressLink',
   'TxidLink',
-  'BitcoinAddressDisplay',
   'HopPathExplorer',
   'MetadataSourcesPanel',
   'ContinuityProof',

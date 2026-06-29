@@ -21,13 +21,17 @@ vi.mock("@/hooks/use-toast", () => ({
   useToast: () => ({ toast: vi.fn() }),
 }));
 
-vi.mock("@/lib/database", () => ({
-  db: {
-    attachments: {
-      where: () => ({ anyOf: () => ({ toArray: () => Promise.resolve([]) }) }),
+vi.mock("@/lib/database", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/database")>();
+  return {
+    ...actual,
+    db: {
+      attachments: {
+        where: () => ({ anyOf: () => ({ toArray: () => Promise.resolve([]) }) }),
+      },
     },
-  },
-}));
+  };
+});
 
 // Enable the BTC Balance column so its internal sort button is rendered.
 vi.mock("@/hooks/use-settings", () => ({
@@ -44,9 +48,6 @@ vi.mock("@/hooks/use-settings", () => ({
   toggleCustomFieldColumn: vi.fn(),
 }));
 
-vi.mock("./BitcoinAddressDisplay", () => ({
-  BitcoinAddressDisplay: ({ address }: { address: string }) => <span>{address}</span>,
-}));
 
 const { RecordTable } = await import("@/components/RecordTable");
 import { BEHAVIOR_LABEL_DISPLAY } from "@/lib/behavior-profile";

@@ -16,6 +16,21 @@ import { render, screen, waitFor, fireEvent, cleanup } from "@testing-library/re
 //     bypassing the Radix popover entirely.
 // ---------------------------------------------------------------------------
 
+// Records calls useRecordPreview() directly, and its RecordCard rows render the
+// real AddressLink/TxidLink (which also consume the context). Stub the context so
+// the page renders without the full provider stack (and its Dexie dependencies).
+vi.mock("@/contexts/RecordPreviewContext", () => ({
+  useRecordPreview: () => ({
+    openRecordPreview: vi.fn(),
+    openRecordPreviewByAddress: vi.fn(),
+    openRecordEdit: vi.fn(),
+    closePreview: vi.fn(),
+    isOpen: false,
+    isLoading: false,
+  }),
+  RecordPreviewProvider: ({ children }: { children: unknown }) => children,
+}));
+
 vi.mock("@/lib/activity-bus", () => ({
   getActivityBus: () => ({
     publishTask: vi.fn(),
@@ -81,10 +96,6 @@ vi.mock("@/components/RecordFilters", () => ({
 vi.mock("@/components/BlockchainToggle", () => ({
   BlockchainToggle: () => <div data-testid="mock-blockchain-toggle" />,
 }));
-vi.mock("@/components/ClickableAddress", () => ({
-  ClickableAddress: ({ address }: { address: string }) => <span>{address}</span>,
-}));
-
 // Stub the behavior picker with plain buttons that toggle a single label into
 // the selected set — the page-level wiring is what we are testing.
 vi.mock("@/components/BehaviorFilter", () => ({
@@ -142,7 +153,13 @@ vi.mock("dexie", () => {
   };
 });
 
-vi.mock("@/lib/database", () => {
+vi.mock("@/lib/database", async () => {
+  // database.ts does `export * from "./db-types"`, but `import`ing the real
+  // module would evaluate its `class extends Dexie` against the mocked dexie.
+  // Spread the plain db-types module so the harness's deep imports (RecordCard →
+  // AddressLink → RecordPreviewContext → RecordDetailPanel → use-node-settings)
+  // still find their re-exported constants without touching Dexie.
+  const dbTypes = await import("@/lib/db-types");
   const recordsBetween = () => ({
     reverse: () => ({
       limit: () => ({ toArray: () => mockDb.pageFetch() }),
@@ -168,6 +185,7 @@ vi.mock("@/lib/database", () => {
   };
 
   return {
+    ...dbTypes,
     USER_CURATED_TIERS: ['verified', 'manual', 'wallet-import', 'xpub-derived'],
     db: {
       records,

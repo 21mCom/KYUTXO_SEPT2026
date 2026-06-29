@@ -1,8 +1,8 @@
 // Shared test harness for component/page tests.
 //
 // Many components render clickable address links (AddressLink / TxidLink ->
-// useRecordPreview) or Radix Tooltips (BitcoinAddressDisplay, HopPathExplorer,
-// RecordTable, RecordDetailPanel, report panels, etc.). Both throw when mounted
+// useRecordPreview) or Radix Tooltips (HopPathExplorer, RecordTable,
+// RecordDetailPanel, report panels, etc.). Both throw when mounted
 // outside their providers (RecordPreviewProvider / TooltipProvider), which
 // silently unmounts the whole tree and makes tests fail in confusing ways. Many
 // of these components only render the link/tooltip conditionally, so a bare

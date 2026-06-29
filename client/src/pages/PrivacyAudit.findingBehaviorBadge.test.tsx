@@ -11,10 +11,13 @@
 //   (c) an address with no matching record at all shows nothing.
 //
 // FindingCard maps addresses → behavior via getRecordsByInputStrings, so that
-// loader is mocked to return records with differing cached stats. ClickableAddress
+// loader is mocked to return records with differing cached stats. AddressLink
 // and TxidLink are leaf components with their own IndexedDB/context dependencies
 // (tested independently), so they are stubbed to keep this focused on the badge.
 
+// renderWithProviders mounts RecordPreviewProvider, whose vocabulary hooks query
+// the real Dexie database at mount; provide an in-memory IndexedDB for jsdom.
+import "fake-indexeddb/auto";
 import { useEffect, useState } from "react";
 import { describe, it, expect, afterEach, vi } from "vitest";
 import { screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
@@ -42,8 +45,8 @@ vi.mock("dexie-react-hooks", () => ({
   },
 }));
 
-vi.mock("@/components/ClickableAddress", () => ({
-  ClickableAddress: ({ address }: { address: string }) => (
+vi.mock("@/components/AddressLink", () => ({
+  AddressLink: ({ address }: { address: string }) => (
     <span data-testid={`address-${address}`}>{address}</span>
   ),
 }));

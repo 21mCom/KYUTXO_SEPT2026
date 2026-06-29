@@ -3,10 +3,10 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup, act } from "@testing-library/react";
 
 // Task #538 wired success/failure clipboard toasts into the shared copy
-// buttons (AddressLink / TxidLink / BitcoinAddressDisplay). These components
-// pull in IndexedDB-backed CRUD modules and the RecordPreview context at import
-// time, so we stub those to keep the render cheap and deterministic and isolate
-// the copy-button-to-toast wiring.
+// buttons (AddressLink / TxidLink). These components pull in IndexedDB-backed
+// CRUD modules and the RecordPreview context at import time, so we stub those to
+// keep the render cheap and deterministic and isolate the copy-button-to-toast
+// wiring.
 const { toastMock } = vi.hoisted(() => ({ toastMock: vi.fn() }));
 vi.mock("@/hooks/use-toast", () => ({ useToast: () => ({ toast: toastMock }) }));
 
@@ -23,7 +23,6 @@ vi.mock("@/contexts/RecordPreviewContext", () => ({
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AddressLink } from "../AddressLink";
 import { TxidLink } from "../TxidLink";
-import { BitcoinAddressDisplay } from "../BitcoinAddressDisplay";
 
 const ADDRESS = "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq";
 const TXID = "4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b";
@@ -102,31 +101,6 @@ describe("TxidLink copy button toast", () => {
     writeText.mockImplementation(() => Promise.reject(new Error("denied")));
     renderWithProvider(<TxidLink txid={TXID} />);
     fireEvent.click(screen.getByTestId(copyTestId));
-    await flush();
-
-    expect(toastMock).toHaveBeenCalledTimes(1);
-    expect(toastMock).toHaveBeenCalledWith(
-      expect.objectContaining({ title: "Copy failed", variant: "destructive" }),
-    );
-  });
-});
-
-describe("BitcoinAddressDisplay copy button toast", () => {
-  it("writes the address to the clipboard and shows the success toast", async () => {
-    renderWithProvider(<BitcoinAddressDisplay address={ADDRESS} />);
-    fireEvent.click(screen.getByTestId("button-copy-address"));
-    await flush();
-
-    expect(writeText).toHaveBeenCalledTimes(1);
-    expect(writeText).toHaveBeenCalledWith(ADDRESS);
-    expect(toastMock).toHaveBeenCalledTimes(1);
-    expect(toastMock).toHaveBeenCalledWith({ description: "Address copied" });
-  });
-
-  it("shows the destructive 'Copy failed' toast when the clipboard write rejects", async () => {
-    writeText.mockImplementation(() => Promise.reject(new Error("denied")));
-    renderWithProvider(<BitcoinAddressDisplay address={ADDRESS} />);
-    fireEvent.click(screen.getByTestId("button-copy-address"));
     await flush();
 
     expect(toastMock).toHaveBeenCalledTimes(1);

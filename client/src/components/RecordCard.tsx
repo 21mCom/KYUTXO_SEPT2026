@@ -2,7 +2,8 @@ import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { MoreVertical, Paperclip } from "lucide-react";
-import { BitcoinAddressDisplay } from "./BitcoinAddressDisplay";
+import { AddressLink } from "./AddressLink";
+import { TxidLink } from "./TxidLink";
 import { RecordTypeBadge } from "./RecordTypeBadge";
 import {
   DropdownMenu,
@@ -100,7 +101,11 @@ export function RecordCard({
         </DropdownMenu>
       </CardHeader>
       <CardContent className="space-y-3">
-        <BitcoinAddressDisplay address={inputString} />
+        {type === "transaction" ? (
+          <TxidLink txid={inputString} recordId={Number(id)} truncate={false} />
+        ) : (
+          <AddressLink address={inputString} recordId={Number(id)} truncate={false} />
+        )}
         <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
           {amount !== undefined && (
             <span className="font-mono font-medium text-foreground" data-testid={`text-amount-${id}`}>
