@@ -1,5 +1,14 @@
 import { ScriptType, OpReturnOutput } from '@/lib/database';
 
+export interface AddressInfo {
+  txCount: number;
+  receivedSats: number;
+  sentSats: number;
+  balanceSats: number;
+  firstSeenTime?: number;
+  lastSeenTime?: number;
+}
+
 export interface BlockchainProvider {
   name: string;
   getBlockHeight(): Promise<number>;
@@ -9,6 +18,8 @@ export interface BlockchainProvider {
    *  in-flight HTTP request if the caller is stopped by the user. */
   getTransaction(txid: string, signal?: AbortSignal): Promise<ApiTransaction | null>;
   testConnection(): Promise<{ success: boolean; blockHeight?: number; error?: string; latency?: number }>;
+  /** Optional: cheaply fetch aggregated address stats from the node. */
+  getAddressInfo?(address: string): Promise<AddressInfo>;
 }
 
 export interface ApiTransaction {

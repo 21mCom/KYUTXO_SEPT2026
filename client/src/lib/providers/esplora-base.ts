@@ -1,5 +1,5 @@
 import { isElectron, getElectronAPI } from '../electron';
-import { BlockchainProvider, ApiTransaction, DEFAULT_RATE_LIMIT_DELAY, TOR_RATE_LIMIT_DELAY, isLocalOrPrivateUrl } from './types';
+import { BlockchainProvider, ApiTransaction, AddressInfo, DEFAULT_RATE_LIMIT_DELAY, TOR_RATE_LIMIT_DELAY, isLocalOrPrivateUrl } from './types';
 
 // Base class with shared functionality for Esplora-compatible APIs
 export abstract class EsploraProvider implements BlockchainProvider {
@@ -202,6 +202,53 @@ export abstract class EsploraProvider implements BlockchainProvider {
     const response = await this.rateLimitedFetch(`${this.baseUrl}/address/${address}`);
     const data = await response.json();
     return (data.chain_stats?.tx_count ?? 0) + (data.mempool_stats?.tx_count ?? 0);
+  }
+
+  async getAddressInfo(address: string): Promise<AddressInfo> {
+    const statsResponse = await this.rateLimitedFetch(`${this.baseUrl}/address/${address}`);
+    const stats = await statsResponse.json();
+
+    const chainStats = stats.chain_stats ?? {};
+    const txCount: number = (chainStats.tx_count ?? 0) + (stats.mempool_stats?.tx_count ?? 0);
+    const receivedSats: number = chainStats.funded_txo_sum ?? 0;
+    const sentSats: number = chainStats.spent_txo_sum ?? 0;
+    const balanceSats: number = receivedSats - sentSats;
+
+    if (txCount === 0) {
+      return { txCount: 0, receivedSats: 0, sentSats: 0, balanceSats: 0 };
+    }
+
+    // Paginate backwards through all transaction history (most-recent first)
+    // to find accurate first/last-seen block times. No page cap — runs until
+    // the API returns an empty page (i.e. full history has been walked).
+    let firstSeenTime: number | undefined;
+    let lastSeenTime: number | undefined;
+    let lastTxid: string | undefined;
+
+    for (;;) {
+      const url = lastTxid
+        ? `${this.baseUrl}/address/${address}/txs/chain/${lastTxid}`
+        : `${this.baseUrl}/address/${address}/txs`;
+
+      const txsResponse = await this.rateLimitedFetch(url);
+      const txs: import('./types').ApiTransaction[] = await txsResponse.json();
+
+      if (!txs || txs.length === 0) break;
+
+      for (const tx of txs) {
+        if (!tx.status.confirmed || !tx.status.block_time) continue;
+        const t = tx.status.block_time;
+        if (lastSeenTime === undefined || t > lastSeenTime) lastSeenTime = t;
+        if (firstSeenTime === undefined || t < firstSeenTime) firstSeenTime = t;
+      }
+
+      lastTxid = txs[txs.length - 1].txid;
+
+      // Esplora returns 25 txs per page; fewer means we've reached the end.
+      if (txs.length < 25) break;
+    }
+
+    return { txCount, receivedSats, sentSats, balanceSats, firstSeenTime, lastSeenTime };
   }
 
   async getTransaction(txid: string, signal?: AbortSignal): Promise<ApiTransaction | null> {

@@ -40,7 +40,8 @@ import {
   GitBranch,
   FlaskConical,
   ChevronsLeftRight,
-  CalendarRange
+  CalendarRange,
+  Search
 } from "lucide-react";
 import logoUrl from "@/assets/foot_1764929618997.png";
 import { version as APP_VERSION } from "../../../package.json";
@@ -106,6 +107,7 @@ const navGroups: NavGroup[] = [
     icon: BarChart3,
     defaultOpen: false,
     items: [
+      { title: "Address Checker", url: "/address-checker", icon: Search },
       { title: "Address Reuse", url: "/address-reuse", icon: Repeat2 },
       { title: "Provenance", url: "/provenance", icon: Map },
       { title: "Flow Visualizer", url: "/flow-visualizer", icon: Network },
