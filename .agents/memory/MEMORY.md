@@ -35,3 +35,4 @@
 - [FundTrail cancel e2e](fund-trail-cancel-e2e.md) — real-browser cancel-notice verify needs small self-chunking seeds, reload-to-surface group, and a Dexie read-delay to win the cancel-timing race.
 - [AddressLink icon cache-driven](addresslink-icon-cache-driven.md) — orange FileText icon comes from the metadata-hover cache subscription (not recordId); TTL only drops the entry, icon refreshes only on a later preload/hover re-resolve.
 - [Browser-seed Transactions page](browser-seed-transactions-reload.md) — default tx list/search only scans curated txs; page useLiveQuery ignores dynamic-import writes — seed then reload ONCE before rendering the link, live createRecord after.
+- [Mockup canvas presentation](mockup-canvas-presentation.md) — presentArtifact artifactId = artifact PATH ("artifacts/mockup-sandbox"); PWA SW serves stale preview screenshots, add a ?cachebust= token.
