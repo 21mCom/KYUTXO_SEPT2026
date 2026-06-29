@@ -37,7 +37,8 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { transactionSyncService, type SyncProgress, type SyncResult, type SyncOptions, type SourceCategory, type SourceSelection, type SourceInfo, type SyncDepthEstimate, loadAddressRecords, getAddressSourcesFromRecords } from "@/lib/transaction-sync";
 import { getActivityBus } from "@/lib/activity-bus";
 import type { Record as DbRecord, PausedSyncState, SkippedAddress, AddressBlacklist, SyncProtectionSettings } from "@/lib/database";
-import { DEFAULT_SYNC_PROTECTION } from "@/lib/database";
+import { DEFAULT_SYNC_PROTECTION, db } from "@/lib/database";
+import { consumePendingSyncAddresses } from "@/lib/sync/pendingSyncTargets";
 import { useNodeSettings } from "@/hooks/use-node-settings";
 import { getProviderDisplayName, getProviderPrivacyInfo } from "@/lib/blockchain-api";
 import { Link } from "wouter";
@@ -100,6 +101,12 @@ export default function TransactionSync() {
   const [skippedAddresses, setSkippedAddresses] = useState<SkippedAddress[]>([]);
   const [blacklist, setBlacklist] = useState<AddressBlacklist[]>([]);
   const [showBlacklist, setShowBlacklist] = useState(false);
+
+  // Targeted sync handed off from another page (e.g. Annual Activity Report's
+  // unresolved funding-transaction list). When present, we sync just these
+  // owning addresses so the report's unresolved count can drop after rerun.
+  const [targetedAddresses, setTargetedAddresses] = useState<string[] | null>(null);
+  const targetedConsumedRef = useRef(false);
 
   // Build current source selection from state
   const currentSourceSelection = useCallback((): SourceSelection => {
@@ -180,13 +187,20 @@ export default function TransactionSync() {
     setFilteredAddressCount(estimate.depth0);
   }, [selectedSources, includeNoSource, maxDepth, cachedRecords]);
 
-  const handleSync = async () => {
+  // Shared sync runner used by both the source-filtered sync and the targeted
+  // "sync these specific addresses" handoff. `activityLabel` lets the targeted
+  // path show a distinct activity-bus label.
+  const runSync = async (
+    options: SyncOptions,
+    cachedRecordsArg: DbRecord[] | undefined,
+    activityLabel: string,
+  ) => {
     setIsSyncing(true);
     isSyncingRef.current = true;
     setSyncProgress({
       phase: 'idle',
       currentDepth: 0,
-      maxDepth,
+      maxDepth: options.maxDepth,
       addressesTotal: 0,
       addressesProcessed: 0,
       transactionsFound: 0,
@@ -198,7 +212,7 @@ export default function TransactionSync() {
     // Update the sync service to use current node settings and protection
     transactionSyncService.updateProvider(nodeSettings);
     transactionSyncService.setSyncProtection(syncProtection);
-    
+
     transactionSyncService.setProgressCallback((progress) => {
       setSyncProgress(progress);
       try {
@@ -208,7 +222,7 @@ export default function TransactionSync() {
         } else if (progress.phase !== 'idle') {
           bus.publishTask({
             id: 'transaction-sync',
-            label: 'Transaction Sync',
+            label: activityLabel,
             phase: progress.phase,
             current: progress.addressesProcessed,
             total: progress.addressesTotal,
@@ -218,15 +232,9 @@ export default function TransactionSync() {
     });
 
     try {
-      const options: SyncOptions = {
-        sourceFilter: 'custom',
-        sourceSelection: currentSourceSelection(),
-        maxDepth,
-        connectedOnly: maxDepth > 1 ? connectedOnly : undefined,
-      };
-      const result = await transactionSyncService.syncWithDepth(options, cachedRecords ?? undefined);
+      const result = await transactionSyncService.syncWithDepth(options, cachedRecordsArg);
       setLastResult(result);
-      
+
       if (result.success && result.addressesSynced === 0 && result.errors.length > 0) {
         toast({
           title: "No Addresses to Sync",
@@ -262,7 +270,7 @@ export default function TransactionSync() {
       await loadSources();
       await loadPausedState();
       await loadSkippedAddresses();
-      
+
       // If sync was stopped/paused, update the result message
       if (wasStopped && lastResult === null) {
         // Check if it was paused (state was saved) or stopped
@@ -281,6 +289,63 @@ export default function TransactionSync() {
       }
     }
   };
+
+  const handleSync = async () => {
+    const options: SyncOptions = {
+      sourceFilter: 'custom',
+      sourceSelection: currentSourceSelection(),
+      maxDepth,
+      connectedOnly: maxDepth > 1 ? connectedOnly : undefined,
+    };
+    await runSync(options, cachedRecords ?? undefined, 'Transaction Sync');
+  };
+
+  // Sync a specific set of owning addresses (handed off from the Annual Activity
+  // Report). Maps the addresses to their address records via the case-insensitive
+  // inputStringLower index, then runs a depth-1 sync over just those records so the
+  // missing funding transactions get pulled in. Returns the matched-address count.
+  const handleSyncTargetedAddresses = useCallback(async (addresses: string[]): Promise<number> => {
+    const lower = Array.from(new Set(addresses.map((a) => a.trim().toLowerCase()).filter(Boolean)));
+    if (lower.length === 0) return 0;
+
+    const matched = await db.records
+      .where('inputStringLower')
+      .anyOf(lower)
+      .filter((r) => r.type === 'address')
+      .toArray();
+    const recordIds = matched
+      .map((r) => r.id)
+      .filter((id): id is number => typeof id === 'number');
+
+    if (recordIds.length === 0) {
+      toast({
+        title: "No Matching Addresses",
+        description: "None of the flagged owning addresses were found in your database.",
+        variant: "destructive",
+      });
+      return 0;
+    }
+
+    const options: SyncOptions = {
+      sourceFilter: 'all',
+      maxDepth: 1,
+      specificRecordIds: recordIds,
+    };
+    await runSync(options, undefined, 'Transaction Sync (Report)');
+    return recordIds.length;
+  }, [toast]);
+
+  // Consume any pending targeted-sync request handed off from another page and
+  // kick off the sync once on mount. The ref guards against StrictMode's
+  // double-invoke and avoids re-triggering on later re-renders.
+  useEffect(() => {
+    if (targetedConsumedRef.current) return;
+    const pending = consumePendingSyncAddresses();
+    if (!pending || pending.length === 0) return;
+    targetedConsumedRef.current = true;
+    setTargetedAddresses(pending);
+    void handleSyncTargetedAddresses(pending);
+  }, [handleSyncTargetedAddresses]);
 
   const handlePauseSync = () => {
     setIsStopping(true);
@@ -541,6 +606,20 @@ export default function TransactionSync() {
             {privacyInfo.description}
           </AlertDescription>
         </Alert>
+
+        {/* Targeted sync handed off from the Annual Activity Report */}
+        {targetedAddresses && targetedAddresses.length > 0 && (
+          <Alert data-testid="alert-targeted-sync">
+            <RefreshCw className="h-4 w-4" />
+            <AlertTitle>Syncing funding transactions from report</AlertTitle>
+            <AlertDescription>
+              Syncing {targetedAddresses.length} owning address
+              {targetedAddresses.length !== 1 ? "es" : ""} flagged by the Annual Activity Report
+              as unresolved funding sources. Once complete, regenerate the report to update the
+              unresolved count.
+            </AlertDescription>
+          </Alert>
+        )}
 
         {/* Stats Overview (Database Totals) */}
         <div className="grid gap-4 sm:grid-cols-3">

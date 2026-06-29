@@ -1,5 +1,6 @@
 import { useState, useMemo, useRef, useCallback } from "react";
-import { Loader2, ChevronDown, ChevronRight, AlertCircle, CalendarRange, FileDown, FileText } from "lucide-react";
+import { useLocation } from "wouter";
+import { Loader2, ChevronDown, ChevronRight, AlertCircle, CalendarRange, FileDown, FileText, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -12,6 +13,7 @@ import { formatBTC } from "@/lib/bitcoin";
 import { getParticipantsByAddresses, getParticipantsByTxids } from "@/lib/dataFacade";
 import { getTransactionsByTxids, getParticipantsByPrevOutKeys } from "@/lib/data/transaction-crud";
 import { AddressLink } from "@/components/AddressLink";
+import { setPendingSyncAddresses } from "@/lib/sync/pendingSyncTargets";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { TransactionParticipant, BlockchainTransaction } from "@/lib/database";
 
@@ -678,8 +680,33 @@ export default function AnnualActivityReport() {
   const [expandedAddresses, setExpandedAddresses] = useState<Set<string>>(new Set());
   const [showUnresolvedDetails, setShowUnresolvedDetails] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
+  const [, navigate] = useLocation();
 
   const [usedAddresses, setUsedAddresses] = useState<string[]>([]);
+
+  /**
+   * Owning addresses behind the unresolved inputs, de-duplicated. These are the
+   * pasted addresses whose spend is understated because their funding tx was
+   * never synced — syncing them pulls in the missing prevout amounts.
+   */
+  const unresolvedOwningAddresses = useMemo(() => {
+    if (!reportData) return [];
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const u of reportData.unresolvedInputs) {
+      const addr = u.address?.trim();
+      if (!addr || seen.has(addr)) continue;
+      seen.add(addr);
+      out.push(addr);
+    }
+    return out;
+  }, [reportData]);
+
+  const handleSyncUnresolved = useCallback(() => {
+    if (unresolvedOwningAddresses.length === 0) return;
+    setPendingSyncAddresses(unresolvedOwningAddresses);
+    navigate("/transaction-sync");
+  }, [unresolvedOwningAddresses, navigate]);
 
   const exportCsv = useCallback(() => {
     if (!reportData) return;
@@ -1297,6 +1324,19 @@ export default function AnnualActivityReport() {
                         regenerate the report. The owning address is the pasted address whose
                         spend is understated.
                       </p>
+                      {unresolvedOwningAddresses.length > 0 && (
+                        <Button
+                          variant="default"
+                          size="sm"
+                          className="mb-2"
+                          onClick={handleSyncUnresolved}
+                          data-testid="button-sync-unresolved"
+                        >
+                          <RefreshCw className="h-4 w-4 mr-2" />
+                          Sync these funding transactions ({unresolvedOwningAddresses.length}{" "}
+                          address{unresolvedOwningAddresses.length !== 1 ? "es" : ""})
+                        </Button>
+                      )}
                       <UnresolvedInputList inputs={reportData.unresolvedInputs} />
                     </div>
                   )}
