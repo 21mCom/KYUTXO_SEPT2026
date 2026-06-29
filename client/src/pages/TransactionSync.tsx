@@ -332,6 +332,10 @@ export default function TransactionSync() {
     setSkippedTargetAddresses(skipped);
 
     if (recordIds.length === 0) {
+      // Nothing to sync: hide the "syncing…" banner entirely so the only message
+      // the auditor sees is the skipped-addresses alert below (no contradictory
+      // "Syncing 0 of N" banner running alongside a "nothing found" notice).
+      setTargetedAddresses(null);
       toast({
         title: "No Matching Addresses",
         description: `None of the ${requested.length} flagged owning address${requested.length !== 1 ? 'es' : ''} were found in your database. Import them first, then sync.`,
@@ -339,6 +343,10 @@ export default function TransactionSync() {
       });
       return 0;
     }
+
+    // At least one flagged address matched a record — surface the targeted-sync
+    // banner now that we know a sync is actually running.
+    setTargetedAddresses(requested);
 
     if (skipped.length > 0) {
       toast({
@@ -365,7 +373,9 @@ export default function TransactionSync() {
     const pending = consumePendingSyncAddresses();
     if (!pending || pending.length === 0) return;
     targetedConsumedRef.current = true;
-    setTargetedAddresses(pending);
+    // Note: the targeted-sync banner is shown by handleSyncTargetedAddresses
+    // only once it confirms at least one flagged address matched a record, so we
+    // don't set it here (avoids a "Syncing 0 of N" flash when nothing matches).
     void handleSyncTargetedAddresses(pending);
   }, [handleSyncTargetedAddresses]);
 
