@@ -1,6 +1,7 @@
 import { useState, useMemo, useRef, useCallback, useEffect } from "react";
 import { useLocation } from "wouter";
-import { Loader2, ChevronDown, ChevronRight, AlertCircle, CalendarRange, FileDown, FileText, RefreshCw } from "lucide-react";
+import { Loader2, ChevronDown, ChevronRight, AlertCircle, CalendarRange, FileDown, FileText, RefreshCw, Copy, Check } from "lucide-react";
+import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -537,17 +538,47 @@ function CounterpartyList({
   entries,
   minTx,
   unresolvedCount,
+  heading,
+  description,
+  listKey,
   "data-testid": testId,
 }: {
   entries: CounterpartyEntry[];
   minTx: number;
   unresolvedCount: number;
+  heading: string;
+  description: string;
+  listKey: string;
   "data-testid"?: string;
 }) {
   const filtered = useMemo(
     () => entries.filter((e) => e.txCount >= minTx),
     [entries, minTx],
   );
+
+  const { copy, isCopied } = useCopyToClipboard();
+  const copied = isCopied(listKey);
+
+  const handleCopy = useCallback(() => {
+    const text = filtered.map((e) => `${e.address}\t${e.txCount}`).join("\n");
+    copy(text, { label: `${heading} list`, key: listKey });
+  }, [filtered, heading, listKey, copy]);
+
+  const handleDownload = useCallback(() => {
+    const stamp = new Date().toISOString().slice(0, 10);
+    const filename = `kyutxo-counterparties-${listKey}-${stamp}.csv`;
+    const rows = [
+      csvRow(["address", "transactions"]),
+      ...filtered.map((e) => csvRow([e.address, e.txCount])),
+    ].join("\n");
+    const blob = new Blob([rows], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [filtered, listKey]);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
@@ -559,6 +590,36 @@ function CounterpartyList({
 
   return (
     <div className="space-y-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h3 className="text-sm font-medium">{heading}</h3>
+        <div className="flex items-center gap-1">
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={handleCopy}
+            disabled={filtered.length === 0}
+            data-testid={`button-copy-${listKey}`}
+            title={`Copy ${heading} list`}
+            className="h-7 px-2 text-xs gap-1"
+          >
+            {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+            Copy
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={handleDownload}
+            disabled={filtered.length === 0}
+            data-testid={`button-download-${listKey}`}
+            title={`Download ${heading} list as CSV`}
+            className="h-7 px-2 text-xs gap-1"
+          >
+            <FileDown className="h-3 w-3" />
+            CSV
+          </Button>
+        </div>
+      </div>
+      <p className="text-xs text-muted-foreground">{description}</p>
       {unresolvedCount > 0 && (
         <div className="text-xs text-muted-foreground bg-muted/50 rounded px-2 py-1.5">
           {unresolvedCount.toLocaleString()} transaction
@@ -1489,32 +1550,24 @@ export default function AnnualActivityReport() {
                 </div>
               </CardHeader>
               <CardContent className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div className="space-y-2">
-                  <h3 className="text-sm font-medium">Received From</h3>
-                  <p className="text-xs text-muted-foreground">
-                    Input-side addresses that funded transactions where the pasted addresses
-                    received BTC.
-                  </p>
-                  <CounterpartyList
-                    entries={reportData.receivedFrom}
-                    minTx={minTx}
-                    unresolvedCount={reportData.unresolvedReceivedFromCount}
-                    data-testid="list-received-from"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <h3 className="text-sm font-medium">Sent To</h3>
-                  <p className="text-xs text-muted-foreground">
-                    Output-side addresses that received BTC in transactions where the pasted
-                    addresses spent.
-                  </p>
-                  <CounterpartyList
-                    entries={reportData.sentTo}
-                    minTx={minTx}
-                    unresolvedCount={reportData.unresolvedSentToCount}
-                    data-testid="list-sent-to"
-                  />
-                </div>
+                <CounterpartyList
+                  entries={reportData.receivedFrom}
+                  minTx={minTx}
+                  unresolvedCount={reportData.unresolvedReceivedFromCount}
+                  heading="Received From"
+                  description="Input-side addresses that funded transactions where the pasted addresses received BTC."
+                  listKey="received-from"
+                  data-testid="list-received-from"
+                />
+                <CounterpartyList
+                  entries={reportData.sentTo}
+                  minTx={minTx}
+                  unresolvedCount={reportData.unresolvedSentToCount}
+                  heading="Sent To"
+                  description="Output-side addresses that received BTC in transactions where the pasted addresses spent."
+                  listKey="sent-to"
+                  data-testid="list-sent-to"
+                />
               </CardContent>
             </Card>
           </>
