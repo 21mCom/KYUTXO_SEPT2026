@@ -81,6 +81,7 @@ const ownedRecord = {
 
 vi.mock("@/hooks/use-settings", () => ({
   useSettings: () => ({ sourceOfFundsTxLimit: TX_LIMIT }),
+  useCustomFields: () => ({ customFields: [], enabledCustomFields: [], isLoading: false }),
 }));
 
 vi.mock("@/hooks/use-address-records", () => ({
