@@ -709,6 +709,79 @@ describe("buildFundTrailPdf", () => {
     expect(text).toContain("?");
   });
 
+  it("never emits UTF-16BE runs in summary mode with a non-Latin center label", async () => {
+    // The summary (non-detailed) layout is a separate live code path from the
+    // detailed export. A non-Latin center label flows through the same
+    // sanitizePdfText guard, but only this mode renders without the per-group
+    // detail sub-tables — so it must be covered independently.
+    const center: TrailHop = {
+      sources: [flow({ groupLabel: "投資 (Wei)" })], // non-Latin source label
+      destinations: [
+        flow({
+          groupLabel: "Bob",
+          totalSats: 50_000_000,
+          details: [
+            detail({ address: "bc1qbob", txid: "dst1", amount: 50_000_000 }),
+          ],
+        }),
+      ],
+    };
+    const snapshot = buildFundTrailSnapshot(
+      "Center (測試)", // non-Latin center label
+      "walletName",
+      center,
+      new Map(),
+    );
+
+    // detailed defaults to false → the summary-only layout.
+    const blob = await buildFundTrailPdf(snapshot);
+
+    // No UTF-16BE runs anywhere in the summary document.
+    expect(await pdfHasUtf16beRuns(blob)).toBe(false);
+
+    // ASCII parts of the sanitized labels still appear, proving the text is present.
+    const text = await extractPdfText(blob);
+    expect(text).toContain("Center");
+    expect(text).toContain("Wei");
+    expect(text).toContain("Bob");
+    // Non-Latin characters are replaced with the safe substitute "?".
+    expect(text).toContain("?");
+  });
+
+  it("never emits UTF-16BE runs when the cap-warning banner is shown with a non-Latin center label", async () => {
+    // The cap-warning banner is its own live code path (doc.splitTextToSize +
+    // a filled rect drawn before the sections). Combined with a non-Latin
+    // center label it must still stay within the WinAnsi single-byte path.
+    const center: TrailHop = {
+      sources: [flow({ groupLabel: "投資者" })], // non-Latin source label
+      destinations: [],
+      isCapped: true,
+      shownTxCount: 1000,
+      totalTxCount: 8500,
+    };
+    const snapshot = buildFundTrailSnapshot(
+      "Center (測試)", // non-Latin center label
+      "walletName",
+      center,
+      new Map(),
+    );
+
+    const blob = await buildFundTrailPdf(snapshot);
+
+    // The warning banner and the non-Latin label together emit no UTF-16BE runs.
+    expect(await pdfHasUtf16beRuns(blob)).toBe(false);
+
+    // The warning text still renders (proving the banner path executed) and the
+    // ASCII parts of the sanitized center label survive.
+    const text = await extractPdfText(blob);
+    expect(text).toContain("incomplete");
+    expect(text).toContain("1,000");
+    expect(text).toContain("8,500");
+    expect(text).toContain("Center");
+    // Non-Latin characters are replaced with the safe substitute "?".
+    expect(text).toContain("?");
+  });
+
   it("renders the per-group detail sub-tables when detailed", async () => {
     const snapshot = richSnapshot();
     const text = await extractPdfText(
