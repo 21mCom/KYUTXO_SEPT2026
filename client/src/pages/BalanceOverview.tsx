@@ -306,6 +306,121 @@ function GroupAddressRows({
   );
 }
 
+// Virtualized renderer for the heuristic-matched address list. On large vaults
+// this set can run into the thousands, so we virtualize the rows (matching the
+// @tanstack/react-virtual pattern used by Records/Transactions/UTXOs/Bulk
+// Editor) instead of mounting one DOM row per address. Rows can wrap (addresses
+// use break-all), so we measure each rendered row.
+const HEURISTIC_ROW_HEIGHT = 44;
+
+function VirtualizedHeuristicList({
+  addresses,
+  resyncingAddresses,
+  resyncDisabled,
+  copiedKey,
+  onCopy,
+  onResync,
+}: {
+  addresses: string[];
+  resyncingAddresses: Set<string>;
+  resyncDisabled: boolean;
+  copiedKey: string | null;
+  onCopy: (address: string) => void;
+  onResync: (address: string) => void;
+}) {
+  const parentRef = useRef<HTMLDivElement>(null);
+
+  const virtualizer = useVirtualizer({
+    count: addresses.length,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => HEURISTIC_ROW_HEIGHT,
+    overscan: 20,
+    measureElement: (el) => el.getBoundingClientRect().height,
+  });
+
+  useEffect(() => {
+    const el = parentRef.current;
+    if (!el) return;
+    let prevWidth = el.clientWidth;
+    const ro = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (!entry) return;
+      const newWidth = entry.contentRect.width;
+      if (newWidth !== prevWidth) {
+        prevWidth = newWidth;
+        virtualizer.measure();
+      }
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [virtualizer]);
+
+  return (
+    <div
+      ref={parentRef}
+      className="max-h-[280px] overflow-auto rounded-md border border-yellow-300 dark:border-yellow-800 bg-yellow-50/50 dark:bg-yellow-950/20"
+      data-testid="scroll-heuristic-addresses"
+    >
+      <div
+        className="relative w-full"
+        style={{ height: `${virtualizer.getTotalSize()}px` }}
+      >
+        {virtualizer.getVirtualItems().map((virtualRow) => {
+          const address = addresses[virtualRow.index];
+          const isResyncing = resyncingAddresses.has(address);
+          return (
+            <div
+              key={address}
+              ref={virtualizer.measureElement}
+              data-index={virtualRow.index}
+              className="absolute left-0 right-0 flex items-center gap-2 px-3 py-2 border-b border-yellow-200 dark:border-yellow-900"
+              style={{ transform: `translateY(${virtualRow.start}px)` }}
+              data-testid={`row-heuristic-address-${address}`}
+            >
+              <p
+                className="flex-1 min-w-0 text-xs font-mono break-all text-yellow-800 dark:text-yellow-200"
+                data-testid={`text-heuristic-address-${address}`}
+              >
+                {address}
+              </p>
+              <Button
+                size="icon"
+                variant="ghost"
+                className="flex-none h-7 w-7 text-yellow-700 dark:text-yellow-300"
+                onClick={() => onCopy(address)}
+                data-testid={`button-copy-heuristic-address-${address}`}
+              >
+                {copiedKey === address ? (
+                  <Check className="h-3 w-3" />
+                ) : (
+                  <Copy className="h-3 w-3" />
+                )}
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => onResync(address)}
+                disabled={isResyncing || resyncDisabled}
+                data-testid={`button-resync-heuristic-address-${address}`}
+                className="flex-none border-yellow-400 dark:border-yellow-600 text-yellow-800 dark:text-yellow-200"
+              >
+                {isResyncing ? (
+                  <>
+                    <Loader2 className="h-3 w-3 mr-1.5 animate-spin" />
+                    Re-syncing…
+                  </>
+                ) : (
+                  "Re-sync"
+                )}
+              </Button>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 export default function BalanceOverview() {
   const [groupBy, setGroupBy] = useState<GroupBy>("wallet");
   const [sortBy, setSortBy] = useState<SortBy>("balance-desc");
@@ -1688,57 +1803,14 @@ export default function BalanceOverview() {
                   Loading addresses…
                 </div>
               ) : heuristicAddresses && heuristicAddresses.length > 0 ? (
-                <ScrollArea className="max-h-[280px] rounded-md border border-yellow-300 dark:border-yellow-800 bg-yellow-50/50 dark:bg-yellow-950/20">
-                  <div className="divide-y divide-yellow-200 dark:divide-yellow-900">
-                    {heuristicAddresses.map((address) => {
-                      const isResyncing = resyncingHeuristicAddresses.has(address);
-                      return (
-                        <div
-                          key={address}
-                          className="flex items-center gap-2 px-3 py-2"
-                          data-testid={`row-heuristic-address-${address}`}
-                        >
-                          <p
-                            className="flex-1 min-w-0 text-xs font-mono break-all text-yellow-800 dark:text-yellow-200"
-                            data-testid={`text-heuristic-address-${address}`}
-                          >
-                            {address}
-                          </p>
-                          <Button
-                            size="icon"
-                            variant="ghost"
-                            className="flex-none h-7 w-7 text-yellow-700 dark:text-yellow-300"
-                            onClick={() => copy(address, { label: "Address" })}
-                            data-testid={`button-copy-heuristic-address-${address}`}
-                          >
-                            {copiedKey === address ? (
-                              <Check className="h-3 w-3" />
-                            ) : (
-                              <Copy className="h-3 w-3" />
-                            )}
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => handleResyncSingleHeuristic(address)}
-                            disabled={isResyncing || resyncingHeuristic}
-                            data-testid={`button-resync-heuristic-address-${address}`}
-                            className="flex-none border-yellow-400 dark:border-yellow-600 text-yellow-800 dark:text-yellow-200"
-                          >
-                            {isResyncing ? (
-                              <>
-                                <Loader2 className="h-3 w-3 mr-1.5 animate-spin" />
-                                Re-syncing…
-                              </>
-                            ) : (
-                              "Re-sync"
-                            )}
-                          </Button>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </ScrollArea>
+                <VirtualizedHeuristicList
+                  addresses={heuristicAddresses}
+                  resyncingAddresses={resyncingHeuristicAddresses}
+                  resyncDisabled={resyncingHeuristic}
+                  copiedKey={copiedKey}
+                  onCopy={(address) => copy(address, { label: "Address" })}
+                  onResync={handleResyncSingleHeuristic}
+                />
               ) : (
                 <p
                   className="text-xs text-yellow-700/80 dark:text-yellow-300/70 py-2"
