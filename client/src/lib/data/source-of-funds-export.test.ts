@@ -35,6 +35,7 @@ function reportData(overrides: Partial<SourceOfFundsData> = {}): SourceOfFundsDa
     internalTransferCount: 0,
     externalFundingCount: 1,
     cap: { capped: false, shownTxCount: 1, totalTxCount: 1 },
+    unresolvedAmountCount: 0,
     ...overrides,
   };
 }

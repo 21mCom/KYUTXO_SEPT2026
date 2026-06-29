@@ -94,6 +94,10 @@ export function SourceOfFundsReport() {
       }
       let totalReceivedSats = 0;
       let currentBalanceSats = 0;
+      // Funding outputs whose amount stayed 0 after the prevout lookup — their
+      // funding transaction was never fully synced, so received totals silently
+      // under-count. Surfaced to the user as a non-blocking notice.
+      let unresolvedAmountCount = 0;
       const fundingSources: FundingSource[] = [];
       const spentTxids = new Set(participants.filter(p => p.role === 'input').map(p => p.txid));
 
@@ -107,6 +111,11 @@ export function SourceOfFundsReport() {
         
         const myOutput = txParticipants.find(p => p.role === 'output' && p.address === selectedAddress);
         if (!myOutput) continue;
+
+        // A funding output that resolves to 0 means the funding transaction was
+        // never fully synced, so its real amount is unknown and the totals below
+        // under-count. Track it so the user can be warned.
+        if (!myOutput.amount) unresolvedAmountCount += 1;
 
         totalReceivedSats += myOutput.amount;
 
@@ -187,6 +196,7 @@ export function SourceOfFundsReport() {
         internalTransferCount: fundingSources.filter(s => s.isInternalTransfer).length,
         externalFundingCount: fundingSources.filter(s => !s.isInternalTransfer).length,
         cap: { capped: isCapped, shownTxCount: fundingSources.length, totalTxCount },
+        unresolvedAmountCount,
       });
 
     } catch (error) {
@@ -306,6 +316,27 @@ export function SourceOfFundsReport() {
             >
               <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
               <span>{sourceOfFundsCapWarning(reportData.cap)}</span>
+            </div>
+          )}
+
+          {reportData.unresolvedAmountCount > 0 && (
+            <div
+              className="flex items-start gap-2 rounded-md border border-amber-500/50 bg-amber-500/10 p-3 text-sm text-amber-700 dark:text-amber-400"
+              data-testid="warning-unresolved-input-amounts"
+            >
+              <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
+              <div>
+                <p className="font-medium mb-1">
+                  {reportData.unresolvedAmountCount} input amount
+                  {reportData.unresolvedAmountCount !== 1 ? "s" : ""} could not be resolved —
+                  received totals may be understated.
+                </p>
+                <p>
+                  The funding transaction
+                  {reportData.unresolvedAmountCount !== 1 ? "s were" : " was"} never synced.
+                  Sync the funding transactions for full accuracy.
+                </p>
+              </div>
             </div>
           )}
 

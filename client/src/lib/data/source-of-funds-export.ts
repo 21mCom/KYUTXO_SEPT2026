@@ -59,6 +59,13 @@ export interface SourceOfFundsData {
   externalFundingCount: number;
   /** Cap status describing whether the funding history was truncated. */
   cap: SourceOfFundsCapInfo;
+  /**
+   * Count of funding sources whose amount could not be resolved (stayed 0)
+   * because the funding transaction was never synced. When > 0, received totals
+   * may be understated and a non-blocking notice is surfaced to the user,
+   * mirroring the Annual Activity Report's unresolved-input warning.
+   */
+  unresolvedAmountCount: number;
 }
 
 /** A funding transaction paired with the block height it confirmed at. */
