@@ -470,6 +470,26 @@ export interface FundTrailPdfOptions extends FundTrailExportOptions {
 }
 
 /**
+ * Replace any character outside the WinAnsi (Windows-1252) 8-bit range with a
+ * safe ASCII substitute so jsPDF's Standard-14 Helvetica font never falls back
+ * to a UTF-16BE byte-stream, which renders as garbled glyphs in most PDF viewers.
+ *
+ * Characters in U+0000–U+00FF are left intact because jsPDF maps them through
+ * the WinAnsi code page, which covers all Latin-1 symbols including the em-dash
+ * (U+2014 → WinAnsi 0x97) already used throughout this builder. Characters at
+ * U+0100 and above — including the "↳" hop-indent marker (U+21B3) and any
+ * non-Latin user-supplied names — are replaced with "?" so they stay renderable
+ * without requiring an embedded Unicode font.
+ */
+function sanitizePdfText(str: string): string {
+  let out = "";
+  for (let i = 0; i < str.length; i++) {
+    out += str.charCodeAt(i) <= 0xff ? str[i] : "?";
+  }
+  return out;
+}
+
+/**
  * Build an offline PDF summary of the Fund Trail snapshot that mirrors the
  * on-screen layout: a center-node header with total in/out, then a Sources
  * section and a Destinations section listing each group (indented by hop depth)
@@ -511,7 +531,7 @@ export async function buildFundTrailPdf(
   doc.setFontSize(10);
   doc.setTextColor(90);
   doc.text(
-    `${DIMENSION_LABELS[snapshot.dimension]}: ${snapshot.centerLabel}`,
+    `${DIMENSION_LABELS[snapshot.dimension]}: ${sanitizePdfText(snapshot.centerLabel)}`,
     14,
     27,
   );
@@ -581,7 +601,10 @@ export async function buildFundTrailPdf(
     flattenNodes(nodes, 0, flat);
     const body = flat.map(({ depth, node }) => {
       const hopPrefix = node.hopDepth != null ? `Hop ${node.hopDepth}: ` : "";
-      const indentPrefix = `${"    ".repeat(depth)}${depth > 0 ? "↳ " : ""}`;
+      // Use ">" as the WinAnsi-safe indent marker instead of "↳" (U+21B3).
+      // "↳" is outside the WinAnsi range, causing jsPDF to emit that text run
+      // as UTF-16BE — which renders as garbled glyphs with no embedded font.
+      const indentPrefix = `${"    ".repeat(depth)}${depth > 0 ? "> " : ""}`;
       // Show the chain of unknown intermediary addresses inline beneath the hop
       // group label so an auditor can trace through which addresses the entity
       // was reached. Wraps within the cell (overflow: linebreak below).
@@ -591,7 +614,7 @@ export async function buildFundTrailPdf(
           ? `\n${indentPrefix}    via: ${summarizeIntermediaryChain(path, maxIntermediaryAddresses)}`
           : "";
       return [
-        `${indentPrefix}${hopPrefix}${node.groupLabel}${pathLine}`,
+        `${indentPrefix}${hopPrefix}${sanitizePdfText(node.groupLabel)}${pathLine}`,
         formatBtc(node.totalSats),
         String(node.details.length),
       ];
@@ -623,11 +646,12 @@ export async function buildFundTrailPdf(
     if (node.details.length === 0) return;
 
     doc.setFontSize(9);
-    const prefix = depth > 0 ? "↳ " : "";
+    // Use ">" as the WinAnsi-safe indent marker (same reasoning as the table body).
+    const prefix = depth > 0 ? "> " : "";
     // Wrap the heading the same way the detail columns wrap, so a long group
     // label (e.g. a descriptor-derived name) breaks onto extra lines instead of
     // being pushed off the right page edge.
-    const headingText = `${prefix}${node.groupLabel} — ${formatBtc(node.totalSats)}`;
+    const headingText = `${prefix}${sanitizePdfText(node.groupLabel)} — ${formatBtc(node.totalSats)}`;
     const headingMaxWidth = pageWidth - 16 - 14;
     const headingLines = doc.splitTextToSize(headingText, headingMaxWidth);
     const oneLineHeight = doc.getTextDimensions("X").h;

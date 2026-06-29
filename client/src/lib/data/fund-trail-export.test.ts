@@ -161,6 +161,19 @@ async function extractPdfText(blob: Blob): Promise<string> {
     .join("\n");
 }
 
+/**
+ * Returns true if any PDF text literal in the blob was emitted as a UTF-16BE
+ * byte stream (i.e. contains embedded NUL bytes). That encoding is the root
+ * cause of the garbled-text bug: Helvetica/WinAnsi cannot render those runs.
+ */
+async function pdfHasUtf16beRuns(blob: Blob): Promise<boolean> {
+  const latin1 = Buffer.from(await blob.arrayBuffer()).toString("latin1");
+  const literals = latin1.match(/\((?:[^()\\]|\\.)*\)/g) ?? [];
+  return literals.some((lit) =>
+    unescapePdfLiteral(lit.slice(1, -1)).includes("\u0000"),
+  );
+}
+
 describe("buildFundTrailCsv", () => {
   it("emits the exact header columns", () => {
     const center: TrailHop = { sources: [], destinations: [] };
@@ -649,9 +662,51 @@ describe("buildFundTrailPdf", () => {
     // Top-level source and destination groups.
     expect(text).toContain("Alice");
     expect(text).toContain("Bob");
-    // The expanded "Carol" hop is indented (with "↳"), forcing jspdf to emit a
-    // UTF-16 run — it must still appear in the rendered table body.
+    // The expanded "Carol" hop is indented; it must appear in the table body.
+    // (The indent marker is now the WinAnsi-safe ">" rather than "↳".)
     expect(text).toContain("Carol");
+  });
+
+  it("never emits UTF-16BE runs — the garbled-text encoding vector", async () => {
+    // A snapshot with:
+    //   - a depth-1 row (previously triggered the "↳" UTF-16BE run)
+    //   - a non-Latin group label (Chinese characters outside the WinAnsi range)
+    //   - a non-Latin center label
+    // After the fix, every text surface must stay within the WinAnsi single-byte
+    // encoding path. UTF-16BE runs (identified by embedded NUL bytes in PDF
+    // literals) must be absent from the entire document.
+    const center: TrailHop = {
+      sources: [flow({ groupLabel: "Alice" })],
+      destinations: [],
+    };
+    const expandedHop: TrailHop = {
+      sources: [
+        flow({ groupLabel: "Wei (魏健)" }), // non-Latin chars outside WinAnsi
+      ],
+      destinations: [],
+    };
+    const registry = new Map<string, TrailHop>();
+    registry.set(flowPath("", "source", "Alice"), expandedHop);
+    const snapshot = buildFundTrailSnapshot(
+      "Center (測試)",
+      "walletName",
+      center,
+      registry,
+    );
+
+    const blob = await buildFundTrailPdf(snapshot, { detailed: true });
+
+    // No UTF-16BE runs anywhere in the document.
+    expect(await pdfHasUtf16beRuns(blob)).toBe(false);
+
+    // ASCII parts of sanitized labels still appear, proving the text is present.
+    const text = await extractPdfText(blob);
+    expect(text).toContain("Wei");
+    expect(text).toContain("Center");
+    // The depth-1 indent marker rendered as the WinAnsi-safe ">".
+    expect(text).toContain(">");
+    // Non-Latin characters are replaced with the safe substitute "?".
+    expect(text).toContain("?");
   });
 
   it("renders the per-group detail sub-tables when detailed", async () => {
