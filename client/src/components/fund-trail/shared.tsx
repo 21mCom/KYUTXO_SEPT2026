@@ -72,7 +72,10 @@ export function HopCapNotice({
 export function ColumnCapBanner({ cap }: { cap?: MultiHopCapEntry }) {
   if (!cap || !cap.isCapped) return null;
   return (
-    <div className="bg-[var(--ft-warn-soft)] text-[var(--ft-warn)] text-[10px] px-3 py-1.5 flex items-center gap-1.5 border border-[var(--ft-warn)]/20 rounded-md mb-3">
+    <div
+      className="bg-[var(--ft-warn-soft)] text-[var(--ft-warn)] text-[10px] px-3 py-1.5 flex items-center gap-1.5 border border-[var(--ft-warn)]/20 rounded-md mb-3"
+      data-testid="ft-cap-banner"
+    >
       <AlertTriangle className="w-3 h-3 shrink-0" />
       <span>
         Showing {cap.shownTxCount.toLocaleString()} of{" "}

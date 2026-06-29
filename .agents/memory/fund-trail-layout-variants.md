@@ -36,3 +36,13 @@ correctness regression, not a style nit):**
 
 - Page body must avoid `h-screen`/`min-h-screen`; use `h-full` + `min-h-0` +
   `flex-1` + local `overflow-auto` so it lives inside the app shell.
+
+**Testing the variants:** the four alternate variants share the adapter's
+synthesized node ids, so assert presence by id (not label text — labels repeat).
+Two non-obvious gotchas worth remembering: (1) cap surfacing is NOT uniform —
+the horizontal column layout shows a per-column banner while the other three use
+an overlay notice, so any cap assertion must accept either testid. (2) Classic
+is rendered directly by `FundTrail.tsx` (not via the variant component), so the
+ONLY place all five layouts share one selector + one engine result is a
+page-level test that drives the real Layout selector; component tests can cover
+the four variants but never Classic.
