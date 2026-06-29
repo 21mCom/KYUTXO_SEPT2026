@@ -699,9 +699,9 @@ function MultiHopTrailLayout({
   const dateRangeLabel = formatDateRange(dateRange);
 
   return (
-    <div className="flex flex-col flex-1 min-h-0 overflow-auto">
+    <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
       {dateRangeLabel && (
-        <div className="sticky top-0 z-50 flex justify-center px-6 pt-4">
+        <div className="flex justify-center px-6 pt-4">
           <Badge
             variant="secondary"
             className="text-xs shadow-sm"
@@ -773,9 +773,9 @@ function MultiHopTrailLayout({
         </DropdownMenu>
       </div>
 
-      <div className="flex flex-1 gap-4 px-6 pb-6 pt-2 min-h-0 overflow-auto">
+      <div className="flex flex-1 gap-4 px-6 pb-6 pt-2 min-h-0 overflow-hidden">
         {/* Sources column */}
-        <div className="flex flex-col gap-3 flex-1 min-w-0">
+        <div className="flex flex-col gap-3 flex-1 min-w-0 min-h-0">
           <div className="flex items-center gap-2 mb-1">
             <ArrowRight className="h-4 w-4 text-muted-foreground" />
             <div className="flex flex-col min-w-0">
@@ -793,23 +793,25 @@ function MultiHopTrailLayout({
             )}
           </div>
 
-          {!hasSources && (
-            <p className="text-sm text-muted-foreground italic">
-              No incoming sources found within {backwardHops} hop{backwardHops !== 1 ? "s" : ""}.
-            </p>
-          )}
+          <div className="flex flex-col gap-3 flex-1 min-h-0 overflow-y-auto pr-1">
+            {!hasSources && (
+              <p className="text-sm text-muted-foreground italic">
+                No incoming sources found within {backwardHops} hop{backwardHops !== 1 ? "s" : ""}.
+              </p>
+            )}
 
-          {multiHopResult.sources.map((node, i) => (
-            <HopCard
-              key={`${node.groupLabel}-h${node.hopDepth}-${i}`}
-              node={node}
-              direction="source"
-            />
-          ))}
+            {multiHopResult.sources.map((node, i) => (
+              <HopCard
+                key={`${node.groupLabel}-h${node.hopDepth}-${i}`}
+                node={node}
+                direction="source"
+              />
+            ))}
+          </div>
         </div>
 
         {/* Center node */}
-        <div className="flex flex-col items-center justify-start gap-3 w-44 shrink-0">
+        <div className="flex flex-col items-center justify-start gap-3 w-44 shrink-0 min-h-0 overflow-y-auto">
           <div
             className="rounded-md border-2 border-primary bg-primary/10 px-4 py-5 text-center w-full"
             data-testid="fund-trail-center-node"
@@ -868,7 +870,7 @@ function MultiHopTrailLayout({
         </div>
 
         {/* Destinations column */}
-        <div className="flex flex-col gap-3 flex-1 min-w-0">
+        <div className="flex flex-col gap-3 flex-1 min-w-0 min-h-0">
           <div className="flex items-center gap-2 mb-1">
             <ArrowLeft className="h-4 w-4 text-muted-foreground" />
             <div className="flex flex-col min-w-0">
@@ -886,19 +888,21 @@ function MultiHopTrailLayout({
             )}
           </div>
 
-          {!hasDests && (
-            <p className="text-sm text-muted-foreground italic">
-              No outgoing destinations found within {forwardHops} hop{forwardHops !== 1 ? "s" : ""}.
-            </p>
-          )}
+          <div className="flex flex-col gap-3 flex-1 min-h-0 overflow-y-auto pr-1">
+            {!hasDests && (
+              <p className="text-sm text-muted-foreground italic">
+                No outgoing destinations found within {forwardHops} hop{forwardHops !== 1 ? "s" : ""}.
+              </p>
+            )}
 
-          {multiHopResult.destinations.map((node, i) => (
-            <HopCard
-              key={`${node.groupLabel}-h${node.hopDepth}-${i}`}
-              node={node}
-              direction="dest"
-            />
-          ))}
+            {multiHopResult.destinations.map((node, i) => (
+              <HopCard
+                key={`${node.groupLabel}-h${node.hopDepth}-${i}`}
+                node={node}
+                direction="dest"
+              />
+            ))}
+          </div>
         </div>
       </div>
     </div>
