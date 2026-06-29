@@ -60,7 +60,10 @@ export class ElectrumProvider implements BlockchainProvider {
     return result.blockHeight;
   }
 
-  async getAddressTransactions(address: string): Promise<ApiTransaction[]> {
+  async getAddressTransactions(
+    address: string,
+    onProgress?: (scanned: number) => void,
+  ): Promise<ApiTransaction[]> {
     this.ensureElectron();
     
     const api = getElectronAPI();
@@ -78,6 +81,7 @@ export class ElectrumProvider implements BlockchainProvider {
     }
     
     const transactions: ApiTransaction[] = [];
+    let scanned = 0;
     const uncached = historyResult.history.filter(item => {
       if (this.transactionCache.has(item.tx_hash)) {
         transactions.push(this.transactionCache.get(item.tx_hash)!);
@@ -85,6 +89,9 @@ export class ElectrumProvider implements BlockchainProvider {
       }
       return true;
     });
+    // Cached txs already counted toward the running scan total.
+    scanned = transactions.length;
+    if (scanned > 0) onProgress?.(scanned);
     
     for (let i = 0; i < uncached.length; i += ElectrumProvider.TX_FETCH_CONCURRENCY) {
       const batch = uncached.slice(i, i + ElectrumProvider.TX_FETCH_CONCURRENCY);
@@ -117,6 +124,9 @@ export class ElectrumProvider implements BlockchainProvider {
           transactions.push(tx);
         }
       }
+
+      scanned += batch.length;
+      onProgress?.(scanned);
     }
     
     return transactions;
@@ -185,8 +195,11 @@ export class ElectrumProvider implements BlockchainProvider {
   // reports 0 sent). Instead we build the set of outpoints that paid TO this
   // address — every funding output appears in the address history — and detect
   // spends by matching each input's prevout reference (txid:vout) against it.
-  async getAddressHistoryDates(address: string): Promise<AddressHistoryDates> {
-    const txs = await this.getAddressTransactions(address);
+  async getAddressHistoryDates(
+    address: string,
+    onProgress?: (scanned: number) => void,
+  ): Promise<AddressHistoryDates> {
+    const txs = await this.getAddressTransactions(address, onProgress);
     return computeHistoryFromTxs(address, txs);
   }
 

@@ -26,6 +26,8 @@ interface AddressRow {
   error?: string;
   historyPhase: HistoryPhase;
   historyError?: string;
+  /** Running count of transactions scanned during an in-progress history walk. */
+  historyScanned?: number;
 }
 
 // Fallback derivation for providers exposing neither getAddressCoreStats nor
@@ -97,10 +99,23 @@ function renderFirstSeen(row: AddressRow, onLoad: () => void, isHistoryRunning: 
     return <span className="text-muted-foreground">{formatDate(row.info?.firstSeenTime)}</span>;
   }
   if (row.historyPhase === "loading") {
+    const total = row.info?.txCount;
+    const scanned = row.historyScanned;
+    // Show "scanned / total" once any page has come back so long history walks
+    // (exchange/mining-pool addresses) report progress instead of a bare spinner.
+    const progressLabel =
+      scanned !== undefined && total
+        ? `${Math.min(scanned, total).toLocaleString()} / ${total.toLocaleString()}`
+        : scanned !== undefined
+          ? scanned.toLocaleString()
+          : "Loading…";
     return (
-      <span className="inline-flex items-center justify-end gap-1 text-muted-foreground">
+      <span
+        className="inline-flex items-center justify-end gap-1 text-muted-foreground tabular-nums"
+        data-testid={`text-history-scan-${row.raw}`}
+      >
         <Loader2 className="h-3 w-3 animate-spin" />
-        Loading…
+        {progressLabel}
       </span>
     );
   }
@@ -283,11 +298,16 @@ export default function AddressChecker() {
       if (historyCancelledRef.current) break;
 
       setRows(prev => prev.map((r, idx) =>
-        idx === i ? { ...r, historyPhase: "loading", historyError: undefined } : r
+        idx === i ? { ...r, historyPhase: "loading", historyError: undefined, historyScanned: undefined } : r
       ));
 
       try {
-        const dates = await provider.getAddressHistoryDates!(address);
+        const dates = await provider.getAddressHistoryDates!(address, (scanned) => {
+          if (historyCancelledRef.current) return;
+          setRows(prev => prev.map((r, idx) =>
+            idx === i && r.historyPhase === "loading" ? { ...r, historyScanned: scanned } : r
+          ));
+        });
         if (historyCancelledRef.current) {
           setRows(prev => prev.map((r, idx) =>
             idx === i && r.historyPhase === "loading" ? { ...r, historyPhase: "idle" } : r

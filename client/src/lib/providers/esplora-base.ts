@@ -269,10 +269,14 @@ export abstract class EsploraProvider implements BlockchainProvider {
   // On-demand tier: walk the full transaction history (most-recent first) to
   // find accurate first/last-seen block times. Received/Sent already come from
   // the fast tier's chain_stats on Esplora, so only dates are returned here.
-  async getAddressHistoryDates(address: string): Promise<AddressHistoryDates> {
+  async getAddressHistoryDates(
+    address: string,
+    onProgress?: (scanned: number) => void,
+  ): Promise<AddressHistoryDates> {
     let firstSeenTime: number | undefined;
     let lastSeenTime: number | undefined;
     let lastTxid: string | undefined;
+    let scanned = 0;
 
     for (;;) {
       const url = lastTxid
@@ -290,6 +294,9 @@ export abstract class EsploraProvider implements BlockchainProvider {
         if (lastSeenTime === undefined || t > lastSeenTime) lastSeenTime = t;
         if (firstSeenTime === undefined || t < firstSeenTime) firstSeenTime = t;
       }
+
+      scanned += txs.length;
+      onProgress?.(scanned);
 
       lastTxid = txs[txs.length - 1].txid;
 

@@ -27,7 +27,10 @@ export interface AddressHistoryDates {
 export interface BlockchainProvider {
   name: string;
   getBlockHeight(): Promise<number>;
-  getAddressTransactions(address: string): Promise<ApiTransaction[]>;
+  getAddressTransactions(
+    address: string,
+    onProgress?: (scanned: number) => void,
+  ): Promise<ApiTransaction[]>;
   getAddressTxCount?(address: string): Promise<number>;
   /** Fetch a single transaction by txid. Pass an AbortSignal to cancel the
    *  in-flight HTTP request if the caller is stopped by the user. */
@@ -45,8 +48,16 @@ export interface BlockchainProvider {
   /**
    * On-demand history walk: return first/last seen times (and, on Electrum,
    * also receivedSats / sentSats which cannot be computed cheaply).
+   *
+   * For addresses with long histories (exchange hot wallets, mining pools) this
+   * walks every confirmed transaction and can take many seconds. The optional
+   * onProgress callback reports the running count of transactions scanned so the
+   * UI can show progress instead of an indeterminate spinner.
    */
-  getAddressHistoryDates?(address: string): Promise<AddressHistoryDates>;
+  getAddressHistoryDates?(
+    address: string,
+    onProgress?: (scanned: number) => void,
+  ): Promise<AddressHistoryDates>;
 }
 
 export interface ApiTransaction {
