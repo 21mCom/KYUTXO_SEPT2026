@@ -32,11 +32,13 @@ import {
 import {
   bulkAddTransactions,
   bulkAddParticipants,
+  bulkPutParticipants,
   updateTransaction,
   getTransactionsByTxids,
   getParticipantsByTxids,
   type CreateTransactionData,
 } from "@/lib/data/transaction-crud";
+import type { TransactionParticipant } from "@/lib/database";
 import {
   bulkAddAddressSyncState,
   getAllAddressSyncState,
@@ -241,6 +243,111 @@ function participantKey(p: {
 }
 
 /**
+ * Build a *resolution-independent* identity key for a participant, used to match a
+ * backup participant to its existing live counterpart even when address-level
+ * details differ (e.g. a live input whose address is still blank vs. the backup
+ * input whose prevout has been resolved to an address). Unlike
+ * {@link participantKey}, this deliberately excludes the enrichable fields
+ * (address/amount/recordId):
+ *   - an OUTPUT is identified by its `vout` (unique within a tx),
+ *   - an INPUT is identified by the outpoint it spends (`prevTxid:prevVout`).
+ * Returns `null` when no stable identity is available (an output without a vout,
+ * or an input without a resolved prevout) — those fall back to
+ * {@link participantKey} matching instead.
+ */
+function participantMatchKey(p: {
+  txid?: string;
+  role?: string;
+  vout?: number | null;
+  prevTxid?: string | null;
+  prevVout?: number | null;
+}): string | null {
+  if (!p.txid) return null;
+  if (p.role === "output") {
+    return typeof p.vout === "number" ? `o|${p.txid}|${p.vout}` : null;
+  }
+  if (p.role === "input") {
+    if (p.prevTxid && typeof p.prevVout === "number") {
+      return `i|${p.txid}|${p.prevTxid}|${p.prevVout}`;
+    }
+    return null;
+  }
+  return null;
+}
+
+/**
+ * Compute the fields to fill on a live participant row from a richer backup
+ * participant for the SAME logical input/output (merge mode). Mirrors
+ * {@link computeTransactionEnrichment}: only fields that are missing/empty on the
+ * live row are returned; any field already populated on the live row is omitted so
+ * it is never overwritten. `txid`, `role`, `vout`, and `id` are never touched.
+ *
+ * The backup's `recordId` MUST already be remapped through `recordIdMap` by the
+ * caller (this is a pure comparison of resolved values). Fields considered:
+ *   - `address`: missing when undefined/null/blank; filled from a non-blank backup
+ *     string (this is the prevout address sync had not yet resolved).
+ *   - `amount`: a `0` is treated as the not-yet-known placeholder, so it is filled
+ *     from a non-zero backup number (a genuine 0-value output stays 0 because the
+ *     backup's value is 0 too).
+ *   - `prevTxid`: missing when undefined/null/blank; filled from a non-blank backup
+ *     string.
+ *   - `prevVout`: `0` is a legitimate vout, so missing only when undefined/null;
+ *     filled from any defined backup number.
+ *   - `recordId`: missing when undefined/null; filled from any defined backup
+ *     number (already remapped).
+ */
+export function computeParticipantEnrichment(
+  live: Record<string, any>,
+  backup: Record<string, any>,
+): Partial<TransactionParticipant> {
+  const changes: Record<string, any> = {};
+
+  const liveAddr = live.address;
+  const backupAddr = backup.address;
+  const liveAddrMissing =
+    liveAddr === undefined || liveAddr === null || String(liveAddr).trim() === "";
+  if (liveAddrMissing && typeof backupAddr === "string" && backupAddr.trim() !== "") {
+    changes.address = backupAddr;
+  }
+
+  const liveAmount = live.amount;
+  const backupAmount = backup.amount;
+  const liveAmountMissing =
+    liveAmount === undefined || liveAmount === null || liveAmount === 0;
+  if (liveAmountMissing && typeof backupAmount === "number" && backupAmount !== 0) {
+    changes.amount = backupAmount;
+  }
+
+  const livePrevTxid = live.prevTxid;
+  const backupPrevTxid = backup.prevTxid;
+  const livePrevTxidMissing =
+    livePrevTxid === undefined || livePrevTxid === null || String(livePrevTxid).trim() === "";
+  if (
+    livePrevTxidMissing &&
+    typeof backupPrevTxid === "string" &&
+    backupPrevTxid.trim() !== ""
+  ) {
+    changes.prevTxid = backupPrevTxid;
+  }
+
+  const livePrevVout = live.prevVout;
+  const backupPrevVout = backup.prevVout;
+  const livePrevVoutMissing = livePrevVout === undefined || livePrevVout === null;
+  if (livePrevVoutMissing && typeof backupPrevVout === "number") {
+    changes.prevVout = backupPrevVout;
+  }
+
+  const liveRecordId = live.recordId;
+  const backupRecordId = backup.recordId;
+  const liveRecordIdMissing = liveRecordId === undefined || liveRecordId === null;
+  if (liveRecordIdMissing && typeof backupRecordId === "number") {
+    changes.recordId = backupRecordId;
+  }
+
+  return changes as Partial<TransactionParticipant>;
+}
+
+/**
  * Numeric transaction fields where a value of `0` means "not known yet" — the
  * placeholder blockchain sync writes before it has resolved the real value
  * (e.g. an unconfirmed tx synced with `blockHeight`/`blockTime`/`fee` still 0).
@@ -390,22 +497,32 @@ export function mergeDuplicateTransactionsByTxid<T extends Record<string, any>>(
  * are never overwritten.
  *
  * Participants are added for transactions actually inserted AND — in merge mode
- * — merged into transactions that already existed (collided by `txid`): a backup
- * may carry richer participant data the live row lacks (resolved input prevouts,
- * addresses, amounts, or `recordId` links). For each collided txid, backup
- * participants whose stable key (`txid+role+address+vout`) is not already present
- * on the live row are added; existing live participants are never duplicated. All
- * participants' `recordId` is remapped through `recordIdMap`.
+ * — reconciled against transactions that already existed (collided by `txid`): a
+ * backup may carry richer participant data the live row lacks (resolved input
+ * prevouts, addresses, amounts, or `recordId` links). For each collided txid each
+ * backup participant is matched to its existing live counterpart (by outpoint for
+ * inputs / vout for outputs, falling back to the full `txid+role+address+vout`
+ * key); a match ENRICHES the live participant's missing/empty fields (address,
+ * amount, prevTxid, prevVout, recordId) via {@link computeParticipantEnrichment}
+ * — never overwriting a populated field — while an unmatched backup participant is
+ * added. Existing live participants are never duplicated. All participants'
+ * `recordId` is remapped through `recordIdMap`.
  */
 export async function restoreLegacyTransactions(
   blockchainTransactions: any[] | undefined,
   transactionParticipants: any[] | undefined,
   restoreMode: RestoreMode,
   recordIdMap: Map<number, number>,
-): Promise<{ transactionsAdded: number; participantsAdded: number; transactionsEnriched: number }> {
+): Promise<{
+  transactionsAdded: number;
+  participantsAdded: number;
+  transactionsEnriched: number;
+  participantsEnriched: number;
+}> {
   let transactionsAdded = 0;
   let participantsAdded = 0;
   let transactionsEnriched = 0;
+  let participantsEnriched = 0;
 
   const restoredTxids = new Set<string>();
   // Txids present in the backup that already exist in the vault (merge mode).
@@ -478,16 +595,29 @@ export async function restoreLegacyTransactions(
   }
 
   if (transactionParticipants && transactionParticipants.length > 0) {
-    // Pre-existing live participants for collided txids, so we can skip backup
-    // participants that already exist and only merge in the genuinely missing
-    // ones. Loaded once, in batches, keyed by the stable participant key.
-    const existingParticipantKeys = new Set<string>();
+    // Pre-existing live participants for collided txids, so we can (a) skip backup
+    // participants the live row already has, and (b) ENRICH an existing live
+    // participant whose details the backup resolved. Loaded once, in batches, and
+    // indexed two ways:
+    //   - `liveByMatchKey`: by the resolution-independent identity (outpoint for
+    //     inputs, vout for outputs) so a blank-address live input still matches the
+    //     backup input whose address/amount/recordId was resolved.
+    //   - `liveByExactKey`: by the full stable key, the fallback identity for
+    //     participants that have no stable match key (an output without a vout, an
+    //     input without a resolved prevout) — preserving the original add-if-absent
+    //     de-dup so the same backup never doubles a row.
+    const liveByMatchKey = new Map<string, TransactionParticipant>();
+    const liveByExactKey = new Map<string, TransactionParticipant>();
     if (collidedTxids.size > 0) {
       const collidedArr = Array.from(collidedTxids);
       const PARTICIPANT_BATCH = 500;
       for (let i = 0; i < collidedArr.length; i += PARTICIPANT_BATCH) {
         const live = await getParticipantsByTxids(collidedArr.slice(i, i + PARTICIPANT_BATCH));
-        for (const lp of live) existingParticipantKeys.add(participantKey(lp));
+        for (const lp of live) {
+          if (!liveByExactKey.has(participantKey(lp))) liveByExactKey.set(participantKey(lp), lp);
+          const mk = participantMatchKey(lp);
+          if (mk && !liveByMatchKey.has(mk)) liveByMatchKey.set(mk, lp);
+        }
       }
     }
 
@@ -495,29 +625,63 @@ export async function restoreLegacyTransactions(
     // itself (covers both freshly inserted and merged-into transactions).
     const addedKeys = new Set<string>();
     const participantsToAdd = [];
+    // Live participants enriched in place (keyed by live id so the same row is
+    // only enriched once even if several backup rows would touch it).
+    const participantsToEnrichById = new Map<number, TransactionParticipant>();
     for (const p of transactionParticipants) {
       if (!p.txid) continue;
       const isNew = restoredTxids.has(p.txid);
       const isCollision = collidedTxids.has(p.txid);
       if (!isNew && !isCollision) continue;
 
+      const remappedRecordId = remapRecordId(recordIdMap, p.recordId);
+
+      if (isCollision) {
+        // Find the existing live participant this backup row corresponds to:
+        // prefer the resolution-independent match key, fall back to the exact key.
+        const mk = participantMatchKey(p);
+        const liveMatch =
+          (mk ? liveByMatchKey.get(mk) : undefined) ?? liveByExactKey.get(participantKey(p));
+        if (liveMatch && typeof liveMatch.id === "number") {
+          // Matched an existing live participant: enrich its missing/empty fields
+          // from the backup (never overwrite populated fields), and never add a
+          // duplicate row for it.
+          const existing = participantsToEnrichById.get(liveMatch.id) ?? liveMatch;
+          const changes = computeParticipantEnrichment(existing, {
+            ...p,
+            recordId: remappedRecordId,
+          });
+          if (Object.keys(changes).length > 0) {
+            participantsToEnrichById.set(liveMatch.id, { ...existing, ...changes });
+          }
+          continue;
+        }
+        // No existing live participant matched: fall through to add it (de-duping
+        // the incoming set against itself by exact key).
+      }
+
       const key = participantKey(p);
-      // For collided txids, never re-add a participant the live row already has.
-      if (isCollision && existingParticipantKeys.has(key)) continue;
       if (addedKeys.has(key)) continue;
       addedKeys.add(key);
 
       const { id, ...pData } = p;
       participantsToAdd.push({
         ...pData,
-        recordId: remapRecordId(recordIdMap, pData.recordId),
+        recordId: remappedRecordId,
       });
     }
     await bulkAddParticipants(participantsToAdd, { skipNotification: true });
     participantsAdded = participantsToAdd.length;
+
+    if (participantsToEnrichById.size > 0) {
+      await bulkPutParticipants(Array.from(participantsToEnrichById.values()), {
+        skipNotification: true,
+      });
+      participantsEnriched = participantsToEnrichById.size;
+    }
   }
 
-  return { transactionsAdded, participantsAdded, transactionsEnriched };
+  return { transactionsAdded, participantsAdded, transactionsEnriched, participantsEnriched };
 }
 
 /**
