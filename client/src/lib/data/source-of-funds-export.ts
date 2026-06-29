@@ -144,10 +144,32 @@ export function sourceOfFundsCapWarning(cap: SourceOfFundsCapInfo): string | nul
 }
 
 /**
+ * Human-readable warning describing that some funding amounts could not be
+ * resolved because their funding transaction was never synced, so received
+ * totals may be understated. Returns null when every amount resolved, keeping
+ * a complete export free of any incompleteness notice. Mirrors the tone of
+ * sourceOfFundsCapWarning so both incompleteness notices read consistently.
+ */
+export function sourceOfFundsUnresolvedWarning(
+  unresolvedAmountCount: number,
+): string | null {
+  if (unresolvedAmountCount <= 0) return null;
+  const count = unresolvedAmountCount.toLocaleString();
+  const noun = unresolvedAmountCount === 1 ? "funding amount" : "funding amounts";
+  return (
+    `WARNING: This Source of Funds report may understate the total received. ` +
+    `${count} ${noun} could not be resolved because the funding transaction ` +
+    `was never synced, so the received totals and the per-source amounts below ` +
+    `may be incomplete.`
+  );
+}
+
+/**
  * Build the plain-text Source of Funds declaration. When the report's funding
- * history was truncated, a prominent warning is prepended above the body (and
- * also noted in the summary) so a reader can never mistake a partial export for
- * a complete one. Fully offline — no external resources.
+ * history was truncated, or some funding amounts could not be resolved, a
+ * prominent warning is prepended above the body (and also noted in the summary)
+ * so a reader can never mistake a partial export for a complete one. Fully
+ * offline — no external resources.
  */
 export function buildSourceOfFundsText(
   data: SourceOfFundsData,
@@ -155,6 +177,9 @@ export function buildSourceOfFundsText(
   generatedAt: string = new Date().toISOString(),
 ): string {
   const warning = sourceOfFundsCapWarning(data.cap);
+  const unresolvedWarning = sourceOfFundsUnresolvedWarning(
+    data.unresolvedAmountCount,
+  );
 
   const lines: string[] = [
     "SOURCE OF FUNDS DECLARATION",
@@ -164,6 +189,10 @@ export function buildSourceOfFundsText(
 
   if (warning) {
     lines.push(warning, "");
+  }
+
+  if (unresolvedWarning) {
+    lines.push(unresolvedWarning, "");
   }
 
   lines.push(
@@ -193,6 +222,12 @@ export function buildSourceOfFundsText(
   if (data.cap.capped) {
     lines.push(
       `Funding Transactions Shown: ${data.cap.shownTxCount.toLocaleString()} of ${data.cap.totalTxCount.toLocaleString()} (truncated)`,
+    );
+  }
+
+  if (data.unresolvedAmountCount > 0) {
+    lines.push(
+      `Unresolved Amounts: ${data.unresolvedAmountCount.toLocaleString()} (received totals may be understated)`,
     );
   }
 

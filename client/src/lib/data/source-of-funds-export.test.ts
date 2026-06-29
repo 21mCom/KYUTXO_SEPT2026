@@ -8,6 +8,7 @@ import {
   selectFundingTxidsUnderCap,
   sourceOfFundsCapWarning,
   sourceOfFundsFilename,
+  sourceOfFundsUnresolvedWarning,
 } from "./source-of-funds-export";
 
 function fundingSource(overrides: Partial<FundingSource> = {}): FundingSource {
@@ -86,6 +87,25 @@ describe("sourceOfFundsCapWarning", () => {
   });
 });
 
+describe("sourceOfFundsUnresolvedWarning", () => {
+  it("returns null when no amounts were unresolved", () => {
+    expect(sourceOfFundsUnresolvedWarning(0)).toBeNull();
+  });
+
+  it("warns that received totals may be understated with the count", () => {
+    const warning = sourceOfFundsUnresolvedWarning(3);
+    expect(warning).not.toBeNull();
+    expect(warning).toContain("understate");
+    expect(warning).toContain("3");
+    expect(warning).toContain("never synced");
+  });
+
+  it("uses singular wording for exactly one unresolved amount", () => {
+    const warning = sourceOfFundsUnresolvedWarning(1);
+    expect(warning).toContain("funding amount could not be resolved");
+  });
+});
+
 describe("buildSourceOfFundsText", () => {
   it("omits any incompleteness warning when the report was not capped", () => {
     const text = buildSourceOfFundsText(reportData(), "USD");
@@ -110,6 +130,29 @@ describe("buildSourceOfFundsText", () => {
     expect(text).toContain("9,999");
     // The summary also records the truncation with counts.
     expect(text).toContain("Funding Transactions Shown: 2,000 of 9,999 (truncated)");
+  });
+
+  it("omits the unresolved-amount warning when every amount resolved", () => {
+    const text = buildSourceOfFundsText(
+      reportData({ unresolvedAmountCount: 0 }),
+      "USD",
+    );
+    expect(text).not.toContain("understate");
+    expect(text).not.toContain("Unresolved Amounts");
+  });
+
+  it("surfaces an unresolved-amount warning with the count when some amounts are unresolved", () => {
+    const text = buildSourceOfFundsText(
+      reportData({ unresolvedAmountCount: 4 }),
+      "USD",
+    );
+    expect(text).toContain("WARNING");
+    expect(text).toContain("understate");
+    expect(text).toContain("never synced");
+    // The summary also records the unresolved count.
+    expect(text).toContain(
+      "Unresolved Amounts: 4 (received totals may be understated)",
+    );
   });
 });
 
