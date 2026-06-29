@@ -447,7 +447,10 @@ describe("LegacyMigrationOverlay preset locked list (stillLocked path)", () => {
 
     const recordsGroup = screen.getByTestId("group-locked-Records");
     expect(recordsGroup.textContent).toContain("Records (2)");
-    expect(recordsGroup.textContent).toContain("#1, #5");
+    // Records is the navigable table, so its ids render as clickable navigation
+    // buttons (one per id) rather than a comma-joined string.
+    expect(screen.getByTestId("button-open-locked-record-1")).toBeTruthy();
+    expect(screen.getByTestId("button-open-locked-record-5")).toBeTruthy();
 
     const tagsGroup = screen.getByTestId("group-locked-Tags");
     expect(tagsGroup.textContent).toContain("Tags (1)");

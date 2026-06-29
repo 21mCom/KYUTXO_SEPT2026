@@ -833,9 +833,12 @@ describe("SettingsPage — entity list import (merge mode) only-changed filter",
     const noteDiff = screen.getByTestId("text-entity-override-sourcenote-0");
     expect(noteDiff.textContent).toContain(first.sourceNote!);
     expect(noteDiff.textContent).toContain(NEW_NOTE);
-    expect(within(noteDiff).getByText(first.sourceNote!).className).toContain(
-      "line-through",
-    );
+    // The old note renders through renderSourceNote, which linkifies any
+    // embedded URL and so splits the note across text + anchor nodes — query the
+    // struck-through container and read its concatenated textContent.
+    const struckNote = noteDiff.querySelector(".line-through.break-words");
+    expect(struckNote).toBeTruthy();
+    expect(struckNote!.textContent).toContain(first.sourceNote!);
     expect(screen.getByText("no change")).toBeTruthy();
 
     // Toggle ON: the source-note-changed override survives the filter; the
@@ -1308,10 +1311,12 @@ describe("SettingsPage — entity list import (merge mode) source-note diff", ()
     expect(note0.textContent).toContain("Source:");
     expect(note0.textContent).toContain(first.sourceNote!);
     expect(note0.textContent).toContain(NEW_NOTE);
-    // The struck-through side carries the old note.
-    expect(within(note0).getByText(first.sourceNote!).className).toContain(
-      "line-through",
-    );
+    // The struck-through side carries the old note. renderSourceNote linkifies
+    // any embedded URL, splitting the note across text + anchor nodes, so query
+    // the struck-through container and read its concatenated textContent.
+    const struck0 = note0.querySelector(".line-through.break-words");
+    expect(struck0).toBeTruthy();
+    expect(struck0!.textContent).toContain(first.sourceNote!);
 
     // Row 1: old note → "(none)" because the incoming entry omits it.
     const note1 = await screen.findByTestId("text-entity-override-sourcenote-1");

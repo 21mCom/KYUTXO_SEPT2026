@@ -434,6 +434,11 @@ describe("v3 backup full pipeline: evidence files survive export -> wipe -> rest
         }
         return attachmentWriter.write(relativePath, fileData);
       },
+      // Delegate delete to the real writer so the post-failure sweep can remove
+      // the files this restore had already written before the failing write.
+      async delete(relativePath: string): Promise<void> {
+        return attachmentWriter.delete(relativePath);
+      },
     };
 
     // 6. The restore must REJECT with the DISTINCT RestoreInterruptedError (not

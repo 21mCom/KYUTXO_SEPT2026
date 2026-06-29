@@ -1835,7 +1835,15 @@ describe("resolveAllBlankInputAddresses", () => {
     });
 
     // Two local output rows the source received: PREV_1:0 (50000) will be spent,
-    // PREV_2:0 (20000) stays unspent.
+    // PREV_2:0 (20000) stays unspent. Each output's transaction must be a
+    // confirmed blockchainTransaction row — the exact-mode balance only counts
+    // outputs whose tx carries a positive block time.
+    await testDb.blockchainTransactions.add(
+      makeExistingTxRow(PREV_1) as unknown as BlockchainTransaction,
+    );
+    await testDb.blockchainTransactions.add(
+      makeExistingTxRow(PREV_2) as unknown as BlockchainTransaction,
+    );
     await addOutputRow(PREV_1, 0, PREV_ADDR, 50000, "v0_p2wpkh");
     await addOutputRow(PREV_2, 0, PREV_ADDR, 20000, "v0_p2wpkh");
 

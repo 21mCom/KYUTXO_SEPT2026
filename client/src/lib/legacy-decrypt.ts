@@ -367,13 +367,16 @@ export async function countUnrecoveredLegacyRows(
 
       for (const item of chunk) {
         const row = item as unknown as globalThis.Record<string, unknown>;
-        // Only count a row as locked when it actually carries a legacy
-        // encryption marker. Modern, never-encrypted rows legitimately have
-        // blank sentinel fields (e.g. address-less transactionParticipants,
-        // blank-inputString records from blockchain sync), and must never be
-        // reported as "missing original encrypted data." This check mirrors
-        // the one in hasUnrecoveredLegacyData and the recovery filter path.
-        if (!hasAnyLegacyMarker(row)) continue;
+        // Only count a row as locked when it is unambiguously a legacy row:
+        // it carries a legacy marker key OR still holds an "[encrypted]"
+        // placeholder in a sensitive field. Modern, never-encrypted rows
+        // legitimately have blank sentinel fields (e.g. address-less
+        // transactionParticipants, blank-inputString records from blockchain
+        // sync), and must never be reported as "missing original encrypted
+        // data." But a payload-less row that kept an "[encrypted]" field is a
+        // genuine (unrecoverable) legacy row and must still be counted. This
+        // check mirrors the one in hasUnrecoveredLegacyData.
+        if (!isDefinitelyLegacyRow(row, sensitiveFields)) continue;
         if (!isRowUnrecovered(row, sensitiveFields)) continue;
         // Whether it can be repaired depends on the encrypted payload still
         // being present — that is the only source the restore reads from.
@@ -433,7 +436,7 @@ export async function hasUnrecoveredLegacyData(signal?: AbortSignal): Promise<bo
 
       for (const item of chunk) {
         const row = item as unknown as globalThis.Record<string, unknown>;
-        if (hasAnyLegacyMarker(row) && isRowUnrecovered(row, sensitiveFields)) {
+        if (isDefinitelyLegacyRow(row, sensitiveFields) && isRowUnrecovered(row, sensitiveFields)) {
           return true;
         }
       }
@@ -786,6 +789,30 @@ function hasAnyLegacyMarker(row: globalThis.Record<string, unknown>): boolean {
   for (const key of LEGACY_MARKER_KEYS_TO_STRIP) {
     if (Object.prototype.hasOwnProperty.call(row, key)) {
       return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * True when the row is unambiguously a legacy row: it either carries a legacy
+ * marker key, or it still holds the literal "[encrypted]" placeholder in one of
+ * its sensitive fields. The placeholder is a definitive signal on its own —
+ * modern, never-encrypted rows never write that literal string — so a row that
+ * has lost its marker keys/payload but kept an "[encrypted]" field is still a
+ * genuine (and unrecoverable) legacy row, not a false positive from a blank
+ * sentinel. This keeps the blank-sentinel guard (which exists only to avoid
+ * counting modern rows that legitimately have blank sentinels) from hiding
+ * payload-less placeholder rows.
+ */
+function isDefinitelyLegacyRow(
+  row: globalThis.Record<string, unknown>,
+  sensitiveFields: readonly string[] | undefined,
+): boolean {
+  if (hasAnyLegacyMarker(row)) return true;
+  if (sensitiveFields) {
+    for (const field of sensitiveFields) {
+      if (isEncryptedPlaceholder(row[field])) return true;
     }
   }
   return false;
