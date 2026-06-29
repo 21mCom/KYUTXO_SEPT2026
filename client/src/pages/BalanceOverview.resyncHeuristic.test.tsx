@@ -268,4 +268,56 @@ describe("BalanceOverview heuristic re-sync", () => {
       expect(banner.textContent).toContain("1 address");
     });
   });
+
+  it("lists the specific heuristic addresses when the detail is expanded", async () => {
+    getNodeSettings.mockResolvedValue({ id: "default", type: "esplora" });
+    await renderAndShowBanner();
+
+    fireEvent.click(screen.getByTestId("button-toggle-heuristic-details"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("row-heuristic-address-A")).not.toBeNull();
+      expect(screen.getByTestId("row-heuristic-address-B")).not.toBeNull();
+    });
+    // Each listed address has its own re-sync action.
+    expect(screen.getByTestId("button-resync-heuristic-address-A")).not.toBeNull();
+    expect(screen.getByTestId("button-resync-heuristic-address-B")).not.toBeNull();
+    // No sync happens just from expanding the list.
+    expect(syncSingleAddress).not.toHaveBeenCalled();
+  });
+
+  it("re-syncs only the chosen address from the expanded list", async () => {
+    getNodeSettings.mockResolvedValue({ id: "default", type: "esplora" });
+    followUpHeuristicCount = 1;
+    await renderAndShowBanner();
+
+    fireEvent.click(screen.getByTestId("button-toggle-heuristic-details"));
+    await screen.findByTestId("button-resync-heuristic-address-A");
+
+    fireEvent.click(screen.getByTestId("button-resync-heuristic-address-A"));
+
+    await waitFor(() => expect(syncSingleAddress).toHaveBeenCalledTimes(1));
+    expect(syncSingleAddress).toHaveBeenCalledWith("A");
+    expect(syncSingleAddress).not.toHaveBeenCalledWith("B");
+    expect(updateProvider).toHaveBeenCalledTimes(1);
+
+    await waitFor(() => expect(toastCalls.length).toBeGreaterThan(0));
+    expect(toastCalls[0].title).toBe("Re-synced");
+    expect(toastCalls[0].variant).toBeUndefined();
+  });
+
+  it("warns without syncing when a single-address re-sync has no provider", async () => {
+    getNodeSettings.mockResolvedValue(null);
+    await renderAndShowBanner();
+
+    fireEvent.click(screen.getByTestId("button-toggle-heuristic-details"));
+    await screen.findByTestId("button-resync-heuristic-address-A");
+
+    fireEvent.click(screen.getByTestId("button-resync-heuristic-address-A"));
+
+    await waitFor(() => expect(toastCalls.length).toBeGreaterThan(0));
+    expect(toastCalls[0].title).toBe("No blockchain provider configured");
+    expect(toastCalls[0].variant).toBe("destructive");
+    expect(syncSingleAddress).not.toHaveBeenCalled();
+  });
 });

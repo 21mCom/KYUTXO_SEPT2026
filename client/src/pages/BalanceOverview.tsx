@@ -379,6 +379,15 @@ export default function BalanceOverview() {
   const [heuristicResyncProgress, setHeuristicResyncProgress] = useState<{ processed: number; total: number } | null>(null);
   const [cancellingResyncHeuristic, setCancellingResyncHeuristic] = useState(false);
   const resyncHeuristicAbortRef = useRef<AbortController | null>(null);
+  // Expandable detail under the heuristic banner: the specific address strings
+  // still on FIFO matching, loaded lazily when the user opens the list (and kept
+  // fresh on db changes while open). Each can be re-synced on its own.
+  const [heuristicDetailsOpen, setHeuristicDetailsOpen] = useState(false);
+  const [heuristicAddresses, setHeuristicAddresses] = useState<string[] | null>(null);
+  const [loadingHeuristicList, setLoadingHeuristicList] = useState(false);
+  // Addresses currently running a one-off per-address re-sync (so each row's
+  // button can show its own spinner and the rest stay enabled).
+  const [resyncingHeuristicAddresses, setResyncingHeuristicAddresses] = useState<Set<string>>(new Set());
   const resolveAbortByGroupRef = useRef<Map<string, AbortController>>(new Map());
   const resolveAbortByRecordRef = useRef<Map<number, AbortController>>(new Map());
   const [cancellingGroups, setCancellingGroups] = useState<Set<string>>(new Set());
@@ -570,6 +579,24 @@ export default function BalanceOverview() {
     }).catch(() => {});
     return () => { cancelled = true; };
   }, [dbSignal]);
+
+  // Load the specific heuristic-matched addresses only when the detail list is
+  // open, and refresh it on any db change (e.g. after a re-sync drops one off
+  // the list). Same local read as the count above, just keeping the strings.
+  useEffect(() => {
+    if (!heuristicDetailsOpen) return;
+    let cancelled = false;
+    setLoadingHeuristicList(true);
+    getHeuristicMatchedAddresses().then((addresses) => {
+      if (!cancelled) {
+        setHeuristicAddresses(addresses);
+        setLoadingHeuristicList(false);
+      }
+    }).catch(() => {
+      if (!cancelled) setLoadingHeuristicList(false);
+    });
+    return () => { cancelled = true; };
+  }, [heuristicDetailsOpen, dbSignal]);
 
   // Spend health (per group): attribute unresolved spends to the wallet groups
   // whose source addresses will be debited once resolved. Recomputed alongside
@@ -994,6 +1021,89 @@ export default function BalanceOverview() {
       resyncHeuristicAbortRef.current.abort();
     }
   }, []);
+
+  // Re-sync a single heuristic-matched address (the per-address action in the
+  // banner's expandable list). Same provider checks as the bulk action, scoped
+  // to one address so the user can fix just the addresses they care about. Once
+  // the address collects exact prevout data the dbSignal-driven recount drops it
+  // from both the count and the open list on its own; we also recount here to
+  // avoid a flash of the stale count.
+  const handleResyncSingleHeuristic = useCallback(async (address: string) => {
+    setResyncingHeuristicAddresses((prev) => {
+      if (prev.has(address)) return prev;
+      const next = new Set(prev);
+      next.add(address);
+      return next;
+    });
+    try {
+      const nodeSettings = await getNodeSettings("default");
+      if (!nodeSettings) {
+        toast({
+          title: "No blockchain provider configured",
+          description:
+            "Configure a provider in Settings to re-sync this address.",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      try {
+        const probe = createProviderFromSettings(nodeSettings);
+        await probe.getBlockHeight();
+      } catch (connErr) {
+        console.warn("[BalanceOverview] Provider unreachable for heuristic re-sync:", connErr);
+        toast({
+          title: "Can't reach the blockchain provider",
+          description:
+            "Check your connection or provider settings in Settings, then try again.",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      transactionSyncService.updateProvider(nodeSettings);
+
+      let ok = false;
+      try {
+        const result = await transactionSyncService.syncSingleAddress(address);
+        ok = result.success;
+      } catch (err) {
+        console.warn(`[BalanceOverview] Heuristic re-sync failed for ${address}:`, err);
+        ok = false;
+      }
+
+      const remaining = await countHeuristicMatchedAddresses();
+      setHeuristicAddressCount(remaining);
+      if (remaining === 0) setHeuristicWarningDismissed(false);
+
+      if (ok) {
+        toast({
+          title: "Re-synced",
+          description: "This address now uses exact matching.",
+        });
+      } else {
+        toast({
+          title: "Re-sync failed",
+          description:
+            "Couldn't re-sync this address. Check your provider settings and try again.",
+          variant: "destructive",
+        });
+      }
+    } catch (err) {
+      console.warn("[BalanceOverview] Heuristic re-sync failed:", err);
+      toast({
+        title: "Re-sync failed",
+        description: "Couldn't re-sync this address. Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setResyncingHeuristicAddresses((prev) => {
+        const next = new Set(prev);
+        next.delete(address);
+        return next;
+      });
+    }
+  }, [toast]);
 
   // Fetch + import the source transactions behind unattributable spends, then
   // attribute those spends locally. "Resolve & Recompute" can only attribute a
@@ -1493,58 +1603,152 @@ export default function BalanceOverview() {
 
       {showHeuristicWarning && (
         <div
-          className="flex-none flex items-start gap-3 px-4 py-3 border-b bg-yellow-50 dark:bg-yellow-950/30"
+          className="flex-none flex flex-col gap-3 px-4 py-3 border-b bg-yellow-50 dark:bg-yellow-950/30"
           data-testid="banner-heuristic-warning"
         >
-          <AlertTriangle className="h-4 w-4 text-yellow-600 dark:text-yellow-400 mt-0.5 flex-none" />
-          <div className="flex-1 min-w-0">
-            <p className="text-sm font-medium text-yellow-800 dark:text-yellow-200">
-              Some balances use estimated UTXO matching — they may be inaccurate
-            </p>
-            <p className="text-xs text-yellow-700/80 dark:text-yellow-300/70 mt-0.5">
-              {heuristicAddressCount!.toLocaleString()} address{heuristicAddressCount !== 1 ? "es" : ""} {heuristicAddressCount !== 1 ? "were" : "was"} synced
-              before exact spend data was collected, so their balances are guessed by matching
-              same-value amounts. This can be wrong for coinjoin or batch transactions. Re-sync
-              {heuristicAddressCount !== 1 ? " these addresses" : " this address"} to fetch exact
-              spend data and switch to precise matching.
-            </p>
-          </div>
-          <div className="flex items-center gap-2 flex-none flex-wrap justify-end">
-            {resyncingHeuristic ? (
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="h-4 w-4 text-yellow-600 dark:text-yellow-400 mt-0.5 flex-none" />
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-medium text-yellow-800 dark:text-yellow-200">
+                Some balances use estimated UTXO matching — they may be inaccurate
+              </p>
+              <p className="text-xs text-yellow-700/80 dark:text-yellow-300/70 mt-0.5">
+                {heuristicAddressCount!.toLocaleString()} address{heuristicAddressCount !== 1 ? "es" : ""} {heuristicAddressCount !== 1 ? "were" : "was"} synced
+                before exact spend data was collected, so their balances are guessed by matching
+                same-value amounts. This can be wrong for coinjoin or batch transactions. Re-sync
+                {heuristicAddressCount !== 1 ? " these addresses" : " this address"} to fetch exact
+                spend data and switch to precise matching.
+              </p>
               <Button
+                variant="ghost"
                 size="sm"
-                variant="outline"
-                onClick={handleCancelResyncHeuristic}
-                disabled={cancellingResyncHeuristic}
-                data-testid="button-cancel-resync-heuristic"
-                className="border-yellow-400 dark:border-yellow-600 text-yellow-800 dark:text-yellow-200"
+                onClick={() => setHeuristicDetailsOpen((o) => !o)}
+                data-testid="button-toggle-heuristic-details"
+                className="mt-1 -ml-2 h-7 px-2 text-xs text-yellow-800 dark:text-yellow-200"
               >
-                <StopCircle className="h-3 w-3 mr-1.5" />
-                {cancellingResyncHeuristic
-                  ? "Stopping…"
-                  : heuristicResyncProgress && heuristicResyncProgress.total > 0
-                    ? `Stop (${heuristicResyncProgress.processed.toLocaleString()}/${heuristicResyncProgress.total.toLocaleString()})`
-                    : "Stop re-syncing"}
+                {heuristicDetailsOpen ? (
+                  <ChevronDown className="h-3 w-3 mr-1" />
+                ) : (
+                  <ChevronRight className="h-3 w-3 mr-1" />
+                )}
+                {heuristicDetailsOpen
+                  ? "Hide affected addresses"
+                  : heuristicAddressCount === 1
+                    ? "Show affected address"
+                    : "Show affected addresses"}
               </Button>
-            ) : (
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={handleResyncHeuristic}
-                data-testid="button-resync-heuristic"
-                className="border-yellow-400 dark:border-yellow-600 text-yellow-800 dark:text-yellow-200"
+            </div>
+            <div className="flex items-center gap-2 flex-none flex-wrap justify-end">
+              {resyncingHeuristic ? (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={handleCancelResyncHeuristic}
+                  disabled={cancellingResyncHeuristic}
+                  data-testid="button-cancel-resync-heuristic"
+                  className="border-yellow-400 dark:border-yellow-600 text-yellow-800 dark:text-yellow-200"
+                >
+                  <StopCircle className="h-3 w-3 mr-1.5" />
+                  {cancellingResyncHeuristic
+                    ? "Stopping…"
+                    : heuristicResyncProgress && heuristicResyncProgress.total > 0
+                      ? `Stop (${heuristicResyncProgress.processed.toLocaleString()}/${heuristicResyncProgress.total.toLocaleString()})`
+                      : "Stop re-syncing"}
+                </Button>
+              ) : (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={handleResyncHeuristic}
+                  disabled={resyncingHeuristicAddresses.size > 0}
+                  data-testid="button-resync-heuristic"
+                  className="border-yellow-400 dark:border-yellow-600 text-yellow-800 dark:text-yellow-200"
+                >
+                  Re-sync all
+                </Button>
+              )}
+              <button
+                onClick={() => setHeuristicWarningDismissed(true)}
+                className="text-yellow-600/60 dark:text-yellow-400/60 hover:text-yellow-700 dark:hover:text-yellow-300 transition-colors"
+                data-testid="button-dismiss-heuristic-warning"
               >
-                Re-sync {heuristicAddressCount !== 1 ? "addresses" : "address"}
-              </Button>
-            )}
-            <button
-              onClick={() => setHeuristicWarningDismissed(true)}
-              className="text-yellow-600/60 dark:text-yellow-400/60 hover:text-yellow-700 dark:hover:text-yellow-300 transition-colors"
-              data-testid="button-dismiss-heuristic-warning"
-            >
-              <X className="h-4 w-4" />
-            </button>
+                <X className="h-4 w-4" />
+              </button>
+            </div>
           </div>
+
+          {heuristicDetailsOpen && (
+            <div className="ml-7" data-testid="list-heuristic-addresses">
+              {loadingHeuristicList && heuristicAddresses === null ? (
+                <div
+                  className="flex items-center gap-2 text-xs text-yellow-700/80 dark:text-yellow-300/70 py-2"
+                  data-testid="text-heuristic-list-loading"
+                >
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                  Loading addresses…
+                </div>
+              ) : heuristicAddresses && heuristicAddresses.length > 0 ? (
+                <ScrollArea className="max-h-[280px] rounded-md border border-yellow-300 dark:border-yellow-800 bg-yellow-50/50 dark:bg-yellow-950/20">
+                  <div className="divide-y divide-yellow-200 dark:divide-yellow-900">
+                    {heuristicAddresses.map((address) => {
+                      const isResyncing = resyncingHeuristicAddresses.has(address);
+                      return (
+                        <div
+                          key={address}
+                          className="flex items-center gap-2 px-3 py-2"
+                          data-testid={`row-heuristic-address-${address}`}
+                        >
+                          <p
+                            className="flex-1 min-w-0 text-xs font-mono break-all text-yellow-800 dark:text-yellow-200"
+                            data-testid={`text-heuristic-address-${address}`}
+                          >
+                            {address}
+                          </p>
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            className="flex-none h-7 w-7 text-yellow-700 dark:text-yellow-300"
+                            onClick={() => copy(address, { label: "Address" })}
+                            data-testid={`button-copy-heuristic-address-${address}`}
+                          >
+                            {copiedKey === address ? (
+                              <Check className="h-3 w-3" />
+                            ) : (
+                              <Copy className="h-3 w-3" />
+                            )}
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => handleResyncSingleHeuristic(address)}
+                            disabled={isResyncing || resyncingHeuristic}
+                            data-testid={`button-resync-heuristic-address-${address}`}
+                            className="flex-none border-yellow-400 dark:border-yellow-600 text-yellow-800 dark:text-yellow-200"
+                          >
+                            {isResyncing ? (
+                              <>
+                                <Loader2 className="h-3 w-3 mr-1.5 animate-spin" />
+                                Re-syncing…
+                              </>
+                            ) : (
+                              "Re-sync"
+                            )}
+                          </Button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </ScrollArea>
+              ) : (
+                <p
+                  className="text-xs text-yellow-700/80 dark:text-yellow-300/70 py-2"
+                  data-testid="text-heuristic-list-empty"
+                >
+                  No addresses are currently using estimated matching.
+                </p>
+              )}
+            </div>
+          )}
         </div>
       )}
 
