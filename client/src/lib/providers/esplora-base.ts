@@ -1,5 +1,5 @@
 import { isElectron, getElectronAPI } from '../electron';
-import { BlockchainProvider, ApiTransaction, AddressInfo, DEFAULT_RATE_LIMIT_DELAY, TOR_RATE_LIMIT_DELAY, isLocalOrPrivateUrl } from './types';
+import { BlockchainProvider, ApiTransaction, AddressInfo, AddressHistoryDates, DEFAULT_RATE_LIMIT_DELAY, TOR_RATE_LIMIT_DELAY, isLocalOrPrivateUrl } from './types';
 
 // Base class with shared functionality for Esplora-compatible APIs
 export abstract class EsploraProvider implements BlockchainProvider {
@@ -249,6 +249,55 @@ export abstract class EsploraProvider implements BlockchainProvider {
     }
 
     return { txCount, receivedSats, sentSats, balanceSats, firstSeenTime, lastSeenTime };
+  }
+
+  // Fast tier: a single address-summary call returns all four core fields
+  // (tx count, funded/spent sums, balance). No history pagination.
+  async getAddressCoreStats(address: string): Promise<AddressInfo> {
+    const statsResponse = await this.rateLimitedFetch(`${this.baseUrl}/address/${address}`);
+    const stats = await statsResponse.json();
+
+    const chainStats = stats.chain_stats ?? {};
+    const txCount: number = (chainStats.tx_count ?? 0) + (stats.mempool_stats?.tx_count ?? 0);
+    const receivedSats: number = chainStats.funded_txo_sum ?? 0;
+    const sentSats: number = chainStats.spent_txo_sum ?? 0;
+    const balanceSats: number = receivedSats - sentSats;
+
+    return { txCount, receivedSats, sentSats, balanceSats };
+  }
+
+  // On-demand tier: walk the full transaction history (most-recent first) to
+  // find accurate first/last-seen block times. Received/Sent already come from
+  // the fast tier's chain_stats on Esplora, so only dates are returned here.
+  async getAddressHistoryDates(address: string): Promise<AddressHistoryDates> {
+    let firstSeenTime: number | undefined;
+    let lastSeenTime: number | undefined;
+    let lastTxid: string | undefined;
+
+    for (;;) {
+      const url = lastTxid
+        ? `${this.baseUrl}/address/${address}/txs/chain/${lastTxid}`
+        : `${this.baseUrl}/address/${address}/txs`;
+
+      const txsResponse = await this.rateLimitedFetch(url);
+      const txs: ApiTransaction[] = await txsResponse.json();
+
+      if (!txs || txs.length === 0) break;
+
+      for (const tx of txs) {
+        if (!tx.status.confirmed || !tx.status.block_time) continue;
+        const t = tx.status.block_time;
+        if (lastSeenTime === undefined || t > lastSeenTime) lastSeenTime = t;
+        if (firstSeenTime === undefined || t < firstSeenTime) firstSeenTime = t;
+      }
+
+      lastTxid = txs[txs.length - 1].txid;
+
+      // Esplora returns 25 txs per page; fewer means we've reached the end.
+      if (txs.length < 25) break;
+    }
+
+    return { firstSeenTime, lastSeenTime };
   }
 
   async getTransaction(txid: string, signal?: AbortSignal): Promise<ApiTransaction | null> {

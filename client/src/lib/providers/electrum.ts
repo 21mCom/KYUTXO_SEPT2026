@@ -1,5 +1,6 @@
 import { isElectron, getElectronAPI } from '../electron';
-import { BlockchainProvider, ApiTransaction } from './types';
+import { BlockchainProvider, ApiTransaction, AddressInfo, AddressHistoryDates } from './types';
+import { computeHistoryFromTxs } from './address-history';
 
 // Electrum protocol provider - uses TCP instead of HTTP for faster bulk queries
 // Note: This provider is experimental and primarily optimized for getting transaction history.
@@ -135,6 +136,58 @@ export class ElectrumProvider implements BlockchainProvider {
       throw new Error(historyResult.error || 'Failed to get address history via Electrum');
     }
     return historyResult.history.length;
+  }
+
+  // Fast tier: only Transactions (history length) and Balance (sum of unspent
+  // outputs) are cheap one-call values on Electrum. Lifetime Received / Sent
+  // are NOT available cheaply — they're left undefined and filled later by
+  // getAddressHistoryDates.
+  async getAddressCoreStats(address: string): Promise<AddressInfo> {
+    this.ensureElectron();
+    const api = getElectronAPI();
+
+    // Transactions: length of the address history (one call).
+    const historyResult = await api.electrumGetHistory({
+      host: this.host,
+      port: this.port,
+      useSSL: this.useSSL,
+      address,
+      timeout: this.timeout,
+    });
+    if (!historyResult.success) {
+      throw new Error(historyResult.error || 'Failed to get address history via Electrum');
+    }
+    const txCount = historyResult.history.length;
+
+    // Balance: sum of unspent outputs (one call). Reuses the existing
+    // electrum-get-utxos IPC rather than adding a new endpoint.
+    const utxoResult = await api.electrumGetUtxos({
+      host: this.host,
+      port: this.port,
+      useSSL: this.useSSL,
+      address,
+      timeout: this.timeout,
+    });
+    if (!utxoResult.success) {
+      throw new Error(utxoResult.error || 'Failed to get address UTXOs via Electrum');
+    }
+    let balanceSats = 0;
+    for (const utxo of utxoResult.utxos || []) {
+      balanceSats += utxo.value || 0;
+    }
+
+    return { txCount, balanceSats };
+  }
+
+  // On-demand tier: walk every transaction to compute Received, Sent and the
+  // first/last-seen block times. Electrum verbose txs do NOT carry prevout
+  // addresses, so spends can't be detected by matching input addresses (that
+  // reports 0 sent). Instead we build the set of outpoints that paid TO this
+  // address — every funding output appears in the address history — and detect
+  // spends by matching each input's prevout reference (txid:vout) against it.
+  async getAddressHistoryDates(address: string): Promise<AddressHistoryDates> {
+    const txs = await this.getAddressTransactions(address);
+    return computeHistoryFromTxs(address, txs);
   }
 
   async getTransaction(txid: string, signal?: AbortSignal): Promise<ApiTransaction | null> {

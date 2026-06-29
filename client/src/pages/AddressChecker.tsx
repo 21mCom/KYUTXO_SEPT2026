@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback } from "react";
-import { Search, Loader2, AlertCircle, CheckCircle, Clock, X, RefreshCw, Info } from "lucide-react";
+import { Search, Loader2, AlertCircle, CheckCircle, Clock, X, RefreshCw, Info, CalendarClock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -8,11 +8,14 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useNodeSettings } from "@/hooks/use-node-settings";
-import { createProviderFromSettings } from "@/lib/blockchain-api";
+import { createProviderFromSettings, type BlockchainProvider } from "@/lib/blockchain-api";
 import { validateAddress, formatBTC } from "@/lib/bitcoin";
 import type { AddressInfo, ApiTransaction } from "@/lib/providers/types";
+import { computeHistoryFromTxs } from "@/lib/providers/address-history";
 
 type RowStatus = "pending" | "loading" | "done" | "error";
+// History (First/Last Seen) is loaded on demand, separately from core stats.
+type HistoryPhase = "idle" | "loading" | "done" | "error";
 
 interface AddressRow {
   raw: string;
@@ -21,36 +24,24 @@ interface AddressRow {
   status: RowStatus;
   info?: AddressInfo;
   error?: string;
+  historyPhase: HistoryPhase;
+  historyError?: string;
 }
 
+// Fallback derivation for providers exposing neither getAddressCoreStats nor
+// getAddressInfo. Reuses the shared history walk (robust outpoint-based sent
+// matching) and adds the confirmed tx count + derived balance.
 function deriveAddressInfoFromTxs(address: string, txs: ApiTransaction[]): AddressInfo {
-  let receivedSats = 0;
-  let sentSats = 0;
-  let firstSeenTime: number | undefined;
-  let lastSeenTime: number | undefined;
-
-  for (const tx of txs) {
-    if (!tx.status.confirmed) continue;
-    const blockTime = tx.status.block_time;
-    if (blockTime) {
-      if (firstSeenTime === undefined || blockTime < firstSeenTime) firstSeenTime = blockTime;
-      if (lastSeenTime === undefined || blockTime > lastSeenTime) lastSeenTime = blockTime;
-    }
-    for (const out of tx.vout) {
-      if (out.scriptpubkey_address === address) receivedSats += out.value;
-    }
-    for (const inp of tx.vin) {
-      if (inp.prevout?.scriptpubkey_address === address) sentSats += inp.prevout.value;
-    }
-  }
-
+  const history = computeHistoryFromTxs(address, txs);
+  const receivedSats = history.receivedSats ?? 0;
+  const sentSats = history.sentSats ?? 0;
   return {
     txCount: txs.filter(tx => tx.status.confirmed).length,
     receivedSats,
     sentSats,
     balanceSats: receivedSats - sentSats,
-    firstSeenTime,
-    lastSeenTime,
+    firstSeenTime: history.firstSeenTime,
+    lastSeenTime: history.lastSeenTime,
   };
 }
 
@@ -96,6 +87,59 @@ function StatusBadge({ status }: { status: RowStatus }) {
   );
 }
 
+// Renders the First Seen cell, which doubles as the per-row on-demand control
+// for loading transaction history (First/Last Seen, and on Electrum Received/Sent).
+function renderFirstSeen(row: AddressRow, onLoad: () => void, isHistoryRunning: boolean) {
+  if (row.isInvalid || row.status !== "done") {
+    return <span className="text-muted-foreground">—</span>;
+  }
+  if (row.historyPhase === "done") {
+    return <span className="text-muted-foreground">{formatDate(row.info?.firstSeenTime)}</span>;
+  }
+  if (row.historyPhase === "loading") {
+    return (
+      <span className="inline-flex items-center justify-end gap-1 text-muted-foreground">
+        <Loader2 className="h-3 w-3 animate-spin" />
+        Loading…
+      </span>
+    );
+  }
+  if (row.historyPhase === "error") {
+    return (
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onLoad}
+            disabled={isHistoryRunning}
+            className="text-destructive"
+            data-testid={`button-retry-history-${row.raw}`}
+          >
+            <AlertCircle className="h-3 w-3 mr-1" />
+            Retry
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent>
+          <span className="text-xs max-w-xs block">{row.historyError}</span>
+        </TooltipContent>
+      </Tooltip>
+    );
+  }
+  return (
+    <Button
+      variant="ghost"
+      size="sm"
+      onClick={onLoad}
+      disabled={isHistoryRunning}
+      data-testid={`button-load-history-${row.raw}`}
+    >
+      <CalendarClock className="h-3 w-3 mr-1" />
+      Load
+    </Button>
+  );
+}
+
 interface ParseResult {
   rows: AddressRow[];
   duplicatesSkipped: number;
@@ -126,9 +170,10 @@ function parseInput(text: string): ParseResult {
         isInvalid: true,
         invalidReason: result.error || "Not a valid Bitcoin address",
         status: "pending",
+        historyPhase: "idle",
       });
     } else {
-      rows.push({ raw: line, isInvalid: false, status: "pending" });
+      rows.push({ raw: line, isInvalid: false, status: "pending", historyPhase: "idle" });
     }
   }
 
@@ -143,7 +188,11 @@ export default function AddressChecker() {
   const [hasRun, setHasRun] = useState(false);
   const [duplicatesSkipped, setDuplicatesSkipped] = useState(0);
   const [providerError, setProviderError] = useState<string | null>(null);
+  const [isHistoryRunning, setIsHistoryRunning] = useState(false);
   const cancelledRef = useRef(false);
+  const historyCancelledRef = useRef(false);
+  // The provider used for the most recent check, reused for on-demand history.
+  const providerRef = useRef<BlockchainProvider | null>(null);
 
   // kept for potential future use
   const _updateRow = useCallback((index: number, patch: Partial<AddressRow>) => {
@@ -160,8 +209,9 @@ export default function AddressChecker() {
     setHasRun(true);
     setIsRunning(true);
     cancelledRef.current = false;
+    historyCancelledRef.current = false;
 
-    let provider: ReturnType<typeof createProviderFromSettings>;
+    let provider: BlockchainProvider;
     try {
       provider = createProviderFromSettings(nodeSettings);
     } catch (err) {
@@ -170,6 +220,7 @@ export default function AddressChecker() {
       setIsRunning(false);
       return;
     }
+    providerRef.current = provider;
 
     const validIndexes = parsed
       .map((r, i) => ({ r, i }))
@@ -184,16 +235,26 @@ export default function AddressChecker() {
 
       try {
         let info: AddressInfo;
+        // historyPhase = "idle" means First/Last Seen are loaded on demand.
+        // "done" means the fallback already filled them in this pass.
+        let historyPhase: HistoryPhase;
 
-        if (provider.getAddressInfo) {
+        if (provider.getAddressCoreStats) {
+          // Fast tier: cheap core fields only, no history pagination.
+          info = await provider.getAddressCoreStats(address);
+          historyPhase = "idle";
+        } else if (provider.getAddressInfo) {
+          // Fallback: combined call already walks history for the dates.
           info = await provider.getAddressInfo(address);
+          historyPhase = "done";
         } else {
           const txs = await provider.getAddressTransactions(address);
           info = deriveAddressInfoFromTxs(address, txs);
+          historyPhase = "done";
         }
 
         setRows(prev => prev.map((r, idx) =>
-          idx === i ? { ...r, status: "done", info } : r
+          idx === i ? { ...r, status: "done", info, historyPhase, historyError: undefined } : r
         ));
       } catch (err) {
         if (cancelledRef.current) break;
@@ -208,9 +269,89 @@ export default function AddressChecker() {
     setIsRunning(false);
   };
 
+  // Run the on-demand history walk for the given row indexes, filling First/Last
+  // Seen (and, on Electrum, Received/Sent). Runs sequentially and stops early if
+  // the user cancels. Errors surface per-row without aborting the others.
+  const loadHistoryForIndexes = async (targets: { i: number; address: string }[]) => {
+    const provider = providerRef.current;
+    if (!provider || !provider.getAddressHistoryDates || targets.length === 0) return;
+
+    historyCancelledRef.current = false;
+    setIsHistoryRunning(true);
+
+    for (const { i, address } of targets) {
+      if (historyCancelledRef.current) break;
+
+      setRows(prev => prev.map((r, idx) =>
+        idx === i ? { ...r, historyPhase: "loading", historyError: undefined } : r
+      ));
+
+      try {
+        const dates = await provider.getAddressHistoryDates!(address);
+        if (historyCancelledRef.current) {
+          setRows(prev => prev.map((r, idx) =>
+            idx === i && r.historyPhase === "loading" ? { ...r, historyPhase: "idle" } : r
+          ));
+          break;
+        }
+        setRows(prev => prev.map((r, idx) => {
+          if (idx !== i) return r;
+          const base: AddressInfo = r.info ?? { txCount: 0, balanceSats: 0 };
+          const info: AddressInfo = {
+            ...base,
+            firstSeenTime: dates.firstSeenTime,
+            lastSeenTime: dates.lastSeenTime,
+            // Only Electrum's history path supplies these; keep fast-tier values otherwise.
+            receivedSats: dates.receivedSats ?? base.receivedSats,
+            sentSats: dates.sentSats ?? base.sentSats,
+          };
+          return { ...r, historyPhase: "done", info };
+        }));
+      } catch (err) {
+        if (historyCancelledRef.current) break;
+        setRows(prev => prev.map((r, idx) =>
+          idx === i
+            ? { ...r, historyPhase: "error", historyError: err instanceof Error ? err.message : "History load failed" }
+            : r
+        ));
+      }
+    }
+
+    // Revert any rows still marked loading (e.g. cancelled mid-run) back to idle.
+    if (historyCancelledRef.current) {
+      setRows(prev => prev.map(r => r.historyPhase === "loading" ? { ...r, historyPhase: "idle" } : r));
+    }
+
+    setIsHistoryRunning(false);
+  };
+
+  const runHistoryForRow = (index: number) => {
+    if (isHistoryRunning) return;
+    const row = rows[index];
+    if (!row || row.isInvalid || row.status !== "done") return;
+    loadHistoryForIndexes([{ i: index, address: row.raw }]);
+  };
+
+  const runHistoryForAll = () => {
+    if (isHistoryRunning) return;
+    const targets = rows
+      .map((r, i) => ({ r, i }))
+      .filter(({ r }) => r.status === "done" && (r.historyPhase === "idle" || r.historyPhase === "error"))
+      .map(({ r, i }) => ({ i, address: r.raw }));
+    loadHistoryForIndexes(targets);
+  };
+
+  const handleCancelHistory = () => {
+    historyCancelledRef.current = true;
+    setIsHistoryRunning(false);
+  };
+
   const handleReset = () => {
     cancelledRef.current = true;
+    historyCancelledRef.current = true;
+    providerRef.current = null;
     setIsRunning(false);
+    setIsHistoryRunning(false);
     setRows([]);
     setHasRun(false);
     setDuplicatesSkipped(0);
@@ -230,6 +371,14 @@ export default function AddressChecker() {
 
   const hasResults = rows.length > 0;
   const allDone = validCount > 0 && (doneCount + errorCount) === validCount && !isRunning;
+
+  // History (First/Last Seen) load progress, tracked separately from core stats.
+  const historyEligibleCount = rows.filter(r => r.status === "done").length;
+  const historyPendingCount = rows.filter(
+    r => r.status === "done" && (r.historyPhase === "idle" || r.historyPhase === "error")
+  ).length;
+  const historyDoneCount = rows.filter(r => r.historyPhase === "done").length;
+  const canLoadHistory = historyEligibleCount > 0 && historyPendingCount > 0 && !isRunning && !isHistoryRunning;
 
   return (
     <div className="flex-1 overflow-y-auto p-6">
@@ -287,7 +436,25 @@ export default function AddressChecker() {
                 </Button>
               )}
 
-              {hasResults && !isRunning && (
+              {canLoadHistory && (
+                <Button
+                  variant="outline"
+                  onClick={runHistoryForAll}
+                  data-testid="button-load-history-all"
+                >
+                  <CalendarClock className="h-4 w-4 mr-2" />
+                  Load First/Last Seen ({historyPendingCount})
+                </Button>
+              )}
+
+              {isHistoryRunning && (
+                <Button variant="outline" onClick={handleCancelHistory} data-testid="button-cancel-history">
+                  <X className="h-4 w-4 mr-2" />
+                  Cancel
+                </Button>
+              )}
+
+              {hasResults && !isRunning && !isHistoryRunning && (
                 <Button variant="outline" onClick={handleReset} data-testid="button-reset-check">
                   <RefreshCw className="h-4 w-4 mr-2" />
                   Reset
@@ -297,6 +464,13 @@ export default function AddressChecker() {
               {isRunning && validCount > 0 && (
                 <span className="text-sm text-muted-foreground" data-testid="text-progress">
                   {doneCount + errorCount} / {validCount} complete
+                </span>
+              )}
+
+              {isHistoryRunning && (
+                <span className="text-sm text-muted-foreground inline-flex items-center gap-2" data-testid="text-history-progress">
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                  Loading history {historyDoneCount} / {historyEligibleCount}
                 </span>
               )}
             </div>
@@ -415,13 +589,13 @@ export default function AddressChecker() {
                         </TableCell>
 
                         <TableCell className="text-right tabular-nums" data-testid={`cell-received-${i}`}>
-                          {row.info ? (
+                          {row.info && row.info.receivedSats !== undefined ? (
                             <span className="font-mono text-xs">{formatBTC(row.info.receivedSats)}</span>
                           ) : "—"}
                         </TableCell>
 
                         <TableCell className="text-right tabular-nums" data-testid={`cell-sent-${i}`}>
-                          {row.info ? (
+                          {row.info && row.info.sentSats !== undefined ? (
                             <span className="font-mono text-xs">{formatBTC(row.info.sentSats)}</span>
                           ) : "—"}
                         </TableCell>
@@ -432,12 +606,14 @@ export default function AddressChecker() {
                           ) : "—"}
                         </TableCell>
 
-                        <TableCell className="text-right text-xs text-muted-foreground" data-testid={`cell-firstseen-${i}`}>
-                          {row.info ? formatDate(row.info.firstSeenTime) : "—"}
+                        <TableCell className="text-right text-xs" data-testid={`cell-firstseen-${i}`}>
+                          {renderFirstSeen(row, () => runHistoryForRow(i), isHistoryRunning)}
                         </TableCell>
 
                         <TableCell className="text-right text-xs text-muted-foreground" data-testid={`cell-lastseen-${i}`}>
-                          {row.info ? formatDate(row.info.lastSeenTime) : "—"}
+                          {row.status === "done" && row.historyPhase === "done"
+                            ? formatDate(row.info?.lastSeenTime)
+                            : "—"}
                         </TableCell>
                       </TableRow>
                     ))}

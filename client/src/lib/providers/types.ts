@@ -2,11 +2,26 @@ import { ScriptType, OpReturnOutput } from '@/lib/database';
 
 export interface AddressInfo {
   txCount: number;
-  receivedSats: number;
-  sentSats: number;
+  /** Undefined when the fast-path could not compute it cheaply (Electrum). */
+  receivedSats?: number;
+  /** Undefined when the fast-path could not compute it cheaply (Electrum). */
+  sentSats?: number;
   balanceSats: number;
   firstSeenTime?: number;
   lastSeenTime?: number;
+}
+
+/**
+ * Returned by the on-demand history walk. On Electrum, receivedSats / sentSats
+ * are also filled here (they cannot be computed cheaply on that protocol).
+ */
+export interface AddressHistoryDates {
+  firstSeenTime?: number;
+  lastSeenTime?: number;
+  /** Filled by Electrum history path where the fast-path left them blank. */
+  receivedSats?: number;
+  /** Filled by Electrum history path where the fast-path left them blank. */
+  sentSats?: number;
 }
 
 export interface BlockchainProvider {
@@ -20,6 +35,18 @@ export interface BlockchainProvider {
   testConnection(): Promise<{ success: boolean; blockHeight?: number; error?: string; latency?: number }>;
   /** Optional: cheaply fetch aggregated address stats from the node. */
   getAddressInfo?(address: string): Promise<AddressInfo>;
+  /**
+   * Fast-tier: return only the cheap core fields without walking history.
+   * On Esplora this is a single address-summary call (all four core fields).
+   * On Electrum this fills txCount + balanceSats; receivedSats/sentSats are left
+   * undefined and will be filled by getAddressHistoryDates.
+   */
+  getAddressCoreStats?(address: string): Promise<AddressInfo>;
+  /**
+   * On-demand history walk: return first/last seen times (and, on Electrum,
+   * also receivedSats / sentSats which cannot be computed cheaply).
+   */
+  getAddressHistoryDates?(address: string): Promise<AddressHistoryDates>;
 }
 
 export interface ApiTransaction {
