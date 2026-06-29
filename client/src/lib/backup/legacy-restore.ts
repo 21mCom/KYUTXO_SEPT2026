@@ -336,6 +336,48 @@ export function computeTransactionEnrichment(
 }
 
 /**
+ * Collapse duplicate-`txid` rows within a single incoming set into one row per
+ * txid, keeping the RICHEST combination: the first occurrence is kept and any
+ * field it is missing/empty/placeholder for is filled from later occurrences via
+ * {@link computeTransactionEnrichment}. Already-populated fields on the kept row
+ * are never overwritten. Rows without a usable `txid` are passed through
+ * unchanged (they cannot be de-duped). The first occurrence's position is
+ * preserved.
+ *
+ * A backup exported from KYUTXO's unique-`txid` table never contains duplicate
+ * txids, so in practice this is a no-op pass-through. It exists so that a
+ * malformed/hand-edited backup carrying the same txid twice (e.g. one
+ * placeholder row and one resolved row) neither loses the richer row to a
+ * first-wins drop nor crashes on the unique-`txid` constraint when bulk-inserted
+ * (the same data-loss class fixed for the live-collision merge path).
+ */
+export function mergeDuplicateTransactionsByTxid<T extends Record<string, any>>(
+  rows: T[],
+): T[] {
+  const result: T[] = [];
+  const indexByTxid = new Map<string, number>();
+  for (const row of rows) {
+    const txid = row?.txid;
+    if (typeof txid !== "string" || txid === "") {
+      result.push(row);
+      continue;
+    }
+    const existingIdx = indexByTxid.get(txid);
+    if (existingIdx === undefined) {
+      indexByTxid.set(txid, result.length);
+      result.push(row);
+      continue;
+    }
+    const kept = result[existingIdx];
+    const changes = computeTransactionEnrichment(kept, row);
+    if (Object.keys(changes).length > 0) {
+      result[existingIdx] = { ...kept, ...changes };
+    }
+  }
+  return result;
+}
+
+/**
  * Restore confirmed blockchain transactions and their input/output
  * participants. Transactions are de-duped by `txid` (existing rows in merge
  * mode, and within the incoming set in both modes).
@@ -388,24 +430,40 @@ export async function restoreLegacyTransactions(
       }
     }
 
-    const txToAdd: CreateTransactionData[] = [];
-    // Keep the LAST backup row per collided txid (matches the de-dup rule that a
-    // later incoming row wins) so its richer fields drive enrichment.
-    const backupRowByCollidedTxid = new Map<string, any>();
+    // Split the incoming rows into those that collide with an existing live row
+    // (merge mode only — `existingTxids` is empty otherwise) and the genuinely
+    // new ones. Each group is de-duped within itself by `txid` via enrichment so
+    // a backup carrying the same txid twice (one placeholder, one resolved) keeps
+    // the richest combination instead of dropping the richer row or crashing on
+    // the unique-`txid` constraint when inserted (covers replace mode, which has
+    // no live collisions but previously kept only the first incoming row).
+    const collidedBackupRows: any[] = [];
+    const newBackupRows: any[] = [];
     for (const tx of blockchainTransactions) {
       if (!tx.txid) continue;
       if (existingTxids.has(tx.txid)) {
         collidedTxids.add(tx.txid);
-        backupRowByCollidedTxid.set(tx.txid, tx);
-        continue;
+        collidedBackupRows.push(tx);
+      } else {
+        newBackupRows.push(tx);
       }
-      if (restoredTxids.has(tx.txid)) continue;
+    }
+
+    const txToAdd: CreateTransactionData[] = [];
+    for (const tx of mergeDuplicateTransactionsByTxid(newBackupRows)) {
       const { id, ...txData } = tx;
       txToAdd.push(txData as CreateTransactionData);
       restoredTxids.add(tx.txid);
     }
     await bulkAddTransactions(txToAdd, { skipNotification: true });
     transactionsAdded = txToAdd.length;
+
+    // Richest backup row per collided txid (combines any duplicate backup rows
+    // for that txid) drives the live-row enrichment below.
+    const backupRowByCollidedTxid = new Map<string, any>();
+    for (const tx of mergeDuplicateTransactionsByTxid(collidedBackupRows)) {
+      backupRowByCollidedTxid.set(tx.txid, tx);
+    }
 
     // Fill missing/placeholder fields on each collided live row from its backup
     // row. Already-populated live fields are left untouched.

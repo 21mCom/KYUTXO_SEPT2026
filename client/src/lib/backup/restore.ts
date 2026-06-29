@@ -70,6 +70,7 @@ import type {
   LineageSnapshot,
 } from "@/lib/database";
 import { clearInlineTables, restoreInlineTables } from "./inline-tables";
+import { mergeDuplicateTransactionsByTxid } from "./legacy-restore";
 
 // Thrown when a restore is cancelled AFTER the destructive clear but the vault
 // could NOT be reset to a clean state. The vault is then in an unknown partial
@@ -430,7 +431,16 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
       }
       counts.addressSyncState += out.length;
     } else if (table === "blockchainTransactions") {
-      const out = rows.map(({ id, ...d }) => d as CreateTransactionData);
+      // The v3 restore always clears the vault first (see the manifest handler),
+      // so a same-txid collision with an EXISTING row can never happen here — the
+      // data-loss class fixed for the merge path cannot recur. A backup exported
+      // from KYUTXO's unique-`txid` table also never repeats a txid. Even so,
+      // defensively collapse any duplicate txids in this batch via enrichment so
+      // a malformed/hand-edited backup neither drops the richer row nor crashes
+      // on the unique-`txid` constraint when bulk-inserted.
+      const out = mergeDuplicateTransactionsByTxid(rows).map(
+        ({ id, ...d }) => d as CreateTransactionData,
+      );
       if (out.length) await bulkAddTransactions(out, { skipNotification: true });
       counts.blockchainTransactions += out.length;
     } else if (table === "utxoLineage") {
