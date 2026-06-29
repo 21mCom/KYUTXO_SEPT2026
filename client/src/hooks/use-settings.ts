@@ -47,6 +47,7 @@ import {
 import { DEFAULT_TX_LIMIT } from '@/lib/data/fund-trail-engine';
 import { DEFAULT_INTERMEDIARY_ADDRESS_CAP } from '@/lib/data/fund-trail-export';
 import { DEFAULT_HOVER_TOOLTIP_PREFS, type HoverTooltipPrefs } from '@/lib/metadata-hover';
+import type { FundTrailLayout } from '@/components/fund-trail/view-data';
 
 export function useSettings() {
   // Wrap the query so undefined (not found) becomes null, keeping the dexie-
@@ -69,6 +70,7 @@ export function useSettings() {
     showScoreBreakdown: settings?.showScoreBreakdown ?? false,
     disableOrphanCheck: settings?.disableOrphanCheck ?? false,
     fundTrailTxLimit: settings?.fundTrailTxLimit ?? DEFAULT_TX_LIMIT,
+    fundTrailLayout: (settings?.fundTrailLayout ?? 'classic') as FundTrailLayout,
     sourceOfFundsTxLimit: settings?.sourceOfFundsTxLimit ?? DEFAULT_TX_LIMIT,
     intermediaryAddressCap: settings?.intermediaryAddressCap ?? DEFAULT_INTERMEDIARY_ADDRESS_CAP,
     hoverTooltipPrefs: settings?.hoverTooltipPrefs
@@ -201,6 +203,13 @@ export async function updateFundTrailTxLimit(value: number) {
   await ensureStoredSettings('default');
   await updateStoredSettings('default', {
     fundTrailTxLimit: value,
+  });
+}
+
+export async function updateFundTrailLayout(value: FundTrailLayout) {
+  await ensureStoredSettings('default');
+  await updateStoredSettings('default', {
+    fundTrailLayout: value,
   });
 }
 

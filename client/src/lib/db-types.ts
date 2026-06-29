@@ -385,6 +385,10 @@ export interface Settings {
   // capping (trade-off between completeness and speed on busy wallets).
   // When unset, defaults to DEFAULT_TX_LIMIT (2000).
   fundTrailTxLimit?: number;
+  // Persisted user preference for the Fund Trail multi-hop layout selector
+  // (see FundTrailLayout in fund-trail/view-data.ts). Defaults to 'classic'
+  // when unset.
+  fundTrailLayout?: 'classic' | 'horizontal' | 'vertical' | 'breakout' | 'sankey';
   // Max number of funding transactions the Source of Funds Report processes per
   // report run before capping (mirrors the Fund Trail limit control).
   // When unset, defaults to DEFAULT_TX_LIMIT (2000).
@@ -477,6 +481,7 @@ export function createDefaultSettings(id: string = 'default'): Settings {
     privacyHistoryLimit: 30,
     disableOrphanCheck: false,
     fundTrailTxLimit: 2000,
+    fundTrailLayout: 'classic',
     intermediaryAddressCap: 10,
   };
 }

@@ -15,6 +15,7 @@ const KEYS = [
   "cancelConfirmThreshold",
   "privacyHistoryLimit",
   "fundTrailTxLimit",
+  "fundTrailLayout",
   "intermediaryAddressCap",
   "sourceOfFundsTxLimit",
   "entityListSnapshot",

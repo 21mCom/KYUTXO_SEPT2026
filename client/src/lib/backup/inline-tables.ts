@@ -61,6 +61,16 @@ import {
   getExistingSnapshotIds,
 } from "@/lib/data/lineage-crud";
 import { lineageIdentity, type RestoreMode } from "./legacy-restore-misc";
+import { FUND_TRAIL_LAYOUT_OPTIONS } from "@/components/fund-trail/view-data";
+
+// Recognized Fund Trail layout values + their human-readable labels, derived
+// from the single source of truth so this allow-list never drifts from the UI.
+const FUND_TRAIL_LAYOUT_VALUES = new Set<string>(
+  FUND_TRAIL_LAYOUT_OPTIONS.map((o) => o.value),
+);
+const FUND_TRAIL_LAYOUT_LABELS: Record<string, string> = Object.fromEntries(
+  FUND_TRAIL_LAYOUT_OPTIONS.map((o) => [o.value, o.label]),
+);
 
 /**
  * Restore the `nodeSettings` singleton rows from a backup. Shared by BOTH the
@@ -138,6 +148,19 @@ const PORTABLE_PREFERENCES: PortablePreferenceDescriptor[] = [
         ? s.fundTrailTxLimit
         : undefined,
     format: (v) => `${(v as number).toLocaleString()} per hop`,
+  },
+  {
+    key: "fundTrailLayout",
+    label: "Fund Trail layout",
+    // Only carry a recognized layout value; anything else (missing field on an
+    // older backup, or an unknown string) leaves the current value untouched.
+    extract: (s) =>
+      typeof s.fundTrailLayout === "string" &&
+      FUND_TRAIL_LAYOUT_VALUES.has(s.fundTrailLayout)
+        ? s.fundTrailLayout
+        : undefined,
+    format: (v) =>
+      FUND_TRAIL_LAYOUT_LABELS[v as string] ?? String(v),
   },
   {
     key: "intermediaryAddressCap",

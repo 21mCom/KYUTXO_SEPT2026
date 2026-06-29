@@ -7,7 +7,7 @@ import {
   createContext,
 } from "react";
 import { useQuery, useQueryClient, keepPreviousData } from "@tanstack/react-query";
-import { useSettings } from "@/hooks/use-settings";
+import { useSettings, updateFundTrailLayout } from "@/hooks/use-settings";
 import {
   ChevronDown,
   ChevronRight,
@@ -995,7 +995,7 @@ function toDateRange(startDate: string, endDate: string): DateRange | undefined 
 }
 
 export default function FundTrail() {
-  const { fundTrailTxLimit, intermediaryAddressCap } = useSettings();
+  const { fundTrailTxLimit, intermediaryAddressCap, fundTrailLayout } = useSettings();
 
   // --- Source mode: trace by group or by a single address ---
   const [sourceMode, setSourceMode] = useState<"group" | "address">("group");
@@ -1007,8 +1007,6 @@ export default function FundTrail() {
   // --- Hop depth controls (1 = same as single-hop; >1 = auto multi-hop) ---
   const [backwardHops, setBackwardHops] = useState(1);
   const [forwardHops, setForwardHops] = useState(1);
-  const [fundTrailLayout, setFundTrailLayout] =
-    useState<FundTrailLayout>("classic");
   const isMultiHop = backwardHops > 1 || forwardHops > 1;
 
   // Live progress for the multi-hop trace: which hop depth is currently being
@@ -1498,7 +1496,7 @@ export default function FundTrail() {
             </label>
             <Select
               value={fundTrailLayout}
-              onValueChange={v => setFundTrailLayout(v as FundTrailLayout)}
+              onValueChange={v => updateFundTrailLayout(v as FundTrailLayout)}
             >
               <SelectTrigger
                 className="w-52"

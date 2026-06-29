@@ -50,6 +50,7 @@ const BASE_SETTINGS = {
   cancelConfirmThreshold: 75,
   privacyHistoryLimit: 30,
   fundTrailTxLimit: 2000,
+  fundTrailLayout: "classic",
   // No entity-list snapshot on this device to start.
 } as any;
 
@@ -68,6 +69,16 @@ function formatDeviceValue(key: string, settings: any): string | null {
       return `${settings.privacyHistoryLimit} runs`;
     case "fundTrailTxLimit":
       return `${settings.fundTrailTxLimit.toLocaleString()} per hop`;
+    case "fundTrailLayout": {
+      const labels: Record<string, string> = {
+        classic: "Classic columns",
+        horizontal: "Horizontal hop timeline",
+        vertical: "Vertical timeline scroll",
+        breakout: "Full-screen breakout",
+        sankey: "Sankey flow",
+      };
+      return labels[settings.fundTrailLayout] ?? String(settings.fundTrailLayout);
+    }
     case "intermediaryAddressCap":
       return `${settings.intermediaryAddressCap.toLocaleString()} addresses`;
     case "sourceOfFundsTxLimit":
@@ -164,6 +175,7 @@ describe("settings-preferences preview/restore parity", () => {
       cancelConfirmThreshold: 90,
       privacyHistoryLimit: 100,
       fundTrailTxLimit: 5000,
+      fundTrailLayout: "sankey",
       intermediaryAddressCap: 25,
       sourceOfFundsTxLimit: 5000,
       entityListSnapshot: { entries: [{ address: "a" }] },
