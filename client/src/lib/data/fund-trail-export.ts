@@ -592,7 +592,7 @@ export async function buildFundTrailPdf(
       const path = node.pathAddresses ?? [];
       const pathLine =
         path.length > 0
-          ? `\n${indentPrefix}    via: ${summarizeIntermediaryChain(path, maxIntermediaryAddresses)}`
+          ? `\n${indentPrefix}    via: ${sanitizePdfText(summarizeIntermediaryChain(path, maxIntermediaryAddresses))}`
           : "";
       return [
         `${indentPrefix}${hopPrefix}${sanitizePdfText(node.groupLabel)}${pathLine}`,
@@ -644,8 +644,8 @@ export async function buildFundTrailPdf(
     cursorY += headingHeight - oneLineHeight + 2;
 
     const detailBody = node.details.map((d) => [
-      d.address,
-      d.txid,
+      sanitizePdfText(d.address),
+      sanitizePdfText(d.txid),
       btcAmount(d.amount),
       isoDate(d.blockTime),
     ]);

@@ -12,6 +12,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { formatBTC } from "@/lib/bitcoin";
+import { sanitizePdfText } from "@/lib/pdfText";
 import { useTags } from "@/hooks/use-tags";
 import { useOwners } from "@/hooks/use-owners";
 import { useWalletNames } from "@/hooks/use-wallet-names";
@@ -453,7 +454,7 @@ export default function StatementReport() {
           ? usedAddresses.join(", ")
           : `${usedAddresses.slice(0, 3).join(", ")} (+${usedAddresses.length - 3} more)`;
         subtitle += subtitle ? " | " : "";
-        subtitle += `Addresses: ${addrText}`;
+        subtitle += `Addresses: ${sanitizePdfText(addrText)}`;
       }
       if (subtitle) {
         doc.text(subtitle, 14, 28);
@@ -478,10 +479,10 @@ export default function StatementReport() {
 
       const body = rows.map(row => {
         const r: string[] = [row.dateStr];
-        if (showTxids) r.push(row.txid.slice(0, 16) + "...");
+        if (showTxids) r.push(sanitizePdfText(row.txid.slice(0, 16)) + "...");
         if (showAddresses) {
           const addrs = Array.from(new Set(row.participants.map(p => p.address)));
-          r.push(addrs.length <= 2 ? addrs.join(", ") : `${addrs[0]}, +${addrs.length - 1}`);
+          r.push(sanitizePdfText(addrs.length <= 2 ? addrs.join(", ") : `${addrs[0]}, +${addrs.length - 1}`));
         }
 
         if (currency === "BTC") {

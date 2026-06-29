@@ -1,5 +1,6 @@
 import { FINDING_TYPE_LABELS, type PrivacyFindingType } from "@/lib/privacy-audit";
 import type { PrivacyAuditHistoryEntry } from "@/lib/database";
+import { sanitizePdfText } from "@/lib/pdfText";
 
 /**
  * Escape a single CSV cell per RFC 4180: wrap in double quotes when the value
@@ -249,7 +250,7 @@ export async function buildPrivacyHistoryPdf(
   // so a filtered (or full-vault) export is labelled prominently at the top.
   // Mixed-scope exports get no global label (the per-run table columns stand).
   const scopeLabel = computePrivacyHistoryScopeLabel(entries);
-  if (scopeLabel) summaryParts.unshift(scopeLabel);
+  if (scopeLabel) summaryParts.unshift(sanitizePdfText(scopeLabel));
   doc.text(summaryParts.join("  |  "), 14, 27);
   doc.setTextColor(0);
 
@@ -286,8 +287,8 @@ export async function buildPrivacyHistoryPdf(
       String(sev.HIGH ?? 0),
       String(sev.MEDIUM ?? 0),
       String(sev.LOW ?? 0),
-      e.owner ?? "All",
-      e.walletName ?? "All",
+      sanitizePdfText(e.owner ?? "All"),
+      sanitizePdfText(e.walletName ?? "All"),
     ];
   });
 
