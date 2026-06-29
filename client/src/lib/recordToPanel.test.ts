@@ -19,57 +19,12 @@
 import { describe, it, expect } from "vitest";
 import type { Record as DbRecord } from "@/lib/database";
 import { toPanelRecord } from "@/lib/recordToPanel";
+import { fullRecord } from "@/test/fullRecordFixture";
 
-// A representative DB record with EVERY field populated. Typed `Required` so the
-// compiler forces any newly added schema field to be carried through here,
-// keeping the key-set comparison below exhaustive.
-const fullRecord: Required<DbRecord> = {
-  id: 42,
-  type: "address",
-  inputString: "bc1qexampleaddressxxxxxxxxxxxxxxxxxxxxxxx",
-  inputStringLower: "bc1qexampleaddressxxxxxxxxxxxxxxxxxxxxxxx",
-  label: "Cold Storage",
-  notes: "Long-term hold",
-  amount: 123456,
-  date: "2026-01-15",
-  tags: ["savings", "cold"],
-  categories: ["personal"],
-  seedName: "Primary Seed",
-  walletSoftware: "Sparrow",
-  privateKeyStatus: "secured",
-  owner: "Alice",
-  walletName: "College Fund",
-  source: "manual",
-  chainType: "receive",
-  derivationPath: "m/84'/0'/0'/0/0",
-  xpub: "zpub6exampleexampleexample",
-  vault: {
-    isVaultXpub: true,
-    vaultName: "Family Vault",
-    m: 2,
-    n: 3,
-    vaultNotes: "2-of-3 multisig",
-  },
-  customFields: { "risk-level": "low" },
-  syncDepth: 0,
-  maxSyncedDepth: 2,
-  discoveredInTxid: "a".repeat(64),
-  discoveredFromRecordId: 7,
-  addressImportance: "verified",
-  firstSeenBlockTime: 1736899200,
-  cachedBalanceSats: 500000,
-  cachedTxCount: 12,
-  cachedLastActivityTime: 1736899200,
-  statsComputedAt: 1736899999000,
-  cachedUtxoCount: 3,
-  flowType: "received",
-  acquisitionMethod: "purchase",
-  dispositionType: "sale",
-  costBasisUsd: 25000,
-  counterpartyType: "exchange",
-  createdAt: 1736800000000,
-  updatedAt: 1736899999000,
-};
+// `fullRecord` is the shared `Required<DbRecord>` fixture (see
+// client/src/test/fullRecordFixture.ts). Reusing it here keeps the converter
+// contract and the per-consumer wiring tests in lockstep: a newly added schema
+// field has to be populated in one place to satisfy all of them.
 
 describe("toPanelRecord", () => {
   it("carries through every field on a full DB record (no silent drops)", () => {
