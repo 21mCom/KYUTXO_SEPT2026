@@ -7,7 +7,11 @@ import { describe, it, expect, afterEach, vi } from "vitest";
 import { render, cleanup, fireEvent } from "@testing-library/react";
 
 const { BehaviorFilter } = await import("@/components/BehaviorFilter");
-import type { BehaviorLabel } from "@/lib/behavior-profile";
+import {
+  type BehaviorLabel,
+  type BehaviorTallyCounts,
+  emptyBehaviorTally,
+} from "@/lib/behavior-profile";
 
 afterEach(() => {
   cleanup();
@@ -82,6 +86,39 @@ describe("BehaviorFilter", () => {
     expect(getByTestId("text-behavior-counts-computing").textContent).toContain(
       "Counting",
     );
+  });
+
+  it("lists 'Synced — No Activity' separately from 'Not Synced' with its own count", () => {
+    const counts: BehaviorTallyCounts = {
+      ...emptyBehaviorTally(),
+      "synced-no-activity": 7,
+      "not-enough-data": 3,
+      dormant: 2,
+    };
+    const { getByTestId } = render(
+      <BehaviorFilter
+        selected={new Set<BehaviorLabel>()}
+        onChange={vi.fn()}
+        counts={counts}
+      />,
+    );
+    fireEvent.click(getByTestId("button-toggle-behavior-filter"));
+
+    // The two synced-vs-not-synced buckets render as distinct rows with distinct
+    // labels and their own counts — the new "synced-no-activity" bin is never
+    // folded into "Not Synced".
+    const syncedNoActivity = getByTestId("option-behavior-synced-no-activity");
+    expect(syncedNoActivity.textContent).toContain("Synced");
+    expect(syncedNoActivity.textContent).toContain("No Activity");
+    expect(getByTestId("count-behavior-synced-no-activity").textContent).toBe("7");
+
+    const notSynced = getByTestId("option-behavior-not-enough-data");
+    expect(notSynced.textContent).toContain("Not Synced");
+    expect(notSynced.textContent).not.toContain("No Activity");
+    expect(getByTestId("count-behavior-not-enough-data").textContent).toBe("3");
+
+    // The two are independent elements, not the same row reused.
+    expect(syncedNoActivity).not.toBe(notSynced);
   });
 
   it("invokes onCancelCounts when the Stop button is clicked", () => {
