@@ -297,24 +297,44 @@ describe("runPrivacyAudit end-to-end proximity scoring", () => {
     expect(proximityEntry!.delta).toBeGreaterThan(-15);
   });
 
-  it("maps a hop-4 proximity path to the LOW tier through the full pipeline", async () => {
-    // See the hop-4 fixture comment above: a hop-4 LOW proximity cannot be
-    // isolated as the sole entry of its severity tier in the waterfall, because
-    // any seed that reaches hop 4 also produces shorter-hop, same-type proximity
-    // siblings that merge into one waterfall entry. We therefore assert the part
-    // that IS observable end-to-end: hop 4 still resolves to LOW severity after
-    // flowing through runPrivacyAudit().
+  it("de-duplicates an entity reachable at several hops to its closest owned hop", async () => {
+    // The hop-4 chain OWNED4 → MID4A → MID4B → BRIDGE4 → EXCHANGE makes every
+    // intermediate an owned address, so the same exchange is reachable from
+    // OWNED4 (hop 4), MID4A (hop 3) and MID4B (hop 2). runPrivacyAudit only
+    // loads transactions that touch an owned address, and the BFS de-duplicates
+    // each entity address to the CLOSEST owned hop. So the riskiest farther-hop
+    // paths cannot survive end-to-end: the entity surfaces exactly ONCE, at its
+    // closest proximity hop (hop 2 → HIGH), never as a hop-3 or hop-4 duplicate.
+    // (BRIDGE4 is hop 1 → a direct ENTITY_EXCHANGE, not a proximity finding.)
+    // The hop-4 → LOW severity mapping itself is covered at the engine level in
+    // privacy-audit.proximity.test.ts, where non-owned intermediates let a hop-4
+    // path stand alone.
     setActiveEntityList([EX4_ENTRY]);
     await seedHop4Graph();
 
     const result = await runPrivacyAudit([OWNED4, MID4A, MID4B, BRIDGE4]);
 
-    const hop4 = result.findings.find(
-      (f) => f.type === "PROXIMITY_EXCHANGE" && f.details.hopDistance === 4,
+    const proximityFindings = result.findings.filter(
+      (f) => f.type === "PROXIMITY_EXCHANGE",
     );
-    expect(hop4).toBeTruthy();
-    expect(hop4!.severity).toBe("LOW");
-    expect(hop4!.details.isProximity).toBe(true);
-    expect(hop4!.addresses).toContain(OWNED4);
+    // Collapsed to a single finding for the shared entity, not one per owned hop.
+    expect(proximityFindings).toHaveLength(1);
+
+    const proximity = proximityFindings[0];
+    expect(proximity.severity).toBe("HIGH");
+    expect(proximity.details.hopDistance).toBe(2);
+    expect(proximity.details.isProximity).toBe(true);
+    // The surviving finding belongs to the closest owned address (MID4B), and the
+    // farther-hop owners are NOT carried as separate proximity findings.
+    expect(proximity.addresses).toContain(MID4B);
+
+    // No farther-hop (3 or 4) duplicate of the same entity leaked through.
+    expect(
+      result.findings.some(
+        (f) =>
+          f.type === "PROXIMITY_EXCHANGE" &&
+          (f.details.hopDistance === 3 || f.details.hopDistance === 4),
+      ),
+    ).toBe(false);
   });
 });

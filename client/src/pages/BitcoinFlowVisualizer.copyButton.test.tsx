@@ -1,11 +1,15 @@
 // @vitest-environment jsdom
+import "fake-indexeddb/auto";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup, act } from "@testing-library/react";
 
 // BitcoinFlowVisualizer.tsx imports a large surface (IndexedDB-backed db,
 // data facade, page hooks, child components). We only need the isolated
 // AddressFinderRow, so stub the heavy modules to keep the import cheap.
-vi.mock("@/lib/database", () => ({ db: {} }));
+vi.mock("@/lib/database", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/database")>();
+  return { ...actual, db: {} };
+});
 vi.mock("@/lib/dataFacade", () => ({ getParticipantsByAddresses: vi.fn() }));
 vi.mock("@/hooks/use-flow-data", () => ({ useFlowData: () => ({}) }));
 vi.mock("@/hooks/use-page-shortcuts", () => ({ usePageShortcuts: vi.fn() }));

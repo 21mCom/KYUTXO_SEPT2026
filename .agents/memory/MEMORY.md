@@ -41,3 +41,4 @@
 - [Mockup canvas presentation](mockup-canvas-presentation.md) — presentArtifact artifactId = artifact PATH ("artifacts/mockup-sandbox"); PWA SW serves stale preview screenshots, add a ?cachebust= token.
 - [RecordDetailPanel render paths](record-detail-panel-paths.md) — clicking a link opens the GLOBAL preview (RecordPreviewContext), which hand-builds panelRecord and silently drops unlisted fields; add new panel fields to both builders.
 - [Provider-harness IndexedDB requirement](provider-harness-indexeddb.md) — TestProviders→RecordPreviewProvider queries Dexie at mount; harness tests without `fake-indexeddb/auto` crash with "IndexedDB API missing".
+- [Privacy proximity hop dedup](privacy-proximity-dedup-hops.md) — closest-hop dedup + owned-only tx loading make isolated hop-3/4 findings impossible E2E; test those tiers at engine level. Also: partly-broken persisted snapshot keeps valid subset (imported+partialWarning), not bundled.

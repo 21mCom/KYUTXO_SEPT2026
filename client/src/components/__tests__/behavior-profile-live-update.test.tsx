@@ -6,6 +6,7 @@
 // component re-renders, the badge must reflect the newly classified label with
 // no stale text left behind.
 
+import "fake-indexeddb/auto";
 import { describe, it, expect, afterEach } from "vitest";
 import { render, cleanup } from "@testing-library/react";
 import { TestProviders } from "@/test/testProviders";
@@ -99,7 +100,7 @@ describe("RecordCard behavior badge live update", () => {
     );
   });
 
-  it("still shows 'Not Synced' when a recompute finds zero transactions", () => {
+  it("shows 'Synced — No Activity' when a recompute finds zero transactions", () => {
     const { getByTestId, rerender } = render(
       <RecordCard
         id="3"
@@ -115,8 +116,8 @@ describe("RecordCard behavior badge live update", () => {
       BEHAVIOR_LABEL_DISPLAY["not-enough-data"],
     );
 
-    // Stats computed but no transactions found → stays not-enough-data, but the
-    // summary changes to the "synced with 0 transactions" wording.
+    // Stats computed but no transactions found → distinct synced-no-activity
+    // label, with summary wording confirming zero transactions on record.
     rerender(
       <RecordCard
         id="3"
@@ -133,7 +134,8 @@ describe("RecordCard behavior badge live update", () => {
     );
 
     const badge = getByTestId("badge-behavior-3");
-    expect(badge.textContent).toBe(BEHAVIOR_LABEL_DISPLAY["not-enough-data"]);
-    expect(badge.getAttribute("title")).toMatch(/no transactions have been found/i);
+    expect(badge.textContent).toBe(BEHAVIOR_LABEL_DISPLAY["synced-no-activity"]);
+    expect(badge.textContent).not.toBe(BEHAVIOR_LABEL_DISPLAY["not-enough-data"]);
+    expect(badge.getAttribute("title")).toMatch(/no transactions on record/i);
   });
 });

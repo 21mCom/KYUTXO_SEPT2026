@@ -262,8 +262,10 @@ describe("SettingsPage — entity list import (replace-mode changed-entries deta
     );
     const oldNote = within(note2).getByText(OLD_NOTE);
     const newNote = within(note2).getByText(NEW_NOTE);
-    expect(oldNote.className).toContain("line-through");
-    expect(newNote.className).not.toContain("line-through");
+    // URL notes render through renderSourceNote (an <a>), so the line-through
+    // diff styling lives on the wrapping span, not the text/anchor node itself.
+    expect(oldNote.closest(".line-through")).not.toBeNull();
+    expect(newNote.closest(".line-through")).toBeNull();
   });
 
   it("renders an added/removed source note as a (none) → value (or value → (none)) diff", async () => {
@@ -309,8 +311,8 @@ describe("SettingsPage — entity list import (replace-mode changed-entries deta
     );
     const added = within(note0).getByText(NEW_NOTE);
     const addedFrom = within(note0).getByText("(none)");
-    expect(addedFrom.className).toContain("line-through");
-    expect(added.className).not.toContain("line-through");
+    expect(addedFrom.closest(".line-through")).not.toBeNull();
+    expect(added.closest(".line-through")).toBeNull();
 
     // Row 1: note removed → OLD_NOTE struck through, "(none)" as the new value.
     const note1 = await screen.findByTestId(
@@ -318,7 +320,7 @@ describe("SettingsPage — entity list import (replace-mode changed-entries deta
     );
     const removedFrom = within(note1).getByText(OLD_NOTE);
     const removedTo = within(note1).getByText("(none)");
-    expect(removedFrom.className).toContain("line-through");
-    expect(removedTo.className).not.toContain("line-through");
+    expect(removedFrom.closest(".line-through")).not.toBeNull();
+    expect(removedTo.closest(".line-through")).toBeNull();
   });
 });

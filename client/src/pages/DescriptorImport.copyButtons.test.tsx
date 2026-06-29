@@ -232,8 +232,7 @@ describe("DescriptorImport copy buttons toast (multisig path)", () => {
 
     expect(writeText).toHaveBeenCalledWith(MS_RECEIVE_ADDRESS);
     expect(toastMock).toHaveBeenCalledWith({
-      title: "Copied",
-      description: "Address copied to clipboard",
+      description: "Address copied",
     });
   });
 
@@ -248,8 +247,7 @@ describe("DescriptorImport copy buttons toast (multisig path)", () => {
 
     expect(writeText).toHaveBeenCalledWith(MS_CHANGE_ADDRESS);
     expect(toastMock).toHaveBeenCalledWith({
-      title: "Copied",
-      description: "Address copied to clipboard",
+      description: "Address copied",
     });
   });
 
@@ -263,7 +261,7 @@ describe("DescriptorImport copy buttons toast (multisig path)", () => {
     expect(toastMock).toHaveBeenCalledWith(
       expect.objectContaining({
         title: "Copy failed",
-        description: "Could not copy to clipboard",
+        description: "Could not copy the address to your clipboard.",
         variant: "destructive",
       }),
     );

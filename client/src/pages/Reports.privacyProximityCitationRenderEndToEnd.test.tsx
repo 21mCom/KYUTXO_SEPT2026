@@ -11,23 +11,32 @@
 // citations from the public entity list. A rendering/serialization regression
 // specific to the PROXIMITY_* prefix — e.g. a citation gate that only matched
 // "ENTITY_" — would silently drop those citations from the panel and exports
-// with no test catching it, especially for the LOW-severity hop-4 case.
+// with no test catching it.
 //
 // This test closes that gap. It seeds real Dexie records + participants
-// (fake-indexeddb) forming a 4-hop chain of owned addresses:
+// (fake-indexeddb) forming a chain of owned addresses:
 //   OWNED_FAR → MID_A → MID_B → MID_C → ENTITY_ADDR
 // (each link is its own transaction). Run through the REAL runPrivacyAudit(),
-// this produces a PROXIMITY_EXCHANGE finding at hopDistance 4 with LOW severity
-// (the riskiest case) from OWNED_FAR's perspective. We then drive that real
-// audit output — never a hand-built mock finding — all the way to:
+// this produces a PROXIMITY_EXCHANGE finding for ENTITY_ADDR. Because every link
+// is owned, detectEntityProximity reaches the entity from several owned
+// addresses at increasing hop distances, and the audit de-duplicates each entity
+// address to its CLOSEST owned hop: here MID_B is 2 transaction hops away, so the
+// surviving proximity finding is hopDistance 2 with HIGH severity (the hop-1
+// neighbour MID_C is a direct ENTITY_EXCHANGE, not a proximity finding; the
+// farther hop-3/hop-4 paths to the same entity are collapsed by the dedup). The
+// LOW-severity hop-4 tier is exercised directly at the engine level in
+// privacy-audit.proximity.test.ts. What matters here is the PROXIMITY_* prefix:
+// any citation-rendering regression specific to that prefix would surface on this
+// hop-2 finding exactly as it would on a hop-4 one. We then drive that real audit
+// output — never a hand-built mock finding — all the way to:
 //   - the on-screen Privacy Audit findings UI (PrivacyAuditReportPanel), and
 //   - the JSON export (buildPrivacyReport), and
 //   - the printable PDF/HTML export (buildPrintableReport),
-// asserting the hop-4 finding's citation (name, categoryLabel, address,
-// sourceNote) renders on every surface. The sourceNote embeds a URL: on screen
-// it must render as an informational link (opened only on explicit click); in
-// the JSON and PDF exports it must appear verbatim as plain text, never wrapped
-// in an anchor (offline-first — citation URLs are never fetched).
+// asserting the finding's citation (name, categoryLabel, address, sourceNote)
+// renders on every surface. The sourceNote embeds a URL: on screen it must
+// render as an informational link (opened only on explicit click); in the JSON
+// and PDF exports it must appear verbatim as plain text, never wrapped in an
+// anchor (offline-first — citation URLs are never fetched).
 
 import "fake-indexeddb/auto";
 
@@ -92,9 +101,11 @@ vi.mock("@/hooks/use-toast", () => ({
   useToast: () => ({ toast: vi.fn() }),
 }));
 
-// A 4-hop chain of owned addresses ending at a known entity address. OWNED_FAR
-// is 4 transaction hops from ENTITY_ADDR → a LOW-severity PROXIMITY_EXCHANGE
-// finding. Non-round amounts keep other heuristics from muddying the findings.
+// A chain of owned addresses ending at a known entity address. Every link is
+// owned, so the audit reaches ENTITY_ADDR from several owned addresses and keeps
+// only the closest-hop proximity finding (MID_B, 2 hops → HIGH-severity
+// PROXIMITY_EXCHANGE). Non-round amounts keep other heuristics from muddying the
+// findings.
 const OWNED_FAR = "bc1qproxfar000000000000000000000000000000aa";
 const MID_A = "bc1qproxmida00000000000000000000000000000bb";
 const MID_B = "bc1qproxmidb00000000000000000000000000000cc";
@@ -145,15 +156,15 @@ function getCitations(details: Record<string, unknown>): EntityCitation[] {
   return (details.citations as EntityCitation[]) ?? [];
 }
 
-/** The real audit's LOW-severity hop-4 PROXIMITY_EXCHANGE finding. */
-function findHop4Proximity(findings: PrivacyFinding[]): PrivacyFinding {
+/** The real audit's HIGH-severity hop-2 (closest-hop) PROXIMITY_EXCHANGE finding. */
+function findProximityFinding(findings: PrivacyFinding[]): PrivacyFinding {
   const f = findings.find(
     (x) =>
       x.type === "PROXIMITY_EXCHANGE" &&
-      (x.details as { hopDistance?: number }).hopDistance === 4,
+      (x.details as { hopDistance?: number }).hopDistance === 2,
   );
-  expect(f, "expected a hop-4 PROXIMITY_EXCHANGE finding").toBeTruthy();
-  expect(f!.severity).toBe("LOW");
+  expect(f, "expected a hop-2 PROXIMITY_EXCHANGE finding").toBeTruthy();
+  expect(f!.severity).toBe("HIGH");
   return f!;
 }
 
@@ -193,10 +204,10 @@ async function renderPanelWithRealAudit() {
 }
 
 /**
- * Find the on-screen finding card for the hop-4 LOW proximity finding (its
+ * Find the on-screen finding card for the hop-2 HIGH proximity finding (its
  * description text names the hop distance) and read its single citation row.
  */
-function readHop4CitationRow(container: HTMLElement): {
+function readProximityCitationRow(container: HTMLElement): {
   name: string;
   category: string;
   address: string;
@@ -205,8 +216,8 @@ function readHop4CitationRow(container: HTMLElement): {
   const cards = Array.from(
     container.querySelectorAll<HTMLElement>('[data-finding-type="PROXIMITY_EXCHANGE"]'),
   );
-  const card = cards.find((c) => /4 transaction hop\(s\)/.test(c.textContent ?? ""));
-  expect(card, "expected an on-screen hop-4 proximity finding card").toBeTruthy();
+  const card = cards.find((c) => /2 transaction hop\(s\)/.test(c.textContent ?? ""));
+  expect(card, "expected an on-screen hop-2 proximity finding card").toBeTruthy();
 
   const rows = Array.from(
     card!.querySelectorAll<HTMLElement>('[data-testid^="row-privacy-citation-"]'),
@@ -222,10 +233,10 @@ function readHop4CitationRow(container: HTMLElement): {
 }
 
 describe("PROXIMITY_* citations render end-to-end from the real audit", () => {
-  it("the real audit produces a hop-4 LOW proximity finding carrying the entity citation", async () => {
+  it("the real audit produces a hop-2 HIGH proximity finding carrying the entity citation", async () => {
     const result = await runPrivacyAudit([OWNED_FAR, MID_A, MID_B, MID_C]);
 
-    const finding = findHop4Proximity(result.findings);
+    const finding = findProximityFinding(result.findings);
     const citations = getCitations(finding.details);
     expect(citations).toEqual([
       {
@@ -240,7 +251,7 @@ describe("PROXIMITY_* citations render end-to-end from the real audit", () => {
   it("surfaces the citation (name/category/address/source) in the on-screen panel", async () => {
     const { container } = await renderPanelWithRealAudit();
 
-    const row = readHop4CitationRow(container);
+    const row = readProximityCitationRow(container);
     expect(row.name).toBe(ENTITY_NAME);
     expect(row.category).toBe(ENTITY_CATEGORY_LABEL);
     expect(row.address).toBe(ENTITY_ADDR);
@@ -250,7 +261,7 @@ describe("PROXIMITY_* citations render end-to-end from the real audit", () => {
   it("renders the citation sourceNote URL as an informational link (never auto-fetched)", async () => {
     const { container } = await renderPanelWithRealAudit();
 
-    const { sourceCell } = readHop4CitationRow(container);
+    const { sourceCell } = readProximityCitationRow(container);
     // The URL is visible verbatim within the surrounding note text.
     expect(sourceCell.textContent).toContain(SOURCE_URL);
 
@@ -263,11 +274,11 @@ describe("PROXIMITY_* citations render end-to-end from the real audit", () => {
     expect(sourceCell.textContent).toContain("WalletExplorer.com service clustering");
   });
 
-  it("serializes the hop-4 proximity citation into the JSON export with the URL as plain text", async () => {
+  it("serializes the hop-2 proximity citation into the JSON export with the URL as plain text", async () => {
     const result = await runPrivacyAudit([OWNED_FAR, MID_A, MID_B, MID_C]);
 
-    // Sanity: the real audit produced the LOW hop-4 finding with its citation.
-    findHop4Proximity(result.findings);
+    // Sanity: the real audit produced the HIGH hop-2 finding with its citation.
+    findProximityFinding(result.findings);
 
     // Round-trip through JSON.stringify so we assert the actual serialized shape
     // the exported .json download carries — not the in-memory object.
@@ -278,10 +289,10 @@ describe("PROXIMITY_* citations render end-to-end from the real audit", () => {
     const exported = [...report.findings, ...report.warnings].find(
       (f) =>
         f.type === "PROXIMITY_EXCHANGE" &&
-        (f.details as { hopDistance?: number }).hopDistance === 4,
+        (f.details as { hopDistance?: number }).hopDistance === 2,
     );
     expect(exported).toBeTruthy();
-    expect(exported!.severity).toBe("LOW");
+    expect(exported!.severity).toBe("HIGH");
     expect(exported!.citations).toEqual([
       {
         name: ENTITY_NAME,
@@ -294,11 +305,11 @@ describe("PROXIMITY_* citations render end-to-end from the real audit", () => {
     expect(exported!.citations![0].sourceNote).toContain(SOURCE_URL);
   });
 
-  it("emits the hop-4 proximity citation in the plain-text (Copy / .txt) report", async () => {
+  it("emits the hop-2 proximity citation in the plain-text (Copy / .txt) report", async () => {
     const result = await runPrivacyAudit([OWNED_FAR, MID_A, MID_B, MID_C]);
 
-    // Sanity: the real audit produced the LOW hop-4 finding with its citation.
-    findHop4Proximity(result.findings);
+    // Sanity: the real audit produced the HIGH hop-2 finding with its citation.
+    findProximityFinding(result.findings);
 
     // This is the surface behind both "Copy report" and "Download .txt".
     const text = buildPrivacyTextReport(result, SCOPE, FIXED_NOW.toLocaleString());
@@ -319,7 +330,7 @@ describe("PROXIMITY_* citations render end-to-end from the real audit", () => {
 
   it("renders the proximity citation into the printable PDF/HTML export with the URL as plain text", async () => {
     const result = await runPrivacyAudit([OWNED_FAR, MID_A, MID_B, MID_C]);
-    findHop4Proximity(result.findings);
+    findProximityFinding(result.findings);
 
     const html = buildPrintableReport(result, SCOPE, FIXED_NOW);
 

@@ -7,23 +7,25 @@
 //
 // Reports.privacyCitationMergedList.test.tsx pins the happy merge re-apply path
 // (all entries valid → bundled + user entries unioned). Reports.
-// privacyCitationCorruptSnapshot.test.tsx pins the fully-corrupt fallback (a
-// single invalid entry, no mode → bundled). But neither covers the subtler
-// merge risk: loadEntitySnapshotFromStorage() validates the WHOLE entries array
-// with validateEntitySnapshot(), so a single bad entry rejects the ENTIRE
-// snapshot and the load must fall back to the bundled list. A regression could
-// instead apply a half-built merged list — silently dropping the good bundled
-// flags, or applying only the one valid user entry on top of an empty list —
-// and no audit-level test would catch it.
+// privacyCitationCorruptSnapshot.test.tsx pins the fully-corrupt fallback (no
+// valid entries at all → bundled). This test pins the subtler PARTIAL case:
+// loadEntitySnapshotFromStorage() validates the WHOLE entries array with
+// validateEntitySnapshot(), but when some entries are valid and some are not,
+// it deliberately KEEPS the valid subset (re-applied under the persisted mode)
+// rather than discarding all the user's correct entries because of one bad one.
+// It surfaces a `partialWarning` in the returned status so the UI can advise the
+// user that some entries were skipped. The full bundled fallback is reserved for
+// the case where NO entries survive validation.
 //
 // This test writes a mode='merge' snapshot DIRECTLY to
 // settings.entityListSnapshot (bypassing the import path, which would have
 // rejected it) containing ONE valid user entry plus ONE invalid-address entry,
 // calls the REAL loadEntitySnapshotFromStorage(), and asserts:
-//   - the status source is 'bundled' and the active list is the full bundled
-//     list (the partly-broken snapshot was rejected whole, NOT half-applied),
-//   - neither the valid user entry NOR the invalid entry is resolvable (the
-//     snapshot did not partially apply), and
+//   - the status source is 'imported' with a partialWarning of one kept / one
+//     skipped (the valid subset was applied, NOT the whole-snapshot rejection),
+//   - the valid user entry IS resolvable (merged on top of the bundled list)
+//     while the invalid entry is NOT,
+//   - the bundled defaults survive the merge (active count == bundled + 1), and
 //   - a KNOWN bundled entity (Binance) still flags a seeded owned -> bundled
 //     contact through the REAL runPrivacyAudit().
 
@@ -63,12 +65,13 @@ const OWNED1 = "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4";
 const BUNDLED_ADDR = "34xp4vRoCGJym3xR7yCVPFHoCNxv4Twseo";
 const TX1 = "3333333333333333333333333333333333333333333333333333333333333333";
 
-// A perfectly VALID user entry that a correct merge WOULD have unioned onto the
-// bundled list. Because it shares the snapshot with a broken sibling entry, the
-// whole snapshot is rejected and this entry must NOT end up in the active list.
+// A perfectly VALID user entry that the partial-keep merge unions onto the
+// bundled list. Because it is the surviving valid entry, it MUST end up in the
+// active list (merged on top of the bundled defaults).
 const VALID_USER_ADDR = "1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2";
-// The invalid address embedded in the same merge snapshot. It must NOT resolve
-// after the fallback (it was never applied).
+const VALID_USER_NAME = "Merged Test Exchange";
+// The invalid address embedded in the same merge snapshot. It is skipped, so it
+// must NOT resolve after the partial load.
 const INVALID_ADDR = "not-a-valid-address";
 
 const BUNDLED_ENTITY_NAME = "Binance";
@@ -107,13 +110,14 @@ async function persistPartlyBrokenMergeSnapshot(): Promise<void> {
         importedAt: Date.now(),
         sourceLabel: "partly-broken-merge.json",
         mode: "merge",
-        // One fully valid entry + one invalid address. Because the load path
-        // validates the WHOLE array, this single bad entry rejects the entire
-        // snapshot and exercises the silent-fallback branch.
+        // One fully valid entry + one invalid address. The load path validates
+        // the WHOLE array but keeps the valid subset, so the valid entry is
+        // merged onto the bundled list and the invalid one is skipped (with a
+        // partialWarning surfaced in the status).
         entries: [
           {
             address: VALID_USER_ADDR,
-            name: "Merged Test Exchange",
+            name: VALID_USER_NAME,
             category: "exchange",
           },
           {
@@ -152,23 +156,27 @@ afterEach(async () => {
   await clearParticipants({ skipNotification: true });
 });
 
-describe("a partly-broken merge snapshot is rejected whole and falls back to bundled", () => {
-  it("reports the load source as 'bundled' and keeps the full bundled list (not half-merged)", () => {
-    expect(loadStatus.source).toBe("bundled");
-    expect(getActiveEntitySource()).toBe("bundled");
+describe("a partly-broken merge snapshot keeps the valid subset and warns", () => {
+  it("reports the load source as 'imported' with a one-kept/one-skipped partialWarning", () => {
+    expect(loadStatus.source).toBe("imported");
+    expect(getActiveEntitySource()).toBe("imported");
 
-    // The whole snapshot was rejected: the active list is exactly the bundled
-    // list — not bundled + 1 (valid user entry kept), and not 1 (valid entry
-    // applied on top of an emptied list).
-    expect(getActiveEntityCount()).toBe(getBundledEntityCount());
-    expect(getActiveEntityCount()).toBeGreaterThan(0);
+    // The valid subset was applied (not the whole-snapshot rejection): exactly
+    // one entry was kept and one invalid entry was skipped.
+    expect(loadStatus.partialWarning).toEqual({ validCount: 1, skippedCount: 1 });
 
-    // Neither snapshot entry made it into the active list — not the invalid
-    // one, and crucially not the otherwise-valid user entry either.
+    // The merge unions the surviving valid entry on top of the full bundled
+    // list — bundled defaults survive, plus the one user entry (it is not in
+    // the bundled list, so the count grows by exactly one).
+    expect(getActiveEntityCount()).toBe(getBundledEntityCount() + 1);
+    expect(getBundledEntityCount()).toBeGreaterThan(0);
+
+    // The valid user entry IS resolvable (it was merged in); the invalid entry
+    // was skipped and never applied.
+    expect(lookupEntity(VALID_USER_ADDR)?.name).toBe(VALID_USER_NAME);
     expect(lookupEntity(INVALID_ADDR)).toBeUndefined();
-    expect(lookupEntity(VALID_USER_ADDR)).toBeUndefined();
 
-    // A known bundled entry is present — proving the bundled fallback is live.
+    // The bundled defaults are still live alongside the merged user entry.
     expect(lookupEntity(BUNDLED_ADDR)?.name).toBe(BUNDLED_ENTITY_NAME);
   });
 

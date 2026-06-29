@@ -189,8 +189,11 @@ describe("BalanceOverview — history import early-exit failures", () => {
       ),
     );
 
-    // Bailed out before checking the provider or running any backfill.
-    expect(getNodeSettingsSpy).not.toHaveBeenCalled();
+    // Bailed out before reaching the provider or running any backfill. (Note:
+    // getNodeSettings is also read by the mount-time useNodeSettings live query,
+    // so the clean handler-only "never reached the provider" signal is that the
+    // provider was never pinged.)
+    expect(getBlockHeightSpy).not.toHaveBeenCalled();
     expect(fakeProvider.getTransaction).not.toHaveBeenCalled();
     expect(resolvePrevoutsSpy).not.toHaveBeenCalled();
     // No blockchain rows were written.

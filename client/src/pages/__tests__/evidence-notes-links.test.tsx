@@ -8,6 +8,7 @@
 // renderSourceNote in three places (grid/list cards, the detail dialog, and
 // the quick-view preview dialog); this covers the grid surface and the
 // preview dialog surface, both fed by the same shared util.
+import "fake-indexeddb/auto";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   screen,

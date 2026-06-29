@@ -13,15 +13,22 @@ import "fake-indexeddb/auto";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
 
-// metadata-hover resolves identifiers through getRecordsByInputString; stub it
-// so a metadata-rich record comes back for whatever identifier is resolved.
+// metadata-hover resolves identifiers two ways: the single-hover path uses
+// getRecordsByInputString, while the table's mount-time batch preload
+// (batchPreloadIdentifiers) fans out to getRecordsByInputStrings. Stub BOTH so
+// a metadata-rich record comes back for whatever identifier is resolved — if the
+// plural path is left unmocked it queries the empty fake-IndexedDB, caches a
+// "no metadata" result, and the later hover short-circuits on that cached miss.
 const getRecordsByInputString = vi.fn();
+const getRecordsByInputStrings = vi.fn();
 vi.mock("@/lib/data/record-crud", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/data/record-crud")>()),
   getRecordsByInputString: (...args: unknown[]) => getRecordsByInputString(...args),
+  getRecordsByInputStrings: (...args: unknown[]) => getRecordsByInputStrings(...args),
 }));
 
 import { renderWithProviders } from "@/test/testProviders";
+import { invalidateCachedRecord } from "@/lib/metadata-hover";
 import { RecordTable } from "../RecordTable";
 import type { Record as DbRecord } from "@/lib/database";
 
@@ -33,6 +40,7 @@ function metaRecord(inputString: string): DbRecord {
     id: 1,
     type: "address",
     inputString,
+    inputStringLower: inputString.toLowerCase(),
     label: "Cold Storage",
     owner: "Treasury",
     tags: [],
@@ -64,11 +72,20 @@ beforeEach(() => {
   getRecordsByInputString.mockImplementation((id: string) =>
     Promise.resolve([metaRecord(id)]),
   );
+  getRecordsByInputStrings.mockImplementation((ids: string[]) =>
+    Promise.resolve(ids.map((id) => metaRecord(id))),
+  );
+  // The metadata-hover cache is module-level and survives across test cases, so
+  // a prior resolution would let the indicator show before the hover. Clear it.
+  invalidateCachedRecord(ADDRESS);
+  invalidateCachedRecord(TXID);
 });
 
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  invalidateCachedRecord(ADDRESS);
+  invalidateCachedRecord(TXID);
 });
 
 describe("RecordTable metadata indicator", () => {

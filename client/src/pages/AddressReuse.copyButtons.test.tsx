@@ -95,11 +95,14 @@ function renderPage() {
   );
 }
 
-async function expandGroup(getByTestId: (id: string) => HTMLElement, findByTestId: (id: string) => Promise<HTMLElement>) {
+async function expandGroup(
+  getAllByTestId: (id: string) => HTMLElement[],
+  findByTestId: (id: string) => Promise<HTMLElement>,
+) {
   const trigger = await findByTestId(`button-expand-address-${ADDRESS.slice(0, 8)}`);
   fireEvent.click(trigger);
   await waitFor(() => {
-    expect(getByTestId(`button-copy-address-${ADDRESS.slice(0, 8)}`)).toBeTruthy();
+    expect(getAllByTestId(`button-copy-address-${ADDRESS.slice(0, 8)}`).length).toBeGreaterThan(0);
   });
 }
 
@@ -126,10 +129,10 @@ afterEach(async () => {
 
 describe("AddressReuse copy buttons", () => {
   it("copies the full address and shows the success toast", async () => {
-    const { getByTestId, findByTestId, findAllByText } = renderPage();
-    await expandGroup(getByTestId, findByTestId);
+    const { getAllByTestId, findByTestId, findAllByText } = renderPage();
+    await expandGroup(getAllByTestId, findByTestId);
 
-    fireEvent.click(getByTestId(`button-copy-address-${ADDRESS.slice(0, 8)}`));
+    fireEvent.click(getAllByTestId(`button-copy-address-${ADDRESS.slice(0, 8)}`)[0]);
 
     expect(writeText).toHaveBeenCalledTimes(1);
     expect(writeText).toHaveBeenCalledWith(ADDRESS);
@@ -137,10 +140,10 @@ describe("AddressReuse copy buttons", () => {
   });
 
   it("copies the full transaction id and shows the success toast", async () => {
-    const { getByTestId, findByTestId, findAllByText } = renderPage();
-    await expandGroup(getByTestId, findByTestId);
+    const { getAllByTestId, findByTestId, findAllByText } = renderPage();
+    await expandGroup(getAllByTestId, findByTestId);
 
-    fireEvent.click(getByTestId(`button-copy-txid-${TXID1.slice(0, 8)}`));
+    fireEvent.click(getAllByTestId(`button-copy-txid-${TXID1.slice(0, 8)}`)[0]);
 
     expect(writeText).toHaveBeenCalledTimes(1);
     expect(writeText).toHaveBeenCalledWith(TXID1);
@@ -150,10 +153,10 @@ describe("AddressReuse copy buttons", () => {
   it("shows the destructive 'Copy failed' toast when the clipboard write rejects", async () => {
     writeText.mockRejectedValue(new Error("clipboard blocked"));
 
-    const { getByTestId, findByTestId, findAllByText } = renderPage();
-    await expandGroup(getByTestId, findByTestId);
+    const { getAllByTestId, findByTestId, findAllByText } = renderPage();
+    await expandGroup(getAllByTestId, findByTestId);
 
-    fireEvent.click(getByTestId(`button-copy-address-${ADDRESS.slice(0, 8)}`));
+    fireEvent.click(getAllByTestId(`button-copy-address-${ADDRESS.slice(0, 8)}`)[0]);
 
     // The write was still attempted with the full address...
     expect(writeText).toHaveBeenCalledWith(ADDRESS);
