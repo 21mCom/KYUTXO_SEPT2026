@@ -109,6 +109,15 @@ vi.mock("@/lib/data/address-stats", () => ({
   countHeuristicMatchedAddresses: vi.fn(() => Promise.resolve(0)),
 }));
 
+// settings-crud reads the real Dexie db at mount (getSettings('default')); in
+// jsdom that throws DatabaseClosedError and the load effect rejects before it
+// can reach the engine fast path, so the group card never renders. Report the
+// formula as already upgraded (version 2) so the one-time backfill is skipped.
+vi.mock("@/lib/data/settings-crud", () => ({
+  getSettings: vi.fn(() => Promise.resolve({ balanceFormulaVersion: 2 })),
+  updateSettings: vi.fn(() => Promise.resolve()),
+}));
+
 // Two addresses in the group. PENDING_RECORD_ID has pending spends; the other
 // does not — exercising the conditional badge/button rendering.
 const PENDING_RECORD_ID = 101;
@@ -369,19 +378,19 @@ describe("BalanceOverview per-address Resolve", () => {
     });
   });
 
-  it("treats a cancelled per-record payload by its resolved count (no distinct stop toast)", async () => {
-    // The per-record handler has no cancel branch — a cancelled payload that
-    // still resolved some spends falls through to the same { resolved }-based
-    // outcome. Here 1 of PENDING_COUNT (3) resolved → 2 still pending →
-    // "Partially resolved" rather than any "Resolve stopped" message.
+  it("surfaces a 'Resolve stopped' toast for a cancelled per-record payload", async () => {
+    // The per-record handler has a dedicated cancel branch (mirroring the
+    // per-group and global handlers): a cancelled payload short-circuits the
+    // { resolved }-based outcome and reports how many spends were resolved
+    // before the stop. Here 1 of PENDING_COUNT (3) resolved before cancel.
     resolveResult = { resolved: 1, cancelled: true };
     await expandGroupAndShowRows();
 
     fireEvent.click(screen.getByTestId(`button-resolve-address-${PENDING_ADDRESS}`));
 
     await waitFor(() => expect(toastCalls.length).toBeGreaterThan(0));
-    expect(toastCalls[0].title).toBe("Partially resolved");
-    expect(toastCalls[0].title).not.toBe("Resolve stopped");
-    expect(toastCalls[0].description).toContain("2 still can't be attributed");
+    expect(toastCalls[0].title).toBe("Resolve stopped");
+    expect(toastCalls[0].title).not.toBe("Partially resolved");
+    expect(toastCalls[0].description).toContain("Stopped after resolving 1 spend");
   });
 });

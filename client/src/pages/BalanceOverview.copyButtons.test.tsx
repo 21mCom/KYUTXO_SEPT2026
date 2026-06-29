@@ -72,6 +72,15 @@ vi.mock("@/lib/data/address-stats", () => ({
   countHeuristicMatchedAddresses: vi.fn(() => Promise.resolve(0)),
 }));
 
+// settings-crud reads the real Dexie db at mount (getSettings('default')); in
+// jsdom that throws DatabaseClosedError and the load effect rejects before it
+// can reach the engine fast path, so the group card never renders. Report the
+// formula as already upgraded (version 2) so the one-time backfill is skipped.
+vi.mock("@/lib/data/settings-crud", () => ({
+  getSettings: vi.fn().mockResolvedValue({ balanceFormulaVersion: 2 }),
+  updateSettings: vi.fn().mockResolvedValue(undefined),
+}));
+
 // ── Spend-health + missing-source data layer ────────────────────────────────
 const getMissingSourceTxidDetails = vi.fn();
 const getUnresolvedSpendBreakdown = vi.fn();

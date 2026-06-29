@@ -113,6 +113,15 @@ vi.mock("@/lib/data/address-stats", () => ({
   countHeuristicMatchedAddresses: vi.fn(() => Promise.resolve(0)),
 }));
 
+// settings-crud reads the real Dexie db at mount (getSettings('default')); in
+// jsdom that throws DatabaseClosedError and the load effect rejects before it
+// can reach the engine fast path, so the group card never renders. Report the
+// formula as already upgraded (version 2) so the one-time backfill is skipped.
+vi.mock("@/lib/data/settings-crud", () => ({
+  getSettings: vi.fn(() => Promise.resolve({ balanceFormulaVersion: 2 })),
+  updateSettings: vi.fn(() => Promise.resolve()),
+}));
+
 // Two pending records, BOTH in GROUP_NAME. The group resolve must scope to the
 // union of their record ids.
 const RECORD_ID_A = 101;
