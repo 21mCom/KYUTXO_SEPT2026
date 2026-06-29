@@ -1,6 +1,7 @@
 import { createContext, useContext, useState, useCallback, useEffect, type ReactNode } from "react";
 import { useLocation } from "wouter";
-import { type Record as DbRecord, type Attachment, type VaultMetadata, type AddressImportance, type ChainType, type CustomField, type FlowType, type AcquisitionMethod, type DispositionType, type CounterpartyType } from "@/lib/database";
+import { type Record as DbRecord, type Attachment, type CustomField } from "@/lib/database";
+import { type PanelRecord, toPanelRecord } from "@/lib/recordToPanel";
 import { getAllCustomFields } from "@/lib/data/custom-fields-crud";
 import { getAttachmentsByRecordIdOrIdentifier } from "@/lib/data/attachments-crud";
 import { getRecord, getRecordsByInputString, updateRecord } from "@/lib/data/record-crud";
@@ -78,52 +79,12 @@ function selectBestRecord(records: DbRecord[]): DbRecord {
   });
 }
 
-interface RecordForPanel {
-  id: string;
-  type: "address" | "transaction" | "other";
-  inputString: string;
-  label: string;
-  notes?: string;
-  tags: string[];
-  categories: string[];
-  seedName?: string;
-  walletSoftware?: string;
-  owner?: string;
-  walletName?: string;
-  privateKeyStatus?: string;
-  source?: string;
-  derivationPath?: string;
-  chainType?: ChainType;
-  vault?: VaultMetadata;
-  addressImportance?: AddressImportance;
-  customFields?: { [slug: string]: string };
-  syncDepth?: number;
-  maxSyncedDepth?: number;
-  discoveredInTxid?: string;
-  discoveredFromRecordId?: number;
-  // Transaction classification metadata
-  flowType?: FlowType;
-  acquisitionMethod?: AcquisitionMethod;
-  dispositionType?: DispositionType;
-  costBasisUsd?: number;
-  // Address counterparty metadata
-  counterpartyType?: CounterpartyType;
-  // Cached on-chain stats (populated after sync/recompute) — required so the
-  // detail panel's behavior badge matches the records list (e.g. a synced but
-  // empty address reads "Synced — No Activity", not "Not Synced").
-  cachedBalanceSats?: number;
-  cachedTxCount?: number;
-  cachedLastActivityTime?: number;
-  cachedUtxoCount?: number;
-  statsComputedAt?: number;
-}
-
 export function RecordPreviewProvider({ children }: { children: ReactNode }) {
   const [, navigate] = useLocation();
   const { toast } = useToast();
   const [isOpen, setIsOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
-  const [record, setRecord] = useState<RecordForPanel | null>(null);
+  const [record, setRecord] = useState<PanelRecord | null>(null);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [customFieldDefs, setCustomFieldDefs] = useState<CustomField[]>([]);
 
@@ -183,42 +144,7 @@ export function RecordPreviewProvider({ children }: { children: ReactNode }) {
 
       const dbRecord: DbRecord = rawRecord;
 
-      const panelRecord: RecordForPanel = {
-        id: String(dbRecord.id),
-        type: dbRecord.type as "address" | "transaction" | "other",
-        inputString: dbRecord.inputString || "",
-        label: dbRecord.label || "Unlabeled",
-        notes: dbRecord.notes || undefined,
-        tags: dbRecord.tags || [],
-        categories: dbRecord.categories || [],
-        seedName: dbRecord.seedName || undefined,
-        walletSoftware: dbRecord.walletSoftware || undefined,
-        owner: dbRecord.owner || undefined,
-        walletName: dbRecord.walletName || undefined,
-        privateKeyStatus: dbRecord.privateKeyStatus || undefined,
-        source: dbRecord.source || undefined,
-        derivationPath: dbRecord.derivationPath || undefined,
-        chainType: dbRecord.chainType || undefined,
-        vault: dbRecord.vault || undefined,
-        addressImportance: dbRecord.addressImportance || undefined,
-        customFields: dbRecord.customFields || undefined,
-        syncDepth: dbRecord.syncDepth,
-        maxSyncedDepth: dbRecord.maxSyncedDepth,
-        discoveredInTxid: dbRecord.discoveredInTxid || undefined,
-        discoveredFromRecordId: dbRecord.discoveredFromRecordId,
-        flowType: dbRecord.flowType || undefined,
-        acquisitionMethod: dbRecord.acquisitionMethod || undefined,
-        dispositionType: dbRecord.dispositionType || undefined,
-        costBasisUsd: dbRecord.costBasisUsd,
-        counterpartyType: dbRecord.counterpartyType || undefined,
-        cachedBalanceSats: dbRecord.cachedBalanceSats,
-        cachedTxCount: dbRecord.cachedTxCount,
-        cachedLastActivityTime: dbRecord.cachedLastActivityTime,
-        cachedUtxoCount: dbRecord.cachedUtxoCount,
-        statsComputedAt: dbRecord.statsComputedAt,
-      };
-
-      setRecord(panelRecord);
+      setRecord(toPanelRecord(dbRecord));
       setIsOpen(true);
       await loadAttachments(recordId, dbRecord.inputString || "");
     } catch (error) {
@@ -253,42 +179,7 @@ export function RecordPreviewProvider({ children }: { children: ReactNode }) {
       
       const dbRecord = selectBestRecord(dbRecords);
 
-      const panelRecord: RecordForPanel = {
-        id: String(dbRecord.id),
-        type: dbRecord.type as "address" | "transaction" | "other",
-        inputString: dbRecord.inputString || "",
-        label: dbRecord.label || "Unlabeled",
-        notes: dbRecord.notes || undefined,
-        tags: dbRecord.tags || [],
-        categories: dbRecord.categories || [],
-        seedName: dbRecord.seedName || undefined,
-        walletSoftware: dbRecord.walletSoftware || undefined,
-        owner: dbRecord.owner || undefined,
-        walletName: dbRecord.walletName || undefined,
-        privateKeyStatus: dbRecord.privateKeyStatus || undefined,
-        source: dbRecord.source || undefined,
-        derivationPath: dbRecord.derivationPath || undefined,
-        chainType: dbRecord.chainType || undefined,
-        vault: dbRecord.vault || undefined,
-        addressImportance: dbRecord.addressImportance || undefined,
-        customFields: dbRecord.customFields || undefined,
-        syncDepth: dbRecord.syncDepth,
-        maxSyncedDepth: dbRecord.maxSyncedDepth,
-        discoveredInTxid: dbRecord.discoveredInTxid || undefined,
-        discoveredFromRecordId: dbRecord.discoveredFromRecordId,
-        flowType: dbRecord.flowType || undefined,
-        acquisitionMethod: dbRecord.acquisitionMethod || undefined,
-        dispositionType: dbRecord.dispositionType || undefined,
-        costBasisUsd: dbRecord.costBasisUsd,
-        counterpartyType: dbRecord.counterpartyType || undefined,
-        cachedBalanceSats: dbRecord.cachedBalanceSats,
-        cachedTxCount: dbRecord.cachedTxCount,
-        cachedLastActivityTime: dbRecord.cachedLastActivityTime,
-        cachedUtxoCount: dbRecord.cachedUtxoCount,
-        statsComputedAt: dbRecord.statsComputedAt,
-      };
-
-      setRecord(panelRecord);
+      setRecord(toPanelRecord(dbRecord));
       setIsOpen(true);
       await loadAttachments(dbRecord.id!, dbRecord.inputString || "");
     } catch (error) {

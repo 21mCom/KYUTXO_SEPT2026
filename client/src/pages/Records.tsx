@@ -8,7 +8,8 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { ArrowLeft, Search as SearchIcon, Database, Hash, AlertCircle, Trash2, X, ChevronLeft, ChevronRight, Loader2, RefreshCw } from "lucide-react";
 import { BlockchainToggle } from "@/components/BlockchainToggle";
-import { type Record as DbRecord, type VaultMetadata, type AddressImportance, type ChainType, type CustomField, type BlockchainTransaction, type TransactionParticipant, USER_CURATED_TIERS } from "@/lib/database";
+import { type Record as DbRecord, type CustomField, type BlockchainTransaction, type TransactionParticipant, USER_CURATED_TIERS } from "@/lib/database";
+import { type PanelRecord, toPanelRecord } from "@/lib/recordToPanel";
 import { useDbChangeSignal } from "@/hooks/use-db-change-signal";
 import { deleteRecord, getParticipantsByTxids } from "@/lib/dataFacade";
 import { getAllCustomFields } from "@/lib/data/custom-fields-crud";
@@ -68,69 +69,12 @@ import { buildRecordsCollection, buildIdentifierSearchCollection, looksLikeBitco
 import { getActivityBus } from "@/lib/activity-bus";
 import { batchPreloadIdentifiers } from "@/lib/metadata-hover";
 
-interface ConvertedRecord {
-  id: string;
-  type: "address" | "transaction" | "other";
-  inputString: string;
-  label: string;
-  notes?: string;
-  tags: string[];
-  categories: string[];
-  seedName?: string;
-  walletSoftware?: string;
-  owner?: string;
-  walletName?: string;
-  privateKeyStatus?: string;
-  source?: string;
-  customFields?: { [key: string]: string };
-  derivationPath?: string;
-  chainType?: ChainType;
-  vault?: VaultMetadata;
-  addressImportance?: AddressImportance;
-  syncDepth?: number;
-  maxSyncedDepth?: number;
-  discoveredInTxid?: string;
-  discoveredFromRecordId?: number;
-  // Cached on-chain stats carried through so RecordTable can render behavior
-  // badges and the page can filter by behavior label — all client-side, no scan.
-  cachedBalanceSats?: number;
-  cachedTxCount?: number;
-  cachedLastActivityTime?: number;
-  cachedUtxoCount?: number;
-  statsComputedAt?: number;
-}
+// The records list and the detail panel share one converter so any new DB
+// field flows through to both automatically (see `toPanelRecord`). `ConvertedRecord`
+// stays as a local alias to avoid churn at the many existing call sites.
+type ConvertedRecord = PanelRecord;
 
-function convertRecord(r: DbRecord): ConvertedRecord {
-  return {
-    id: String(r.id),
-    type: r.type as "address" | "transaction" | "other",
-    inputString: r.inputString,
-    label: r.label,
-    notes: r.notes,
-    tags: r.tags || [],
-    categories: r.categories || [],
-    seedName: r.seedName,
-    walletSoftware: r.walletSoftware,
-    owner: r.owner,
-    walletName: r.walletName,
-    privateKeyStatus: r.privateKeyStatus,
-    source: r.source,
-    customFields: r.customFields,
-    derivationPath: r.derivationPath,
-    chainType: r.chainType,
-    vault: r.vault,
-    addressImportance: r.addressImportance,
-    syncDepth: r.syncDepth,
-    maxSyncedDepth: r.maxSyncedDepth,
-    discoveredInTxid: r.discoveredInTxid,
-    discoveredFromRecordId: r.discoveredFromRecordId,
-    cachedBalanceSats: r.cachedBalanceSats,
-    cachedTxCount: r.cachedTxCount,
-    cachedLastActivityTime: r.cachedLastActivityTime,
-    cachedUtxoCount: r.cachedUtxoCount,
-    statsComputedAt: r.statsComputedAt,
-  };
-}
+const convertRecord = toPanelRecord;
 
 // Merge several id-descending tier streams into a single id-descending page.
 // Used by the keyset tier branches: each group holds up to `limit` rows below

@@ -25,11 +25,14 @@ row was correct (it reads the full converted record), only the panel was wrong �
 **Why:** manual field projection has no compile-time guarantee it stays in sync with the
 `DbRecord` shape; new fields are easy to forget.
 
-**How to apply:** when adding any field that the detail panel renders, add it to BOTH the
-`RecordForPanel` interface AND both `panelRecord` builders in RecordPreviewContext. To
-diagnose "panel shows stale/missing data", suspect this builder first. Note: instrumenting
-Records.tsx `selectedRecord` will NOT fire when the panel was opened via a link — that path
-is RecordPreviewContext.
+**How to apply:** the per-field manual builders are GONE. All three render paths
+(RecordPreviewContext's two builders, Records.tsx `convertRecord`, and ClickableAddress)
+now go through one spread-based converter `toPanelRecord` in `client/src/lib/recordToPanel.ts`
+(returns `PanelRecord = Omit<DbRecord,"id"> & {id:string}`), so any new DB field flows
+through automatically — do NOT reintroduce hand-copied field lists. To diagnose "panel shows
+stale/missing data", check `toPanelRecord` first. Note: instrumenting Records.tsx
+`selectedRecord` will NOT fire when the panel was opened via a link — that path is
+RecordPreviewContext.
 
 **Testing note:** KYUTXO has NO service worker (only a manifest link) — stale-bundle is not
 the cause here; the Vite dev server serves fresh code. `window.__DIAG`/console probes placed

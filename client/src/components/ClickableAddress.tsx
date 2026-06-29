@@ -1,41 +1,12 @@
 import { useState, useEffect } from "react";
 import { useLocation } from "wouter";
-import { db, type Record as DbRecord, type ChainType, type AddressImportance, type VaultMetadata, type FlowType, type AcquisitionMethod, type DispositionType, type CounterpartyType } from "@/lib/database";
+import { db } from "@/lib/database";
+import { type PanelRecord, toPanelRecord } from "@/lib/recordToPanel";
 import { RecordDetailPanel } from "./RecordDetailPanel";
 
 interface ClickableAddressProps {
   address: string;
   className?: string;
-}
-
-interface ConvertedRecord {
-  id: string;
-  type: "address" | "transaction" | "other";
-  inputString: string;
-  label: string;
-  notes?: string;
-  tags: string[];
-  categories: string[];
-  seedName?: string;
-  walletSoftware?: string;
-  owner?: string;
-  walletName?: string;
-  privateKeyStatus?: string;
-  source?: string;
-  derivationPath?: string;
-  chainType?: ChainType;
-  vault?: VaultMetadata;
-  addressImportance?: AddressImportance;
-  customFields?: { [key: string]: string };
-  syncDepth?: number;
-  maxSyncedDepth?: number;
-  discoveredInTxid?: string;
-  discoveredFromRecordId?: number;
-  flowType?: FlowType;
-  acquisitionMethod?: AcquisitionMethod;
-  dispositionType?: DispositionType;
-  costBasisUsd?: number;
-  counterpartyType?: CounterpartyType;
 }
 
 export function ClickableAddress({ 
@@ -44,7 +15,7 @@ export function ClickableAddress({
 }: ClickableAddressProps) {
   const [, navigate] = useLocation();
   const [isOpen, setIsOpen] = useState(false);
-  const [record, setRecord] = useState<ConvertedRecord | null>(null);
+  const [record, setRecord] = useState<PanelRecord | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [hasMetadata, setHasMetadata] = useState(false);
 
@@ -93,36 +64,7 @@ export function ClickableAddress({
         .first();
       
       if (dbRecord) {
-        const converted: ConvertedRecord = {
-          id: String(dbRecord.id),
-          type: dbRecord.type as "address" | "transaction" | "other",
-          inputString: dbRecord.inputString,
-          label: dbRecord.label || "",
-          notes: dbRecord.notes,
-          tags: dbRecord.tags || [],
-          categories: dbRecord.categories || [],
-          seedName: dbRecord.seedName,
-          walletSoftware: dbRecord.walletSoftware,
-          owner: dbRecord.owner,
-          walletName: dbRecord.walletName,
-          privateKeyStatus: dbRecord.privateKeyStatus,
-          source: dbRecord.source,
-          derivationPath: dbRecord.derivationPath,
-          chainType: dbRecord.chainType as ChainType | undefined,
-          vault: dbRecord.vault as VaultMetadata | undefined,
-          addressImportance: dbRecord.addressImportance as AddressImportance | undefined,
-          customFields: dbRecord.customFields as { [key: string]: string } | undefined,
-          syncDepth: dbRecord.syncDepth,
-          maxSyncedDepth: dbRecord.maxSyncedDepth,
-          discoveredInTxid: dbRecord.discoveredInTxid,
-          discoveredFromRecordId: dbRecord.discoveredFromRecordId,
-          flowType: dbRecord.flowType as FlowType | undefined,
-          acquisitionMethod: dbRecord.acquisitionMethod as AcquisitionMethod | undefined,
-          dispositionType: dbRecord.dispositionType as DispositionType | undefined,
-          costBasisUsd: dbRecord.costBasisUsd,
-          counterpartyType: dbRecord.counterpartyType as CounterpartyType | undefined,
-        };
-        setRecord(converted);
+        setRecord(toPanelRecord(dbRecord));
         setIsOpen(true);
       } else {
         navigate(`/records?search=${encodeURIComponent(address)}`);
