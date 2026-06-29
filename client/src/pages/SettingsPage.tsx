@@ -138,7 +138,7 @@ import {
   type SearchFadeOption,
 } from "@/config/debounce";
 import { useActivityBus } from "@/lib/activity-bus";
-import { detectAndBackfill, detectOrphanedTxRecords, runTxidBackfill, resolveAllBlankInputAddresses, type BackfillResult } from "@/lib/txid-backfill";
+import { detectAndBackfill, detectOrphanedTxRecords, runTxidBackfill, resolveAllBlankInputAddresses, formatSkippedReasons, type BackfillResult } from "@/lib/txid-backfill";
 import { describeResolveError } from "@/lib/resolve-error";
 import { resetOrphanCheckGate } from "@/lib/orphan-check-session";
 import { createProviderFromSettings } from "@/lib/blockchain-api";
@@ -1888,11 +1888,14 @@ export default function SettingsPage() {
       } else {
         const parts: string[] = [];
         if (result.rebuilt > 0) parts.push(`${result.rebuilt} rebuilt`);
-        if (result.skipped > 0) parts.push(`${result.skipped} skipped`);
+        if (result.skipped > 0) {
+          const skippedDetail = formatSkippedReasons(result.skippedReasons);
+          parts.push(skippedDetail || `${result.skipped} skipped`);
+        }
         if (result.failed > 0) parts.push(`${result.failed} failed`);
         toast({
           title: "Transaction Rebuild Complete",
-          description: `Found ${result.orphansFound} orphaned transaction${result.orphansFound !== 1 ? "s" : ""}. ${parts.join(", ")}.`,
+          description: `Found ${result.orphansFound} orphaned transaction${result.orphansFound !== 1 ? "s" : ""}. ${parts.join("; ")}.`,
         });
       }
     } catch (err) {
@@ -2511,11 +2514,14 @@ export default function SettingsPage() {
                 });
                 const parts: string[] = [];
                 if (bfResult.rebuilt > 0) parts.push(`${bfResult.rebuilt} rebuilt`);
-                if (bfResult.skipped > 0) parts.push(`${bfResult.skipped} skipped`);
+                if (bfResult.skipped > 0) {
+                  const skippedDetail = formatSkippedReasons(bfResult.skippedReasons);
+                  parts.push(skippedDetail || `${bfResult.skipped} skipped`);
+                }
                 if (bfResult.failed > 0) parts.push(`${bfResult.failed} failed`);
                 if (bfResult.prevoutsResolved > 0) parts.push(`${bfResult.prevoutsResolved} input addresses resolved`);
                 backfillSummary = parts.length > 0
-                  ? ` Transaction data: ${parts.join(", ")}.`
+                  ? ` Transaction data: ${parts.join("; ")}.`
                   : "";
               } catch {
                 backfillSummary = ` ${txids.length} transaction${txids.length !== 1 ? "s" : ""} need on-chain data — run "Rebuild Missing Transactions" in Settings when connected.`;
@@ -3000,11 +3006,14 @@ export default function SettingsPage() {
               });
               const bfParts: string[] = [];
               if (bfResult.rebuilt > 0) bfParts.push(`${bfResult.rebuilt} rebuilt`);
-              if (bfResult.skipped > 0) bfParts.push(`${bfResult.skipped} skipped`);
+              if (bfResult.skipped > 0) {
+                const skippedDetail = formatSkippedReasons(bfResult.skippedReasons);
+                bfParts.push(skippedDetail || `${bfResult.skipped} skipped`);
+              }
               if (bfResult.failed > 0) bfParts.push(`${bfResult.failed} failed`);
               if (bfResult.prevoutsResolved > 0) bfParts.push(`${bfResult.prevoutsResolved} input addresses resolved`);
               backfillSuffix = bfParts.length > 0
-                ? ` Transaction data: ${bfParts.join(", ")}.`
+                ? ` Transaction data: ${bfParts.join("; ")}.`
                 : "";
             } catch {
               backfillSuffix = ` ${orphanTxids.length} transaction${orphanTxids.length !== 1 ? "s" : ""} need on-chain data — run "Rebuild Missing Transactions" in Settings when connected.`;
@@ -4828,31 +4837,66 @@ export default function SettingsPage() {
 
             <Separator />
 
-            <div ref={rebuildSectionRef} className="flex items-center justify-between gap-2 flex-wrap">
-              <div>
-                <Label className="text-base">Rebuild Missing Transactions</Label>
-                <p className="text-sm text-muted-foreground">
-                  Fetch on-chain data for transaction records that were restored from an older backup or added manually without syncing. Requires a connected blockchain provider.
-                </p>
+            <div ref={rebuildSectionRef} className="space-y-3">
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <div>
+                  <Label className="text-base">Rebuild Missing Transactions</Label>
+                  <p className="text-sm text-muted-foreground">
+                    Fetch on-chain data for transaction records that were restored from an older backup or added manually without syncing. Requires a connected blockchain provider.
+                  </p>
+                </div>
+                <Button
+                  variant="outline"
+                  onClick={handleManualBackfill}
+                  disabled={isBackfilling}
+                  data-testid="button-rebuild-transactions"
+                >
+                  {isBackfilling ? (
+                    <>
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                      Rebuilding...
+                    </>
+                  ) : (
+                    <>
+                      <RefreshCw className="h-4 w-4 mr-2" />
+                      Rebuild
+                    </>
+                  )}
+                </Button>
               </div>
-              <Button
-                variant="outline"
-                onClick={handleManualBackfill}
-                disabled={isBackfilling}
-                data-testid="button-rebuild-transactions"
-              >
-                {isBackfilling ? (
-                  <>
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    Rebuilding...
-                  </>
-                ) : (
-                  <>
-                    <RefreshCw className="h-4 w-4 mr-2" />
-                    Rebuild
-                  </>
-                )}
-              </Button>
+              {backfillResult && !isBackfilling && !backfillResult.deferred && (
+                <div className="rounded-md border bg-muted/40 px-4 py-3 space-y-1 text-sm" data-testid="rebuild-result-summary">
+                  <div className="font-medium text-foreground">Last rebuild result</div>
+                  <div className="text-muted-foreground space-y-0.5">
+                    {backfillResult.orphansFound === 0 ? (
+                      <p>No orphaned transactions found — everything is up to date.</p>
+                    ) : (
+                      <>
+                        <p>
+                          Found {backfillResult.orphansFound.toLocaleString()} orphaned transaction{backfillResult.orphansFound !== 1 ? "s" : ""}.
+                          {backfillResult.rebuilt > 0 && ` ${backfillResult.rebuilt.toLocaleString()} rebuilt.`}
+                          {backfillResult.failed > 0 && ` ${backfillResult.failed.toLocaleString()} failed.`}
+                          {backfillResult.prevoutsResolved > 0 && ` ${backfillResult.prevoutsResolved.toLocaleString()} input address${backfillResult.prevoutsResolved !== 1 ? "es" : ""} resolved.`}
+                        </p>
+                        {backfillResult.skipped > 0 && (() => {
+                          const skippedText = formatSkippedReasons(backfillResult.skippedReasons);
+                          const hasNotFound = (backfillResult.skippedReasons['not-found'] ?? 0) > 0;
+                          return (
+                            <>
+                              <p>Skipped: {skippedText || `${backfillResult.skipped.toLocaleString()} skipped`}.</p>
+                              {hasNotFound && (
+                                <p className="text-muted-foreground/80 text-xs mt-1">
+                                  Transactions not found on your provider usually mean a network mismatch (e.g. testnet IDs against a mainnet node) or a node that does not carry the full transaction history.
+                                </p>
+                              )}
+                            </>
+                          );
+                        })()}
+                      </>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
 
             <Separator />

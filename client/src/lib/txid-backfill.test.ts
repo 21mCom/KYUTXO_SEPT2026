@@ -79,6 +79,7 @@ const {
   runTxidBackfill,
   detectAndBackfill,
   resolveAllBlankInputAddresses,
+  formatSkippedReasons,
 } = await import("./txid-backfill");
 
 // ---- Fixtures --------------------------------------------------------------
@@ -374,6 +375,7 @@ describe("runTxidBackfill", () => {
 
     expect(result.skipped).toBe(1);
     expect(result.rebuilt).toBe(0);
+    expect(result.skippedReasons['has-row']).toBe(1);
     // Existing-row guard short-circuits before the provider is hit.
     expect(getTx).not.toHaveBeenCalled();
 
@@ -388,6 +390,7 @@ describe("runTxidBackfill", () => {
 
     expect(result.skipped).toBe(1);
     expect(result.rebuilt).toBe(0);
+    expect(result.skippedReasons['not-found']).toBe(1);
     expect(await testDb.blockchainTransactions.count()).toBe(0);
   });
 
@@ -400,6 +403,7 @@ describe("runTxidBackfill", () => {
 
     expect(result.skipped).toBe(1);
     expect(result.rebuilt).toBe(0);
+    expect(result.skippedReasons['unconfirmed']).toBe(1);
   });
 
   it("skips a transaction with insufficient confirmations", async () => {
@@ -413,6 +417,7 @@ describe("runTxidBackfill", () => {
 
     expect(result.skipped).toBe(1);
     expect(result.rebuilt).toBe(0);
+    expect(result.skippedReasons['insufficient-confirmations']).toBe(1);
   });
 
   it("counts a provider error as failed and records the message", async () => {
@@ -442,6 +447,12 @@ describe("runTxidBackfill", () => {
     expect(result.rebuilt).toBe(1);
     expect(result.skipped).toBe(2);
     expect(result.failed).toBe(1);
+    // Reason breakdown must account for both skipped entries.
+    expect(result.skippedReasons['not-found']).toBe(1);
+    expect(result.skippedReasons['unconfirmed']).toBe(1);
+    // skippedReasons total must equal result.skipped.
+    const reasonTotal = Object.values(result.skippedReasons).reduce((s, n) => s + n, 0);
+    expect(reasonTotal).toBe(result.skipped);
   });
 
   it("stops fetching once the AbortSignal fires", async () => {
@@ -480,6 +491,51 @@ describe("runTxidBackfill", () => {
     });
 
     expect(events[events.length - 1]).toBe("complete");
+  });
+});
+
+// ---- formatSkippedReasons --------------------------------------------------
+
+describe("formatSkippedReasons", () => {
+  it("returns an empty string for an empty breakdown", () => {
+    expect(formatSkippedReasons({})).toBe("");
+  });
+
+  it("returns empty when all counts are zero", () => {
+    expect(formatSkippedReasons({ 'not-found': 0 })).toBe("");
+  });
+
+  it("formats a single 'not-found' reason without hint by default", () => {
+    const text = formatSkippedReasons({ 'not-found': 5 });
+    expect(text).toContain("5");
+    expect(text).toContain("not found on your connected provider");
+    // No hint by default
+    expect(text).not.toContain("mainnet vs testnet");
+  });
+
+  it("appends a not-found hint when includeHint is true", () => {
+    const text = formatSkippedReasons({ 'not-found': 3 }, { includeHint: true });
+    expect(text).toContain("not found on your connected provider");
+    expect(text).toContain("mainnet vs testnet");
+  });
+
+  it("does not append a hint for non-not-found reasons even when includeHint is true", () => {
+    const text = formatSkippedReasons({ 'unconfirmed': 2 }, { includeHint: true });
+    expect(text).toContain("not yet confirmed");
+    expect(text).not.toContain("mainnet vs testnet");
+  });
+
+  it("formats a mix of reasons as a comma-separated list", () => {
+    const text = formatSkippedReasons({ 'not-found': 90, 'unconfirmed': 16 });
+    expect(text).toContain("90");
+    expect(text).toContain("not found on your connected provider");
+    expect(text).toContain("16");
+    expect(text).toContain("not yet confirmed");
+  });
+
+  it("uses the raw key as a fallback label for unknown reasons", () => {
+    const text = formatSkippedReasons({ 'some-future-reason': 4 });
+    expect(text).toContain("some-future-reason");
   });
 });
 

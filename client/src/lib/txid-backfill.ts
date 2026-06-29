@@ -71,12 +71,59 @@ export interface BackfillResult {
   orphansFound: number;
   rebuilt: number;
   skipped: number;
+  /**
+   * Breakdown of why each skipped transaction was not rebuilt.
+   * Keys: 'not-found' | 'unconfirmed' | 'insufficient-confirmations' | 'parse-failed' | 'has-row'
+   */
+  skippedReasons: { [key: string]: number };
   failed: number;
   /** Number of blank input addresses filled in by prevout resolution. */
   prevoutsResolved: number;
   deferred: boolean;
   deferReason?: string;
   errors: string[];
+}
+
+// ─── Skip reason labels and summary helper ──────────────────────────────────
+
+const SKIP_REASON_LABELS: { [key: string]: string } = {
+  'not-found': 'not found on your connected provider',
+  'unconfirmed': 'not yet confirmed',
+  'insufficient-confirmations': 'waiting for enough confirmations',
+  'parse-failed': 'could not be parsed',
+  'has-row': 'already had on-chain data',
+};
+
+const NOT_FOUND_HINT =
+  'These transaction IDs may not exist on the network or node you\'re connected to — ' +
+  'check that you\'re on the right network (e.g. mainnet vs testnet) or that your node carries full transaction history.';
+
+/**
+ * Turns a skippedReasons breakdown into a human-readable string.
+ * Returns an empty string when there are no skipped transactions.
+ *
+ * @param skippedReasons - The reason→count map from BackfillResult.skippedReasons.
+ * @param includeHint - When true, appends actionable guidance for the "not-found" case.
+ */
+export function formatSkippedReasons(
+  skippedReasons: { [key: string]: number },
+  { includeHint = false }: { includeHint?: boolean } = {},
+): string {
+  const entries = Object.entries(skippedReasons).filter(([, n]) => n > 0);
+  if (entries.length === 0) return '';
+
+  const parts = entries.map(([reason, count]) => {
+    const label = SKIP_REASON_LABELS[reason] ?? reason;
+    return `${count.toLocaleString()} ${label}`;
+  });
+
+  let text = parts.join(', ');
+
+  if (includeHint && (skippedReasons['not-found'] ?? 0) > 0) {
+    text += '. ' + NOT_FOUND_HINT;
+  }
+
+  return text;
 }
 
 export interface BackfillOptions {
@@ -273,6 +320,7 @@ export async function runTxidBackfill(
     orphansFound: txids.length,
     rebuilt: 0,
     skipped: 0,
+    skippedReasons: {},
     failed: 0,
     prevoutsResolved: 0,
     deferred: false,
@@ -353,7 +401,7 @@ export async function runTxidBackfill(
         }
 
         const written = await writeOnChainData(parsed);
-        return { txid, status: written ? 'rebuilt' : 'skipped' };
+        return { txid, status: written ? 'rebuilt' : 'skipped', reason: written ? undefined : 'has-row' };
       })
     );
 
@@ -366,10 +414,13 @@ export async function runTxidBackfill(
           rebuiltTxids.push(txid);
         } else {
           result.skipped++;
+          // Record the skip reason in the breakdown.
+          const skipReason = ('reason' in r.value && r.value.reason) ? r.value.reason : 'unknown';
+          result.skippedReasons[skipReason] = (result.skippedReasons[skipReason] ?? 0) + 1;
           // A txid skipped because it already had a blockchain row may still
           // carry blank inputs from a previously-cancelled resolution pass; flag
           // it so the resolution step below can resume that leftover work.
-          if ('reason' in r.value && r.value.reason === 'has-row') {
+          if (skipReason === 'has-row') {
             existingRowTxids.push(txid);
           }
         }
@@ -974,6 +1025,7 @@ export async function detectAndBackfill(
       orphansFound: 0,
       rebuilt: 0,
       skipped: 0,
+      skippedReasons: {},
       failed: 0,
       prevoutsResolved: 0,
       deferred: false,
@@ -990,6 +1042,7 @@ export async function detectAndBackfill(
         orphansFound: txids.length,
         rebuilt: 0,
         skipped: 0,
+        skippedReasons: {},
         failed: 0,
         prevoutsResolved: 0,
         deferred: true,
@@ -1007,6 +1060,7 @@ export async function detectAndBackfill(
       orphansFound: txids.length,
       rebuilt: 0,
       skipped: 0,
+      skippedReasons: {},
       failed: 0,
       prevoutsResolved: 0,
       deferred: true,
@@ -1020,6 +1074,7 @@ export async function detectAndBackfill(
       orphansFound: txids.length,
       rebuilt: 0,
       skipped: 0,
+      skippedReasons: {},
       failed: 0,
       prevoutsResolved: 0,
       deferred: false,
