@@ -1057,7 +1057,31 @@ export default function FundTrail() {
   useEffect(() => {
     if (!isFullScreen) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setIsFullScreen(false);
+      if (e.key === "Escape") {
+        setIsFullScreen(false);
+        return;
+      }
+      // Layout shortcuts 1–5 (skip when modifier keys are held or when the
+      // user is typing in a field).
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      const target = e.target as HTMLElement | null;
+      if (
+        target &&
+        (target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.isContentEditable)
+      ) {
+        return;
+      }
+      const index = Number(e.key) - 1;
+      if (
+        Number.isInteger(index) &&
+        index >= 0 &&
+        index < FUND_TRAIL_LAYOUT_OPTIONS.length
+      ) {
+        e.preventDefault();
+        updateFundTrailLayout(FUND_TRAIL_LAYOUT_OPTIONS[index].value);
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -1673,13 +1697,39 @@ export default function FundTrail() {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent className="z-[10000]">
-                {FUND_TRAIL_LAYOUT_OPTIONS.map(opt => (
+                {FUND_TRAIL_LAYOUT_OPTIONS.map((opt, i) => (
                   <SelectItem key={opt.value} value={opt.value}>
-                    {opt.label}
+                    <span className="flex items-center gap-2">
+                      <kbd className="inline-flex h-4 min-w-4 items-center justify-center rounded-sm border border-border bg-muted px-1 text-[10px] font-medium text-muted-foreground">
+                        {i + 1}
+                      </kbd>
+                      {opt.label}
+                    </span>
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
+
+            <div
+              className="flex items-center gap-1.5"
+              data-testid="fund-trail-fullscreen-shortcut-hint"
+            >
+              <span className="text-xs text-muted-foreground">Press</span>
+              <span className="flex items-center gap-1">
+                {FUND_TRAIL_LAYOUT_OPTIONS.map((opt, i) => (
+                  <kbd
+                    key={opt.value}
+                    title={opt.label}
+                    className="inline-flex h-5 min-w-5 items-center justify-center rounded-sm border border-border bg-muted px-1 text-[10px] font-medium text-muted-foreground"
+                  >
+                    {i + 1}
+                  </kbd>
+                ))}
+              </span>
+              <span className="text-xs text-muted-foreground">
+                to switch layout
+              </span>
+            </div>
 
             <div className="flex items-center gap-1.5">
               <span className="text-xs text-muted-foreground">Sources</span>
