@@ -32,5 +32,6 @@
 - [Browser-seed privacy audit](browser-seed-privacy-audit.md) — real-browser layout checks: seed via Vite-singleton dynamic imports; active entity list is in-memory (reload wipes it); one combined snippet avoids runTest timeouts.
 - [Stale dev-bundle e2e](stale-dev-bundle-e2e.md) — e2e failing while unit tests + code review are green often = stale Vite/PWA bundle; force a rebuild (edit/restart) before chasing a non-bug.
 - [UTXOs note-icon scroll verify](utxos-scroll-preload-browser-verify.md) — note icon's hover path ≠ scroll-preload path (cover separately); jsdom proof stubs the virtualizer window + DB seam only; identifiers must differ in first-8 chars.
+- [FundTrail cancel e2e](fund-trail-cancel-e2e.md) — real-browser cancel-notice verify needs small self-chunking seeds, reload-to-surface group, and a Dexie read-delay to win the cancel-timing race.
 - [AddressLink icon cache-driven](addresslink-icon-cache-driven.md) — orange FileText icon comes from the metadata-hover cache subscription (not recordId); TTL only drops the entry, icon refreshes only on a later preload/hover re-resolve.
 - [Browser-seed Transactions page](browser-seed-transactions-reload.md) — default tx list/search only scans curated txs; page useLiveQuery ignores dynamic-import writes — seed then reload ONCE before rendering the link, live createRecord after.
