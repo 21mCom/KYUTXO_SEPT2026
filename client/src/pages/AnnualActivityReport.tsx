@@ -33,6 +33,22 @@ interface CounterpartyEntry {
   txCount: number;
 }
 
+/**
+ * One spent input whose value could not be resolved because its funding
+ * transaction was never synced. Surfaced so auditors can see *which*
+ * transactions caused the understated spend total and sync the missing data.
+ */
+export interface UnresolvedInput {
+  /** Txid of the (synced) transaction in the report that spent this input. */
+  spendingTxid: string;
+  /** Txid of the unsynced funding transaction (the prevout's source). */
+  prevTxid: string;
+  /** Output index within the funding transaction. */
+  prevVout: number;
+  /** Owning (pasted) address that spent this input, if known. */
+  address: string;
+}
+
 export interface ReportData {
   combinedYearRows: YearRow[];
   perAddress: AddressActivity[];
@@ -47,6 +63,12 @@ export interface ReportData {
    * could not be looked up. When > 0, spent totals may be understated.
    */
   unresolvedInputAmountCount: number;
+  /**
+   * The specific unresolved inputs behind `unresolvedInputAmountCount`. Lets the
+   * report (and its exports) list the offending txid/prevout/owning address so an
+   * auditor can act on them. Length equals `unresolvedInputAmountCount`.
+   */
+  unresolvedInputs: UnresolvedInput[];
 }
 
 function buildYearRowsFromMaps(
@@ -105,7 +127,12 @@ function sumYearRows(rows: YearRow[]): { txCount: number; receivedSats: number; 
  * (unfiltered) counterparty lists with their transaction counts. Pure (no DOM,
  * no DB) so it works fully offline and is testable in isolation.
  */
-export function buildAnnualActivityCsv(data: ReportData, addresses: string[], generatedAt: Date): string {
+export function buildAnnualActivityCsv(
+  data: ReportData,
+  addresses: string[],
+  generatedAt: Date,
+  includeUnresolvedInputs = false,
+): string {
   const lines: string[] = [];
 
   lines.push(csvRow(["KYUTXO Annual Activity Report"]));
@@ -121,6 +148,23 @@ export function buildAnnualActivityCsv(data: ReportData, addresses: string[], ge
         `Warning: ${data.unresolvedInputAmountCount} input amount(s) could not be resolved because the funding transaction(s) were never synced. Spent totals may be understated.`,
       ]),
     );
+    if (includeUnresolvedInputs && data.unresolvedInputs.length > 0) {
+      lines.push(
+        csvRow([
+          "To fix: sync the funding transactions listed below, then regenerate the report.",
+        ]),
+      );
+      lines.push("");
+      lines.push(csvRow(["Unresolved Inputs (understated spends)"]));
+      lines.push(
+        csvRow(["Spending Txid", "Funding Txid", "Funding Output", "Owning Address"]),
+      );
+      for (const u of data.unresolvedInputs) {
+        lines.push(
+          csvRow([u.spendingTxid, u.prevTxid, u.prevVout, u.address || "(unknown)"]),
+        );
+      }
+    }
   }
   lines.push("");
 
@@ -215,6 +259,7 @@ export function computeAnnualActivity(params: {
   spentOutputAmounts: Map<string, { amount: number; address: string }>;
   outputAmountLookup: Map<string, number>;
   unresolvedInputAmountCount?: number;
+  unresolvedInputs?: UnresolvedInput[];
 }): ReportData {
   const {
     addresses,
@@ -224,7 +269,8 @@ export function computeAnnualActivity(params: {
     spendingTxids,
     spentOutputAmounts,
     outputAmountLookup,
-    unresolvedInputAmountCount = 0,
+    unresolvedInputs = [],
+    unresolvedInputAmountCount = unresolvedInputs.length,
   } = params;
   const addressSet = new Set(addresses);
 
@@ -425,6 +471,7 @@ export function computeAnnualActivity(params: {
     unresolvedSentToCount: unresolvedSentToTxids.size,
     noDataAddresses,
     unresolvedInputAmountCount,
+    unresolvedInputs,
   };
 }
 
@@ -560,6 +607,68 @@ function CounterpartyList({
   );
 }
 
+function UnresolvedInputList({ inputs }: { inputs: UnresolvedInput[] }) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const virtualizer = useVirtualizer({
+    count: inputs.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => 56,
+    overscan: 10,
+  });
+
+  if (inputs.length === 0) return null;
+
+  return (
+    <div
+      ref={scrollRef}
+      className="max-h-72 overflow-auto border border-amber-500/40 rounded-md bg-background/40"
+      data-testid="scroll-unresolved-inputs"
+    >
+      <div style={{ height: `${virtualizer.getTotalSize()}px`, position: "relative" }}>
+        <div
+          style={{
+            position: "absolute",
+            top: 0,
+            left: 0,
+            width: "100%",
+            transform: `translateY(${virtualizer.getVirtualItems()[0]?.start ?? 0}px)`,
+          }}
+        >
+          {virtualizer.getVirtualItems().map((vi) => {
+            const u = inputs[vi.index];
+            return (
+              <div
+                key={`${u.spendingTxid}:${u.prevTxid}:${u.prevVout}`}
+                data-index={vi.index}
+                ref={virtualizer.measureElement}
+                className="px-3 py-2 text-xs border-b border-amber-500/20 last:border-b-0 space-y-0.5"
+                data-testid={`row-unresolved-input-${vi.index}`}
+              >
+                <div className="flex flex-wrap gap-x-2">
+                  <span className="text-muted-foreground">Funding tx (sync this):</span>
+                  <span className="font-mono break-all">
+                    {u.prevTxid}:{u.prevVout}
+                  </span>
+                </div>
+                <div className="flex flex-wrap gap-x-2">
+                  <span className="text-muted-foreground">Spent in tx:</span>
+                  <span className="font-mono break-all">{u.spendingTxid}</span>
+                </div>
+                {u.address && (
+                  <div className="flex flex-wrap gap-x-2">
+                    <span className="text-muted-foreground">Owning address:</span>
+                    <span className="font-mono break-all">{u.address}</span>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function AnnualActivityReport() {
   const [pastedText, setPastedText] = useState("");
   const [isGenerating, setIsGenerating] = useState(false);
@@ -567,6 +676,7 @@ export default function AnnualActivityReport() {
   const [hasGenerated, setHasGenerated] = useState(false);
   const [minTx, setMinTx] = useState(5);
   const [expandedAddresses, setExpandedAddresses] = useState<Set<string>>(new Set());
+  const [showUnresolvedDetails, setShowUnresolvedDetails] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
 
   const [usedAddresses, setUsedAddresses] = useState<string[]>([]);
@@ -575,7 +685,12 @@ export default function AnnualActivityReport() {
     if (!reportData) return;
     try {
       const generatedAt = new Date();
-      const content = buildAnnualActivityCsv(reportData, usedAddresses, generatedAt);
+      const content = buildAnnualActivityCsv(
+        reportData,
+        usedAddresses,
+        generatedAt,
+        showUnresolvedDetails,
+      );
       const stamp = generatedAt.toISOString().slice(0, 10);
       const filename = `kyutxo-annual-activity-${stamp}.csv`;
       const blob = new Blob([content], { type: "text/csv;charset=utf-8" });
@@ -588,7 +703,7 @@ export default function AnnualActivityReport() {
     } catch (err) {
       console.error("Failed to export annual activity report:", err);
     }
-  }, [reportData, usedAddresses]);
+  }, [reportData, usedAddresses, showUnresolvedDetails]);
 
   const exportPdf = useCallback(async () => {
     if (!reportData) return;
@@ -614,7 +729,7 @@ export default function AnnualActivityReport() {
       if (reportData.unresolvedInputAmountCount > 0) {
         doc.setFontSize(9);
         const warning = doc.splitTextToSize(
-          `Warning: ${reportData.unresolvedInputAmountCount.toLocaleString()} input amount${reportData.unresolvedInputAmountCount !== 1 ? "s" : ""} could not be resolved because the funding transaction${reportData.unresolvedInputAmountCount !== 1 ? "s were" : " was"} never synced. Spent totals may be understated.`,
+          `Warning: ${reportData.unresolvedInputAmountCount.toLocaleString()} input amount${reportData.unresolvedInputAmountCount !== 1 ? "s" : ""} could not be resolved because the funding transaction${reportData.unresolvedInputAmountCount !== 1 ? "s were" : " was"} never synced. Spent totals may be understated. Sync the funding transactions for full accuracy.`,
           pageWidth - 28,
         ) as string[];
         doc.text(warning, 14, 34);
@@ -769,6 +884,36 @@ export default function AnnualActivityReport() {
         reportData.unresolvedSentToCount,
       );
 
+      // ── Unresolved inputs (optional detail) ──────────────────────────────
+      if (showUnresolvedDetails && reportData.unresolvedInputs.length > 0) {
+        cursorY += 10;
+        ensureSpace(24);
+        doc.setFontSize(13);
+        doc.text("Unresolved Inputs (understated spends)", 14, cursorY);
+        cursorY += 5;
+        doc.setFontSize(8);
+        const hint = doc.splitTextToSize(
+          "Sync the funding transactions below, then regenerate the report for complete spent totals.",
+          pageWidth - 28,
+        ) as string[];
+        doc.text(hint, 14, cursorY);
+        cursorY += hint.length * 4;
+        autoTable(doc, {
+          startY: cursorY + 2,
+          head: [["Spending Txid", "Funding Txid", "Output", "Owning Address"]],
+          body: reportData.unresolvedInputs.map((u) => [
+            u.spendingTxid,
+            u.prevTxid,
+            String(u.prevVout),
+            u.address || "(unknown)",
+          ]),
+          styles: { fontSize: 6, cellPadding: 1.5, overflow: "linebreak" },
+          headStyles: { fillColor: [41, 128, 185] },
+          margin: { left: 14, right: 14 },
+        });
+        cursorY = getLastY();
+      }
+
       // ── Generation timestamp footer on every page ────────────────────────
       const pageHeight = doc.internal.pageSize.getHeight();
       const totalPages = doc.getNumberOfPages();
@@ -794,7 +939,7 @@ export default function AnnualActivityReport() {
     } catch (err) {
       console.error("Failed to export annual activity report PDF:", err);
     }
-  }, [reportData, usedAddresses]);
+  }, [reportData, usedAddresses, showUnresolvedDetails]);
 
   const toggleAddress = useCallback((addr: string) => {
     setExpandedAddresses((prev) => {
@@ -935,7 +1080,11 @@ export default function AnnualActivityReport() {
 
       // Resolve any inputs that still have amount=0 and point to a prevout
       // not yet in outputAmountLookup (referenced tx not in our txid set).
-      const unresolvedPrevOuts = new Set<string>();
+      // Track unresolved prevouts *with* the detail an auditor needs: which
+      // synced tx spent them (spendingTxid), the unsynced funding outpoint
+      // (prevTxid:prevVout), and the owning pasted address. Keyed by the prevout
+      // ref so the count semantics match (one entry per distinct unsynced output).
+      const unresolvedPrevOuts = new Map<string, UnresolvedInput>();
       for (const [, participants] of allTxParticipants) {
         for (const p of participants) {
           if (p.role !== "input") continue;
@@ -943,13 +1092,20 @@ export default function AnnualActivityReport() {
           const amt = Number(p.amount) || 0;
           if (amt === 0 && p.prevTxid && p.prevVout !== undefined) {
             const key = `${p.prevTxid}:${p.prevVout}`;
-            if (!outputAmountLookup.has(key)) unresolvedPrevOuts.add(key);
+            if (!outputAmountLookup.has(key) && !unresolvedPrevOuts.has(key)) {
+              unresolvedPrevOuts.set(key, {
+                spendingTxid: p.txid,
+                prevTxid: p.prevTxid,
+                prevVout: p.prevVout,
+                address: p.address,
+              });
+            }
           }
         }
       }
       if (unresolvedPrevOuts.size > 0) {
         const prevTxids = Array.from(
-          new Set(Array.from(unresolvedPrevOuts).map((k) => k.split(":")[0])),
+          new Set(Array.from(unresolvedPrevOuts.keys()).map((k) => k.split(":")[0])),
         );
         for (let i = 0; i < prevTxids.length; i += 500) {
           if (abort.signal.aborted) return;
@@ -968,12 +1124,13 @@ export default function AnnualActivityReport() {
         }
       }
 
-      // Count prevouts that STILL couldn't be resolved after the backfill — their
-      // funding tx was never synced, so their input amount stays 0 and the spent
-      // total silently under-counts. Surfaced to the user as a non-blocking notice.
-      let unresolvedInputAmountCount = 0;
-      for (const key of unresolvedPrevOuts) {
-        if (!outputAmountLookup.has(key)) unresolvedInputAmountCount += 1;
+      // Collect prevouts that STILL couldn't be resolved after the backfill —
+      // their funding tx was never synced, so their input amount stays 0 and the
+      // spent total silently under-counts. Surfaced to the user as a non-blocking
+      // notice, and (optionally) listed so the offending txids can be synced.
+      const unresolvedInputs: UnresolvedInput[] = [];
+      for (const [key, info] of unresolvedPrevOuts) {
+        if (!outputAmountLookup.has(key)) unresolvedInputs.push(info);
       }
 
       // ── Steps 7-9: aggregate received/spent + counterparties (pure) ──────
@@ -985,7 +1142,7 @@ export default function AnnualActivityReport() {
         spendingTxids,
         spentOutputAmounts,
         outputAmountLookup,
-        unresolvedInputAmountCount,
+        unresolvedInputs,
       });
 
       setReportData(reportData);
@@ -1107,7 +1264,7 @@ export default function AnnualActivityReport() {
                 data-testid="warning-unresolved-input-amounts"
               >
                 <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
-                <div>
+                <div className="min-w-0 flex-1">
                   <p className="font-medium mb-1">
                     {reportData.unresolvedInputAmountCount} input amount
                     {reportData.unresolvedInputAmountCount !== 1 ? "s" : ""} could not be resolved —
@@ -1116,8 +1273,33 @@ export default function AnnualActivityReport() {
                   <p>
                     The funding transaction
                     {reportData.unresolvedInputAmountCount !== 1 ? "s were" : " was"} never synced.
-                    Sync the funding transactions for full accuracy.
+                    Sync the funding transactions below for full accuracy.
                   </p>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="mt-2"
+                    onClick={() => setShowUnresolvedDetails((v) => !v)}
+                    data-testid="button-toggle-unresolved-details"
+                  >
+                    {showUnresolvedDetails ? (
+                      <ChevronDown className="h-4 w-4 mr-2" />
+                    ) : (
+                      <ChevronRight className="h-4 w-4 mr-2" />
+                    )}
+                    {showUnresolvedDetails ? "Hide" : "Show"} affected transactions (
+                    {reportData.unresolvedInputAmountCount.toLocaleString()})
+                  </Button>
+                  {showUnresolvedDetails && (
+                    <div className="mt-3" data-testid="list-unresolved-inputs">
+                      <p className="text-xs mb-2">
+                        Sync the funding transaction (prevout) for each input below, then
+                        regenerate the report. The owning address is the pasted address whose
+                        spend is understated.
+                      </p>
+                      <UnresolvedInputList inputs={reportData.unresolvedInputs} />
+                    </div>
+                  )}
                 </div>
               </div>
             )}

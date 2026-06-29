@@ -31,6 +31,7 @@ const SAMPLE: ReportData = {
   unresolvedSentToCount: 0,
   noDataAddresses: ["bc1qaddr2"],
   unresolvedInputAmountCount: 0,
+  unresolvedInputs: [],
 };
 
 describe("buildAnnualActivityCsv", () => {
@@ -86,6 +87,38 @@ describe("buildAnnualActivityCsv", () => {
     expect(csv).not.toContain("Spent totals may be understated");
   });
 
+  it("lists the unresolved inputs when includeUnresolvedInputs is true", () => {
+    const withUnresolved: ReportData = {
+      ...SAMPLE,
+      unresolvedInputAmountCount: 2,
+      unresolvedInputs: [
+        { spendingTxid: "spendA", prevTxid: "fundA", prevVout: 0, address: "bc1qowner1" },
+        { spendingTxid: "spendB", prevTxid: "fundB", prevVout: 3, address: "" },
+      ],
+    };
+    const csv = buildAnnualActivityCsv(withUnresolved, ["bc1qaddr1"], GENERATED_AT, true);
+    expect(csv).toContain("Unresolved Inputs (understated spends)");
+    expect(csv).toContain("Spending Txid,Funding Txid,Funding Output,Owning Address");
+    expect(csv).toContain("spendA,fundA,0,bc1qowner1");
+    // Blank owning address falls back to a readable placeholder.
+    expect(csv).toContain("spendB,fundB,3,(unknown)");
+  });
+
+  it("omits the unresolved-input list by default (includeUnresolvedInputs unset)", () => {
+    const withUnresolved: ReportData = {
+      ...SAMPLE,
+      unresolvedInputAmountCount: 1,
+      unresolvedInputs: [
+        { spendingTxid: "spendA", prevTxid: "fundA", prevVout: 0, address: "bc1qowner1" },
+      ],
+    };
+    const csv = buildAnnualActivityCsv(withUnresolved, ["bc1qaddr1"], GENERATED_AT);
+    // Warning still present, but no detail table.
+    expect(csv).toContain("Spent totals may be understated");
+    expect(csv).not.toContain("Unresolved Inputs (understated spends)");
+    expect(csv).not.toContain("spendA,fundA");
+  });
+
   it("escapes cells that contain commas or quotes", () => {
     const tricky: ReportData = {
       ...SAMPLE,
@@ -105,6 +138,7 @@ describe("buildAnnualActivityCsv", () => {
       unresolvedSentToCount: 0,
       noDataAddresses: [],
       unresolvedInputAmountCount: 0,
+      unresolvedInputs: [],
     };
     const csv = buildAnnualActivityCsv(empty, [], GENERATED_AT);
     expect(csv).toContain("No synced transaction data for any of the provided addresses.");

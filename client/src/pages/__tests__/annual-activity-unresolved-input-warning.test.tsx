@@ -103,6 +103,27 @@ const {
   };
 });
 
+// jsdom gives virtualized scroll containers a height of 0, so the real
+// virtualizer renders no rows. Replace it with a stub that renders every item
+// (count comes from the options arg) so the unresolved-input rows are present.
+vi.mock("@tanstack/react-virtual", () => ({
+  useVirtualizer: (opts: { count: number; estimateSize: () => number }) => {
+    const size = opts.estimateSize();
+    const items = Array.from({ length: opts.count }, (_, i) => ({
+      index: i,
+      start: i * size,
+      size,
+      end: (i + 1) * size,
+      key: i,
+    }));
+    return {
+      getVirtualItems: () => items,
+      getTotalSize: () => opts.count * size,
+      measureElement: () => {},
+    };
+  },
+}));
+
 vi.mock("@/lib/dataFacade", () => ({
   getParticipantsByAddresses,
   getParticipantsByTxids,
@@ -151,5 +172,22 @@ describe("AnnualActivityReport — unresolved input amount warning", () => {
     // All 3 seeded prevouts remain unresolved → the notice reports 3.
     expect(warning.textContent).toContain("3 input amounts could not be resolved");
     expect(warning.textContent).toContain("spent totals may be understated");
+  });
+
+  it("lists the affected funding/spending txids when the user expands the details", async () => {
+    generateReport();
+
+    // Details are hidden until the user opts in.
+    await screen.findByTestId("warning-unresolved-input-amounts");
+    expect(screen.queryByTestId("list-unresolved-inputs")).toBeNull();
+
+    fireEvent.click(screen.getByTestId("button-toggle-unresolved-details"));
+
+    const list = await screen.findByTestId("list-unresolved-inputs");
+    // Each seeded spend i has funding prevout prevTxid(i):0 and spending spendTxid(i).
+    expect(list.textContent).toContain(`${prevTxid(0)}:0`);
+    expect(list.textContent).toContain(spendTxid(0));
+    // Owning address (the pasted address) is shown so auditors know whose spend is off.
+    expect(list.textContent).toContain(MINE);
   });
 });
