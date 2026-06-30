@@ -37,10 +37,13 @@ import { useNodeSettings } from "@/hooks/use-node-settings";
 import { useOwners } from "@/hooks/use-owners";
 import { useWalletNames } from "@/hooks/use-wallet-names";
 import { createProviderFromSettings } from "@/lib/blockchain-api";
-import { validateAddress, formatBTC } from "@/lib/bitcoin";
+import { validateAddress, formatBTC, truncateAddress } from "@/lib/bitcoin";
 import { sanitizePdfText } from "@/lib/pdfText";
 import { computeStatsForAddresses } from "@/lib/data/address-stats";
 import { getRecordsByType } from "@/lib/data/record-crud";
+import { getLatestPriceOnOrBefore } from "@/lib/data/price-data-crud";
+import { getAttachmentsByRecordId } from "@/lib/data/attachments-crud";
+import { ACQUISITION_METHOD_OPTIONS, COUNTERPARTY_TYPE_OPTIONS } from "@/lib/db-types";
 import { useToast } from "@/hooks/use-toast";
 import {
   buildChallengeMessage,
@@ -255,6 +258,10 @@ export default function ProofOfFundsDeclaration() {
   const [qrExplorerId, setQrExplorerId] = useState<ExplorerId>("mempool");
   // address -> generated QR data URL for the on-screen preview
   const [qrPreviews, setQrPreviews] = useState<Record<string, string>>({});
+
+  // Acquisition & Provenance section (optional, off by default)
+  const [includeProvenance, setIncludeProvenance] = useState(false);
+  const [provenanceFiatCurrency, setProvenanceFiatCurrency] = useState("USD");
 
   // PDF generating
   const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
@@ -898,6 +905,304 @@ export default function ProofOfFundsDeclaration() {
         addSpacer(2);
       }
 
+      // ── Acquisition & Provenance Section ──────────────────────────────────
+      if (includeProvenance && doneRows.length > 0) {
+        // Gather all address records from vault
+        const allAddrRecords = await getRecordsByType("address");
+        const recordByAddress = new Map<string, (typeof allAddrRecords)[0]>();
+        for (const rec of allAddrRecords) {
+          recordByAddress.set(rec.inputString, rec);
+        }
+
+        interface ProvenanceEntry {
+          address: string;
+          label: string;
+          acquisitionDate: string;
+          acquisitionMethod: string;
+          counterpartyName: string;
+          btcAmountSats: number;
+          costBasisFiat: string;
+          priceInfo: string;
+          hasRecord: boolean;
+          attachmentNames: string[];
+        }
+
+        const provenanceEntries: ProvenanceEntry[] = [];
+        const allSupportingDocs: string[] = [];
+        let totalCostBasis = 0;
+        let hasCostBasis = false;
+
+        for (const row of doneRows) {
+          const rec = recordByAddress.get(row.raw);
+          const balanceSats = row.balanceSats ?? 0;
+
+          if (!rec) {
+            provenanceEntries.push({
+              address: row.raw,
+              label: "",
+              acquisitionDate: "No vault record",
+              acquisitionMethod: "No vault record",
+              counterpartyName: "No vault record",
+              btcAmountSats: balanceSats,
+              costBasisFiat: "Not recorded",
+              priceInfo: "",
+              hasRecord: false,
+              attachmentNames: [],
+            });
+            continue;
+          }
+
+          // Acquisition date
+          const acquisitionDate = rec.date ? rec.date : "Not recorded";
+
+          // Acquisition method label
+          const methodOpt = ACQUISITION_METHOD_OPTIONS.find((o) => o.value === rec.acquisitionMethod);
+          const acquisitionMethod = methodOpt?.label ?? (rec.acquisitionMethod ? rec.acquisitionMethod : "Not recorded");
+
+          // Counterparty / source name: prefer walletName, then label, then counterpartyType label
+          const counterpartyTypeOpt = COUNTERPARTY_TYPE_OPTIONS.find((o) => o.value === rec.counterpartyType);
+          const counterpartyName =
+            (rec.walletName?.trim() || "") !== ""
+              ? rec.walletName!.trim()
+              : (rec.label?.trim() || "") !== ""
+              ? rec.label.trim()
+              : counterpartyTypeOpt
+              ? counterpartyTypeOpt.label
+              : "Not recorded";
+
+          // Cost basis / fiat value at acquisition
+          let costBasisFiat = "Not recorded";
+          let priceInfo = "";
+
+          if (rec.costBasisUsd !== undefined && rec.costBasisUsd > 0) {
+            const formatted = rec.costBasisUsd.toLocaleString(undefined, {
+              minimumFractionDigits: 2,
+              maximumFractionDigits: 2,
+            });
+            costBasisFiat = `USD ${formatted} (user-supplied)`;
+            totalCostBasis += rec.costBasisUsd;
+            hasCostBasis = true;
+          } else if (rec.date) {
+            const priceRow = await getLatestPriceOnOrBefore(rec.date, provenanceFiatCurrency, "BTC");
+            if (priceRow) {
+              const computedBasis = (balanceSats / 1e8) * priceRow.close;
+              const formatted = computedBasis.toLocaleString(undefined, {
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2,
+              });
+              costBasisFiat = `${provenanceFiatCurrency} ${formatted}`;
+              const rateSource = priceRow.source ? priceRow.source : "vault price store";
+              priceInfo = `Rate: ${provenanceFiatCurrency} ${priceRow.close.toLocaleString()} on ${priceRow.date} (source: ${rateSource})`;
+              totalCostBasis += computedBasis;
+              hasCostBasis = true;
+            } else {
+              costBasisFiat = "Not recorded";
+              priceInfo = `No ${provenanceFiatCurrency} price data for ${rec.date} (source: vault price store)`;
+            }
+          }
+
+          // Attachments linked to this record
+          const attachments = rec.id !== undefined ? await getAttachmentsByRecordId(rec.id) : [];
+          const attachmentNames = attachments.map((a) => a.filename);
+          allSupportingDocs.push(...attachmentNames);
+
+          provenanceEntries.push({
+            address: row.raw,
+            label: rec.label || "",
+            acquisitionDate,
+            acquisitionMethod,
+            counterpartyName,
+            btcAmountSats: balanceSats,
+            costBasisFiat,
+            priceInfo,
+            hasRecord: true,
+            attachmentNames,
+          });
+        }
+
+        // Start a new page for the provenance appendix
+        doc.addPage();
+        y = 20;
+
+        doc.setFontSize(16);
+        doc.setFont("helvetica", "bold");
+        doc.setTextColor(0, 0, 0);
+        doc.text("APPENDIX: ACQUISITION & PROVENANCE", margin, y);
+        y += 8;
+        doc.setLineWidth(0.5);
+        doc.line(margin, y, margin + contentW, y);
+        y += 5;
+
+        doc.setFontSize(8.5);
+        doc.setFont("helvetica", "normal");
+        const provenanceIntroLines = doc.splitTextToSize(
+          sanitizePdfText(
+            "The following table documents the acquisition history for the declared Bitcoin addresses. " +
+            "Data is sourced from the declarant's KYUTXO vault records. Addresses without vault records " +
+            "or acquisition metadata are shown as \"Not recorded\". Historical fiat values are estimates " +
+            "based on stored price data; they may not reflect the actual transaction price."
+          ),
+          contentW
+        ) as string[];
+        doc.text(provenanceIntroLines, margin, y);
+        y += provenanceIntroLines.length * 8.5 * 0.45 + 5;
+
+        // Per-source table
+        const provTableHead = [[
+          "Address",
+          "Date Acquired",
+          "Acquisition Method",
+          "Counterparty / Source",
+          `BTC Amount`,
+          `Cost Basis (${provenanceFiatCurrency})`,
+        ]];
+        const provTableBody = provenanceEntries.map((e) => [
+          sanitizePdfText(truncateAddress(e.address, 8, 8)),
+          sanitizePdfText(e.acquisitionDate),
+          sanitizePdfText(e.acquisitionMethod),
+          sanitizePdfText(e.counterpartyName),
+          sanitizePdfText(`${formatBTC(e.btcAmountSats)} BTC`),
+          sanitizePdfText(e.costBasisFiat),
+        ]);
+
+        autoTable(doc, {
+          startY: y,
+          head: provTableHead,
+          body: provTableBody,
+          margin: { left: margin, right: margin },
+          styles: { fontSize: 7, font: "helvetica", cellPadding: 2, overflow: "linebreak" },
+          headStyles: { fillColor: [40, 40, 40], textColor: [255, 255, 255], fontStyle: "bold" },
+          columnStyles: {
+            0: { cellWidth: contentW * 0.19, font: "courier" },
+            1: { cellWidth: contentW * 0.13 },
+            2: { cellWidth: contentW * 0.17 },
+            3: { cellWidth: contentW * 0.19 },
+            4: { cellWidth: contentW * 0.14, halign: "right" },
+            5: { cellWidth: contentW * 0.18, halign: "right" },
+          },
+          didDrawPage: () => {},
+        });
+
+        y = (doc as any).lastAutoTable.finalY + 5;
+
+        // Price rate notes (one per entry that has a note)
+        const priceNotes = provenanceEntries.filter((e) => e.priceInfo);
+        if (priceNotes.length > 0) {
+          checkPageBreak(10 + priceNotes.length * 5);
+          doc.setFontSize(7.5);
+          doc.setFont("helvetica", "italic");
+          doc.setTextColor(100, 100, 100);
+          for (const e of priceNotes) {
+            const noteText = `${truncateAddress(e.address, 8, 8)}: ${e.priceInfo}`;
+            doc.text(sanitizePdfText(noteText), margin, y);
+            y += 4;
+          }
+          doc.setTextColor(0, 0, 0);
+          y += 2;
+        }
+
+        // Summary line
+        checkPageBreak(35);
+        doc.setFontSize(10);
+        doc.setFont("helvetica", "bold");
+        doc.setTextColor(0, 0, 0);
+        doc.text("PROVENANCE SUMMARY", margin, y);
+        y += 5;
+
+        doc.setFontSize(9);
+        doc.setFont("helvetica", "normal");
+        doc.text(sanitizePdfText(`Total BTC (declared addresses): ${formatBTC(totalSats)} BTC`), margin, y);
+        y += 4.5;
+
+        if (hasCostBasis) {
+          const costStr = totalCostBasis.toLocaleString(undefined, {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2,
+          });
+          doc.text(sanitizePdfText(`Total Cost Basis: ${provenanceFiatCurrency} ${costStr}`), margin, y);
+          y += 4.5;
+        }
+
+        if (fiatValid && fiatTotal !== null) {
+          const currentStr = fiatTotal.toLocaleString("en-US", {
+            style: "currency",
+            currency: fiatCurrency,
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2,
+          });
+          doc.text(
+            sanitizePdfText(
+              `Current Value: ${currentStr} ${fiatCurrency} (at declarant-supplied rate of ${fiatRateNum.toLocaleString("en-US", { maximumFractionDigits: 2 })} ${fiatCurrency}/BTC)`
+            ),
+            margin,
+            y
+          );
+          y += 4.5;
+
+          if (hasCostBasis && fiatCurrency === provenanceFiatCurrency && totalCostBasis > 0) {
+            const gainLoss = fiatTotal - totalCostBasis;
+            const pct = ((gainLoss / totalCostBasis) * 100).toFixed(1);
+            const gainStr = gainLoss.toLocaleString(undefined, {
+              minimumFractionDigits: 2,
+              maximumFractionDigits: 2,
+            });
+            doc.text(
+              sanitizePdfText(
+                `Unrealized Gain/Loss: ${gainLoss >= 0 ? "+" : ""}${fiatCurrency} ${gainStr} (${gainLoss >= 0 ? "+" : ""}${pct}%)`
+              ),
+              margin,
+              y
+            );
+            y += 4.5;
+          }
+        }
+
+        y += 3;
+
+        // Supporting documents list
+        checkPageBreak(20);
+        doc.setFontSize(10);
+        doc.setFont("helvetica", "bold");
+        doc.setTextColor(0, 0, 0);
+        doc.text("SUPPORTING DOCUMENTS", margin, y);
+        y += 5;
+
+        doc.setFontSize(8.5);
+        doc.setFont("helvetica", "normal");
+
+        if (allSupportingDocs.length === 0) {
+          doc.setTextColor(100, 100, 100);
+          doc.text("No file attachments are linked to the declared records in vault.", margin, y);
+          doc.setTextColor(0, 0, 0);
+          y += 5;
+        } else {
+          for (const name of allSupportingDocs) {
+            checkPageBreak(8);
+            doc.text(sanitizePdfText(`\u2022 ${name}`), margin + 3, y);
+            y += 4.5;
+          }
+          y += 2;
+        }
+
+        // Disclaimer note
+        checkPageBreak(15);
+        doc.setFontSize(7.5);
+        doc.setFont("helvetica", "italic");
+        doc.setTextColor(100, 100, 100);
+        const provNoteLines = doc.splitTextToSize(
+          sanitizePdfText(
+            "Disclaimer: Acquisition data is taken from the declarant's KYUTXO vault records at the time of generation. " +
+            "Historical fiat values are estimates from stored price history and may not equal the actual price paid. " +
+            "User-supplied cost basis figures are as entered by the declarant. " +
+            "This section is informational only and does not constitute financial, tax, or legal advice."
+          ),
+          contentW
+        ) as string[];
+        doc.text(provNoteLines, margin, y);
+        y += provNoteLines.length * 7.5 * 0.45 + 4;
+        doc.setTextColor(0, 0, 0);
+      }
+
       // ── Standard Disclaimers ───────────────────────────────────────────────
       checkPageBreak(50);
       addLine("DISCLAIMERS", 11, true);
@@ -1169,6 +1474,8 @@ export default function ProofOfFundsDeclaration() {
     fiatRateNum,
     controlStates,
     toast,
+    includeProvenance,
+    provenanceFiatCurrency,
   ]);
 
   const validCount = validRows.length;
@@ -2083,10 +2390,118 @@ export default function ProofOfFundsDeclaration() {
           </CardContent>
         </Card>
 
-        {/* Step 7: Generate PDF */}
+        {/* Step 7: Acquisition & Provenance */}
         <Card>
           <CardHeader>
-            <CardTitle>Step 7 — Generate PDF</CardTitle>
+            <CardTitle className="flex items-center gap-2">
+              <FileText className="h-5 w-5" />
+              Step 7 — Acquisition &amp; Provenance
+              <Badge variant="secondary" className="ml-1 text-xs font-normal">Optional</Badge>
+            </CardTitle>
+            <CardDescription>
+              Add an appendix documenting how the declared addresses acquired their Bitcoin:
+              acquisition dates, methods, cost basis, and fiat values at time of acquisition.
+              A list of linked supporting documents is included so a reviewer can cross-reference exhibits.
+              Data is read from your vault records — nothing is changed.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="flex items-center justify-between gap-4 flex-wrap">
+              <div className="space-y-0.5">
+                <Label htmlFor="include-provenance" className="text-sm font-medium">
+                  Include Acquisition &amp; Provenance appendix in the PDF
+                </Label>
+                <p className="text-sm text-muted-foreground">
+                  Off by default. When on, a per-address provenance table and supporting-documents
+                  list are appended as a separate section.
+                </p>
+              </div>
+              <Switch
+                id="include-provenance"
+                checked={includeProvenance}
+                onCheckedChange={setIncludeProvenance}
+                data-testid="switch-include-provenance"
+              />
+            </div>
+
+            {includeProvenance && (
+              <>
+                <Separator />
+
+                <div className="space-y-2 max-w-xs">
+                  <Label htmlFor="provenance-currency" className="text-sm">
+                    Fiat currency for cost basis and historical pricing
+                  </Label>
+                  <Select
+                    value={provenanceFiatCurrency}
+                    onValueChange={setProvenanceFiatCurrency}
+                  >
+                    <SelectTrigger id="provenance-currency" data-testid="select-provenance-currency">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="USD">USD — US Dollar</SelectItem>
+                      <SelectItem value="EUR">EUR — Euro</SelectItem>
+                      <SelectItem value="GBP">GBP — British Pound</SelectItem>
+                      <SelectItem value="CAD">CAD — Canadian Dollar</SelectItem>
+                      <SelectItem value="AUD">AUD — Australian Dollar</SelectItem>
+                      <SelectItem value="CHF">CHF — Swiss Franc</SelectItem>
+                      <SelectItem value="JPY">JPY — Japanese Yen</SelectItem>
+                      <SelectItem value="SGD">SGD — Singapore Dollar</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">
+                    Used for historical price lookups from your vault's stored price data.
+                    Addresses with a manually recorded cost basis will show that value in USD
+                    regardless of this setting.
+                  </p>
+                </div>
+
+                <Alert>
+                  <AlertCircle className="h-4 w-4" />
+                  <AlertDescription className="text-sm space-y-1">
+                    <p>
+                      Acquisition data is read from your vault records. Addresses with no vault
+                      record, or records with no acquisition metadata, are shown as "Not recorded."
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      Historical fiat values are estimates from your vault's stored price data.
+                      If no price data exists for an acquisition date, the cost basis will be
+                      shown as "Not recorded." Figures are informational only.
+                    </p>
+                  </AlertDescription>
+                </Alert>
+
+                {doneRows.length === 0 ? (
+                  <p className="text-sm text-muted-foreground flex items-center gap-2">
+                    <Clock className="h-4 w-4" />
+                    Check balances for at least one address (Step 2) to include this section.
+                  </p>
+                ) : (
+                  <div className="rounded-md border bg-muted/30 px-4 py-3 text-sm space-y-1">
+                    <div className="font-medium">What will be included</div>
+                    <ul className="text-muted-foreground space-y-0.5 list-disc list-inside text-xs">
+                      <li>
+                        Per-address table: date acquired, acquisition method, BTC amount, and cost
+                        basis in {provenanceFiatCurrency} (from price history or user-supplied basis)
+                      </li>
+                      <li>
+                        Provenance summary: total BTC, total cost basis
+                        {fiatValid && fiatTotal !== null ? ", current value, and unrealized gain/loss" : ""}
+                      </li>
+                      <li>Supporting documents: file attachments linked to the declared records</li>
+                    </ul>
+                  </div>
+                )}
+              </>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Step 8: Generate PDF */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Step 8 — Generate PDF</CardTitle>
             <CardDescription>
               All required steps above must be complete before a PDF can be generated.
               The PDF is created entirely in your browser — no data leaves your device.
@@ -2149,6 +2564,7 @@ export default function ProofOfFundsDeclaration() {
                   source attestation, disclaimers, and a signature block.
                   {includeQr && ` It will also include verification QR codes linking each address to ${getExplorer(qrExplorerId).host}.`}
                   {verifiedCount > 0 && ` An appendix will contain the challenge messages and signatures for ${verifiedCount} verified address${verifiedCount !== 1 ? "es" : ""}.`}
+                  {includeProvenance && ` An Acquisition & Provenance appendix will document acquisition dates, methods, and cost basis (in ${provenanceFiatCurrency}) for the declared addresses, plus a list of linked supporting documents.`}
                 </p>
               </div>
             )}
