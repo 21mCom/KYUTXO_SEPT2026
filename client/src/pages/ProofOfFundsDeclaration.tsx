@@ -63,6 +63,10 @@ interface ControlState {
   status: ControlStatus;
   error?: string;
   verifiedSig?: string;
+  // True when a previously-verified signature was cleared because the declarant
+  // details (name/date/purpose) changed, so the signed challenge message no
+  // longer matches. Surfaces an inline "re-verify" warning until re-verified.
+  staleAfterVerify?: boolean;
 }
 
 interface BalanceSummary {
@@ -174,7 +178,7 @@ export default function ProofOfFundsDeclaration() {
         const updated: Record<string, ControlState> = {};
         for (const [addr, cs] of Object.entries(prev)) {
           if (cs.status === "verified") {
-            updated[addr] = { paste: cs.paste, status: "idle" };
+            updated[addr] = { paste: cs.paste, status: "idle", staleAfterVerify: true };
           } else {
             updated[addr] = cs;
           }
@@ -1433,13 +1437,37 @@ export default function ProofOfFundsDeclaration() {
                               Verification Failed
                             </Badge>
                           )}
-                          {cs.status === "idle" && (
+                          {cs.status === "idle" && cs.staleAfterVerify && (
+                            <Badge
+                              variant="outline"
+                              className="gap-1 shrink-0 border-amber-500 text-amber-600 dark:text-amber-400"
+                              data-testid={`badge-stale-${idx}`}
+                            >
+                              <AlertCircle className="h-3 w-3" />
+                              Re-verification Needed
+                            </Badge>
+                          )}
+                          {cs.status === "idle" && !cs.staleAfterVerify && (
                             <Badge variant="secondary" className="gap-1 shrink-0">
                               <Shield className="h-3 w-3" />
                               Self-Declared (Unverified)
                             </Badge>
                           )}
                         </div>
+
+                        {cs.status === "idle" && cs.staleAfterVerify && !isTaproot && (
+                          <Alert
+                            className="py-2 border-amber-500/60 text-amber-700 dark:text-amber-300 [&>svg]:text-amber-600 dark:[&>svg]:text-amber-400"
+                            data-testid={`alert-stale-${idx}`}
+                          >
+                            <AlertCircle className="h-3.5 w-3.5" />
+                            <AlertDescription className="text-xs">
+                              Declarant details changed — re-verify your signature. The challenge
+                              message now embeds the updated name, date, or purpose, so the previous
+                              signature no longer matches.
+                            </AlertDescription>
+                          </Alert>
+                        )}
 
                         {isTaproot ? (
                           <p className="text-xs text-muted-foreground">
