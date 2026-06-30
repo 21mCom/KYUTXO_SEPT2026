@@ -48,6 +48,7 @@ import {
 } from "@/lib/blockchain-api";
 import { validateAddress, formatBTC, truncateAddress } from "@/lib/bitcoin";
 import { sanitizePdfText } from "@/lib/pdfText";
+import { buildAttestationLines } from "@/lib/attestationLines";
 import { computeStatsForAddresses } from "@/lib/data/address-stats";
 import { getRecordsByType } from "@/lib/data/record-crud";
 import { getLatestPriceOnOrBefore } from "@/lib/data/price-data-crud";
@@ -592,39 +593,17 @@ export default function ProofOfFundsDeclaration() {
   // immediate visual confirmation of what that section will contain as they
   // type. Purely derived from state; no DB query or sanitization needed (the
   // PDF's sanitizePdfText only strips characters the PDF renderer can't draw).
-  const attestationPreviewLines = useMemo(() => {
-    const lines: string[] = [];
-
-    lines.push(
-      amlPepStatus === "yes"
-        ? "PEP Status: The declarant confirms they ARE a Politically Exposed Person (PEP)."
-        : amlPepStatus === "no"
-        ? "PEP Status: The declarant confirms they are NOT a Politically Exposed Person (PEP)."
-        : "PEP Status: Not stated by declarant (no selection made)."
-    );
-
-    lines.push(
-      amlSourceOfWealth.trim()
-        ? `Source of Wealth: ${amlSourceOfWealth.trim()}`
-        : "Source of Wealth: Not provided by declarant."
-    );
-
-    lines.push(
-      amlSourceOfFunds.trim()
-        ? `Source of Funds: ${amlSourceOfFunds.trim()}`
-        : "Source of Funds: Not provided by declarant."
-    );
-
-    if (amlTaxJurisdiction.trim()) {
-      lines.push(
-        amlTaxStatement.trim()
-          ? `Tax Residency & Compliance: The declarant is resident for tax purposes in ${amlTaxJurisdiction.trim()}. ${amlTaxStatement.trim()}`
-          : `Tax Residency: The declarant is resident for tax purposes in ${amlTaxJurisdiction.trim()}.`
-      );
-    }
-
-    return lines;
-  }, [amlPepStatus, amlSourceOfWealth, amlSourceOfFunds, amlTaxJurisdiction, amlTaxStatement]);
+  const attestationPreviewLines = useMemo(
+    () =>
+      buildAttestationLines({
+        pepStatus: amlPepStatus,
+        sourceOfWealth: amlSourceOfWealth,
+        sourceOfFunds: amlSourceOfFunds,
+        taxJurisdiction: amlTaxJurisdiction,
+        taxStatement: amlTaxStatement,
+      }),
+    [amlPepStatus, amlSourceOfWealth, amlSourceOfFunds, amlTaxJurisdiction, amlTaxStatement],
+  );
 
   // Stable key for the set of addresses we have balances for, so the QR preview
   // effect only regenerates when the actual addresses (not the array ref) change.
@@ -1810,32 +1789,22 @@ export default function ProofOfFundsDeclaration() {
         addLine("DECLARANT SELF-ATTESTATIONS", 10, true);
         addSpacer(2);
 
-        const pepText =
-          amlPepStatus === "yes"
-            ? "PEP Status: The declarant confirms they ARE a Politically Exposed Person (PEP)."
-            : amlPepStatus === "no"
-            ? "PEP Status: The declarant confirms they are NOT a Politically Exposed Person (PEP)."
-            : "PEP Status: Not stated by declarant (no selection made).";
-        addWrapped(pepText, 9);
-        addSpacer(2);
-
-        const wealthText = amlSourceOfWealth.trim()
-          ? `Source of Wealth: ${sanitizePdfText(amlSourceOfWealth)}`
-          : "Source of Wealth: Not provided by declarant.";
-        addWrapped(wealthText, 9);
-        addSpacer(2);
-
-        const fundsText = amlSourceOfFunds.trim()
-          ? `Source of Funds: ${sanitizePdfText(amlSourceOfFunds)}`
-          : "Source of Funds: Not provided by declarant.";
-        addWrapped(fundsText, 9);
-        addSpacer(2);
-
-        if (amlTaxJurisdiction.trim()) {
-          const taxText = amlTaxStatement.trim()
-            ? `Tax Residency & Compliance: The declarant is resident for tax purposes in ${sanitizePdfText(amlTaxJurisdiction)}. ${sanitizePdfText(amlTaxStatement)}`
-            : `Tax Residency: The declarant is resident for tax purposes in ${sanitizePdfText(amlTaxJurisdiction)}.`;
-          addWrapped(taxText, 9);
+        // Built from the SAME shared builder as the on-screen attestation
+        // preview (see `attestationPreviewLines`), differing only by the
+        // sanitizePdfText transform applied here to user-supplied values, so the
+        // preview can never silently drift from what this section renders.
+        const attestationLines = buildAttestationLines(
+          {
+            pepStatus: amlPepStatus,
+            sourceOfWealth: amlSourceOfWealth,
+            sourceOfFunds: amlSourceOfFunds,
+            taxJurisdiction: amlTaxJurisdiction,
+            taxStatement: amlTaxStatement,
+          },
+          sanitizePdfText,
+        );
+        for (const line of attestationLines) {
+          addWrapped(line, 9);
           addSpacer(2);
         }
 
