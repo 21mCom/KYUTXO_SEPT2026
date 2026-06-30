@@ -118,6 +118,7 @@ const navGroups: NavGroup[] = [
       { title: "Quantum Risk", url: "/quantum-risk", icon: ShieldAlert },
       { title: "Reports", url: "/reports", icon: ClipboardList },
       { title: "Statement", url: "/statement", icon: FileText },
+      { title: "Proof of Funds", url: "/proof-of-funds", icon: FileText },
       { title: "Annual Activity", url: "/annual-activity", icon: CalendarRange },
       { title: "Lightning", url: "/lightning-speculator", icon: Zap },
     ]

@@ -67,6 +67,7 @@ import EngineDiagnostics from "@/pages/EngineDiagnostics";
 import DatabaseDoctor from "@/pages/DatabaseDoctor";
 import AnnualActivityReport from "@/pages/AnnualActivityReport";
 import AddressChecker from "@/pages/AddressChecker";
+import ProofOfFundsDeclaration from "@/pages/ProofOfFundsDeclaration";
 import NotFound from "@/pages/not-found";
 
 function AppRoutes() {
@@ -122,6 +123,7 @@ function AppRoutes() {
       <Route path="/database-doctor" component={DatabaseDoctor} />
       <Route path="/annual-activity" component={AnnualActivityReport} />
       <Route path="/address-checker" component={AddressChecker} />
+      <Route path="/proof-of-funds" component={ProofOfFundsDeclaration} />
       <Route component={NotFound} />
     </Switch>
   );
