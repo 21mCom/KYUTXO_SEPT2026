@@ -1,6 +1,6 @@
 ---
 name: FundTrail Classic multi-hop scroll verify
-description: How to real-browser verify the Classic Fund Trail layout scrolls each column inside its pane (not whole-page), incl. seeding a >1-hop trail both directions.
+description: How to real-browser verify the Classic Fund Trail layout (inline + full-screen) scrolls inside its pane (not whole-page), incl. seeding a >1-hop trail both directions and checking all five full-screen layouts.
 ---
 
 To browser-verify the Classic (`fundTrailLayout==="classic"`) multi-hop layout's
@@ -44,3 +44,47 @@ the page itself doesn't scroll or that a column actually overflows-then-scrolls.
 The browser recipe above stays the source of truth for real overflow and is the
 deliverable when a task asks to *measure* it; pair the two, don't swap one for
 the other.
+
+## Full-screen overlay (all five layouts) — measured no-whole-page-scroll
+
+The page has a SEPARATE full-screen branch (`isFullScreen` overlay, testid
+`fund-trail-fullscreen`, `FundTrail.tsx` ~line 1682) that re-wraps the same
+layouts in DIFFERENT containers than the inline `fund-trail-body`. The jsdom
+guard `FundTrail.fullScreenScroll.test.tsx` only checks CSS *class structure*; it
+cannot MEASURE pixels, so a class-preserving overflow regression (intrinsic-height
+child, min-width blowout, flex edge case) would pass it yet still scroll the whole
+page. This recipe is the pixel-truth complement and is the deliverable when a task
+asks to *measure* full-screen overflow.
+
+**Seed (one fast `page.evaluate`, ~96 txns — no chunking needed):** same shape as
+the inline recipe above. Center wallet `walletName: "AAA Treasury"` (sorts to top
+of the group dropdown). ~24 known src wallets (input=src,output=center) + ~24 known
+dst wallets (input=center,output=dst) for long hop-1 columns, plus a backward
+unknown intermediary (`input=unkBack,output=center`) feeding ~6 `Deep Src N`
+(`input=deepSrc,output=unkBack`) and a forward unknown intermediary
+(`input=center,output=unkFwd`) feeding ~6 `Deep Dst N` to satisfy >1 hop BOTH
+sides. Tables cleared + bulkAdded directly via `import('/src/lib/database.ts').db`:
+`records {type:'address',inputString,inputStringLower,walletName,createdAt}`,
+`blockchainTransactions {txid,blockTime,blockHeight}`,
+`transactionParticipants {txid,address,role:'input'|'output',amount,vout}`.
+Dexie schemas only declare indexes, so extra/missing non-index fields are fine and
+direct bulkAdd bypasses address-validation (arbitrary `bc1q…`-ish strings work).
+
+**Flow:** new context (fresh IndexedDB → "Create a password") → create vault
+(`input-password`+`input-confirm-password`+`button-submit`) → seed → RELOAD +
+re-unlock (group dropdown is a cached react-query; reload re-reads `listGroupValues`)
+→ /fund-trail → pick "AAA Treasury" (`fund-trail-group-select`) → backward=2,
+forward=2 → click `fund-trail-expand` → wait for `fund-trail-fullscreen`.
+
+**Switch layouts WITHOUT leaving full-screen:** the overlay binds window keydown
+1–5 (1 Classic, 2 Horizontal, 3 Vertical, 4 Breakout, 5 Sankey) — press the digit
+key (focus must NOT be in an input), or use `fund-trail-fullscreen-layout-select`.
+
+**Assert per layout (`page.evaluate`, real measurement):** with the overlay as the
+root, `document.documentElement.scrollHeight - clientHeight <= 2` AND
+`document.body.scrollHeight - clientHeight <= 2` (no whole-page scroll);
+`querySelectorAll('[class*=h-screen]').length === 0` inside the overlay; Classic has
+`fund-trail-hop-card-*` > 0, the four variants have `ft-node-*` > 0 (Sankey reports
+ft-nodes but 0 hop-cards — expected). Stress check: scroll an inner pane to the
+bottom, re-measure, page delta must STILL be <= 2. Confirmed passing all five at
+1280×720 (every doc/body delta = 0).
