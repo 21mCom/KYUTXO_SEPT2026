@@ -44,7 +44,7 @@ export interface BlockchainProvider {
    * On Electrum this fills txCount + balanceSats; receivedSats/sentSats are left
    * undefined and will be filled by getAddressHistoryDates.
    */
-  getAddressCoreStats?(address: string): Promise<AddressInfo>;
+  getAddressCoreStats?(address: string, signal?: AbortSignal): Promise<AddressInfo>;
   /**
    * On-demand history walk: return first/last seen times (and, on Electrum,
    * also receivedSats / sentSats which cannot be computed cheaply).

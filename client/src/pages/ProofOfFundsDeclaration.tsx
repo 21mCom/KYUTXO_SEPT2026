@@ -36,7 +36,12 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { useNodeSettings } from "@/hooks/use-node-settings";
 import { useOwners } from "@/hooks/use-owners";
 import { useWalletNames } from "@/hooks/use-wallet-names";
-import { createProviderFromSettings } from "@/lib/blockchain-api";
+import { Link } from "wouter";
+import {
+  createProviderFromSettings,
+  isNodeUnreachableError,
+  NODE_PROBE_TIMEOUT_MS,
+} from "@/lib/blockchain-api";
 import { validateAddress, formatBTC, truncateAddress } from "@/lib/bitcoin";
 import { sanitizePdfText } from "@/lib/pdfText";
 import { computeStatsForAddresses } from "@/lib/data/address-stats";
@@ -415,7 +420,7 @@ export default function ProofOfFundsDeclaration() {
         provider = createProviderFromSettings(nodeSettings);
       } catch (err) {
         const msg =
-          err instanceof Error ? err.message : "Failed to create provider. Check Node Connection settings.";
+          err instanceof Error ? err.message : "Failed to create provider.";
         setProviderError(msg);
         setIsChecking(false);
         return;
@@ -430,29 +435,81 @@ export default function ProofOfFundsDeclaration() {
 
       const nowTs = Math.floor(Date.now() / 1000);
 
+      const fetchBalanceSats = async (
+        address: string,
+        signal?: AbortSignal,
+      ): Promise<number> => {
+        if (provider.getAddressCoreStats) {
+          const info = await provider.getAddressCoreStats(address, signal);
+          return info.balanceSats ?? 0;
+        } else if (provider.getAddressInfo) {
+          const info = await provider.getAddressInfo(address);
+          return info.balanceSats ?? 0;
+        } else {
+          const { computeHistoryFromTxs } = await import("@/lib/providers/address-history");
+          const txs = await provider.getAddressTransactions(address);
+          const history = computeHistoryFromTxs(address, txs);
+          return (history.receivedSats ?? 0) - (history.sentSats ?? 0);
+        }
+      };
+
+      let isFirstAttempt = true;
       for (const { i } of validIndices) {
         if (cancelledRef.current) break;
         setRows((prev) => prev.map((r, idx) => (idx === i ? { ...r, status: "loading" } : r)));
         const address = parsed[i].raw;
+        const attemptIsFirst = isFirstAttempt;
         try {
           let balanceSats: number;
-          if (provider.getAddressCoreStats) {
-            const info = await provider.getAddressCoreStats(address);
-            balanceSats = info.balanceSats ?? 0;
-          } else if (provider.getAddressInfo) {
-            const info = await provider.getAddressInfo(address);
-            balanceSats = info.balanceSats ?? 0;
+          if (attemptIsFirst) {
+            // Cap the very first attempt so an unreachable node fails fast instead
+            // of hanging for the full per-request timeout on every address. Abort
+            // the in-flight request and reject the race once the cap is hit.
+            const controller = new AbortController();
+            let probeTimer: ReturnType<typeof setTimeout> | undefined;
+            try {
+              balanceSats = await Promise.race([
+                fetchBalanceSats(address, controller.signal),
+                new Promise<number>((_, reject) => {
+                  probeTimer = setTimeout(() => {
+                    controller.abort(
+                      new DOMException("Node probe timed out", "TimeoutError"),
+                    );
+                    reject(
+                      new Error(
+                        `Node unreachable — no response within ${NODE_PROBE_TIMEOUT_MS / 1000}s.`,
+                      ),
+                    );
+                  }, NODE_PROBE_TIMEOUT_MS);
+                }),
+              ]);
+            } finally {
+              if (probeTimer) clearTimeout(probeTimer);
+            }
           } else {
-            const { computeHistoryFromTxs } = await import("@/lib/providers/address-history");
-            const txs = await provider.getAddressTransactions(address);
-            const history = computeHistoryFromTxs(address, txs);
-            balanceSats = (history.receivedSats ?? 0) - (history.sentSats ?? 0);
+            balanceSats = await fetchBalanceSats(address);
           }
+          isFirstAttempt = false;
           setRows((prev) =>
             prev.map((r, idx) => (idx === i ? { ...r, status: "done", balanceSats } : r))
           );
         } catch (err) {
           if (cancelledRef.current) break;
+          // On the first attempt, a node-level connectivity failure means the
+          // node is unreachable: fail the whole check immediately rather than
+          // grinding through every address. Transient/per-address errors still
+          // surface per-row (here and on later addresses).
+          if (attemptIsFirst && isNodeUnreachableError(err)) {
+            setProviderError(
+              "Node unreachable — the on-chain balance check could not reach your node.",
+            );
+            setRows((prev) =>
+              prev.map((r) => (r.status === "loading" ? { ...r, status: "pending" } : r))
+            );
+            setIsChecking(false);
+            return;
+          }
+          isFirstAttempt = false;
           setRows((prev) =>
             prev.map((r, idx) =>
               idx === i
@@ -1663,7 +1720,16 @@ export default function ProofOfFundsDeclaration() {
             {providerError && (
               <Alert variant="destructive">
                 <AlertCircle className="h-4 w-4" />
-                <AlertDescription>{providerError}</AlertDescription>
+                <AlertDescription>
+                  {providerError}{" "}
+                  <Link
+                    href="/node-settings"
+                    className="font-medium underline underline-offset-2"
+                    data-testid="link-node-settings"
+                  >
+                    Check Node Connection settings
+                  </Link>
+                </AlertDescription>
               </Alert>
             )}
           </CardContent>

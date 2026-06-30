@@ -253,8 +253,8 @@ export abstract class EsploraProvider implements BlockchainProvider {
 
   // Fast tier: a single address-summary call returns all four core fields
   // (tx count, funded/spent sums, balance). No history pagination.
-  async getAddressCoreStats(address: string): Promise<AddressInfo> {
-    const statsResponse = await this.rateLimitedFetch(`${this.baseUrl}/address/${address}`);
+  async getAddressCoreStats(address: string, signal?: AbortSignal): Promise<AddressInfo> {
+    const statsResponse = await this.rateLimitedFetch(`${this.baseUrl}/address/${address}`, signal);
     const stats = await statsResponse.json();
 
     const chainStats = stats.chain_stats ?? {};

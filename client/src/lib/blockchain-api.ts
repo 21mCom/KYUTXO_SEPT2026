@@ -26,6 +26,26 @@ export type { BlockchainProvider, ApiTransaction, ParsedTransaction, TorStatus, 
 export type { ProviderType };
 export { MINIMUM_CONFIRMATIONS };
 
+// Maximum time (ms) to wait on the FIRST live-balance address attempt before
+// declaring the node unreachable. Deliberately shorter than the full per-request
+// timeout so an unreachable node fails fast instead of hanging address-by-address.
+export const NODE_PROBE_TIMEOUT_MS = 5000;
+
+// Classify an error as a node-level connectivity failure (node down, refused,
+// DNS failure, proxy failure, or our short probe timeout) rather than a
+// transient/per-address error (e.g. a single 404/500 or rate limit). Used by the
+// live-balance path to decide whether to fail the whole check up front.
+export function isNodeUnreachableError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error ?? '');
+  const name = error instanceof Error ? error.name : '';
+  // Our short probe aborts with a TimeoutError, and the message we throw on the
+  // race begins with "Node unreachable".
+  if (name === 'TimeoutError') return true;
+  return /node unreachable|failed to fetch|networkerror|network request failed|fetch failed|tor proxy request failed|econnrefused|enotfound|ehostunreach|etimedout|connection refused|timed out|getaddrinfo/i.test(
+    message,
+  );
+}
+
 // Create a provider from legacy type (for backwards compatibility)
 export function createProvider(type: ProviderType = 'mempool', network: 'mainnet' | 'testnet' = 'mainnet'): BlockchainProvider {
   switch (type) {
