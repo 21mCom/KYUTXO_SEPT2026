@@ -586,6 +586,46 @@ export default function ProofOfFundsDeclaration() {
     purpose,
   ]);
 
+  // Live preview of the declarant self-attestation lines, derived purely from
+  // the attestation inputs. These mirror — word-for-word — the strings written
+  // into the PDF's "DECLARANT SELF-ATTESTATIONS" section, so the user gets
+  // immediate visual confirmation of what that section will contain as they
+  // type. Purely derived from state; no DB query or sanitization needed (the
+  // PDF's sanitizePdfText only strips characters the PDF renderer can't draw).
+  const attestationPreviewLines = useMemo(() => {
+    const lines: string[] = [];
+
+    lines.push(
+      amlPepStatus === "yes"
+        ? "PEP Status: The declarant confirms they ARE a Politically Exposed Person (PEP)."
+        : amlPepStatus === "no"
+        ? "PEP Status: The declarant confirms they are NOT a Politically Exposed Person (PEP)."
+        : "PEP Status: Not stated by declarant (no selection made)."
+    );
+
+    lines.push(
+      amlSourceOfWealth.trim()
+        ? `Source of Wealth: ${amlSourceOfWealth.trim()}`
+        : "Source of Wealth: Not provided by declarant."
+    );
+
+    lines.push(
+      amlSourceOfFunds.trim()
+        ? `Source of Funds: ${amlSourceOfFunds.trim()}`
+        : "Source of Funds: Not provided by declarant."
+    );
+
+    if (amlTaxJurisdiction.trim()) {
+      lines.push(
+        amlTaxStatement.trim()
+          ? `Tax Residency & Compliance: The declarant is resident for tax purposes in ${amlTaxJurisdiction.trim()}. ${amlTaxStatement.trim()}`
+          : `Tax Residency: The declarant is resident for tax purposes in ${amlTaxJurisdiction.trim()}.`
+      );
+    }
+
+    return lines;
+  }, [amlPepStatus, amlSourceOfWealth, amlSourceOfFunds, amlTaxJurisdiction, amlTaxStatement]);
+
   // Stable key for the set of addresses we have balances for, so the QR preview
   // effect only regenerates when the actual addresses (not the array ref) change.
   const doneAddressKey = useMemo(() => doneRows.map((r) => r.raw).join("|"), [doneRows]);
@@ -3534,6 +3574,22 @@ export default function ProofOfFundsDeclaration() {
                             data-testid="input-aml-tax-statement"
                           />
                         </div>
+                      </div>
+                    </div>
+
+                    {/* Live attestation preview — mirrors the PDF section word-for-word */}
+                    <div className="space-y-2 rounded-md border bg-muted/40 p-4" data-testid="preview-aml-attestation">
+                      <h4 className="text-sm font-semibold">Attestation preview</h4>
+                      <p className="text-xs text-muted-foreground">
+                        These lines appear verbatim in the PDF's "Declarant Self-Attestations" section and
+                        update as you type above.
+                      </p>
+                      <div className="space-y-1.5 text-xs">
+                        {attestationPreviewLines.map((line, i) => (
+                          <p key={i} className="leading-relaxed" data-testid={`text-aml-attestation-line-${i}`}>
+                            {line}
+                          </p>
+                        ))}
                       </div>
                     </div>
 
