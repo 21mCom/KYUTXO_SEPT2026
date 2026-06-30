@@ -378,6 +378,8 @@ function formatHopLabel(hops: number): string {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+/** PDF document format version embedded in every generated document. */
+const KYUTXO_APP_VERSION = "1.1.28";
 
 export default function ProofOfFundsDeclaration() {
   const { nodeSettings } = useNodeSettings();
@@ -465,6 +467,14 @@ export default function ProofOfFundsDeclaration() {
   // Acquisition & Provenance section (optional, off by default)
   const [includeProvenance, setIncludeProvenance] = useState(false);
   const [provenanceFiatCurrency, setProvenanceFiatCurrency] = useState("USD");
+
+  // Attestation block (optional, off by default)
+  const [includeAttestation, setIncludeAttestation] = useState(false);
+  const [attestationPlaceOfSigning, setAttestationPlaceOfSigning] = useState("");
+  const [attestationWitnessLine, setAttestationWitnessLine] = useState("");
+
+  // Glossary (optional, off by default)
+  const [includeGlossary, setIncludeGlossary] = useState(false);
 
   // AML / Risk Screening section (optional, off by default)
   const [includeAml, setIncludeAml] = useState(false);
@@ -1042,10 +1052,87 @@ export default function ProofOfFundsDeclaration() {
         }
       };
 
-      // Gather verified addresses for later appendix
+      // ── Content fingerprint (SHA-256 of canonical content, computed before rendering) ──
+      const generationTimestamp = new Date();
+      const generationIso = generationTimestamp.toISOString();
+
+      // Gather verified addresses (needed for canonical payload AND later appendix)
       const verifiedRows = doneRows.filter((r) => controlStates[r.raw]?.status === "verified");
       const hasVerified = verifiedRows.length > 0;
       const allVerified = doneRows.length > 0 && verifiedRows.length === doneRows.length;
+
+      // Canonical content covers every field that materially affects what is rendered
+      // in the PDF — core declaration fields, all address data, proof-of-control
+      // challenge messages and signatures for verified addresses, all optional-section
+      // user inputs and toggle states, and the generation UTC ISO timestamp.
+      // This exact string (lines joined by "\n", UTF-8 encoded) is the SHA-256 preimage.
+      // The preimage is reproduced verbatim inside the Document Integrity section of the
+      // PDF so any third party can recompute the fingerprint independently.
+      const canonicalLinesList: string[] = [
+        "KYUTXO-POF-v1",
+        `TOOL: KYUTXO v${KYUTXO_APP_VERSION}`,
+        `REF: ${declarationNonce}`,
+        `DECLARANT: ${declarantName}`,
+        declarantContact.trim() ? `CONTACT: ${declarantContact.trim()}` : "",
+        declarantResidentialAddress.trim() ? `RESIDENTIAL: ${declarantResidentialAddress.trim()}` : "",
+        declarantDob.trim() ? `DOB: ${declarantDob.trim()}` : "",
+        declarantTaxId.trim() ? `TAX_ID: ${declarantTaxId.trim()}` : "",
+        declarantIdNumber.trim() ? `ID_NUMBER: ${declarantIdNumber.trim()}` : "",
+        declarantNationality.trim() ? `NATIONALITY: ${declarantNationality.trim()}` : "",
+        `DATE: ${declarationDate}`,
+        `PURPOSE: ${purpose}`,
+        statement.trim() ? `STATEMENT: ${statement.trim()}` : "",
+        "ADDRESSES:",
+        ...doneRows.map((r) => {
+          const cs = controlStates[r.raw];
+          const ctrl = cs?.status === "verified" ? "VERIFIED" : "UNVERIFIED";
+          return `${r.raw}: ${r.balanceSats ?? 0} sat [${ctrl}]`;
+        }),
+        `TOTAL: ${totalSats} sat`,
+        summary ? `SOURCE: ${summary.asOfLabel}` : "",
+        summary?.blockHeight ? `BLOCK: ${summary.blockHeight}` : "",
+        summary?.timestamp ? `TIMESTAMP: ${summary.timestamp}` : "",
+        fiatValid ? `FIAT_RATE: ${fiatRateNum} ${fiatCurrency}` : "",
+        // Proof-of-control: include challenge message and submitted signature for each
+        // verified address. The challenge message is deterministically derived from the
+        // declaration fields, so these lines are fully reproducible from the printed document.
+        ...verifiedRows.flatMap((r) => {
+          const cs = controlStates[r.raw]!;
+          const challengeMsg = buildChallengeMessage({
+            address: r.raw,
+            declarantName,
+            declarationDate,
+            purpose,
+            nonce: declarationNonce,
+          });
+          return [
+            `CTRL_${r.raw}_CHALLENGE: ${challengeMsg}`,
+            `CTRL_${r.raw}_SIG: ${cs.verifiedSig ?? ""}`,
+          ];
+        }),
+        `SECTION_QR: ${includeQr ? `ON:${qrExplorerId}` : "OFF"}`,
+        `SECTION_PROVENANCE: ${includeProvenance ? `ON:${provenanceFiatCurrency}` : "OFF"}`,
+        includeAml ? `SECTION_AML: ON` : "SECTION_AML: OFF",
+        includeAml ? `AML_PEP: ${amlPepStatus}` : "",
+        includeAml && amlSourceOfWealth.trim() ? `AML_WEALTH: ${amlSourceOfWealth.trim()}` : "",
+        includeAml && amlSourceOfFunds.trim() ? `AML_FUNDS: ${amlSourceOfFunds.trim()}` : "",
+        includeAml && amlTaxJurisdiction.trim() ? `AML_TAX_JUR: ${amlTaxJurisdiction.trim()}` : "",
+        includeAml && amlTaxStatement.trim() ? `AML_TAX_STMT: ${amlTaxStatement.trim()}` : "",
+        `SECTION_ATTESTATION: ${includeAttestation ? "ON" : "OFF"}`,
+        includeAttestation && attestationPlaceOfSigning.trim() ? `ATTEST_PLACE: ${attestationPlaceOfSigning.trim()}` : "",
+        includeAttestation && attestationWitnessLine.trim() ? `ATTEST_WITNESS: ${attestationWitnessLine.trim()}` : "",
+        `SECTION_GLOSSARY: ${includeGlossary ? "ON" : "OFF"}`,
+        `GENERATED: ${generationIso}`,
+      ].filter(Boolean);
+      const canonicalPayload = canonicalLinesList.join("\n");
+      // Fingerprint failure is treated as a hard error — silently substituting a
+      // placeholder would give a false sense of integrity. crypto.subtle is available
+      // in all modern browsers so failure here indicates a serious environment problem.
+      const enc = new TextEncoder();
+      const hashBuf = await crypto.subtle.digest("SHA-256", enc.encode(canonicalPayload));
+      const contentFingerprint = Array.from(new Uint8Array(hashBuf))
+        .map((b) => b.toString(16).padStart(2, "0"))
+        .join("");
 
       // ── Title ──────────────────────────────────────────────────────────────
       doc.setFontSize(18);
@@ -1778,7 +1865,7 @@ export default function ProofOfFundsDeclaration() {
       doc.setTextColor(100, 100, 100);
       doc.text(
         sanitizePdfText(
-          `Generated by KYUTXO on ${new Date().toLocaleDateString(undefined, {
+          `Generated by KYUTXO on ${generationTimestamp.toLocaleDateString(undefined, {
             year: "numeric",
             month: "long",
             day: "numeric",
@@ -1787,6 +1874,177 @@ export default function ProofOfFundsDeclaration() {
         margin,
         y
       );
+      doc.setTextColor(0, 0, 0);
+      y += 5;
+
+      // ── Document Integrity (always-on) ────────────────────────────────────
+      checkPageBreak(55);
+      doc.setFontSize(11);
+      doc.setFont("helvetica", "bold");
+      doc.setTextColor(0, 0, 0);
+      doc.text("DOCUMENT INTEGRITY", margin, y);
+      y += 5;
+      doc.setLineWidth(0.3);
+      doc.line(margin, y, margin + contentW, y);
+      y += 4;
+
+      doc.setFontSize(8.5);
+      doc.setFont("helvetica", "normal");
+      doc.setTextColor(0, 0, 0);
+
+      // Generation metadata
+      // NOTE: Generated timestamp is displayed as UTC ISO 8601 — this is exactly the
+      // value in the canonical payload so the fingerprint is unambiguously reproducible.
+      const metaLines: [string, string][] = [
+        ["Tool:", `KYUTXO v${KYUTXO_APP_VERSION} (Proof of Funds Declaration)`],
+        ["Generated (UTC ISO 8601):", generationIso],
+        ["Declaration Reference:", declarationNonce],
+      ];
+
+      // Blockchain time-anchor
+      if (summary?.blockHeight) {
+        const anchorLabel = summary.timestamp
+          ? `Block ${summary.blockHeight.toLocaleString()} — ${formatUnix(summary.timestamp)}`
+          : `Block ${summary.blockHeight.toLocaleString()}`;
+        metaLines.push(["On-chain data current as of:", anchorLabel]);
+      } else if (summary?.timestamp) {
+        metaLines.push(["On-chain data as of:", formatUnix(summary.timestamp)]);
+      }
+
+      // Content fingerprint
+      metaLines.push(["Content Fingerprint (SHA-256):", contentFingerprint]);
+
+      const metaLabelW = 65;
+      const metaValueW = contentW - metaLabelW;
+      for (const [label, value] of metaLines) {
+        checkPageBreak(10);
+        doc.setFont("helvetica", "bold");
+        doc.text(sanitizePdfText(label), margin, y);
+        doc.setFont("helvetica", "normal");
+        const valLines = doc.splitTextToSize(sanitizePdfText(value), metaValueW) as string[];
+        doc.text(valLines, margin + metaLabelW, y);
+        y += Math.max(valLines.length * 8.5 * 0.45, 4.5);
+      }
+      y += 2;
+
+      doc.setFontSize(7.5);
+      doc.setFont("helvetica", "italic");
+      doc.setTextColor(100, 100, 100);
+      const fingerprintNote =
+        "The Content Fingerprint is SHA-256(UTF-8(canonical payload)), where the canonical payload " +
+        "is the verbatim preimage printed below (lines joined by newline \"\\n\"). " +
+        "It covers: tool version, reference ID, all declarant fields, date, purpose, statement, " +
+        "all declared addresses with balances and control status, proof-of-control challenge messages " +
+        "and signatures for verified addresses, blockchain anchor, fiat rate, all section toggle states " +
+        "and their user-entered fields, and the UTC ISO 8601 generation timestamp. " +
+        "A reviewer can copy the preimage below, UTF-8 encode it, SHA-256 hash it, and verify the hex matches the fingerprint above. " +
+        "Page numbering in the footer confirms no pages have been removed.";
+      const fpNoteLines = doc.splitTextToSize(sanitizePdfText(fingerprintNote), contentW) as string[];
+      doc.text(fpNoteLines, margin, y);
+      doc.setTextColor(0, 0, 0);
+      y += fpNoteLines.length * 7.5 * 0.45 + 4;
+
+      // ── Canonical payload (verbatim preimage) ─────────────────────────────
+      // Printed in full so any third party can recompute the fingerprint independently
+      // without possessing any information not visible in this document.
+      checkPageBreak(20);
+      doc.setFontSize(7.5);
+      doc.setFont("helvetica", "bold");
+      doc.setTextColor(0, 0, 0);
+      doc.text("Fingerprint Preimage (canonical payload, reproduced verbatim):", margin, y);
+      y += 4.5;
+
+      // Print payload in Courier at small size, with a light background box
+      doc.setFont("courier", "normal");
+      doc.setFontSize(6.5);
+      doc.setTextColor(30, 30, 30);
+      const payloadWrapped = doc.splitTextToSize(
+        sanitizePdfText(canonicalPayload),
+        contentW - 4
+      ) as string[];
+      const payloadBoxH = payloadWrapped.length * 6.5 * 0.42 + 4;
+      checkPageBreak(payloadBoxH + 4);
+      doc.setFillColor(248, 248, 248);
+      doc.setDrawColor(200, 200, 200);
+      doc.rect(margin, y - 1.5, contentW, payloadBoxH, "FD");
+      doc.text(payloadWrapped, margin + 2, y + 1);
+      y += payloadBoxH + 4;
+      doc.setTextColor(0, 0, 0);
+
+      // ── Optional Attestation Block ─────────────────────────────────────────
+      if (includeAttestation) {
+        checkPageBreak(70);
+        doc.setFontSize(11);
+        doc.setFont("helvetica", "bold");
+        doc.setTextColor(0, 0, 0);
+        doc.text("FORMAL ATTESTATION", margin, y);
+        y += 5;
+        doc.setLineWidth(0.5);
+        doc.line(margin, y, margin + contentW, y);
+        y += 5;
+
+        doc.setFontSize(9);
+        doc.setFont("helvetica", "normal");
+        doc.setTextColor(0, 0, 0);
+        const attestText =
+          `I, ${sanitizePdfText(declarantName)}, hereby solemnly declare and attest that the foregoing ` +
+          "information — including all Bitcoin addresses, reported balances, and supporting details — is true, " +
+          "accurate, and complete to the best of my knowledge and belief. I am the lawful owner or authorised " +
+          "signatory of the declared addresses and the funds associated with them. I understand that knowingly " +
+          "making a false declaration may result in civil and/or criminal liability under applicable law.";
+        const attestLines = doc.splitTextToSize(sanitizePdfText(attestText), contentW) as string[];
+        doc.text(attestLines, margin, y);
+        y += attestLines.length * 9 * 0.45 + 8;
+
+        // Signature line
+        checkPageBreak(50);
+        doc.setFontSize(9);
+        doc.setFont("helvetica", "normal");
+        doc.text("Declarant signature: _______________________________________________", margin, y);
+        y += 8;
+        doc.text(`Full name: ${sanitizePdfText(declarantName)}`, margin, y);
+        y += 7;
+
+        const placeSigned = attestationPlaceOfSigning.trim();
+        if (placeSigned) {
+          doc.text(`Place of signing: ${sanitizePdfText(placeSigned)}`, margin, y);
+          y += 7;
+        } else {
+          doc.text("Place of signing: _______________________________________________", margin, y);
+          y += 7;
+        }
+
+        doc.text(`Date: ${sanitizePdfText(declarationDate)}`, margin, y);
+        y += 10;
+
+        // Optional witness / notary line
+        const witnessLine = attestationWitnessLine.trim();
+        if (witnessLine) {
+          doc.setFont("helvetica", "italic");
+          doc.setFontSize(9);
+          const wLines = doc.splitTextToSize(sanitizePdfText(`Witness / Notary: ${witnessLine}`), contentW) as string[];
+          doc.text(wLines, margin, y);
+          doc.setFont("helvetica", "normal");
+          y += wLines.length * 9 * 0.45 + 5;
+        } else {
+          doc.text("Witness / Notary signature: ____________________________________", margin, y);
+          y += 7;
+          doc.text("Witness / Notary name and capacity: ____________________________", margin, y);
+          y += 7;
+          doc.text("Date: _______________", margin, y);
+          y += 7;
+        }
+
+        doc.setFontSize(7.5);
+        doc.setFont("helvetica", "italic");
+        doc.setTextColor(100, 100, 100);
+        doc.text(
+          sanitizePdfText(`Declaration Reference: ${declarationNonce}`),
+          margin, y
+        );
+        doc.setTextColor(0, 0, 0);
+        y += 8;
+      }
 
       // ── Appendix: Proof-of-Control Evidence ───────────────────────────────
       if (hasVerified) {
@@ -1961,6 +2219,165 @@ export default function ProofOfFundsDeclaration() {
         }
       }
 
+      // ── Optional Glossary ──────────────────────────────────────────────────
+      if (includeGlossary) {
+        doc.addPage();
+        y = 20;
+
+        doc.setFontSize(16);
+        doc.setFont("helvetica", "bold");
+        doc.setTextColor(0, 0, 0);
+        doc.text("APPENDIX: GLOSSARY OF TERMS", margin, y);
+        y += 8;
+        doc.setLineWidth(0.5);
+        doc.line(margin, y, margin + contentW, y);
+        y += 5;
+
+        doc.setFontSize(8.5);
+        doc.setFont("helvetica", "normal");
+        doc.setTextColor(60, 60, 60);
+        const glossaryIntroLines = doc.splitTextToSize(
+          sanitizePdfText(
+            "This glossary provides plain-language explanations of technical terms used in this declaration, " +
+            "for the benefit of non-technical reviewers."
+          ),
+          contentW
+        ) as string[];
+        doc.text(glossaryIntroLines, margin, y);
+        y += glossaryIntroLines.length * 8.5 * 0.45 + 5;
+        doc.setTextColor(0, 0, 0);
+
+        const glossaryTerms: [string, string][] = [
+          [
+            "Bitcoin",
+            "A decentralized digital currency that operates on a peer-to-peer network without a central authority. Transactions are recorded on a public ledger called the blockchain.",
+          ],
+          [
+            "Bitcoin Address",
+            "A unique identifier — similar to a bank account number — used to receive Bitcoin. An address is derived from a cryptographic key pair. Common formats begin with '1', '3', or 'bc1'.",
+          ],
+          [
+            "Balance",
+            "The total amount of Bitcoin currently held at an address, measured in BTC or satoshis, as reported by the blockchain at the time of declaration.",
+          ],
+          [
+            "BTC",
+            "The symbol for Bitcoin. One BTC equals 100,000,000 satoshis (sat). Balances in this document are expressed in BTC unless otherwise noted.",
+          ],
+          [
+            "Satoshi (sat)",
+            "The smallest unit of Bitcoin. 1 BTC = 100,000,000 satoshis. Named after Bitcoin's pseudonymous creator, Satoshi Nakamoto.",
+          ],
+          [
+            "Blockchain",
+            "A public, append-only ledger that permanently records all Bitcoin transactions. Each block of transactions is cryptographically linked to the previous one, making the history tamper-evident.",
+          ],
+          [
+            "Block",
+            "A batch of confirmed Bitcoin transactions added to the blockchain. Each block is identified by its height (position in the chain). Block height is used in this document as a time-anchor for reported balances.",
+          ],
+          [
+            "Confirmation",
+            "A transaction is 'confirmed' once it has been included in a block and broadcast across the network. Each subsequent block mined on top adds another confirmation, increasing finality.",
+          ],
+          [
+            "UTXO (Unspent Transaction Output)",
+            "The fundamental accounting unit of Bitcoin. Each received Bitcoin amount creates a UTXO; spending Bitcoin consumes one or more UTXOs as inputs and creates new UTXOs as outputs. An address's balance is the sum of its UTXOs.",
+          ],
+          [
+            "xpub (Extended Public Key)",
+            "A public key from which an entire sequence of Bitcoin addresses can be derived without exposing private keys. Sharing an xpub allows read-only balance monitoring across all derived addresses.",
+          ],
+          [
+            "Proof of Control",
+            "Cryptographic evidence that the declarant holds the private key corresponding to a Bitcoin address, demonstrated by signing a unique challenge message with that key using their wallet.",
+          ],
+          [
+            "Bitcoin Signed Message",
+            "A standard format for signing a text message with a Bitcoin private key, producing a base64-encoded signature that can be independently verified against the address. Supported by most Bitcoin wallets.",
+          ],
+          [
+            "BIP-322",
+            "Bitcoin Improvement Proposal 322 — a newer signing standard that supports modern address types including Taproot (bc1p…) addresses, using Schnorr signatures.",
+          ],
+          [
+            "Hop",
+            "A single transaction step between two Bitcoin addresses in the transaction graph. A '2-hop' connection means there are two intermediate transactions between the declared address and a named counterparty.",
+          ],
+          [
+            "SHA-256",
+            "A cryptographic hash function that produces a fixed-length (256-bit / 64-character hex) fingerprint from any input. Even a single character change in the input produces a completely different hash, making it useful for detecting document alterations.",
+          ],
+          [
+            "Declaration Reference (Nonce)",
+            "A randomly generated, unique identifier assigned to this declaration at the time of generation. It is embedded in every signed challenge message to prevent signatures from being reused across different declarations.",
+          ],
+          [
+            "PEP (Politically Exposed Person)",
+            "An individual who holds or has held a prominent public function (e.g. head of state, senior government official, senior judicial or military official). Financial institutions apply enhanced due diligence to PEPs.",
+          ],
+          [
+            "AML (Anti-Money Laundering)",
+            "Laws, regulations, and procedures designed to prevent criminals from disguising illegally obtained funds as legitimate income. AML compliance requires financial institutions to screen customers and their transaction histories.",
+          ],
+          [
+            "KYC (Know Your Customer)",
+            "A set of identity verification procedures financial institutions use to confirm the identity of their clients and assess the risk of illegal activity such as money laundering or fraud.",
+          ],
+        ];
+
+        for (const [term, definition] of glossaryTerms) {
+          const defLines = doc.splitTextToSize(sanitizePdfText(definition), contentW - 4) as string[];
+          const neededHeight = 5 + defLines.length * 8.5 * 0.45 + 4;
+          checkPageBreak(neededHeight + 2);
+
+          doc.setFontSize(8.5);
+          doc.setFont("helvetica", "bold");
+          doc.setTextColor(0, 0, 0);
+          doc.text(sanitizePdfText(term), margin, y);
+          y += 4.5;
+
+          doc.setFont("helvetica", "normal");
+          doc.setTextColor(50, 50, 50);
+          doc.text(defLines, margin + 4, y);
+          doc.setTextColor(0, 0, 0);
+          y += defLines.length * 8.5 * 0.45 + 3;
+        }
+      }
+
+      // ── Page X of Y footers (applied to every page after all content) ──────
+      const totalPages = (doc.internal as any).getNumberOfPages();
+      const pageH = doc.internal.pageSize.getHeight();
+      const footerY = pageH - 8;
+      const shortRef = declarationNonce.length > 20
+        ? `${declarationNonce.slice(0, 10)}…${declarationNonce.slice(-8)}`
+        : declarationNonce;
+
+      for (let pageNum = 1; pageNum <= totalPages; pageNum++) {
+        doc.setPage(pageNum);
+        doc.setFontSize(7);
+        doc.setFont("helvetica", "normal");
+        doc.setTextColor(120, 120, 120);
+        doc.text(
+          sanitizePdfText(`Page ${pageNum} of ${totalPages}`),
+          margin,
+          footerY
+        );
+        doc.text(
+          sanitizePdfText(`Ref: ${shortRef}`),
+          pageW / 2,
+          footerY,
+          { align: "center" }
+        );
+        doc.text(
+          sanitizePdfText("PROOF OF FUNDS DECLARATION"),
+          pageW - margin,
+          footerY,
+          { align: "right" }
+        );
+        doc.setTextColor(0, 0, 0);
+      }
+
       const safeName = sanitizePdfText(declarantName.replace(/\s+/g, "_").replace(/[^a-zA-Z0-9_-]/g, ""));
       doc.save(`proof-of-funds-${safeName || "declaration"}-${declarationDate}.pdf`);
 
@@ -2007,6 +2424,10 @@ export default function ProofOfFundsDeclaration() {
     amlSourceOfWealth,
     amlSourceOfFunds,
     amlTaxStatement,
+    includeAttestation,
+    attestationPlaceOfSigning,
+    attestationWitnessLine,
+    includeGlossary,
   ]);
 
   const validCount = validRows.length;
@@ -3316,10 +3737,163 @@ export default function ProofOfFundsDeclaration() {
           </CardContent>
         </Card>
 
-        {/* Step 9: Generate PDF */}
+        {/* Step 9: Formal Attestation */}
         <Card>
           <CardHeader>
-            <CardTitle>Step 9 — Generate PDF</CardTitle>
+            <CardTitle className="flex items-center gap-2">
+              <ClipboardCheck className="h-5 w-5" />
+              Step 9 — Formal Attestation
+              <Badge variant="secondary" className="ml-1 text-xs font-normal">Optional</Badge>
+            </CardTitle>
+            <CardDescription>
+              Add a formal attestation block with a solemn declaration statement, a signature line,
+              place of signing, and an optional witness or notary line. Off by default — the always-on
+              document integrity section (reference ID, content fingerprint, page numbers, blockchain
+              time-anchor) is included in every PDF regardless of this toggle.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="flex items-center justify-between gap-4 flex-wrap">
+              <div className="space-y-0.5">
+                <Label htmlFor="include-attestation" className="text-sm font-medium">
+                  Include formal attestation block in the PDF
+                </Label>
+                <p className="text-sm text-muted-foreground">
+                  Off by default. When on, adds a solemn declaration statement with a signature line,
+                  date, place of signing, and an optional witness/notary block.
+                </p>
+              </div>
+              <Switch
+                id="include-attestation"
+                checked={includeAttestation}
+                onCheckedChange={setIncludeAttestation}
+                data-testid="switch-include-attestation"
+              />
+            </div>
+
+            {includeAttestation && (
+              <>
+                <Separator />
+                <div className="rounded-md border bg-muted/30 px-4 py-3 space-y-1 text-sm">
+                  <div className="font-medium text-sm">Attestation statement (printed verbatim)</div>
+                  <p className="text-xs text-muted-foreground italic">
+                    "I, [your name], hereby solemnly declare and attest that the foregoing information —
+                    including all Bitcoin addresses, reported balances, and supporting details — is true,
+                    accurate, and complete to the best of my knowledge and belief. I am the lawful owner
+                    or authorised signatory of the declared addresses and the funds associated with them.
+                    I understand that knowingly making a false declaration may result in civil and/or
+                    criminal liability under applicable law."
+                  </p>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="space-y-1">
+                    <Label htmlFor="attestation-place" className="text-sm">
+                      Place of signing <span className="text-muted-foreground text-xs">(optional)</span>
+                    </Label>
+                    <Input
+                      id="attestation-place"
+                      placeholder="e.g. London, United Kingdom"
+                      value={attestationPlaceOfSigning}
+                      onChange={(e) => setAttestationPlaceOfSigning(e.target.value)}
+                      data-testid="input-attestation-place"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      If blank, a blank signature line is printed instead.
+                    </p>
+                  </div>
+                  <div className="space-y-1">
+                    <Label htmlFor="attestation-witness" className="text-sm">
+                      Witness / Notary line <span className="text-muted-foreground text-xs">(optional)</span>
+                    </Label>
+                    <Input
+                      id="attestation-witness"
+                      placeholder="e.g. John Smith, Solicitor, Law Society No. 12345"
+                      value={attestationWitnessLine}
+                      onChange={(e) => setAttestationWitnessLine(e.target.value)}
+                      data-testid="input-attestation-witness"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      If blank, blank witness/notary signature lines are printed.
+                    </p>
+                  </div>
+                </div>
+                <div className="rounded-md border bg-muted/30 px-4 py-3 space-y-1 text-xs text-muted-foreground">
+                  <p className="font-medium text-foreground text-sm">Always included in every PDF (no toggle needed)</p>
+                  <ul className="list-disc list-inside space-y-0.5">
+                    <li>Page X of Y footer with declaration reference ID on every page</li>
+                    <li>Generation metadata: tool name, generation date/time</li>
+                    <li>Content fingerprint: SHA-256 of key declaration fields</li>
+                    <li>Blockchain time-anchor: block height and timestamp from your balance data</li>
+                  </ul>
+                </div>
+              </>
+            )}
+
+            {!includeAttestation && (
+              <div className="rounded-md border bg-muted/30 px-4 py-3 space-y-1 text-xs text-muted-foreground">
+                <p className="font-medium text-foreground text-sm">Always included in every PDF</p>
+                <ul className="list-disc list-inside space-y-0.5">
+                  <li>Page X of Y footer with declaration reference ID on every page</li>
+                  <li>Generation metadata: tool name, generation date/time</li>
+                  <li>Content fingerprint: SHA-256 of key declaration fields</li>
+                  <li>Blockchain time-anchor: block height and timestamp from your balance data</li>
+                </ul>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Step 10: Glossary */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <FileText className="h-5 w-5" />
+              Step 10 — Glossary
+              <Badge variant="secondary" className="ml-1 text-xs font-normal">Optional</Badge>
+            </CardTitle>
+            <CardDescription>
+              Append a plain-language glossary of Bitcoin and compliance terms for non-technical reviewers.
+              Covers Bitcoin addresses, UTXO, xpub, confirmations, hops, SHA-256, PEP, AML, and more.
+              Off by default — when off, the PDF is unchanged.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="flex items-center justify-between gap-4 flex-wrap">
+              <div className="space-y-0.5">
+                <Label htmlFor="include-glossary" className="text-sm font-medium">
+                  Include glossary appendix in the PDF
+                </Label>
+                <p className="text-sm text-muted-foreground">
+                  Off by default. When on, adds a final appendix defining Bitcoin, Address, UTXO, xpub,
+                  Confirmation, Hop, SHA-256, PEP, AML, KYC, and other terms used in this document.
+                </p>
+              </div>
+              <Switch
+                id="include-glossary"
+                checked={includeGlossary}
+                onCheckedChange={setIncludeGlossary}
+                data-testid="switch-include-glossary"
+              />
+            </div>
+
+            {includeGlossary && (
+              <>
+                <Separator />
+                <div className="rounded-md border bg-muted/30 px-4 py-3 text-xs text-muted-foreground space-y-1">
+                  <p className="font-medium text-foreground text-sm">Terms covered</p>
+                  <p>Bitcoin, Bitcoin Address, Balance, BTC, Satoshi, Blockchain, Block, Confirmation,
+                  UTXO, xpub, Proof of Control, Bitcoin Signed Message, BIP-322, Hop, SHA-256,
+                  Declaration Reference (Nonce), PEP, AML, KYC</p>
+                </div>
+              </>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Step 11: Generate PDF */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Step 11 — Generate PDF</CardTitle>
             <CardDescription>
               All required steps above must be complete before a PDF can be generated.
               The PDF is created entirely in your browser — no data leaves your device.
@@ -3379,11 +3953,14 @@ export default function ProofOfFundsDeclaration() {
                 <p>
                   The PDF will include: declarant details, statement, {doneRows.length} address{doneRows.length !== 1 ? "es" : ""} with
                   balances and control status, total ({formatBTC(totalSats)} BTC){fiatValid && fiatTotal !== null ? ", fiat equivalent," : ","} data
-                  source attestation, disclaimers, and a signature block.
-                  {includeQr && ` It will also include verification QR codes linking each address to ${getExplorer(qrExplorerId).host}.`}
+                  source attestation, disclaimers, a signature block, and a document integrity section
+                  (page numbers, reference ID, content fingerprint, and blockchain time-anchor).
+                  {includeAttestation && " A formal attestation block will be included."}
+                  {includeQr && ` Verification QR codes linking each address to ${getExplorer(qrExplorerId).host} will be included.`}
                   {verifiedCount > 0 && ` An appendix will contain the challenge messages and signatures for ${verifiedCount} verified address${verifiedCount !== 1 ? "es" : ""}.`}
                   {includeProvenance && ` An Acquisition & Provenance appendix will document acquisition dates, methods, and cost basis (in ${provenanceFiatCurrency}) for the declared addresses, plus a list of linked supporting documents.`}
                   {includeAml && " An AML / Risk Screening appendix will include offline entity-list results, indirect proximity analysis, declarant self-attestations, and a screening disclaimer."}
+                  {includeGlossary && " A glossary appendix will define key terms for non-technical reviewers."}
                 </p>
               </div>
             )}
