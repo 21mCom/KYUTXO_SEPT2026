@@ -73,6 +73,14 @@ args = "proof-verify-browser-check"
 task = "workflow.run"
 args = "proof-verify-node-check"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "pdf-glyph-node-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "pdf-glyph-browser-check"
+
 [[workflows.workflow]]
 name = "Start application"
 author = "agent"
@@ -188,6 +196,28 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "npx vitest run client/src/lib/proofVerificationBrowserCheck.test.ts client/src/lib/signatureVerify.test.ts"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "pdf-glyph-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/lib/pdfGlyphBrowserCheck.test.ts"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "pdf-glyph-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-pdf-glyph-browser.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true
