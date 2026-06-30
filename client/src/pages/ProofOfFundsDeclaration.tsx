@@ -41,6 +41,7 @@ import {
   createProviderFromSettings,
   isNodeUnreachableError,
   NODE_PROBE_TIMEOUT_MS,
+  NODE_UNREACHABLE_CONSECUTIVE_LIMIT,
 } from "@/lib/blockchain-api";
 import { validateAddress, formatBTC, truncateAddress } from "@/lib/bitcoin";
 import { sanitizePdfText } from "@/lib/pdfText";
@@ -454,6 +455,8 @@ export default function ProofOfFundsDeclaration() {
       };
 
       let isFirstAttempt = true;
+      let hadSuccess = false;
+      let consecutiveNodeFailures = 0;
       for (const { i } of validIndices) {
         if (cancelledRef.current) break;
         setRows((prev) => prev.map((r, idx) => (idx === i ? { ...r, status: "loading" } : r)));
@@ -490,16 +493,19 @@ export default function ProofOfFundsDeclaration() {
             balanceSats = await fetchBalanceSats(address);
           }
           isFirstAttempt = false;
+          hadSuccess = true;
+          consecutiveNodeFailures = 0;
           setRows((prev) =>
             prev.map((r, idx) => (idx === i ? { ...r, status: "done", balanceSats } : r))
           );
         } catch (err) {
           if (cancelledRef.current) break;
+          const nodeUnreachable = isNodeUnreachableError(err);
           // On the first attempt, a node-level connectivity failure means the
           // node is unreachable: fail the whole check immediately rather than
           // grinding through every address. Transient/per-address errors still
           // surface per-row (here and on later addresses).
-          if (attemptIsFirst && isNodeUnreachableError(err)) {
+          if (attemptIsFirst && nodeUnreachable) {
             setProviderError(
               "Node unreachable — the on-chain balance check could not reach your node.",
             );
@@ -510,6 +516,32 @@ export default function ProofOfFundsDeclaration() {
             return;
           }
           isFirstAttempt = false;
+          // After a successful start, the node going down partway through shows up
+          // as a run of consecutive node-unreachable failures. Short-circuit the
+          // whole check rather than grinding through the rest one timeout at a
+          // time. A single transient failure (or any non-node error) stays below
+          // the threshold and resets the run, so isolated 429/500/404s continue.
+          if (nodeUnreachable) {
+            consecutiveNodeFailures += 1;
+          } else {
+            consecutiveNodeFailures = 0;
+          }
+          if (
+            hadSuccess &&
+            nodeUnreachable &&
+            consecutiveNodeFailures >= NODE_UNREACHABLE_CONSECUTIVE_LIMIT
+          ) {
+            setProviderError(
+              "Node unreachable — the on-chain balance check could not reach your node.",
+            );
+            setRows((prev) =>
+              prev.map((r) =>
+                r.status === "loading" ? { ...r, status: "pending" } : r,
+              ),
+            );
+            setIsChecking(false);
+            return;
+          }
           setRows((prev) =>
             prev.map((r, idx) =>
               idx === i

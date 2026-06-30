@@ -31,6 +31,12 @@ export { MINIMUM_CONFIRMATIONS };
 // timeout so an unreachable node fails fast instead of hanging address-by-address.
 export const NODE_PROBE_TIMEOUT_MS = 5000;
 
+// After a successful start, this many consecutive node-unreachable failures means
+// the node went down mid-check: short-circuit the whole live-balance check instead
+// of grinding through every remaining address one full timeout at a time. Isolated
+// single transient failures stay below this threshold and surface per-row.
+export const NODE_UNREACHABLE_CONSECUTIVE_LIMIT = 3;
+
 // Classify an error as a node-level connectivity failure (node down, refused,
 // DNS failure, proxy failure, or our short probe timeout) rather than a
 // transient/per-address error (e.g. a single 404/500 or rate limit). Used by the
