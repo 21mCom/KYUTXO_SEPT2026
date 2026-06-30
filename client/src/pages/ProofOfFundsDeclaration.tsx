@@ -599,6 +599,7 @@ export default function ProofOfFundsDeclaration() {
 
   // PDF generating
   const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
+  const [isGeneratingSamplePdf, setIsGeneratingSamplePdf] = useState(false);
 
   // Expanded invalid section
   const [showInvalid, setShowInvalid] = useState(false);
@@ -1201,55 +1202,132 @@ export default function ProofOfFundsDeclaration() {
     [controlStates, declarantName, declarationDate, purpose, declarationNonce, verifierReference, freshnessAnchor]
   );
 
-  // PDF generation
-  const generatePdf = useCallback(async () => {
-    if (!canGeneratePdf) return;
-    setIsGeneratingPdf(true);
-    try {
-      const jsPDFModule = await import("jspdf");
-      const autoTableModule = await import("jspdf-autotable");
-      const jsPDF = jsPDFModule.default;
-      const autoTable = autoTableModule.default;
+  // ── Shared PDF builder — called by both generatePdf and generateSamplePdf ──
+  // When isSample=true: uses placeholder data, adds a watermark on every page,
+  // emits a specimen fingerprint label, and skips real DB / AML lookups — but
+  // uses the SAME section ordering, page structure, and conditional gates as the
+  // real path so users can approve the exact layout before filling in their data.
+  const buildPofPdf = useCallback(async (isSample: boolean) => {
+    const jsPDFModule = await import("jspdf");
+    const autoTableModule = await import("jspdf-autotable");
+    const jsPDF = jsPDFModule.default;
+    const autoTable = autoTableModule.default;
 
-      const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
-      const pageW = doc.internal.pageSize.getWidth();
-      const margin = 14;
-      const contentW = pageW - margin * 2;
-      let y = 20;
+    const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
+    const pageW = doc.internal.pageSize.getWidth();
+    const margin = 14;
+    const contentW = pageW - margin * 2;
+    let y = 20;
 
-      const addLine = (text: string, size = 10, bold = false, color: [number, number, number] = [0, 0, 0]) => {
-        doc.setFontSize(size);
-        doc.setFont("helvetica", bold ? "bold" : "normal");
-        doc.setTextColor(...color);
-        const lines = doc.splitTextToSize(sanitizePdfText(text), contentW) as string[];
-        doc.text(lines, margin, y);
-        y += lines.length * size * 0.5;
-      };
+    const addLine = (text: string, size = 10, bold = false, color: [number, number, number] = [0, 0, 0]) => {
+      doc.setFontSize(size);
+      doc.setFont("helvetica", bold ? "bold" : "normal");
+      doc.setTextColor(...color);
+      const lines = doc.splitTextToSize(sanitizePdfText(text), contentW) as string[];
+      doc.text(lines, margin, y);
+      y += lines.length * size * 0.5;
+    };
 
-      const addWrapped = (text: string, size = 9, color: [number, number, number] = [0, 0, 0]) => {
-        doc.setFontSize(size);
-        doc.setFont("helvetica", "normal");
-        doc.setTextColor(...color);
-        const lines = doc.splitTextToSize(sanitizePdfText(text), contentW) as string[];
-        doc.text(lines, margin, y);
-        y += lines.length * size * 0.45 + 2;
-      };
+    const addWrapped = (text: string, size = 9, color: [number, number, number] = [0, 0, 0]) => {
+      doc.setFontSize(size);
+      doc.setFont("helvetica", "normal");
+      doc.setTextColor(...color);
+      const lines = doc.splitTextToSize(sanitizePdfText(text), contentW) as string[];
+      doc.text(lines, margin, y);
+      y += lines.length * size * 0.45 + 2;
+    };
 
-      const addSpacer = (h = 4) => { y += h; };
+    const addSpacer = (h = 4) => { y += h; };
 
-      const checkPageBreak = (needed = 20) => {
-        const pageH = doc.internal.pageSize.getHeight();
-        if (y + needed > pageH - 15) {
-          doc.addPage();
-          y = 20;
-        }
-      };
+    const checkPageBreak = (needed = 20) => {
+      const pageH = doc.internal.pageSize.getHeight();
+      if (y + needed > pageH - 15) {
+        doc.addPage();
+        y = 20;
+      }
+    };
 
-      // ── Content fingerprint (SHA-256 of canonical content, computed before rendering) ──
-      const generationTimestamp = new Date();
-      const generationIso = generationTimestamp.toISOString();
+    // ── Sample placeholder data (used only when isSample=true) ──────────────
+    const SAMPLE_NONCE = "SAMPLE0000000000";
+    const SAMPLE_DATE_STR = declarationDate || new Date().toISOString().slice(0, 10);
+    const SAMPLE_NAME = "Jane Q. Sample";
+    const SAMPLE_CONTACT = "jane.sample@example.com";
+    const SAMPLE_RESIDENTIAL = "123 Sample Street, Example City, EX1 2AB";
+    const SAMPLE_DOB = "1985-01-01";
+    const SAMPLE_TAX_ID = "SAMPLE-TAX-123";
+    const SAMPLE_ID_NUMBER = "SAMPLE-ID-456789";
+    const SAMPLE_NATIONALITY = "Sampleland";
+    const SAMPLE_PURPOSE = "Format preview only — not a valid declaration";
+    const SAMPLE_STATEMENT_TEXT =
+      "This is a specimen statement for layout preview only. " +
+      "All information in this document is entirely fictitious and must not be used as evidence of any kind.";
 
-      // Gather verified addresses (needed for canonical payload AND later appendix)
+    // Typed row shape that carries verified-state inline (avoids repeated controlStates lookups)
+    interface EffRow {
+      raw: string;
+      balanceSats: number;
+      verified: boolean;
+      verifiedSig?: string;
+      verifiedFormat?: SignatureFormat;
+    }
+
+    const SAMPLE_EFF_ROWS: EffRow[] = [
+      {
+        raw: "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4",
+        balanceSats: 125_000_000,
+        verified: true,
+        verifiedSig: "SAMPLE_SIGNATURE_PLACEHOLDER_NOT_VALID_DO_NOT_USE==",
+        verifiedFormat: "legacy" as SignatureFormat,
+      },
+      { raw: "1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2", balanceSats: 75_000_000, verified: false },
+    ];
+
+    // ── Effective data (switches between real and sample) ────────────────────
+    const effName = isSample ? SAMPLE_NAME : declarantName;
+    const effContact = isSample ? SAMPLE_CONTACT : declarantContact;
+    const effResidential = isSample ? SAMPLE_RESIDENTIAL : declarantResidentialAddress;
+    const effDob = isSample ? SAMPLE_DOB : declarantDob;
+    const effTaxId = isSample ? SAMPLE_TAX_ID : declarantTaxId;
+    const effIdNumber = isSample ? SAMPLE_ID_NUMBER : declarantIdNumber;
+    const effNationality = isSample ? SAMPLE_NATIONALITY : declarantNationality;
+    const effDate = isSample ? SAMPLE_DATE_STR : declarationDate;
+    const effPurpose = isSample ? SAMPLE_PURPOSE : purpose;
+    const effStatement = isSample ? SAMPLE_STATEMENT_TEXT : statement;
+    const effNonce = isSample ? SAMPLE_NONCE : declarationNonce;
+
+    const effRows: EffRow[] = isSample
+      ? SAMPLE_EFF_ROWS
+      : doneRows.map((r) => ({
+          raw: r.raw,
+          balanceSats: r.balanceSats ?? 0,
+          verified: controlStates[r.raw]?.status === "verified",
+          verifiedSig: controlStates[r.raw]?.verifiedSig,
+          verifiedFormat: controlStates[r.raw]?.verifiedFormat,
+        }));
+
+    const effVerifiedRows = effRows.filter((r) => r.verified);
+    const hasVerified = effVerifiedRows.length > 0;
+    const allVerified = effRows.length > 0 && effVerifiedRows.length === effRows.length;
+    const effTotalSats = isSample ? 200_000_000 : totalSats;
+    const effFiatValid = isSample ? true : fiatValid;
+    const effFiatRate = isSample ? 65_000 : fiatRateNum;
+    const effFiatCurrency = isSample ? "USD" : fiatCurrency;
+    const effFiatTotal: number | null = isSample
+      ? (200_000_000 / 1e8) * 65_000
+      : fiatTotal;
+    const effSummary = isSample ? null : summary;
+
+    // ── Content fingerprint ───────────────────────────────────────────────────
+    const generationTimestamp = new Date();
+    const generationIso = generationTimestamp.toISOString();
+
+    let contentFingerprint: string;
+    let canonicalPayload = "";
+
+    if (isSample) {
+      contentFingerprint = "SPECIMEN — NOT A VALID FINGERPRINT (sample PDF)";
+    } else {
+      // Gather verified addresses (needed for canonical payload)
       const verifiedRows = doneRows.filter((r) => controlStates[r.raw]?.status === "verified");
       const hasVerified = verifiedRows.length > 0;
       const allVerified = doneRows.length > 0 && verifiedRows.length === doneRows.length;
@@ -1317,15 +1395,33 @@ export default function ProofOfFundsDeclaration() {
         `SECTION_GLOSSARY: ${includeGlossary ? "ON" : "OFF"}`,
         `GENERATED: ${generationIso}`,
       ].filter(Boolean);
-      const canonicalPayload = canonicalLinesList.join("\n");
+      canonicalPayload = canonicalLinesList.join("\n");
       // Fingerprint failure is treated as a hard error — silently substituting a
       // placeholder would give a false sense of integrity. crypto.subtle is available
       // in all modern browsers so failure here indicates a serious environment problem.
       const enc = new TextEncoder();
       const hashBuf = await crypto.subtle.digest("SHA-256", enc.encode(canonicalPayload));
-      const contentFingerprint = Array.from(new Uint8Array(hashBuf))
+      contentFingerprint = Array.from(new Uint8Array(hashBuf))
         .map((b) => b.toString(16).padStart(2, "0"))
         .join("");
+    } // end if (!isSample) fingerprint block
+
+    // ── Sample notice banner (sample mode only) ───────────────────────────────
+    if (isSample) {
+      doc.setFillColor(255, 210, 210);
+      doc.setDrawColor(200, 80, 80);
+      doc.rect(margin, y - 4, contentW, 13, "FD");
+      doc.setFontSize(8.5);
+      doc.setFont("helvetica", "bold");
+      doc.setTextColor(160, 0, 0);
+      const noticeLines = doc.splitTextToSize(
+        "SAMPLE / SPECIMEN — NOT A VALID DECLARATION. This document is a layout preview only. All data is fictitious.",
+        contentW - 4
+      ) as string[];
+      doc.text(noticeLines, margin + 2, y + 2.5);
+      y += noticeLines.length * 8.5 * 0.45 + 10;
+      doc.setTextColor(0, 0, 0);
+    }
 
       // ── Title ──────────────────────────────────────────────────────────────
       doc.setFontSize(18);
@@ -1341,52 +1437,54 @@ export default function ProofOfFundsDeclaration() {
       // ── Declarant Details ──────────────────────────────────────────────────
       addLine("DECLARANT DETAILS", 11, true);
       addSpacer(2);
-      addLine(`Full Name: ${declarantName}`, 10);
+      addLine(`Full Name: ${effName}`, 10);
       addSpacer(1);
-      if (declarantContact.trim()) {
-        addLine(`Contact / Address: ${declarantContact}`, 10);
+      if (effContact.trim()) {
+        addLine(`Contact / Address: ${effContact}`, 10);
         addSpacer(1);
       }
-      if (declarantResidentialAddress.trim()) {
-        addLine(`Residential / Street Address: ${declarantResidentialAddress}`, 10);
+      if (effResidential.trim()) {
+        addLine(`Residential / Street Address: ${effResidential}`, 10);
         addSpacer(1);
       }
-      if (declarantDob.trim()) {
-        addLine(`Date of Birth: ${declarantDob}`, 10);
+      if (effDob.trim()) {
+        addLine(`Date of Birth: ${effDob}`, 10);
         addSpacer(1);
       }
-      if (declarantTaxId.trim()) {
-        addLine(`Tax ID Number: ${declarantTaxId}`, 10);
+      if (effTaxId.trim()) {
+        addLine(`Tax ID Number: ${effTaxId}`, 10);
         addSpacer(1);
       }
-      if (declarantIdNumber.trim()) {
-        addLine(`Identification Number: ${declarantIdNumber}`, 10);
+      if (effIdNumber.trim()) {
+        addLine(`Identification Number: ${effIdNumber}`, 10);
         addSpacer(1);
       }
-      if (declarantNationality.trim()) {
-        addLine(`Nationality: ${declarantNationality}`, 10);
+      if (effNationality.trim()) {
+        addLine(`Nationality: ${effNationality}`, 10);
         addSpacer(1);
       }
-      addLine(`Declaration Date: ${declarationDate}`, 10);
+      addLine(`Declaration Date: ${effDate}`, 10);
       addSpacer(1);
-      addLine(`Purpose: ${purpose}`, 10);
+      addLine(`Purpose: ${effPurpose}`, 10);
       addSpacer(1);
-      addLine(`Declaration Reference: ${declarationNonce}`, 10);
+      addLine(`Declaration Reference: ${effNonce}`, 10);
       addSpacer(4);
 
       // ── Statement ──────────────────────────────────────────────────────────
-      if (statement.trim()) {
+      if (effStatement.trim()) {
         addLine("DECLARATION STATEMENT", 11, true);
         addSpacer(2);
-        addWrapped(statement);
+        addWrapped(effStatement);
         addSpacer(4);
       }
 
       // ── Data Source Attestation ────────────────────────────────────────────
       addLine("DATA SOURCE ATTESTATION", 11, true);
       addSpacer(2);
-      if (summary) {
-        addWrapped(summary.asOfLabel);
+      if (effSummary) {
+        addWrapped(effSummary.asOfLabel);
+      } else if (isSample) {
+        addWrapped("Sample data — balance figures are fictitious placeholders, not sourced from the blockchain.");
       }
       addSpacer(4);
 
@@ -1395,12 +1493,11 @@ export default function ProofOfFundsDeclaration() {
       addSpacer(2);
 
       const tableStartY = y;
-      const tableBody = doneRows.map((r) => {
-        const cs = controlStates[r.raw];
-        const ctrlLabel = cs?.status === "verified" ? "Control Verified" : "Self-Declared (Unverified)";
+      const tableBody = effRows.map((r) => {
+        const ctrlLabel = r.verified ? "Control Verified" : "Self-Declared (Unverified)";
         return [
           sanitizePdfText(r.raw),
-          `${formatBTC(r.balanceSats ?? 0)} BTC`,
+          `${formatBTC(r.balanceSats)} BTC`,
           sanitizePdfText(ctrlLabel),
         ];
       });
@@ -1419,8 +1516,8 @@ export default function ProofOfFundsDeclaration() {
         },
         didParseCell: (data: any) => {
           if (data.column.index === 2 && data.section === "body") {
-            const row = doneRows[data.row.index];
-            if (row && controlStates[row.raw]?.status === "verified") {
+            const row = effRows[data.row.index];
+            if (row?.verified) {
               data.cell.styles.textColor = [0, 120, 0];
             }
           }
@@ -1434,19 +1531,20 @@ export default function ProofOfFundsDeclaration() {
       doc.setFontSize(10);
       doc.setFont("helvetica", "bold");
       doc.setTextColor(0, 0, 0);
-      doc.text(`TOTAL: ${formatBTC(totalSats)} BTC`, margin, y);
+      doc.text(`TOTAL: ${formatBTC(effTotalSats)} BTC`, margin, y);
       y += 5;
 
-      if (fiatValid && fiatTotal !== null) {
+      if (effFiatValid && effFiatTotal !== null) {
         doc.setFont("helvetica", "normal");
         doc.setFontSize(9);
         doc.setTextColor(0, 0, 0);
-        const fiatLine = `Fiat equivalent: ${fiatTotal.toLocaleString("en-US", {
+        const fiatLineSuffix = isSample ? " — SAMPLE RATE" : "";
+        const fiatLine = `Fiat equivalent: ${effFiatTotal.toLocaleString("en-US", {
           style: "currency",
-          currency: fiatCurrency,
+          currency: effFiatCurrency,
           minimumFractionDigits: 2,
           maximumFractionDigits: 2,
-        })} (at ${sanitizePdfText(fiatCurrency)} ${sanitizePdfText(fiatRateNum.toLocaleString("en-US", { maximumFractionDigits: 2 }))} per BTC)`;
+        })} (at ${sanitizePdfText(effFiatCurrency)} ${sanitizePdfText(effFiatRate.toLocaleString("en-US", { maximumFractionDigits: 2 }))} per BTC)${fiatLineSuffix}`;
         const fiatLines = doc.splitTextToSize(sanitizePdfText(fiatLine), contentW) as string[];
         doc.text(fiatLines, margin, y);
         y += fiatLines.length * 4;
@@ -1465,12 +1563,12 @@ export default function ProofOfFundsDeclaration() {
       addSpacer(4);
 
       // ── Balance-Verification QR Codes ──────────────────────────────────────
-      if (includeQr && doneRows.length > 0) {
+      if (includeQr && effRows.length > 0) {
         const qrExplorer = getExplorer(qrExplorerId);
 
         // Pre-generate every QR code offline (data: URLs, no network).
         const qrMap = new Map<string, string>();
-        for (const r of doneRows) {
+        for (const r of effRows) {
           try {
             qrMap.set(
               r.raw,
@@ -1501,7 +1599,7 @@ export default function ProofOfFundsDeclaration() {
         const textX = margin + qrSize + 4;
         const textW = contentW - qrSize - 4;
 
-        for (const r of doneRows) {
+        for (const r of effRows) {
           const dataUrl = qrMap.get(r.raw);
           checkPageBreak(qrSize + qrGap);
           const blockTop = y;
@@ -1522,7 +1620,7 @@ export default function ProofOfFundsDeclaration() {
           doc.setFont("helvetica", "normal");
           doc.setFontSize(8);
           doc.setTextColor(0, 0, 0);
-          doc.text(sanitizePdfText(`Balance: ${formatBTC(r.balanceSats ?? 0)} BTC`), textX, ty);
+          doc.text(sanitizePdfText(`Balance: ${formatBTC(r.balanceSats)} BTC`), textX, ty);
           ty += 5;
 
           doc.setFontSize(7.5);
@@ -1541,14 +1639,7 @@ export default function ProofOfFundsDeclaration() {
       }
 
       // ── Acquisition & Provenance Section ──────────────────────────────────
-      if (includeProvenance && doneRows.length > 0) {
-        // Gather all address records from vault
-        const allAddrRecords = await getRecordsByType("address");
-        const recordByAddress = new Map<string, (typeof allAddrRecords)[0]>();
-        for (const rec of allAddrRecords) {
-          recordByAddress.set(rec.inputString, rec);
-        }
-
+      if (includeProvenance && effRows.length > 0) {
         interface ProvenanceEntry {
           address: string;
           label: string;
@@ -1562,101 +1653,145 @@ export default function ProofOfFundsDeclaration() {
           attachmentNames: string[];
         }
 
-        const provenanceEntries: ProvenanceEntry[] = [];
-        const allSupportingDocs: string[] = [];
-        let totalCostBasis = 0;
-        let hasCostBasis = false;
+        let provenanceEntries: ProvenanceEntry[];
+        let allSupportingDocs: string[];
+        let totalCostBasis: number;
+        let hasCostBasis: boolean;
 
-        for (const row of doneRows) {
-          const rec = recordByAddress.get(row.raw);
-          const balanceSats = row.balanceSats ?? 0;
-
-          if (!rec) {
-            provenanceEntries.push({
-              address: row.raw,
-              label: "",
-              acquisitionDate: "No vault record",
-              acquisitionMethod: "No vault record",
-              counterpartyName: "No vault record",
-              btcAmountSats: balanceSats,
-              costBasisFiat: "Not recorded",
+        if (isSample) {
+          // Hardcoded fictitious entries — one per sample address
+          provenanceEntries = [
+            {
+              address: SAMPLE_EFF_ROWS[0].raw,
+              label: "Sample Long-Term Hold",
+              acquisitionDate: "2021-03-15",
+              acquisitionMethod: "Exchange Purchase",
+              counterpartyName: "Kraken (sample)",
+              btcAmountSats: 125_000_000,
+              costBasisFiat: "USD 72,500.00 (user-supplied)",
               priceInfo: "",
-              hasRecord: false,
-              attachmentNames: [],
-            });
-            continue;
+              hasRecord: true,
+              attachmentNames: ["sample-purchase-receipt.pdf"],
+            },
+            {
+              address: SAMPLE_EFF_ROWS[1].raw,
+              label: "Sample Mining Reward",
+              acquisitionDate: "2020-05-01",
+              acquisitionMethod: "Mining",
+              counterpartyName: "Self-Mined (sample)",
+              btcAmountSats: 75_000_000,
+              costBasisFiat: "USD 37,000.00 (user-supplied)",
+              priceInfo: "",
+              hasRecord: true,
+              attachmentNames: ["sample-mining-record.csv"],
+            },
+          ];
+          allSupportingDocs = ["sample-purchase-receipt.pdf", "sample-mining-record.csv"];
+          totalCostBasis = 109_500;
+          hasCostBasis = true;
+        } else {
+          // Real DB lookup path
+          provenanceEntries = [];
+          allSupportingDocs = [];
+          totalCostBasis = 0;
+          hasCostBasis = false;
+
+          const allAddrRecords = await getRecordsByType("address");
+          const recordByAddress = new Map<string, (typeof allAddrRecords)[0]>();
+          for (const rec of allAddrRecords) {
+            recordByAddress.set(rec.inputString, rec);
           }
 
-          // Acquisition date
-          const acquisitionDate = rec.date ? rec.date : "Not recorded";
+          for (const row of doneRows) {
+            const rec = recordByAddress.get(row.raw);
+            const balanceSats = row.balanceSats ?? 0;
 
-          // Acquisition method label
-          const methodOpt = ACQUISITION_METHOD_OPTIONS.find((o) => o.value === rec.acquisitionMethod);
-          const acquisitionMethod = methodOpt?.label ?? (rec.acquisitionMethod ? rec.acquisitionMethod : "Not recorded");
+            if (!rec) {
+              provenanceEntries.push({
+                address: row.raw,
+                label: "",
+                acquisitionDate: "No vault record",
+                acquisitionMethod: "No vault record",
+                counterpartyName: "No vault record",
+                btcAmountSats: balanceSats,
+                costBasisFiat: "Not recorded",
+                priceInfo: "",
+                hasRecord: false,
+                attachmentNames: [],
+              });
+              continue;
+            }
 
-          // Counterparty / source name: prefer the explicit counterpartyName, then
-          // walletName, then label, then the counterpartyType label.
-          const counterpartyTypeOpt = COUNTERPARTY_TYPE_OPTIONS.find((o) => o.value === rec.counterpartyType);
-          const counterpartyName =
-            (rec.counterpartyName?.trim() || "") !== ""
-              ? rec.counterpartyName!.trim()
-              : (rec.walletName?.trim() || "") !== ""
-              ? rec.walletName!.trim()
-              : (rec.label?.trim() || "") !== ""
-              ? rec.label.trim()
-              : counterpartyTypeOpt
-              ? counterpartyTypeOpt.label
-              : "Not recorded";
+            // Acquisition date
+            const acquisitionDate = rec.date ? rec.date : "Not recorded";
 
-          // Cost basis / fiat value at acquisition
-          let costBasisFiat = "Not recorded";
-          let priceInfo = "";
+            // Acquisition method label
+            const methodOpt = ACQUISITION_METHOD_OPTIONS.find((o) => o.value === rec.acquisitionMethod);
+            const acquisitionMethod = methodOpt?.label ?? (rec.acquisitionMethod ? rec.acquisitionMethod : "Not recorded");
 
-          if (rec.costBasisUsd !== undefined && rec.costBasisUsd > 0) {
-            const formatted = rec.costBasisUsd.toLocaleString(undefined, {
-              minimumFractionDigits: 2,
-              maximumFractionDigits: 2,
-            });
-            costBasisFiat = `USD ${formatted} (user-supplied)`;
-            totalCostBasis += rec.costBasisUsd;
-            hasCostBasis = true;
-          } else if (rec.date) {
-            const priceRow = await getLatestPriceOnOrBefore(rec.date, provenanceFiatCurrency, "BTC");
-            if (priceRow) {
-              const computedBasis = (balanceSats / 1e8) * priceRow.close;
-              const formatted = computedBasis.toLocaleString(undefined, {
+            // Counterparty / source name
+            const counterpartyTypeOpt = COUNTERPARTY_TYPE_OPTIONS.find((o) => o.value === rec.counterpartyType);
+            const counterpartyName =
+              (rec.counterpartyName?.trim() || "") !== ""
+                ? rec.counterpartyName!.trim()
+                : (rec.walletName?.trim() || "") !== ""
+                ? rec.walletName!.trim()
+                : (rec.label?.trim() || "") !== ""
+                ? rec.label.trim()
+                : counterpartyTypeOpt
+                ? counterpartyTypeOpt.label
+                : "Not recorded";
+
+            // Cost basis / fiat value at acquisition
+            let costBasisFiat = "Not recorded";
+            let priceInfo = "";
+
+            if (rec.costBasisUsd !== undefined && rec.costBasisUsd > 0) {
+              const formatted = rec.costBasisUsd.toLocaleString(undefined, {
                 minimumFractionDigits: 2,
                 maximumFractionDigits: 2,
               });
-              costBasisFiat = `${provenanceFiatCurrency} ${formatted}`;
-              const rateSource = priceRow.source ? priceRow.source : "vault price store";
-              priceInfo = `Rate: ${provenanceFiatCurrency} ${priceRow.close.toLocaleString()} on ${priceRow.date} (source: ${rateSource})`;
-              totalCostBasis += computedBasis;
+              costBasisFiat = `USD ${formatted} (user-supplied)`;
+              totalCostBasis += rec.costBasisUsd;
               hasCostBasis = true;
-            } else {
-              costBasisFiat = "Not recorded";
-              priceInfo = `No ${provenanceFiatCurrency} price data for ${rec.date} (source: vault price store)`;
+            } else if (rec.date) {
+              const priceRow = await getLatestPriceOnOrBefore(rec.date, provenanceFiatCurrency, "BTC");
+              if (priceRow) {
+                const computedBasis = (balanceSats / 1e8) * priceRow.close;
+                const formatted = computedBasis.toLocaleString(undefined, {
+                  minimumFractionDigits: 2,
+                  maximumFractionDigits: 2,
+                });
+                costBasisFiat = `${provenanceFiatCurrency} ${formatted}`;
+                const rateSource = priceRow.source ? priceRow.source : "vault price store";
+                priceInfo = `Rate: ${provenanceFiatCurrency} ${priceRow.close.toLocaleString()} on ${priceRow.date} (source: ${rateSource})`;
+                totalCostBasis += computedBasis;
+                hasCostBasis = true;
+              } else {
+                costBasisFiat = "Not recorded";
+                priceInfo = `No ${provenanceFiatCurrency} price data for ${rec.date} (source: vault price store)`;
+              }
             }
+
+            // Attachments linked to this record
+            const attachments = rec.id !== undefined ? await getAttachmentsByRecordId(rec.id) : [];
+            const attachmentNames = attachments.map((a) => a.filename);
+            allSupportingDocs.push(...attachmentNames);
+
+            provenanceEntries.push({
+              address: row.raw,
+              label: rec.label || "",
+              acquisitionDate,
+              acquisitionMethod,
+              counterpartyName,
+              btcAmountSats: balanceSats,
+              costBasisFiat,
+              priceInfo,
+              hasRecord: true,
+              attachmentNames,
+            });
           }
-
-          // Attachments linked to this record
-          const attachments = rec.id !== undefined ? await getAttachmentsByRecordId(rec.id) : [];
-          const attachmentNames = attachments.map((a) => a.filename);
-          allSupportingDocs.push(...attachmentNames);
-
-          provenanceEntries.push({
-            address: row.raw,
-            label: rec.label || "",
-            acquisitionDate,
-            acquisitionMethod,
-            counterpartyName,
-            btcAmountSats: balanceSats,
-            costBasisFiat,
-            priceInfo,
-            hasRecord: true,
-            attachmentNames,
-          });
-        }
+        } // end if (isSample) else
 
         // Start a new page for the provenance appendix
         doc.addPage();
@@ -1749,7 +1884,7 @@ export default function ProofOfFundsDeclaration() {
 
         doc.setFontSize(9);
         doc.setFont("helvetica", "normal");
-        doc.text(sanitizePdfText(`Total BTC (declared addresses): ${formatBTC(totalSats)} BTC`), margin, y);
+        doc.text(sanitizePdfText(`Total BTC (declared addresses): ${formatBTC(effTotalSats)} BTC`), margin, y);
         y += 4.5;
 
         if (hasCostBasis) {
@@ -1761,24 +1896,24 @@ export default function ProofOfFundsDeclaration() {
           y += 4.5;
         }
 
-        if (fiatValid && fiatTotal !== null) {
-          const currentStr = fiatTotal.toLocaleString("en-US", {
+        if (effFiatValid && effFiatTotal !== null) {
+          const currentStr = effFiatTotal.toLocaleString("en-US", {
             style: "currency",
-            currency: fiatCurrency,
+            currency: effFiatCurrency,
             minimumFractionDigits: 2,
             maximumFractionDigits: 2,
           });
           doc.text(
             sanitizePdfText(
-              `Current Value: ${currentStr} ${fiatCurrency} (at declarant-supplied rate of ${fiatRateNum.toLocaleString("en-US", { maximumFractionDigits: 2 })} ${fiatCurrency}/BTC)`
+              `Current Value: ${currentStr} ${effFiatCurrency} (at declarant-supplied rate of ${effFiatRate.toLocaleString("en-US", { maximumFractionDigits: 2 })} ${effFiatCurrency}/BTC)`
             ),
             margin,
             y
           );
           y += 4.5;
 
-          if (hasCostBasis && fiatCurrency === provenanceFiatCurrency && totalCostBasis > 0) {
-            const gainLoss = fiatTotal - totalCostBasis;
+          if (hasCostBasis && effFiatCurrency === provenanceFiatCurrency && totalCostBasis > 0) {
+            const gainLoss = effFiatTotal - totalCostBasis;
             const pct = ((gainLoss / totalCostBasis) * 100).toFixed(1);
             const gainStr = gainLoss.toLocaleString(undefined, {
               minimumFractionDigits: 2,
@@ -1786,7 +1921,7 @@ export default function ProofOfFundsDeclaration() {
             });
             doc.text(
               sanitizePdfText(
-                `Unrealized Gain/Loss: ${gainLoss >= 0 ? "+" : ""}${fiatCurrency} ${gainStr} (${gainLoss >= 0 ? "+" : ""}${pct}%)`
+                `Unrealized Gain/Loss: ${gainLoss >= 0 ? "+" : ""}${effFiatCurrency} ${gainStr} (${gainLoss >= 0 ? "+" : ""}${pct}%)`
               ),
               margin,
               y
@@ -1842,8 +1977,22 @@ export default function ProofOfFundsDeclaration() {
       }
 
       // ── AML / Risk Screening Appendix ─────────────────────────────────────
-      if (includeAml && doneRows.length > 0) {
-        const amlResult = await runAmlScreening(doneRows.map((r) => r.raw));
+      if (includeAml && effRows.length > 0) {
+        const amlResult = isSample
+          ? {
+              screeningDate: effDate,
+              screenedCount: effRows.length,
+              directMatches: [] as Array<{ address: string; entityName: string; categoryLabel: string }>,
+              hasGraphData: false,
+              nearestHopDistance: null as null | number,
+              nearestHopEntityName: null as string | null,
+              nearestHopCategoryLabel: null as string | null,
+              entityListSource: "bundled" as const,
+              entityListCount: 0,
+              entityListImportedAt: null as null | number,
+              entityListSourceLabel: null as string | null,
+            }
+          : await runAmlScreening(doneRows.map((r) => r.raw));
 
         doc.addPage();
         y = 20;
@@ -1958,11 +2107,11 @@ export default function ProofOfFundsDeclaration() {
         // preview can never silently drift from what this section renders.
         const attestationLines = buildAttestationLines(
           {
-            pepStatus: amlPepStatus,
-            sourceOfWealth: amlSourceOfWealth,
-            sourceOfFunds: amlSourceOfFunds,
-            taxJurisdiction: amlTaxJurisdiction,
-            taxStatement: amlTaxStatement,
+            pepStatus: isSample ? "no" : amlPepStatus,
+            sourceOfWealth: isSample ? "Sample employment income" : amlSourceOfWealth,
+            sourceOfFunds: isSample ? "Sample savings" : amlSourceOfFunds,
+            taxJurisdiction: isSample ? "Sampleland" : amlTaxJurisdiction,
+            taxStatement: isSample ? "" : amlTaxStatement,
           },
           sanitizePdfText,
         );
@@ -1986,8 +2135,8 @@ export default function ProofOfFundsDeclaration() {
       addSpacer(2);
 
       const verifiedFormats = new Set(
-        verifiedRows
-          .map((r) => controlStates[r.raw]?.verifiedFormat)
+        effVerifiedRows
+          .map((r) => r.verifiedFormat)
           .filter((f): f is SignatureFormat => !!f)
       );
       const formatPhrase =
@@ -2000,7 +2149,7 @@ export default function ProofOfFundsDeclaration() {
       const controlDisclaimerLine = allVerified
         ? `2. Cryptographic proof-of-control is included for all addresses via ${formatPhrase}. An appendix contains the challenge messages and signatures for independent re-verification.`
         : hasVerified
-        ? `2. Cryptographic proof-of-control is included for ${verifiedRows.length} of ${doneRows.length} address${doneRows.length !== 1 ? "es" : ""} via ${formatPhrase}. The remaining addresses are self-declared. An appendix contains the challenge messages and signatures for verified addresses.`
+        ? `2. Cryptographic proof-of-control is included for ${effVerifiedRows.length} of ${effRows.length} address${effRows.length !== 1 ? "es" : ""} via ${formatPhrase}. The remaining addresses are self-declared. An appendix contains the challenge messages and signatures for verified addresses.`
         : "2. No cryptographic proof-of-control is included. All addresses are self-declared by the declarant.";
 
       const disclaimers = [
@@ -2026,7 +2175,7 @@ export default function ProofOfFundsDeclaration() {
       doc.setTextColor(0, 0, 0);
       doc.text("Declarant signature: ___________________________________", margin, y);
       y += 8;
-      doc.text(`Date: ${sanitizePdfText(declarationDate)}`, margin, y);
+      doc.text(`Date: ${sanitizePdfText(effDate)}`, margin, y);
       y += 6;
       doc.setFontSize(8);
       doc.setTextColor(100, 100, 100);
@@ -2065,21 +2214,25 @@ export default function ProofOfFundsDeclaration() {
       const metaLines: [string, string][] = [
         ["Tool:", `KYUTXO v${KYUTXO_APP_VERSION} (Proof of Funds Declaration)`],
         ["Generated (UTC ISO 8601):", generationIso],
-        ["Declaration Reference:", declarationNonce],
+        ["Declaration Reference:", effNonce],
       ];
 
       // Blockchain time-anchor
-      if (summary?.blockHeight) {
-        const anchorLabel = summary.timestamp
-          ? `Block ${summary.blockHeight.toLocaleString()} — ${formatUnix(summary.timestamp)}`
-          : `Block ${summary.blockHeight.toLocaleString()}`;
+      if (effSummary?.blockHeight) {
+        const anchorLabel = effSummary.timestamp
+          ? `Block ${effSummary.blockHeight.toLocaleString()} — ${formatUnix(effSummary.timestamp)}`
+          : `Block ${effSummary.blockHeight.toLocaleString()}`;
         metaLines.push(["On-chain data current as of:", anchorLabel]);
-      } else if (summary?.timestamp) {
-        metaLines.push(["On-chain data as of:", formatUnix(summary.timestamp)]);
+      } else if (effSummary?.timestamp) {
+        metaLines.push(["On-chain data as of:", formatUnix(effSummary.timestamp)]);
       }
 
-      // Content fingerprint
-      metaLines.push(["Content Fingerprint (SHA-256):", contentFingerprint]);
+      // Content fingerprint (red in sample mode to make the specimen label visually obvious)
+      if (isSample) {
+        metaLines.push(["Content Fingerprint (SHA-256):", ""]);
+      } else {
+        metaLines.push(["Content Fingerprint (SHA-256):", contentFingerprint]);
+      }
 
       const metaLabelW = 65;
       const metaValueW = contentW - metaLabelW;
@@ -2088,55 +2241,77 @@ export default function ProofOfFundsDeclaration() {
         doc.setFont("helvetica", "bold");
         doc.text(sanitizePdfText(label), margin, y);
         doc.setFont("helvetica", "normal");
-        const valLines = doc.splitTextToSize(sanitizePdfText(value), metaValueW) as string[];
-        doc.text(valLines, margin + metaLabelW, y);
-        y += Math.max(valLines.length * 8.5 * 0.45, 4.5);
+        if (label.startsWith("Content Fingerprint") && isSample) {
+          doc.setTextColor(180, 0, 0);
+          doc.setFont("helvetica", "bold");
+          doc.text(sanitizePdfText(contentFingerprint), margin + metaLabelW, y);
+          doc.setFont("helvetica", "normal");
+          doc.setTextColor(0, 0, 0);
+          y += 4.5;
+        } else {
+          const valLines = doc.splitTextToSize(sanitizePdfText(value), metaValueW) as string[];
+          doc.text(valLines, margin + metaLabelW, y);
+          y += Math.max(valLines.length * 8.5 * 0.45, 4.5);
+        }
       }
       y += 2;
 
       doc.setFontSize(7.5);
       doc.setFont("helvetica", "italic");
       doc.setTextColor(100, 100, 100);
-      const fingerprintNote =
-        "The Content Fingerprint is SHA-256(UTF-8(canonical payload)), where the canonical payload " +
-        "is the verbatim preimage printed below (lines joined by newline \"\\n\"). " +
-        "It covers: tool version, reference ID, all declarant fields, date, purpose, statement, " +
-        "all declared addresses with balances and control status, proof-of-control challenge messages " +
-        "and signatures for verified addresses, blockchain anchor, fiat rate, all section toggle states " +
-        "and their user-entered fields, and the UTC ISO 8601 generation timestamp. " +
-        "A reviewer can copy the preimage below, UTF-8 encode it, SHA-256 hash it, and verify the hex matches the fingerprint above. " +
-        "Page numbering in the footer confirms no pages have been removed.";
-      const fpNoteLines = doc.splitTextToSize(sanitizePdfText(fingerprintNote), contentW) as string[];
-      doc.text(fpNoteLines, margin, y);
-      doc.setTextColor(0, 0, 0);
-      y += fpNoteLines.length * 7.5 * 0.45 + 4;
 
-      // ── Canonical payload (verbatim preimage) ─────────────────────────────
-      // Printed in full so any third party can recompute the fingerprint independently
-      // without possessing any information not visible in this document.
-      checkPageBreak(20);
-      doc.setFontSize(7.5);
-      doc.setFont("helvetica", "bold");
-      doc.setTextColor(0, 0, 0);
-      doc.text("Fingerprint Preimage (canonical payload, reproduced verbatim):", margin, y);
-      y += 4.5;
+      if (isSample) {
+        // In sample mode, skip the canonical payload box and explain why
+        const sampleFpNote =
+          "SPECIMEN — No canonical payload is printed for sample PDFs. " +
+          "The Content Fingerprint above is a placeholder label, not a valid SHA-256 hash. " +
+          "A real declaration includes the verbatim preimage here so any reviewer can independently verify the fingerprint.";
+        const sampleFpLines = doc.splitTextToSize(sanitizePdfText(sampleFpNote), contentW) as string[];
+        doc.text(sampleFpLines, margin, y);
+        doc.setTextColor(0, 0, 0);
+        y += sampleFpLines.length * 7.5 * 0.45 + 4;
+      } else {
+        const fingerprintNote =
+          "The Content Fingerprint is SHA-256(UTF-8(canonical payload)), where the canonical payload " +
+          "is the verbatim preimage printed below (lines joined by newline \"\\n\"). " +
+          "It covers: tool version, reference ID, all declarant fields, date, purpose, statement, " +
+          "all declared addresses with balances and control status, proof-of-control challenge messages " +
+          "and signatures for verified addresses, blockchain anchor, fiat rate, all section toggle states " +
+          "and their user-entered fields, and the UTC ISO 8601 generation timestamp. " +
+          "A reviewer can copy the preimage below, UTF-8 encode it, SHA-256 hash it, and verify the hex matches the fingerprint above. " +
+          "Page numbering in the footer confirms no pages have been removed.";
+        const fpNoteLines = doc.splitTextToSize(sanitizePdfText(fingerprintNote), contentW) as string[];
+        doc.text(fpNoteLines, margin, y);
+        doc.setTextColor(0, 0, 0);
+        y += fpNoteLines.length * 7.5 * 0.45 + 4;
 
-      // Print payload in Courier at small size, with a light background box
-      doc.setFont("courier", "normal");
-      doc.setFontSize(6.5);
-      doc.setTextColor(30, 30, 30);
-      const payloadWrapped = doc.splitTextToSize(
-        sanitizePdfText(canonicalPayload),
-        contentW - 4
-      ) as string[];
-      const payloadBoxH = payloadWrapped.length * 6.5 * 0.42 + 4;
-      checkPageBreak(payloadBoxH + 4);
-      doc.setFillColor(248, 248, 248);
-      doc.setDrawColor(200, 200, 200);
-      doc.rect(margin, y - 1.5, contentW, payloadBoxH, "FD");
-      doc.text(payloadWrapped, margin + 2, y + 1);
-      y += payloadBoxH + 4;
-      doc.setTextColor(0, 0, 0);
+        // ── Canonical payload (verbatim preimage) ───────────────────────────
+        // Printed in full so any third party can recompute the fingerprint independently
+        // without possessing any information not visible in this document.
+        checkPageBreak(20);
+        doc.setFontSize(7.5);
+        doc.setFont("helvetica", "bold");
+        doc.setTextColor(0, 0, 0);
+        doc.text("Fingerprint Preimage (canonical payload, reproduced verbatim):", margin, y);
+        y += 4.5;
+
+        // Print payload in Courier at small size, with a light background box
+        doc.setFont("courier", "normal");
+        doc.setFontSize(6.5);
+        doc.setTextColor(30, 30, 30);
+        const payloadWrapped = doc.splitTextToSize(
+          sanitizePdfText(canonicalPayload),
+          contentW - 4
+        ) as string[];
+        const payloadBoxH = payloadWrapped.length * 6.5 * 0.42 + 4;
+        checkPageBreak(payloadBoxH + 4);
+        doc.setFillColor(248, 248, 248);
+        doc.setDrawColor(200, 200, 200);
+        doc.rect(margin, y - 1.5, contentW, payloadBoxH, "FD");
+        doc.text(payloadWrapped, margin + 2, y + 1);
+        y += payloadBoxH + 4;
+        doc.setTextColor(0, 0, 0);
+      }
 
       // ── Optional Attestation Block ─────────────────────────────────────────
       if (includeAttestation) {
@@ -2154,7 +2329,7 @@ export default function ProofOfFundsDeclaration() {
         doc.setFont("helvetica", "normal");
         doc.setTextColor(0, 0, 0);
         const attestText =
-          `I, ${sanitizePdfText(declarantName)}, hereby solemnly declare and attest that the foregoing ` +
+          `I, ${sanitizePdfText(effName)}, hereby solemnly declare and attest that the foregoing ` +
           "information — including all Bitcoin addresses, reported balances, and supporting details — is true, " +
           "accurate, and complete to the best of my knowledge and belief. I am the lawful owner or authorised " +
           "signatory of the declared addresses and the funds associated with them. I understand that knowingly " +
@@ -2169,7 +2344,7 @@ export default function ProofOfFundsDeclaration() {
         doc.setFont("helvetica", "normal");
         doc.text("Declarant signature: _______________________________________________", margin, y);
         y += 8;
-        doc.text(`Full name: ${sanitizePdfText(declarantName)}`, margin, y);
+        doc.text(`Full name: ${sanitizePdfText(effName)}`, margin, y);
         y += 7;
 
         const placeSigned = attestationPlaceOfSigning.trim();
@@ -2181,7 +2356,7 @@ export default function ProofOfFundsDeclaration() {
           y += 7;
         }
 
-        doc.text(`Date: ${sanitizePdfText(declarationDate)}`, margin, y);
+        doc.text(`Date: ${sanitizePdfText(effDate)}`, margin, y);
         y += 10;
 
         // Optional witness / notary line
@@ -2206,7 +2381,7 @@ export default function ProofOfFundsDeclaration() {
         doc.setFont("helvetica", "italic");
         doc.setTextColor(100, 100, 100);
         doc.text(
-          sanitizePdfText(`Declaration Reference: ${declarationNonce}`),
+          sanitizePdfText(`Declaration Reference: ${effNonce}`),
           margin, y
         );
         doc.setTextColor(0, 0, 0);
@@ -2290,16 +2465,16 @@ export default function ProofOfFundsDeclaration() {
         doc.setFont("helvetica", "normal");
         doc.setTextColor(0, 0, 0);
         const formatDesc = [
-          `The Challenge Message is the human-readable text that was signed for each address. It records the declarant, purpose, date, a unique Declaration Reference (nonce: ${declarationNonce}), and the address itself.`,
+          `The Challenge Message is the human-readable text that was signed for each address. It records the declarant, purpose, date, a unique Declaration Reference (nonce: ${effNonce}), and the address itself.`,
           "The Declaration Reference is a random value generated specifically for this declaration; because it is embedded in every signed message, the signatures cannot be silently reused for a different declaration.",
           "When verifying, the message must be supplied exactly as shown — every character and line break is part of what was signed, so changing even one character will cause verification to fail.",
         ];
-        if (verifierReference.trim()) {
+        if (!isSample && verifierReference.trim()) {
           formatDesc.push(
             `Verifier Reference: "${verifierReference.trim()}" — a free-text identifier provided by the requesting party and embedded in each signed message, binding the signatures to this specific request.`
           );
         }
-        if (freshnessAnchor) {
+        if (!isSample && freshnessAnchor) {
           formatDesc.push(
             `Block Anchor: height ${freshnessAnchor.height}, hash ${freshnessAnchor.hash} (fetched ${freshnessAnchor.fetchedAt}). ` +
             `This anchor proves each signature was created at or after block ${freshnessAnchor.height}. ` +
@@ -2313,9 +2488,8 @@ export default function ProofOfFundsDeclaration() {
         doc.text(formatLines, margin, y);
         y += formatLines.length * 8.5 * 0.45 + 6;
 
-        for (const row of verifiedRows) {
+        for (const row of effVerifiedRows) {
           checkPageBreak(60);
-          const cs = controlStates[row.raw]!;
 
           doc.setFontSize(9);
           doc.setFont("helvetica", "bold");
@@ -2332,7 +2506,7 @@ export default function ProofOfFundsDeclaration() {
           doc.setTextColor(80, 80, 80);
           const sigFormatLines = doc.splitTextToSize(
             sanitizePdfText(
-              `Signature Format: ${signatureFormatLabel(cs.verifiedFormat ?? "legacy")}`
+              `Signature Format: ${signatureFormatLabel(row.verifiedFormat ?? "legacy")}`
             ),
             contentW
           ) as string[];
@@ -2342,12 +2516,12 @@ export default function ProofOfFundsDeclaration() {
 
           const challengeMsg = buildChallengeMessage({
             address: row.raw,
-            declarantName,
-            declarationDate,
-            purpose,
-            nonce: declarationNonce,
-            verifierReference: verifierReference || undefined,
-            freshnessAnchor: freshnessAnchor ?? undefined,
+            declarantName: effName,
+            declarationDate: effDate,
+            purpose: effPurpose,
+            nonce: effNonce,
+            verifierReference: isSample ? undefined : (verifierReference || undefined),
+            freshnessAnchor: isSample ? undefined : (freshnessAnchor ?? undefined),
           });
 
           doc.setFontSize(8);
@@ -2368,7 +2542,7 @@ export default function ProofOfFundsDeclaration() {
           doc.setFontSize(8);
           doc.setTextColor(0, 0, 0);
           doc.text(
-            cs.verifiedFormat === "bip322"
+            row.verifiedFormat === "bip322"
               ? "BIP-322 Witness (base64):"
               : "Wallet Signature (base64):",
             margin,
@@ -2378,7 +2552,7 @@ export default function ProofOfFundsDeclaration() {
 
           doc.setFont("courier", "normal");
           doc.setFontSize(7.5);
-          const sigLines = doc.splitTextToSize(sanitizePdfText(cs.verifiedSig ?? ""), contentW - 4) as string[];
+          const sigLines = doc.splitTextToSize(sanitizePdfText(row.verifiedSig ?? ""), contentW - 4) as string[];
           doc.setFillColor(245, 245, 245);
           doc.rect(margin, y - 1, contentW, sigLines.length * 7.5 * 0.42 + 4, "F");
           doc.text(sigLines, margin + 2, y + 1.5);
@@ -2529,11 +2703,11 @@ export default function ProofOfFundsDeclaration() {
 
       // ── Page X of Y footers (applied to every page after all content) ──────
       const totalPages = (doc.internal as any).getNumberOfPages();
-      const pageH = doc.internal.pageSize.getHeight();
-      const footerY = pageH - 8;
-      const shortRef = declarationNonce.length > 20
-        ? `${declarationNonce.slice(0, 10)}…${declarationNonce.slice(-8)}`
-        : declarationNonce;
+      const pageHFt = doc.internal.pageSize.getHeight();
+      const footerY = pageHFt - 8;
+      const shortRef = effNonce.length > 20
+        ? `${effNonce.slice(0, 10)}…${effNonce.slice(-8)}`
+        : effNonce;
 
       for (let pageNum = 1; pageNum <= totalPages; pageNum++) {
         doc.setPage(pageNum);
@@ -2552,7 +2726,7 @@ export default function ProofOfFundsDeclaration() {
           { align: "center" }
         );
         doc.text(
-          sanitizePdfText("PROOF OF FUNDS DECLARATION"),
+          sanitizePdfText(isSample ? "PROOF OF FUNDS DECLARATION — SPECIMEN" : "PROOF OF FUNDS DECLARATION"),
           pageW - margin,
           footerY,
           { align: "right" }
@@ -2560,22 +2734,29 @@ export default function ProofOfFundsDeclaration() {
         doc.setTextColor(0, 0, 0);
       }
 
-      const safeName = sanitizePdfText(declarantName.replace(/\s+/g, "_").replace(/[^a-zA-Z0-9_-]/g, ""));
-      doc.save(`proof-of-funds-${safeName || "declaration"}-${declarationDate}.pdf`);
+      // ── Diagonal watermark on every page (sample mode only) ───────────────
+      if (isSample) {
+        for (let pageNum = 1; pageNum <= totalPages; pageNum++) {
+          doc.setPage(pageNum);
+          doc.setFontSize(52);
+          doc.setFont("helvetica", "bold");
+          doc.setTextColor(220, 0, 0);
+          doc.setGState(new (doc as any).GState({ opacity: 0.08 }));
+          const cx = pageW / 2;
+          const cy = pageHFt / 2;
+          doc.text("SPECIMEN", cx, cy, { align: "center", angle: 45 });
+          doc.setGState(new (doc as any).GState({ opacity: 1 }));
+          doc.setTextColor(0, 0, 0);
+        }
+      }
 
-      toast({ title: "PDF Downloaded", description: "Your Proof of Funds Declaration has been saved." });
-    } catch (err) {
-      console.error("[ProofOfFunds] PDF generation failed:", err);
-      toast({
-        variant: "destructive",
-        title: "PDF Export Failed",
-        description: err instanceof Error ? err.message : "An unexpected error occurred during PDF generation.",
-      });
-    } finally {
-      setIsGeneratingPdf(false);
-    }
+      const safeName = sanitizePdfText(effName.replace(/\s+/g, "_").replace(/[^a-zA-Z0-9_-]/g, ""));
+      if (isSample) {
+        doc.save(`proof-of-funds-SAMPLE-${safeName || "specimen"}-${effDate}.pdf`);
+      } else {
+        doc.save(`proof-of-funds-${safeName || "declaration"}-${effDate}.pdf`);
+      }
   }, [
-    canGeneratePdf,
     declarantName,
     declarantContact,
     declarantResidentialAddress,
@@ -2611,6 +2792,40 @@ export default function ProofOfFundsDeclaration() {
     attestationWitnessLine,
     includeGlossary,
   ]);
+
+  const generatePdf = useCallback(async () => {
+    setIsGeneratingPdf(true);
+    try {
+      await buildPofPdf(false);
+      toast({ title: "PDF Downloaded", description: "Your Proof of Funds Declaration has been saved." });
+    } catch (err) {
+      console.error("[ProofOfFunds] PDF generation failed:", err);
+      toast({
+        variant: "destructive",
+        title: "PDF Export Failed",
+        description: err instanceof Error ? err.message : "An unexpected error occurred during PDF generation.",
+      });
+    } finally {
+      setIsGeneratingPdf(false);
+    }
+  }, [buildPofPdf, canGeneratePdf, toast]);
+
+  const generateSamplePdf = useCallback(async () => {
+    setIsGeneratingSamplePdf(true);
+    try {
+      await buildPofPdf(true);
+      toast({ title: "Sample PDF Downloaded", description: "The specimen format preview has been saved. It is not a valid declaration." });
+    } catch (err) {
+      console.error("[ProofOfFunds] Sample PDF generation failed:", err);
+      toast({
+        variant: "destructive",
+        title: "Sample PDF Export Failed",
+        description: err instanceof Error ? err.message : "An unexpected error occurred during sample PDF generation.",
+      });
+    } finally {
+      setIsGeneratingSamplePdf(false);
+    }
+  }, [buildPofPdf, toast]);
 
   const validCount = validRows.length;
   const doneCount = doneRows.length + errorRows.length;
@@ -4294,6 +4509,38 @@ export default function ProofOfFundsDeclaration() {
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
+            {/* Sample PDF section */}
+            <div className="rounded-md border border-dashed border-muted-foreground/40 p-4 space-y-2 bg-muted/30">
+              <p className="text-sm font-medium">Preview the layout first</p>
+              <p className="text-xs text-muted-foreground">
+                Generate a specimen PDF filled with obviously-fake placeholder data to approve the layout
+                before entering your real identity details. The sample is stamped{" "}
+                <span className="font-medium">SAMPLE / NOT A VALID DECLARATION</span> on every page and
+                contains no real fingerprint or verifiable signatures.
+              </p>
+              <Button
+                onClick={generateSamplePdf}
+                disabled={isGeneratingSamplePdf || isGeneratingPdf}
+                data-testid="button-generate-sample-pdf"
+                variant="outline"
+                size="default"
+              >
+                {isGeneratingSamplePdf ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Generating Sample…
+                  </>
+                ) : (
+                  <>
+                    <FileText className="h-4 w-4 mr-2" />
+                    Generate Sample PDF
+                  </>
+                )}
+              </Button>
+            </div>
+
+            <Separator />
+
             {!canGeneratePdf && (
               <div className="space-y-1">
                 {doneRows.length === 0 && (

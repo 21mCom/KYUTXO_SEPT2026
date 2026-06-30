@@ -46,3 +46,4 @@
 - [Privacy proximity hop dedup](privacy-proximity-dedup-hops.md) — closest-hop dedup + owned-only tx loading make isolated hop-3/4 findings impossible E2E; test those tiers at engine level. Also: partly-broken persisted snapshot keeps valid subset (imported+partialWarning), not bundled.
 - [Heuristic Re-sync browser verify](heuristic-resync-browser-verify.md) — Balance per-address/bulk Re-sync e2e needs REAL on-chain spend addrs to actually promote; in-flight lockout assert is racy.
 - [pdf.js browser harness](pdfjs-browser-harness.md) — Nix Chromium v125 can't run pdfjs-dist default build (Promise.try); use legacy build + legacy worker ?url in browser; pdf.js is only an oracle.
+- [PofF shared PDF builder pattern](pof-shared-pdf-builder.md) — `buildPofPdf(isSample)` useCallback with `eff*` vars; sample AML needs explicit placeholder SOW/SOF strings; sample inline amlResult needs full EntityListDescriptionInput fields (entityListSource etc.).
