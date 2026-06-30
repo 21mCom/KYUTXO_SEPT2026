@@ -49,6 +49,15 @@ import {
 import { validateAddress, formatBTC, truncateAddress } from "@/lib/bitcoin";
 import { sanitizePdfText } from "@/lib/pdfText";
 import { buildAttestationLines } from "@/lib/attestationLines";
+import {
+  AML_APPENDIX_STRINGS,
+  formatHopLabel,
+  buildScreeningDateLine,
+  buildAddressesScreenedLine,
+  buildDirectMatchResultLine,
+  buildEntityListDescription,
+  buildNearestEntityLine,
+} from "@/lib/amlAppendixStrings";
 import { computeStatsForAddresses } from "@/lib/data/address-stats";
 import { getRecordsByType } from "@/lib/data/record-crud";
 import { getLatestPriceOnOrBefore } from "@/lib/data/price-data-crud";
@@ -371,11 +380,6 @@ export async function runAmlScreening(addresses: string[]): Promise<AmlScreening
     nearestHopCategoryLabel: globalMinCategoryLabel,
     hasGraphData: true,
   };
-}
-
-/** Format a hop distance consistently for both on-screen preview and the PDF. */
-function formatHopLabel(hops: number): string {
-  return hops >= 4 ? `${hops}+ hops` : `${hops} hop${hops !== 1 ? "s" : ""}`;
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -1765,50 +1769,38 @@ export default function ProofOfFundsDeclaration() {
         doc.line(margin, y, margin + contentW, y);
         y += 5;
 
-        addLine("SCREENING PARAMETERS", 10, true);
+        addLine(AML_APPENDIX_STRINGS.screeningParametersHeading, 10, true);
         addSpacer(2);
-        addLine(`Screening date: ${sanitizePdfText(amlResult.screeningDate)}`, 9);
+        addLine(
+          sanitizePdfText(buildScreeningDateLine(amlResult.screeningDate)),
+          9
+        );
         addSpacer(1);
-        const entityListDesc =
-          amlResult.entityListSource === "bundled"
-            ? `Bundled (KYUTXO default) — ${amlResult.entityListCount.toLocaleString()} known addresses`
-            : (() => {
-                const parts = [
-                  `User-imported snapshot — ${amlResult.entityListCount.toLocaleString()} known addresses`,
-                ];
-                if (amlResult.entityListSourceLabel) {
-                  parts.push(`file: ${sanitizePdfText(amlResult.entityListSourceLabel)}`);
-                }
-                if (amlResult.entityListImportedAt) {
-                  parts.push(`imported: ${new Date(amlResult.entityListImportedAt).toISOString().slice(0, 10)}`);
-                }
-                return parts.join(", ");
-              })();
-        addLine(`Entity list: ${entityListDesc}`, 9);
+        addLine(
+          buildEntityListDescription(amlResult, sanitizePdfText),
+          9
+        );
         addSpacer(1);
-        addLine(`Addresses screened: ${amlResult.screenedCount}`, 9);
+        addLine(buildAddressesScreenedLine(amlResult.screenedCount), 9);
         addSpacer(5);
 
         checkPageBreak(30);
-        addLine("DIRECT MATCH RESULTS", 10, true);
+        addLine(AML_APPENDIX_STRINGS.directMatchResultsHeading, 10, true);
         addSpacer(2);
         if (amlResult.directMatches.length === 0) {
           doc.setFontSize(9);
           doc.setFont("helvetica", "bold");
           doc.setTextColor(0, 120, 0);
-          doc.text("Result: No direct matches detected.", margin, y);
+          doc.text(AML_APPENDIX_STRINGS.noDirectMatchesResult, margin, y);
           doc.setTextColor(0, 0, 0);
           y += 5;
-          addWrapped(
-            "None of the declared addresses appear in the active entity list.",
-            9
-          );
+          addWrapped(AML_APPENDIX_STRINGS.noDirectMatchesDetail, 9);
         } else {
           doc.setFontSize(9);
           doc.setFont("helvetica", "bold");
           doc.setTextColor(160, 0, 0);
           doc.text(
-            `Result: ${amlResult.directMatches.length} direct match(es) detected — see table below.`,
+            buildDirectMatchResultLine(amlResult.directMatches.length),
             margin,
             y
           );
@@ -1838,32 +1830,30 @@ export default function ProofOfFundsDeclaration() {
         addSpacer(5);
 
         checkPageBreak(25);
-        addLine("INDIRECT PROXIMITY ANALYSIS", 10, true);
+        addLine(AML_APPENDIX_STRINGS.indirectProximityAnalysisHeading, 10, true);
         addSpacer(2);
         if (!amlResult.hasGraphData) {
-          addWrapped(
-            "No transaction history is available for these addresses in the local vault. " +
-              "Indirect proximity analysis requires synced transaction data.",
-            9,
-            [80, 80, 80]
-          );
+          addWrapped(AML_APPENDIX_STRINGS.noGraphDataDetail, 9, [80, 80, 80]);
         } else if (amlResult.nearestHopDistance === null) {
           doc.setFontSize(9);
           doc.setFont("helvetica", "bold");
           doc.setTextColor(0, 120, 0);
-          doc.text("No flagged counterparty detected within 4 transaction hops.", margin, y);
+          doc.text(AML_APPENDIX_STRINGS.noProximityMatchResult, margin, y);
           doc.setTextColor(0, 0, 0);
           y += 5;
-          addWrapped(
-            "The declared addresses have no indirect on-chain links to known flagged entities within the analysed transaction graph (up to 4 hops).",
-            9
-          );
+          addWrapped(AML_APPENDIX_STRINGS.noProximityMatchDetail, 9);
         } else {
-          const hopLabel = formatHopLabel(amlResult.nearestHopDistance!);
           doc.setFontSize(9);
           doc.setFont("helvetica", "normal");
           doc.setTextColor(0, 0, 0);
-          const proximityLine = `Nearest flagged entity: ${hopLabel} away — ${sanitizePdfText(amlResult.nearestHopEntityName ?? "")} (${sanitizePdfText(amlResult.nearestHopCategoryLabel ?? "")})`;
+          const proximityLine = buildNearestEntityLine(
+            {
+              nearestHopDistance: amlResult.nearestHopDistance,
+              nearestHopEntityName: amlResult.nearestHopEntityName,
+              nearestHopCategoryLabel: amlResult.nearestHopCategoryLabel,
+            },
+            sanitizePdfText
+          );
           const proxLines = doc.splitTextToSize(sanitizePdfText(proximityLine), contentW) as string[];
           doc.text(proxLines, margin, y);
           y += proxLines.length * 9 * 0.45 + 2;
@@ -1871,7 +1861,7 @@ export default function ProofOfFundsDeclaration() {
         addSpacer(5);
 
         checkPageBreak(60);
-        addLine("DECLARANT SELF-ATTESTATIONS", 10, true);
+        addLine(AML_APPENDIX_STRINGS.declarantSelfAttestationsHeading, 10, true);
         addSpacer(2);
 
         // Built from the SAME shared builder as the on-screen attestation
@@ -1893,18 +1883,13 @@ export default function ProofOfFundsDeclaration() {
           addSpacer(2);
         }
 
-        addWrapped(
-          "General attestation: The declarant attests that the declared funds are not derived from, do not represent proceeds of, and are not intended to be used in connection with any criminal activity, money laundering, terrorist financing, tax evasion, or sanctions evasion.",
-          9
-        );
+        addWrapped(AML_APPENDIX_STRINGS.generalAttestation, 9);
         addSpacer(6);
 
         checkPageBreak(35);
-        addLine("SCREENING DISCLAIMER", 10, true);
+        addLine(AML_APPENDIX_STRINGS.screeningDisclaimerHeading, 10, true);
         addSpacer(2);
-        const amlDisclaimer =
-          "IMPORTANT — LIMITATIONS OF THIS SCREENING: This AML / risk screening is a best-effort, offline check performed by KYUTXO against a bundled dataset of publicly documented addresses compiled from open sources (WalletExplorer.com address clustering, GraphSense TagPacks, OFAC SDN designations, and published incident reports). It is NOT a substitute for the financial institution's own KYC/AML procedures, licensed chain-analysis tooling, or regulatory obligations. A \"no direct match\" result does not guarantee the funds are free of risk, and this document does not constitute a legal clearance opinion. The declarant's self-attestations are unverified statements and must be independently assessed by the receiving institution. All risk decisions remain the sole responsibility of the institution's compliance function.";
-        addWrapped(amlDisclaimer, 8, [80, 80, 80]);
+        addWrapped(AML_APPENDIX_STRINGS.screeningDisclaimer, 8, [80, 80, 80]);
       }
 
       // ── Standard Disclaimers ───────────────────────────────────────────────
@@ -3513,16 +3498,7 @@ export default function ProofOfFundsDeclaration() {
 
                       {amlScreeningResult && (
                         <div className="space-y-1 text-xs text-muted-foreground">
-                          <div>
-                            {amlScreeningResult.entityListSource === "bundled"
-                              ? `Entity list: Bundled (KYUTXO default) — ${amlScreeningResult.entityListCount.toLocaleString()} known addresses`
-                              : (() => {
-                                  const parts = [`User-imported snapshot — ${amlScreeningResult.entityListCount.toLocaleString()} known addresses`];
-                                  if (amlScreeningResult.entityListSourceLabel) parts.push(`file: ${amlScreeningResult.entityListSourceLabel}`);
-                                  if (amlScreeningResult.entityListImportedAt) parts.push(`imported: ${new Date(amlScreeningResult.entityListImportedAt).toISOString().slice(0, 10)}`);
-                                  return `Entity list: ${parts.join(", ")}`;
-                                })()}
-                          </div>
+                          <div>{buildEntityListDescription(amlScreeningResult)}</div>
                           {amlScreeningResult.directMatches.length === 0 ? (
                             <div className="text-green-600 dark:text-green-400 font-medium">
                               No direct matches — none of the declared addresses appear in the entity list.
