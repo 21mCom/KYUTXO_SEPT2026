@@ -153,17 +153,18 @@ export async function verifyBitcoinSignature(
   }
 
   const network = bitcoin.networks.bitcoin;
-  const pubKeyBuf = Buffer.from(pubKey);
-
+  // bitcoinjs-lib v7 accepts a Uint8Array pubkey directly. Do NOT wrap in
+  // Buffer.from(...) — the Buffer global is not available in the browser and
+  // would throw "Buffer is not defined", failing verification at runtime.
   const candidates: string[] = [];
 
   try {
     if (compressed) {
-      candidates.push(bitcoin.payments.p2wpkh({ pubkey: pubKeyBuf, network }).address!);
-      const p2wpkh = bitcoin.payments.p2wpkh({ pubkey: pubKeyBuf, network });
+      candidates.push(bitcoin.payments.p2wpkh({ pubkey: pubKey, network }).address!);
+      const p2wpkh = bitcoin.payments.p2wpkh({ pubkey: pubKey, network });
       candidates.push(bitcoin.payments.p2sh({ redeem: p2wpkh, network }).address!);
     }
-    candidates.push(bitcoin.payments.p2pkh({ pubkey: pubKeyBuf, network }).address!);
+    candidates.push(bitcoin.payments.p2pkh({ pubkey: pubKey, network }).address!);
   } catch (err) {
     return {
       verified: false,
