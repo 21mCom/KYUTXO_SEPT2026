@@ -61,6 +61,10 @@ args = "note-rendering"
 task = "workflow.run"
 args = "test-providers"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "no-buffer-global"
+
 [[workflows.workflow]]
 name = "Start application"
 author = "agent"
@@ -143,6 +147,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-test-providers.js"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "no-buffer-global"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-no-buffer-global.js"
 
 [workflows.workflow.metadata]
 isValidation = true

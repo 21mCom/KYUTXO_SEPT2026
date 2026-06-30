@@ -8,6 +8,7 @@ LOCKFILE_CMD="node scripts/check-lockfile-urls.js"
 NO_EXTERNAL_CMD="node scripts/check-no-external-resources.js"
 NOTE_RENDER_CMD="node scripts/check-note-rendering.js"
 TEST_PROVIDERS_CMD="node scripts/check-test-providers.js"
+NO_BUFFER_CMD="node scripts/check-no-buffer-global.js"
 
 append_check() {
   cmd="$1"
@@ -33,3 +34,4 @@ append_check "$LOCKFILE_CMD" "lockfile URLs"
 append_check "$NO_EXTERNAL_CMD" "no external resources"
 append_check "$NOTE_RENDER_CMD" "note rendering"
 append_check "$TEST_PROVIDERS_CMD" "test providers"
+append_check "$NO_BUFFER_CMD" "no buffer global"
