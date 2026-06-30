@@ -1415,7 +1415,9 @@ export default function ProofOfFundsDeclaration() {
       doc.setFont("helvetica", "bold");
       doc.setTextColor(160, 0, 0);
       const noticeLines = doc.splitTextToSize(
-        "SAMPLE / SPECIMEN — NOT A VALID DECLARATION. This document is a layout preview only. All data is fictitious.",
+        sanitizePdfText(
+          "SAMPLE / SPECIMEN — NOT A VALID DECLARATION. This document is a layout preview only. All data is fictitious."
+        ),
         contentW - 4
       ) as string[];
       doc.text(noticeLines, margin + 2, y + 2.5);

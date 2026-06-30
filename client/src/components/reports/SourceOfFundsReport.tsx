@@ -7,10 +7,12 @@ import { getPriceDataByKey, getLatestPriceOnOrBefore } from "@/lib/data/price-da
 import {
   type FundingSource,
   type SourceOfFundsData,
+  buildSampleSourceOfFundsData,
   buildSourceOfFundsText,
   selectFundingTxidsUnderCap,
   sourceOfFundsCapWarning,
   sourceOfFundsFilename,
+  sourceOfFundsSampleFilename,
 } from "@/lib/data/source-of-funds-export";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -21,7 +23,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { AlertCircle, AlertTriangle, ArrowRight, Check, Download, ExternalLink, RefreshCw, Wallet } from "lucide-react";
+import { AlertCircle, AlertTriangle, ArrowRight, Check, Download, ExternalLink, FlaskConical, RefreshCw, Wallet } from "lucide-react";
 import { formatBTC, truncateAddress } from "@/lib/bitcoin";
 import { AddressLink } from "@/components/AddressLink";
 
@@ -219,6 +221,23 @@ export function SourceOfFundsReport() {
     URL.revokeObjectURL(url);
   }
 
+  // Download a SAMPLE / SPECIMEN report built from fictitious data so a user can
+  // preview the export's layout before entering real data. It mirrors the real
+  // report's sections (warnings/summary/funding sources) but is stamped
+  // SAMPLE / SPECIMEN and never touches the vault, so it is always available
+  // regardless of whether any addresses have been synced.
+  function exportSampleReport() {
+    const sampleData = buildSampleSourceOfFundsData();
+    const text = buildSourceOfFundsText(sampleData, currency, undefined, true);
+    const blob = new Blob([text], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = sourceOfFundsSampleFilename();
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
   return (
     <div className="space-y-6">
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -303,6 +322,14 @@ export function SourceOfFundsReport() {
             Export
           </Button>
         )}
+        <Button
+          variant="outline"
+          onClick={exportSampleReport}
+          data-testid="button-generate-sample-report"
+        >
+          <FlaskConical className="h-4 w-4 mr-2" />
+          Generate Sample Report
+        </Button>
       </div>
 
       {reportData && (

@@ -4,10 +4,12 @@ import {
   type DatedFundingTxid,
   type FundingSource,
   type SourceOfFundsData,
+  buildSampleSourceOfFundsData,
   buildSourceOfFundsText,
   selectFundingTxidsUnderCap,
   sourceOfFundsCapWarning,
   sourceOfFundsFilename,
+  sourceOfFundsSampleFilename,
   sourceOfFundsUnresolvedWarning,
 } from "./source-of-funds-export";
 
@@ -153,6 +155,53 @@ describe("buildSourceOfFundsText", () => {
     expect(text).toContain(
       "Unresolved Amounts: 4 (received totals may be understated)",
     );
+  });
+});
+
+describe("buildSampleSourceOfFundsData", () => {
+  it("exercises both an external (cost-basis) and an internal funding source", () => {
+    const data = buildSampleSourceOfFundsData();
+    expect(data.externalFundingCount).toBe(1);
+    expect(data.internalTransferCount).toBe(1);
+    const external = data.fundingSources.find((s) => !s.isInternalTransfer);
+    const internal = data.fundingSources.find((s) => s.isInternalTransfer);
+    expect(external?.costBasisUSD).toBeGreaterThan(0);
+    expect(internal).toBeDefined();
+  });
+
+  it("is a clean, complete report with no cap or unresolved warnings", () => {
+    const data = buildSampleSourceOfFundsData();
+    expect(data.cap.capped).toBe(false);
+    expect(data.unresolvedAmountCount).toBe(0);
+  });
+});
+
+describe("buildSourceOfFundsText (sample mode)", () => {
+  it("stamps the title and body SAMPLE / SPECIMEN and notes fictitious data", () => {
+    const text = buildSourceOfFundsText(
+      buildSampleSourceOfFundsData(),
+      "USD",
+      "2026-06-30T00:00:00.000Z",
+      true,
+    );
+    expect(text).toContain("SOURCE OF FUNDS DECLARATION — SAMPLE / SPECIMEN");
+    expect(text).toContain("SAMPLE / SPECIMEN — NOT A VALID DECLARATION");
+    expect(text).toContain("fictitious");
+    expect(text).toContain("Generated (SPECIMEN):");
+    expect(text).toContain("END OF SAMPLE / SPECIMEN");
+  });
+
+  it("does not stamp SPECIMEN when sample is false", () => {
+    const text = buildSourceOfFundsText(reportData(), "USD");
+    expect(text).not.toContain("SPECIMEN");
+    expect(text).not.toContain("SAMPLE");
+  });
+});
+
+describe("sourceOfFundsSampleFilename", () => {
+  it("builds a dated SAMPLE specimen filename", () => {
+    const name = sourceOfFundsSampleFilename(new Date("2026-06-30T12:00:00Z"));
+    expect(name).toBe("source-of-funds-SAMPLE-specimen-2026-06-30.txt");
   });
 });
 

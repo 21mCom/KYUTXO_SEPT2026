@@ -170,22 +170,43 @@ export function sourceOfFundsUnresolvedWarning(
  * prominent warning is prepended above the body (and also noted in the summary)
  * so a reader can never mistake a partial export for a complete one. Fully
  * offline — no external resources.
+ *
+ * When `sample` is true the export is stamped SAMPLE / SPECIMEN: the title gains
+ * a specimen suffix, a banner is inserted at the top of every "page" (the body
+ * has no real pages, so the banner is repeated at the head of each section) and
+ * a closing specimen line is appended, so a reader can never mistake a layout
+ * preview built from fictitious data for a real declaration.
  */
 export function buildSourceOfFundsText(
   data: SourceOfFundsData,
   currency: string,
   generatedAt: string = new Date().toISOString(),
+  sample: boolean = false,
 ): string {
   const warning = sourceOfFundsCapWarning(data.cap);
   const unresolvedWarning = sourceOfFundsUnresolvedWarning(
     data.unresolvedAmountCount,
   );
 
+  const specimenBanner =
+    "*** SAMPLE / SPECIMEN — NOT A VALID DECLARATION ***";
+
   const lines: string[] = [
-    "SOURCE OF FUNDS DECLARATION",
+    sample
+      ? "SOURCE OF FUNDS DECLARATION — SAMPLE / SPECIMEN"
+      : "SOURCE OF FUNDS DECLARATION",
     "=".repeat(50),
     "",
   ];
+
+  if (sample) {
+    lines.push(
+      specimenBanner,
+      "This document is a layout preview only. All data below is fictitious " +
+        "and was not sourced from the blockchain.",
+      "",
+    );
+  }
 
   if (warning) {
     lines.push(warning, "");
@@ -201,6 +222,7 @@ export function buildSourceOfFundsText(
     data.owner ? `Owner: ${data.owner}` : "",
     data.walletName ? `Wallet: ${data.walletName}` : "",
     "",
+    ...(sample ? [specimenBanner, ""] : []),
     "SUMMARY",
     "-".repeat(30),
     `Current Balance: ${formatBTC(data.currentBalanceSats)} BTC`,
@@ -231,7 +253,9 @@ export function buildSourceOfFundsText(
     );
   }
 
-  lines.push("", "FUNDING SOURCES", "-".repeat(30), "");
+  lines.push("");
+  if (sample) lines.push(specimenBanner, "");
+  lines.push("FUNDING SOURCES", "-".repeat(30), "");
 
   for (const source of data.fundingSources) {
     lines.push(`Date: ${source.date}`);
@@ -246,7 +270,14 @@ export function buildSourceOfFundsText(
   }
 
   lines.push("");
-  lines.push(`Generated: ${generatedAt}`);
+  lines.push(`Generated${sample ? " (SPECIMEN)" : ""}: ${generatedAt}`);
+  if (sample) {
+    lines.push(
+      "",
+      "END OF SAMPLE / SPECIMEN — All data above is fictitious. This is a " +
+        "layout preview only and is not a valid Source of Funds declaration.",
+    );
+  }
 
   return lines.filter((l) => l !== "").join("\n");
 }
@@ -257,4 +288,66 @@ export function sourceOfFundsFilename(
   date: Date = new Date(),
 ): string {
   return `source-of-funds-${address.substring(0, 10)}-${date.toISOString().split("T")[0]}.txt`;
+}
+
+/** Build the dated download filename for a SAMPLE source-of-funds export. */
+export function sourceOfFundsSampleFilename(date: Date = new Date()): string {
+  return `source-of-funds-SAMPLE-specimen-${date.toISOString().split("T")[0]}.txt`;
+}
+
+/**
+ * Fictitious Source of Funds data used to render the SAMPLE / SPECIMEN preview.
+ *
+ * It deliberately exercises every layout branch the real report can show — an
+ * external funding event with a cost basis, an internal (non-taxable) transfer,
+ * a populated owner/wallet, and a realized cost basis + unrealized gain — so a
+ * user previewing the layout sees the full shape of a populated report before
+ * entering real data. No warnings or caps are set so the clean, complete layout
+ * is shown. All values are invented and never touch the blockchain.
+ */
+export function buildSampleSourceOfFundsData(): SourceOfFundsData {
+  const fundingSources: FundingSource[] = [
+    {
+      txid:
+        "5a1f0e2b9c8d7a6b5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b9c8d7e6f5a4b3c2d",
+      date: "2023-02-14",
+      blockHeight: 778_500,
+      amountSats: 150_000_000,
+      fromAddress: "bc1qsamplexchangeaddr00000000000000000specimen",
+      fromLabel: "Sample Exchange Withdrawal",
+      fromOwner: "Acme Exchange (sample)",
+      isInternalTransfer: false,
+      priceAtTime: 24_500,
+      costBasisUSD: 36_750,
+    },
+    {
+      txid:
+        "9f8e7d6c5b4a39281706f5e4d3c2b1a09f8e7d6c5b4a39281706f5e4d3c2b1a0",
+      date: "2024-08-09",
+      blockHeight: 856_200,
+      amountSats: 50_000_000,
+      fromAddress: "bc1qsampleownwalletaddr0000000000000specimen",
+      fromLabel: "Sample Cold Storage",
+      fromOwner: "Jane Q. Sample",
+      isInternalTransfer: true,
+    },
+  ];
+
+  return {
+    address: "bc1qsampletargetaddr000000000000000000specimen",
+    label: "Sample Long-Term Savings",
+    owner: "Jane Q. Sample",
+    walletName: "Sample Hardware Wallet",
+    currentBalanceSats: 200_000_000,
+    totalReceivedSats: 200_000_000,
+    fundingSources,
+    currentPriceUSD: 65_000,
+    currentValueUSD: 130_000,
+    totalCostBasisUSD: 36_750,
+    unrealizedGainUSD: 93_250,
+    internalTransferCount: 1,
+    externalFundingCount: 1,
+    cap: { capped: false, shownTxCount: 2, totalTxCount: 2 },
+    unresolvedAmountCount: 0,
+  };
 }
