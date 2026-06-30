@@ -329,3 +329,67 @@ describe("ProofOfFundsDeclaration — balances table & QR appendix keep long con
     ).toEqual([]);
   });
 });
+
+// Regression: generatePdf is a useCallback whose dep list must include includeQr
+// and qrExplorerId. If those deps are dropped, flipping the "Include verification
+// QR codes" switch as the LAST interaction before clicking Generate (i.e. without
+// changing any other declarant field afterward) leaves the memoized callback
+// closing over the stale includeQr=false, so the exported PDF silently omits the
+// QR appendix. This test fills every declarant field FIRST, then toggles QR LAST,
+// and asserts the appendix is still present.
+describe("ProofOfFundsDeclaration — QR toggle as last action still emits the appendix", () => {
+  beforeEach(() => {
+    pdfState.drawn.length = 0;
+    Object.assign(navigator, {
+      clipboard: { writeText: vi.fn(async () => {}) },
+    });
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("includes the QR appendix when the QR switch is the last interaction before Generate", async () => {
+    const drawn = pdfState.drawn;
+
+    const { default: ProofOfFundsDeclaration } = await import(
+      "@/pages/ProofOfFundsDeclaration"
+    );
+
+    renderWithProviders(<ProofOfFundsDeclaration />);
+
+    fireEvent.change(screen.getByTestId("textarea-address-input"), {
+      target: { value: ADDR },
+    });
+    fireEvent.click(screen.getByTestId("button-check-balances"));
+    await waitFor(() => {
+      expect(screen.getByTestId("text-total-balance")).toBeTruthy();
+    });
+
+    // Fill the declarant fields FIRST (these are real generatePdf deps).
+    fireEvent.change(screen.getByTestId("input-declarant-name"), {
+      target: { value: "Jane Declarant" },
+    });
+    fireEvent.change(screen.getByTestId("input-purpose"), {
+      target: { value: "Proof of funds for a property purchase" },
+    });
+
+    await waitFor(() => {
+      expect(
+        (screen.getByTestId("button-generate-pdf") as HTMLButtonElement).disabled,
+      ).toBe(false);
+    });
+
+    // Toggle the QR switch as the VERY LAST interaction — nothing else changes
+    // afterward. With the stale-closure bug this had no effect on the export.
+    fireEvent.click(screen.getByTestId("switch-include-qr"));
+
+    fireEvent.click(screen.getByTestId("button-generate-pdf"));
+
+    await waitFor(() => {
+      expect(
+        drawn.some((d) => d.line === "BALANCE VERIFICATION QR CODES"),
+      ).toBe(true);
+    });
+  });
+});

@@ -1533,6 +1533,8 @@ export default function ProofOfFundsDeclaration() {
     toast,
     includeProvenance,
     provenanceFiatCurrency,
+    includeQr,
+    qrExplorerId,
   ]);
 
   const validCount = validRows.length;
