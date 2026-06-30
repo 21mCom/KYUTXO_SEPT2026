@@ -110,7 +110,24 @@ function findProvenanceBody(): any[] | undefined {
   return call?.body;
 }
 
-async function renderAndGeneratePdf() {
+// Drives a Radix <Select> via the keyboard (pointer events don't open it under
+// jsdom): focus the trigger, press Enter to open, then click the matching option.
+async function selectOption(triggerTestId: string, optionLabel: RegExp) {
+  const trigger = screen.getByTestId(triggerTestId);
+  trigger.focus();
+  fireEvent.keyDown(trigger, { key: "Enter" });
+  const option = await screen.findByRole("option", { name: optionLabel });
+  fireEvent.click(option);
+}
+
+async function renderAndGeneratePdf(opts?: {
+  // Declarant-supplied exchange rate (BTC per 1 fiat unit) typed into the Fiat
+  // Valuation card. When set, the PDF prints "Current Value" / gain-loss lines.
+  fiatRate?: string;
+  // When set, switches the provenance appendix currency so it differs from the
+  // declaration's (USD) fiat currency, exercising the gain/loss currency guard.
+  provenanceCurrency?: RegExp;
+}) {
   const { default: ProofOfFundsDeclaration } = await import(
     "@/pages/ProofOfFundsDeclaration"
   );
@@ -136,8 +153,18 @@ async function renderAndGeneratePdf() {
     expect(screen.getByTestId("textarea-signature-0")).toBeTruthy();
   });
 
+  if (opts?.fiatRate !== undefined) {
+    fireEvent.change(screen.getByTestId("input-fiat-rate"), {
+      target: { value: opts.fiatRate },
+    });
+  }
+
   // Turn on the Acquisition & Provenance appendix.
   fireEvent.click(screen.getByTestId("switch-include-provenance"));
+
+  if (opts?.provenanceCurrency) {
+    await selectOption("select-provenance-currency", opts.provenanceCurrency);
+  }
 
   const pdfButton = screen.getByTestId("button-generate-pdf") as HTMLButtonElement;
   await waitFor(() => {
@@ -159,6 +186,11 @@ describe("ProofOfFundsDeclaration — provenance appendix cost basis & totals", 
     Object.assign(navigator, {
       clipboard: { writeText: vi.fn(async () => {}) },
     });
+    // jsdom lacks these; Radix <Select> calls them when opening its listbox.
+    Element.prototype.scrollIntoView = vi.fn();
+    (Element.prototype as any).hasPointerCapture = vi.fn();
+    (Element.prototype as any).releasePointerCapture = vi.fn();
+    (Element.prototype as any).setPointerCapture = vi.fn();
   });
 
   afterEach(() => {
@@ -252,5 +284,119 @@ describe("ProofOfFundsDeclaration — provenance appendix cost basis & totals", 
 
     // With no cost basis at all, the summary must NOT print a Total Cost Basis.
     expect(textCalls.some((t) => t.startsWith("Total Cost Basis:"))).toBe(false);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Unrealized Gain/Loss line: fiatTotal - totalCostBasis, with a percentage of
+  // (gainLoss / totalCostBasis) * 100, only when the declaration fiat currency
+  // matches the provenance fiat currency and totalCostBasis > 0.
+  //
+  // Balance is 0.005 BTC (500,000 sats from the address-stats mock), so with a
+  // declarant-supplied rate of 60,000 USD/BTC the current value is 300.00 USD.
+  // ---------------------------------------------------------------------------
+
+  it("emits a positive Unrealized Gain/Loss for a gain", async () => {
+    mockAddressRecords = [
+      {
+        id: 1,
+        type: "address",
+        inputString: ADDR,
+        label: "",
+        date: "2021-03-15",
+        costBasisUsd: 100, // total cost basis = 100.00
+        tags: [],
+        categories: [],
+      },
+    ];
+
+    // 0.005 BTC * 60,000 = 300.00 current value; gain = 300 - 100 = +200.00 (+200.0%).
+    await renderAndGeneratePdf({ fiatRate: "60000" });
+
+    expect(
+      textCalls.some((t) => t === "Total Cost Basis: USD 100.00"),
+    ).toBe(true);
+    expect(
+      textCalls.some(
+        (t) => t === "Unrealized Gain/Loss: +USD 200.00 (+200.0%)",
+      ),
+    ).toBe(true);
+  });
+
+  it("emits a negative Unrealized Gain/Loss for a loss", async () => {
+    mockAddressRecords = [
+      {
+        id: 1,
+        type: "address",
+        inputString: ADDR,
+        label: "",
+        date: "2021-03-15",
+        costBasisUsd: 400, // total cost basis = 400.00
+        tags: [],
+        categories: [],
+      },
+    ];
+
+    // 0.005 BTC * 60,000 = 300.00 current value; loss = 300 - 400 = -100.00 (-25.0%).
+    await renderAndGeneratePdf({ fiatRate: "60000" });
+
+    expect(
+      textCalls.some((t) => t === "Total Cost Basis: USD 400.00"),
+    ).toBe(true);
+    expect(
+      textCalls.some(
+        (t) => t === "Unrealized Gain/Loss: USD -100.00 (-25.0%)",
+      ),
+    ).toBe(true);
+  });
+
+  it("omits Unrealized Gain/Loss when the fiat currency differs from the provenance currency", async () => {
+    mockAddressRecords = [
+      {
+        id: 1,
+        type: "address",
+        inputString: ADDR,
+        label: "",
+        date: "2021-03-15",
+        costBasisUsd: 100,
+        tags: [],
+        categories: [],
+      },
+    ];
+
+    // Declaration currency stays USD; provenance currency is switched to EUR, so
+    // the gain/loss guard (fiatCurrency === provenanceFiatCurrency) fails.
+    await renderAndGeneratePdf({ fiatRate: "60000", provenanceCurrency: /EUR/ });
+
+    // The Current Value line still prints (fiat rate is valid)...
+    expect(textCalls.some((t) => t.startsWith("Current Value:"))).toBe(true);
+    // ...and a cost basis exists, but the gain/loss line is suppressed.
+    expect(
+      textCalls.some((t) => t.startsWith("Unrealized Gain/Loss:")),
+    ).toBe(false);
+  });
+
+  it("omits Unrealized Gain/Loss when there is no cost basis (totalCostBasis is 0)", async () => {
+    // No costBasisUsd and no price data -> totalCostBasis stays 0.
+    mockAddressRecords = [
+      {
+        id: 1,
+        type: "address",
+        inputString: ADDR,
+        label: "",
+        date: "2019-07-01",
+        tags: [],
+        categories: [],
+      },
+    ];
+
+    // A valid fiat rate still prints the Current Value line, isolating the
+    // omission to the totalCostBasis > 0 guard.
+    await renderAndGeneratePdf({ fiatRate: "60000" });
+
+    expect(textCalls.some((t) => t.startsWith("Current Value:"))).toBe(true);
+    expect(textCalls.some((t) => t.startsWith("Total Cost Basis:"))).toBe(false);
+    expect(
+      textCalls.some((t) => t.startsWith("Unrealized Gain/Loss:")),
+    ).toBe(false);
   });
 });
