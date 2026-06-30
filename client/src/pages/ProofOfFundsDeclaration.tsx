@@ -1077,12 +1077,37 @@ export default function ProofOfFundsDeclaration() {
     }
   }, [nodeSettings]);
 
+  // Validate the manually-entered freshness anchor inputs
+  const freshnessManualHeightError = useMemo(() => {
+    const raw = freshnessManualHeight.trim();
+    if (!raw) return null;
+    if (!/^\d+$/.test(raw)) return "Height must be a whole number.";
+    if (parseInt(raw, 10) <= 0) return "Height must be greater than zero.";
+    return null;
+  }, [freshnessManualHeight]);
+
+  const freshnessManualHashError = useMemo(() => {
+    const raw = freshnessManualHash.trim();
+    if (!raw) return null;
+    if (!/^[0-9a-f]{64}$/.test(raw)) {
+      return "Block hash must be exactly 64 lowercase hex characters.";
+    }
+    return null;
+  }, [freshnessManualHash]);
+
+  const canApplyManualFreshnessAnchor =
+    /^\d+$/.test(freshnessManualHeight.trim()) &&
+    parseInt(freshnessManualHeight.trim(), 10) > 0 &&
+    /^[0-9a-f]{64}$/.test(freshnessManualHash.trim());
+
   // Apply manually-entered height + hash as the freshness anchor
   const applyManualFreshnessAnchor = useCallback(() => {
-    const h = parseInt(freshnessManualHeight.trim(), 10);
+    const raw = freshnessManualHeight.trim();
     const hash = freshnessManualHash.trim();
-    if (!Number.isFinite(h) || h <= 0) return;
-    if (!hash) return;
+    if (!/^\d+$/.test(raw)) return;
+    const h = parseInt(raw, 10);
+    if (h <= 0) return;
+    if (!/^[0-9a-f]{64}$/.test(hash)) return;
     const fetchedAt = new Date().toISOString().replace("T", " ").slice(0, 16) + " UTC";
     setFreshnessAnchor({ height: h, hash, fetchedAt });
     setFreshnessAnchorError(null);
@@ -3332,7 +3357,7 @@ export default function ProofOfFundsDeclaration() {
                                   Paste the block height and hash manually — you can look them up on any
                                   Bitcoin block explorer.
                                 </p>
-                                <div className="flex gap-2 flex-wrap items-end">
+                                <div className="flex gap-2 flex-wrap items-start">
                                   <div className="space-y-1">
                                     <Label className="text-xs">Block height</Label>
                                     <Input
@@ -3340,8 +3365,17 @@ export default function ProofOfFundsDeclaration() {
                                       value={freshnessManualHeight}
                                       onChange={(e) => setFreshnessManualHeight(e.target.value)}
                                       className="w-32 text-xs font-mono"
+                                      aria-invalid={!!freshnessManualHeightError}
                                       data-testid="input-freshness-manual-height"
                                     />
+                                    {freshnessManualHeightError && (
+                                      <p
+                                        className="text-xs text-destructive"
+                                        data-testid="error-freshness-manual-height"
+                                      >
+                                        {freshnessManualHeightError}
+                                      </p>
+                                    )}
                                   </div>
                                   <div className="space-y-1 flex-1">
                                     <Label className="text-xs">Block hash</Label>
@@ -3350,17 +3384,29 @@ export default function ProofOfFundsDeclaration() {
                                       value={freshnessManualHash}
                                       onChange={(e) => setFreshnessManualHash(e.target.value)}
                                       className="text-xs font-mono"
+                                      aria-invalid={!!freshnessManualHashError}
                                       data-testid="input-freshness-manual-hash"
                                     />
+                                    {freshnessManualHashError && (
+                                      <p
+                                        className="text-xs text-destructive"
+                                        data-testid="error-freshness-manual-hash"
+                                      >
+                                        {freshnessManualHashError}
+                                      </p>
+                                    )}
                                   </div>
-                                  <Button
-                                    size="sm"
-                                    onClick={applyManualFreshnessAnchor}
-                                    disabled={!freshnessManualHeight.trim() || !freshnessManualHash.trim()}
-                                    data-testid="button-apply-manual-freshness"
-                                  >
-                                    Apply
-                                  </Button>
+                                  <div className="space-y-1">
+                                    <Label className="text-xs invisible">Apply</Label>
+                                    <Button
+                                      size="sm"
+                                      onClick={applyManualFreshnessAnchor}
+                                      disabled={!canApplyManualFreshnessAnchor}
+                                      data-testid="button-apply-manual-freshness"
+                                    >
+                                      Apply
+                                    </Button>
+                                  </div>
                                 </div>
                                 <Button
                                   size="sm"
