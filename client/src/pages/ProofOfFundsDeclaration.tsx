@@ -767,18 +767,19 @@ export default function ProofOfFundsDeclaration() {
           minimumFractionDigits: 2,
           maximumFractionDigits: 2,
         })} (at ${sanitizePdfText(fiatCurrency)} ${sanitizePdfText(fiatRateNum.toLocaleString("en-US", { maximumFractionDigits: 2 }))} per BTC)`;
-        doc.text(sanitizePdfText(fiatLine), margin, y);
-        y += 4;
+        const fiatLines = doc.splitTextToSize(sanitizePdfText(fiatLine), contentW) as string[];
+        doc.text(fiatLines, margin, y);
+        y += fiatLines.length * 4;
         doc.setTextColor(120, 80, 0);
-        doc.text(
+        const disclaimerLines = doc.splitTextToSize(
           sanitizePdfText(
             "DISCLAIMER: Exchange rate supplied by declarant. This is not a market quote or financial advice."
           ),
-          margin,
-          y
-        );
+          contentW
+        ) as string[];
+        doc.text(disclaimerLines, margin, y);
         doc.setTextColor(0, 0, 0);
-        y += 5;
+        y += disclaimerLines.length * 4 + 1;
       }
 
       addSpacer(4);
@@ -1015,21 +1016,25 @@ export default function ProofOfFundsDeclaration() {
           doc.setFontSize(9);
           doc.setFont("helvetica", "bold");
           doc.setTextColor(0, 0, 0);
-          doc.text(sanitizePdfText(`Address: ${row.raw}`), margin, y);
-          y += 5;
+          const addrHeadingLines = doc.splitTextToSize(
+            sanitizePdfText(`Address: ${row.raw}`),
+            contentW
+          ) as string[];
+          doc.text(addrHeadingLines, margin, y);
+          y += addrHeadingLines.length * 5;
 
           doc.setFontSize(8);
           doc.setFont("helvetica", "normal");
           doc.setTextColor(80, 80, 80);
-          doc.text(
+          const sigFormatLines = doc.splitTextToSize(
             sanitizePdfText(
               `Signature Format: ${signatureFormatLabel(cs.verifiedFormat ?? "legacy")}`
             ),
-            margin,
-            y
-          );
+            contentW
+          ) as string[];
+          doc.text(sigFormatLines, margin, y);
           doc.setTextColor(0, 0, 0);
-          y += 5;
+          y += sigFormatLines.length * 5;
 
           const challengeMsg = buildChallengeMessage({
             address: row.raw,
