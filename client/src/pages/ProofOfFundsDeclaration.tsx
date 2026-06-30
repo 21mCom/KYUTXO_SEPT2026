@@ -222,7 +222,7 @@ interface AmlScreeningResult {
   hasGraphData: boolean;
 }
 
-async function runAmlScreening(addresses: string[]): Promise<AmlScreeningResult> {
+export async function runAmlScreening(addresses: string[]): Promise<AmlScreeningResult> {
   const screeningDate = new Date().toISOString().slice(0, 10);
   const entityListSource = getActiveEntitySource();
   const entityListCount = getActiveEntityCount();
