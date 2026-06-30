@@ -68,7 +68,6 @@ import { clearAllRecords, getRecord } from "@/lib/data/record-crud";
 // persists" assertion. Anything NOT listed here is treated as user-editable, so
 // a newly added editable schema column is caught by default.
 //   - identity / auto-managed: id, createdAt, updatedAt, inputStringLower
-//   - structural columns this edit form does not re-persist on save: type, vault
 //   - XPUB / derivation provenance (set at import, not edited here):
 //     chainType, derivationPath, xpub, syncDepth, maxSyncedDepth,
 //     discoveredInTxid, discoveredFromRecordId, firstSeenBlockTime
@@ -80,8 +79,6 @@ const NON_EDITABLE_FIELDS: ReadonlySet<keyof DbRecord> = new Set<keyof DbRecord>
   "createdAt",
   "updatedAt",
   "inputStringLower",
-  "type",
-  "vault",
   "chainType",
   "derivationPath",
   "xpub",
@@ -166,10 +163,11 @@ describe("RecordPreviewContext edit-save field fidelity", () => {
     });
 
     // The fully-populated submit payload the form would emit: every editable
-    // field carries the fixture's value. `type: "other"` skips the Bitcoin-input
-    // validation in handleUpdateRecord (the fixture address is a placeholder);
-    // `type` is non-editable so it is never asserted.
-    const formPayload: { [key: string]: unknown } = { type: "other" };
+    // field carries the fixture's value (including `type` and `vault`, which are
+    // now asserted). The fixture's placeholder address still passes the
+    // Bitcoin-input validation in handleUpdateRecord via the lenient bech32
+    // format check, so `type: "address"` does not abort the save.
+    const formPayload: { [key: string]: unknown } = {};
     for (const field of EDITABLE_FIELDS) {
       formPayload[field] = fullRecord[field];
     }

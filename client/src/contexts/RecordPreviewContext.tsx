@@ -290,6 +290,8 @@ export function RecordPreviewProvider({ children }: { children: ReactNode }) {
       const previousInputString = editingRecord.inputString || "";
 
       await updateRecord(editingRecord.id, {
+        type: data.type,
+        vault: data.vault,
         inputString: data.inputString,
         label: data.label,
         notes: data.notes || "",
