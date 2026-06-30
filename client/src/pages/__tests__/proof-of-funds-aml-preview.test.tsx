@@ -237,9 +237,10 @@ describe("ProofOfFundsDeclaration — on-screen AML preview matches the PDF", ()
     expect(previewHas("Nearest flagged entity:")).toBe(false);
 
     // ── PDF for the same fixture ──
-    // The PDF routes text through sanitizePdfText, which replaces the em-dash
-    // (U+2014) with "?", so match dash-free substrings here. The underlying
-    // state (entity-list source + count) must still be identical to the preview.
+    // The PDF routes text through sanitizePdfText, which remaps the em-dash
+    // (U+2014) to its WinAnsi byte (0x97); match dash-free substrings here to
+    // stay encoding-agnostic. The underlying state (entity-list source + count)
+    // must still be identical to the preview.
     await generatePdf();
     expect(pdfHas("Bundled (KYUTXO default)")).toBe(true);
     expect(pdfHas("9,999 known addresses")).toBe(true);
@@ -287,8 +288,9 @@ describe("ProofOfFundsDeclaration — on-screen AML preview matches the PDF", ()
     expect(previewHas("No direct matches —")).toBe(false);
 
     // ── PDF for the same fixture ──
-    // sanitizePdfText turns the preview's em-dash into "?", so match dash-free
-    // substrings here; the imported-snapshot label/date state must still match.
+    // sanitizePdfText remaps the preview's em-dash to its WinAnsi byte, so match
+    // dash-free substrings here; the imported-snapshot label/date state must
+    // still match.
     await generatePdf();
     expect(pdfHas("User-imported snapshot")).toBe(true);
     expect(pdfHas("42 known addresses")).toBe(true);

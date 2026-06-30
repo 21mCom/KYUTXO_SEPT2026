@@ -6,9 +6,12 @@ import { sanitizePdfText } from "./pdfText";
 // sanitizePdfText is the single guard that keeps jsPDF's Standard-14 Helvetica
 // from falling back to a UTF-16BE byte stream (the garbled-glyph bug). Every
 // PDF export (Fund Trail, Annual Activity Report, Continuity Certificate) routes
-// record-derived text through it. These tests pin the exact boundary: U+0000–
-// U+00FF survive unchanged (jsPDF maps them through the WinAnsi code page),
-// anything at U+0100 or above is replaced with "?".
+// record-derived text through it. These tests pin the contract: U+0000–U+00FF
+// survive unchanged (jsPDF maps them through the WinAnsi code page); the
+// printable punctuation Windows-1252 places in its 0x80–0x9F range (em-dash,
+// curly quotes, ellipsis, …) is remapped to the matching single byte so jsPDF
+// renders the correct glyph; anything else at U+0100 or above is replaced with
+// "?".
 // ---------------------------------------------------------------------------
 
 describe("sanitizePdfText", () => {
@@ -23,14 +26,20 @@ describe("sanitizePdfText", () => {
     expect(sanitizePdfText(input)).toBe(input);
   });
 
-  it("replaces the em-dash because it is above the U+00FF cutoff", () => {
-    // NOTE: this differs from the task's "em-dash stays intact" example. The
-    // em-dash is U+2014 — NOT Latin-1 (Latin-1 ends at U+00FF). The helper is
-    // intentionally conservative and replaces every code point above U+00FF,
-    // including the em-dash, with "?". (jsPDF 3.x happens to map U+2014 to a
-    // WinAnsi single byte, but the helper does not rely on that.) This test
-    // pins the real contract so a future change in either direction is caught.
-    expect(sanitizePdfText("Alice — Bob")).toBe("Alice ? Bob");
+  it("remaps the em-dash to its WinAnsi byte (0x97) so jsPDF draws it", () => {
+    // The em-dash is U+2014 — above the Latin-1 cutoff (U+00FF) but present in
+    // the Windows-1252 0x80–0x9F range at byte 0x97. jsPDF's Standard-14 fonts
+    // use WinAnsiEncoding, so emitting byte 0x97 renders the correct glyph.
+    expect(sanitizePdfText("Alice — Bob")).toBe("Alice \u0097 Bob");
+  });
+
+  it("remaps other common WinAnsi punctuation (curly quotes, ellipsis, bullet)", () => {
+    // '…'” • — all live in the Windows-1252 high range.
+    expect(sanitizePdfText("\u2018a\u2019")).toBe("\u0091a\u0092"); // ' a '
+    expect(sanitizePdfText("\u201Cb\u201D")).toBe("\u0093b\u0094"); // " b "
+    expect(sanitizePdfText("wait\u2026")).toBe("wait\u0085"); // ellipsis
+    expect(sanitizePdfText("\u2022 item")).toBe("\u0095 item"); // bullet
+    expect(sanitizePdfText("a\u2013b")).toBe("a\u0096b"); // en dash
   });
 
   it("replaces the hop-indent marker ↳ (U+21B3) with ?", () => {
