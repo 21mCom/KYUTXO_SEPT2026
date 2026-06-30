@@ -1,34 +1,36 @@
 // @vitest-environment jsdom
 //
-// Coverage for the format-specific labelling that appears once an address is
-// verified with a particular signature scheme (ControlState.verifiedFormat).
+// Coverage for the Taproot (BIP-322) format-specific labelling in the Proof of
+// Funds Declaration PDF appendix.
 //
-// When a declaration mixes legacy-verified and BIP-322-verified addresses, the
-// generated PDF must label each one correctly and the disclaimer must use the
-// combined-format phrasing. A regression here would silently mislabel evidence
-// in the exported document.
+// The appendix renders a different label depending on the verified signature
+// scheme: legacy addresses show "Wallet Signature (base64):" while a Taproot
+// (bc1p…) address verified via BIP-322 must show "BIP-322 Witness (base64):"
+// plus the BIP-322 format label. The existing verify-instructions test only
+// exercises a legacy address, so a regression that mislabelled BIP-322 evidence
+// (or dropped the format-specific branch and fell back to the legacy label)
+// would go unnoticed and could confuse the institution verifying the proof.
 //
-// This test verifies one legacy (P2PKH) address and one Taproot (BIP-322)
-// address, then generates the PDF (jsPDF is mocked so every `doc.text(...)`
-// string is captured) and asserts:
-//   (1) the per-address "Signature Format:" line uses the correct human label
-//       for each format (Bitcoin Signed Message vs BIP-322 (Taproot / Schnorr));
-//   (2) the appendix signature-box heading switches between
-//       "Wallet Signature (base64):" and "BIP-322 Witness (base64):";
-//   (3) the DISCLAIMERS section uses the combined
-//       "Bitcoin Signed Message and BIP-322 signatures" phrasing.
+// This test verifies a SINGLE Taproot address with a mocked BIP-322 result and
+// generates the PDF (jsPDF is mocked so every `doc.text(...)` string is
+// captured), then asserts:
+//   (1) the per-address "Signature Format:" line uses the BIP-322 label and the
+//       legacy label is NOT present anywhere;
+//   (2) the appendix signature-box heading is "BIP-322 Witness (base64):" and
+//       the legacy "Wallet Signature (base64):" heading is NOT present;
+//   (3) the DISCLAIMERS statement line uses the single-format "via BIP-322
+//       signatures." phrasing (not the legacy or combined phrasing).
 //
-// verifyBitcoinSignature is mocked to return verified with a format derived
-// from the address prefix; signatureFormatLabel and buildChallengeMessage stay
-// real so the labels and disclaimer text are exercised exactly as shipped.
+// verifyBitcoinSignature is mocked to return verified with format "bip322";
+// signatureFormatLabel / buildChallengeMessage stay real so the labels and
+// disclaimer text are exercised exactly as shipped.
 
 import "fake-indexeddb/auto";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
 import { renderWithProviders } from "@/test/testProviders";
 
-// A legacy P2PKH address and a mainnet Taproot (P2TR) address.
-const LEGACY_ADDR = "1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2";
+// A mainnet Taproot (P2TR) address.
 const TAPROOT_ADDR =
   "bc1ppv609nr0vr25u07u95waq5lucwfm6tde4nydujnu8npg4q75mr5sxq8lt3";
 
@@ -90,21 +92,21 @@ vi.mock("@/lib/data/record-crud", () => ({
 
 // Keep signatureFormatLabel / buildChallengeMessage / generateDeclarationNonce
 // real; only stub the actual cryptographic verification so the test does not
-// need genuine signatures over the dynamic challenge message. The format is
-// derived from the address type, exactly as the real verifier would report it.
+// need a genuine BIP-322 witness over the dynamic challenge message. The format
+// is reported as "bip322", exactly as the real verifier would for a Taproot
+// address.
 vi.mock("@/lib/signatureVerify", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/signatureVerify")>();
   return {
     ...actual,
-    verifyBitcoinSignature: vi.fn(async (address: string) => {
-      const isTaproot =
-        address.startsWith("bc1p") || address.startsWith("tb1p");
-      return { verified: true, format: isTaproot ? "bip322" : "legacy" };
-    }),
+    verifyBitcoinSignature: vi.fn(async () => ({
+      verified: true,
+      format: "bip322",
+    })),
   };
 });
 
-describe("ProofOfFundsDeclaration — mixed-format proof-of-control PDF", () => {
+describe("ProofOfFundsDeclaration — Taproot (BIP-322) proof-of-control PDF", () => {
   beforeEach(() => {
     pdfTextLines.length = 0;
     Object.assign(navigator, {
@@ -116,16 +118,16 @@ describe("ProofOfFundsDeclaration — mixed-format proof-of-control PDF", () => 
     cleanup();
   });
 
-  it("labels each verified address by its format and uses combined disclaimer phrasing", async () => {
+  it("labels a Taproot address with the BIP-322 format, not the legacy label", async () => {
     const { default: ProofOfFundsDeclaration } = await import(
       "@/pages/ProofOfFundsDeclaration"
     );
 
     renderWithProviders(<ProofOfFundsDeclaration />);
 
-    // Seed both addresses and resolve their balances so two "done" rows exist.
+    // Seed the Taproot address and resolve its balance.
     fireEvent.change(screen.getByTestId("textarea-address-input"), {
-      target: { value: `${LEGACY_ADDR}\n${TAPROOT_ADDR}` },
+      target: { value: TAPROOT_ADDR },
     });
     fireEvent.click(screen.getByTestId("button-check-balances"));
 
@@ -148,24 +150,17 @@ describe("ProofOfFundsDeclaration — mixed-format proof-of-control PDF", () => 
     // Step 5 verify UI only renders once declarant info is complete.
     await waitFor(() => {
       expect(screen.getByTestId("textarea-signature-0")).toBeTruthy();
-      expect(screen.getByTestId("textarea-signature-1")).toBeTruthy();
     });
 
-    // Paste a (mock-accepted) signature for each address and verify it.
-    // doneRows preserve input order: idx 0 = legacy, idx 1 = taproot.
+    // Paste a (mock-accepted) BIP-322 witness and verify it.
     fireEvent.change(screen.getByTestId("textarea-signature-0"), {
-      target: { value: "legacy-signature-base64==" },
-    });
-    fireEvent.click(screen.getByTestId("button-verify-0"));
-    fireEvent.change(screen.getByTestId("textarea-signature-1"), {
       target: { value: "bip322-witness-base64==" },
     });
-    fireEvent.click(screen.getByTestId("button-verify-1"));
+    fireEvent.click(screen.getByTestId("button-verify-0"));
 
-    // Both addresses should report as control-verified.
     await waitFor(() => {
       expect(
-        screen.getByText(/2 of 2 addresses control-verified/i),
+        screen.getByText(/1 of 1 address control-verified/i),
       ).toBeTruthy();
     });
 
@@ -184,38 +179,40 @@ describe("ProofOfFundsDeclaration — mixed-format proof-of-control PDF", () => 
       ).toBe(true);
     });
 
-    // (1) Per-address "Signature Format:" lines — one per scheme, correct label.
-    expect(pdfTextLines).toContain(
-      "Signature Format: Bitcoin Signed Message",
-    );
+    // (1) Per-address "Signature Format:" line uses the BIP-322 label and the
+    //     legacy label must NOT appear anywhere.
     expect(pdfTextLines).toContain(
       "Signature Format: BIP-322 (Simple)",
     );
+    expect(pdfTextLines).not.toContain(
+      "Signature Format: Bitcoin Signed Message",
+    );
 
-    // (2) Appendix signature-box headings switch on format.
-    expect(pdfTextLines).toContain("Wallet Signature (base64):");
+    // (2) Appendix signature-box heading is the BIP-322 witness heading; the
+    //     legacy heading must NOT be present.
     expect(pdfTextLines).toContain("BIP-322 Witness (base64):");
+    expect(pdfTextLines).not.toContain("Wallet Signature (base64):");
 
-    // (3) Disclaimer uses the combined-format phrasing for the mixed set.
-    const combinedDisclaimer = pdfTextLines.find(
+    // (3) The DISCLAIMERS statement line uses the single-format BIP-322
+    //     phrasing — not the legacy or combined phrasing.
+    const bip322Disclaimer = pdfTextLines.find(
       (l) =>
         l.includes("proof-of-control is included") &&
-        l.includes("Bitcoin Signed Message and BIP-322 signatures"),
+        /via BIP-322 signatures\./.test(l),
     );
-    expect(combinedDisclaimer).toBeTruthy();
-    // The single-format phrasings must NOT be the one used here.
+    expect(bip322Disclaimer).toBeTruthy();
     expect(
       pdfTextLines.some(
         (l) =>
           l.includes("proof-of-control is included") &&
-          /via BIP-322 signatures\./.test(l),
+          /via Bitcoin Signed Message signatures\./.test(l),
       ),
     ).toBe(false);
     expect(
       pdfTextLines.some(
         (l) =>
           l.includes("proof-of-control is included") &&
-          /via Bitcoin Signed Message signatures\./.test(l),
+          l.includes("Bitcoin Signed Message and BIP-322 signatures"),
       ),
     ).toBe(false);
   });
