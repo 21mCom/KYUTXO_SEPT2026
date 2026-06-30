@@ -382,6 +382,63 @@ function formatHopLabel(hops: number): string {
 /** PDF document format version embedded in every generated document. */
 const KYUTXO_APP_VERSION = "1.1.28";
 
+// ────────────────────────────────────────────────────────────────────────────
+// Persisted declaration preferences (attestation + glossary toggles)
+// ────────────────────────────────────────────────────────────────────────────
+const DECLARATION_PREFS_KEY = "kyutxo.proofOfFunds.declarationPrefs";
+
+interface DeclarationPrefs {
+  includeAttestation: boolean;
+  attestationPlaceOfSigning: string;
+  attestationWitnessLine: string;
+  includeGlossary: boolean;
+}
+
+const DEFAULT_DECLARATION_PREFS: DeclarationPrefs = {
+  includeAttestation: false,
+  attestationPlaceOfSigning: "",
+  attestationWitnessLine: "",
+  includeGlossary: false,
+};
+
+function loadDeclarationPrefs(): DeclarationPrefs {
+  try {
+    const stored = localStorage.getItem(DECLARATION_PREFS_KEY);
+    if (stored) {
+      const parsed = JSON.parse(stored) as Partial<DeclarationPrefs>;
+      return {
+        includeAttestation:
+          typeof parsed.includeAttestation === "boolean"
+            ? parsed.includeAttestation
+            : DEFAULT_DECLARATION_PREFS.includeAttestation,
+        attestationPlaceOfSigning:
+          typeof parsed.attestationPlaceOfSigning === "string"
+            ? parsed.attestationPlaceOfSigning
+            : DEFAULT_DECLARATION_PREFS.attestationPlaceOfSigning,
+        attestationWitnessLine:
+          typeof parsed.attestationWitnessLine === "string"
+            ? parsed.attestationWitnessLine
+            : DEFAULT_DECLARATION_PREFS.attestationWitnessLine,
+        includeGlossary:
+          typeof parsed.includeGlossary === "boolean"
+            ? parsed.includeGlossary
+            : DEFAULT_DECLARATION_PREFS.includeGlossary,
+      };
+    }
+  } catch {
+    // Ignore parse/storage errors — fall back to defaults
+  }
+  return DEFAULT_DECLARATION_PREFS;
+}
+
+function saveDeclarationPrefs(prefs: DeclarationPrefs) {
+  try {
+    localStorage.setItem(DECLARATION_PREFS_KEY, JSON.stringify(prefs));
+  } catch {
+    // Ignore storage errors
+  }
+}
+
 export default function ProofOfFundsDeclaration() {
   const { nodeSettings } = useNodeSettings();
   const { owners } = useOwners();
@@ -469,13 +526,38 @@ export default function ProofOfFundsDeclaration() {
   const [includeProvenance, setIncludeProvenance] = useState(false);
   const [provenanceFiatCurrency, setProvenanceFiatCurrency] = useState("USD");
 
-  // Attestation block (optional, off by default)
-  const [includeAttestation, setIncludeAttestation] = useState(false);
-  const [attestationPlaceOfSigning, setAttestationPlaceOfSigning] = useState("");
-  const [attestationWitnessLine, setAttestationWitnessLine] = useState("");
+  // Attestation block (optional, off by default). Initial values are restored
+  // from the persisted declaration preferences (see loadDeclarationPrefs).
+  const [includeAttestation, setIncludeAttestation] = useState(
+    () => loadDeclarationPrefs().includeAttestation,
+  );
+  const [attestationPlaceOfSigning, setAttestationPlaceOfSigning] = useState(
+    () => loadDeclarationPrefs().attestationPlaceOfSigning,
+  );
+  const [attestationWitnessLine, setAttestationWitnessLine] = useState(
+    () => loadDeclarationPrefs().attestationWitnessLine,
+  );
 
-  // Glossary (optional, off by default)
-  const [includeGlossary, setIncludeGlossary] = useState(false);
+  // Glossary (optional, off by default). Restored from persisted preferences.
+  const [includeGlossary, setIncludeGlossary] = useState(
+    () => loadDeclarationPrefs().includeGlossary,
+  );
+
+  // Persist declaration preferences whenever any of them changes so they are
+  // restored on the next page load.
+  useEffect(() => {
+    saveDeclarationPrefs({
+      includeAttestation,
+      attestationPlaceOfSigning,
+      attestationWitnessLine,
+      includeGlossary,
+    });
+  }, [
+    includeAttestation,
+    attestationPlaceOfSigning,
+    attestationWitnessLine,
+    includeGlossary,
+  ]);
 
   // AML / Risk Screening section (optional, off by default)
   const [includeAml, setIncludeAml] = useState(false);
