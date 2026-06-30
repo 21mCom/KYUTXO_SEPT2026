@@ -14,6 +14,7 @@ import {
   Download,
   Shield,
   ShieldCheck,
+  ShieldAlert,
   Copy,
   ClipboardCheck,
   QrCode as QrCodeIcon,
@@ -60,6 +61,12 @@ import {
   signatureFormatLabel,
   type SignatureFormat,
 } from "@/lib/signatureVerify";
+import {
+  lookupEntities,
+  getActiveEntityCount,
+  getActiveEntitySource,
+  ENTITY_CATEGORY_LABELS,
+} from "@/lib/privacy-entity-list";
 
 type BalanceSource = "live" | "offline";
 type RowStatus = "pending" | "loading" | "done" | "error";
@@ -190,6 +197,188 @@ function getExplorer(id: ExplorerId): ExplorerDef {
   return QR_EXPLORERS.find((e) => e.id === id) ?? QR_EXPLORERS[0];
 }
 
+// ─── AML Screening ──────────────────────────────────────────────────────────
+
+interface AmlDirectMatch {
+  address: string;
+  entityName: string;
+  categoryLabel: string;
+  sourceNote?: string;
+}
+
+interface AmlScreeningResult {
+  screeningDate: string;
+  entityListSource: "bundled" | "imported";
+  entityListCount: number;
+  /** Unix timestamp (ms) when the snapshot was imported, if applicable. */
+  entityListImportedAt: number | null;
+  /** User-supplied label for the imported snapshot file, if applicable. */
+  entityListSourceLabel: string | null;
+  screenedCount: number;
+  directMatches: AmlDirectMatch[];
+  nearestHopDistance: number | null;
+  nearestHopEntityName: string | null;
+  nearestHopCategoryLabel: string | null;
+  hasGraphData: boolean;
+}
+
+async function runAmlScreening(addresses: string[]): Promise<AmlScreeningResult> {
+  const screeningDate = new Date().toISOString().slice(0, 10);
+  const entityListSource = getActiveEntitySource();
+  const entityListCount = getActiveEntityCount();
+
+  // Fetch optional snapshot metadata (importedAt + sourceLabel) from settings.
+  const { getSettings } = await import("@/lib/data/settings-crud");
+  const settings = await getSettings("default");
+  const snap = (settings as any)?.entityListSnapshot as
+    | { importedAt?: number; sourceLabel?: string }
+    | undefined;
+  const entityListImportedAt = snap?.importedAt ?? null;
+  const entityListSourceLabel = snap?.sourceLabel ?? null;
+
+  const directEntityMap = lookupEntities(addresses);
+  const directMatches: AmlDirectMatch[] = [];
+  for (const [addr, entry] of directEntityMap) {
+    directMatches.push({
+      address: addr,
+      entityName: entry.name,
+      categoryLabel: ENTITY_CATEGORY_LABELS[entry.category],
+      sourceNote: entry.sourceNote,
+    });
+  }
+
+  const { getParticipantsByAddresses } = await import("@/lib/data/record-queries");
+  const { getParticipantsByTxids } = await import("@/lib/data/transaction-crud");
+
+  const ownParticipants = await getParticipantsByAddresses(addresses);
+
+  if (ownParticipants.length === 0) {
+    return {
+      screeningDate,
+      entityListSource,
+      entityListCount,
+      entityListImportedAt,
+      entityListSourceLabel,
+      screenedCount: addresses.length,
+      directMatches,
+      nearestHopDistance: null,
+      nearestHopEntityName: null,
+      nearestHopCategoryLabel: null,
+      hasGraphData: false,
+    };
+  }
+
+  const ourTxids = [...new Set(ownParticipants.map((p) => p.txid))];
+  const MAX_TXIDS = 2000;
+  const txidSlice = ourTxids.slice(0, MAX_TXIDS);
+
+  const BATCH = 500;
+  const allParts: typeof ownParticipants = [];
+  for (let i = 0; i < txidSlice.length; i += BATCH) {
+    const batch = txidSlice.slice(i, i + BATCH);
+    const parts = await getParticipantsByTxids(batch);
+    allParts.push(...parts);
+  }
+
+  const addressToTxids = new Map<string, string[]>();
+  for (const p of allParts) {
+    const list = addressToTxids.get(p.address);
+    if (list) list.push(p.txid);
+    else addressToTxids.set(p.address, [p.txid]);
+  }
+
+  const txidToParticipants = new Map<string, typeof allParts>();
+  for (const p of allParts) {
+    const list = txidToParticipants.get(p.txid);
+    if (list) list.push(p);
+    else txidToParticipants.set(p.txid, [p]);
+  }
+
+  const graphAddresses = Array.from(addressToTxids.keys());
+  const entityInGraph = lookupEntities(graphAddresses);
+
+  if (entityInGraph.size === 0) {
+    return {
+      screeningDate,
+      entityListSource,
+      entityListCount,
+      entityListImportedAt,
+      entityListSourceLabel,
+      screenedCount: addresses.length,
+      directMatches,
+      nearestHopDistance: null,
+      nearestHopEntityName: null,
+      nearestHopCategoryLabel: null,
+      hasGraphData: true,
+    };
+  }
+
+  const ownedSet = new Set(addresses);
+  const MAX_HOPS = 4;
+  const MAX_NODES = 500;
+
+  let globalMinHop = Infinity;
+  let globalMinEntityName: string | null = null;
+  let globalMinCategoryLabel: string | null = null;
+
+  for (const startAddr of addresses) {
+    if (!addressToTxids.has(startAddr)) continue;
+
+    const visited = new Set<string>([startAddr]);
+    const visitedTxids = new Set<string>();
+    let frontier = [startAddr];
+
+    for (let hop = 1; hop <= MAX_HOPS && frontier.length > 0; hop++) {
+      const nextFrontier: string[] = [];
+      for (const addr of frontier) {
+        const txids = addressToTxids.get(addr) ?? [];
+        for (const txid of txids) {
+          if (visitedTxids.has(txid)) continue;
+          visitedTxids.add(txid);
+          const parts = txidToParticipants.get(txid) ?? [];
+          for (const p of parts) {
+            if (!p.address || visited.has(p.address)) continue;
+            visited.add(p.address);
+            const entity = entityInGraph.get(p.address);
+            if (entity) {
+              if (hop < globalMinHop) {
+                globalMinHop = hop;
+                globalMinEntityName = entity.name;
+                globalMinCategoryLabel = ENTITY_CATEGORY_LABELS[entity.category];
+              }
+            } else if (!ownedSet.has(p.address)) {
+              nextFrontier.push(p.address);
+            }
+          }
+        }
+      }
+      frontier = nextFrontier;
+      if (visited.size > MAX_NODES) break;
+    }
+  }
+
+  return {
+    screeningDate,
+    entityListSource,
+    entityListCount,
+    entityListImportedAt,
+    entityListSourceLabel,
+    screenedCount: addresses.length,
+    directMatches,
+    nearestHopDistance: globalMinHop === Infinity ? null : globalMinHop,
+    nearestHopEntityName: globalMinEntityName,
+    nearestHopCategoryLabel: globalMinCategoryLabel,
+    hasGraphData: true,
+  };
+}
+
+/** Format a hop distance consistently for both on-screen preview and the PDF. */
+function formatHopLabel(hops: number): string {
+  return hops >= 4 ? `${hops}+ hops` : `${hops} hop${hops !== 1 ? "s" : ""}`;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+
 export default function ProofOfFundsDeclaration() {
   const { nodeSettings } = useNodeSettings();
   const { owners } = useOwners();
@@ -276,6 +465,16 @@ export default function ProofOfFundsDeclaration() {
   // Acquisition & Provenance section (optional, off by default)
   const [includeProvenance, setIncludeProvenance] = useState(false);
   const [provenanceFiatCurrency, setProvenanceFiatCurrency] = useState("USD");
+
+  // AML / Risk Screening section (optional, off by default)
+  const [includeAml, setIncludeAml] = useState(false);
+  const [amlPepStatus, setAmlPepStatus] = useState<"not-stated" | "yes" | "no">("not-stated");
+  const [amlTaxJurisdiction, setAmlTaxJurisdiction] = useState("");
+  const [amlSourceOfWealth, setAmlSourceOfWealth] = useState("");
+  const [amlSourceOfFunds, setAmlSourceOfFunds] = useState("");
+  const [amlTaxStatement, setAmlTaxStatement] = useState("");
+  const [amlScreeningResult, setAmlScreeningResult] = useState<AmlScreeningResult | null>(null);
+  const [isComputingAml, setIsComputingAml] = useState(false);
 
   // PDF generating
   const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
@@ -415,6 +614,31 @@ export default function ProofOfFundsDeclaration() {
     // doneAddressKey captures the address set; doneRows ref is intentionally omitted.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [includeQr, qrExplorerId, doneAddressKey]);
+
+  // Recompute AML screening whenever the toggle turns on or the address set changes.
+  useEffect(() => {
+    if (!includeAml || doneRows.length === 0) {
+      setAmlScreeningResult(null);
+      return;
+    }
+    let cancelled = false;
+    setIsComputingAml(true);
+    runAmlScreening(doneRows.map((r) => r.raw))
+      .then((result) => {
+        if (!cancelled) {
+          setAmlScreeningResult(result);
+          setIsComputingAml(false);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setIsComputingAml(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // doneAddressKey captures the address set; doneRows ref is intentionally omitted.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [includeAml, doneAddressKey]);
 
   const canGeneratePdf =
     doneRows.length > 0 &&
@@ -1334,6 +1558,174 @@ export default function ProofOfFundsDeclaration() {
         doc.setTextColor(0, 0, 0);
       }
 
+      // ── AML / Risk Screening Appendix ─────────────────────────────────────
+      if (includeAml && doneRows.length > 0) {
+        const amlResult = await runAmlScreening(doneRows.map((r) => r.raw));
+
+        doc.addPage();
+        y = 20;
+
+        doc.setFontSize(16);
+        doc.setFont("helvetica", "bold");
+        doc.setTextColor(0, 0, 0);
+        doc.text("APPENDIX: AML / RISK SCREENING", margin, y);
+        y += 8;
+        doc.setLineWidth(0.5);
+        doc.line(margin, y, margin + contentW, y);
+        y += 5;
+
+        addLine("SCREENING PARAMETERS", 10, true);
+        addSpacer(2);
+        addLine(`Screening date: ${sanitizePdfText(amlResult.screeningDate)}`, 9);
+        addSpacer(1);
+        const entityListDesc =
+          amlResult.entityListSource === "bundled"
+            ? `Bundled (KYUTXO default) — ${amlResult.entityListCount.toLocaleString()} known addresses`
+            : (() => {
+                const parts = [
+                  `User-imported snapshot — ${amlResult.entityListCount.toLocaleString()} known addresses`,
+                ];
+                if (amlResult.entityListSourceLabel) {
+                  parts.push(`file: ${sanitizePdfText(amlResult.entityListSourceLabel)}`);
+                }
+                if (amlResult.entityListImportedAt) {
+                  parts.push(`imported: ${new Date(amlResult.entityListImportedAt).toISOString().slice(0, 10)}`);
+                }
+                return parts.join(", ");
+              })();
+        addLine(`Entity list: ${entityListDesc}`, 9);
+        addSpacer(1);
+        addLine(`Addresses screened: ${amlResult.screenedCount}`, 9);
+        addSpacer(5);
+
+        checkPageBreak(30);
+        addLine("DIRECT MATCH RESULTS", 10, true);
+        addSpacer(2);
+        if (amlResult.directMatches.length === 0) {
+          doc.setFontSize(9);
+          doc.setFont("helvetica", "bold");
+          doc.setTextColor(0, 120, 0);
+          doc.text("Result: No direct matches detected.", margin, y);
+          doc.setTextColor(0, 0, 0);
+          y += 5;
+          addWrapped(
+            "None of the declared addresses appear in the active entity list.",
+            9
+          );
+        } else {
+          doc.setFontSize(9);
+          doc.setFont("helvetica", "bold");
+          doc.setTextColor(160, 0, 0);
+          doc.text(
+            `Result: ${amlResult.directMatches.length} direct match(es) detected — see table below.`,
+            margin,
+            y
+          );
+          doc.setTextColor(0, 0, 0);
+          y += 5;
+
+          autoTable(doc, {
+            startY: y,
+            head: [["Address", "Entity Name", "Category"]],
+            body: amlResult.directMatches.map((m) => [
+              sanitizePdfText(truncateAddress(m.address, 8, 8)),
+              sanitizePdfText(m.entityName),
+              sanitizePdfText(m.categoryLabel),
+            ]),
+            margin: { left: margin, right: margin },
+            styles: { fontSize: 8, font: "helvetica", cellPadding: 2, overflow: "linebreak" },
+            headStyles: { fillColor: [120, 0, 0], textColor: [255, 255, 255], fontStyle: "bold" },
+            columnStyles: {
+              0: { cellWidth: contentW * 0.38, font: "courier" },
+              1: { cellWidth: contentW * 0.40 },
+              2: { cellWidth: contentW * 0.22 },
+            },
+            didDrawPage: () => {},
+          });
+          y = (doc as any).lastAutoTable.finalY + 5;
+        }
+        addSpacer(5);
+
+        checkPageBreak(25);
+        addLine("INDIRECT PROXIMITY ANALYSIS", 10, true);
+        addSpacer(2);
+        if (!amlResult.hasGraphData) {
+          addWrapped(
+            "No transaction history is available for these addresses in the local vault. " +
+              "Indirect proximity analysis requires synced transaction data.",
+            9,
+            [80, 80, 80]
+          );
+        } else if (amlResult.nearestHopDistance === null) {
+          doc.setFontSize(9);
+          doc.setFont("helvetica", "bold");
+          doc.setTextColor(0, 120, 0);
+          doc.text("No flagged counterparty detected within 4 transaction hops.", margin, y);
+          doc.setTextColor(0, 0, 0);
+          y += 5;
+          addWrapped(
+            "The declared addresses have no indirect on-chain links to known flagged entities within the analysed transaction graph (up to 4 hops).",
+            9
+          );
+        } else {
+          const hopLabel = formatHopLabel(amlResult.nearestHopDistance!);
+          doc.setFontSize(9);
+          doc.setFont("helvetica", "normal");
+          doc.setTextColor(0, 0, 0);
+          const proximityLine = `Nearest flagged entity: ${hopLabel} away — ${sanitizePdfText(amlResult.nearestHopEntityName ?? "")} (${sanitizePdfText(amlResult.nearestHopCategoryLabel ?? "")})`;
+          const proxLines = doc.splitTextToSize(sanitizePdfText(proximityLine), contentW) as string[];
+          doc.text(proxLines, margin, y);
+          y += proxLines.length * 9 * 0.45 + 2;
+        }
+        addSpacer(5);
+
+        checkPageBreak(60);
+        addLine("DECLARANT SELF-ATTESTATIONS", 10, true);
+        addSpacer(2);
+
+        const pepText =
+          amlPepStatus === "yes"
+            ? "PEP Status: The declarant confirms they ARE a Politically Exposed Person (PEP)."
+            : amlPepStatus === "no"
+            ? "PEP Status: The declarant confirms they are NOT a Politically Exposed Person (PEP)."
+            : "PEP Status: Not stated by declarant (no selection made).";
+        addWrapped(pepText, 9);
+        addSpacer(2);
+
+        const wealthText = amlSourceOfWealth.trim()
+          ? `Source of Wealth: ${sanitizePdfText(amlSourceOfWealth)}`
+          : "Source of Wealth: Not provided by declarant.";
+        addWrapped(wealthText, 9);
+        addSpacer(2);
+
+        const fundsText = amlSourceOfFunds.trim()
+          ? `Source of Funds: ${sanitizePdfText(amlSourceOfFunds)}`
+          : "Source of Funds: Not provided by declarant.";
+        addWrapped(fundsText, 9);
+        addSpacer(2);
+
+        if (amlTaxJurisdiction.trim()) {
+          const taxText = amlTaxStatement.trim()
+            ? `Tax Residency & Compliance: The declarant is resident for tax purposes in ${sanitizePdfText(amlTaxJurisdiction)}. ${sanitizePdfText(amlTaxStatement)}`
+            : `Tax Residency: The declarant is resident for tax purposes in ${sanitizePdfText(amlTaxJurisdiction)}.`;
+          addWrapped(taxText, 9);
+          addSpacer(2);
+        }
+
+        addWrapped(
+          "General attestation: The declarant attests that the declared funds are not derived from, do not represent proceeds of, and are not intended to be used in connection with any criminal activity, money laundering, terrorist financing, tax evasion, or sanctions evasion.",
+          9
+        );
+        addSpacer(6);
+
+        checkPageBreak(35);
+        addLine("SCREENING DISCLAIMER", 10, true);
+        addSpacer(2);
+        const amlDisclaimer =
+          "IMPORTANT — LIMITATIONS OF THIS SCREENING: This AML / risk screening is a best-effort, offline check performed by KYUTXO against a bundled dataset of publicly documented addresses compiled from open sources (WalletExplorer.com address clustering, GraphSense TagPacks, OFAC SDN designations, and published incident reports). It is NOT a substitute for the financial institution's own KYC/AML procedures, licensed chain-analysis tooling, or regulatory obligations. A \"no direct match\" result does not guarantee the funds are free of risk, and this document does not constitute a legal clearance opinion. The declarant's self-attestations are unverified statements and must be independently assessed by the receiving institution. All risk decisions remain the sole responsibility of the institution's compliance function.";
+        addWrapped(amlDisclaimer, 8, [80, 80, 80]);
+      }
+
       // ── Standard Disclaimers ───────────────────────────────────────────────
       checkPageBreak(50);
       addLine("DISCLAIMERS", 11, true);
@@ -1609,6 +2001,12 @@ export default function ProofOfFundsDeclaration() {
     provenanceFiatCurrency,
     includeQr,
     qrExplorerId,
+    includeAml,
+    amlPepStatus,
+    amlTaxJurisdiction,
+    amlSourceOfWealth,
+    amlSourceOfFunds,
+    amlTaxStatement,
   ]);
 
   const validCount = validRows.length;
@@ -2532,12 +2930,216 @@ export default function ProofOfFundsDeclaration() {
           </CardContent>
         </Card>
 
-        {/* Step 7: Acquisition & Provenance */}
+        {/* Step 7: AML / Risk Screening */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <ShieldAlert className="h-5 w-5" />
+              Step 7 — AML / Risk Screening
+              <Badge variant="secondary" className="ml-1 text-xs font-normal">Optional</Badge>
+            </CardTitle>
+            <CardDescription>
+              Add an AML / Risk Screening appendix that screens the declared addresses against
+              KYUTXO's bundled offline entity list and surfaces self-attestation lines for PEP status,
+              source of wealth/funds, and tax residency. Off by default — when off, the PDF is unchanged.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="flex items-center justify-between gap-4 flex-wrap">
+              <div className="space-y-0.5">
+                <Label htmlFor="include-aml" className="text-sm font-medium">
+                  Include AML / Risk Screening appendix in the PDF
+                </Label>
+                <p className="text-sm text-muted-foreground">
+                  Off by default. When on, adds a screening summary, attestation lines, and an
+                  honesty disclaimer to the declaration.
+                </p>
+              </div>
+              <Switch
+                id="include-aml"
+                checked={includeAml}
+                onCheckedChange={setIncludeAml}
+                data-testid="switch-include-aml"
+              />
+            </div>
+
+            {includeAml && (
+              <>
+                <Separator />
+
+                {doneRows.length === 0 ? (
+                  <p className="text-sm text-muted-foreground flex items-center gap-2">
+                    <Clock className="h-4 w-4" />
+                    Check balances for at least one valid address (Step 2) to run screening.
+                  </p>
+                ) : (
+                  <>
+                    {/* Screening preview */}
+                    <div className="rounded-md border bg-muted/30 px-4 py-3 space-y-2">
+                      <div className="flex items-center gap-2 text-sm font-medium">
+                        {isComputingAml ? (
+                          <>
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                            Running screening…
+                          </>
+                        ) : amlScreeningResult ? (
+                          <>
+                            <ShieldAlert className="h-4 w-4" />
+                            Screening complete — {amlScreeningResult.screenedCount} address{amlScreeningResult.screenedCount !== 1 ? "es" : ""} checked
+                          </>
+                        ) : (
+                          <>
+                            <Shield className="h-4 w-4" />
+                            Screening will run when you generate the PDF
+                          </>
+                        )}
+                      </div>
+
+                      {amlScreeningResult && (
+                        <div className="space-y-1 text-xs text-muted-foreground">
+                          <div>
+                            {amlScreeningResult.entityListSource === "bundled"
+                              ? `Entity list: Bundled (KYUTXO default) — ${amlScreeningResult.entityListCount.toLocaleString()} known addresses`
+                              : (() => {
+                                  const parts = [`User-imported snapshot — ${amlScreeningResult.entityListCount.toLocaleString()} known addresses`];
+                                  if (amlScreeningResult.entityListSourceLabel) parts.push(`file: ${amlScreeningResult.entityListSourceLabel}`);
+                                  if (amlScreeningResult.entityListImportedAt) parts.push(`imported: ${new Date(amlScreeningResult.entityListImportedAt).toISOString().slice(0, 10)}`);
+                                  return `Entity list: ${parts.join(", ")}`;
+                                })()}
+                          </div>
+                          {amlScreeningResult.directMatches.length === 0 ? (
+                            <div className="text-green-600 dark:text-green-400 font-medium">
+                              No direct matches — none of the declared addresses appear in the entity list.
+                            </div>
+                          ) : (
+                            <div className="text-destructive font-medium">
+                              {amlScreeningResult.directMatches.length} direct match{amlScreeningResult.directMatches.length !== 1 ? "es" : ""} detected: {amlScreeningResult.directMatches.map(m => m.entityName).join(", ")}
+                            </div>
+                          )}
+                          {amlScreeningResult.hasGraphData ? (
+                            amlScreeningResult.nearestHopDistance === null ? (
+                              <div className="text-green-600 dark:text-green-400">
+                                No flagged counterparty within 4 hops.
+                              </div>
+                            ) : (
+                              <div>
+                                Nearest flagged entity: {formatHopLabel(amlScreeningResult.nearestHopDistance)} away — {amlScreeningResult.nearestHopEntityName} ({amlScreeningResult.nearestHopCategoryLabel})
+                              </div>
+                            )
+                          ) : (
+                            <div className="text-muted-foreground">
+                              No transaction data available for hop analysis — sync addresses to enable this.
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Attestation inputs */}
+                    <div className="space-y-4">
+                      <h4 className="text-sm font-semibold">Declarant Self-Attestations</h4>
+                      <p className="text-xs text-muted-foreground">
+                        These fields are optional but recommended. They appear verbatim in the PDF attestation section.
+                        Blank fields are noted as "not provided" in the PDF.
+                      </p>
+
+                      <div className="space-y-1">
+                        <Label htmlFor="aml-pep-status" className="text-sm">
+                          Politically Exposed Person (PEP) status
+                        </Label>
+                        <Select value={amlPepStatus} onValueChange={(v) => setAmlPepStatus(v as "not-stated" | "yes" | "no")}>
+                          <SelectTrigger id="aml-pep-status" data-testid="select-aml-pep-status">
+                            <SelectValue placeholder="Select…" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="not-stated">Not stated</SelectItem>
+                            <SelectItem value="no">No — I am not a PEP</SelectItem>
+                            <SelectItem value="yes">Yes — I am a PEP</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+
+                      <div className="space-y-1">
+                        <Label htmlFor="aml-source-of-wealth" className="text-sm">
+                          Source of Wealth <span className="text-muted-foreground text-xs">(how the declarant accumulated their overall wealth)</span>
+                        </Label>
+                        <Textarea
+                          id="aml-source-of-wealth"
+                          placeholder="e.g. Employment income, business ownership, property sale proceeds, inheritance…"
+                          className="min-h-[72px] text-sm resize-none"
+                          value={amlSourceOfWealth}
+                          onChange={(e) => setAmlSourceOfWealth(e.target.value)}
+                          data-testid="textarea-aml-source-of-wealth"
+                        />
+                      </div>
+
+                      <div className="space-y-1">
+                        <Label htmlFor="aml-source-of-funds" className="text-sm">
+                          Source of Funds <span className="text-muted-foreground text-xs">(where these specific Bitcoin funds came from)</span>
+                        </Label>
+                        <Textarea
+                          id="aml-source-of-funds"
+                          placeholder="e.g. Purchased via regulated exchange using salary income, mined since 2015, received as payment for consulting services…"
+                          className="min-h-[72px] text-sm resize-none"
+                          value={amlSourceOfFunds}
+                          onChange={(e) => setAmlSourceOfFunds(e.target.value)}
+                          data-testid="textarea-aml-source-of-funds"
+                        />
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div className="space-y-1">
+                          <Label htmlFor="aml-tax-jurisdiction" className="text-sm">
+                            Tax residency jurisdiction
+                          </Label>
+                          <Input
+                            id="aml-tax-jurisdiction"
+                            placeholder="e.g. United Kingdom, Germany, United States"
+                            value={amlTaxJurisdiction}
+                            onChange={(e) => setAmlTaxJurisdiction(e.target.value)}
+                            data-testid="input-aml-tax-jurisdiction"
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <Label htmlFor="aml-tax-statement" className="text-sm">
+                            Tax compliance statement <span className="text-muted-foreground text-xs">(optional)</span>
+                          </Label>
+                          <Input
+                            id="aml-tax-statement"
+                            placeholder="e.g. All taxes have been duly filed and paid."
+                            value={amlTaxStatement}
+                            onChange={(e) => setAmlTaxStatement(e.target.value)}
+                            data-testid="input-aml-tax-statement"
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    <Alert>
+                      <AlertCircle className="h-4 w-4" />
+                      <AlertDescription className="text-xs space-y-1">
+                        <p className="font-medium">Screening limitations</p>
+                        <p>
+                          This is a best-effort offline check against a bundled dataset of publicly documented
+                          addresses. It is not a substitute for your institution's own KYC/AML procedures or
+                          licensed chain-analysis tooling. A "no match" result does not guarantee the funds
+                          are risk-free. The PDF clearly states these limitations.
+                        </p>
+                      </AlertDescription>
+                    </Alert>
+                  </>
+                )}
+              </>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Step 8: Acquisition & Provenance */}
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <FileText className="h-5 w-5" />
-              Step 7 — Acquisition &amp; Provenance
+              Step 8 — Acquisition &amp; Provenance
               <Badge variant="secondary" className="ml-1 text-xs font-normal">Optional</Badge>
             </CardTitle>
             <CardDescription>
@@ -2713,10 +3315,10 @@ export default function ProofOfFundsDeclaration() {
           </CardContent>
         </Card>
 
-        {/* Step 8: Generate PDF */}
+        {/* Step 9: Generate PDF */}
         <Card>
           <CardHeader>
-            <CardTitle>Step 8 — Generate PDF</CardTitle>
+            <CardTitle>Step 9 — Generate PDF</CardTitle>
             <CardDescription>
               All required steps above must be complete before a PDF can be generated.
               The PDF is created entirely in your browser — no data leaves your device.
@@ -2780,6 +3382,7 @@ export default function ProofOfFundsDeclaration() {
                   {includeQr && ` It will also include verification QR codes linking each address to ${getExplorer(qrExplorerId).host}.`}
                   {verifiedCount > 0 && ` An appendix will contain the challenge messages and signatures for ${verifiedCount} verified address${verifiedCount !== 1 ? "es" : ""}.`}
                   {includeProvenance && ` An Acquisition & Provenance appendix will document acquisition dates, methods, and cost basis (in ${provenanceFiatCurrency}) for the declared addresses, plus a list of linked supporting documents.`}
+                  {includeAml && " An AML / Risk Screening appendix will include offline entity-list results, indirect proximity analysis, declarant self-attestations, and a screening disclaimer."}
                 </p>
               </div>
             )}
