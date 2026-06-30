@@ -157,6 +157,7 @@ export function RecordFormDialog({
     costBasisUsd: undefined as number | undefined,
     // Address-specific metadata
     counterpartyType: undefined as CounterpartyType | undefined,
+    counterpartyName: "",
   });
 
   const { toast } = useToast();
@@ -894,7 +895,22 @@ export function RecordFormDialog({
                 </Select>
                 <p className="text-xs text-muted-foreground">
                   Classify the source/counterparty: exchange, individual, business, etc.
-                  The counterparty name is taken from the Wallet Name or Label.
+                </p>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="counterpartyName">Counterparty Name</Label>
+                <Input
+                  id="counterpartyName"
+                  value={formData.counterpartyName || ""}
+                  onChange={(e) => setFormData({ ...formData, counterpartyName: e.target.value })}
+                  placeholder="e.g. Coinbase, Kraken, John Smith"
+                  disabled={isSubmitting}
+                  data-testid="input-counterparty-name"
+                />
+                <p className="text-xs text-muted-foreground">
+                  Optional. The explicit source/counterparty name shown in the appendix.
+                  If left blank, the Wallet Name, Label, or Counterparty Type is used instead.
                 </p>
               </div>
 

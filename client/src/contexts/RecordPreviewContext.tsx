@@ -312,6 +312,7 @@ export function RecordPreviewProvider({ children }: { children: ReactNode }) {
         dispositionType: data.dispositionType,
         costBasisUsd: data.costBasisUsd,
         counterpartyType: data.counterpartyType,
+        counterpartyName: data.counterpartyName,
       });
 
       // Upload any new files for the existing record

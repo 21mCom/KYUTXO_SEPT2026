@@ -101,6 +101,7 @@ interface RecordDetailPanelProps {
     costBasisUsd?: number;
     // Address metadata
     counterpartyType?: CounterpartyType;
+    counterpartyName?: string;
     // Cached address stats (populated after sync/recompute)
     cachedBalanceSats?: number;
     cachedTxCount?: number;
@@ -955,6 +956,19 @@ export function RecordDetailPanel({
                 <Badge variant="outline" data-testid="badge-counterparty-type">
                   {COUNTERPARTY_TYPE_OPTIONS.find(o => o.value === record.counterpartyType)?.label || record.counterpartyType}
                 </Badge>
+              </div>
+            )}
+
+            {/* Address Counterparty Name */}
+            {record.type === 'address' && record.counterpartyName?.trim() && (
+              <div>
+                <h4 className="text-sm font-medium mb-2 flex items-center gap-2">
+                  <User className="h-4 w-4" />
+                  Counterparty Name
+                </h4>
+                <p className="text-sm text-muted-foreground" data-testid="text-counterparty-name">
+                  {record.counterpartyName}
+                </p>
               </div>
             )}
 

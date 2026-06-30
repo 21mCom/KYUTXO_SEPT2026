@@ -473,6 +473,7 @@ export default function Dashboard() {
         dispositionType: data.dispositionType,
         costBasisUsd: data.costBasisUsd,
         counterpartyType: data.counterpartyType,
+        counterpartyName: data.counterpartyName,
       };
 
       // If record exists, update it instead of creating
@@ -625,6 +626,7 @@ export default function Dashboard() {
         dispositionType: data.dispositionType,
         costBasisUsd: data.costBasisUsd,
         counterpartyType: data.counterpartyType,
+        counterpartyName: data.counterpartyName,
       });
 
       // Upload any new files for existing record

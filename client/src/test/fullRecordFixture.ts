@@ -53,6 +53,7 @@ export const fullRecord: Required<DbRecord> = {
   dispositionType: "sale",
   costBasisUsd: 25000,
   counterpartyType: "exchange",
+  counterpartyName: "Coinbase",
   createdAt: 1736800000000,
   updatedAt: 1736899999000,
 };

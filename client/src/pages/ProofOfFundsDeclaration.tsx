@@ -521,7 +521,7 @@ export default function ProofOfFundsDeclaration() {
       const rec = byAddress.get(row.raw);
       const hasRecord = !!rec;
       const hasCounterparty =
-        !!(rec?.walletName?.trim() || rec?.label?.trim() || rec?.counterpartyType);
+        !!(rec?.counterpartyName?.trim() || rec?.walletName?.trim() || rec?.label?.trim() || rec?.counterpartyType);
       const missing: string[] = [];
       if (hasRecord) {
         if (!rec?.date) missing.push("Acquisition date");
@@ -1420,10 +1420,13 @@ export default function ProofOfFundsDeclaration() {
           const methodOpt = ACQUISITION_METHOD_OPTIONS.find((o) => o.value === rec.acquisitionMethod);
           const acquisitionMethod = methodOpt?.label ?? (rec.acquisitionMethod ? rec.acquisitionMethod : "Not recorded");
 
-          // Counterparty / source name: prefer walletName, then label, then counterpartyType label
+          // Counterparty / source name: prefer the explicit counterpartyName, then
+          // walletName, then label, then the counterpartyType label.
           const counterpartyTypeOpt = COUNTERPARTY_TYPE_OPTIONS.find((o) => o.value === rec.counterpartyType);
           const counterpartyName =
-            (rec.walletName?.trim() || "") !== ""
+            (rec.counterpartyName?.trim() || "") !== ""
+              ? rec.counterpartyName!.trim()
+              : (rec.walletName?.trim() || "") !== ""
               ? rec.walletName!.trim()
               : (rec.label?.trim() || "") !== ""
               ? rec.label.trim()

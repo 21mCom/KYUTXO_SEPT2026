@@ -234,6 +234,10 @@ export interface Record {
   // === Address-specific metadata fields ===
   // Counterparty type: classification of external addresses
   counterpartyType?: CounterpartyType;
+  // Counterparty name: explicit human-friendly source/counterparty name (e.g.
+  // "Coinbase"), distinct from walletName/label. Used by the Acquisition &
+  // Provenance appendix; falls back to walletName/label/counterpartyType when blank.
+  counterpartyName?: string;
   
   createdAt: number;
   updatedAt: number;
