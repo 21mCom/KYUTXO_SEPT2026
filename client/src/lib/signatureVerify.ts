@@ -11,9 +11,17 @@
  *                                    wallets that sign SegWit with the
  *                                    compressed-P2PKH header
  *
- * P2TR (Taproot, bc1p…) addresses are verified using BIP-322 "Simple"
- * single-key-spend Schnorr signatures (the base64 witness produced by
- * Bitcoin Core 24+, Sparrow, and other BIP-322 capable wallets).
+ * In addition, BIP-322 "Simple" single-key-spend signatures (the base64
+ * witness produced by Bitcoin Core 24+, Sparrow, and other BIP-322 capable
+ * wallets) are verified for:
+ *
+ *   - P2TR  (Taproot, bc1p…)   — Schnorr signature over the BIP-341 key-path
+ *                                sighash
+ *   - P2WPKH (native SegWit bc1q…) — ECDSA signature over the BIP-143 sighash
+ *
+ * For bc1q addresses the legacy Bitcoin Signed Message (65-byte) path is still
+ * used when a 65-byte signature is pasted; anything else is treated as a
+ * BIP-322 witness, so both formats are accepted.
  *
  * No private keys, seeds, or network access are involved — only public
  * addresses and signatures.
@@ -27,14 +35,14 @@ bitcoin.initEccLib(ecc);
 /**
  * Which signing scheme verified an address's control.
  *   - 'legacy'  → Bitcoin Signed Message (BIP-137 style, P2PKH/P2SH/P2WPKH)
- *   - 'bip322'  → BIP-322 Simple Schnorr witness (Taproot / P2TR)
+ *   - 'bip322'  → BIP-322 Simple witness (Taproot Schnorr or SegWit ECDSA)
  */
 export type SignatureFormat = 'legacy' | 'bip322';
 
 /** Human-readable label for a signature format, used in the UI and PDF. */
 export function signatureFormatLabel(format: SignatureFormat): string {
   return format === 'bip322'
-    ? 'BIP-322 (Taproot / Schnorr)'
+    ? 'BIP-322 (Simple)'
     : 'Bitcoin Signed Message';
 }
 
@@ -103,6 +111,27 @@ export async function verifyBitcoinSignature(
     trimmedAddr.startsWith('bcrt1p')
   ) {
     return verifyBip322Simple(trimmedAddr, message, sigBase64);
+  }
+
+  // Native SegWit v0 (P2WPKH, bc1q…) addresses can carry either a legacy
+  // BIP-137 signature (exactly 65 bytes) or a BIP-322 "Simple" witness
+  // (signature + public key, always longer than 65 bytes). Route by the
+  // decoded signature length: 65-byte signatures keep using the legacy path
+  // below; anything else is verified as a BIP-322 witness.
+  if (
+    trimmedAddr.startsWith('bc1q') ||
+    trimmedAddr.startsWith('tb1q') ||
+    trimmedAddr.startsWith('bcrt1q')
+  ) {
+    let decodedLen = -1;
+    try {
+      decodedLen = atob(sigBase64.trim()).length;
+    } catch {
+      decodedLen = -1;
+    }
+    if (decodedLen !== 65) {
+      return verifyBip322P2WPKH(trimmedAddr, message, sigBase64);
+    }
   }
 
   let sigBytes: Uint8Array;
@@ -332,6 +361,162 @@ export async function verifyBip322Simple(
 
     const sighash = toSign.hashForWitnessV1(0, [spk], [BigInt(0)], hashType);
     const ok = ecc.verifySchnorr(sighash, outputKey, sig);
+    if (ok) {
+      return { verified: true, format: 'bip322' };
+    }
+    return {
+      verified: false,
+      error:
+        'The BIP-322 signature did not verify against this address. ' +
+        'Make sure the message matches exactly and that you signed with the wallet holding this address.',
+    };
+  } catch (err) {
+    return {
+      verified: false,
+      error: `BIP-322 verification failed: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+}
+
+/** Constant-time-ish byte comparison for short fixed-length arrays. */
+function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a[i] ^ b[i];
+  return diff === 0;
+}
+
+/**
+ * Verify a BIP-322 "Simple" single-key-spend signature for a native SegWit
+ * P2WPKH (bc1q…) address. Accepts the base64 witness produced by Bitcoin
+ * Core, Sparrow, and other BIP-322 capable wallets.
+ *
+ * The witness stack holds two items — an ECDSA DER signature (with a trailing
+ * sighash-type byte) and the 33-byte compressed public key. Verification
+ * reconstructs the BIP-322 virtual to_spend / to_sign transactions, confirms
+ * the public key hashes to the address, and validates the ECDSA signature
+ * against the BIP-143 (witness v0) sighash. Script-path / "Full" BIP-322
+ * witnesses are not supported and produce a clear error.
+ */
+export async function verifyBip322P2WPKH(
+  address: string,
+  message: string,
+  sigBase64: string,
+): Promise<VerificationResult> {
+  let pubKeyHash: Uint8Array;
+  try {
+    const decoded = bitcoin.address.fromBech32(address.trim());
+    if (decoded.version !== 0 || decoded.data.length !== 20) {
+      return {
+        verified: false,
+        error:
+          'Address is not a valid native SegWit P2WPKH (bc1q…) output (expected witness v0, 20-byte key hash).',
+      };
+    }
+    pubKeyHash = decoded.data;
+  } catch {
+    return { verified: false, error: 'Could not decode the SegWit address.' };
+  }
+
+  let witnessBytes: Uint8Array;
+  try {
+    const binary = atob(sigBase64.trim());
+    witnessBytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) witnessBytes[i] = binary.charCodeAt(i);
+  } catch {
+    return { verified: false, error: 'Signature is not valid base64.' };
+  }
+
+  let witness: Uint8Array[];
+  try {
+    witness = parseWitnessStack(witnessBytes);
+  } catch {
+    return {
+      verified: false,
+      error: 'Could not parse the BIP-322 witness. Paste the full base64 signature from your wallet.',
+    };
+  }
+
+  if (witness.length !== 2) {
+    return {
+      verified: false,
+      error:
+        'Only BIP-322 Simple single-key-spend signatures are supported for SegWit. ' +
+        'This witness has ' + witness.length + ' items (script-path / "Full" BIP-322 is not supported).',
+    };
+  }
+
+  const sigDer = witness[0];
+  const pubkey = witness[1];
+
+  if (pubkey.length !== 33) {
+    return {
+      verified: false,
+      error: `Unexpected public key length (${pubkey.length} bytes; expected a 33-byte compressed key).`,
+    };
+  }
+
+  let derivedHash: Uint8Array;
+  try {
+    derivedHash = bitcoin.crypto.hash160(pubkey);
+  } catch {
+    return { verified: false, error: 'Could not hash the witness public key.' };
+  }
+  if (!bytesEqual(derivedHash, pubKeyHash)) {
+    return {
+      verified: false,
+      error:
+        'The BIP-322 signature is cryptographically valid, but its public key does not correspond to this address. ' +
+        'Make sure you signed with the wallet that holds this exact address.',
+    };
+  }
+
+  let sig64: Uint8Array;
+  let hashType: number;
+  try {
+    const dec = bitcoin.script.signature.decode(sigDer);
+    sig64 = dec.signature;
+    hashType = dec.hashType;
+  } catch {
+    return { verified: false, error: 'Could not decode the DER signature inside the BIP-322 witness.' };
+  }
+
+  try {
+    const spk = new Uint8Array(22);
+    spk[0] = 0x00; // OP_0
+    spk[1] = 0x14; // push 20 bytes
+    spk.set(pubKeyHash, 2);
+
+    const msgHash = await bip322MessageHash(message);
+    const scriptSig = new Uint8Array(34);
+    scriptSig[0] = 0x00; // OP_0
+    scriptSig[1] = 0x20; // push 32 bytes
+    scriptSig.set(msgHash, 2);
+
+    const toSpend = new bitcoin.Transaction();
+    toSpend.version = 0;
+    toSpend.locktime = 0;
+    toSpend.addInput(new Uint8Array(32), 0xffffffff, 0, scriptSig);
+    toSpend.addOutput(spk, BigInt(0));
+
+    const toSign = new bitcoin.Transaction();
+    toSign.version = 0;
+    toSign.locktime = 0;
+    toSign.addInput(toSpend.getHash(), 0, 0);
+    toSign.addOutput(new Uint8Array([0x6a]), BigInt(0)); // OP_RETURN
+
+    // BIP-143 sighash for P2WPKH uses the implicit P2PKH scriptCode:
+    //   OP_DUP OP_HASH160 <20-byte hash> OP_EQUALVERIFY OP_CHECKSIG
+    const scriptCode = new Uint8Array(25);
+    scriptCode[0] = 0x76; // OP_DUP
+    scriptCode[1] = 0xa9; // OP_HASH160
+    scriptCode[2] = 0x14; // push 20 bytes
+    scriptCode.set(pubKeyHash, 3);
+    scriptCode[23] = 0x88; // OP_EQUALVERIFY
+    scriptCode[24] = 0xac; // OP_CHECKSIG
+
+    const sighash = toSign.hashForWitnessV0(0, scriptCode, BigInt(0), hashType);
+    const ok = ecc.verify(sighash, pubkey, sig64);
     if (ok) {
       return { verified: true, format: 'bip322' };
     }

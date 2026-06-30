@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   verifyBitcoinSignature,
   verifyBip322Simple,
+  verifyBip322P2WPKH,
   signatureFormatLabel,
   buildChallengeMessage,
   generateDeclarationNonce,
@@ -64,11 +65,92 @@ describe('BIP-322 Simple verification (Taproot)', () => {
   });
 });
 
+/**
+ * BIP-322 Simple test vector for a native SegWit P2WPKH (bc1q…) address.
+ *
+ * This uses the canonical BIP-322 reference key/address (the same fixture used
+ * across the BIP-322 reference implementations and bip322-js): private key
+ * WIF `L3VFeEujGtevx9w18HD1fhRbCH67Az2dpCymeRE1SoPK6XQtaN2k` →
+ * address `bc1q9vza2e8x573nczrlzms0wvx3gsqjx7vavgkx0l`. The signatures are
+ * the deterministic (RFC-6979) BIP-322 Simple witnesses for the messages
+ * "Hello World" and "" (empty) with SIGHASH_ALL, base64-encoded.
+ */
+const P2WPKH_BIP322_ADDR = 'bc1q9vza2e8x573nczrlzms0wvx3gsqjx7vavgkx0l';
+const P2WPKH_BIP322_HELLO_SIG =
+  'AkgwRQIhAOzyynlqt93lOKJr+wmmxIens//zPzl9tqIOua93wO6MAiBi5n5EyAcPScOjf1lAqIUIQtr3zKNeavYabHyR8eGhowEhAsfxIAMZZEKUPYWI4BruhAQjzFT8FSFSajuFwrDL1Yhy';
+const P2WPKH_BIP322_EMPTY_SIG =
+  'AkgwRQIhAPkJ1Q4oYS0htvyuSFHLxRQpFAY56b70UvE7Dxazen0ZAiAtZfFz1S6T6I23MWI2lK/pcNTWncuyL8UL+oMdydVgzAEhAsfxIAMZZEKUPYWI4BruhAQjzFT8FSFSajuFwrDL1Yhy';
+
+describe('BIP-322 Simple verification (native SegWit P2WPKH)', () => {
+  it('verifies a known external bc1q BIP-322 vector', async () => {
+    const result = await verifyBip322P2WPKH(
+      P2WPKH_BIP322_ADDR,
+      'Hello World',
+      P2WPKH_BIP322_HELLO_SIG,
+    );
+    expect(result.verified).toBe(true);
+    expect(result.format).toBe('bip322');
+  });
+
+  it('verifies the empty-message vector', async () => {
+    const result = await verifyBip322P2WPKH(P2WPKH_BIP322_ADDR, '', P2WPKH_BIP322_EMPTY_SIG);
+    expect(result.verified).toBe(true);
+  });
+
+  it('rejects the signature against the wrong message', async () => {
+    const result = await verifyBip322P2WPKH(
+      P2WPKH_BIP322_ADDR,
+      'Goodbye World',
+      P2WPKH_BIP322_HELLO_SIG,
+    );
+    expect(result.verified).toBe(false);
+    expect(result.error).toBeTruthy();
+  });
+
+  it('rejects the signature against a different bc1q address', async () => {
+    const result = await verifyBip322P2WPKH(
+      'bc1qwe7rk7w29xsfttcfrr2s35qk8w880j9vrlfkf0',
+      'Hello World',
+      P2WPKH_BIP322_HELLO_SIG,
+    );
+    expect(result.verified).toBe(false);
+    expect(result.error).toMatch(/public key does not correspond/i);
+  });
+
+  it('rejects a non-P2WPKH address', async () => {
+    const result = await verifyBip322P2WPKH(P2TR_ADDR, 'Hello World', P2WPKH_BIP322_HELLO_SIG);
+    expect(result.verified).toBe(false);
+    expect(result.error).toMatch(/P2WPKH|witness v0/i);
+  });
+
+  it('rejects invalid base64', async () => {
+    const result = await verifyBip322P2WPKH(P2WPKH_BIP322_ADDR, 'Hello World', 'not base64!!!@@@');
+    expect(result.verified).toBe(false);
+    expect(result.error).toMatch(/base64/i);
+  });
+});
+
 describe('verifyBitcoinSignature routing', () => {
   it('routes Taproot addresses to the BIP-322 path', async () => {
     const result = await verifyBitcoinSignature(P2TR_ADDR, 'Hello World', HELLO_WORLD_SIG);
     expect(result.verified).toBe(true);
     expect(result.format).toBe('bip322');
+  });
+
+  it('routes a bc1q BIP-322 witness to the BIP-322 P2WPKH path', async () => {
+    const result = await verifyBitcoinSignature(
+      P2WPKH_BIP322_ADDR,
+      'Hello World',
+      P2WPKH_BIP322_HELLO_SIG,
+    );
+    expect(result.verified).toBe(true);
+    expect(result.format).toBe('bip322');
+  });
+
+  it('still verifies a legacy BIP-137 signature for a bc1q address (fallback)', async () => {
+    const result = await verifyBitcoinSignature(VEC2.p2wpkh, MESSAGE, VEC2.sig);
+    expect(result.verified).toBe(true);
+    expect(result.format).toBe('legacy');
   });
 
   it('requires all three inputs', async () => {
