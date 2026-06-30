@@ -59,6 +59,41 @@ export const AML_APPENDIX_STRINGS = {
     'IMPORTANT — LIMITATIONS OF THIS SCREENING: This AML / risk screening is a best-effort, offline check performed by KYUTXO against a bundled dataset of publicly documented addresses compiled from open sources (WalletExplorer.com address clustering, GraphSense TagPacks, OFAC SDN designations, and published incident reports). It is NOT a substitute for the financial institution\'s own KYC/AML procedures, licensed chain-analysis tooling, or regulatory obligations. A "no direct match" result does not guarantee the funds are free of risk, and this document does not constitute a legal clearance opinion. The declarant\'s self-attestations are unverified statements and must be independently assessed by the receiving institution. All risk decisions remain the sole responsibility of the institution\'s compliance function.',
 } as const;
 
+/**
+ * Fixed verdict strings for the *on-screen* screening preview block in
+ * `ProofOfFundsDeclaration.tsx`. These are deliberately worded differently from
+ * the PDF appendix boilerplate above — they are shorter, friendlier summaries
+ * shown live in the editor — so they are kept as their own pinned constants
+ * rather than reusing `AML_APPENDIX_STRINGS`. Pinned word-for-word by a unit
+ * test so a wording change can never silently make the live preview misleading.
+ */
+export const AML_PREVIEW_STRINGS = {
+  /** Direct-match branch — no matches found. */
+  noDirectMatches:
+    "No direct matches — none of the declared addresses appear in the entity list.",
+
+  /** Indirect proximity branch — graph present, no flagged counterparty found. */
+  noProximityMatch: "No flagged counterparty within 4 hops.",
+
+  /** Indirect proximity branch — no synced transaction graph. */
+  noGraphData:
+    "No transaction data available for hop analysis — sync addresses to enable this.",
+} as const;
+
+/**
+ * On-screen preview "<n> direct match(es) detected: <names>" line for the
+ * matches-found branch. Pins the singular/plural form and the comma-joined
+ * entity-name list.
+ */
+export function buildPreviewDirectMatchLine(
+  matchCount: number,
+  entityNames: string[],
+): string {
+  return `${matchCount} direct match${
+    matchCount !== 1 ? "es" : ""
+  } detected: ${entityNames.join(", ")}`;
+}
+
 /** Format a hop distance consistently for both on-screen preview and the PDF. */
 export function formatHopLabel(hops: number): string {
   return hops >= 4 ? `${hops}+ hops` : `${hops} hop${hops !== 1 ? "s" : ""}`;

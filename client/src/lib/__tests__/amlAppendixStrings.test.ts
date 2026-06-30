@@ -10,10 +10,12 @@
 import { describe, it, expect } from "vitest";
 import {
   AML_APPENDIX_STRINGS,
+  AML_PREVIEW_STRINGS,
   formatHopLabel,
   buildScreeningDateLine,
   buildAddressesScreenedLine,
   buildDirectMatchResultLine,
+  buildPreviewDirectMatchLine,
   buildEntityListDescription,
   buildNearestEntityLine,
 } from "@/lib/amlAppendixStrings";
@@ -68,6 +70,58 @@ describe("AML_APPENDIX_STRINGS — fixed boilerplate (word-for-word)", () => {
     );
     expect(AML_APPENDIX_STRINGS.screeningDisclaimer).toBe(
       'IMPORTANT — LIMITATIONS OF THIS SCREENING: This AML / risk screening is a best-effort, offline check performed by KYUTXO against a bundled dataset of publicly documented addresses compiled from open sources (WalletExplorer.com address clustering, GraphSense TagPacks, OFAC SDN designations, and published incident reports). It is NOT a substitute for the financial institution\'s own KYC/AML procedures, licensed chain-analysis tooling, or regulatory obligations. A "no direct match" result does not guarantee the funds are free of risk, and this document does not constitute a legal clearance opinion. The declarant\'s self-attestations are unverified statements and must be independently assessed by the receiving institution. All risk decisions remain the sole responsibility of the institution\'s compliance function.',
+    );
+  });
+});
+
+describe("AML_PREVIEW_STRINGS — on-screen preview verdicts (word-for-word)", () => {
+  it("pins the no-direct-matches verdict (distinct from the PDF wording)", () => {
+    expect(AML_PREVIEW_STRINGS.noDirectMatches).toBe(
+      "No direct matches — none of the declared addresses appear in the entity list.",
+    );
+  });
+
+  it("pins the no-proximity-match verdict", () => {
+    expect(AML_PREVIEW_STRINGS.noProximityMatch).toBe(
+      "No flagged counterparty within 4 hops.",
+    );
+  });
+
+  it("pins the no-graph-data verdict", () => {
+    expect(AML_PREVIEW_STRINGS.noGraphData).toBe(
+      "No transaction data available for hop analysis — sync addresses to enable this.",
+    );
+  });
+
+  it("keeps the preview verdicts deliberately different from the PDF wording", () => {
+    expect(AML_PREVIEW_STRINGS.noDirectMatches).not.toBe(
+      AML_APPENDIX_STRINGS.noDirectMatchesDetail,
+    );
+    expect(AML_PREVIEW_STRINGS.noProximityMatch).not.toBe(
+      AML_APPENDIX_STRINGS.noProximityMatchResult,
+    );
+    expect(AML_PREVIEW_STRINGS.noGraphData).not.toBe(
+      AML_APPENDIX_STRINGS.noGraphDataDetail,
+    );
+  });
+});
+
+describe("buildPreviewDirectMatchLine", () => {
+  it("singularises a single match", () => {
+    expect(buildPreviewDirectMatchLine(1, ["Test Mixer"])).toBe(
+      "1 direct match detected: Test Mixer",
+    );
+  });
+
+  it("pluralises and comma-joins multiple matches", () => {
+    expect(
+      buildPreviewDirectMatchLine(2, ["Test Mixer", "Bad Exchange"]),
+    ).toBe("2 direct matches detected: Test Mixer, Bad Exchange");
+  });
+
+  it("uses the plural form for a zero count and an empty name list", () => {
+    expect(buildPreviewDirectMatchLine(0, [])).toBe(
+      "0 direct matches detected: ",
     );
   });
 });

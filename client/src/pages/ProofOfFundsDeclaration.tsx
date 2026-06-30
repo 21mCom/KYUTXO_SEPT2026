@@ -51,10 +51,12 @@ import { sanitizePdfText } from "@/lib/pdfText";
 import { buildAttestationLines } from "@/lib/attestationLines";
 import {
   AML_APPENDIX_STRINGS,
+  AML_PREVIEW_STRINGS,
   formatHopLabel,
   buildScreeningDateLine,
   buildAddressesScreenedLine,
   buildDirectMatchResultLine,
+  buildPreviewDirectMatchLine,
   buildEntityListDescription,
   buildNearestEntityLine,
 } from "@/lib/amlAppendixStrings";
@@ -3501,17 +3503,20 @@ export default function ProofOfFundsDeclaration() {
                           <div>{buildEntityListDescription(amlScreeningResult)}</div>
                           {amlScreeningResult.directMatches.length === 0 ? (
                             <div className="text-green-600 dark:text-green-400 font-medium">
-                              No direct matches — none of the declared addresses appear in the entity list.
+                              {AML_PREVIEW_STRINGS.noDirectMatches}
                             </div>
                           ) : (
                             <div className="text-destructive font-medium">
-                              {amlScreeningResult.directMatches.length} direct match{amlScreeningResult.directMatches.length !== 1 ? "es" : ""} detected: {amlScreeningResult.directMatches.map(m => m.entityName).join(", ")}
+                              {buildPreviewDirectMatchLine(
+                                amlScreeningResult.directMatches.length,
+                                amlScreeningResult.directMatches.map(m => m.entityName),
+                              )}
                             </div>
                           )}
                           {amlScreeningResult.hasGraphData ? (
                             amlScreeningResult.nearestHopDistance === null ? (
                               <div className="text-green-600 dark:text-green-400">
-                                No flagged counterparty within 4 hops.
+                                {AML_PREVIEW_STRINGS.noProximityMatch}
                               </div>
                             ) : (
                               <div>
@@ -3520,7 +3525,7 @@ export default function ProofOfFundsDeclaration() {
                             )
                           ) : (
                             <div className="text-muted-foreground">
-                              No transaction data available for hop analysis — sync addresses to enable this.
+                              {AML_PREVIEW_STRINGS.noGraphData}
                             </div>
                           )}
                         </div>
