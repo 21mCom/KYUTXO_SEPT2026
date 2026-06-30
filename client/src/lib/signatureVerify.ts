@@ -11,8 +11,9 @@
  *                                    wallets that sign SegWit with the
  *                                    compressed-P2PKH header
  *
- * P2TR (Taproot) requires BIP-322 Schnorr verification which is not
- * supported here; a clear error is returned for those addresses.
+ * P2TR (Taproot, bc1p…) addresses are verified using BIP-322 "Simple"
+ * single-key-spend Schnorr signatures (the base64 witness produced by
+ * Bitcoin Core 24+, Sparrow, and other BIP-322 capable wallets).
  *
  * No private keys, seeds, or network access are involved — only public
  * addresses and signatures.
@@ -23,9 +24,25 @@ import * as bitcoin from 'bitcoinjs-lib';
 
 bitcoin.initEccLib(ecc);
 
+/**
+ * Which signing scheme verified an address's control.
+ *   - 'legacy'  → Bitcoin Signed Message (BIP-137 style, P2PKH/P2SH/P2WPKH)
+ *   - 'bip322'  → BIP-322 Simple Schnorr witness (Taproot / P2TR)
+ */
+export type SignatureFormat = 'legacy' | 'bip322';
+
+/** Human-readable label for a signature format, used in the UI and PDF. */
+export function signatureFormatLabel(format: SignatureFormat): string {
+  return format === 'bip322'
+    ? 'BIP-322 (Taproot / Schnorr)'
+    : 'Bitcoin Signed Message';
+}
+
 export interface VerificationResult {
   verified: boolean;
   error?: string;
+  /** The scheme used when verification succeeded. */
+  format?: SignatureFormat;
 }
 
 /**
@@ -77,6 +94,17 @@ export async function verifyBitcoinSignature(
     return { verified: false, error: 'Address, message, and signature are all required.' };
   }
 
+  // Taproot (P2TR) addresses use BIP-322 Simple Schnorr signatures, not the
+  // legacy Bitcoin Signed Message format handled below.
+  const trimmedAddr = address.trim();
+  if (
+    trimmedAddr.startsWith('bc1p') ||
+    trimmedAddr.startsWith('tb1p') ||
+    trimmedAddr.startsWith('bcrt1p')
+  ) {
+    return verifyBip322Simple(trimmedAddr, message, sigBase64);
+  }
+
   let sigBytes: Uint8Array;
   try {
     const binary = atob(sigBase64.trim());
@@ -124,15 +152,6 @@ export async function verifyBitcoinSignature(
     return { verified: false, error: 'Could not recover a public key from this signature. The signature may be invalid or corrupt.' };
   }
 
-  if (address.startsWith('bc1p') || address.startsWith('tb1p')) {
-    return {
-      verified: false,
-      error:
-        'Taproot (P2TR / bc1p…) addresses use BIP-322 Schnorr signatures, which are not supported in this version. ' +
-        'Use a P2PKH (1…) or native SegWit P2WPKH (bc1q…) address for cryptographic proof-of-control.',
-    };
-  }
-
   const network = bitcoin.networks.bitcoin;
   const pubKeyBuf = Buffer.from(pubKey);
 
@@ -153,7 +172,7 @@ export async function verifyBitcoinSignature(
   }
 
   if (candidates.includes(address)) {
-    return { verified: true };
+    return { verified: true, format: 'legacy' };
   }
 
   return {
@@ -162,6 +181,171 @@ export async function verifyBitcoinSignature(
       'The signature is cryptographically valid, but it was not produced by the key controlling this address. ' +
       'Make sure you signed with the wallet that holds this exact address.',
   };
+}
+
+const BIP322_TAG = 'BIP0322-signed-message';
+
+async function sha256(data: Uint8Array): Promise<Uint8Array> {
+  const digest = await crypto.subtle.digest('SHA-256', data as BufferSource);
+  return new Uint8Array(digest);
+}
+
+/**
+ * BIP-322 message hash (BIP-340 tagged hash):
+ *   SHA256(SHA256(tag) || SHA256(tag) || message), tag = "BIP0322-signed-message"
+ */
+async function bip322MessageHash(message: string): Promise<Uint8Array> {
+  const enc = new TextEncoder();
+  const tagHash = await sha256(enc.encode(BIP322_TAG));
+  const msgBytes = enc.encode(message);
+  const buf = new Uint8Array(tagHash.length * 2 + msgBytes.length);
+  buf.set(tagHash, 0);
+  buf.set(tagHash, tagHash.length);
+  buf.set(msgBytes, tagHash.length * 2);
+  return sha256(buf);
+}
+
+/** Read a Bitcoin-style CompactSize varint from `buf` at `offset`. */
+function readVarInt(buf: Uint8Array, offset: number): { value: number; size: number } {
+  const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+  const first = buf[offset];
+  if (first < 0xfd) return { value: first, size: 1 };
+  if (first === 0xfd) return { value: dv.getUint16(offset + 1, true), size: 3 };
+  if (first === 0xfe) return { value: dv.getUint32(offset + 1, true), size: 5 };
+  return { value: Number(dv.getBigUint64(offset + 1, true)), size: 9 };
+}
+
+/** Parse a serialized witness stack (count-prefixed, length-prefixed items). */
+function parseWitnessStack(buf: Uint8Array): Uint8Array[] {
+  let offset = 0;
+  const { value: count, size } = readVarInt(buf, offset);
+  offset += size;
+  const items: Uint8Array[] = [];
+  for (let i = 0; i < count; i++) {
+    const { value: len, size: lenSize } = readVarInt(buf, offset);
+    offset += lenSize;
+    if (offset + len > buf.length) {
+      throw new Error('Witness item length exceeds available data.');
+    }
+    items.push(buf.subarray(offset, offset + len));
+    offset += len;
+  }
+  if (offset !== buf.length) {
+    throw new Error('Trailing bytes after witness stack.');
+  }
+  return items;
+}
+
+/**
+ * Verify a BIP-322 "Simple" single-key-spend signature for a Taproot (P2TR)
+ * address. Accepts the base64 witness produced by Bitcoin Core 24+, Sparrow,
+ * and other BIP-322 capable wallets.
+ *
+ * Implements the BIP-322 virtual to_spend / to_sign transaction construction
+ * and validates the Schnorr signature against the address's x-only output key
+ * (BIP-341 key-path sighash). Script-path spends and multi-item witnesses
+ * (BIP-322 "Full") are not supported and produce a clear error.
+ */
+export async function verifyBip322Simple(
+  address: string,
+  message: string,
+  sigBase64: string,
+): Promise<VerificationResult> {
+  let outputKey: Uint8Array;
+  try {
+    const decoded = bitcoin.address.fromBech32(address.trim());
+    if (decoded.version !== 1 || decoded.data.length !== 32) {
+      return {
+        verified: false,
+        error: 'Address is not a valid Taproot (P2TR) output (expected witness v1, 32-byte key).',
+      };
+    }
+    outputKey = decoded.data;
+  } catch {
+    return { verified: false, error: 'Could not decode the Taproot address.' };
+  }
+
+  let witnessBytes: Uint8Array;
+  try {
+    const binary = atob(sigBase64.trim());
+    witnessBytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) witnessBytes[i] = binary.charCodeAt(i);
+  } catch {
+    return { verified: false, error: 'Signature is not valid base64.' };
+  }
+
+  let witness: Uint8Array[];
+  try {
+    witness = parseWitnessStack(witnessBytes);
+  } catch {
+    return {
+      verified: false,
+      error: 'Could not parse the BIP-322 witness. Paste the full base64 signature from your wallet.',
+    };
+  }
+
+  if (witness.length !== 1) {
+    return {
+      verified: false,
+      error:
+        'Only BIP-322 Simple single-key-spend signatures are supported. ' +
+        'This witness has ' + witness.length + ' items (script-path / "Full" BIP-322 is not supported).',
+    };
+  }
+
+  let sig = witness[0];
+  let hashType = 0x00;
+  if (sig.length === 65) {
+    hashType = sig[64];
+    sig = sig.subarray(0, 64);
+  } else if (sig.length !== 64) {
+    return {
+      verified: false,
+      error: `Unexpected BIP-322 signature length (${sig.length} bytes; expected 64 or 65).`,
+    };
+  }
+
+  try {
+    const spk = new Uint8Array(34);
+    spk[0] = 0x51; // OP_1
+    spk[1] = 0x20; // push 32 bytes
+    spk.set(outputKey, 2);
+
+    const msgHash = await bip322MessageHash(message);
+    const scriptSig = new Uint8Array(34);
+    scriptSig[0] = 0x00; // OP_0
+    scriptSig[1] = 0x20; // push 32 bytes
+    scriptSig.set(msgHash, 2);
+
+    const toSpend = new bitcoin.Transaction();
+    toSpend.version = 0;
+    toSpend.locktime = 0;
+    toSpend.addInput(new Uint8Array(32), 0xffffffff, 0, scriptSig);
+    toSpend.addOutput(spk, BigInt(0));
+
+    const toSign = new bitcoin.Transaction();
+    toSign.version = 0;
+    toSign.locktime = 0;
+    toSign.addInput(toSpend.getHash(), 0, 0);
+    toSign.addOutput(new Uint8Array([0x6a]), BigInt(0)); // OP_RETURN
+
+    const sighash = toSign.hashForWitnessV1(0, [spk], [BigInt(0)], hashType);
+    const ok = ecc.verifySchnorr(sighash, outputKey, sig);
+    if (ok) {
+      return { verified: true, format: 'bip322' };
+    }
+    return {
+      verified: false,
+      error:
+        'The BIP-322 signature did not verify against this address. ' +
+        'Make sure the message matches exactly and that you signed with the wallet holding this address.',
+    };
+  } catch (err) {
+    return {
+      verified: false,
+      error: `BIP-322 verification failed: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
 }
 
 /**

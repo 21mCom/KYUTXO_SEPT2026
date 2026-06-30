@@ -46,6 +46,8 @@ import {
   buildChallengeMessage,
   verifyBitcoinSignature,
   generateDeclarationNonce,
+  signatureFormatLabel,
+  type SignatureFormat,
 } from "@/lib/signatureVerify";
 
 type BalanceSource = "live" | "offline";
@@ -71,6 +73,7 @@ interface ControlState {
   // details (name/date/purpose) changed, so the signed challenge message no
   // longer matches. Surfaces an inline "re-verify" warning until re-verified.
   staleAfterVerify?: boolean;
+  verifiedFormat?: SignatureFormat;
 }
 
 interface BalanceSummary {
@@ -568,7 +571,7 @@ export default function ProofOfFundsDeclaration() {
         if (result.verified) {
           setControlStates((prev) => ({
             ...prev,
-            [address]: { paste, status: "verified", verifiedSig: paste },
+            [address]: { paste, status: "verified", verifiedSig: paste, verifiedFormat: result.format },
           }));
         } else {
           setControlStates((prev) => ({
@@ -835,10 +838,22 @@ export default function ProofOfFundsDeclaration() {
       addLine("DISCLAIMERS", 11, true);
       addSpacer(2);
 
+      const verifiedFormats = new Set(
+        verifiedRows
+          .map((r) => controlStates[r.raw]?.verifiedFormat)
+          .filter((f): f is SignatureFormat => !!f)
+      );
+      const formatPhrase =
+        verifiedFormats.has("legacy") && verifiedFormats.has("bip322")
+          ? "Bitcoin Signed Message and BIP-322 signatures"
+          : verifiedFormats.has("bip322")
+          ? "BIP-322 signatures"
+          : "Bitcoin Signed Message signatures";
+
       const controlDisclaimerLine = allVerified
-        ? "2. Cryptographic proof-of-control is included for all addresses via Bitcoin Signed Message signatures. An appendix contains the challenge messages and signatures for independent re-verification."
+        ? `2. Cryptographic proof-of-control is included for all addresses via ${formatPhrase}. An appendix contains the challenge messages and signatures for independent re-verification.`
         : hasVerified
-        ? `2. Cryptographic proof-of-control is included for ${verifiedRows.length} of ${doneRows.length} address${doneRows.length !== 1 ? "es" : ""} via Bitcoin Signed Message signatures. The remaining addresses are self-declared. An appendix contains the challenge messages and signatures for verified addresses.`
+        ? `2. Cryptographic proof-of-control is included for ${verifiedRows.length} of ${doneRows.length} address${doneRows.length !== 1 ? "es" : ""} via ${formatPhrase}. The remaining addresses are self-declared. An appendix contains the challenge messages and signatures for verified addresses.`
         : "2. No cryptographic proof-of-control is included. All addresses are self-declared by the declarant.";
 
       const disclaimers = [
@@ -900,8 +915,9 @@ export default function ProofOfFundsDeclaration() {
         const introLines = doc.splitTextToSize(
           sanitizePdfText(
             "The following section contains the challenge message and corresponding wallet signature for each address where cryptographic proof-of-control was provided. " +
+            "Legacy addresses use Bitcoin Signed Message signatures; Taproot (bc1p…) addresses use BIP-322 Simple signatures. " +
             "The signature was produced by the declarant using their own wallet or hardware device — no private keys were shared with KYUTXO. " +
-            "To independently verify, use any standard Bitcoin message-verification tool with the address, message, and signature shown below."
+            "To independently verify, use a Bitcoin message-verification tool that supports the signature format shown for each address, with the address, message, and signature shown below."
           ),
           contentW
         ) as string[];
@@ -976,6 +992,19 @@ export default function ProofOfFundsDeclaration() {
           doc.text(sanitizePdfText(`Address: ${row.raw}`), margin, y);
           y += 5;
 
+          doc.setFontSize(8);
+          doc.setFont("helvetica", "normal");
+          doc.setTextColor(80, 80, 80);
+          doc.text(
+            sanitizePdfText(
+              `Signature Format: ${signatureFormatLabel(cs.verifiedFormat ?? "legacy")}`
+            ),
+            margin,
+            y
+          );
+          doc.setTextColor(0, 0, 0);
+          y += 5;
+
           const challengeMsg = buildChallengeMessage({
             address: row.raw,
             declarantName,
@@ -1001,7 +1030,13 @@ export default function ProofOfFundsDeclaration() {
           doc.setFont("helvetica", "bold");
           doc.setFontSize(8);
           doc.setTextColor(0, 0, 0);
-          doc.text("Wallet Signature (base64):", margin, y);
+          doc.text(
+            cs.verifiedFormat === "bip322"
+              ? "BIP-322 Witness (base64):"
+              : "Wallet Signature (base64):",
+            margin,
+            y
+          );
           y += 4;
 
           doc.setFont("courier", "normal");
@@ -1565,7 +1600,11 @@ export default function ProofOfFundsDeclaration() {
                       Bitcoin Signed Message (legacy format) — supported by Bitcoin Core, Electrum,
                       BlueWallet, Sparrow, Trezor, Ledger, and most hardware/software wallets.
                       Works for P2PKH (1…), P2SH-P2WPKH (3…), and native SegWit P2WPKH (bc1q…) addresses.
-                      Taproot (bc1p…) is not supported in this version.
+                    </p>
+                    <p className="text-xs">
+                      BIP-322 (Simple) — for Taproot (bc1p…) addresses. Paste the base64
+                      signature produced by a BIP-322 capable wallet such as Bitcoin Core 24+
+                      or Sparrow.
                     </p>
                   </AlertDescription>
                 </Alert>
@@ -1626,7 +1665,7 @@ export default function ProofOfFundsDeclaration() {
                           )}
                         </div>
 
-                        {cs.status === "idle" && cs.staleAfterVerify && !isTaproot && (
+                        {cs.status === "idle" && cs.staleAfterVerify && (
                           <Alert
                             className="py-2 border-amber-500/60 text-amber-700 dark:text-amber-300 [&>svg]:text-amber-600 dark:[&>svg]:text-amber-400"
                             data-testid={`alert-stale-${idx}`}
@@ -1640,12 +1679,7 @@ export default function ProofOfFundsDeclaration() {
                           </Alert>
                         )}
 
-                        {isTaproot ? (
-                          <p className="text-xs text-muted-foreground">
-                            Taproot (bc1p…) addresses use BIP-322 Schnorr signatures, which are not
-                            supported in this version. This address will be marked self-declared.
-                          </p>
-                        ) : (
+                        {(
                           <>
                             <div className="space-y-1">
                               <div className="flex items-center justify-between">
@@ -1682,14 +1716,17 @@ export default function ProofOfFundsDeclaration() {
                                 {challengeMsg}
                               </pre>
                               <p className="text-xs text-muted-foreground">
-                                In your wallet, use "Sign Message" (or equivalent) and paste the text
-                                above exactly as shown.
+                                {isTaproot
+                                  ? 'In a BIP-322 capable wallet (Bitcoin Core 24+, Sparrow), use "Sign Message" and paste the text above exactly as shown.'
+                                  : 'In your wallet, use "Sign Message" (or equivalent) and paste the text above exactly as shown.'}
                               </p>
                             </div>
 
                             <div className="space-y-2">
                               <Label className="text-xs font-medium" htmlFor={`sig-input-${idx}`}>
-                                Paste Wallet Signature (base64)
+                                {isTaproot
+                                  ? "Paste BIP-322 Signature (base64)"
+                                  : "Paste Wallet Signature (base64)"}
                               </Label>
                               <Textarea
                                 id={`sig-input-${idx}`}
@@ -1713,7 +1750,11 @@ export default function ProofOfFundsDeclaration() {
                               {cs.status === "verified" && (
                                 <div className="flex items-center gap-2 text-xs text-green-600 dark:text-green-400 font-medium">
                                   <ShieldCheck className="h-3.5 w-3.5" />
-                                  Signature verified — control of this address is cryptographically proven.
+                                  Signature verified
+                                  {cs.verifiedFormat
+                                    ? ` (${signatureFormatLabel(cs.verifiedFormat)})`
+                                    : ""}
+                                  {" "}— control of this address is cryptographically proven.
                                 </div>
                               )}
 
