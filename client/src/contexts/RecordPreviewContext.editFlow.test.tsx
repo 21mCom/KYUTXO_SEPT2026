@@ -26,6 +26,7 @@ import {
 import { Toaster } from "@/components/ui/toaster";
 import { createRecord } from "@/lib/dataFacade";
 import { clearAllRecords, getRecord } from "@/lib/data/record-crud";
+import { clickSaveButton } from "@/test/clickSave";
 
 const ADDRESS = "bc1qeditflow00000000000000000000000000000000xy";
 
@@ -101,9 +102,12 @@ describe("RecordPreviewContext view / edit flow", () => {
     // Form is prefilled with the existing record's data.
     await waitFor(() => expect(labelInput.value).toBe("Original Label"));
 
-    // Change the label and save through the form.
+    // Change the label and save by clicking the real Save button. clickSaveButton
+    // asserts the button is genuinely wired to submit its form, so this guards
+    // against the Save button being moved outside the <form> or losing
+    // type="submit".
     fireEvent.change(labelInput, { target: { value: "Updated Label" } });
-    fireEvent.click(screen.getByTestId("button-save"));
+    clickSaveButton();
 
     // Persisted via the CRUD layer (updateRecord).
     await waitFor(async () => {

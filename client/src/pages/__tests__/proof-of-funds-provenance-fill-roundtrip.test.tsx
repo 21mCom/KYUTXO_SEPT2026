@@ -29,6 +29,7 @@ import "fake-indexeddb/auto";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
 import { renderWithProviders } from "@/test/testProviders";
+import { clickSaveButton } from "@/test/clickSave";
 import { createRecord, clearAllRecords } from "@/lib/data/record-crud";
 
 // A real, valid mainnet P2PKH address so RecordFormDialog's save-time
@@ -185,14 +186,18 @@ describe("ProofOfFundsDeclaration — provenance 'Fill in missing fields' live r
       target: { value: "12345.67" },
     });
 
-    // Save the record. We submit the form element directly rather than clicking
-    // the submit button: under jsdom the Radix Dialog-hosted submit button's
-    // click does not reliably trigger the form's onSubmit, whereas a submit event
-    // does. (The button is still asserted present so the save affordance exists.)
-    const saveButton = screen.getByTestId("button-save");
-    const form = saveButton.closest("form");
-    expect(form).not.toBeNull();
-    fireEvent.submit(form as HTMLFormElement);
+    // The seeded record had a blank label, but the editor's Label field is
+    // `required`, so a real browser (and jsdom) would block submission until it
+    // is filled. Provide a label so clicking Save actually submits.
+    fireEvent.change(screen.getByTestId("input-label"), {
+      target: { value: "My Addr" },
+    });
+
+    // Save by clicking the real Save button (not by firing a submit event on the
+    // <form>). clickSaveButton asserts the button is genuinely wired to submit
+    // its form, so this also guards against the button being moved outside the
+    // <form> or losing type="submit".
+    clickSaveButton();
 
     // The live summary refreshes: the row now reports everything recorded and the
     // incomplete count is gone.
