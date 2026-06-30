@@ -4,6 +4,7 @@ import {
   verifyBip322Simple,
   verifyBip322P2WPKH,
   verifyBip322Full,
+  verifyBip322P2SH,
   signatureFormatLabel,
   buildChallengeMessage,
   generateDeclarationNonce,
@@ -218,6 +219,73 @@ describe('BIP-322 Full verification (Taproot script-path)', () => {
     const result = await verifyBip322Full(P2TR_CSA_ADDR, FULL_MSG, P2TR_LEAF_SIG);
     expect(result.verified).toBe(false);
     expect(result.error).toMatch(/control block does not commit/i);
+  });
+});
+
+/**
+ * BIP-322 "Full" vectors for P2SH-wrapped SegWit multisig (P2SH-P2WSH, the
+ * legacy "3…" form used by older multisig vaults before native bech32 became
+ * common). These are deterministic witnesses produced offline from fixed
+ * private keys, serialized as the to_sign witness stack and base64-encoded —
+ * exactly the artefact a wrapped-multisig wallet exports. Verification
+ * independently rebuilds the BIP-322 to_spend/to_sign with the P2SH
+ * scriptPubKey, confirms hash160(redeemScript) matches the address, re-derives
+ * the BIP-143 sighash, and re-runs the multisig script.
+ */
+const P2SH_P2WSH_2OF2_ADDR = '3GKSstjZTsY2XfdxbzDtWTJJEw4B4918PY';
+const P2SH_P2WSH_2OF2_SIG =
+  'BABIMEUCIQCadTCxF4nxWc3SUPxswQANiHXbElgvkdWBCwUxGf3xfgIgBA9b/XFCIH2+rqWUXv53UolAR2rxfAHc0IdUHma8meoBSDBFAiEA8GtfmPQfcFLZRRHzPHISGVvrzeCGtM2yHpoAcl7TlHMCIBId6VTsTZ+cElN8SdhCiNa+iIX8diqxLMEEeX6Ih/KeAUdSIQNPNVvct8wK9yjvPM65YV2QaEu1sspfhZqw8LcEB1hxqiECRm1/yuVj5csJoNGHC7WANEgEYXh5oUlJzyIoXxuuPydSrg==';
+
+const P2SH_P2WSH_2OF3_ADDR = '3Fb8YstDgknYfB3hHVvNv5YckPJREWg6k4';
+const P2SH_P2WSH_2OF3_SIG =
+  'BABIMEUCIQCggqw56AMHc1lP0f5UaRBAfpn7TgQ+xiYE67R9vG0DMAIgf7+74GcO/IelJSgA9203iKl35Y2dua24+YQ8Pfk8iZcBSDBFAiEAlen4NupPDjxdlJQ9gxithLMNFZpV71CvYz+pen0j1KgCIG2kCzm9otoQZgiIHQ1jBUsrCWq2SXU+9sPL0mvaYgyJAWlSIQNPNVvct8wK9yjvPM65YV2QaEu1sspfhZqw8LcEB1hxqiECRm1/yuVj5csJoNGHC7WANEgEYXh5oUlJzyIoXxuuPychAjxyrdtP3wmvlPDJTX/pKjhqfnDPih2FkWOGuyU1x7GxU64=';
+
+describe('BIP-322 Full verification (P2SH-wrapped multisig)', () => {
+  it('verifies a 2-of-2 P2SH-P2WSH multisig script-path signature', async () => {
+    const result = await verifyBip322P2SH(P2SH_P2WSH_2OF2_ADDR, FULL_MSG, P2SH_P2WSH_2OF2_SIG);
+    expect(result.verified).toBe(true);
+    expect(result.format).toBe('bip322');
+  });
+
+  it('verifies a 2-of-3 P2SH-P2WSH multisig (signed by two of three cosigners)', async () => {
+    const result = await verifyBip322P2SH(P2SH_P2WSH_2OF3_ADDR, FULL_MSG, P2SH_P2WSH_2OF3_SIG);
+    expect(result.verified).toBe(true);
+  });
+
+  it('rejects a wrapped-multisig signature against the wrong message', async () => {
+    const result = await verifyBip322P2SH(P2SH_P2WSH_2OF2_ADDR, 'Goodbye World', P2SH_P2WSH_2OF2_SIG);
+    expect(result.verified).toBe(false);
+    expect(result.error).toBeTruthy();
+  });
+
+  it('rejects a wrapped-multisig signature against a different P2SH address', async () => {
+    const result = await verifyBip322P2SH(P2SH_P2WSH_2OF3_ADDR, FULL_MSG, P2SH_P2WSH_2OF2_SIG);
+    expect(result.verified).toBe(false);
+    expect(result.error).toMatch(/does not correspond|not supported/i);
+  });
+
+  it('rejects a non-P2SH address', async () => {
+    const result = await verifyBip322P2SH(P2WSH_2OF2_ADDR, FULL_MSG, P2SH_P2WSH_2OF2_SIG);
+    expect(result.verified).toBe(false);
+    expect(result.error).toMatch(/P2SH/i);
+  });
+
+  it('rejects invalid base64', async () => {
+    const result = await verifyBip322P2SH(P2SH_P2WSH_2OF2_ADDR, FULL_MSG, 'not base64!!!@@@');
+    expect(result.verified).toBe(false);
+    expect(result.error).toMatch(/base64/i);
+  });
+
+  it('routes a P2SH BIP-322 witness through verifyBitcoinSignature', async () => {
+    const result = await verifyBitcoinSignature(P2SH_P2WSH_2OF2_ADDR, FULL_MSG, P2SH_P2WSH_2OF2_SIG);
+    expect(result.verified).toBe(true);
+    expect(result.format).toBe('bip322');
+  });
+
+  it('still verifies a legacy 65-byte signature for a P2SH-P2WPKH address (fallback)', async () => {
+    const result = await verifyBitcoinSignature(VEC1.p2sh, MESSAGE, VEC1.sig);
+    expect(result.verified).toBe(true);
+    expect(result.format).toBe('legacy');
   });
 });
 

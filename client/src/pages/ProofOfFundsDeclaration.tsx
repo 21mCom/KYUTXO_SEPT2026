@@ -2608,9 +2608,10 @@ export default function ProofOfFundsDeclaration() {
                       Works for P2PKH (1…), P2SH-P2WPKH (3…), and native SegWit P2WPKH (bc1q…) addresses.
                     </p>
                     <p className="text-xs">
-                      BIP-322 (Simple) — for Taproot (bc1p…) addresses. Paste the base64
-                      signature produced by a BIP-322 capable wallet such as Bitcoin Core 24+
-                      or Sparrow.
+                      BIP-322 — for native SegWit (bc1q…), Taproot (bc1p…), and P2SH-wrapped
+                      (3…) addresses, including multisig vaults (P2WSH, P2SH-P2WSH, and Taproot
+                      script-path). Paste the base64 signature produced by a BIP-322 capable
+                      wallet such as Bitcoin Core 24+ or Sparrow.
                     </p>
                   </AlertDescription>
                 </Alert>

@@ -23,6 +23,20 @@
  * used when a 65-byte signature is pasted; anything else is treated as a
  * BIP-322 witness, so both formats are accepted.
  *
+ * BIP-322 "Full" (script-path) signatures additionally cover multisig and
+ * script vaults:
+ *
+ *   - P2WSH  (native SegWit bc1q…, 32-byte) — CHECKSIG / CHECKMULTISIG vaults
+ *   - P2TR   (Taproot bc1p…) script-path     — CHECKSIG / CHECKSIGADD tapscript
+ *   - P2SH-wrapped SegWit (3… / 2…)          — P2SH-P2WSH multisig and
+ *                                              P2SH-P2WPKH single-key vaults,
+ *                                              the legacy wrapped form used by
+ *                                              many existing multisig wallets
+ *
+ * A P2SH (3…/2…) address with a 65-byte signature keeps the legacy
+ * P2SH-P2WPKH path; any other signature is routed to the wrapped-script
+ * verifier.
+ *
  * No private keys, seeds, or network access are involved — only public
  * addresses and signatures.
  */
@@ -146,6 +160,31 @@ export async function verifyBitcoinSignature(
     }
     if (decodedLen !== 65) {
       return verifyBip322P2WPKH(trimmedAddr, message, sigBase64);
+    }
+  }
+
+  // P2SH (3… mainnet / 2… testnet) addresses are either a legacy
+  // P2SH-P2WPKH single key — which signs with the 65-byte Bitcoin Signed
+  // Message format handled below — or a P2SH-wrapped SegWit multisig /
+  // single-key vault (P2SH-P2WSH / P2SH-P2WPKH) that proves control with a
+  // BIP-322 witness. Route any non-65-byte signature on a P2SH address to the
+  // wrapped-script verifier; 65-byte legacy signatures keep the path below.
+  let base58Version = -1;
+  try {
+    base58Version = bitcoin.address.fromBase58Check(trimmedAddr).version;
+  } catch {
+    base58Version = -1;
+  }
+  // P2SH version bytes: 5 (mainnet 3…), 196 (testnet / regtest 2…).
+  if (base58Version === 5 || base58Version === 196) {
+    let decodedLen = -1;
+    try {
+      decodedLen = atob(sigBase64.trim()).length;
+    } catch {
+      decodedLen = -1;
+    }
+    if (decodedLen !== 65) {
+      return verifyBip322P2SH(trimmedAddr, message, sigBase64);
     }
   }
 
@@ -1064,6 +1103,208 @@ export async function verifyBip322Full(
     error:
       'The BIP-322 Full (Taproot script-path) signature did not verify against this address. ' +
       'Make sure the message matches exactly and that enough cosigners signed.',
+  };
+}
+
+/**
+ * Verify a BIP-322 witness for a P2SH-wrapped SegWit address (3… mainnet /
+ * 2… testnet). Covers the two common wrapped forms used by older multisig and
+ * single-key vaults:
+ *
+ *   - P2SH-P2WSH  : a wrapped multisig / miniscript vault — the redeem script
+ *                   is `OP_0 <32-byte sha256(witnessScript)>`
+ *   - P2SH-P2WPKH : a wrapped single key — the redeem script is
+ *                   `OP_0 <20-byte hash160(pubkey)>`
+ *
+ * For a P2SH-wrapped SegWit input the redeem script *is* the native witness
+ * program, so we reconstruct it from the witness, confirm
+ * hash160(redeemScript) matches the P2SH address, and then verify exactly as
+ * the native SegWit case. The only difference from the native form is that the
+ * BIP-322 virtual to_spend output carries the P2SH scriptPubKey
+ * (`OP_HASH160 <20> OP_EQUAL`), which changes its txid and therefore the
+ * to_sign BIP-143 sighash. The redeem-script push in the to_sign scriptSig does
+ * not enter the BIP-143 sighash, so it is irrelevant to verification.
+ *
+ * Genuinely invalid signatures, mismatched scripts, and bare (non-SegWit) P2SH
+ * spends all produce clear errors rather than a silent pass.
+ */
+export async function verifyBip322P2SH(
+  address: string,
+  message: string,
+  sigBase64: string,
+): Promise<VerificationResult> {
+  let scriptHash: Uint8Array;
+  try {
+    const decoded = bitcoin.address.fromBase58Check(address.trim());
+    if (decoded.version !== 5 && decoded.version !== 196) {
+      return {
+        verified: false,
+        error: 'Address is not a P2SH (3… / 2…) address.',
+      };
+    }
+    scriptHash = new Uint8Array(decoded.hash);
+  } catch {
+    return { verified: false, error: 'Could not decode the P2SH address.' };
+  }
+
+  let witnessBytes: Uint8Array;
+  try {
+    const binary = atob(sigBase64.trim());
+    witnessBytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) witnessBytes[i] = binary.charCodeAt(i);
+  } catch {
+    return { verified: false, error: 'Signature is not valid base64.' };
+  }
+
+  let witness: Uint8Array[];
+  try {
+    witness = parseWitnessStack(witnessBytes);
+  } catch {
+    return {
+      verified: false,
+      error: 'Could not parse the BIP-322 witness. Paste the full base64 signature from your wallet.',
+    };
+  }
+
+  if (witness.length < 1) {
+    return { verified: false, error: 'The BIP-322 witness is empty.' };
+  }
+
+  let msgHash: Uint8Array;
+  try {
+    msgHash = await bip322MessageHash(message);
+  } catch {
+    return { verified: false, error: 'Failed to compute the BIP-322 message hash.' };
+  }
+
+  // P2SH scriptPubKey for the virtual to_spend output: OP_HASH160 <20> OP_EQUAL.
+  const spk = concatBytes(
+    new Uint8Array([0xa9, 0x14]),
+    scriptHash,
+    new Uint8Array([0x87]),
+  );
+
+  const scriptSig = new Uint8Array(34);
+  scriptSig[0] = 0x00; // OP_0
+  scriptSig[1] = 0x20; // push 32 bytes
+  scriptSig.set(msgHash, 2);
+
+  let toSign: bitcoin.Transaction;
+  try {
+    const toSpend = new bitcoin.Transaction();
+    toSpend.version = 0;
+    toSpend.locktime = 0;
+    toSpend.addInput(new Uint8Array(32), 0xffffffff, 0, scriptSig);
+    toSpend.addOutput(spk, BigInt(0));
+
+    toSign = new bitcoin.Transaction();
+    toSign.version = 0;
+    toSign.locktime = 0;
+    toSign.addInput(toSpend.getHash(), 0, 0);
+    toSign.addOutput(new Uint8Array([0x6a]), BigInt(0)); // OP_RETURN
+  } catch (err) {
+    return {
+      verified: false,
+      error: `BIP-322 (P2SH) verification failed: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+
+  // P2SH-P2WSH: the last witness item is the witnessScript; the redeem script
+  // is OP_0 <sha256(witnessScript)>, whose hash160 must match the address.
+  const witnessScript = witness[witness.length - 1];
+  let wsHash: Uint8Array;
+  try {
+    wsHash = await sha256(witnessScript);
+  } catch {
+    return { verified: false, error: 'Could not hash the witness script.' };
+  }
+  const redeemScriptWSH = concatBytes(new Uint8Array([0x00, 0x20]), wsHash);
+  const redeemHashWSH = new Uint8Array(bitcoin.crypto.hash160(redeemScriptWSH));
+  if (bytesEqual(redeemHashWSH, scriptHash)) {
+    const inputStack = witness.slice(0, witness.length - 1);
+    const computeSighash = (hashType: number): Uint8Array =>
+      new Uint8Array(
+        toSign.hashForWitnessV0(0, witnessScript as Buffer, BigInt(0), hashType),
+      );
+    let ok: boolean;
+    try {
+      ok = execWitnessScriptV0(witnessScript, inputStack, computeSighash);
+    } catch (err) {
+      return {
+        verified: false,
+        error: `BIP-322 (P2SH-P2WSH) verification failed: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      };
+    }
+    if (ok) return { verified: true, format: 'bip322' };
+    return {
+      verified: false,
+      error:
+        'The BIP-322 (P2SH-P2WSH) signature did not verify against this address. ' +
+        'Make sure the message matches exactly and that enough cosigners signed.',
+    };
+  }
+
+  // P2SH-P2WPKH: a wrapped single key. The witness holds [DER sig, 33-byte
+  // pubkey]; the redeem script is OP_0 <hash160(pubkey)>.
+  if (witness.length === 2 && witness[1].length === 33) {
+    const sigDer = witness[0];
+    const pubkey = witness[1];
+    const keyHash = new Uint8Array(bitcoin.crypto.hash160(pubkey));
+    const redeemScriptWPKH = concatBytes(new Uint8Array([0x00, 0x14]), keyHash);
+    const redeemHashWPKH = new Uint8Array(bitcoin.crypto.hash160(redeemScriptWPKH));
+    if (bytesEqual(redeemHashWPKH, scriptHash)) {
+      let sig64: Uint8Array;
+      let hashType: number;
+      try {
+        const dec = bitcoin.script.signature.decode(sigDer);
+        sig64 = dec.signature;
+        hashType = dec.hashType;
+      } catch {
+        return {
+          verified: false,
+          error: 'Could not decode the DER signature inside the BIP-322 witness.',
+        };
+      }
+      try {
+        // BIP-143 scriptCode for a P2WPKH input is the implicit P2PKH script:
+        //   OP_DUP OP_HASH160 <20-byte hash> OP_EQUALVERIFY OP_CHECKSIG
+        const scriptCode = new Uint8Array(25);
+        scriptCode[0] = 0x76; // OP_DUP
+        scriptCode[1] = 0xa9; // OP_HASH160
+        scriptCode[2] = 0x14; // push 20 bytes
+        scriptCode.set(keyHash, 3);
+        scriptCode[23] = 0x88; // OP_EQUALVERIFY
+        scriptCode[24] = 0xac; // OP_CHECKSIG
+
+        const sighash = toSign.hashForWitnessV0(0, scriptCode, BigInt(0), hashType);
+        const ok = ecc.verify(sighash, pubkey, sig64);
+        if (ok) return { verified: true, format: 'bip322' };
+        return {
+          verified: false,
+          error:
+            'The BIP-322 (P2SH-P2WPKH) signature did not verify against this address. ' +
+            'Make sure the message matches exactly and that you signed with the wallet holding this address.',
+        };
+      } catch (err) {
+        return {
+          verified: false,
+          error: `BIP-322 (P2SH-P2WPKH) verification failed: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        };
+      }
+    }
+  }
+
+  return {
+    verified: false,
+    error:
+      'The witness does not correspond to this P2SH address. ' +
+      'BIP-322 verification supports P2SH-wrapped SegWit (P2SH-P2WSH multisig / P2SH-P2WPKH) vaults; ' +
+      'bare (non-SegWit) P2SH multisig is not supported. ' +
+      'Make sure you signed with the wallet that holds this exact address.',
   };
 }
 
