@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useMemo } from "react";
+import { useState, useRef, useCallback, useMemo, useEffect } from "react";
 import {
   FileText,
   Loader2,
@@ -12,6 +12,10 @@ import {
   ChevronDown,
   ChevronUp,
   Download,
+  Shield,
+  ShieldCheck,
+  Copy,
+  ClipboardCheck,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -24,6 +28,7 @@ import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useNodeSettings } from "@/hooks/use-node-settings";
 import { useOwners } from "@/hooks/use-owners";
 import { useWalletNames } from "@/hooks/use-wallet-names";
@@ -33,9 +38,15 @@ import { sanitizePdfText } from "@/lib/pdfText";
 import { computeStatsForAddresses } from "@/lib/data/address-stats";
 import { getRecordsByType } from "@/lib/data/record-crud";
 import { useToast } from "@/hooks/use-toast";
+import {
+  buildChallengeMessage,
+  verifyBitcoinSignature,
+  generateDeclarationNonce,
+} from "@/lib/signatureVerify";
 
 type BalanceSource = "live" | "offline";
 type RowStatus = "pending" | "loading" | "done" | "error";
+type ControlStatus = "idle" | "verifying" | "verified" | "failed";
 
 interface AddressRow {
   raw: string;
@@ -45,6 +56,13 @@ interface AddressRow {
   balanceSats?: number;
   error?: string;
   lastSyncTime?: number;
+}
+
+interface ControlState {
+  paste: string;
+  status: ControlStatus;
+  error?: string;
+  verifiedSig?: string;
 }
 
 interface BalanceSummary {
@@ -132,6 +150,40 @@ export default function ProofOfFundsDeclaration() {
   const [purpose, setPurpose] = useState("");
   const [statement, setStatement] = useState("");
 
+  // Declaration nonce — generated once per page session
+  const [declarationNonce] = useState<string>(() => generateDeclarationNonce());
+
+  // Proof of control
+  // Map of address -> per-address control verification state
+  const [controlStates, setControlStates] = useState<Record<string, ControlState>>({});
+  // Track which addresses' challenge messages have been copied
+  const [copiedAddresses, setCopiedAddresses] = useState<Set<string>>(new Set());
+
+  // When declarant identity fields change, any previously-verified signatures
+  // are no longer valid (the challenge message they signed has changed).
+  const prevDeclarantRef = useRef({ name: declarantName, date: declarationDate, purpose });
+  useEffect(() => {
+    const prev = prevDeclarantRef.current;
+    if (
+      prev.name !== declarantName ||
+      prev.date !== declarationDate ||
+      prev.purpose !== purpose
+    ) {
+      prevDeclarantRef.current = { name: declarantName, date: declarationDate, purpose };
+      setControlStates((prev) => {
+        const updated: Record<string, ControlState> = {};
+        for (const [addr, cs] of Object.entries(prev)) {
+          if (cs.status === "verified") {
+            updated[addr] = { paste: cs.paste, status: "idle" };
+          } else {
+            updated[addr] = cs;
+          }
+        }
+        return updated;
+      });
+    }
+  }, [declarantName, declarationDate, purpose]);
+
   // Fiat
   const [fiatCurrency, setFiatCurrency] = useState("USD");
   const [fiatRate, setFiatRate] = useState("");
@@ -157,6 +209,12 @@ export default function ProofOfFundsDeclaration() {
   );
 
   const fiatTotal = fiatValid && summary ? (totalSats / 1e8) * fiatRateNum : null;
+
+  // Proof-of-control summary counts
+  const verifiedCount = useMemo(
+    () => doneRows.filter((r) => controlStates[r.raw]?.status === "verified").length,
+    [doneRows, controlStates]
+  );
 
   const canGeneratePdf =
     doneRows.length > 0 &&
@@ -233,7 +291,6 @@ export default function ProofOfFundsDeclaration() {
             const info = await provider.getAddressInfo(address);
             balanceSats = info.balanceSats ?? 0;
           } else {
-            // Fallback: get all txs and derive balance
             const { computeHistoryFromTxs } = await import("@/lib/providers/address-history");
             const txs = await provider.getAddressTransactions(address);
             const history = computeHistoryFromTxs(address, txs);
@@ -259,7 +316,7 @@ export default function ProofOfFundsDeclaration() {
           ? `Live on-chain check — block ${blockHeight.toLocaleString()} (${formatUnix(nowTs)})`
           : `Live on-chain check — ${formatUnix(nowTs)}`;
         setSummary({
-          totalSats: 0, // recalculated from rows
+          totalSats: 0,
           source: "live",
           asOfLabel,
           blockHeight,
@@ -267,9 +324,7 @@ export default function ProofOfFundsDeclaration() {
         });
       }
     } else {
-      // Offline mode: compute from vault data
       const validAddresses = validIndices.map(({ r }) => r.raw);
-      // Mark all as loading
       setRows((prev) =>
         prev.map((r) => (!r.isInvalid ? { ...r, status: "loading" } : r))
       );
@@ -277,7 +332,6 @@ export default function ProofOfFundsDeclaration() {
       try {
         const statsMap = await computeStatsForAddresses(validAddresses);
 
-        // Get last sync time from records
         let lastSyncTime: number | undefined;
         try {
           const allRecords = await getRecordsByType("address");
@@ -348,8 +402,96 @@ export default function ProofOfFundsDeclaration() {
     setSummary(null);
     setProviderError(null);
     setPastedText("");
+    setControlStates({});
+    setCopiedAddresses(new Set());
   };
 
+  // Per-address: copy the challenge message to clipboard
+  const handleCopyChallenge = useCallback(
+    (address: string) => {
+      const msg = buildChallengeMessage({
+        address,
+        declarantName,
+        declarationDate,
+        purpose,
+        nonce: declarationNonce,
+      });
+      navigator.clipboard.writeText(msg).then(() => {
+        setCopiedAddresses((prev) => new Set(prev).add(address));
+        setTimeout(() => {
+          setCopiedAddresses((prev) => {
+            const next = new Set(prev);
+            next.delete(address);
+            return next;
+          });
+        }, 2000);
+      });
+    },
+    [declarantName, declarationDate, purpose, declarationNonce]
+  );
+
+  // Per-address: update pasted signature text
+  const handleSignaturePaste = useCallback((address: string, value: string) => {
+    setControlStates((prev) => ({
+      ...prev,
+      [address]: { ...prev[address], paste: value, status: "idle", error: undefined, verifiedSig: undefined },
+    }));
+  }, []);
+
+  // Per-address: verify pasted signature
+  const handleVerify = useCallback(
+    async (address: string) => {
+      const cs = controlStates[address];
+      const paste = cs?.paste?.trim() ?? "";
+      if (!paste) {
+        setControlStates((prev) => ({
+          ...prev,
+          [address]: { ...prev[address], status: "failed", error: "Paste a signature first." },
+        }));
+        return;
+      }
+
+      setControlStates((prev) => ({
+        ...prev,
+        [address]: { ...prev[address], status: "verifying", error: undefined },
+      }));
+
+      const message = buildChallengeMessage({
+        address,
+        declarantName,
+        declarationDate,
+        purpose,
+        nonce: declarationNonce,
+      });
+
+      try {
+        const result = await verifyBitcoinSignature(address, message, paste);
+        if (result.verified) {
+          setControlStates((prev) => ({
+            ...prev,
+            [address]: { paste, status: "verified", verifiedSig: paste },
+          }));
+        } else {
+          setControlStates((prev) => ({
+            ...prev,
+            [address]: { paste, status: "failed", error: result.error },
+          }));
+        }
+      } catch (err) {
+        setControlStates((prev) => ({
+          ...prev,
+          [address]: {
+            paste,
+            status: "failed",
+            error: err instanceof Error ? err.message : "Verification failed unexpectedly.",
+          },
+        }));
+      }
+    },
+    [controlStates, declarantName, declarationDate, purpose, declarationNonce]
+  );
+
+  // PDF generation
   const generatePdf = useCallback(async () => {
     if (!canGeneratePdf) return;
     setIsGeneratingPdf(true);
@@ -373,16 +515,29 @@ export default function ProofOfFundsDeclaration() {
         y += size * 0.5;
       };
 
-      const addWrapped = (text: string, size = 9) => {
+      const addWrapped = (text: string, size = 9, color: [number, number, number] = [0, 0, 0]) => {
         doc.setFontSize(size);
         doc.setFont("helvetica", "normal");
-        doc.setTextColor(0, 0, 0);
+        doc.setTextColor(...color);
         const lines = doc.splitTextToSize(sanitizePdfText(text), contentW) as string[];
         doc.text(lines, margin, y);
         y += lines.length * size * 0.45 + 2;
       };
 
       const addSpacer = (h = 4) => { y += h; };
+
+      const checkPageBreak = (needed = 20) => {
+        const pageH = doc.internal.pageSize.getHeight();
+        if (y + needed > pageH - 15) {
+          doc.addPage();
+          y = 20;
+        }
+      };
+
+      // Gather verified addresses for later appendix
+      const verifiedRows = doneRows.filter((r) => controlStates[r.raw]?.status === "verified");
+      const hasVerified = verifiedRows.length > 0;
+      const allVerified = doneRows.length > 0 && verifiedRows.length === doneRows.length;
 
       // ── Title ──────────────────────────────────────────────────────────────
       doc.setFontSize(18);
@@ -407,6 +562,8 @@ export default function ProofOfFundsDeclaration() {
       addLine(`Declaration Date: ${declarationDate}`, 10);
       addSpacer(1);
       addLine(`Purpose: ${purpose}`, 10);
+      addSpacer(1);
+      addLine(`Declaration Reference: ${declarationNonce}`, 10);
       addSpacer(4);
 
       // ── Statement ──────────────────────────────────────────────────────────
@@ -430,21 +587,35 @@ export default function ProofOfFundsDeclaration() {
       addSpacer(2);
 
       const tableStartY = y;
-      const tableBody = doneRows.map((r) => [
-        sanitizePdfText(r.raw),
-        `${formatBTC(r.balanceSats ?? 0)} BTC`,
-      ]);
+      const tableBody = doneRows.map((r) => {
+        const cs = controlStates[r.raw];
+        const ctrlLabel = cs?.status === "verified" ? "Control Verified" : "Self-Declared (Unverified)";
+        return [
+          sanitizePdfText(r.raw),
+          `${formatBTC(r.balanceSats ?? 0)} BTC`,
+          sanitizePdfText(ctrlLabel),
+        ];
+      });
 
       autoTable(doc, {
         startY: tableStartY,
-        head: [["Bitcoin Address", "Balance (BTC)"]],
+        head: [["Bitcoin Address", "Balance (BTC)", "Control Status"]],
         body: tableBody,
         margin: { left: margin, right: margin },
-        styles: { fontSize: 8, font: "helvetica", cellPadding: 2 },
+        styles: { fontSize: 7.5, font: "helvetica", cellPadding: 2 },
         headStyles: { fillColor: [40, 40, 40], textColor: [255, 255, 255], fontStyle: "bold" },
         columnStyles: {
-          0: { cellWidth: contentW * 0.68, font: "courier" },
-          1: { cellWidth: contentW * 0.32, halign: "right" },
+          0: { cellWidth: contentW * 0.55, font: "courier" },
+          1: { cellWidth: contentW * 0.22, halign: "right" },
+          2: { cellWidth: contentW * 0.23 },
+        },
+        didParseCell: (data: any) => {
+          if (data.column.index === 2 && data.section === "body") {
+            const row = doneRows[data.row.index];
+            if (row && controlStates[row.raw]?.status === "verified") {
+              data.cell.styles.textColor = [0, 120, 0];
+            }
+          }
         },
         didDrawPage: () => { /* allow page breaks */ },
       });
@@ -454,12 +625,14 @@ export default function ProofOfFundsDeclaration() {
       // ── Totals ─────────────────────────────────────────────────────────────
       doc.setFontSize(10);
       doc.setFont("helvetica", "bold");
+      doc.setTextColor(0, 0, 0);
       doc.text(`TOTAL: ${formatBTC(totalSats)} BTC`, margin, y);
       y += 5;
 
       if (fiatValid && fiatTotal !== null) {
         doc.setFont("helvetica", "normal");
         doc.setFontSize(9);
+        doc.setTextColor(0, 0, 0);
         const fiatLine = `Fiat equivalent: ${fiatTotal.toLocaleString("en-US", {
           style: "currency",
           currency: fiatCurrency,
@@ -483,11 +656,19 @@ export default function ProofOfFundsDeclaration() {
       addSpacer(4);
 
       // ── Standard Disclaimers ───────────────────────────────────────────────
+      checkPageBreak(50);
       addLine("DISCLAIMERS", 11, true);
       addSpacer(2);
+
+      const controlDisclaimerLine = allVerified
+        ? "2. Cryptographic proof-of-control is included for all addresses via Bitcoin Signed Message signatures. An appendix contains the challenge messages and signatures for independent re-verification."
+        : hasVerified
+        ? `2. Cryptographic proof-of-control is included for ${verifiedRows.length} of ${doneRows.length} address${doneRows.length !== 1 ? "es" : ""} via Bitcoin Signed Message signatures. The remaining addresses are self-declared. An appendix contains the challenge messages and signatures for verified addresses.`
+        : "2. No cryptographic proof-of-control is included. All addresses are self-declared by the declarant.";
+
       const disclaimers = [
-        "1. This is a self-declaration. The declarant personally attests to ownership of the above Bitcoin addresses.",
-        "2. No cryptographic proof-of-control (signed message / BIP-322) is included in this version of the declaration.",
+        "1. This is a declaration produced by the declarant personally attesting to ownership of the above Bitcoin addresses.",
+        controlDisclaimerLine,
         "3. Balances reflect the data source indicated above and may not represent real-time on-chain state.",
         "4. This document was generated offline using KYUTXO. No data was transmitted to third parties during generation.",
         "5. This document does not constitute financial, legal, or tax advice.",
@@ -500,10 +681,12 @@ export default function ProofOfFundsDeclaration() {
       addSpacer(6);
 
       // ── Signature Block ────────────────────────────────────────────────────
+      checkPageBreak(30);
       addLine("SIGNATURE", 11, true);
       addSpacer(4);
       doc.setFontSize(10);
       doc.setFont("helvetica", "normal");
+      doc.setTextColor(0, 0, 0);
       doc.text("Declarant signature: ___________________________________", margin, y);
       y += 8;
       doc.text(`Date: ${sanitizePdfText(declarationDate)}`, margin, y);
@@ -521,6 +704,97 @@ export default function ProofOfFundsDeclaration() {
         margin,
         y
       );
+
+      // ── Appendix: Proof-of-Control Evidence ───────────────────────────────
+      if (hasVerified) {
+        doc.addPage();
+        y = 20;
+
+        doc.setFontSize(16);
+        doc.setFont("helvetica", "bold");
+        doc.setTextColor(0, 0, 0);
+        doc.text("APPENDIX: PROOF-OF-CONTROL EVIDENCE", margin, y);
+        y += 8;
+
+        doc.setLineWidth(0.5);
+        doc.line(margin, y, margin + contentW, y);
+        y += 6;
+
+        doc.setFontSize(8.5);
+        doc.setFont("helvetica", "normal");
+        const introLines = doc.splitTextToSize(
+          sanitizePdfText(
+            "The following section contains the challenge message and corresponding wallet signature for each address where cryptographic proof-of-control was provided. " +
+            "The signature was produced by the declarant using their own wallet or hardware device — no private keys were shared with KYUTXO. " +
+            "To independently verify, use any standard Bitcoin message-verification tool with the address, message, and signature shown below."
+          ),
+          contentW
+        ) as string[];
+        doc.text(introLines, margin, y);
+        y += introLines.length * 8.5 * 0.45 + 6;
+
+        for (const row of verifiedRows) {
+          checkPageBreak(60);
+          const cs = controlStates[row.raw]!;
+
+          doc.setFontSize(9);
+          doc.setFont("helvetica", "bold");
+          doc.setTextColor(0, 0, 0);
+          doc.text(sanitizePdfText(`Address: ${row.raw}`), margin, y);
+          y += 5;
+
+          const challengeMsg = buildChallengeMessage({
+            address: row.raw,
+            declarantName,
+            declarationDate,
+            purpose,
+            nonce: declarationNonce,
+          });
+
+          doc.setFontSize(8);
+          doc.setFont("helvetica", "bold");
+          doc.text("Challenge Message:", margin, y);
+          y += 4;
+
+          doc.setFont("courier", "normal");
+          doc.setFontSize(7.5);
+          const msgLines = doc.splitTextToSize(sanitizePdfText(challengeMsg), contentW - 4) as string[];
+          doc.setFillColor(245, 245, 245);
+          doc.rect(margin, y - 1, contentW, msgLines.length * 7.5 * 0.42 + 4, "F");
+          doc.text(msgLines, margin + 2, y + 1.5);
+          y += msgLines.length * 7.5 * 0.42 + 6;
+
+          checkPageBreak(20);
+          doc.setFont("helvetica", "bold");
+          doc.setFontSize(8);
+          doc.setTextColor(0, 0, 0);
+          doc.text("Wallet Signature (base64):", margin, y);
+          y += 4;
+
+          doc.setFont("courier", "normal");
+          doc.setFontSize(7.5);
+          const sigLines = doc.splitTextToSize(sanitizePdfText(cs.verifiedSig ?? ""), contentW - 4) as string[];
+          doc.setFillColor(245, 245, 245);
+          doc.rect(margin, y - 1, contentW, sigLines.length * 7.5 * 0.42 + 4, "F");
+          doc.text(sigLines, margin + 2, y + 1.5);
+          y += sigLines.length * 7.5 * 0.42 + 6;
+
+          doc.setFont("helvetica", "normal");
+          doc.setFontSize(7.5);
+          doc.setTextColor(0, 130, 0);
+          doc.text(
+            sanitizePdfText("Status: Control Verified — signature matches this address."),
+            margin,
+            y
+          );
+          doc.setTextColor(0, 0, 0);
+          y += 8;
+          doc.setLineWidth(0.2);
+          doc.setDrawColor(200, 200, 200);
+          doc.line(margin, y, margin + contentW, y);
+          y += 5;
+        }
+      }
 
       const safeName = sanitizePdfText(declarantName.replace(/\s+/g, "_").replace(/[^a-zA-Z0-9_-]/g, ""));
       doc.save(`proof-of-funds-${safeName || "declaration"}-${declarationDate}.pdf`);
@@ -541,6 +815,7 @@ export default function ProofOfFundsDeclaration() {
     declarantName,
     declarantContact,
     declarationDate,
+    declarationNonce,
     purpose,
     statement,
     summary,
@@ -550,11 +825,17 @@ export default function ProofOfFundsDeclaration() {
     fiatTotal,
     fiatCurrency,
     fiatRateNum,
+    controlStates,
     toast,
   ]);
 
   const validCount = validRows.length;
   const doneCount = doneRows.length + errorRows.length;
+
+  const declarantInfoComplete =
+    declarantName.trim() !== "" &&
+    declarationDate !== "" &&
+    purpose.trim() !== "";
 
   return (
     <div className="flex-1 overflow-y-auto p-6">
@@ -760,7 +1041,6 @@ export default function ProofOfFundsDeclaration() {
                 </Alert>
               )}
 
-              {/* Valid address table */}
               {validRows.length > 0 && (
                 <Table>
                   <TableHeader>
@@ -779,8 +1059,6 @@ export default function ProofOfFundsDeclaration() {
                         <TableCell className="text-right font-mono tabular-nums">
                           {row.status === "done"
                             ? formatBTC(row.balanceSats ?? 0)
-                            : row.status === "error"
-                            ? <span className="text-muted-foreground">—</span>
                             : <span className="text-muted-foreground">—</span>
                           }
                         </TableCell>
@@ -816,7 +1094,6 @@ export default function ProofOfFundsDeclaration() {
                 </Table>
               )}
 
-              {/* Total */}
               {doneRows.length > 0 && (
                 <div className="flex items-center justify-between rounded-md border bg-muted/30 px-4 py-3">
                   <span className="font-semibold text-sm">Total Balance</span>
@@ -838,7 +1115,6 @@ export default function ProofOfFundsDeclaration() {
                 </div>
               )}
 
-              {/* Invalid addresses */}
               {invalidRows.length > 0 && (
                 <div className="rounded-md border border-destructive/30">
                   <button
@@ -1014,12 +1290,237 @@ export default function ProofOfFundsDeclaration() {
           </CardContent>
         </Card>
 
-        {/* Step 5: Generate PDF */}
+        {/* Step 5: Proof of Control */}
         <Card>
           <CardHeader>
-            <CardTitle>Step 5 — Generate PDF</CardTitle>
+            <CardTitle className="flex items-center gap-2">
+              <Shield className="h-5 w-5" />
+              Step 5 — Proof of Control
+              <Badge variant="secondary" className="ml-1 text-xs font-normal">Optional</Badge>
+            </CardTitle>
             <CardDescription>
-              All steps above must be complete before a PDF can be generated.
+              Strengthen the declaration by proving cryptographic control of each address.
+              Sign the challenge message below in your own wallet, then paste the resulting
+              signature here. No private keys are shared with KYUTXO — only the address,
+              message, and signature are used for verification.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {!declarantInfoComplete && (
+              <Alert>
+                <AlertCircle className="h-4 w-4" />
+                <AlertDescription>
+                  Complete Step 3 (declarant name, date, and purpose) first so the challenge message
+                  can be generated. Any signatures you collect must match that exact message.
+                </AlertDescription>
+              </Alert>
+            )}
+
+            {doneRows.length === 0 && (
+              <p className="text-sm text-muted-foreground">
+                Check balances for at least one valid address (Step 2) to unlock this step.
+              </p>
+            )}
+
+            {doneRows.length > 0 && declarantInfoComplete && (
+              <>
+                <Alert>
+                  <Shield className="h-4 w-4" />
+                  <AlertDescription className="space-y-1">
+                    <p className="font-medium">Supported formats</p>
+                    <p className="text-xs">
+                      Bitcoin Signed Message (legacy format) — supported by Bitcoin Core, Electrum,
+                      BlueWallet, Sparrow, Trezor, Ledger, and most hardware/software wallets.
+                      Works for P2PKH (1…), P2SH-P2WPKH (3…), and native SegWit P2WPKH (bc1q…) addresses.
+                      Taproot (bc1p…) is not supported in this version.
+                    </p>
+                  </AlertDescription>
+                </Alert>
+
+                {verifiedCount > 0 && (
+                  <div className="flex items-center gap-2 text-sm text-green-600 dark:text-green-400 font-medium">
+                    <ShieldCheck className="h-4 w-4" />
+                    {verifiedCount} of {doneRows.length} address{doneRows.length !== 1 ? "es" : ""} control-verified
+                  </div>
+                )}
+
+                <div className="space-y-6">
+                  {doneRows.map((row, idx) => {
+                    const cs = controlStates[row.raw] ?? { paste: "", status: "idle" as ControlStatus };
+                    const isTaproot = row.raw.startsWith("bc1p") || row.raw.startsWith("tb1p");
+                    const challengeMsg = buildChallengeMessage({
+                      address: row.raw,
+                      declarantName,
+                      declarationDate,
+                      purpose,
+                      nonce: declarationNonce,
+                    });
+                    const copied = copiedAddresses.has(row.raw);
+
+                    return (
+                      <div key={idx} className="space-y-3 rounded-md border p-4">
+                        <div className="flex items-start justify-between gap-2 flex-wrap">
+                          <div className="font-mono text-xs break-all text-muted-foreground">
+                            {row.raw}
+                          </div>
+                          {cs.status === "verified" && (
+                            <Badge className="gap-1 bg-green-600 dark:bg-green-700 text-white shrink-0">
+                              <ShieldCheck className="h-3 w-3" />
+                              Control Verified
+                            </Badge>
+                          )}
+                          {cs.status === "failed" && (
+                            <Badge variant="destructive" className="gap-1 shrink-0">
+                              <AlertCircle className="h-3 w-3" />
+                              Verification Failed
+                            </Badge>
+                          )}
+                          {cs.status === "idle" && (
+                            <Badge variant="secondary" className="gap-1 shrink-0">
+                              <Shield className="h-3 w-3" />
+                              Self-Declared (Unverified)
+                            </Badge>
+                          )}
+                        </div>
+
+                        {isTaproot ? (
+                          <p className="text-xs text-muted-foreground">
+                            Taproot (bc1p…) addresses use BIP-322 Schnorr signatures, which are not
+                            supported in this version. This address will be marked self-declared.
+                          </p>
+                        ) : (
+                          <>
+                            <div className="space-y-1">
+                              <div className="flex items-center justify-between">
+                                <Label className="text-xs font-medium">Challenge Message</Label>
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      onClick={() => handleCopyChallenge(row.raw)}
+                                      data-testid={`button-copy-challenge-${idx}`}
+                                      className="h-7 text-xs gap-1.5"
+                                    >
+                                      {copied ? (
+                                        <>
+                                          <ClipboardCheck className="h-3.5 w-3.5 text-green-600" />
+                                          Copied
+                                        </>
+                                      ) : (
+                                        <>
+                                          <Copy className="h-3.5 w-3.5" />
+                                          Copy
+                                        </>
+                                      )}
+                                    </Button>
+                                  </TooltipTrigger>
+                                  <TooltipContent>Copy message to clipboard</TooltipContent>
+                                </Tooltip>
+                              </div>
+                              <pre
+                                className="rounded-md bg-muted/60 px-3 py-2 text-xs font-mono whitespace-pre-wrap break-all leading-relaxed"
+                                data-testid={`text-challenge-${idx}`}
+                              >
+                                {challengeMsg}
+                              </pre>
+                              <p className="text-xs text-muted-foreground">
+                                In your wallet, use "Sign Message" (or equivalent) and paste the text
+                                above exactly as shown.
+                              </p>
+                            </div>
+
+                            <div className="space-y-2">
+                              <Label className="text-xs font-medium" htmlFor={`sig-input-${idx}`}>
+                                Paste Wallet Signature (base64)
+                              </Label>
+                              <Textarea
+                                id={`sig-input-${idx}`}
+                                placeholder="Paste the base64 signature from your wallet here…"
+                                className="min-h-[80px] font-mono text-xs resize-none"
+                                value={cs.paste}
+                                onChange={(e) => handleSignaturePaste(row.raw, e.target.value)}
+                                data-testid={`textarea-signature-${idx}`}
+                                disabled={cs.status === "verifying"}
+                              />
+
+                              {cs.status === "failed" && cs.error && (
+                                <Alert variant="destructive" className="py-2">
+                                  <AlertCircle className="h-3.5 w-3.5" />
+                                  <AlertDescription className="text-xs">
+                                    {cs.error}
+                                  </AlertDescription>
+                                </Alert>
+                              )}
+
+                              {cs.status === "verified" && (
+                                <div className="flex items-center gap-2 text-xs text-green-600 dark:text-green-400 font-medium">
+                                  <ShieldCheck className="h-3.5 w-3.5" />
+                                  Signature verified — control of this address is cryptographically proven.
+                                </div>
+                              )}
+
+                              <div className="flex gap-2">
+                                <Button
+                                  size="sm"
+                                  variant={cs.status === "verified" ? "outline" : "default"}
+                                  onClick={() => handleVerify(row.raw)}
+                                  disabled={cs.status === "verifying" || !cs.paste.trim()}
+                                  data-testid={`button-verify-${idx}`}
+                                >
+                                  {cs.status === "verifying" ? (
+                                    <>
+                                      <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
+                                      Verifying…
+                                    </>
+                                  ) : cs.status === "verified" ? (
+                                    <>
+                                      <ShieldCheck className="h-3.5 w-3.5 mr-1.5" />
+                                      Re-verify
+                                    </>
+                                  ) : (
+                                    <>
+                                      <Shield className="h-3.5 w-3.5 mr-1.5" />
+                                      Verify Signature
+                                    </>
+                                  )}
+                                </Button>
+
+                                {(cs.paste || cs.status !== "idle") && (
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    onClick={() =>
+                                      setControlStates((prev) => ({
+                                        ...prev,
+                                        [row.raw]: { paste: "", status: "idle" },
+                                      }))
+                                    }
+                                    data-testid={`button-clear-sig-${idx}`}
+                                  >
+                                    <X className="h-3.5 w-3.5 mr-1.5" />
+                                    Clear
+                                  </Button>
+                                )}
+                              </div>
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Step 6: Generate PDF */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Step 6 — Generate PDF</CardTitle>
+            <CardDescription>
+              All required steps above must be complete before a PDF can be generated.
               The PDF is created entirely in your browser — no data leaves your device.
             </CardDescription>
           </CardHeader>
@@ -1074,7 +1575,12 @@ export default function ProofOfFundsDeclaration() {
 
             {canGeneratePdf && (
               <div className="text-xs text-muted-foreground space-y-0.5">
-                <p>The PDF will include: declarant details, statement, {doneRows.length} address{doneRows.length !== 1 ? "es" : ""} with balances, total ({formatBTC(totalSats)} BTC){fiatValid && fiatTotal !== null ? `, fiat equivalent, ` : ", "}data source attestation, disclaimers, and a signature block.</p>
+                <p>
+                  The PDF will include: declarant details, statement, {doneRows.length} address{doneRows.length !== 1 ? "es" : ""} with
+                  balances and control status, total ({formatBTC(totalSats)} BTC){fiatValid && fiatTotal !== null ? ", fiat equivalent," : ","} data
+                  source attestation, disclaimers, and a signature block.
+                  {verifiedCount > 0 && ` An appendix will contain the challenge messages and signatures for ${verifiedCount} verified address${verifiedCount !== 1 ? "es" : ""}.`}
+                </p>
               </div>
             )}
           </CardContent>
