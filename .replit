@@ -65,6 +65,14 @@ args = "test-providers"
 task = "workflow.run"
 args = "no-buffer-global"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "proof-verify-browser-check"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "proof-verify-node-check"
+
 [[workflows.workflow]]
 name = "Start application"
 author = "agent"
@@ -158,6 +166,28 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-no-buffer-global.js"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "proof-verify-browser-check"
+author = "agent"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-proof-verify-browser.mjs"
+
+[[workflows.workflow]]
+name = "proof-verify-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/lib/proofVerificationBrowserCheck.test.ts client/src/lib/signatureVerify.test.ts"
 
 [workflows.workflow.metadata]
 isValidation = true
