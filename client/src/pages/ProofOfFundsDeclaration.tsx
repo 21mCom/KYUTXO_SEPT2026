@@ -36,6 +36,8 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { useNodeSettings } from "@/hooks/use-node-settings";
 import { useOwners } from "@/hooks/use-owners";
 import { useWalletNames } from "@/hooks/use-wallet-names";
+import { useRecordPreview } from "@/contexts/RecordPreviewContext";
+import { useLiveQuery } from "dexie-react-hooks";
 import { Link } from "wouter";
 import {
   createProviderFromSettings,
@@ -193,6 +195,12 @@ export default function ProofOfFundsDeclaration() {
   const { owners } = useOwners();
   const { walletNames } = useWalletNames();
   const { toast } = useToast();
+  const { openRecordEdit } = useRecordPreview();
+
+  // Address records, kept live so the provenance summary in Step 7 updates
+  // immediately after a record is edited from the "Fill in missing fields"
+  // quick-action.
+  const addressRecords = useLiveQuery(() => getRecordsByType("address"), []);
 
   // Address input
   const [addressTab, setAddressTab] = useState<"paste" | "vault">("paste");
@@ -290,6 +298,40 @@ export default function ProofOfFundsDeclaration() {
   );
 
   const fiatTotal = fiatValid && summary ? (totalSats / 1e8) * fiatRateNum : null;
+
+  // Per-address provenance completeness for the Step 7 summary. Mirrors the
+  // fields the Acquisition & Provenance appendix reads from each address
+  // record so users can see (and fill in) what's missing before generating.
+  const provenanceStatus = useMemo(() => {
+    const byAddress = new Map<string, NonNullable<typeof addressRecords>[number]>();
+    for (const rec of addressRecords ?? []) {
+      byAddress.set(rec.inputString, rec);
+    }
+    return doneRows.map((row) => {
+      const rec = byAddress.get(row.raw);
+      const hasRecord = !!rec;
+      const hasCounterparty =
+        !!(rec?.walletName?.trim() || rec?.label?.trim() || rec?.counterpartyType);
+      const missing: string[] = [];
+      if (hasRecord) {
+        if (!rec?.date) missing.push("Acquisition date");
+        if (!rec?.acquisitionMethod) missing.push("Acquisition method");
+        if (!hasCounterparty) missing.push("Counterparty");
+        if (!(rec?.costBasisUsd && rec.costBasisUsd > 0)) missing.push("Cost basis");
+      }
+      return {
+        address: row.raw,
+        recordId: rec?.id,
+        hasRecord,
+        missing,
+      };
+    });
+  }, [doneRows, addressRecords]);
+
+  const provenanceIncompleteCount = useMemo(
+    () => provenanceStatus.filter((s) => !s.hasRecord || s.missing.length > 0).length,
+    [provenanceStatus]
+  );
 
   // Proof-of-control summary counts
   const verifiedCount = useMemo(
@@ -2591,6 +2633,79 @@ export default function ProofOfFundsDeclaration() {
                       </li>
                       <li>Supporting documents: file attachments linked to the declared records</li>
                     </ul>
+                  </div>
+                )}
+
+                {doneRows.length > 0 && (
+                  <div className="space-y-2" data-testid="provenance-summary">
+                    <div className="flex items-center justify-between gap-2 flex-wrap">
+                      <Label className="text-sm font-medium">Provenance details per address</Label>
+                      {provenanceIncompleteCount === 0 ? (
+                        <Badge variant="secondary" className="text-xs font-normal" data-testid="badge-provenance-complete">
+                          <CheckCircle className="h-3 w-3 mr-1" />
+                          All recorded
+                        </Badge>
+                      ) : (
+                        <Badge variant="outline" className="text-xs font-normal" data-testid="badge-provenance-incomplete">
+                          <AlertCircle className="h-3 w-3 mr-1" />
+                          {provenanceIncompleteCount} need{provenanceIncompleteCount === 1 ? "s" : ""} attention
+                        </Badge>
+                      )}
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      Fields below are read into the appendix. Record them on each address to make
+                      the appendix more complete.
+                    </p>
+                    <div className="rounded-md border divide-y">
+                      {provenanceStatus.map((s) => (
+                        <div
+                          key={s.address}
+                          className="flex items-center justify-between gap-3 px-3 py-2 flex-wrap"
+                          data-testid={`provenance-row-${s.address}`}
+                        >
+                          <div className="min-w-0 space-y-1">
+                            <div className="font-mono text-xs truncate" title={s.address}>
+                              {truncateAddress(s.address)}
+                            </div>
+                            {!s.hasRecord ? (
+                              <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                                <AlertCircle className="h-3 w-3 shrink-0" />
+                                No vault record — provenance can't be recorded
+                              </div>
+                            ) : s.missing.length === 0 ? (
+                              <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                                <CheckCircle className="h-3 w-3 shrink-0" />
+                                All provenance fields recorded
+                              </div>
+                            ) : (
+                              <div className="flex items-center gap-1 flex-wrap">
+                                <span className="text-xs text-muted-foreground">Missing:</span>
+                                {s.missing.map((m) => (
+                                  <Badge
+                                    key={m}
+                                    variant="outline"
+                                    className="text-xs font-normal"
+                                  >
+                                    {m}
+                                  </Badge>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                          {s.hasRecord && s.missing.length > 0 && s.recordId !== undefined && (
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              onClick={() => openRecordEdit(s.recordId!, "acquisition")}
+                              data-testid={`button-fill-provenance-${s.address}`}
+                            >
+                              Fill in missing fields
+                            </Button>
+                          )}
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 )}
               </>

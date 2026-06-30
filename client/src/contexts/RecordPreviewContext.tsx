@@ -21,7 +21,7 @@ import { invalidateCachedRecord } from "@/lib/metadata-hover";
 interface RecordPreviewContextType {
   openRecordPreview: (recordId: number) => Promise<void>;
   openRecordPreviewByAddress: (inputString: string) => Promise<void>;
-  openRecordEdit: (recordId: number) => Promise<void>;
+  openRecordEdit: (recordId: number, scrollToSection?: "acquisition") => Promise<void>;
   closePreview: () => void;
   isOpen: boolean;
   isLoading: boolean;
@@ -92,6 +92,7 @@ export function RecordPreviewProvider({ children }: { children: ReactNode }) {
   const [editingRecord, setEditingRecord] = useState<DbRecord | null>(null);
   const [editingAttachments, setEditingAttachments] = useState<Attachment[]>([]);
   const [isFormOpen, setIsFormOpen] = useState(false);
+  const [editScrollSection, setEditScrollSection] = useState<"acquisition" | undefined>(undefined);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<{ current: number; total: number } | null>(null);
 
@@ -206,7 +207,7 @@ export function RecordPreviewProvider({ children }: { children: ReactNode }) {
     }
   }, [record, loadAttachments]);
 
-  const openRecordEdit = useCallback(async (recordId: number) => {
+  const openRecordEdit = useCallback(async (recordId: number, scrollToSection?: "acquisition") => {
     try {
       const raw = await getRecord(recordId);
       if (!raw) {
@@ -218,6 +219,7 @@ export function RecordPreviewProvider({ children }: { children: ReactNode }) {
         return;
       }
       setEditingRecord(raw);
+      setEditScrollSection(scrollToSection);
       setIsFormOpen(true);
       try {
         const atts = await getAttachmentsByRecordIdOrIdentifier(recordId, raw.inputString || "");
@@ -241,6 +243,7 @@ export function RecordPreviewProvider({ children }: { children: ReactNode }) {
     setIsFormOpen(false);
     setEditingRecord(null);
     setEditingAttachments([]);
+    setEditScrollSection(undefined);
   }, [isSubmitting]);
 
   const refreshEditingAttachments = useCallback(async () => {
@@ -402,6 +405,7 @@ export function RecordPreviewProvider({ children }: { children: ReactNode }) {
         onCheckDuplicate={handleCheckDuplicate}
         existingAttachments={editingAttachments}
         onAttachmentDeleted={refreshEditingAttachments}
+        scrollToSection={editScrollSection}
       />
     </RecordPreviewContext.Provider>
   );

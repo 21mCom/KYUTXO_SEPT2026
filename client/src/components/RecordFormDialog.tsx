@@ -112,6 +112,8 @@ interface RecordFormDialogProps {
   onCheckDuplicate?: (inputString: string) => Promise<ExistingRecord | undefined>;
   existingAttachments?: Attachment[];
   onAttachmentDeleted?: () => void;
+  // When set, the dialog scrolls to the named section after it opens.
+  scrollToSection?: "acquisition";
 }
 
 export function RecordFormDialog({ 
@@ -131,6 +133,7 @@ export function RecordFormDialog({
   onCheckDuplicate,
   existingAttachments = [],
   onAttachmentDeleted,
+  scrollToSection,
 }: RecordFormDialogProps) {
   const getDefaultFormData = () => ({
     inputString: "",
@@ -173,6 +176,7 @@ export function RecordFormDialog({
   const [newOwner, setNewOwner] = useState("");
   const [newWalletName, setNewWalletName] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const acquisitionSectionRef = useRef<HTMLDivElement>(null);
   
   // Duplicate detection state
   const [duplicateRecord, setDuplicateRecord] = useState<ExistingRecord | undefined>();
@@ -217,6 +221,16 @@ export function RecordFormDialog({
       setVaultNotes(data.vault?.vaultNotes || '');
     }
   }, [open, initialData]);
+
+  // Scroll to a requested section once the dialog has opened and rendered.
+  useEffect(() => {
+    if (open && scrollToSection === "acquisition") {
+      const t = setTimeout(() => {
+        acquisitionSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      }, 150);
+      return () => clearTimeout(t);
+    }
+  }, [open, scrollToSection, formData.type]);
 
   // Check for duplicate when inputString changes (debounced)
   const checkForDuplicate = useCallback(async (inputString: string) => {
@@ -810,29 +824,100 @@ export function RecordFormDialog({
             </div>
           )}
 
-          {/* Address Counterparty Type */}
+          {/* Address Acquisition & Provenance Section */}
           {formData.type === "address" && (
-            <div className="space-y-2">
-              <Label>Counterparty Type</Label>
-              <Select
-                value={formData.counterpartyType || ""}
-                onValueChange={(value) => setFormData({ ...formData, counterpartyType: value as CounterpartyType })}
-                disabled={isSubmitting}
-              >
-                <SelectTrigger data-testid="select-counterparty-type">
-                  <SelectValue placeholder="What type of entity is this?" />
-                </SelectTrigger>
-                <SelectContent>
-                  {COUNTERPARTY_TYPE_OPTIONS.map((opt) => (
-                    <SelectItem key={opt.value} value={opt.value}>
-                      {opt.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+            <div
+              ref={acquisitionSectionRef}
+              className="space-y-3 p-4 bg-muted/30 rounded-lg border scroll-mt-4"
+              data-testid="section-acquisition"
+            >
+              <h5 className="font-medium text-sm flex items-center gap-2">
+                <ArrowDownLeft className="h-4 w-4" />
+                Acquisition &amp; Provenance
+              </h5>
               <p className="text-xs text-muted-foreground">
-                Classify this address as exchange, individual, business, etc.
+                Record how this address acquired its Bitcoin. These details power the
+                Acquisition &amp; Provenance appendix in the Proof of Funds declaration.
               </p>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="acquisitionDate">Acquisition Date</Label>
+                  <Input
+                    id="acquisitionDate"
+                    type="date"
+                    value={formData.date || ""}
+                    onChange={(e) => setFormData({ ...formData, date: e.target.value })}
+                    disabled={isSubmitting}
+                    data-testid="input-acquisition-date"
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label>Acquisition Method</Label>
+                  <Select
+                    value={formData.acquisitionMethod || ""}
+                    onValueChange={(value) => setFormData({ ...formData, acquisitionMethod: value as AcquisitionMethod })}
+                    disabled={isSubmitting}
+                  >
+                    <SelectTrigger data-testid="select-address-acquisition-method">
+                      <SelectValue placeholder="How was this acquired?" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {ACQUISITION_METHOD_OPTIONS.map((opt) => (
+                        <SelectItem key={opt.value} value={opt.value}>
+                          {opt.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label>Counterparty Type</Label>
+                <Select
+                  value={formData.counterpartyType || ""}
+                  onValueChange={(value) => setFormData({ ...formData, counterpartyType: value as CounterpartyType })}
+                  disabled={isSubmitting}
+                >
+                  <SelectTrigger data-testid="select-counterparty-type">
+                    <SelectValue placeholder="What type of entity is this?" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {COUNTERPARTY_TYPE_OPTIONS.map((opt) => (
+                      <SelectItem key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">
+                  Classify the source/counterparty: exchange, individual, business, etc.
+                  The counterparty name is taken from the Wallet Name or Label.
+                </p>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="addressCostBasisUsd">Cost Basis (USD)</Label>
+                <Input
+                  id="addressCostBasisUsd"
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value={formData.costBasisUsd ?? ""}
+                  onChange={(e) => setFormData({
+                    ...formData,
+                    costBasisUsd: e.target.value ? parseFloat(e.target.value) : undefined,
+                  })}
+                  placeholder="What you paid in USD"
+                  disabled={isSubmitting}
+                  data-testid="input-address-cost-basis"
+                />
+                <p className="text-xs text-muted-foreground">
+                  Optional. If left blank, historical market price data is used for the appendix.
+                </p>
+              </div>
             </div>
           )}
 
