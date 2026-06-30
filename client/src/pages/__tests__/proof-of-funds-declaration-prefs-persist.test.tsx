@@ -58,6 +58,10 @@ describe("ProofOfFundsDeclaration — attestation/glossary prefs persist", () =>
       (screen.getByTestId("switch-include-glossary") as HTMLButtonElement)
         .getAttribute("aria-checked"),
     ).toBe("false");
+    expect(
+      (screen.getByTestId("switch-include-intro") as HTMLButtonElement)
+        .getAttribute("aria-checked"),
+    ).toBe("false");
     // The place/witness inputs are only shown when attestation is on, so they
     // should not be present in the default off state.
     expect(screen.queryByTestId("input-attestation-place")).toBeNull();
@@ -72,6 +76,7 @@ describe("ProofOfFundsDeclaration — attestation/glossary prefs persist", () =>
 
     fireEvent.click(screen.getByTestId("switch-include-attestation"));
     fireEvent.click(screen.getByTestId("switch-include-glossary"));
+    fireEvent.click(screen.getByTestId("switch-include-intro"));
 
     fireEvent.change(screen.getByTestId("input-attestation-place"), {
       target: { value: "London, United Kingdom" },
@@ -82,6 +87,7 @@ describe("ProofOfFundsDeclaration — attestation/glossary prefs persist", () =>
 
     const stored = JSON.parse(localStorage.getItem(PREFS_KEY) ?? "{}");
     expect(stored).toEqual({
+      includeIntro: true,
       includeAttestation: true,
       attestationPlaceOfSigning: "London, United Kingdom",
       attestationWitnessLine: "John Smith, Solicitor",
@@ -93,6 +99,7 @@ describe("ProofOfFundsDeclaration — attestation/glossary prefs persist", () =>
     localStorage.setItem(
       PREFS_KEY,
       JSON.stringify({
+        includeIntro: true,
         includeAttestation: true,
         attestationPlaceOfSigning: "Berlin, Germany",
         attestationWitnessLine: "Jane Doe, Notary",
@@ -114,6 +121,11 @@ describe("ProofOfFundsDeclaration — attestation/glossary prefs persist", () =>
     expect(
       screen
         .getByTestId("switch-include-glossary")
+        .getAttribute("aria-checked"),
+    ).toBe("true");
+    expect(
+      screen
+        .getByTestId("switch-include-intro")
         .getAttribute("aria-checked"),
     ).toBe("true");
     expect(
@@ -142,6 +154,11 @@ describe("ProofOfFundsDeclaration — attestation/glossary prefs persist", () =>
     expect(
       screen
         .getByTestId("switch-include-glossary")
+        .getAttribute("aria-checked"),
+    ).toBe("false");
+    expect(
+      screen
+        .getByTestId("switch-include-intro")
         .getAttribute("aria-checked"),
     ).toBe("false");
   });

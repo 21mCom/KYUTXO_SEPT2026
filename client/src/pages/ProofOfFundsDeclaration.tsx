@@ -82,7 +82,7 @@ import {
 } from "@/lib/privacy-entity-list";
 
 type BalanceSource = "live" | "offline";
-type RowStatus = "pending" | "loading" | "done" | "error";
+type RowStatus = "pending" | "loading" | "done" | "empty" | "error";
 type ControlStatus = "idle" | "verifying" | "verified" | "failed";
 
 interface AddressRow {
@@ -395,6 +395,7 @@ const KYUTXO_APP_VERSION = "1.1.28";
 const DECLARATION_PREFS_KEY = "kyutxo.proofOfFunds.declarationPrefs";
 
 interface DeclarationPrefs {
+  includeIntro: boolean;
   includeAttestation: boolean;
   attestationPlaceOfSigning: string;
   attestationWitnessLine: string;
@@ -402,6 +403,7 @@ interface DeclarationPrefs {
 }
 
 const DEFAULT_DECLARATION_PREFS: DeclarationPrefs = {
+  includeIntro: false,
   includeAttestation: false,
   attestationPlaceOfSigning: "",
   attestationWitnessLine: "",
@@ -414,6 +416,10 @@ function loadDeclarationPrefs(): DeclarationPrefs {
     if (stored) {
       const parsed = JSON.parse(stored) as Partial<DeclarationPrefs>;
       return {
+        includeIntro:
+          typeof parsed.includeIntro === "boolean"
+            ? parsed.includeIntro
+            : DEFAULT_DECLARATION_PREFS.includeIntro,
         includeAttestation:
           typeof parsed.includeAttestation === "boolean"
             ? parsed.includeAttestation
@@ -445,6 +451,16 @@ function saveDeclarationPrefs(prefs: DeclarationPrefs) {
     // Ignore storage errors
   }
 }
+
+// Optional introduction / preface. Plain-language explanation of what Bitcoin is
+// and why this declaration can rely on publicly verifiable blockchain records.
+// Rendered at the very top of the PDF (before the declarant details) when the
+// user opts in. Kept ASCII-only so it round-trips cleanly through jsPDF's
+// WinAnsi text path (see sanitizePdfText).
+const DECLARATION_INTRO_PARAGRAPHS: string[] = [
+  "Bitcoin is a digital bearer asset that can be held in self-custody without the involvement of a financial intermediary. The Bitcoin blockchain acts as the pseudonymous ledger for self-custodied Bitcoin. Many objective aspects of Bitcoin can be independently verified through its publicly accessible blockchain ledger, including the existence of specific addresses, transaction history, and current balances. This declaration therefore relies on those publicly verifiable records wherever possible. Ownership and control are established through exclusive possession of the corresponding private cryptographic keys. As a result, the undersigned, as the holder of the private keys controlling the referenced Bitcoin address(es), is the individual best positioned to attest to the ownership and control of these assets.",
+  "Where appropriate, supporting evidence may include blockchain explorer records, cryptographic message signing, and other technical means of demonstrating control over the referenced Bitcoin addresses.",
+];
 
 export default function ProofOfFundsDeclaration() {
   const { nodeSettings } = useNodeSettings();
@@ -571,16 +587,24 @@ export default function ProofOfFundsDeclaration() {
     () => loadDeclarationPrefs().includeGlossary,
   );
 
+  // Introduction / preface (optional, off by default). Restored from persisted
+  // preferences. When on, a plain-language preface is added to the top of the PDF.
+  const [includeIntro, setIncludeIntro] = useState(
+    () => loadDeclarationPrefs().includeIntro,
+  );
+
   // Persist declaration preferences whenever any of them changes so they are
   // restored on the next page load.
   useEffect(() => {
     saveDeclarationPrefs({
+      includeIntro,
       includeAttestation,
       attestationPlaceOfSigning,
       attestationWitnessLine,
       includeGlossary,
     });
   }, [
+    includeIntro,
     includeAttestation,
     attestationPlaceOfSigning,
     attestationWitnessLine,
@@ -607,6 +631,7 @@ export default function ProofOfFundsDeclaration() {
   const validRows = useMemo(() => rows.filter((r) => !r.isInvalid), [rows]);
   const invalidRows = useMemo(() => rows.filter((r) => r.isInvalid), [rows]);
   const doneRows = useMemo(() => validRows.filter((r) => r.status === "done"), [validRows]);
+  const emptyRows = useMemo(() => validRows.filter((r) => r.status === "empty"), [validRows]);
   const errorRows = useMemo(() => validRows.filter((r) => r.status === "error"), [validRows]);
   const hasResults = rows.length > 0;
 
@@ -902,7 +927,11 @@ export default function ProofOfFundsDeclaration() {
           hadSuccess = true;
           consecutiveNodeFailures = 0;
           setRows((prev) =>
-            prev.map((r, idx) => (idx === i ? { ...r, status: "done", balanceSats } : r))
+            prev.map((r, idx) =>
+              idx === i
+                ? { ...r, status: balanceSats === 0 ? "empty" : "done", balanceSats }
+                : r
+            )
           );
         } catch (err) {
           if (cancelledRef.current) break;
@@ -999,11 +1028,8 @@ export default function ProofOfFundsDeclaration() {
           prev.map((r) => {
             if (r.isInvalid) return r;
             const stats = statsMap.get(r.raw);
-            if (stats) {
-              return { ...r, status: "done", balanceSats: stats.balanceSats };
-            } else {
-              return { ...r, status: "done", balanceSats: 0 };
-            }
+            const balanceSats = stats ? stats.balanceSats : 0;
+            return { ...r, status: balanceSats === 0 ? "empty" : "done", balanceSats };
           })
         );
 
@@ -1392,6 +1418,7 @@ export default function ProofOfFundsDeclaration() {
         `SECTION_ATTESTATION: ${includeAttestation ? "ON" : "OFF"}`,
         includeAttestation && attestationPlaceOfSigning.trim() ? `ATTEST_PLACE: ${attestationPlaceOfSigning.trim()}` : "",
         includeAttestation && attestationWitnessLine.trim() ? `ATTEST_WITNESS: ${attestationWitnessLine.trim()}` : "",
+        `SECTION_INTRO: ${includeIntro ? "ON" : "OFF"}`,
         `SECTION_GLOSSARY: ${includeGlossary ? "ON" : "OFF"}`,
         `GENERATED: ${generationIso}`,
       ].filter(Boolean);
@@ -1435,6 +1462,20 @@ export default function ProofOfFundsDeclaration() {
       doc.setLineWidth(0.5);
       doc.line(margin, y, margin + contentW, y);
       y += 5;
+
+      // ── Optional Introduction / Preface ─────────────────────────────────────
+      // Rendered at the very top, before the declarant details, when enabled.
+      if (includeIntro) {
+        checkPageBreak(30);
+        addLine("INTRODUCTION", 11, true);
+        addSpacer(2);
+        for (const paragraph of DECLARATION_INTRO_PARAGRAPHS) {
+          checkPageBreak(24);
+          addWrapped(paragraph);
+          addSpacer(2);
+        }
+        addSpacer(3);
+      }
 
       // ── Declarant Details ──────────────────────────────────────────────────
       addLine("DECLARANT DETAILS", 11, true);
@@ -2789,6 +2830,7 @@ export default function ProofOfFundsDeclaration() {
     amlSourceOfWealth,
     amlSourceOfFunds,
     amlTaxStatement,
+    includeIntro,
     includeAttestation,
     attestationPlaceOfSigning,
     attestationWitnessLine,
@@ -2830,7 +2872,7 @@ export default function ProofOfFundsDeclaration() {
   }, [buildPofPdf, toast]);
 
   const validCount = validRows.length;
-  const doneCount = doneRows.length + errorRows.length;
+  const doneCount = doneRows.length + emptyRows.length + errorRows.length;
 
   const declarantInfoComplete =
     declarantName.trim() !== "" &&
@@ -3050,7 +3092,7 @@ export default function ProofOfFundsDeclaration() {
                 </Alert>
               )}
 
-              {validRows.length > 0 && (
+              {validRows.filter((r) => r.status !== "empty").length > 0 && (
                 <Table>
                   <TableHeader>
                     <TableRow>
@@ -3060,7 +3102,7 @@ export default function ProofOfFundsDeclaration() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {validRows.map((row, idx) => (
+                    {validRows.filter((r) => r.status !== "empty").map((row, idx) => (
                       <TableRow key={idx} data-testid={`row-address-${idx}`}>
                         <TableCell className="font-mono text-xs break-all">
                           {row.raw}
@@ -3103,6 +3145,15 @@ export default function ProofOfFundsDeclaration() {
                 </Table>
               )}
 
+              {doneRows.length === 0 && emptyRows.length > 0 && !isChecking && (
+                <Alert data-testid="alert-all-empty">
+                  <AlertCircle className="h-4 w-4" />
+                  <AlertDescription>
+                    All {emptyRows.length} address{emptyRows.length !== 1 ? "es" : ""} resolved to a zero balance and were excluded. There is nothing to declare.
+                  </AlertDescription>
+                </Alert>
+              )}
+
               {doneRows.length > 0 && (
                 <div className="flex items-center justify-between rounded-md border bg-muted/30 px-4 py-3">
                   <span className="font-semibold text-sm">Total Balance</span>
@@ -3122,6 +3173,15 @@ export default function ProofOfFundsDeclaration() {
                     )}
                   </div>
                 </div>
+              )}
+
+              {emptyRows.length > 0 && doneRows.length > 0 && (
+                <Alert data-testid="alert-empty-excluded">
+                  <AlertCircle className="h-4 w-4" />
+                  <AlertDescription>
+                    {emptyRows.length} empty address{emptyRows.length !== 1 ? "es" : ""} excluded — {emptyRows.length !== 1 ? "these addresses have" : "this address has"} a zero balance and will not appear in the declaration.
+                  </AlertDescription>
+                </Alert>
               )}
 
               {invalidRows.length > 0 && (
@@ -4501,10 +4561,61 @@ export default function ProofOfFundsDeclaration() {
           </CardContent>
         </Card>
 
-        {/* Step 11: Generate PDF */}
+        {/* Step 11: Introduction / Preface */}
         <Card>
           <CardHeader>
-            <CardTitle>Step 11 — Generate PDF</CardTitle>
+            <CardTitle className="flex items-center gap-2">
+              <FileText className="h-5 w-5" />
+              Step 11 — Introduction / Preface
+              <Badge variant="secondary" className="ml-1 text-xs font-normal">Optional</Badge>
+            </CardTitle>
+            <CardDescription>
+              Add a short plain-language preface to the very top of the PDF: that Bitcoin is a digital
+              bearer asset, that the blockchain is a publicly verifiable ledger, and that ownership is
+              established through control of the private keys.
+              Off by default — when off, the PDF is unchanged.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="flex items-center justify-between gap-4 flex-wrap">
+              <div className="space-y-0.5">
+                <Label htmlFor="include-intro" className="text-sm font-medium">
+                  Include introduction / preface in the PDF
+                </Label>
+                <p className="text-sm text-muted-foreground">
+                  Off by default. When on, adds an Introduction section at the top of the declaration,
+                  before the declarant details.
+                </p>
+              </div>
+              <Switch
+                id="include-intro"
+                checked={includeIntro}
+                onCheckedChange={setIncludeIntro}
+                data-testid="switch-include-intro"
+              />
+            </div>
+
+            {includeIntro && (
+              <>
+                <Separator />
+                <div
+                  className="rounded-md border bg-muted/30 px-4 py-3 text-xs text-muted-foreground space-y-2"
+                  data-testid="text-intro-preview"
+                >
+                  <p className="font-medium text-foreground text-sm">Preview</p>
+                  {DECLARATION_INTRO_PARAGRAPHS.map((paragraph, i) => (
+                    <p key={i}>{paragraph}</p>
+                  ))}
+                </div>
+              </>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Step 12: Generate PDF */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Step 12 — Generate PDF</CardTitle>
             <CardDescription>
               All required steps above must be complete before a PDF can be generated.
               The PDF is created entirely in your browser — no data leaves your device.
@@ -4598,6 +4709,7 @@ export default function ProofOfFundsDeclaration() {
                   balances and control status, total ({formatBTC(totalSats)} BTC){fiatValid && fiatTotal !== null ? ", fiat equivalent," : ","} data
                   source attestation, disclaimers, a signature block, and a document integrity section
                   (page numbers, reference ID, content fingerprint, and blockchain time-anchor).
+                  {includeIntro && " A plain-language introduction will appear at the very top, before the declarant details."}
                   {includeAttestation && " A formal attestation block will be included."}
                   {includeQr && ` Verification QR codes linking each address to ${getExplorer(qrExplorerId).host} will be included.`}
                   {verifiedCount > 0 && ` An appendix will contain the challenge messages and signatures for ${verifiedCount} verified address${verifiedCount !== 1 ? "es" : ""}.`}
