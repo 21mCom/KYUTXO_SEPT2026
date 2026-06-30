@@ -19,6 +19,10 @@ import {
   ClipboardCheck,
   QrCode as QrCodeIcon,
   Globe,
+  Upload,
+  Trash2,
+  Image as ImageIcon,
+  Paperclip,
 } from "lucide-react";
 import QRCode from "qrcode";
 import { Button } from "@/components/ui/button";
@@ -48,6 +52,7 @@ import {
 } from "@/lib/blockchain-api";
 import { validateAddress, formatBTC, truncateAddress } from "@/lib/bitcoin";
 import { sanitizePdfText } from "@/lib/pdfText";
+import { mergeEvidencePdfs, countPdfPages, type PdfExhibit } from "@/lib/pdfMerge";
 import { buildAttestationLines } from "@/lib/attestationLines";
 import {
   AML_APPENDIX_STRINGS,
@@ -84,6 +89,69 @@ import {
 type BalanceSource = "live" | "offline";
 type RowStatus = "pending" | "loading" | "done" | "empty" | "error";
 type ControlStatus = "idle" | "verifying" | "verified" | "failed";
+
+// ── Supporting Evidence (optional) ──────────────────────────────────────────
+// Declarants may attach screenshots/photos (embedded into the dossier PDF) and
+// PDF documents (merged onto the end as extra pages). Files are held in memory
+// only for the current session — never written to localStorage or IndexedDB —
+// and processed entirely offline.
+type EvidenceKind = "image" | "pdf";
+
+interface EvidenceItem {
+  id: string;
+  name: string;
+  kind: EvidenceKind;
+  mime: string;
+  /** Raw file bytes; hashed for the fingerprint and used for embed/merge. */
+  bytes: Uint8Array;
+  /** Images only: data URL for the form thumbnail and jsPDF embedding. */
+  dataUrl?: string;
+  caption: string;
+  sha256: string;
+  size: number;
+  /** PDFs only: page count, validated and shown in the exhibit index. */
+  pageCount?: number;
+}
+
+const EVIDENCE_MAX_ITEMS = 20;
+const EVIDENCE_MAX_FILE_BYTES = 25 * 1024 * 1024; // 25 MB per file
+// Cumulative cap across all attachments. Image data URLs, jsPDF's embedded
+// copies, and pdf-lib's in-memory merge all multiply the raw bytes, so a
+// generous per-file cap with no overall ceiling could still exhaust memory and
+// freeze the renderer. Bound the total to keep PDF generation safe.
+const EVIDENCE_MAX_TOTAL_BYTES = 75 * 1024 * 1024; // 75 MB combined
+const EVIDENCE_ACCEPT = "image/png,image/jpeg,image/webp,application/pdf";
+const EVIDENCE_IMAGE_MIMES = ["image/png", "image/jpeg", "image/webp"];
+
+let evidenceIdCounter = 0;
+function nextEvidenceId(): string {
+  evidenceIdCounter += 1;
+  return `ev-${Date.now().toString(36)}-${evidenceIdCounter}`;
+}
+
+async function hashBytesHex(bytes: Uint8Array): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(digest))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+// Browser-safe base64 (no Node Buffer): chunk to stay within the
+// String.fromCharCode argument limit for large images.
+function imageBytesToDataUrl(bytes: Uint8Array, mime: string): string {
+  let binary = "";
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  }
+  return `data:${mime};base64,${btoa(binary)}`;
+}
+
+function formatEvidenceSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
 
 interface AddressRow {
   raw: string;
@@ -624,6 +692,138 @@ export default function ProofOfFundsDeclaration() {
   // PDF generating
   const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
   const [isGeneratingSamplePdf, setIsGeneratingSamplePdf] = useState(false);
+
+  // Supporting Evidence (optional) — session-only; binary is never persisted.
+  const [evidenceItems, setEvidenceItems] = useState<EvidenceItem[]>([]);
+  const [isAddingEvidence, setIsAddingEvidence] = useState(false);
+  const evidenceInputRef = useRef<HTMLInputElement>(null);
+
+  const handleEvidenceFiles = useCallback(
+    async (files: FileList | null) => {
+      if (!files || files.length === 0) return;
+      const incoming = Array.from(files);
+      setIsAddingEvidence(true);
+      try {
+        const room = EVIDENCE_MAX_ITEMS - evidenceItems.length;
+        if (room <= 0) {
+          toast({
+            title: "Evidence limit reached",
+            description: `You can attach up to ${EVIDENCE_MAX_ITEMS} files.`,
+            variant: "destructive",
+          });
+          return;
+        }
+        const toProcess = incoming.slice(0, room);
+        const skippedForLimit = incoming.length - toProcess.length;
+        const added: EvidenceItem[] = [];
+        const errors: string[] = [];
+        let runningTotal = evidenceItems.reduce((sum, it) => sum + it.size, 0);
+        for (const file of toProcess) {
+          const mime = file.type;
+          const isImage = EVIDENCE_IMAGE_MIMES.includes(mime);
+          const isPdf = mime === "application/pdf";
+          if (!isImage && !isPdf) {
+            errors.push(`${file.name}: unsupported file type`);
+            continue;
+          }
+          if (file.size > EVIDENCE_MAX_FILE_BYTES) {
+            errors.push(
+              `${file.name}: larger than ${EVIDENCE_MAX_FILE_BYTES / (1024 * 1024)} MB`,
+            );
+            continue;
+          }
+          if (runningTotal + file.size > EVIDENCE_MAX_TOTAL_BYTES) {
+            errors.push(
+              `${file.name}: skipped — would exceed the ${EVIDENCE_MAX_TOTAL_BYTES / (1024 * 1024)} MB combined limit`,
+            );
+            continue;
+          }
+          const bytes = new Uint8Array(await file.arrayBuffer());
+          const sha256 = await hashBytesHex(bytes);
+          // Reserve this file's bytes against the combined cap so later files in
+          // the same batch see an accurate running total.
+          runningTotal += file.size;
+          if (isPdf) {
+            let pageCount: number;
+            try {
+              pageCount = await countPdfPages(bytes);
+            } catch {
+              // Not actually added — release its reserved bytes.
+              runningTotal -= file.size;
+              errors.push(
+                `${file.name}: could not be read as a PDF (it may be corrupted or password-protected)`,
+              );
+              continue;
+            }
+            added.push({
+              id: nextEvidenceId(),
+              name: file.name,
+              kind: "pdf",
+              mime,
+              bytes,
+              caption: "",
+              sha256,
+              size: file.size,
+              pageCount,
+            });
+          } else {
+            added.push({
+              id: nextEvidenceId(),
+              name: file.name,
+              kind: "image",
+              mime,
+              bytes,
+              dataUrl: imageBytesToDataUrl(bytes, mime),
+              caption: "",
+              sha256,
+              size: file.size,
+            });
+          }
+        }
+        if (added.length) setEvidenceItems((prev) => [...prev, ...added]);
+        if (errors.length || skippedForLimit) {
+          const parts = [...errors];
+          if (skippedForLimit) {
+            parts.push(
+              `${skippedForLimit} file(s) skipped (limit of ${EVIDENCE_MAX_ITEMS})`,
+            );
+          }
+          toast({
+            title: added.length
+              ? "Some files were not added"
+              : "No files were added",
+            description: parts.join("; "),
+            variant: "destructive",
+          });
+        }
+      } finally {
+        setIsAddingEvidence(false);
+        if (evidenceInputRef.current) evidenceInputRef.current.value = "";
+      }
+    },
+    [evidenceItems.length, toast],
+  );
+
+  const removeEvidenceItem = useCallback((id: string) => {
+    setEvidenceItems((prev) => prev.filter((it) => it.id !== id));
+  }, []);
+
+  const clearEvidence = useCallback(() => setEvidenceItems([]), []);
+
+  const updateEvidenceCaption = useCallback((id: string, caption: string) => {
+    setEvidenceItems((prev) =>
+      prev.map((it) => (it.id === id ? { ...it, caption } : it)),
+    );
+  }, []);
+
+  const evidenceImageCount = useMemo(
+    () => evidenceItems.filter((it) => it.kind === "image").length,
+    [evidenceItems],
+  );
+  const evidencePdfItems = useMemo(
+    () => evidenceItems.filter((it) => it.kind === "pdf"),
+    [evidenceItems],
+  );
 
   // Expanded invalid section
   const [showInvalid, setShowInvalid] = useState(false);
@@ -1420,6 +1620,11 @@ export default function ProofOfFundsDeclaration() {
         includeAttestation && attestationWitnessLine.trim() ? `ATTEST_WITNESS: ${attestationWitnessLine.trim()}` : "",
         `SECTION_INTRO: ${includeIntro ? "ON" : "OFF"}`,
         `SECTION_GLOSSARY: ${includeGlossary ? "ON" : "OFF"}`,
+        `EVIDENCE_COUNT: ${evidenceItems.length}`,
+        ...evidenceItems.map(
+          (it, i) =>
+            `EVIDENCE_ITEM_${String(i + 1).padStart(3, "0")}: ${it.kind}|${it.name}|${it.sha256}|${it.caption.trim()}`,
+        ),
         `GENERATED: ${generationIso}`,
       ].filter(Boolean);
       canonicalPayload = canonicalLinesList.join("\n");
@@ -2744,6 +2949,99 @@ export default function ProofOfFundsDeclaration() {
         }
       }
 
+      // ── Supporting Evidence appendix (real declarations only) ──────────────
+      // Image exhibits are embedded here; PDF exhibits are listed in the index
+      // and then merged onto the end of the dossier (after this jsPDF document)
+      // in the output step below. Skipped entirely in sample mode so specimen
+      // PDFs never carry attachments and stay fully watermarked.
+      if (!isSample && evidenceItems.length > 0) {
+        doc.addPage();
+        y = 20;
+        addLine("APPENDIX: SUPPORTING EVIDENCE", 13, true);
+        addSpacer(2);
+        addWrapped(
+          "The declarant attached the following supporting evidence. Image files are embedded in this appendix. " +
+            "PDF documents are merged onto the end of this dossier as additional pages, in the order listed below. " +
+            "Each item's SHA-256 hash is recorded so a reviewer can independently confirm the attachment has not been altered.",
+          9,
+          [60, 60, 60],
+        );
+        addSpacer(3);
+
+        // Exhibit index — every attachment, in upload order.
+        addLine("Evidence index", 11, true);
+        addSpacer(1);
+        let exhibitNo = 0;
+        evidenceItems.forEach((it, i) => {
+          const isPdf = it.kind === "pdf";
+          const exhibitLabel = isPdf ? `Exhibit ${++exhibitNo}` : "Embedded image";
+          const meta = isPdf
+            ? `PDF, ${formatEvidenceSize(it.size)}, ${it.pageCount ?? "?"} page${it.pageCount === 1 ? "" : "s"}`
+            : `Image, ${formatEvidenceSize(it.size)}`;
+          checkPageBreak(20);
+          addLine(`${i + 1}. ${it.name}  [${exhibitLabel}]`, 9, true);
+          addWrapped(meta, 8, [90, 90, 90]);
+          if (it.caption.trim()) {
+            addWrapped(`Caption: ${it.caption.trim()}`, 8, [60, 60, 60]);
+          }
+          addWrapped(`SHA-256: ${it.sha256}`, 7, [120, 120, 120]);
+          if (isPdf) {
+            addWrapped(
+              `Merged as ${exhibitLabel} — its ${it.pageCount ?? "?"} page${it.pageCount === 1 ? "" : "s"} follow after this appendix.`,
+              8,
+              [90, 90, 90],
+            );
+          }
+          addSpacer(2);
+        });
+
+        // Embedded images.
+        const imageItems = evidenceItems.filter(
+          (it) => it.kind === "image" && it.dataUrl,
+        );
+        if (imageItems.length > 0) {
+          addSpacer(2);
+          checkPageBreak(16);
+          addLine("Embedded images", 11, true);
+          addSpacer(2);
+          const pageH = doc.internal.pageSize.getHeight();
+          for (const it of imageItems) {
+            const fmt =
+              it.mime === "image/png"
+                ? "PNG"
+                : it.mime === "image/webp"
+                  ? "WEBP"
+                  : "JPEG";
+            let dispW = contentW;
+            let dispH = contentW * 0.75; // fallback ratio if properties unavailable
+            try {
+              const props = doc.getImageProperties(it.dataUrl!);
+              if (props.width > 0 && props.height > 0) {
+                dispW = contentW;
+                dispH = (props.height / props.width) * dispW;
+                const maxH = pageH - 50;
+                if (dispH > maxH) {
+                  dispH = maxH;
+                  dispW = (props.width / props.height) * dispH;
+                }
+              }
+            } catch {
+              // Keep the fallback size if jsPDF can't read the image header.
+            }
+            const captionH = it.caption.trim() ? 8 : 0;
+            checkPageBreak(8 + dispH + captionH + 8);
+            addLine(it.name, 9, true);
+            doc.addImage(it.dataUrl!, fmt, margin, y, dispW, dispH);
+            y += dispH + 3;
+            if (it.caption.trim()) {
+              addWrapped(`Caption: ${it.caption.trim()}`, 8, [60, 60, 60]);
+            }
+            addWrapped(`SHA-256: ${it.sha256}`, 7, [120, 120, 120]);
+            addSpacer(4);
+          }
+        }
+      }
+
       // ── Page X of Y footers (applied to every page after all content) ──────
       const totalPages = (doc.internal as any).getNumberOfPages();
       const pageHFt = doc.internal.pageSize.getHeight();
@@ -2751,6 +3049,8 @@ export default function ProofOfFundsDeclaration() {
       const shortRef = effNonce.length > 20
         ? `${effNonce.slice(0, 10)}…${effNonce.slice(-8)}`
         : effNonce;
+      const hasPdfExhibits =
+        !isSample && evidenceItems.some((it) => it.kind === "pdf");
 
       for (let pageNum = 1; pageNum <= totalPages; pageNum++) {
         doc.setPage(pageNum);
@@ -2758,7 +3058,9 @@ export default function ProofOfFundsDeclaration() {
         doc.setFont("helvetica", "normal");
         doc.setTextColor(120, 120, 120);
         doc.text(
-          sanitizePdfText(`Page ${pageNum} of ${totalPages}`),
+          sanitizePdfText(
+            `Page ${pageNum} of ${totalPages}${hasPdfExhibits ? " + exhibits" : ""}`,
+          ),
           margin,
           footerY
         );
@@ -2794,13 +3096,43 @@ export default function ProofOfFundsDeclaration() {
       }
 
       const safeName = sanitizePdfText(effName.replace(/\s+/g, "_").replace(/[^a-zA-Z0-9_-]/g, ""));
-      if (isSample) {
-        doc.save(`proof-of-funds-SAMPLE-${safeName || "specimen"}-${effDate}.pdf`);
+      const baseFileName = isSample
+        ? `proof-of-funds-SAMPLE-${safeName || "specimen"}-${effDate}.pdf`
+        : `proof-of-funds-${safeName || "declaration"}-${effDate}.pdf`;
+
+      // PDF exhibits can only be appended after the jsPDF document is complete:
+      // jsPDF cannot import external PDF pages, so we hand the finished dossier
+      // bytes plus each uploaded PDF to pdf-lib and download the combined file.
+      // Image exhibits are already embedded above, so they need no merge. Sample
+      // mode never attaches exhibits, so it always takes the plain save path.
+      const pdfExhibits: PdfExhibit[] = isSample
+        ? []
+        : evidenceItems
+            .filter((it) => it.kind === "pdf")
+            .map((it) => ({ name: it.name, bytes: it.bytes }));
+
+      if (pdfExhibits.length > 0) {
+        const baseBytes = new Uint8Array(
+          doc.output("arraybuffer") as ArrayBuffer,
+        );
+        const mergedBytes = await mergeEvidencePdfs(baseBytes, pdfExhibits);
+        const blob = new Blob([mergedBytes as BlobPart], {
+          type: "application/pdf",
+        });
+        const url = URL.createObjectURL(blob);
+        const anchor = document.createElement("a");
+        anchor.href = url;
+        anchor.download = baseFileName;
+        document.body.appendChild(anchor);
+        anchor.click();
+        document.body.removeChild(anchor);
+        URL.revokeObjectURL(url);
       } else {
-        doc.save(`proof-of-funds-${safeName || "declaration"}-${effDate}.pdf`);
+        doc.save(baseFileName);
       }
   }, [
     declarantName,
+    evidenceItems,
     declarantContact,
     declarantResidentialAddress,
     declarantDob,
@@ -4612,10 +4944,161 @@ export default function ProofOfFundsDeclaration() {
           </CardContent>
         </Card>
 
-        {/* Step 12: Generate PDF */}
+        {/* Step 12: Supporting Evidence (optional) */}
         <Card>
           <CardHeader>
-            <CardTitle>Step 12 — Generate PDF</CardTitle>
+            <CardTitle>Step 12 — Supporting Evidence (optional)</CardTitle>
+            <CardDescription>
+              Attach images (screenshots or photos) and PDF documents to support your
+              declaration. Images are embedded into the dossier, and PDFs are merged on
+              as extra pages at the end. Files stay on your device and are only kept for
+              this session — they are never uploaded or saved.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <input
+              ref={evidenceInputRef}
+              type="file"
+              accept={EVIDENCE_ACCEPT}
+              multiple
+              className="hidden"
+              data-testid="input-evidence-file"
+              onChange={(e) => handleEvidenceFiles(e.target.files)}
+            />
+
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="default"
+                onClick={() => evidenceInputRef.current?.click()}
+                disabled={
+                  isAddingEvidence || evidenceItems.length >= EVIDENCE_MAX_ITEMS
+                }
+                data-testid="button-add-evidence"
+              >
+                {isAddingEvidence ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Adding…
+                  </>
+                ) : (
+                  <>
+                    <Upload className="h-4 w-4 mr-2" />
+                    Add files
+                  </>
+                )}
+              </Button>
+              {evidenceItems.length > 0 && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="default"
+                  onClick={clearEvidence}
+                  data-testid="button-clear-evidence"
+                >
+                  <Trash2 className="h-4 w-4 mr-2" />
+                  Clear all
+                </Button>
+              )}
+              <span
+                className="text-xs text-muted-foreground"
+                data-testid="text-evidence-count"
+              >
+                {evidenceItems.length === 0
+                  ? "No files attached"
+                  : `${evidenceItems.length} of ${EVIDENCE_MAX_ITEMS} file${
+                      evidenceItems.length !== 1 ? "s" : ""
+                    } — ${evidenceImageCount} image${
+                      evidenceImageCount !== 1 ? "s" : ""
+                    }, ${evidencePdfItems.length} PDF${
+                      evidencePdfItems.length !== 1 ? "s" : ""
+                    }`}
+              </span>
+            </div>
+
+            <p className="text-xs text-muted-foreground">
+              Accepted: PNG, JPEG, WebP images and PDF documents. Up to{" "}
+              {EVIDENCE_MAX_ITEMS} files, {EVIDENCE_MAX_FILE_BYTES / (1024 * 1024)} MB
+              each, {EVIDENCE_MAX_TOTAL_BYTES / (1024 * 1024)} MB combined.
+            </p>
+
+            {evidenceItems.length > 0 && (
+              <div className="space-y-2">
+                {evidenceItems.map((it) => (
+                  <div
+                    key={it.id}
+                    data-testid={`row-evidence-${it.id}`}
+                    className="flex items-start gap-3 rounded-md border p-3"
+                  >
+                    <div className="shrink-0">
+                      {it.kind === "image" && it.dataUrl ? (
+                        <img
+                          src={it.dataUrl}
+                          alt={it.name}
+                          className="h-16 w-16 rounded-md object-cover border"
+                          data-testid={`img-evidence-${it.id}`}
+                        />
+                      ) : (
+                        <div className="h-16 w-16 rounded-md border flex items-center justify-center bg-muted/40">
+                          <FileText className="h-7 w-7 text-muted-foreground" />
+                        </div>
+                      )}
+                    </div>
+                    <div className="flex-1 min-w-0 space-y-2">
+                      <div className="flex flex-wrap items-center gap-2">
+                        {it.kind === "image" ? (
+                          <ImageIcon className="h-4 w-4 text-muted-foreground shrink-0" />
+                        ) : (
+                          <Paperclip className="h-4 w-4 text-muted-foreground shrink-0" />
+                        )}
+                        <span
+                          className="text-sm font-medium truncate"
+                          data-testid={`text-evidence-name-${it.id}`}
+                        >
+                          {it.name}
+                        </span>
+                        <Badge variant="secondary">
+                          {it.kind === "pdf"
+                            ? `PDF · ${it.pageCount ?? "?"} page${
+                                it.pageCount === 1 ? "" : "s"
+                              }`
+                            : "Image"}
+                        </Badge>
+                        <span className="text-xs text-muted-foreground">
+                          {formatEvidenceSize(it.size)}
+                        </span>
+                      </div>
+                      <Input
+                        value={it.caption}
+                        onChange={(e) =>
+                          updateEvidenceCaption(it.id, e.target.value)
+                        }
+                        placeholder="Add a caption (optional)"
+                        data-testid={`input-evidence-caption-${it.id}`}
+                      />
+                    </div>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => removeEvidenceItem(it.id)}
+                      aria-label={`Remove ${it.name}`}
+                      data-testid={`button-remove-evidence-${it.id}`}
+                    >
+                      <X className="h-4 w-4" />
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Step 13: Generate PDF */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Step 13 — Generate PDF</CardTitle>
             <CardDescription>
               All required steps above must be complete before a PDF can be generated.
               The PDF is created entirely in your browser — no data leaves your device.
@@ -4716,6 +5199,7 @@ export default function ProofOfFundsDeclaration() {
                   {includeProvenance && ` An Acquisition & Provenance appendix will document acquisition dates, methods, and cost basis (in ${provenanceFiatCurrency}) for the declared addresses, plus a list of linked supporting documents.`}
                   {includeAml && " An AML / Risk Screening appendix will include offline entity-list results, indirect proximity analysis, declarant self-attestations, and a screening disclaimer."}
                   {includeGlossary && " A glossary appendix will define key terms for non-technical reviewers."}
+                  {evidenceItems.length > 0 && ` ${evidenceItems.length} supporting evidence file${evidenceItems.length !== 1 ? "s" : ""} will be attached: ${evidenceImageCount} image${evidenceImageCount !== 1 ? "s" : ""} embedded in an appendix${evidencePdfItems.length > 0 ? ` and ${evidencePdfItems.length} PDF${evidencePdfItems.length !== 1 ? "s" : ""} merged as extra pages` : ""}.`}
                 </p>
               </div>
             )}
