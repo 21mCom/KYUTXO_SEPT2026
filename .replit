@@ -89,6 +89,10 @@ args = "pdf-text-sanitized"
 task = "workflow.run"
 args = "sample-pdf-browser-check"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "pof-empty-exclusion-browser-check"
+
 [[workflows.workflow]]
 name = "Start application"
 author = "agent"
@@ -248,6 +252,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-sample-pdf-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "pof-empty-exclusion-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-pof-empty-exclusion-browser.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true
