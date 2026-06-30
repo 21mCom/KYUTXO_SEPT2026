@@ -85,6 +85,10 @@ args = "pdf-glyph-browser-check"
 task = "workflow.run"
 args = "pdf-text-sanitized"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "sample-pdf-browser-check"
+
 [[workflows.workflow]]
 name = "Start application"
 author = "agent"
@@ -233,6 +237,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-pdf-text-sanitized.js"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "sample-pdf-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-sample-pdf-browser.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true
