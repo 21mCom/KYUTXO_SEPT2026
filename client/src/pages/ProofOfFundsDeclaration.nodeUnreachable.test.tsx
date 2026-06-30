@@ -15,16 +15,12 @@
 //      short-circuits with the same "Node unreachable" banner instead of
 //      grinding through every remaining address.
 
-import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, screen, waitFor, fireEvent, within, cleanup } from "@testing-library/react";
+import "fake-indexeddb/auto";
 
-// Render Radix tooltip parts inline so the page needs no TooltipProvider.
-vi.mock("@/components/ui/tooltip", () => ({
-  Tooltip: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  TooltipTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  TooltipContent: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  TooltipProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-}));
+import { describe, it, expect, beforeEach, vi } from "vitest";
+import { screen, waitFor, fireEvent, within, cleanup } from "@testing-library/react";
+
+import { renderWithProviders } from "@/test/testProviders";
 
 vi.mock("@/hooks/use-node-settings", () => ({
   useNodeSettings: () => ({ nodeSettings: { id: "default", providerType: "mempool-space" } }),
@@ -75,7 +71,7 @@ describe("ProofOfFundsDeclaration — live check node-unreachable fast fail", ()
   it("fails the whole check on a first-address network error without attempting the rest", async () => {
     getAddressCoreStats.mockRejectedValue(new Error("Failed to fetch"));
 
-    render(<ProofOfFundsDeclaration />);
+    renderWithProviders(<ProofOfFundsDeclaration />);
     startLiveCheck([ADDR_A, ADDR_B, ADDR_C]);
 
     // Provider banner with the Node Connection settings link appears.
@@ -98,7 +94,7 @@ describe("ProofOfFundsDeclaration — live check node-unreachable fast fail", ()
     });
 
     cleanup();
-    render(<ProofOfFundsDeclaration />);
+    renderWithProviders(<ProofOfFundsDeclaration />);
     startLiveCheck([ADDR_A, ADDR_B, ADDR_C]);
 
     await waitFor(() => {
@@ -126,7 +122,7 @@ describe("ProofOfFundsDeclaration — live check node-unreachable fast fail", ()
     });
 
     cleanup();
-    render(<ProofOfFundsDeclaration />);
+    renderWithProviders(<ProofOfFundsDeclaration />);
     startLiveCheck([ADDR_A, ADDR_B, ADDR_C, ADDR_D, ADDR_E, ADDR_F]);
 
     // The whole-check "Node unreachable" banner appears.
@@ -155,7 +151,7 @@ describe("ProofOfFundsDeclaration — live check node-unreachable fast fail", ()
     });
 
     cleanup();
-    render(<ProofOfFundsDeclaration />);
+    renderWithProviders(<ProofOfFundsDeclaration />);
     startLiveCheck([ADDR_A, ADDR_B, ADDR_C]);
 
     await waitFor(() => {
