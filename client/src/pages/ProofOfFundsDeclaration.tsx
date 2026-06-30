@@ -733,6 +733,64 @@ export default function ProofOfFundsDeclaration() {
         doc.text(introLines, margin, y);
         y += introLines.length * 8.5 * 0.45 + 6;
 
+        // ── How to independently verify ──────────────────────────────────────
+        checkPageBreak(70);
+        doc.setFontSize(11);
+        doc.setFont("helvetica", "bold");
+        doc.setTextColor(0, 0, 0);
+        doc.text("HOW TO INDEPENDENTLY VERIFY", margin, y);
+        y += 6;
+
+        doc.setFontSize(8.5);
+        doc.setFont("helvetica", "normal");
+        const howToIntroLines = doc.splitTextToSize(
+          sanitizePdfText(
+            "Each address below has a Challenge Message and a Wallet Signature. You can confirm, without KYUTXO and without any network access, that the holder of each address signed that exact message. " +
+            "Use any standard Bitcoin signed-message verification tool and supply three inputs: the Address, the Challenge Message (verbatim, including line breaks), and the Wallet Signature (base64)."
+          ),
+          contentW
+        ) as string[];
+        doc.text(howToIntroLines, margin, y);
+        y += howToIntroLines.length * 8.5 * 0.45 + 4;
+
+        const verifyMethods = [
+          "1. bitcoin-cli (Bitcoin Core): run  bitcoin-cli verifymessage \"<address>\" \"<signature>\" \"<challenge message>\"  — it returns true when the signature is valid for that address and message.",
+          "2. Electrum: open Tools > Sign/Verify Message, paste the Address, Challenge Message, and Signature, then click Verify.",
+          "3. Any other Bitcoin signed-message verifier (e.g. Sparrow's Verify Message tool, or any offline tool that accepts an address, a message, and a signature) will work the same way.",
+        ];
+        for (const m of verifyMethods) {
+          checkPageBreak(16);
+          const mLines = doc.splitTextToSize(sanitizePdfText(m), contentW - 3) as string[];
+          doc.setFontSize(8.5);
+          doc.setFont("helvetica", "normal");
+          doc.setTextColor(0, 0, 0);
+          doc.text(mLines, margin + 3, y);
+          y += mLines.length * 8.5 * 0.45 + 2;
+        }
+        y += 3;
+
+        // ── Challenge message & nonce format explanation ─────────────────────
+        checkPageBreak(50);
+        doc.setFontSize(11);
+        doc.setFont("helvetica", "bold");
+        doc.setTextColor(0, 0, 0);
+        doc.text("CHALLENGE MESSAGE FORMAT", margin, y);
+        y += 6;
+
+        doc.setFontSize(8.5);
+        doc.setFont("helvetica", "normal");
+        doc.setTextColor(0, 0, 0);
+        const formatLines = doc.splitTextToSize(
+          sanitizePdfText(
+            `The Challenge Message is the human-readable text that was signed for each address. It records the declarant, purpose, date, a unique Declaration Reference (nonce: ${declarationNonce}), and the address itself. ` +
+            "The Declaration Reference is a random value generated specifically for this declaration; because it is embedded in every signed message, the signatures cannot be silently reused for a different declaration. " +
+            "When verifying, the message must be supplied exactly as shown — every character and line break is part of what was signed, so changing even one character will cause verification to fail."
+          ),
+          contentW
+        ) as string[];
+        doc.text(formatLines, margin, y);
+        y += formatLines.length * 8.5 * 0.45 + 6;
+
         for (const row of verifiedRows) {
           checkPageBreak(60);
           const cs = controlStates[row.raw]!;
