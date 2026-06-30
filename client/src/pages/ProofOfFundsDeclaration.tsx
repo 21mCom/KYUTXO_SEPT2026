@@ -618,8 +618,9 @@ export default function ProofOfFundsDeclaration() {
         doc.setFontSize(size);
         doc.setFont("helvetica", bold ? "bold" : "normal");
         doc.setTextColor(...color);
-        doc.text(sanitizePdfText(text), margin, y);
-        y += size * 0.5;
+        const lines = doc.splitTextToSize(sanitizePdfText(text), contentW) as string[];
+        doc.text(lines, margin, y);
+        y += lines.length * size * 0.5;
       };
 
       const addWrapped = (text: string, size = 9, color: [number, number, number] = [0, 0, 0]) => {
