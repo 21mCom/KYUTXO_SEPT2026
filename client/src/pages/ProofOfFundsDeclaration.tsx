@@ -203,6 +203,11 @@ export default function ProofOfFundsDeclaration() {
   // Declarant form
   const [declarantName, setDeclarantName] = useState("");
   const [declarantContact, setDeclarantContact] = useState("");
+  const [declarantResidentialAddress, setDeclarantResidentialAddress] = useState("");
+  const [declarantDob, setDeclarantDob] = useState("");
+  const [declarantTaxId, setDeclarantTaxId] = useState("");
+  const [declarantIdNumber, setDeclarantIdNumber] = useState("");
+  const [declarantNationality, setDeclarantNationality] = useState("");
   const [declarationDate, setDeclarationDate] = useState(todayString());
   const [purpose, setPurpose] = useState("");
   const [statement, setStatement] = useState("");
@@ -661,6 +666,26 @@ export default function ProofOfFundsDeclaration() {
         addLine(`Contact / Address: ${declarantContact}`, 10);
         addSpacer(1);
       }
+      if (declarantResidentialAddress.trim()) {
+        addLine(`Residential / Street Address: ${declarantResidentialAddress}`, 10);
+        addSpacer(1);
+      }
+      if (declarantDob.trim()) {
+        addLine(`Date of Birth: ${declarantDob}`, 10);
+        addSpacer(1);
+      }
+      if (declarantTaxId.trim()) {
+        addLine(`Tax ID Number: ${declarantTaxId}`, 10);
+        addSpacer(1);
+      }
+      if (declarantIdNumber.trim()) {
+        addLine(`Identification Number: ${declarantIdNumber}`, 10);
+        addSpacer(1);
+      }
+      if (declarantNationality.trim()) {
+        addLine(`Nationality: ${declarantNationality}`, 10);
+        addSpacer(1);
+      }
       addLine(`Declaration Date: ${declarationDate}`, 10);
       addSpacer(1);
       addLine(`Purpose: ${purpose}`, 10);
@@ -1082,6 +1107,11 @@ export default function ProofOfFundsDeclaration() {
     canGeneratePdf,
     declarantName,
     declarantContact,
+    declarantResidentialAddress,
+    declarantDob,
+    declarantTaxId,
+    declarantIdNumber,
+    declarantNationality,
     declarationDate,
     declarationNonce,
     purpose,
@@ -1465,6 +1495,63 @@ export default function ProofOfFundsDeclaration() {
                 onChange={(e) => setDeclarantContact(e.target.value)}
                 data-testid="input-declarant-contact"
               />
+            </div>
+
+            <div className="space-y-1">
+              <Label htmlFor="declarant-residential-address">Residential / Street Address <span className="text-muted-foreground text-xs">(optional)</span></Label>
+              <Input
+                id="declarant-residential-address"
+                placeholder="Street address, city, state / country"
+                value={declarantResidentialAddress}
+                onChange={(e) => setDeclarantResidentialAddress(e.target.value)}
+                data-testid="input-declarant-residential-address"
+              />
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="space-y-1">
+                <Label htmlFor="declarant-dob">Date of Birth <span className="text-muted-foreground text-xs">(optional)</span></Label>
+                <Input
+                  id="declarant-dob"
+                  type="date"
+                  value={declarantDob}
+                  onChange={(e) => setDeclarantDob(e.target.value)}
+                  data-testid="input-declarant-dob"
+                />
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="declarant-nationality">Nationality <span className="text-muted-foreground text-xs">(optional)</span></Label>
+                <Input
+                  id="declarant-nationality"
+                  placeholder="e.g. United States"
+                  value={declarantNationality}
+                  onChange={(e) => setDeclarantNationality(e.target.value)}
+                  data-testid="input-declarant-nationality"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="space-y-1">
+                <Label htmlFor="declarant-tax-id">Tax ID Number <span className="text-muted-foreground text-xs">(optional)</span></Label>
+                <Input
+                  id="declarant-tax-id"
+                  placeholder="e.g. SSN, EIN, TIN"
+                  value={declarantTaxId}
+                  onChange={(e) => setDeclarantTaxId(e.target.value)}
+                  data-testid="input-declarant-tax-id"
+                />
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="declarant-id-number">Identification Number <span className="text-muted-foreground text-xs">(optional)</span></Label>
+                <Input
+                  id="declarant-id-number"
+                  placeholder="e.g. Passport or national ID number"
+                  value={declarantIdNumber}
+                  onChange={(e) => setDeclarantIdNumber(e.target.value)}
+                  data-testid="input-declarant-id-number"
+                />
+              </div>
             </div>
 
             <div className="space-y-1">
