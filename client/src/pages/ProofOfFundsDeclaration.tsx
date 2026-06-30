@@ -72,6 +72,7 @@ import {
   generateDeclarationNonce,
   signatureFormatLabel,
   type SignatureFormat,
+  type FreshnessAnchor,
 } from "@/lib/signatureVerify";
 import {
   lookupEntities,
@@ -493,17 +494,38 @@ export default function ProofOfFundsDeclaration() {
   // Track which addresses' challenge messages have been copied
   const [copiedAddresses, setCopiedAddresses] = useState<Set<string>>(new Set());
 
-  // When declarant identity fields change, any previously-verified signatures
-  // are no longer valid (the challenge message they signed has changed).
-  const prevDeclarantRef = useRef({ name: declarantName, date: declarationDate, purpose });
+  // Optional add-ons for Step 5 (both off by default)
+  const [proofAddonsOpen, setProofAddonsOpen] = useState(false);
+  const [verifierReference, setVerifierReference] = useState("");
+  const [freshnessAnchorEnabled, setFreshnessAnchorEnabled] = useState(false);
+  const [freshnessAnchor, setFreshnessAnchor] = useState<FreshnessAnchor | null>(null);
+  const [freshnessAnchorFetching, setFreshnessAnchorFetching] = useState(false);
+  const [freshnessAnchorError, setFreshnessAnchorError] = useState<string | null>(null);
+  const [freshnessManualHeight, setFreshnessManualHeight] = useState("");
+  const [freshnessManualHash, setFreshnessManualHash] = useState("");
+
+  // When declarant identity fields OR proof-of-control add-ons change, any
+  // previously-verified signatures are no longer valid (the challenge message
+  // they signed has changed).
+  const prevDeclarantRef = useRef({
+    name: declarantName,
+    date: declarationDate,
+    purpose,
+    verifierReference,
+    freshnessAnchor: null as FreshnessAnchor | null,
+    freshnessAnchorEnabled,
+  });
   useEffect(() => {
     const prev = prevDeclarantRef.current;
     if (
       prev.name !== declarantName ||
       prev.date !== declarationDate ||
-      prev.purpose !== purpose
+      prev.purpose !== purpose ||
+      prev.verifierReference !== verifierReference ||
+      prev.freshnessAnchor !== freshnessAnchor ||
+      prev.freshnessAnchorEnabled !== freshnessAnchorEnabled
     ) {
-      prevDeclarantRef.current = { name: declarantName, date: declarationDate, purpose };
+      prevDeclarantRef.current = { name: declarantName, date: declarationDate, purpose, verifierReference, freshnessAnchor, freshnessAnchorEnabled };
       setControlStates((prev) => {
         const updated: Record<string, ControlState> = {};
         for (const [addr, cs] of Object.entries(prev)) {
@@ -516,7 +538,7 @@ export default function ProofOfFundsDeclaration() {
         return updated;
       });
     }
-  }, [declarantName, declarationDate, purpose]);
+  }, [declarantName, declarationDate, purpose, verifierReference, freshnessAnchor, freshnessAnchorEnabled]);
 
   // Fiat
   const [fiatCurrency, setFiatCurrency] = useState("USD");
@@ -1030,7 +1052,42 @@ export default function ProofOfFundsDeclaration() {
     setCopiedAddresses(new Set());
   };
 
-  // Per-address: copy the challenge message to clipboard
+  // Fetch current block height + hash for the freshness anchor
+  const fetchFreshnessAnchor = useCallback(async () => {
+    setFreshnessAnchorFetching(true);
+    setFreshnessAnchorError(null);
+    setFreshnessAnchor(null);
+    try {
+      const provider = createProviderFromSettings(nodeSettings);
+      const height = await provider.getBlockHeight();
+      let hash: string;
+      if (provider.getTipBlockHash) {
+        hash = (await provider.getTipBlockHash()).trim();
+      } else {
+        throw new Error("Connected provider does not support block-hash lookup. Use the manual entry below.");
+      }
+      const fetchedAt = new Date().toISOString().replace("T", " ").slice(0, 16) + " UTC";
+      setFreshnessAnchor({ height, hash, fetchedAt });
+      setFreshnessManualHeight(String(height));
+      setFreshnessManualHash(hash);
+    } catch (err) {
+      setFreshnessAnchorError(err instanceof Error ? err.message : "Failed to fetch block data.");
+    } finally {
+      setFreshnessAnchorFetching(false);
+    }
+  }, [nodeSettings]);
+
+  // Apply manually-entered height + hash as the freshness anchor
+  const applyManualFreshnessAnchor = useCallback(() => {
+    const h = parseInt(freshnessManualHeight.trim(), 10);
+    const hash = freshnessManualHash.trim();
+    if (!Number.isFinite(h) || h <= 0) return;
+    if (!hash) return;
+    const fetchedAt = new Date().toISOString().replace("T", " ").slice(0, 16) + " UTC";
+    setFreshnessAnchor({ height: h, hash, fetchedAt });
+    setFreshnessAnchorError(null);
+  }, [freshnessManualHeight, freshnessManualHash]);
+
   const handleCopyChallenge = useCallback(
     (address: string) => {
       const msg = buildChallengeMessage({
@@ -1039,6 +1096,8 @@ export default function ProofOfFundsDeclaration() {
         declarationDate,
         purpose,
         nonce: declarationNonce,
+        verifierReference: verifierReference || undefined,
+        freshnessAnchor: freshnessAnchor ?? undefined,
       });
       navigator.clipboard.writeText(msg).then(() => {
         setCopiedAddresses((prev) => new Set(prev).add(address));
@@ -1051,7 +1110,7 @@ export default function ProofOfFundsDeclaration() {
         }, 2000);
       });
     },
-    [declarantName, declarationDate, purpose, declarationNonce]
+    [declarantName, declarationDate, purpose, declarationNonce, verifierReference, freshnessAnchor]
   );
 
   // Per-address: update pasted signature text
@@ -1086,6 +1145,8 @@ export default function ProofOfFundsDeclaration() {
         declarationDate,
         purpose,
         nonce: declarationNonce,
+        verifierReference: verifierReference || undefined,
+        freshnessAnchor: freshnessAnchor ?? undefined,
       });
 
       try {
@@ -1112,7 +1173,7 @@ export default function ProofOfFundsDeclaration() {
         }));
       }
     },
-    [controlStates, declarantName, declarationDate, purpose, declarationNonce]
+    [controlStates, declarantName, declarationDate, purpose, declarationNonce, verifierReference, freshnessAnchor]
   );
 
   // PDF generation
@@ -2203,12 +2264,25 @@ export default function ProofOfFundsDeclaration() {
         doc.setFontSize(8.5);
         doc.setFont("helvetica", "normal");
         doc.setTextColor(0, 0, 0);
+        const formatDesc = [
+          `The Challenge Message is the human-readable text that was signed for each address. It records the declarant, purpose, date, a unique Declaration Reference (nonce: ${declarationNonce}), and the address itself.`,
+          "The Declaration Reference is a random value generated specifically for this declaration; because it is embedded in every signed message, the signatures cannot be silently reused for a different declaration.",
+          "When verifying, the message must be supplied exactly as shown — every character and line break is part of what was signed, so changing even one character will cause verification to fail.",
+        ];
+        if (verifierReference.trim()) {
+          formatDesc.push(
+            `Verifier Reference: "${verifierReference.trim()}" — a free-text identifier provided by the requesting party and embedded in each signed message, binding the signatures to this specific request.`
+          );
+        }
+        if (freshnessAnchor) {
+          formatDesc.push(
+            `Block Anchor: height ${freshnessAnchor.height}, hash ${freshnessAnchor.hash} (fetched ${freshnessAnchor.fetchedAt}). ` +
+            `This anchor proves each signature was created at or after block ${freshnessAnchor.height}. ` +
+            "It does not prove an exact timestamp — the verifier can confirm the block on any public explorer."
+          );
+        }
         const formatLines = doc.splitTextToSize(
-          sanitizePdfText(
-            `The Challenge Message is the human-readable text that was signed for each address. It records the declarant, purpose, date, a unique Declaration Reference (nonce: ${declarationNonce}), and the address itself. ` +
-            "The Declaration Reference is a random value generated specifically for this declaration; because it is embedded in every signed message, the signatures cannot be silently reused for a different declaration. " +
-            "When verifying, the message must be supplied exactly as shown — every character and line break is part of what was signed, so changing even one character will cause verification to fail."
-          ),
+          sanitizePdfText(formatDesc.join(" ")),
           contentW
         ) as string[];
         doc.text(formatLines, margin, y);
@@ -2247,6 +2321,8 @@ export default function ProofOfFundsDeclaration() {
             declarationDate,
             purpose,
             nonce: declarationNonce,
+            verifierReference: verifierReference || undefined,
+            freshnessAnchor: freshnessAnchor ?? undefined,
           });
 
           doc.setFontSize(8);
@@ -3125,6 +3201,185 @@ export default function ProofOfFundsDeclaration() {
                   </div>
                 )}
 
+                {/* Optional add-ons: verifier reference + block-hash freshness anchor */}
+                <div className="rounded-md border">
+                  <button
+                    type="button"
+                    className="flex w-full items-center justify-between px-4 py-3 text-sm font-medium hover-elevate rounded-md"
+                    onClick={() => setProofAddonsOpen((v) => !v)}
+                    data-testid="button-proof-addons-toggle"
+                  >
+                    <span className="flex items-center gap-2">
+                      <Shield className="h-4 w-4 text-muted-foreground" />
+                      Optional add-ons
+                      <Badge variant="secondary" className="text-xs font-normal">both off by default</Badge>
+                    </span>
+                    {proofAddonsOpen ? <ChevronUp className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
+                  </button>
+
+                  {proofAddonsOpen && (
+                    <div className="border-t px-4 py-4 space-y-5">
+                      {/* Verifier reference */}
+                      <div className="space-y-2">
+                        <Label htmlFor="verifier-reference" className="text-sm font-medium">
+                          Verifier reference{" "}
+                          <span className="text-muted-foreground font-normal">(optional)</span>
+                        </Label>
+                        <p className="text-xs text-muted-foreground">
+                          Free text the requesting party (e.g. a bank) wants embedded in the signed
+                          message — such as a case number or request ID. Leave blank to omit.
+                        </p>
+                        <Input
+                          id="verifier-reference"
+                          placeholder="e.g. ACME Bank request #2026-001"
+                          value={verifierReference}
+                          onChange={(e) => setVerifierReference(e.target.value)}
+                          data-testid="input-verifier-reference"
+                          maxLength={200}
+                        />
+                        {verifierReference.trim() && (
+                          <p className="text-xs text-muted-foreground font-mono">
+                            Will appear in message as: <span className="text-foreground">Verifier ref: {verifierReference.trim()}</span>
+                          </p>
+                        )}
+                      </div>
+
+                      <Separator />
+
+                      {/* Block-hash freshness anchor */}
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between gap-4 flex-wrap">
+                          <div className="space-y-0.5">
+                            <Label htmlFor="freshness-anchor-toggle" className="text-sm font-medium">
+                              Add freshness anchor (block hash){" "}
+                              <span className="text-muted-foreground font-normal">(optional)</span>
+                            </Label>
+                            <p className="text-xs text-muted-foreground">
+                              Embeds the current block height + hash in the signed message, proving the
+                              signature was made at or after that block. No third party involved.
+                            </p>
+                          </div>
+                          <Switch
+                            id="freshness-anchor-toggle"
+                            checked={freshnessAnchorEnabled}
+                            onCheckedChange={(v) => {
+                              setFreshnessAnchorEnabled(v);
+                              if (v) {
+                                fetchFreshnessAnchor();
+                              } else {
+                                setFreshnessAnchor(null);
+                                setFreshnessAnchorError(null);
+                              }
+                            }}
+                            data-testid="switch-freshness-anchor"
+                          />
+                        </div>
+
+                        {freshnessAnchorEnabled && (
+                          <div className="space-y-3 pl-1">
+                            {freshnessAnchor ? (
+                              <Alert className="py-2 border-green-500/50 [&>svg]:text-green-600 dark:[&>svg]:text-green-400">
+                                <ShieldCheck className="h-3.5 w-3.5" />
+                                <AlertDescription className="text-xs space-y-1">
+                                  <p className="font-medium text-green-700 dark:text-green-300">Block anchor set</p>
+                                  <p className="font-mono break-all">Height: {freshnessAnchor.height}</p>
+                                  <p className="font-mono break-all">Hash: {freshnessAnchor.hash}</p>
+                                  <p className="text-muted-foreground">Fetched: {freshnessAnchor.fetchedAt}</p>
+                                  <p className="text-muted-foreground">
+                                    This proves signatures were created at or after block {freshnessAnchor.height}.
+                                  </p>
+                                </AlertDescription>
+                              </Alert>
+                            ) : null}
+
+                            <div className="flex gap-2 flex-wrap">
+                              <Button
+                                size="sm"
+                                variant={freshnessAnchor ? "outline" : "default"}
+                                onClick={fetchFreshnessAnchor}
+                                disabled={freshnessAnchorFetching}
+                                data-testid="button-fetch-freshness-anchor"
+                              >
+                                {freshnessAnchorFetching ? (
+                                  <><Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />Fetching…</>
+                                ) : freshnessAnchor ? (
+                                  <><RefreshCw className="h-3.5 w-3.5 mr-1.5" />Refresh anchor</>
+                                ) : (
+                                  <><Download className="h-3.5 w-3.5 mr-1.5" />Fetch current block</>
+                                )}
+                              </Button>
+                              {freshnessAnchor && (
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  onClick={() => { setFreshnessAnchor(null); setFreshnessAnchorError(null); }}
+                                  data-testid="button-clear-freshness-anchor"
+                                >
+                                  <X className="h-3.5 w-3.5 mr-1.5" />Clear
+                                </Button>
+                              )}
+                            </div>
+
+                            {freshnessAnchorError && (
+                              <div className="space-y-2">
+                                <Alert variant="destructive" className="py-2">
+                                  <AlertCircle className="h-3.5 w-3.5" />
+                                  <AlertDescription className="text-xs">
+                                    {freshnessAnchorError}
+                                  </AlertDescription>
+                                </Alert>
+                                <p className="text-xs text-muted-foreground">
+                                  Paste the block height and hash manually — you can look them up on any
+                                  Bitcoin block explorer.
+                                </p>
+                                <div className="flex gap-2 flex-wrap items-end">
+                                  <div className="space-y-1">
+                                    <Label className="text-xs">Block height</Label>
+                                    <Input
+                                      placeholder="e.g. 900000"
+                                      value={freshnessManualHeight}
+                                      onChange={(e) => setFreshnessManualHeight(e.target.value)}
+                                      className="w-32 text-xs font-mono"
+                                      data-testid="input-freshness-manual-height"
+                                    />
+                                  </div>
+                                  <div className="space-y-1 flex-1">
+                                    <Label className="text-xs">Block hash</Label>
+                                    <Input
+                                      placeholder="64-character hex hash"
+                                      value={freshnessManualHash}
+                                      onChange={(e) => setFreshnessManualHash(e.target.value)}
+                                      className="text-xs font-mono"
+                                      data-testid="input-freshness-manual-hash"
+                                    />
+                                  </div>
+                                  <Button
+                                    size="sm"
+                                    onClick={applyManualFreshnessAnchor}
+                                    disabled={!freshnessManualHeight.trim() || !freshnessManualHash.trim()}
+                                    data-testid="button-apply-manual-freshness"
+                                  >
+                                    Apply
+                                  </Button>
+                                </div>
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  className="text-xs"
+                                  onClick={() => { setFreshnessAnchorEnabled(false); setFreshnessAnchor(null); setFreshnessAnchorError(null); }}
+                                  data-testid="button-proceed-without-anchor"
+                                >
+                                  Proceed without freshness anchor
+                                </Button>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
                 <div className="space-y-6">
                   {doneRows.map((row, idx) => {
                     const cs = controlStates[row.raw] ?? { paste: "", status: "idle" as ControlStatus };
@@ -3135,6 +3390,8 @@ export default function ProofOfFundsDeclaration() {
                       declarationDate,
                       purpose,
                       nonce: declarationNonce,
+                      verifierReference: verifierReference || undefined,
+                      freshnessAnchor: freshnessAnchor ?? undefined,
                     });
                     const copied = copiedAddresses.has(row.raw);
 
@@ -3181,9 +3438,9 @@ export default function ProofOfFundsDeclaration() {
                           >
                             <AlertCircle className="h-3.5 w-3.5" />
                             <AlertDescription className="text-xs">
-                              Declarant details changed — re-verify your signature. The challenge
-                              message now embeds the updated name, date, or purpose, so the previous
-                              signature no longer matches.
+                              Challenge message changed — re-verify your signature. The declarant
+                              details, verifier reference, or block anchor were updated, so the
+                              previous signature no longer matches.
                             </AlertDescription>
                           </Alert>
                         )}

@@ -27,6 +27,10 @@ export interface AddressHistoryDates {
 export interface BlockchainProvider {
   name: string;
   getBlockHeight(): Promise<number>;
+  /** Optional: fetch the hash of the current chain tip. Only available on
+   *  Esplora-compatible providers (not Electrum). Used by the proof-of-control
+   *  freshness anchor feature. */
+  getTipBlockHash?(): Promise<string>;
   getAddressTransactions(
     address: string,
     onProgress?: (scanned: number) => void,

@@ -108,7 +108,7 @@ describe("ProofOfFundsDeclaration — stale signature warning", () => {
       expect(screen.getByTestId("badge-stale-0")).toBeTruthy();
     });
     expect(screen.getByTestId("alert-stale-0").textContent).toContain(
-      "Declarant details changed",
+      "Challenge message changed",
     );
 
     // Re-verify the signature — the warning disappears.

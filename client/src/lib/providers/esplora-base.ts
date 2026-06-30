@@ -193,6 +193,11 @@ export abstract class EsploraProvider implements BlockchainProvider {
     return response.json();
   }
 
+  async getTipBlockHash(): Promise<string> {
+    const response = await this.rateLimitedFetch(`${this.baseUrl}/blocks/tip/hash`);
+    return response.text();
+  }
+
   async getAddressTransactions(address: string): Promise<ApiTransaction[]> {
     const response = await this.rateLimitedFetch(`${this.baseUrl}/address/${address}/txs`);
     return response.json();
