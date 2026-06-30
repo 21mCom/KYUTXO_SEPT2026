@@ -16,7 +16,10 @@ import {
   ShieldCheck,
   Copy,
   ClipboardCheck,
+  QrCode as QrCodeIcon,
+  Globe,
 } from "lucide-react";
+import QRCode from "qrcode";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
@@ -25,6 +28,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Separator } from "@/components/ui/separator";
+import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -126,6 +130,52 @@ function todayString(): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
+// Public block-explorer services a recipient can use to independently look up an
+// address's balance. The QR code simply ENCODES the explorer URL as text — it is
+// generated entirely offline (no network call, no remote QR image service). The
+// recipient chooses whether to scan it and contact the third-party explorer.
+type ExplorerId = "mempool" | "blockstream" | "blockchain" | "blockchair";
+
+interface ExplorerDef {
+  id: ExplorerId;
+  label: string;
+  // Human-readable host shown under each QR code in the UI and PDF.
+  host: string;
+  // Builds the public address page URL that the QR code encodes.
+  addressUrl: (address: string) => string;
+}
+
+const QR_EXPLORERS: ExplorerDef[] = [
+  {
+    id: "mempool",
+    label: "mempool.space",
+    host: "mempool.space",
+    addressUrl: (a) => `https://mempool.space/address/${a}`,
+  },
+  {
+    id: "blockstream",
+    label: "Blockstream.info",
+    host: "blockstream.info",
+    addressUrl: (a) => `https://blockstream.info/address/${a}`,
+  },
+  {
+    id: "blockchain",
+    label: "Blockchain.com",
+    host: "blockchain.com",
+    addressUrl: (a) => `https://www.blockchain.com/explorer/addresses/btc/${a}`,
+  },
+  {
+    id: "blockchair",
+    label: "Blockchair",
+    host: "blockchair.com",
+    addressUrl: (a) => `https://blockchair.com/bitcoin/address/${a}`,
+  },
+];
+
+function getExplorer(id: ExplorerId): ExplorerDef {
+  return QR_EXPLORERS.find((e) => e.id === id) ?? QR_EXPLORERS[0];
+}
+
 export default function ProofOfFundsDeclaration() {
   const { nodeSettings } = useNodeSettings();
   const { owners } = useOwners();
@@ -192,6 +242,12 @@ export default function ProofOfFundsDeclaration() {
   const [fiatCurrency, setFiatCurrency] = useState("USD");
   const [fiatRate, setFiatRate] = useState("");
 
+  // Balance-verification QR codes (optional)
+  const [includeQr, setIncludeQr] = useState(false);
+  const [qrExplorerId, setQrExplorerId] = useState<ExplorerId>("mempool");
+  // address -> generated QR data URL for the on-screen preview
+  const [qrPreviews, setQrPreviews] = useState<Record<string, string>>({});
+
   // PDF generating
   const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
 
@@ -219,6 +275,45 @@ export default function ProofOfFundsDeclaration() {
     () => doneRows.filter((r) => controlStates[r.raw]?.status === "verified").length,
     [doneRows, controlStates]
   );
+
+  // Stable key for the set of addresses we have balances for, so the QR preview
+  // effect only regenerates when the actual addresses (not the array ref) change.
+  const doneAddressKey = useMemo(() => doneRows.map((r) => r.raw).join("|"), [doneRows]);
+
+  // Generate the on-screen QR previews offline whenever the toggle, explorer, or
+  // address set changes. QRCode.toDataURL never touches the network — it draws
+  // the code locally and returns a data: URL.
+  useEffect(() => {
+    if (!includeQr || doneRows.length === 0) {
+      setQrPreviews({});
+      return;
+    }
+    let cancelled = false;
+    const explorer = getExplorer(qrExplorerId);
+    // Drop any previous codes immediately so we never show stale images under a
+    // newly selected explorer label while the new codes are being drawn.
+    setQrPreviews({});
+    (async () => {
+      const map: Record<string, string> = {};
+      for (const r of doneRows) {
+        try {
+          map[r.raw] = await QRCode.toDataURL(explorer.addressUrl(r.raw), {
+            width: 240,
+            margin: 1,
+            errorCorrectionLevel: "M",
+          });
+        } catch {
+          // Skip a single failed code rather than failing the whole preview.
+        }
+      }
+      if (!cancelled) setQrPreviews(map);
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // doneAddressKey captures the address set; doneRows ref is intentionally omitted.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [includeQr, qrExplorerId, doneAddressKey]);
 
   const canGeneratePdf =
     doneRows.length > 0 &&
@@ -658,6 +753,82 @@ export default function ProofOfFundsDeclaration() {
       }
 
       addSpacer(4);
+
+      // ── Balance-Verification QR Codes ──────────────────────────────────────
+      if (includeQr && doneRows.length > 0) {
+        const qrExplorer = getExplorer(qrExplorerId);
+
+        // Pre-generate every QR code offline (data: URLs, no network).
+        const qrMap = new Map<string, string>();
+        for (const r of doneRows) {
+          try {
+            qrMap.set(
+              r.raw,
+              await QRCode.toDataURL(qrExplorer.addressUrl(r.raw), {
+                width: 400,
+                margin: 1,
+                errorCorrectionLevel: "M",
+              })
+            );
+          } catch {
+            // Skip a single failed code rather than aborting the whole PDF.
+          }
+        }
+
+        checkPageBreak(30);
+        addLine("BALANCE VERIFICATION QR CODES", 11, true);
+        addSpacer(2);
+        addWrapped(
+          `Scan a code below to view that address on ${qrExplorer.host} and confirm its balance. ` +
+            "These QR codes link to a public, third-party block explorer; opening them requires internet access " +
+            "and shares the address with that explorer. KYUTXO made no network requests to generate this document.",
+          8.5
+        );
+        addSpacer(2);
+
+        const qrSize = 30; // mm
+        const qrGap = 6;
+        const textX = margin + qrSize + 4;
+        const textW = contentW - qrSize - 4;
+
+        for (const r of doneRows) {
+          const dataUrl = qrMap.get(r.raw);
+          checkPageBreak(qrSize + qrGap);
+          const blockTop = y;
+
+          if (dataUrl) {
+            doc.addImage(dataUrl, "PNG", margin, blockTop, qrSize, qrSize);
+          }
+
+          // Address + explorer URL to the right of the code.
+          let ty = blockTop + 4;
+          doc.setFont("courier", "normal");
+          doc.setFontSize(8);
+          doc.setTextColor(0, 0, 0);
+          const addrLines = doc.splitTextToSize(sanitizePdfText(r.raw), textW) as string[];
+          doc.text(addrLines, textX, ty);
+          ty += addrLines.length * 8 * 0.45 + 2;
+
+          doc.setFont("helvetica", "normal");
+          doc.setFontSize(8);
+          doc.setTextColor(0, 0, 0);
+          doc.text(sanitizePdfText(`Balance: ${formatBTC(r.balanceSats ?? 0)} BTC`), textX, ty);
+          ty += 5;
+
+          doc.setFontSize(7.5);
+          doc.setTextColor(80, 80, 80);
+          const urlLines = doc.splitTextToSize(
+            sanitizePdfText(qrExplorer.addressUrl(r.raw)),
+            textW
+          ) as string[];
+          doc.text(urlLines, textX, ty);
+
+          doc.setTextColor(0, 0, 0);
+          y = Math.max(blockTop + qrSize, ty + urlLines.length * 7.5 * 0.45) + qrGap;
+        }
+
+        addSpacer(2);
+      }
 
       // ── Standard Disclaimers ───────────────────────────────────────────────
       checkPageBreak(50);
@@ -1601,10 +1772,121 @@ export default function ProofOfFundsDeclaration() {
           </CardContent>
         </Card>
 
-        {/* Step 6: Generate PDF */}
+        {/* Step 6: Balance-Verification QR Codes */}
         <Card>
           <CardHeader>
-            <CardTitle>Step 6 — Generate PDF</CardTitle>
+            <CardTitle className="flex items-center gap-2">
+              <QrCodeIcon className="h-5 w-5" />
+              Step 6 — Verification QR Codes
+              <Badge variant="secondary" className="ml-1 text-xs font-normal">Optional</Badge>
+            </CardTitle>
+            <CardDescription>
+              Add a QR code for each address so the recipient can scan it and look up the
+              balance on a public block explorer. The codes are drawn entirely offline —
+              KYUTXO never contacts the explorer. They simply encode a link the recipient
+              can choose to open (which requires their own internet connection).
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="flex items-center justify-between gap-4 flex-wrap">
+              <div className="space-y-0.5">
+                <Label htmlFor="include-qr" className="text-sm font-medium">
+                  Include verification QR codes in the PDF
+                </Label>
+                <p className="text-sm text-muted-foreground">
+                  Adds one QR code per address with a checked balance.
+                </p>
+              </div>
+              <Switch
+                id="include-qr"
+                checked={includeQr}
+                onCheckedChange={setIncludeQr}
+                data-testid="switch-include-qr"
+              />
+            </div>
+
+            {includeQr && (
+              <>
+                <Separator />
+
+                {doneRows.length === 0 ? (
+                  <p className="text-sm text-muted-foreground flex items-center gap-2">
+                    <Clock className="h-4 w-4" />
+                    Check balances for at least one valid address (Step 2) to generate codes.
+                  </p>
+                ) : (
+                  <>
+                    <div className="space-y-2 max-w-xs">
+                      <Label htmlFor="qr-explorer" className="text-sm">Block explorer</Label>
+                      <Select
+                        value={qrExplorerId}
+                        onValueChange={(v) => setQrExplorerId(v as ExplorerId)}
+                      >
+                        <SelectTrigger id="qr-explorer" data-testid="select-qr-explorer">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {QR_EXPLORERS.map((e) => (
+                            <SelectItem key={e.id} value={e.id} data-testid={`option-explorer-${e.id}`}>
+                              {e.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <p className="text-xs text-muted-foreground">
+                        Each code links to{" "}
+                        <span className="font-mono">{getExplorer(qrExplorerId).host}</span>.
+                      </p>
+                    </div>
+
+                    <Alert>
+                      <Globe className="h-4 w-4" />
+                      <AlertDescription>
+                        Scanning a code opens a third-party block explorer and shares the
+                        address with it. The recipient needs their own internet connection;
+                        KYUTXO stays fully offline.
+                      </AlertDescription>
+                    </Alert>
+
+                    <div className="grid grid-cols-[repeat(auto-fill,minmax(160px,1fr))] gap-3">
+                      {doneRows.map((r) => (
+                        <div
+                          key={r.raw}
+                          className="flex flex-col items-center gap-2 rounded-md border p-3 text-center"
+                          data-testid={`qr-preview-${r.raw}`}
+                        >
+                          {qrPreviews[r.raw] ? (
+                            <img
+                              src={qrPreviews[r.raw]}
+                              alt={`QR code linking to ${r.raw}`}
+                              className="h-32 w-32"
+                              data-testid={`qr-image-${r.raw}`}
+                            />
+                          ) : (
+                            <div className="h-32 w-32 flex items-center justify-center text-muted-foreground">
+                              <Loader2 className="h-5 w-5 animate-spin" />
+                            </div>
+                          )}
+                          <span className="font-mono text-xs break-all" title={r.raw}>
+                            {r.raw.length > 20 ? `${r.raw.slice(0, 10)}…${r.raw.slice(-8)}` : r.raw}
+                          </span>
+                          <span className="text-xs text-muted-foreground">
+                            {formatBTC(r.balanceSats ?? 0)} BTC
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                )}
+              </>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Step 7: Generate PDF */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Step 7 — Generate PDF</CardTitle>
             <CardDescription>
               All required steps above must be complete before a PDF can be generated.
               The PDF is created entirely in your browser — no data leaves your device.
@@ -1665,6 +1947,7 @@ export default function ProofOfFundsDeclaration() {
                   The PDF will include: declarant details, statement, {doneRows.length} address{doneRows.length !== 1 ? "es" : ""} with
                   balances and control status, total ({formatBTC(totalSats)} BTC){fiatValid && fiatTotal !== null ? ", fiat equivalent," : ","} data
                   source attestation, disclaimers, and a signature block.
+                  {includeQr && ` It will also include verification QR codes linking each address to ${getExplorer(qrExplorerId).host}.`}
                   {verifiedCount > 0 && ` An appendix will contain the challenge messages and signatures for ${verifiedCount} verified address${verifiedCount !== 1 ? "es" : ""}.`}
                 </p>
               </div>
