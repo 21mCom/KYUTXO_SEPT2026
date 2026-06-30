@@ -284,6 +284,44 @@ export default function ProofOfFundsDeclaration() {
     [doneRows, controlStates]
   );
 
+  // Live on-screen preview of the declarant details. Mirrors the PDF builder:
+  // required fields always appear once filled, and each optional identity field
+  // only contributes a row when it is non-blank (no stray labels for empty
+  // fields). Keeping this list in lockstep with the PDF prevents the preview
+  // from drifting from the exported document.
+  const declarantPreviewRows = useMemo(() => {
+    const previewRows: { key: string; label: string; value: string; testid: string }[] = [];
+    if (declarantName.trim())
+      previewRows.push({ key: "name", label: "Full Name:", value: declarantName, testid: "preview-declarant-name" });
+    if (declarantContact.trim())
+      previewRows.push({ key: "contact", label: "Contact / Address:", value: declarantContact, testid: "preview-declarant-contact" });
+    if (declarantResidentialAddress.trim())
+      previewRows.push({ key: "residential", label: "Residential / Street Address:", value: declarantResidentialAddress, testid: "preview-declarant-residential-address" });
+    if (declarantDob.trim())
+      previewRows.push({ key: "dob", label: "Date of Birth:", value: declarantDob, testid: "preview-declarant-dob" });
+    if (declarantTaxId.trim())
+      previewRows.push({ key: "taxid", label: "Tax ID Number:", value: declarantTaxId, testid: "preview-declarant-tax-id" });
+    if (declarantIdNumber.trim())
+      previewRows.push({ key: "idnumber", label: "Identification Number:", value: declarantIdNumber, testid: "preview-declarant-id-number" });
+    if (declarantNationality.trim())
+      previewRows.push({ key: "nationality", label: "Nationality:", value: declarantNationality, testid: "preview-declarant-nationality" });
+    if (declarationDate)
+      previewRows.push({ key: "date", label: "Declaration Date:", value: declarationDate, testid: "preview-declaration-date" });
+    if (purpose.trim())
+      previewRows.push({ key: "purpose", label: "Purpose:", value: purpose, testid: "preview-purpose" });
+    return previewRows;
+  }, [
+    declarantName,
+    declarantContact,
+    declarantResidentialAddress,
+    declarantDob,
+    declarantTaxId,
+    declarantIdNumber,
+    declarantNationality,
+    declarationDate,
+    purpose,
+  ]);
+
   // Stable key for the set of addresses we have balances for, so the QR preview
   // effect only regenerates when the actual addresses (not the array ref) change.
   const doneAddressKey = useMemo(() => doneRows.map((r) => r.raw).join("|"), [doneRows]);
@@ -1582,6 +1620,34 @@ export default function ProofOfFundsDeclaration() {
                 data-testid="textarea-statement"
               />
             </div>
+
+            {/* Live preview of the declarant details that will appear in the PDF.
+                Optional identity fields only show when filled (mirrors the PDF). */}
+            {declarantPreviewRows.length > 0 && (
+              <div
+                className="rounded-md border bg-muted/30 p-4 space-y-2"
+                data-testid="declarant-preview"
+              >
+                <h4 className="text-sm font-semibold">Declaration Preview</h4>
+                <p className="text-xs text-muted-foreground">
+                  This is how the declarant details will appear in the PDF. Blank optional fields are omitted.
+                </p>
+                <dl className="space-y-1 text-sm">
+                  {declarantPreviewRows.map((row) => (
+                    <div
+                      key={row.key}
+                      className="flex flex-wrap gap-x-2"
+                      data-testid={`preview-row-${row.key}`}
+                    >
+                      <dt className="text-muted-foreground">{row.label}</dt>
+                      <dd className="font-medium break-all" data-testid={row.testid}>
+                        {row.value}
+                      </dd>
+                    </div>
+                  ))}
+                </dl>
+              </div>
+            )}
           </CardContent>
         </Card>
 
