@@ -632,7 +632,9 @@ export async function buildFundTrailPdf(
     // Wrap the heading the same way the detail columns wrap, so a long group
     // label (e.g. a descriptor-derived name) breaks onto extra lines instead of
     // being pushed off the right page edge.
-    const headingText = `${prefix}${sanitizePdfText(node.groupLabel)} — ${formatBtc(node.totalSats)}`;
+    const headingText = sanitizePdfText(
+      `${prefix}${node.groupLabel} — ${formatBtc(node.totalSats)}`,
+    );
     const headingMaxWidth = pageWidth - 16 - 14;
     const headingLines = doc.splitTextToSize(headingText, headingMaxWidth);
     const oneLineHeight = doc.getTextDimensions("X").h;
@@ -679,7 +681,7 @@ export async function buildFundTrailPdf(
     doc.setTextColor(120);
     doc.text(`Generated: ${generated}`, 14, pageHeight - 10);
     doc.text(
-      `KYUTXO — generated offline  ·  Page ${p} of ${pageCount}`,
+      sanitizePdfText(`KYUTXO — generated offline  ·  Page ${p} of ${pageCount}`),
       pageWidth - 14,
       pageHeight - 10,
       { align: "right" },

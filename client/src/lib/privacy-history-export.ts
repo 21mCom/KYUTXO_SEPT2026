@@ -323,7 +323,7 @@ export async function buildPrivacyHistoryPdf(
   doc.setFontSize(8);
   doc.setTextColor(120);
   doc.text(`Generated: ${new Date().toLocaleString()}`, 14, pageHeight - 10);
-  doc.text("KYUTXO — generated offline", pageWidth - 14, pageHeight - 10, { align: "right" });
+  doc.text(sanitizePdfText("KYUTXO — generated offline"), pageWidth - 14, pageHeight - 10, { align: "right" });
 
   return doc.output("blob");
 }

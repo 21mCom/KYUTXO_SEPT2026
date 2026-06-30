@@ -9,6 +9,7 @@ NO_EXTERNAL_CMD="node scripts/check-no-external-resources.js"
 NOTE_RENDER_CMD="node scripts/check-note-rendering.js"
 TEST_PROVIDERS_CMD="node scripts/check-test-providers.js"
 NO_BUFFER_CMD="node scripts/check-no-buffer-global.js"
+PDF_TEXT_CMD="node scripts/check-pdf-text-sanitized.js"
 
 append_check() {
   cmd="$1"
@@ -35,3 +36,4 @@ append_check "$NO_EXTERNAL_CMD" "no external resources"
 append_check "$NOTE_RENDER_CMD" "note rendering"
 append_check "$TEST_PROVIDERS_CMD" "test providers"
 append_check "$NO_BUFFER_CMD" "no buffer global"
+append_check "$PDF_TEXT_CMD" "pdf text sanitized"

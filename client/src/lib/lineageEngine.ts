@@ -1028,7 +1028,9 @@ export async function downloadEvidenceBundlePdf(bundle: EvidenceBundle, filename
     doc.setFont('helvetica', 'bold');
     doc.setTextColor(180, 60, 60);
     doc.text(
-      `INCOMPLETE — ${bundle.summary.totalSegments} of ${bundle.requestedSegments ?? '?'} segments exported`,
+      sanitizePdfText(
+        `INCOMPLETE — ${bundle.summary.totalSegments} of ${bundle.requestedSegments ?? '?'} segments exported`,
+      ),
       margin, y
     );
     doc.setTextColor(0);
