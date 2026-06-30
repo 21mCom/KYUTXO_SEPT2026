@@ -41,7 +41,8 @@ import {
   FlaskConical,
   ChevronsLeftRight,
   CalendarRange,
-  Search
+  Search,
+  Droplets
 } from "lucide-react";
 import logoUrl from "@/assets/foot_1764929618997.png";
 import { version as APP_VERSION } from "../../../package.json";
@@ -121,6 +122,7 @@ const navGroups: NavGroup[] = [
       { title: "Proof of Funds", url: "/proof-of-funds", icon: FileText },
       { title: "Annual Activity", url: "/annual-activity", icon: CalendarRange },
       { title: "Lightning", url: "/lightning-speculator", icon: Zap },
+      { title: "Dusted", url: "/dusted", icon: Droplets },
     ]
   },
   {

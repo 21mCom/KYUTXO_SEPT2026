@@ -68,6 +68,7 @@ import DatabaseDoctor from "@/pages/DatabaseDoctor";
 import AnnualActivityReport from "@/pages/AnnualActivityReport";
 import AddressChecker from "@/pages/AddressChecker";
 import ProofOfFundsDeclaration from "@/pages/ProofOfFundsDeclaration";
+import DustedPage from "@/pages/DustedPage";
 import NotFound from "@/pages/not-found";
 
 function AppRoutes() {
@@ -124,6 +125,7 @@ function AppRoutes() {
       <Route path="/annual-activity" component={AnnualActivityReport} />
       <Route path="/address-checker" component={AddressChecker} />
       <Route path="/proof-of-funds" component={ProofOfFundsDeclaration} />
+      <Route path="/dusted" component={DustedPage} />
       <Route component={NotFound} />
     </Switch>
   );
