@@ -540,6 +540,183 @@ describe("verifyBitcoinSignature — rejects bad input clearly", () => {
   });
 });
 
+/**
+ * Negative cross-implementation BIP-322 "Full" vectors: structurally-valid but
+ * INSUFFICIENT witnesses an attacker would actually craft.
+ *
+ * The positive external vectors above prove the verifier ACCEPTS genuine
+ * independent witnesses; these prove it REJECTS the cases that matter most —
+ * a witness whose script still hashes to / commits to the address (so it sails
+ * past the hash and taproot-commitment checks) but whose SIGNATURES are too few,
+ * mis-ordered, or tampered.
+ *
+ * Rather than re-deriving fresh signatures, these "almost valid" witnesses are
+ * generated from the externally-produced positive vectors by an INDEPENDENT
+ * witness-stack rewriter (the helpers below) that only ever re-orders, drops, or
+ * bit-flips stack items — it shares no code with signatureVerify.ts's own
+ * (non-exported) parser/interpreter. The witness/leaf script item is left
+ * untouched, so the address hash160/sha256 and the taproot control-block
+ * commitment still match; only the signature material is broken. That isolates
+ * the rejection to the signature-validation logic (CHECKMULTISIG / CHECKSIG /
+ * CHECKSIGADD), exactly the surface an attacker probes.
+ */
+function b64ToBytes(b64: string): Uint8Array {
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+function bytesToB64(bytes: Uint8Array): string {
+  let s = "";
+  for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+  return btoa(s);
+}
+
+/** CompactSize varint reader (independent of the verifier's internal one). */
+function readCompactSize(buf: Uint8Array, off: number): { value: number; size: number } {
+  const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+  const first = buf[off];
+  if (first < 0xfd) return { value: first, size: 1 };
+  if (first === 0xfd) return { value: dv.getUint16(off + 1, true), size: 3 };
+  if (first === 0xfe) return { value: dv.getUint32(off + 1, true), size: 5 };
+  return { value: Number(dv.getBigUint64(off + 1, true)), size: 9 };
+}
+
+/** Parse a serialized witness stack into its items. */
+function splitWitness(b64: string): Uint8Array[] {
+  const buf = b64ToBytes(b64);
+  let off = 0;
+  const { value: count, size } = readCompactSize(buf, off);
+  off += size;
+  const items: Uint8Array[] = [];
+  for (let i = 0; i < count; i++) {
+    const { value: len, size: lenSize } = readCompactSize(buf, off);
+    off += lenSize;
+    items.push(buf.subarray(off, off + len));
+    off += len;
+  }
+  return items;
+}
+
+/** Encode a small length as a CompactSize varint (all items here are < 0xfd*… big). */
+function writeCompactSize(n: number): Uint8Array {
+  if (n < 0xfd) return new Uint8Array([n]);
+  if (n <= 0xffff) return new Uint8Array([0xfd, n & 0xff, (n >> 8) & 0xff]);
+  return new Uint8Array([0xfe, n & 0xff, (n >> 8) & 0xff, (n >> 16) & 0xff, (n >> 24) & 0xff]);
+}
+
+/** Re-serialize a witness stack from its items and base64-encode it. */
+function joinWitness(items: Uint8Array[]): string {
+  const chunks: Uint8Array[] = [writeCompactSize(items.length)];
+  for (const item of items) {
+    chunks.push(writeCompactSize(item.length));
+    chunks.push(item);
+  }
+  let total = 0;
+  for (const c of chunks) total += c.length;
+  const out = new Uint8Array(total);
+  let off = 0;
+  for (const c of chunks) {
+    out.set(c, off);
+    off += c.length;
+  }
+  return bytesToB64(out);
+}
+
+/** Return a copy of `item` with the byte at `index` flipped (XOR 0xff). */
+function flipByte(item: Uint8Array, index: number): Uint8Array {
+  const copy = item.slice();
+  copy[index] ^= 0xff;
+  return copy;
+}
+
+describe("BIP-322 Full rejects structurally-valid-but-insufficient multisig (P2WSH)", () => {
+  // EXT_P2WSH_2OF3 stack: [<empty dummy>, sigA, sigC, <witnessScript>].
+  const items = splitWitness(EXT_P2WSH_2OF3_SIG);
+
+  it("rejects a 2-of-3 P2WSH with only ONE signature (too few sigs)", async () => {
+    // Drop sigC, leaving the dummy, a single sig, and the (untouched) script.
+    const tooFew = joinWitness([items[0], items[1], items[3]]);
+    const result = await verifyBip322Full(EXT_P2WSH_2OF3_ADDR, EXT_MSG, tooFew);
+    expect(result.verified).toBe(false);
+    expect(result.error).toBeTruthy();
+    // The script item is unchanged, so it must get past the hash check and fail
+    // in signature validation, not in the address-mismatch branch.
+    expect(result.error).not.toMatch(/witness script does not hash/i);
+  });
+
+  it("rejects a 2-of-3 P2WSH with the cosigner signatures in the wrong order", async () => {
+    // OP_CHECKMULTISIG matches sigs to keys sequentially in script order, so
+    // swapping the two valid sigs makes the second one run out of keys.
+    const swapped = joinWitness([items[0], items[2], items[1], items[3]]);
+    const result = await verifyBip322Full(EXT_P2WSH_2OF3_ADDR, EXT_MSG, swapped);
+    expect(result.verified).toBe(false);
+    expect(result.error).toBeTruthy();
+    expect(result.error).not.toMatch(/witness script does not hash/i);
+  });
+
+  it("rejects a 2-of-3 P2WSH where one signature is tampered (one bad sig)", async () => {
+    // Flip a byte inside the r-value of sigA: the DER stays structurally
+    // parseable but the signature no longer verifies against any cosigner key.
+    const badSig = flipByte(items[1], 10);
+    const tampered = joinWitness([items[0], badSig, items[2], items[3]]);
+    const result = await verifyBip322Full(EXT_P2WSH_2OF3_ADDR, EXT_MSG, tampered);
+    expect(result.verified).toBe(false);
+    expect(result.error).toBeTruthy();
+    expect(result.error).not.toMatch(/witness script does not hash/i);
+  });
+
+  it("rejects a 2-of-2 P2WSH where one of the two signatures is tampered", async () => {
+    // Same attack on the 2-of-2 vault: a single bad sig must fail the m-of-n.
+    const twoOfTwo = splitWitness(EXT_P2WSH_2OF2_SIG); // [empty, sigA, sigB, script]
+    const badSig = flipByte(twoOfTwo[2], 10);
+    const tampered = joinWitness([twoOfTwo[0], twoOfTwo[1], badSig, twoOfTwo[3]]);
+    const result = await verifyBip322Full(EXT_P2WSH_2OF2_ADDR, EXT_MSG, tampered);
+    expect(result.verified).toBe(false);
+    expect(result.error).toBeTruthy();
+    expect(result.error).not.toMatch(/witness script does not hash/i);
+  });
+});
+
+describe("BIP-322 Full rejects structurally-valid-but-insufficient multisig (P2TR script-path)", () => {
+  // EXT_P2TR_CSA stack: [sigB, sigA, <leafScript>, <controlBlock>].
+  const items = splitWitness(EXT_P2TR_CSA_SIG);
+
+  it("rejects a CHECKSIGADD 2-of-2 with one good and one tampered signature", async () => {
+    // Flip a byte in the second Schnorr signature: CHECKSIGADD then counts only
+    // one valid sig, so OP_2 OP_NUMEQUAL fails (1 ≠ 2).
+    const badSig = flipByte(items[1], 10);
+    const tampered = joinWitness([items[0], badSig, items[2], items[3]]);
+    const result = await verifyBip322Full(EXT_P2TR_CSA_ADDR, EXT_MSG, tampered);
+    expect(result.verified).toBe(false);
+    expect(result.error).toBeTruthy();
+    // The leaf script + control block are untouched, so it gets past the
+    // taproot-commitment check and fails in tapscript signature validation.
+    expect(result.error).not.toMatch(/control block does not commit/i);
+  });
+
+  it("rejects a CHECKSIGADD 2-of-2 with the two signatures swapped", async () => {
+    // Each Schnorr sig is bound to a specific cosigner key by position, so
+    // swapping them makes both CHECKSIG/CHECKSIGADD checks fail.
+    const swapped = joinWitness([items[1], items[0], items[2], items[3]]);
+    const result = await verifyBip322Full(EXT_P2TR_CSA_ADDR, EXT_MSG, swapped);
+    expect(result.verified).toBe(false);
+    expect(result.error).toBeTruthy();
+    expect(result.error).not.toMatch(/control block does not commit/i);
+  });
+
+  it("rejects a CHECKSIGADD 2-of-2 with one signature dropped (too few sigs)", async () => {
+    // Remove sigB, leaving a single sig for a 2-of-2 tapscript: the count can
+    // never reach 2, so verification must fail (without crashing).
+    const tooFew = joinWitness([items[1], items[2], items[3]]);
+    const result = await verifyBip322Full(EXT_P2TR_CSA_ADDR, EXT_MSG, tooFew);
+    expect(result.verified).toBe(false);
+    expect(result.error).toBeTruthy();
+    expect(result.error).not.toMatch(/control block does not commit/i);
+  });
+});
+
 describe("challenge message helpers", () => {
   it("builds a deterministic challenge embedding the address and nonce", () => {
     const msg = buildChallengeMessage({
