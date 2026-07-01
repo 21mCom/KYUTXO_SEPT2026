@@ -93,6 +93,10 @@ args = "sample-pdf-browser-check"
 task = "workflow.run"
 args = "pof-empty-exclusion-browser-check"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "pof-empty-exclusion-live-browser-check"
+
 [[workflows.workflow]]
 name = "Start application"
 author = "agent"
@@ -263,6 +267,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-pof-empty-exclusion-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "pof-empty-exclusion-live-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-pof-empty-exclusion-live-browser.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true
