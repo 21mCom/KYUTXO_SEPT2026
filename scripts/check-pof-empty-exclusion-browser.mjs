@@ -29,6 +29,17 @@
 //     - the "Generate PDF" button stays disabled
 //     - no individual results-table rows are rendered
 //
+//   Full-featured case (one funded, one empty, ALL optional sections ON):
+//     - the QR, Acquisition & Provenance, and AML / Risk Screening switches are
+//       all turned on before the PDF is generated
+//     - the generated PDF contains the funded address (full form, drawn by the
+//       QR section, AND truncated 8+8 form, drawn by the provenance table)
+//     - the empty address never appears in ANY section, in either its full form
+//       or its truncated 8+8 form (the truncation the QR/provenance/AML sections
+//       use). This closes the gap left by the default OFF-sections run: those
+//       optional sections render addresses in a truncated `first8...last8` shape
+//       that plain full-string substring matching would have missed.
+//
 // pdf.js is only the verification *oracle* (KYUTXO never reads PDFs). We load
 // pdf.js's *legacy* build because the Nix-pinned test Chromium (v125) predates
 // `Promise.try`, which pdfjs' default build/worker needs — same flavor/reason as
@@ -52,6 +63,16 @@ const ADDR_EMPTY = '12higDjoCCNXSA95xZMWUdPvXNmkAduhWv';
 const FUNDED_SATS = 500_000;
 const FUNDED_TXID =
   'a1b2c3d4e5f6071829304152637485960718293041526374859607182930a1b2';
+
+// The QR / provenance / AML sections render addresses in a truncated 8+8 shape
+// via `truncateAddress(addr, 8, 8)` => `first8...last8` (see client/src/lib/
+// bitcoin.ts). Mirror that here so we can assert on the truncated form too.
+function truncate88(address) {
+  if (address.length <= 16) return address;
+  return `${address.slice(0, 8)}...${address.slice(-8)}`;
+}
+const ADDR_FUNDED_TRUNC = truncate88(ADDR_FUNDED);
+const ADDR_EMPTY_TRUNC = truncate88(ADDR_EMPTY);
 
 function resolveChromium() {
   if (process.env.CHROMIUM_BIN) return process.env.CHROMIUM_BIN;
@@ -146,6 +167,7 @@ async function main() {
 
   const steps = [];
   let pdfBytes = null;
+  let fullPdfBytes = null;
 
   try {
     // Fresh context => empty IndexedDB => the login screen shows the "Create
@@ -327,6 +349,61 @@ async function main() {
       `[pof-empty-browser] captured PDF (${pdfBytes.byteLength} bytes, ` +
         `name: ${download.suggestedFilename()})`,
     );
+
+    // ════════════════════════════════════════════════════════════════════════
+    // CASE 3 — one funded, one empty, with ALL optional sections ON.
+    // The QR, provenance, and AML sections render addresses in a truncated 8+8
+    // form, so a leak there wouldn't be caught by the plain full-string PDF
+    // check above. Turn every optional-section switch on and regenerate.
+    // ════════════════════════════════════════════════════════════════════════
+    const switchIds = [
+      'switch-include-qr',
+      'switch-include-provenance',
+      'switch-include-aml',
+    ];
+    for (const id of switchIds) {
+      const sw = page.getByTestId(id);
+      await sw.scrollIntoViewIfNeeded({ timeout: 10_000 });
+      // Radix Switch exposes its state via aria-checked; only click when off so
+      // we deterministically end up ON regardless of any default.
+      const checked = await sw.getAttribute('aria-checked');
+      if (checked !== 'true') {
+        await sw.click();
+      }
+      await page.waitForFunction(
+        (testId) => {
+          const el = document.querySelector(`[data-testid="${testId}"]`);
+          return el && el.getAttribute('aria-checked') === 'true';
+        },
+        id,
+        { timeout: 10_000 },
+      );
+    }
+    steps.push({
+      name: 'full: QR, provenance and AML switches are all ON',
+      passed: true,
+      detail: switchIds.join(', ') + ' aria-checked=true',
+    });
+
+    // The generate button must still be enabled (optional sections don't gate
+    // it) — regenerate the now full-featured PDF.
+    await page.waitForFunction(
+      () => {
+        const b = document.querySelector('[data-testid="button-generate-pdf"]');
+        return b && !b.hasAttribute('disabled');
+      },
+      { timeout: 15_000 },
+    );
+    await pdfBtn.scrollIntoViewIfNeeded({ timeout: 10_000 });
+    const [fullDownload] = await Promise.all([
+      page.waitForEvent('download', { timeout: 90_000 }),
+      pdfBtn.click(),
+    ]);
+    fullPdfBytes = await readDownloadBytes(fullDownload);
+    console.log(
+      `[pof-empty-browser] captured full-featured PDF (${fullPdfBytes.byteLength} bytes, ` +
+        `name: ${fullDownload.suggestedFilename()})`,
+    );
   } finally {
     await browser.close();
     if (startedServer && devProc) {
@@ -374,6 +451,60 @@ async function main() {
     });
   }
 
+  // ── Verify the FULL-FEATURED PDF (QR + provenance + AML) excludes empty ────
+  if (!fullPdfBytes || fullPdfBytes.byteLength === 0) {
+    steps.push({
+      name: 'full: a full-featured PDF was generated',
+      passed: false,
+      detail: 'no full-featured PDF bytes were captured',
+    });
+  } else {
+    const fullText = await extractPdfText(fullPdfBytes);
+    const stripped = fullText.replace(/\s+/g, '');
+    const has = (needle) =>
+      fullText.includes(needle) || stripped.includes(needle);
+
+    // Funded must appear: full form (QR section prints r.raw) AND truncated 8+8
+    // form (provenance table prints truncateAddress(addr, 8, 8)). Requiring both
+    // proves the optional sections actually rendered — otherwise an "empty
+    // absent" pass could be vacuously true (no section drew any address).
+    const fundedFull = has(ADDR_FUNDED);
+    const fundedTrunc = has(ADDR_FUNDED_TRUNC);
+    steps.push({
+      name: 'full: funded address (full form) appears in the full-featured PDF',
+      passed: fundedFull === true,
+      detail: fundedFull
+        ? 'funded full address found (QR section rendered)'
+        : `funded full address ${ADDR_FUNDED} missing from the PDF text layer`,
+    });
+    steps.push({
+      name: 'full: funded address (truncated 8+8) appears in the full-featured PDF',
+      passed: fundedTrunc === true,
+      detail: fundedTrunc
+        ? `funded truncated address ${ADDR_FUNDED_TRUNC} found (provenance section rendered)`
+        : `funded truncated address ${ADDR_FUNDED_TRUNC} missing — provenance section may not have rendered`,
+    });
+
+    // Empty must NOT appear in EITHER its full or truncated form, anywhere in
+    // the QR / provenance / AML sections.
+    const emptyFull = has(ADDR_EMPTY);
+    const emptyTrunc = has(ADDR_EMPTY_TRUNC);
+    steps.push({
+      name: 'full: empty address (full form) does NOT appear in the full-featured PDF',
+      passed: emptyFull === false,
+      detail: emptyFull
+        ? `empty full address ${ADDR_EMPTY} leaked into the full-featured PDF`
+        : 'empty full address correctly absent',
+    });
+    steps.push({
+      name: 'full: empty address (truncated 8+8) does NOT appear in the full-featured PDF',
+      passed: emptyTrunc === false,
+      detail: emptyTrunc
+        ? `empty truncated address ${ADDR_EMPTY_TRUNC} leaked into an optional section`
+        : 'empty truncated address correctly absent from every optional section',
+    });
+  }
+
   const ok = steps.every((s) => s.passed);
 
   console.log(`[pof-empty-browser] ok=${ok}`);
@@ -390,7 +521,8 @@ async function main() {
   }
 
   console.log(
-    '[pof-empty-browser] PASSED: empty-address exclusion holds in a real browser (table, alerts and PDF).',
+    '[pof-empty-browser] PASSED: empty-address exclusion holds in a real browser ' +
+      '(table, alerts, plain PDF, and the full-featured PDF with QR + provenance + AML on).',
   );
 }
 
