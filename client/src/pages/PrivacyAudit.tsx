@@ -2065,6 +2065,7 @@ export default function PrivacyAudit() {
   const [adversaryResult, setAdversaryResult] = useState<AdversaryViewResult | null>(null);
   const [adversaryRunning, setAdversaryRunning] = useState(false);
   const [adversaryStatusMessage, setAdversaryStatusMessage] = useState("");
+  const adversaryAbortRef = useRef<AbortController | null>(null);
   const [taggingProgress, setTaggingProgress] = useState({ current: 0, total: 0 });
   const [selectedOwner, setSelectedOwner] = useState<string>("all");
   const [selectedWallet, setSelectedWallet] = useState<string>("all");
@@ -2083,6 +2084,9 @@ export default function PrivacyAudit() {
 
   const runAudit = useCallback(async () => {
     try {
+      // Abort a previous adversary view still running from an earlier audit
+      adversaryAbortRef.current?.abort();
+      adversaryAbortRef.current = null;
       setResult(null);
       setAdversaryResult(null);
       setAdversaryRunning(false);
@@ -2134,13 +2138,25 @@ export default function PrivacyAudit() {
       // immediately. It builds its own context from the same DB data.
       setAdversaryRunning(true);
       setAdversaryStatusMessage("Starting adversary view\u2026");
-      runAdversaryView(userAddresses, (msg) => setAdversaryStatusMessage(msg))
+      const advController = new AbortController();
+      adversaryAbortRef.current = advController;
+      runAdversaryView(
+        userAddresses,
+        (msg) => {
+          if (!advController.signal.aborted) setAdversaryStatusMessage(msg);
+        },
+        advController.signal,
+      )
         .then((advResult) => {
+          if (advController.signal.aborted) return;
+          if (adversaryAbortRef.current === advController) adversaryAbortRef.current = null;
           setAdversaryResult(advResult);
           setAdversaryRunning(false);
           setAdversaryStatusMessage("");
         })
         .catch((advErr) => {
+          if (adversaryAbortRef.current === advController) adversaryAbortRef.current = null;
+          if (advController.signal.aborted) return;
           console.error("Adversary view failed:", advErr);
           setAdversaryRunning(false);
           setAdversaryStatusMessage("");

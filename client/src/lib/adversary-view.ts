@@ -250,11 +250,12 @@ const PARTICIPANT_BATCH = 500;
 async function buildAdversaryContext(
   userAddresses: string[],
   report: (msg: string) => void,
+  signal?: AbortSignal,
 ): Promise<AdversaryContext> {
   const userSet = new Set(userAddresses);
 
   report("Adversary view: loading transaction participants\u2026");
-  const ownedParticipants = await getParticipantsByAddresses(userAddresses);
+  const ownedParticipants = await getParticipantsByAddresses(userAddresses, signal);
 
   // Collect all txids that touch any owned address
   const ourTxids = new Set(ownedParticipants.map((p) => p.txid));
@@ -265,6 +266,7 @@ async function buildAdversaryContext(
   report("Adversary view: loading full transaction data\u2026");
   const allParts: TransactionParticipant[] = [];
   for (let i = 0; i < txidArray.length; i += PARTICIPANT_BATCH) {
+    if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
     const batch = txidArray.slice(i, i + PARTICIPANT_BATCH);
     const batchParts = await db.transactionParticipants
       .where("txid")
@@ -297,10 +299,12 @@ async function buildAdversaryContext(
  *
  * @param userAddresses Owned Bitcoin addresses to analyse
  * @param report        Optional progress callback
+ * @param signal        Optional AbortSignal to cancel the DB-loading phase
  */
 export async function runAdversaryView(
   userAddresses: string[],
   report?: (msg: string) => void,
+  signal?: AbortSignal,
 ): Promise<AdversaryViewResult> {
   const progress = (msg: string) => report?.(msg);
 
@@ -308,8 +312,12 @@ export async function runAdversaryView(
     return emptyResult();
   }
 
+  if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+
   // Build the adversary context (load DB participants)
-  const ctx = await buildAdversaryContext(userAddresses, progress);
+  const ctx = await buildAdversaryContext(userAddresses, progress, signal);
+
+  if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
 
   return runAdversaryViewFromContext(ctx, progress);
 }

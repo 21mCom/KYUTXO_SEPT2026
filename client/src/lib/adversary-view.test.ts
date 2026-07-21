@@ -675,3 +675,28 @@ describe("Empty context", () => {
     expect(result.degradation).toBeNull();
   });
 });
+
+// ── Abort support ─────────────────────────────────────────────────────────────
+
+describe("runAdversaryView abort", () => {
+  it("rejects with AbortError when the signal is already aborted", async () => {
+    const { runAdversaryView } = await import("./adversary-view");
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(
+      runAdversaryView(["addr1"], undefined, controller.signal),
+    ).rejects.toMatchObject({ name: "AbortError" });
+  });
+
+  it("threads the signal through to getParticipantsByAddresses", async () => {
+    const { runAdversaryView } = await import("./adversary-view");
+    const { getParticipantsByAddresses } = await import("@/lib/data/record-queries");
+    vi.mocked(getParticipantsByAddresses).mockResolvedValue([]);
+    const controller = new AbortController();
+
+    await runAdversaryView(["addr1"], undefined, controller.signal);
+
+    expect(getParticipantsByAddresses).toHaveBeenCalledWith(["addr1"], controller.signal);
+  });
+});
