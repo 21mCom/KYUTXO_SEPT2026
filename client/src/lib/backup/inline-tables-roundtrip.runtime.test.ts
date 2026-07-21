@@ -79,6 +79,11 @@ import {
   getAllPriceData,
   clearPriceData,
 } from "@/lib/data/price-data-crud";
+import {
+  markOutpointsAsDust,
+  getAllDustFlags,
+  clearDustFlags,
+} from "@/lib/data/dust-flags-crud";
 
 // ---- fully-populated seed rows (every optional + required field set) --------
 
@@ -201,6 +206,7 @@ async function clearEverything(): Promise<void> {
   await clearEvidence({ skipNotification: true });
   await clearEvidenceAttachments({ skipNotification: true });
   await clearPriceData({ skipNotification: true });
+  await clearDustFlags({ skipNotification: true });
   await db.tags.clear();
   await db.categories.clear();
   await db.owners.clear();
@@ -228,6 +234,7 @@ async function roundTrip(): Promise<void> {
   await clearEvidence({ skipNotification: true });
   await clearEvidenceAttachments({ skipNotification: true });
   await clearPriceData({ skipNotification: true });
+  await clearDustFlags({ skipNotification: true });
 
   await restoreV3Backup({
     source: blobChunks(blob),
@@ -378,6 +385,31 @@ describe("inline tables backup round-trip", () => {
       const expectedTitle = titleByOriginalEvidenceId.get(original.evidenceId);
       expect(restoredTitle).toBe(expectedTitle);
     }
+  });
+
+  it("preserves every field of dustFlags", async () => {
+    const flags = [
+      {
+        txid: "a".repeat(64),
+        vout: 0,
+        address: "bc1qdust0000000000000000000000000000000001",
+        amountSats: 546,
+      },
+      {
+        txid: "b".repeat(64),
+        vout: 3,
+        address: "bc1qdust0000000000000000000000000000000002",
+        amountSats: 1000,
+      },
+    ];
+    await markOutpointsAsDust(flags);
+    const seeded = sortBy(stripId(await getAllDustFlags()), (r) => r.outpoint);
+    expect(seeded).toHaveLength(2);
+
+    await roundTrip();
+
+    const restored = sortBy(stripId(await getAllDustFlags()), (r) => r.outpoint);
+    expect(restored).toEqual(seeded);
   });
 
   it("restores a backup that has no inline-table rows without error", async () => {
@@ -601,6 +633,64 @@ describe("restoreInlineTables merge mode (inline lineage / custody segments)", (
     expect(
       liveLineage.find((l) => l.consumingTxid === "tx-vault-2")!.spentAmount,
     ).toBe(44444);
+  });
+
+  it("skips an already-flagged dust outpoint on merge and dedups within one backup", async () => {
+    // Seed the vault with an existing flag.
+    await markOutpointsAsDust([
+      { txid: "c".repeat(64), vout: 1, address: "addr-existing", amountSats: 546 },
+    ]);
+    expect(await getAllDustFlags()).toHaveLength(1);
+
+    // Merge a backup that re-includes the same outpoint (with different field
+    // values), a brand-new one, and an internal duplicate of the new one. The
+    // unique &outpoint index must not abort the restore; the existing flag wins.
+    await expect(
+      restoreInlineTables(
+        {
+          dustFlags: [
+            {
+              id: 900,
+              outpoint: `${"c".repeat(64)}:1`,
+              txid: "c".repeat(64),
+              vout: 1,
+              address: "addr-from-backup",
+              amountSats: 999,
+              markedAt: 1_700_000_020_000,
+            },
+            {
+              id: 901,
+              outpoint: `${"d".repeat(64)}:0`,
+              txid: "d".repeat(64),
+              vout: 0,
+              address: "addr-new",
+              amountSats: 546,
+              markedAt: 1_700_000_021_000,
+            },
+            {
+              id: 902,
+              outpoint: `${"d".repeat(64)}:0`,
+              txid: "d".repeat(64),
+              vout: 0,
+              address: "addr-new-dup",
+              amountSats: 546,
+              markedAt: 1_700_000_022_000,
+            },
+          ],
+        },
+        "merge",
+      ),
+    ).resolves.toBeUndefined();
+
+    const live = await getAllDustFlags();
+    expect(live).toHaveLength(2);
+    // Pre-existing flag untouched (backup's overlapping row was skipped).
+    expect(live.find((f) => f.outpoint === `${"c".repeat(64)}:1`)!.address).toBe(
+      "addr-existing",
+    );
+    expect(live.find((f) => f.outpoint === `${"d".repeat(64)}:0`)!.address).toBe(
+      "addr-new",
+    );
   });
 
   it("replace mode (default) appends inline rows as-is into a cleared vault", async () => {

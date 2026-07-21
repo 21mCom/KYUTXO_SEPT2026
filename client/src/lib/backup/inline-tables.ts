@@ -48,6 +48,11 @@ import {
 } from "@/lib/data/price-data-crud";
 import { getAllSettings, getSettings, updateSettings } from "@/lib/data/settings-crud";
 import {
+  getAllDustFlags,
+  clearDustFlags,
+  restoreDustFlagRows,
+} from "@/lib/data/dust-flags-crud";
+import {
   getAllNodeSettings,
   putNodeSettings,
   clearNodeSettings,
@@ -293,6 +298,7 @@ export async function readInlineTables(): Promise<Record<string, unknown[]>> {
     priceData,
     settings,
     nodeSettings,
+    dustFlags,
   ] = await Promise.all([
     getAllRecordOrigins(),
     getAllCustomFields(),
@@ -302,6 +308,7 @@ export async function readInlineTables(): Promise<Record<string, unknown[]>> {
     getAllPriceData(),
     getAllSettings(),
     getAllNodeSettings(),
+    getAllDustFlags(),
   ]);
 
   return {
@@ -319,6 +326,7 @@ export async function readInlineTables(): Promise<Record<string, unknown[]>> {
     priceData,
     settings,
     nodeSettings,
+    dustFlags,
   };
 }
 
@@ -336,6 +344,7 @@ export async function clearInlineTables(): Promise<void> {
   await clearEvidenceAttachments({ skipNotification: true });
   await clearPriceData({ skipNotification: true });
   await clearNodeSettings({ skipNotification: true });
+  await clearDustFlags({ skipNotification: true });
   // NOTE: settings is intentionally not cleared (matches legacy restore).
   // utxoLineage, custodySegments and lineageSnapshots are streamed tables now;
   // the restore orchestrator clears them, not this inline path.
@@ -415,6 +424,13 @@ export async function restoreInlineTables(
 
   await restoreNodeSettingsRows(arr("nodeSettings"));
   await restoreSettingsPreferences(arr("settings"));
+
+  // dustFlags (user-flagged dust outputs, Dexie v35) ride inline. Older backups
+  // that predate the table simply have no `dustFlags` key, so `arr` returns []
+  // and they restore cleanly. In replace mode the table was cleared above; in
+  // merge mode rows whose unique `outpoint` already exists are skipped so the
+  // unique index can't abort the restore mid-way.
+  await restoreDustFlagRows(arr("dustFlags"), restoreMode, { skipNotification: true });
 
   // utxoLineage and custodySegments are streamed tables now, so NEW backups
   // carry them as NDJSON (handled by the restore orchestrator) and won't have

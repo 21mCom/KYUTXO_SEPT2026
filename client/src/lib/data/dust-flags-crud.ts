@@ -69,6 +69,80 @@ export async function getAllDustFlags(): Promise<DustFlag[]> {
   return db.dustFlags.toArray();
 }
 
+export interface DustFlagWriteOptions {
+  skipNotification?: boolean;
+}
+
+export async function clearDustFlags(options?: DustFlagWriteOptions): Promise<void> {
+  await db.dustFlags.clear();
+  if (!options?.skipNotification) {
+    notifyDbChange('dustFlags');
+  }
+}
+
+export type DustFlagRestoreMode = 'merge' | 'replace';
+
+/**
+ * Restore dust-flag rows from a backup. SINGLE source of truth for the backup
+ * restore path (v3 inline tables).
+ *
+ * The backup `id` is always stripped (every row gets a fresh autoincrement id).
+ * Rows missing a usable `outpoint` are rebuilt from `txid`/`vout` when possible
+ * and skipped otherwise (never write a row that would break the unique index).
+ *
+ * The `&outpoint` index is UNIQUE, so in MERGE mode rows whose outpoint already
+ * exists are skipped (otherwise the first duplicate would abort the restore
+ * mid-way); the skip-set is also extended as we go so an internally duplicated
+ * backup can't collide with itself. In REPLACE mode the caller cleared the
+ * table first, but the internal de-dup still applies for safety.
+ *
+ * Returns the number of rows actually written.
+ */
+export async function restoreDustFlagRows(
+  rows: any[] | undefined,
+  restoreMode: DustFlagRestoreMode,
+  options?: DustFlagWriteOptions
+): Promise<number> {
+  if (!rows || rows.length === 0) return 0;
+
+  const seen = new Set<string>();
+  if (restoreMode === 'merge') {
+    const existing = await db.dustFlags.toArray();
+    for (const e of existing) seen.add(e.outpoint);
+  }
+
+  const toAdd: DustFlag[] = [];
+  const now = Date.now();
+  for (const r of rows) {
+    if (!r || typeof r !== 'object') continue;
+    const { id, ...d } = r;
+    let outpoint: string | undefined =
+      typeof d.outpoint === 'string' && d.outpoint.length > 0 ? d.outpoint : undefined;
+    if (!outpoint && typeof d.txid === 'string' && typeof d.vout === 'number') {
+      outpoint = toOutpoint(d.txid, d.vout);
+    }
+    if (!outpoint) continue;
+    if (seen.has(outpoint)) continue;
+    seen.add(outpoint);
+    toAdd.push({
+      outpoint,
+      txid: typeof d.txid === 'string' ? d.txid : outpoint.split(':')[0],
+      vout: typeof d.vout === 'number' ? d.vout : Number(outpoint.split(':')[1]) || 0,
+      address: typeof d.address === 'string' ? d.address : '',
+      amountSats: typeof d.amountSats === 'number' ? d.amountSats : 0,
+      markedAt: typeof d.markedAt === 'number' ? d.markedAt : now,
+    });
+  }
+
+  if (toAdd.length > 0) {
+    await db.dustFlags.bulkAdd(toAdd);
+    if (!options?.skipNotification) {
+      notifyDbChange('dustFlags');
+    }
+  }
+  return toAdd.length;
+}
+
 /**
  * The complete set of dust-flagged outpoints ("txid:vout") for fast lookups.
  */
