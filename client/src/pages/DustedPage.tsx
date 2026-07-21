@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
-import { Droplets, Loader2, X, RefreshCw, Flag, FlagOff } from "lucide-react";
+import { Droplets, Loader2, X, RefreshCw, Flag, FlagOff, ChevronRight, ChevronDown } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { markOutpointsAsDust, unmarkDustOutpoints, getAllDustFlags, toOutpoint } from "@/lib/data/dust-flags-crud";
 import { Button } from "@/components/ui/button";
@@ -202,6 +202,20 @@ export default function DustedPage() {
     [dustFlags],
   );
   const [flagBusyAddress, setFlagBusyAddress] = useState<string | null>(null);
+  const [flagBusyOutpoint, setFlagBusyOutpoint] = useState<string | null>(null);
+  const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
+
+  const toggleExpanded = useCallback((recordId: number) => {
+    setExpandedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(recordId)) {
+        next.delete(recordId);
+      } else {
+        next.add(recordId);
+      }
+      return next;
+    });
+  }, []);
 
   const handleMarkAsDust = useCallback(
     async (row: DustingResult) => {
@@ -254,6 +268,60 @@ export default function DustedPage() {
         });
       } finally {
         setFlagBusyAddress(null);
+      }
+    },
+    [toast],
+  );
+
+  const handleMarkOutput = useCallback(
+    async (row: DustingResult, output: { txid: string; vout: number; amountSats: number }) => {
+      const outpoint = toOutpoint(output.txid, output.vout);
+      setFlagBusyOutpoint(outpoint);
+      try {
+        const added = await markOutpointsAsDust([
+          { txid: output.txid, vout: output.vout, address: row.address, amountSats: output.amountSats },
+        ]);
+        toast({
+          title: "Marked as dust",
+          description:
+            added > 0
+              ? "Output flagged as dust."
+              : "This output was already flagged as dust.",
+        });
+      } catch (err) {
+        toast({
+          title: "Failed to mark as dust",
+          description: err instanceof Error ? err.message : String(err),
+          variant: "destructive",
+        });
+      } finally {
+        setFlagBusyOutpoint(null);
+      }
+    },
+    [toast],
+  );
+
+  const handleUnmarkOutput = useCallback(
+    async (output: { txid: string; vout: number }) => {
+      const outpoint = toOutpoint(output.txid, output.vout);
+      setFlagBusyOutpoint(outpoint);
+      try {
+        const removed = await unmarkDustOutpoints([outpoint]);
+        toast({
+          title: removed > 0 ? "Dust flag removed" : "Nothing to remove",
+          description:
+            removed > 0
+              ? "Output unflagged."
+              : "This output was not flagged as dust.",
+        });
+      } catch (err) {
+        toast({
+          title: "Failed to remove dust flag",
+          description: err instanceof Error ? err.message : String(err),
+          variant: "destructive",
+        });
+      } finally {
+        setFlagBusyOutpoint(null);
       }
     },
     [toast],
@@ -367,10 +435,28 @@ export default function DustedPage() {
     runComputation(scopeType, scopeValue, threshold);
   };
 
+  type FlatRow =
+    | { type: "address"; row: DustingResult }
+    | { type: "output"; row: DustingResult; output: { txid: string; vout: number; amountSats: number } };
+
+  const flatRows = useMemo<FlatRow[]>(() => {
+    if (!results) return [];
+    const rows: FlatRow[] = [];
+    for (const row of results) {
+      rows.push({ type: "address", row });
+      if (expandedIds.has(row.recordId)) {
+        for (const output of row.unspentOutputs) {
+          rows.push({ type: "output", row, output });
+        }
+      }
+    }
+    return rows;
+  }, [results, expandedIds]);
+
   const virtualizer = useVirtualizer({
-    count: results?.length ?? 0,
+    count: flatRows.length,
     getScrollElement: () => parentRef.current,
-    estimateSize: () => 56,
+    estimateSize: (index) => (flatRows[index]?.type === "output" ? 44 : 56),
     overscan: 10,
   });
 
@@ -544,7 +630,80 @@ export default function DustedPage() {
                 style={{ height: `${virtualizer.getTotalSize()}px`, position: "relative" }}
               >
                 {virtualizer.getVirtualItems().map((vItem) => {
-                  const row = results[vItem.index];
+                  const flatRow = flatRows[vItem.index];
+                  if (!flatRow) return null;
+
+                  if (flatRow.type === "output") {
+                    const { row, output } = flatRow;
+                    const outpoint = toOutpoint(output.txid, output.vout);
+                    const isFlagged = flaggedOutpoints.has(outpoint);
+                    const busy = flagBusyOutpoint === outpoint || flagBusyAddress === row.address;
+                    return (
+                      <div
+                        key={`${row.recordId}-${outpoint}`}
+                        data-testid={`row-dust-output-${row.recordId}-${output.txid}-${output.vout}`}
+                        style={{
+                          position: "absolute",
+                          top: 0,
+                          left: 0,
+                          width: "100%",
+                          height: `${vItem.size}px`,
+                          transform: `translateY(${vItem.start}px)`,
+                        }}
+                        className="flex items-center gap-4 pl-12 pr-4 border-b last:border-b-0 bg-muted/30"
+                      >
+                        <span
+                          className="flex-1 min-w-0 truncate font-mono text-xs text-muted-foreground"
+                          data-testid={`text-outpoint-${row.recordId}-${output.txid}-${output.vout}`}
+                          title={outpoint}
+                        >
+                          {output.txid}:{output.vout}
+                        </span>
+                        <span
+                          className="text-xs tabular-nums text-muted-foreground whitespace-nowrap"
+                          data-testid={`text-output-sats-${row.recordId}-${output.txid}-${output.vout}`}
+                        >
+                          {output.amountSats.toLocaleString()} sats
+                        </span>
+                        <div className="w-32 flex justify-end">
+                          {isFlagged ? (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              disabled={busy}
+                              onClick={() => handleUnmarkOutput(output)}
+                              data-testid={`button-unmark-output-${row.recordId}-${output.txid}-${output.vout}`}
+                            >
+                              {flagBusyOutpoint === outpoint ? (
+                                <Loader2 className="h-3 w-3 animate-spin mr-1" />
+                              ) : (
+                                <FlagOff className="h-3 w-3 mr-1" />
+                              )}
+                              Unmark
+                            </Button>
+                          ) : (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              disabled={busy}
+                              onClick={() => handleMarkOutput(row, output)}
+                              data-testid={`button-mark-output-${row.recordId}-${output.txid}-${output.vout}`}
+                            >
+                              {flagBusyOutpoint === outpoint ? (
+                                <Loader2 className="h-3 w-3 animate-spin mr-1" />
+                              ) : (
+                                <Flag className="h-3 w-3 mr-1" />
+                              )}
+                              Mark
+                            </Button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  }
+
+                  const row = flatRow.row;
+                  const isExpanded = expandedIds.has(row.recordId);
                   return (
                     <div
                       key={row.recordId}
@@ -559,13 +718,32 @@ export default function DustedPage() {
                       }}
                       className="flex items-center px-4 border-b last:border-b-0"
                     >
-                      <div className="flex-1 min-w-0">
-                        <AddressLink
-                          address={row.address}
-                          recordId={row.recordId}
-                          truncate
-                          showCopy={false}
-                        />
+                      <div className="flex-1 min-w-0 flex items-center gap-1">
+                        {row.unspentOutputs.length > 0 ? (
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            onClick={() => toggleExpanded(row.recordId)}
+                            data-testid={`button-toggle-outputs-${row.recordId}`}
+                            aria-label={isExpanded ? "Collapse outputs" : "Expand outputs"}
+                          >
+                            {isExpanded ? (
+                              <ChevronDown className="h-4 w-4" />
+                            ) : (
+                              <ChevronRight className="h-4 w-4" />
+                            )}
+                          </Button>
+                        ) : (
+                          <span className="w-9 flex-none" />
+                        )}
+                        <div className="flex-1 min-w-0">
+                          <AddressLink
+                            address={row.address}
+                            recordId={row.recordId}
+                            truncate
+                            showCopy={false}
+                          />
+                        </div>
                       </div>
 
                       <div className="w-20 text-right">
