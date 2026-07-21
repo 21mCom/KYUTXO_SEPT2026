@@ -93,6 +93,7 @@ import {
   restoreLegacySnapshots,
 } from "@/lib/backup/legacy-restore-misc";
 import { clearDerivationTemplates } from "@/lib/data/derivation-templates-crud";
+import { clearDustFlags, restoreDustFlagRows } from "@/lib/data/dust-flags-crud";
 import { getSettings, updateSettings } from "@/lib/data/settings-crud";
 import {
   prepareEntitySnapshot,
@@ -2674,6 +2675,7 @@ export default function SettingsPage() {
         blockchainTransactions = [],
         transactionParticipants = [],
         addressSyncState = [],
+        dustFlags = [],
       } = data;
 
       if (restoreMode === "replace") {
@@ -2701,6 +2703,10 @@ export default function SettingsPage() {
         await clearTransactions({ skipNotification: true });
         await clearParticipants({ skipNotification: true });
         await clearAddressSyncState({ skipNotification: true });
+        // Dust flags point at transaction outputs; a replace restore wipes the
+        // transactions above, so stale flags must never survive it. Cleared
+        // even though most legacy backups predate the dustFlags table.
+        await clearDustFlags({ skipNotification: true });
         // Mark the vault as wiped so the cancel/error handlers know to
         // reload rather than just close the dialog.
         restoreClearedRef.current = true;
@@ -2924,6 +2930,16 @@ export default function SettingsPage() {
       const snapshotsResult = await restoreLegacySnapshots(lineageSnapshots, restoreMode);
       const snapshotsAdded = snapshotsResult.snapshotsAdded;
 
+      // Restore dust flags (user-flagged dust outputs, Dexie v35). Legacy JSON
+      // backups produced by KYUTXO never carried a `dustFlags` key (the v3 ZIP
+      // format predates the table), so this is defensive: a hand-edited or
+      // third-party legacy JSON that DOES include dustFlags must not lose them
+      // silently. Shared with the v3 inline path via restoreDustFlagRows so the
+      // two paths can never diverge (ids stripped, unique-outpoint de-dup).
+      const dustFlagsAdded = await restoreDustFlagRows(dustFlags, restoreMode, {
+        skipNotification: true,
+      });
+
       // Restore blockchain transaction data (v2.2.0+, not encrypted): confirmed
       // transactions, their input/output participants, and per-address sync
       // state. Without this a restored vault would have to re-sync everything
@@ -2951,7 +2967,7 @@ export default function SettingsPage() {
         recordIdMap,
       );
 
-      console.log(`[Restore] transactions: ${transactionsAdded}, enriched: ${transactionsEnriched}, participants: ${participantsAdded}, participants enriched: ${participantsEnriched}, synced addresses: ${addressSyncAdded}`);
+      console.log(`[Restore] transactions: ${transactionsAdded}, enriched: ${transactionsEnriched}, participants: ${participantsAdded}, participants enriched: ${participantsEnriched}, synced addresses: ${addressSyncAdded}, dust flags: ${dustFlagsAdded}`);
 
       setRestoreProgress(100);
       setRestoreMessage("Restore complete! Checking for missing transaction data...");
@@ -2966,7 +2982,7 @@ export default function SettingsPage() {
       }
       let additionalDataMsg = "";
       const legacyOrphanCount = legacyOrphanedFilesRouted;
-      if (evidenceAdded > 0 || priceDataAdded > 0 || lineageDataAdded > 0 || snapshotsAdded > 0 || transactionsAdded > 0 || addressSyncAdded > 0) {
+      if (evidenceAdded > 0 || priceDataAdded > 0 || lineageDataAdded > 0 || snapshotsAdded > 0 || transactionsAdded > 0 || addressSyncAdded > 0 || dustFlagsAdded > 0) {
         const parts = [];
         if (evidenceAdded > 0) parts.push(`${evidenceAdded} evidence`);
         if (priceDataAdded > 0) parts.push(`${priceDataAdded} prices`);
@@ -2974,6 +2990,7 @@ export default function SettingsPage() {
         if (snapshotsAdded > 0) parts.push(`${snapshotsAdded} snapshot${snapshotsAdded !== 1 ? "s" : ""}`);
         if (transactionsAdded > 0) parts.push(`${transactionsAdded} transactions`);
         if (addressSyncAdded > 0) parts.push(`${addressSyncAdded} synced addresses`);
+        if (dustFlagsAdded > 0) parts.push(`${dustFlagsAdded} dust flag${dustFlagsAdded !== 1 ? "s" : ""}`);
         additionalDataMsg = `, ${parts.join(", ")}`;
       }
 
