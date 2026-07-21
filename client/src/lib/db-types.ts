@@ -904,6 +904,20 @@ export interface SkippedAddress {
   createdAt: number;
 }
 
+// User-flagged dust output. Marks a specific outpoint (txid:vout) as dust so
+// the rest of the app (UTXOs page, reports, Privacy Audit) can annotate or
+// exclude it and the user avoids accidentally spending it.
+export interface DustFlag {
+  id?: number;
+  /** "txid:vout" — unique per flagged output */
+  outpoint: string;
+  txid: string;
+  vout: number;
+  address: string;
+  amountSats: number;
+  markedAt: number;
+}
+
 // Address blacklist - permanently skip these addresses during sync
 export interface AddressBlacklist {
   id?: number;

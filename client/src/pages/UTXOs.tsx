@@ -12,6 +12,7 @@ import { format } from "date-fns";
 import { Link } from "wouter";
 import { BlockchainTransaction, TransactionParticipant, Record as DbRecord, PriceData, USER_CURATED_TIERS } from "@/lib/database";
 import { getAllAddressSyncState } from "@/lib/data/address-sync-crud";
+import { getDustFlaggedOutpointSet } from "@/lib/data/dust-flags-crud";
 import { getPriceDataByAsset } from "@/lib/data/price-data-crud";
 import { countRecordsByTypeAndImportanceTiers, getTransactionsByTxids } from "@/lib/dataFacade";
 import {
@@ -213,6 +214,7 @@ export function UtxoTableRow({
   onOpenUtxo,
   measureRef,
   dataIndex,
+  dustFlaggedOutpoints,
 }: {
   row: FlatUtxoRow;
   isExpanded?: boolean;
@@ -221,9 +223,14 @@ export function UtxoTableRow({
   onOpenUtxo: (utxo: UTXO) => void;
   measureRef?: (el: HTMLElement | null) => void;
   dataIndex?: number;
+  /** Set of "txid:vout" outpoints the user flagged as dust. */
+  dustFlaggedOutpoints?: Set<string>;
 }) {
   if (row.kind === 'group') {
     const group = row.group;
+    const dustCount = dustFlaggedOutpoints
+      ? group.utxos.filter(u => dustFlaggedOutpoints.has(`${u.txid}:${u.vout}`)).length
+      : 0;
     return (
       <TableRow
         ref={measureRef}
@@ -248,11 +255,22 @@ export function UtxoTableRow({
             {group.label && (
               <span className="text-xs text-muted-foreground">{group.label}</span>
             )}
-            {group.utxos.length > 1 && (
-              <Badge variant="secondary" className="w-fit text-xs">
-                {group.utxos.length} UTXOs
-              </Badge>
-            )}
+            <div className="flex flex-wrap gap-1">
+              {group.utxos.length > 1 && (
+                <Badge variant="secondary" className="w-fit text-xs">
+                  {group.utxos.length} UTXOs
+                </Badge>
+              )}
+              {dustCount > 0 && (
+                <Badge
+                  variant="outline"
+                  className="w-fit text-xs text-orange-600 dark:text-orange-400"
+                  data-testid={`badge-dust-group-${group.address.slice(0, 8)}`}
+                >
+                  {dustCount} dust
+                </Badge>
+              )}
+            </div>
           </div>
         </TableCell>
         <TableCell className="font-mono">
@@ -323,6 +341,15 @@ export function UtxoTableRow({
               <span>{utxo.amountSats.toLocaleString()} sats</span>
             )}
           </span>
+          {dustFlaggedOutpoints?.has(`${utxo.txid}:${utxo.vout}`) && (
+            <Badge
+              variant="outline"
+              className="text-xs text-orange-600 dark:text-orange-400"
+              data-testid={`badge-dust-${utxo.id}`}
+            >
+              Dust
+            </Badge>
+          )}
         </div>
       </TableCell>
       <TableCell className="text-sm text-muted-foreground">
@@ -351,6 +378,7 @@ export function VirtualizedUtxoList({
   onOpenUtxo,
   scrollRef,
   header,
+  dustFlaggedOutpoints,
 }: {
   flattenedRows: FlatUtxoRow[];
   expandedAddresses: Set<string>;
@@ -359,6 +387,7 @@ export function VirtualizedUtxoList({
   onOpenUtxo: (utxo: UTXO) => void;
   scrollRef: React.RefObject<HTMLDivElement>;
   header: React.ReactNode;
+  dustFlaggedOutpoints?: Set<string>;
 }) {
   const utxoVirtualizer = useVirtualizer({
     count: flattenedRows.length,
@@ -415,6 +444,7 @@ export function VirtualizedUtxoList({
                 onOpenUtxo={onOpenUtxo}
                 measureRef={utxoVirtualizer.measureElement}
                 dataIndex={virtualRow.index}
+                dustFlaggedOutpoints={dustFlaggedOutpoints}
               />
             );
           })}
@@ -511,6 +541,12 @@ export default function UTXOs() {
   // Load price data for value calculations
   const priceData = useLiveQuery(
     () => getPriceDataByAsset('BTC', 'USD'),
+    []
+  );
+
+  // User-flagged dust outpoints ("txid:vout") so rows can show a Dust badge.
+  const dustFlaggedOutpoints = useLiveQuery(
+    () => getDustFlaggedOutpointSet(),
     []
   );
 
@@ -1760,6 +1796,7 @@ export default function UTXOs() {
                 onToggleGroup={toggleExpanded}
                 onOpenUtxo={openUtxoDetail}
                 scrollRef={utxoScrollRef}
+                dustFlaggedOutpoints={dustFlaggedOutpoints}
                 header={
                   <TableRow>
                     <TableHead className="w-8"></TableHead>

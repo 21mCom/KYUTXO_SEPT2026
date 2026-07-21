@@ -13,7 +13,7 @@ import type {
   TransactionParticipant, AddressSyncState, NodeSettings, DerivationTemplate,
   UtxoLineage, CustodySegment, LineageSnapshot, Evidence, EvidenceAttachment,
   PausedSyncState, SkippedAddress, AddressBlacklist, PartialExportBundle,
-  TrashedAttachment, PrivacyAuditHistoryEntry,
+  TrashedAttachment, PrivacyAuditHistoryEntry, DustFlag,
 } from './db-types';
 
 export class KYUTXODatabase extends Dexie {
@@ -65,9 +65,19 @@ export class KYUTXODatabase extends Dexie {
   trashedAttachments!: Table<TrashedAttachment>;
   // Snapshots of completed Privacy Audits for tracking score over time.
   privacyAuditHistory!: Table<PrivacyAuditHistoryEntry>;
+  // User-flagged dust outputs (keyed by outpoint "txid:vout") so dusted
+  // outputs can be indicated in the UTXOs page and annotated in reports.
+  dustFlags!: Table<DustFlag>;
 
   constructor() {
     super('KYUTXODatabase');
+
+    // v35: add the dustFlags table — user-flagged dust outputs keyed by unique
+    // outpoint ("txid:vout"). Delta declaration — all other tables inherit
+    // unchanged from v34.
+    this.version(35).stores({
+      dustFlags: '++id, &outpoint, txid, address, markedAt',
+    });
 
     // v34: add the privacyAuditHistory table for the Privacy History timeline.
     // Each completed audit appends a snapshot (score, grade, finding counts).

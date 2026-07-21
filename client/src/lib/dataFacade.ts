@@ -16,3 +16,4 @@ export * from './data/address-sync-crud';
 export * from './data/paused-sync-crud';
 export * from './data/sync-protection-crud';
 export * from './data/partial-export-crud';
+export * from './data/dust-flags-crud';

@@ -122,6 +122,13 @@ export interface AuditContext {
   participants: TransactionParticipant[];
   participantsByTxid: Map<string, TransactionParticipant[]>;
   transactions: Map<string, BlockchainTransaction>;
+  /**
+   * Outpoints ("txid:vout") the user explicitly flagged as dust (via the
+   * Dusted page). Dust findings for these outputs are annotated + downgraded:
+   * the user has already identified them and set them aside, so the residual
+   * risk is only accidental spending.
+   */
+  dustFlaggedOutpoints?: Set<string>;
 }
 
 // ─── Scoring model ────────────────────────────────────────────────────────────
@@ -294,10 +301,15 @@ async function buildAuditContext(
     for (const tx of txs) txRecords.set(tx.txid, tx);
   }
 
+  onProgress?.("Loading dust flags...");
+  const dustFlagRows = await db.dustFlags.toArray();
+  const dustFlaggedOutpoints = new Set(dustFlagRows.map((r) => r.outpoint));
+
   return {
     userAddresses: addressSet,
     participants,
     participantsByTxid,
+    dustFlaggedOutpoints,
     transactions: txRecords,
   };
 }
@@ -384,13 +396,30 @@ export function detectDustUTXOs(ctx: AuditContext): { findings: PrivacyFinding[]
 
   for (const d of currentDust) {
     const isStrict = d.sats <= STRICT_DUST_SATS;
+    const isUserFlagged = ctx.dustFlaggedOutpoints?.has(`${d.txid}:${d.vout}`) ?? false;
+    if (isUserFlagged) {
+      // The user has already marked this output as dust (Dusted page), so the
+      // main risk — unknowingly merging it into a spend — is mitigated.
+      // Annotate + downgrade instead of penalising at full severity.
+      findings.push({
+        type: "DUST",
+        severity: "LOW",
+        description: `Unspent dust UTXO at ${d.address} (${d.sats} sats) — already marked as dust by you. Keep avoiding it when spending.`,
+        details: { sats: d.sats, vout: d.vout, unspent: true, markedAsDust: true },
+        correction:
+          "You have flagged this output as dust. Continue to exclude it from spends; if you ever need to move it, use a CoinJoin transaction.",
+        txids: [d.txid],
+        addresses: [d.address],
+      });
+      continue;
+    }
     findings.push({
       type: "DUST",
       severity: isStrict ? "CRITICAL" : "MEDIUM",
       description: `Unspent dust UTXO at ${d.address} (${d.sats} sats). ${isStrict ? "Below relay threshold — likely a dust attack." : "Small enough to be used as a tracking vector."}`,
       details: { sats: d.sats, vout: d.vout, unspent: true },
       correction:
-        "Do not spend dust UTXOs with your other coins — this links your addresses. Either ignore the dust or spend it in a CoinJoin transaction.",
+        "Do not spend dust UTXOs with your other coins — this links your addresses. Either ignore the dust or spend it in a CoinJoin transaction, or mark it as dust on the Dusted page so it is tracked.",
       txids: [d.txid],
       addresses: [d.address],
     });

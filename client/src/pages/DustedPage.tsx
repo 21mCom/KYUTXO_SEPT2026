@@ -1,5 +1,8 @@
-import { useState, useEffect, useRef, useCallback } from "react";
-import { Droplets, Loader2, X, RefreshCw } from "lucide-react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { useLiveQuery } from "dexie-react-hooks";
+import { Droplets, Loader2, X, RefreshCw, Flag, FlagOff } from "lucide-react";
+import { useToast } from "@/hooks/use-toast";
+import { markOutpointsAsDust, unmarkDustOutpoints, getAllDustFlags, toOutpoint } from "@/lib/data/dust-flags-crud";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -27,6 +30,8 @@ interface DustingResult {
   totalCount: number;
   spentCount: number;
   unspentCount: number;
+  /** Unspent dust outputs for this address, used by the "Mark as dust" action. */
+  unspentOutputs: Array<{ txid: string; vout: number; amountSats: number }>;
 }
 
 type ScopeType = "all" | GroupBy;
@@ -98,7 +103,7 @@ async function computeDustings(
   // the full spent-outpoints set is available before we look at any output.
   const addresses = Array.from(addressMap.keys());
   const allInputs: Array<{ prevTxid: string; prevVout: number }> = [];
-  const allDustOutputs: Array<{ address: string; txid: string; vout: number }> = [];
+  const allDustOutputs: Array<{ address: string; txid: string; vout: number; amountSats: number }> = [];
   let partProcessed = 0;
 
   for (let i = 0; i < addresses.length; i += PARTICIPANT_BATCH) {
@@ -119,7 +124,7 @@ async function computeDustings(
         // output — only accumulate if it's a dust candidate
         const sats = Math.round(p.amount);
         if (sats > 0 && sats < threshold) {
-          allDustOutputs.push({ address: p.address, txid: p.txid, vout: p.vout ?? 0 });
+          allDustOutputs.push({ address: p.address, txid: p.txid, vout: p.vout ?? 0, amountSats: sats });
         }
       }
     }
@@ -137,16 +142,20 @@ async function computeDustings(
     spentOutpoints.add(`${inp.prevTxid}:${inp.prevVout}`);
   }
 
-  const dustByAddress = new Map<string, { spent: number; unspent: number }>();
+  const dustByAddress = new Map<
+    string,
+    { spent: number; unspent: number; unspentOutputs: Array<{ txid: string; vout: number; amountSats: number }> }
+  >();
   for (const out of allDustOutputs) {
     if (!addressMap.has(out.address)) continue;
     const outpoint = `${out.txid}:${out.vout}`;
     const isSpent = spentOutpoints.has(outpoint);
-    const entry = dustByAddress.get(out.address) ?? { spent: 0, unspent: 0 };
+    const entry = dustByAddress.get(out.address) ?? { spent: 0, unspent: 0, unspentOutputs: [] };
     if (isSpent) {
       entry.spent += 1;
     } else {
       entry.unspent += 1;
+      entry.unspentOutputs.push({ txid: out.txid, vout: out.vout, amountSats: out.amountSats });
     }
     dustByAddress.set(out.address, entry);
   }
@@ -163,6 +172,7 @@ async function computeDustings(
       totalCount: total,
       spentCount: counts.spent,
       unspentCount: counts.unspent,
+      unspentOutputs: counts.unspentOutputs,
     });
   }
 
@@ -183,6 +193,71 @@ export default function DustedPage() {
 
   const abortRef = useRef<AbortController | null>(null);
   const parentRef = useRef<HTMLDivElement>(null);
+  const { toast } = useToast();
+
+  // Live set of already-flagged outpoints so each row can show Mark vs Unmark.
+  const dustFlags = useLiveQuery(() => getAllDustFlags());
+  const flaggedOutpoints = useMemo(
+    () => new Set((dustFlags ?? []).map((f) => f.outpoint)),
+    [dustFlags],
+  );
+  const [flagBusyAddress, setFlagBusyAddress] = useState<string | null>(null);
+
+  const handleMarkAsDust = useCallback(
+    async (row: DustingResult) => {
+      setFlagBusyAddress(row.address);
+      try {
+        const added = await markOutpointsAsDust(
+          row.unspentOutputs.map((o) => ({
+            txid: o.txid,
+            vout: o.vout,
+            address: row.address,
+            amountSats: o.amountSats,
+          })),
+        );
+        toast({
+          title: "Marked as dust",
+          description:
+            added > 0
+              ? `${added} unspent output${added !== 1 ? "s" : ""} flagged as dust for this address.`
+              : "All unspent dust outputs for this address were already flagged.",
+        });
+      } catch (err) {
+        toast({
+          title: "Failed to mark as dust",
+          description: err instanceof Error ? err.message : String(err),
+          variant: "destructive",
+        });
+      } finally {
+        setFlagBusyAddress(null);
+      }
+    },
+    [toast],
+  );
+
+  const handleUnmarkDust = useCallback(
+    async (row: DustingResult) => {
+      setFlagBusyAddress(row.address);
+      try {
+        const removed = await unmarkDustOutpoints(
+          row.unspentOutputs.map((o) => toOutpoint(o.txid, o.vout)),
+        );
+        toast({
+          title: "Dust flags removed",
+          description: `${removed} output${removed !== 1 ? "s" : ""} unflagged for this address.`,
+        });
+      } catch (err) {
+        toast({
+          title: "Failed to remove dust flags",
+          description: err instanceof Error ? err.message : String(err),
+          variant: "destructive",
+        });
+      } finally {
+        setFlagBusyAddress(null);
+      }
+    },
+    [toast],
+  );
 
   const { walletNames } = useWalletNames();
   const { owners } = useOwners();
@@ -452,11 +527,12 @@ export default function DustedPage() {
               </span>
             </div>
 
-            <div className="flex-none px-4 py-2 border-b grid grid-cols-[1fr_auto_auto_auto] gap-4 text-xs font-medium text-muted-foreground uppercase tracking-wide">
+            <div className="flex-none px-4 py-2 border-b grid grid-cols-[1fr_auto_auto_auto_auto] gap-4 text-xs font-medium text-muted-foreground uppercase tracking-wide">
               <span>Address</span>
               <span className="w-20 text-right">Total</span>
               <span className="w-20 text-right">Unspent</span>
               <span className="w-20 text-right">Spent</span>
+              <span className="w-32 text-right">Action</span>
             </div>
 
             <div
@@ -536,6 +612,57 @@ export default function DustedPage() {
                             —
                           </span>
                         )}
+                      </div>
+
+                      <div className="w-32 flex justify-end">
+                        {(() => {
+                          if (row.unspentOutputs.length === 0) {
+                            return (
+                              <span
+                                className="text-xs text-muted-foreground"
+                                data-testid={`text-no-action-${row.recordId}`}
+                              >
+                                —
+                              </span>
+                            );
+                          }
+                          const flaggedCount = row.unspentOutputs.filter((o) =>
+                            flaggedOutpoints.has(toOutpoint(o.txid, o.vout)),
+                          ).length;
+                          const allFlagged = flaggedCount === row.unspentOutputs.length;
+                          const busy = flagBusyAddress === row.address;
+                          return allFlagged ? (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              disabled={busy}
+                              onClick={() => handleUnmarkDust(row)}
+                              data-testid={`button-unmark-dust-${row.recordId}`}
+                            >
+                              {busy ? (
+                                <Loader2 className="h-3 w-3 animate-spin mr-1" />
+                              ) : (
+                                <FlagOff className="h-3 w-3 mr-1" />
+                              )}
+                              Unmark
+                            </Button>
+                          ) : (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              disabled={busy}
+                              onClick={() => handleMarkAsDust(row)}
+                              data-testid={`button-mark-dust-${row.recordId}`}
+                            >
+                              {busy ? (
+                                <Loader2 className="h-3 w-3 animate-spin mr-1" />
+                              ) : (
+                                <Flag className="h-3 w-3 mr-1" />
+                              )}
+                              Mark as dust
+                            </Button>
+                          );
+                        })()}
                       </div>
                     </div>
                   );
