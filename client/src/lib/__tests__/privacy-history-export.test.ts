@@ -219,15 +219,43 @@ describe('buildPrivacyHistoryCsv', () => {
     ]);
     const rows = parse(csv);
     const header = rows[0];
-    // Two distinct finding-type columns appear after the 13 fixed columns.
-    expect(header.length).toBe(13 + 2);
+    // Two distinct finding-type columns appear after the 18 fixed columns
+    // (13 original + 5 Adversary View columns).
+    expect(header.length).toBe(18 + 2);
     // Each run zero-fills the finding type it did not record.
-    const dataValues = rows.slice(1).map((r) => r.slice(13).map(Number));
+    const dataValues = rows.slice(1).map((r) => r.slice(18).map(Number));
     for (const counts of dataValues) {
       const total = counts.reduce((a, b) => a + b, 0);
       expect(total === 2 || total === 5).toBe(true);
       expect(counts).toContain(0);
     }
+  });
+
+  it('includes Adversary View columns, blank when a run has no adversary data', () => {
+    const withAdv = makeEntry({
+      id: 1,
+      adversary: {
+        exposureCount: 3,
+        addressesExposed: 7,
+        separationCount: 2,
+        confusionCount: 1,
+        contextMergeCount: 4,
+      },
+    });
+    const withoutAdv = makeEntry({ id: 2, timestamp: Date.UTC(2025, 0, 1) });
+    const rows = parse(buildPrivacyHistoryCsv([withAdv, withoutAdv]));
+    expect(rows[0].slice(13, 18)).toEqual([
+      'Adversary Exposure Clusters',
+      'Adversary Addresses Exposed',
+      'Adversary Preserved Separations',
+      'Adversary Change Confusions',
+      'Adversary Context Merges',
+    ]);
+    // Newest first: withAdv (2026) comes before withoutAdv (2025).
+    expect(rows[1].slice(13, 18)).toEqual(['3', '7', '2', '1', '4']);
+    // Missing adversary data is blank, not zero, so "not measured" is
+    // distinguishable from a genuine zero-exposure run.
+    expect(rows[2].slice(13, 18)).toEqual(['', '', '', '', '']);
   });
 
   it('orders runs newest first', () => {
@@ -509,6 +537,50 @@ describe('buildPrivacyHistoryPdf summary line', () => {
 // ("Generated: <timestamp>" and the "KYUTXO — generated offline" branding) are
 // drawn directly via doc.text(), not through autotable, so they are verified by
 // reading back the recorded doc.text(...) calls (see the jspdf wrapper above).
+describe('buildPrivacyHistoryPdf adversary table', () => {
+  beforeEach(() => {
+    autoTableCalls.length = 0;
+  });
+
+  const adversary = {
+    exposureCount: 3,
+    addressesExposed: 7,
+    separationCount: 2,
+    confusionCount: 1,
+    contextMergeCount: 4,
+  };
+
+  it('adds an Adversary View table with one row per run that has adversary data', async () => {
+    await buildPrivacyHistoryPdf([
+      makeEntry({ id: 1, timestamp: Date.UTC(2026, 0, 2), adversary }),
+      makeEntry({ id: 2, timestamp: Date.UTC(2026, 0, 1) }), // no adversary data
+    ]);
+    const advTable = autoTableCalls.find(
+      (c) => Array.isArray(c.head[0]) && (c.head[0] as string[]).includes('Exposure Clusters'),
+    );
+    expect(advTable).toBeDefined();
+    expect(advTable!.head[0]).toEqual([
+      'Date',
+      'Exposure Clusters',
+      'Addresses Exposed',
+      'Preserved Separations',
+      'Change Confusions',
+      'Context Merges',
+    ]);
+    // Only the run with adversary data gets a row.
+    expect(advTable!.body).toHaveLength(1);
+    expect((advTable!.body[0] as string[]).slice(1)).toEqual(['3', '7', '2', '1', '4']);
+  });
+
+  it('omits the Adversary View table entirely when no run has adversary data', async () => {
+    await buildPrivacyHistoryPdf([makeEntry({ id: 1 }), makeEntry({ id: 2 })]);
+    const advTable = autoTableCalls.find(
+      (c) => Array.isArray(c.head[0]) && (c.head[0] as string[]).includes('Exposure Clusters'),
+    );
+    expect(advTable).toBeUndefined();
+  });
+});
+
 describe('buildPrivacyHistoryPdf title and footer', () => {
   beforeEach(() => {
     drawCalls.text.length = 0;
@@ -525,8 +597,10 @@ describe('buildPrivacyHistoryPdf title and footer', () => {
     const labels = drawCalls.text.map((c) => c[0]) as string[];
     // The "Generated:" footer carries a runtime timestamp, so match by prefix.
     expect(labels.some((s) => s.startsWith('Generated: '))).toBe(true);
-    // The offline-branding footer is a fixed string.
-    expect(labels).toContain('KYUTXO — generated offline');
+    // The offline-branding footer is a fixed string, routed through
+    // sanitizePdfText which remaps the em-dash to its WinAnsi byte (0x97) so
+    // jsPDF's Standard-14 Helvetica paints the correct glyph.
+    expect(labels).toContain('KYUTXO \x97 generated offline');
   });
 
   it('renders the "Generated:" footer timestamp in the human-readable locale format', async () => {

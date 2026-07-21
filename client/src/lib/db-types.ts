@@ -551,6 +551,16 @@ export interface PrivacyAuditHistoryEntry {
   // Filter scope this audit was run under (for display/context only)
   owner?: string;
   walletName?: string;
+  // Adversary View summary captured for this run (written after the async
+  // adversary analysis completes). Absent on runs recorded before this field
+  // existed, or when the adversary analysis failed for that run.
+  adversary?: {
+    exposureCount: number;
+    addressesExposed: number;
+    separationCount: number;
+    confusionCount: number;
+    contextMergeCount: number;
+  };
 }
 
 // Script type classification for addresses/outputs

@@ -53,6 +53,7 @@ const {
   getPrivacyAuditHistoryCount,
   clearPrivacyAuditHistory,
   trimPrivacyAuditHistory,
+  setPrivacyAuditHistoryAdversary,
   DEFAULT_PRIVACY_HISTORY_LIMIT,
 } = await import("./privacy-history-crud");
 
@@ -320,5 +321,33 @@ describe("clearPrivacyAuditHistory", () => {
     await clearPrivacyAuditHistory();
     expect(await testDb.privacyAuditHistory.count()).toBe(0);
     expect(await getPrivacyAuditHistory()).toEqual([]);
+  });
+});
+
+describe("setPrivacyAuditHistoryAdversary", () => {
+  const adversary = {
+    exposureCount: 3,
+    addressesExposed: 7,
+    separationCount: 2,
+    confusionCount: 1,
+    contextMergeCount: 4,
+  };
+
+  it("attaches the adversary summary to an existing entry and returns true", async () => {
+    const id = await addPrivacyAuditHistoryEntry(mkEntry(1000));
+    expect(await setPrivacyAuditHistoryAdversary(id, adversary)).toBe(true);
+
+    const stored = await testDb.privacyAuditHistory.get(id);
+    expect(stored?.adversary).toEqual(adversary);
+    // Untouched fields survive the update.
+    expect(stored?.timestamp).toBe(1000);
+  });
+
+  it("returns false without writing when the entry no longer exists (trimmed away)", async () => {
+    const id = await addPrivacyAuditHistoryEntry(mkEntry(1000));
+    await clearPrivacyAuditHistory();
+
+    expect(await setPrivacyAuditHistoryAdversary(id, adversary)).toBe(false);
+    expect(await testDb.privacyAuditHistory.count()).toBe(0);
   });
 });

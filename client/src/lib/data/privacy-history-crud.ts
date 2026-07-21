@@ -106,6 +106,27 @@ export async function addPrivacyAuditHistoryEntry(
 }
 
 /**
+ * Attach (or replace) the Adversary View summary on an existing audit
+ * snapshot. The adversary analysis runs asynchronously after the main audit,
+ * so its summary is written as a follow-up update to the entry created by
+ * addPrivacyAuditHistoryEntry. No-ops silently if the entry has since been
+ * trimmed away (returns false in that case).
+ */
+export async function setPrivacyAuditHistoryAdversary(
+  id: number,
+  adversary: NonNullable<PrivacyAuditHistoryEntry['adversary']>,
+  options?: PrivacyHistoryWriteOptions
+): Promise<boolean> {
+  const updated = await db.privacyAuditHistory.update(id, { adversary });
+
+  if (updated > 0 && !options?.skipNotification) {
+    notifyDbChange('privacyAuditHistory');
+  }
+
+  return updated > 0;
+}
+
+/**
  * Return audit snapshots ordered oldest → newest (suitable for a timeline /
  * sparkline). Pass a limit to cap the number of most-recent runs returned.
  */

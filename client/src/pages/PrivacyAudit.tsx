@@ -70,7 +70,7 @@ import { useLiveQuery } from "dexie-react-hooks";
 import { renderSourceNote } from "@/lib/renderSourceNote";
 import { beginBulkOperation, endBulkOperation, db } from "@/lib/database";
 import type { Record as DbRecord, PrivacyAuditHistoryEntry, TransactionParticipant } from "@/lib/database";
-import { addPrivacyAuditHistoryEntry, clearPrivacyAuditHistory } from "@/lib/data/privacy-history-crud";
+import { addPrivacyAuditHistoryEntry, clearPrivacyAuditHistory, setPrivacyAuditHistoryAdversary } from "@/lib/data/privacy-history-crud";
 import {
   buildPrivacyHistoryCsv,
   buildPrivacyHistoryPdf,
@@ -1576,6 +1576,23 @@ export function PrivacyHistoryCard() {
     [history],
   );
 
+  // Adversary View exposure trend — only runs that recorded an adversary
+  // summary (older runs predate the feature and are skipped so the line
+  // doesn't dip to fake zeros).
+  const adversaryChartData = useMemo(
+    () =>
+      (history ?? [])
+        .filter((h) => h.adversary)
+        .map((h) => ({
+          ts: h.timestamp,
+          date: formatHistoryDate(h.timestamp),
+          exposure: h.adversary!.exposureCount,
+          separation: h.adversary!.separationCount,
+          confusion: h.adversary!.confusionCount,
+        })),
+    [history],
+  );
+
   // Build the per-run rows (newest first) annotated with which finding types
   // changed compared to the immediately preceding run.
   const rows = useMemo(() => {
@@ -1859,6 +1876,65 @@ export function PrivacyHistoryCard() {
           </p>
         )}
 
+        {adversaryChartData.length > 1 && (
+          <div data-testid="container-adversary-trend">
+            <div className="flex items-center justify-between gap-2 flex-wrap mb-1">
+              <span className="text-xs font-medium">Adversary View trend</span>
+              <div className="flex items-center gap-3 flex-wrap text-[10px] text-muted-foreground">
+                <span className="inline-flex items-center gap-1">
+                  <span className="inline-block h-2 w-2 rounded-full bg-red-500" />
+                  Exposure clusters
+                </span>
+                <span className="inline-flex items-center gap-1">
+                  <span className="inline-block h-2 w-2 rounded-full bg-green-500" />
+                  Preserved separations
+                </span>
+                <span className="inline-flex items-center gap-1">
+                  <span className="inline-block h-2 w-2 rounded-full bg-amber-500" />
+                  Change confusions
+                </span>
+              </div>
+            </div>
+            <ResponsiveContainer width="100%" height={120}>
+              <LineChart data={adversaryChartData} margin={{ top: 8, right: 8, left: -20, bottom: 0 }}>
+                <XAxis dataKey="date" tick={{ fontSize: 9 }} interval="preserveStartEnd" />
+                <YAxis allowDecimals={false} tick={{ fontSize: 10 }} />
+                <Tooltip contentStyle={{ fontSize: 11 }} />
+                <Line
+                  type="monotone"
+                  dataKey="exposure"
+                  name="Exposure clusters"
+                  stroke="#ef4444"
+                  strokeWidth={2}
+                  dot={{ r: 2 }}
+                  activeDot={{ r: 4 }}
+                  isAnimationActive={false}
+                />
+                <Line
+                  type="monotone"
+                  dataKey="separation"
+                  name="Preserved separations"
+                  stroke="#22c55e"
+                  strokeWidth={2}
+                  dot={{ r: 2 }}
+                  activeDot={{ r: 4 }}
+                  isAnimationActive={false}
+                />
+                <Line
+                  type="monotone"
+                  dataKey="confusion"
+                  name="Change confusions"
+                  stroke="#f59e0b"
+                  strokeWidth={2}
+                  dot={{ r: 2 }}
+                  activeDot={{ r: 4 }}
+                  isAnimationActive={false}
+                />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        )}
+
         <div
           className="flex flex-wrap items-end gap-3 rounded-md border p-3"
           data-testid="container-history-export-selection"
@@ -2014,6 +2090,46 @@ export function PrivacyHistoryCard() {
                 </span>
               </div>
 
+              {entry.adversary && (
+                <div
+                  className="flex flex-wrap gap-1"
+                  data-testid={`container-history-adversary-${entry.id ?? entry.timestamp}`}
+                >
+                  <Badge variant="outline" className="text-xs" data-testid="badge-history-adversary-exposure">
+                    <span className="text-red-600 dark:text-red-400 font-medium">
+                      {entry.adversary.exposureCount}
+                    </span>
+                    <span className="ml-1">
+                      exposed cluster{entry.adversary.exposureCount === 1 ? "" : "s"} (
+                      {entry.adversary.addressesExposed} addr
+                      {entry.adversary.addressesExposed === 1 ? "" : "s"})
+                    </span>
+                  </Badge>
+                  <Badge variant="outline" className="text-xs" data-testid="badge-history-adversary-separation">
+                    <span className="text-green-600 dark:text-green-400 font-medium">
+                      {entry.adversary.separationCount}
+                    </span>
+                    <span className="ml-1">
+                      separation{entry.adversary.separationCount === 1 ? "" : "s"} preserved
+                    </span>
+                  </Badge>
+                  <Badge variant="outline" className="text-xs" data-testid="badge-history-adversary-confusion">
+                    <span className="text-amber-600 dark:text-amber-400 font-medium">
+                      {entry.adversary.confusionCount}
+                    </span>
+                    <span className="ml-1">
+                      change confusion{entry.adversary.confusionCount === 1 ? "" : "s"}
+                    </span>
+                  </Badge>
+                  <Badge variant="outline" className="text-xs" data-testid="badge-history-adversary-context">
+                    <span className="font-medium">{entry.adversary.contextMergeCount}</span>
+                    <span className="ml-1">
+                      context merge{entry.adversary.contextMergeCount === 1 ? "" : "s"}
+                    </span>
+                  </Badge>
+                </div>
+              )}
+
               {changes.length > 0 && (
                 <div className="flex flex-wrap gap-1" data-testid="container-history-changes">
                   {changes.slice(0, 8).map((c) => {
@@ -2134,35 +2250,10 @@ export default function PrivacyAudit() {
       setResult(auditResult);
       setScanState("complete");
 
-      // Fire the adversary view asynchronously so the user sees main findings
-      // immediately. It builds its own context from the same DB data.
-      setAdversaryRunning(true);
-      setAdversaryStatusMessage("Starting adversary view\u2026");
-      const advController = new AbortController();
-      adversaryAbortRef.current = advController;
-      runAdversaryView(
-        userAddresses,
-        (msg) => {
-          if (!advController.signal.aborted) setAdversaryStatusMessage(msg);
-        },
-        advController.signal,
-      )
-        .then((advResult) => {
-          if (advController.signal.aborted) return;
-          if (adversaryAbortRef.current === advController) adversaryAbortRef.current = null;
-          setAdversaryResult(advResult);
-          setAdversaryRunning(false);
-          setAdversaryStatusMessage("");
-        })
-        .catch((advErr) => {
-          if (adversaryAbortRef.current === advController) adversaryAbortRef.current = null;
-          if (advController.signal.aborted) return;
-          console.error("Adversary view failed:", advErr);
-          setAdversaryRunning(false);
-          setAdversaryStatusMessage("");
-        });
-
-      // Persist a snapshot so users can track their score over time.
+      // Persist a snapshot so users can track their score over time. Saved
+      // before the async adversary view launches so its summary can be
+      // attached to this same entry once the analysis completes.
+      let historyEntryId: number | null = null;
       try {
         const allItems = [...auditResult.findings, ...auditResult.warnings];
         const severityCounts = { CRITICAL: 0, HIGH: 0, MEDIUM: 0, LOW: 0 };
@@ -2171,7 +2262,7 @@ export default function PrivacyAudit() {
           severityCounts[f.severity] += 1;
           findingTypeCounts[f.type] = (findingTypeCounts[f.type] ?? 0) + 1;
         }
-        await addPrivacyAuditHistoryEntry({
+        historyEntryId = await addPrivacyAuditHistoryEntry({
           timestamp: Date.now(),
           score: auditResult.score,
           grade: auditResult.grade,
@@ -2186,6 +2277,52 @@ export default function PrivacyAudit() {
       } catch (historyError) {
         console.error("Failed to save privacy audit history:", historyError);
       }
+
+      // Fire the adversary view asynchronously so the user sees main findings
+      // immediately. It builds its own context from the same DB data. When it
+      // completes, attach its summary to this run's history entry so exposure
+      // can be tracked over time in the history card and CSV/PDF exports.
+      setAdversaryRunning(true);
+      setAdversaryStatusMessage("Starting adversary view\u2026");
+      const advController = new AbortController();
+      adversaryAbortRef.current = advController;
+      runAdversaryView(
+        userAddresses,
+        (msg) => {
+          if (!advController.signal.aborted) setAdversaryStatusMessage(msg);
+        },
+        advController.signal,
+      )
+        .then(async (advResult) => {
+          if (advController.signal.aborted) return;
+          if (adversaryAbortRef.current === advController) adversaryAbortRef.current = null;
+          setAdversaryResult(advResult);
+          setAdversaryRunning(false);
+          setAdversaryStatusMessage("");
+          if (historyEntryId != null) {
+            try {
+              await setPrivacyAuditHistoryAdversary(historyEntryId, {
+                exposureCount: advResult.summary.exposureCount,
+                addressesExposed: advResult.summary.addressesExposed,
+                separationCount: advResult.summary.separationCount,
+                confusionCount: advResult.summary.confusionCount,
+                contextMergeCount: advResult.summary.contextMergeCount,
+              });
+            } catch (advHistoryError) {
+              console.error(
+                "Failed to save adversary view summary to audit history:",
+                advHistoryError,
+              );
+            }
+          }
+        })
+        .catch((advErr) => {
+          if (adversaryAbortRef.current === advController) adversaryAbortRef.current = null;
+          if (advController.signal.aborted) return;
+          console.error("Adversary view failed:", advErr);
+          setAdversaryRunning(false);
+          setAdversaryStatusMessage("");
+        });
 
       toast({
         title: auditResult.isClean ? "All Clear" : "Audit Complete",

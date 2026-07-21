@@ -97,6 +97,11 @@ export function buildPrivacyHistoryCsv(entries: PrivacyAuditHistoryEntry[]): str
     "Low",
     "Owner",
     "Wallet",
+    "Adversary Exposure Clusters",
+    "Adversary Addresses Exposed",
+    "Adversary Preserved Separations",
+    "Adversary Change Confusions",
+    "Adversary Context Merges",
     ...sortedTypes.map(findingTypeLabel),
   ];
 
@@ -124,6 +129,13 @@ export function buildPrivacyHistoryCsv(entries: PrivacyAuditHistoryEntry[]): str
       sev.LOW ?? 0,
       ownerCell,
       walletCell,
+      // Adversary View summary — blank (not 0) when a run has no recorded
+      // adversary data, so "not measured" is distinguishable from "zero".
+      e.adversary ? e.adversary.exposureCount : "",
+      e.adversary ? e.adversary.addressesExposed : "",
+      e.adversary ? e.adversary.separationCount : "",
+      e.adversary ? e.adversary.confusionCount : "",
+      e.adversary ? e.adversary.contextMergeCount : "",
       ...sortedTypes.map((type) => e.findingTypeCounts?.[type] ?? 0),
     ];
   });
@@ -313,6 +325,39 @@ export async function buildPrivacyHistoryPdf(
       body: ordered.map((e) => [
         new Date(e.timestamp).toLocaleString(),
         ...findingTypes.map((type) => String(e.findingTypeCounts?.[type] ?? 0)),
+      ]),
+      styles: { fontSize: 7, cellPadding: 1.5 },
+      headStyles: { fillColor: [41, 128, 185] },
+    });
+  }
+
+  // Adversary View table — one row per run that has a recorded adversary
+  // summary, so chain-analysis exposure can be tracked over time alongside
+  // the score. Omitted entirely when no run carries adversary data (e.g. all
+  // runs predate the feature).
+  const adversaryRuns = ordered.filter((e) => e.adversary);
+  if (adversaryRuns.length > 0) {
+    const lastTable2 = (doc as unknown as { lastAutoTable?: { finalY: number } }).lastAutoTable;
+    const advStartY = (lastTable2?.finalY ?? cursorY) + 8;
+    doc.setFontSize(11);
+    doc.text("Adversary View (chain-analysis exposure)", 14, advStartY);
+    autoTable(doc, {
+      startY: advStartY + 3,
+      head: [[
+        "Date",
+        "Exposure Clusters",
+        "Addresses Exposed",
+        "Preserved Separations",
+        "Change Confusions",
+        "Context Merges",
+      ]],
+      body: adversaryRuns.map((e) => [
+        new Date(e.timestamp).toLocaleString(),
+        String(e.adversary!.exposureCount),
+        String(e.adversary!.addressesExposed),
+        String(e.adversary!.separationCount),
+        String(e.adversary!.confusionCount),
+        String(e.adversary!.contextMergeCount),
       ]),
       styles: { fontSize: 7, cellPadding: 1.5 },
       headStyles: { fillColor: [41, 128, 185] },
