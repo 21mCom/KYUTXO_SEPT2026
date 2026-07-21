@@ -218,6 +218,25 @@ function fmtTxid(txid: string): string {
   return `${txid.slice(0, 8)}\u2026`;
 }
 
+/**
+ * Script type derivable from an address prefix. Used by the adversary's
+ * script-type-consistency change heuristic.
+ */
+type ScriptType = "p2wpkh" | "p2tr" | "p2sh" | "p2pkh" | "unknown";
+
+function getScriptType(address: string): ScriptType {
+  if (!address) return "unknown";
+  const a = address.toLowerCase();
+  if (a.startsWith("bc1p") || a.startsWith("tb1p") || a.startsWith("bcrt1p"))
+    return "p2tr";
+  if (a.startsWith("bc1q") || a.startsWith("tb1q") || a.startsWith("bcrt1q"))
+    return "p2wpkh";
+  if (address.startsWith("3") || address.startsWith("2")) return "p2sh";
+  if (address.startsWith("1") || address.startsWith("m") || address.startsWith("n"))
+    return "p2pkh";
+  return "unknown";
+}
+
 const RECORD_BATCH = 500;
 const PARTICIPANT_BATCH = 500;
 
@@ -546,11 +565,22 @@ export async function runAdversaryViewFromContext(
     }
   }
 
-  // ── Step 7: Protective confusion (change-guess heuristic) ─────────────────
+  // ── Step 7: Protective confusion (change-guess heuristics) ────────────────
   // For each tx with exactly 2 outputs where at least one is owned and has
-  // chainType, compare the adversary's change-guess (smaller amount = change)
-  // against our ground truth. When the guess is wrong, that works in our favour
-  // by misdirecting analysis.
+  // chainType, compare the adversary's change-guess against our ground truth.
+  // When the guess is wrong, that works in our favour by misdirecting analysis.
+  //
+  // The adversary applies TWO change-detection heuristics:
+  //   1. Amount ordering: the smaller output is assumed to be change.
+  //   2. Script-type consistency: if the majority of inputs share a script
+  //      type and exactly one output matches that type, that output is the
+  //      more likely change (wallets typically send change back to the same
+  //      script type they spend from).
+  // When both heuristics agree the adversary is confident (confidence stays
+  // "certain"-adjacent, i.e. "certain"); when they disagree the guess is only
+  // "speculative"; when the script-type heuristic gives no signal (unknown
+  // types, both outputs the same type, or no matching output) the finding
+  // remains at the amount-only "likely" tier.
   const confusionFindings: AdversaryFinding[] = [];
   const confusionSeen = new Set<string>();
 
@@ -569,6 +599,48 @@ export async function runAdversaryViewFromContext(
     const adversaryChange = outA.amount <= outB.amount ? outA : outB;
     const adversaryPayment = outA.amount <= outB.amount ? outB : outA;
 
+    // Script-type heuristic: find the majority script type among the inputs,
+    // then see whether exactly one output matches it.
+    const inputs = parts.filter((p) => p.role === "input");
+    const inputTypeCounts = new Map<ScriptType, number>();
+    for (const inp of inputs) {
+      const t = getScriptType(inp.address);
+      if (t === "unknown") continue;
+      inputTypeCounts.set(t, (inputTypeCounts.get(t) ?? 0) + 1);
+    }
+    let majorityInputType: ScriptType | null = null;
+    let majorityCount = 0;
+    let tied = false;
+    for (const [t, count] of inputTypeCounts) {
+      if (count > majorityCount) {
+        majorityInputType = t;
+        majorityCount = count;
+        tied = false;
+      } else if (count === majorityCount) {
+        tied = true;
+      }
+    }
+    if (tied) majorityInputType = null;
+
+    let scriptTypeChange: TransactionParticipant | null = null;
+    if (majorityInputType) {
+      const typeA = getScriptType(outA.address);
+      const typeB = getScriptType(outB.address);
+      const aMatches = typeA === majorityInputType;
+      const bMatches = typeB === majorityInputType;
+      if (aMatches && !bMatches) scriptTypeChange = outA;
+      else if (bMatches && !aMatches) scriptTypeChange = outB;
+    }
+
+    // Combine the two heuristics into a confidence tier for the finding.
+    let confusionConfidence: AdversaryConfidence = "likely";
+    if (scriptTypeChange) {
+      confusionConfidence =
+        scriptTypeChange.address === adversaryChange.address
+          ? "certain"
+          : "speculative";
+    }
+
     for (const ownedOut of ownedOutputs) {
       const rec = recordMap.get(ownedOut.address);
       if (!rec?.chainType) continue;
@@ -579,7 +651,7 @@ export async function runAdversaryViewFromContext(
       if (adversaryThinkChange && !weKnowChange) {
         confusionFindings.push({
           category: "protective-confusion",
-          confidence: "likely",
+          confidence: confusionConfidence,
           narrative: `In ${fmtTxid(txid)}, the adversary\u2019s change-detection heuristic guesses ${fmtAddr(ownedOut.address)} is internal change \u2014 but your records show it is a receive address. This misdirects analysis and hides the true payment recipient.`,
           txids: [txid],
           addresses: [ownedOut.address, adversaryPayment.address].filter(
@@ -592,7 +664,7 @@ export async function runAdversaryViewFromContext(
       } else if (!adversaryThinkChange && weKnowChange) {
         confusionFindings.push({
           category: "protective-confusion",
-          confidence: "likely",
+          confidence: confusionConfidence,
           narrative: `In ${fmtTxid(txid)}, the adversary\u2019s heuristic misidentifies ${fmtAddr(ownedOut.address)} as a payment output \u2014 but it is actually your change address. The adversary over-estimates the outflow and misreads the true change retention.`,
           txids: [txid],
           addresses: [ownedOut.address],

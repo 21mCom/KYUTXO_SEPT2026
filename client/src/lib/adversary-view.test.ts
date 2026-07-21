@@ -361,6 +361,151 @@ describe("Protective confusion — change-guess heuristic", () => {
   });
 });
 
+// ── Protective confusion: script-type heuristic ───────────────────────────────
+
+describe("Protective confusion — script-type matching heuristic", () => {
+  it("upgrades confidence to certain when script-type and amount guesses agree", async () => {
+    const ownedReceive = "bc1qagree000000000000000000000000000000rr1"; // P2WPKH, matches inputs
+    const extPayment = "1PaymentP2pkhAddress0000000000000pp"; // P2PKH, differs
+
+    const byTxid = new Map([
+      [
+        "txAgree",
+        [
+          makePart("txAgree", "input", "bc1qin1000000000000000000000000000000000i1"),
+          makePart("txAgree", "input", "bc1qin2000000000000000000000000000000000i2"),
+          // smaller AND P2WPKH-matching output → both heuristics say change,
+          // but ground truth says receive → confusion at "certain" tier
+          makePart("txAgree", "output", ownedReceive, 50_000),
+          makePart("txAgree", "output", extPayment, 200_000),
+        ],
+      ],
+    ]);
+
+    const ctx = makeCtx([ownedReceive], byTxid);
+    mockGetRecords.mockResolvedValue([
+      makeRecord(ownedReceive, { chainType: "receive" }),
+    ]);
+
+    const result = await runAdversaryViewFromContext(ctx);
+
+    expect(result.confusionFindings).toHaveLength(1);
+    expect(result.confusionFindings[0].confidence).toBe("certain");
+  });
+
+  it("downgrades confidence to speculative when script-type and amount guesses disagree", async () => {
+    const ownedReceive = "1OwnedP2pkhReceiveAddr0000000000000oo"; // P2PKH, differs from inputs
+    const extLarger = "bc1qextlarger00000000000000000000000000ex1"; // P2WPKH, matches inputs
+
+    const byTxid = new Map([
+      [
+        "txDisagree",
+        [
+          makePart("txDisagree", "input", "bc1qin1000000000000000000000000000000000i1"),
+          makePart("txDisagree", "input", "bc1qin2000000000000000000000000000000000i2"),
+          // amount heuristic: smaller owned P2PKH output = change
+          // script heuristic: larger P2WPKH output matches inputs = change
+          makePart("txDisagree", "output", ownedReceive, 50_000),
+          makePart("txDisagree", "output", extLarger, 200_000),
+        ],
+      ],
+    ]);
+
+    const ctx = makeCtx([ownedReceive], byTxid);
+    mockGetRecords.mockResolvedValue([
+      makeRecord(ownedReceive, { chainType: "receive" }),
+    ]);
+
+    const result = await runAdversaryViewFromContext(ctx);
+
+    expect(result.confusionFindings).toHaveLength(1);
+    expect(result.confusionFindings[0].confidence).toBe("speculative");
+  });
+
+  it("keeps confidence at likely when both outputs share the input script type (no signal)", async () => {
+    const ownedReceive = "bc1qnosig000000000000000000000000000000ns1";
+    const extPayment = "bc1qnosigext0000000000000000000000000000e2";
+
+    const byTxid = new Map([
+      [
+        "txNoSignal",
+        [
+          makePart("txNoSignal", "input", "bc1qin1000000000000000000000000000000000i1"),
+          makePart("txNoSignal", "output", ownedReceive, 50_000),
+          makePart("txNoSignal", "output", extPayment, 200_000),
+        ],
+      ],
+    ]);
+
+    const ctx = makeCtx([ownedReceive], byTxid);
+    mockGetRecords.mockResolvedValue([
+      makeRecord(ownedReceive, { chainType: "receive" }),
+    ]);
+
+    const result = await runAdversaryViewFromContext(ctx);
+
+    expect(result.confusionFindings).toHaveLength(1);
+    expect(result.confusionFindings[0].confidence).toBe("likely");
+  });
+
+  it("keeps confidence at likely when input script types are tied (no majority)", async () => {
+    const ownedReceive = "bc1qtied0000000000000000000000000000000td1";
+    const extPayment = "1TiedP2pkhPayment000000000000000000tp";
+
+    const byTxid = new Map([
+      [
+        "txTied",
+        [
+          makePart("txTied", "input", "bc1qin1000000000000000000000000000000000i1"),
+          makePart("txTied", "input", "1P2pkhInput000000000000000000000000in2"),
+          makePart("txTied", "output", ownedReceive, 50_000),
+          makePart("txTied", "output", extPayment, 200_000),
+        ],
+      ],
+    ]);
+
+    const ctx = makeCtx([ownedReceive], byTxid);
+    mockGetRecords.mockResolvedValue([
+      makeRecord(ownedReceive, { chainType: "receive" }),
+    ]);
+
+    const result = await runAdversaryViewFromContext(ctx);
+
+    expect(result.confusionFindings).toHaveLength(1);
+    expect(result.confusionFindings[0].confidence).toBe("likely");
+  });
+
+  it("applies script-type confidence to the missed-change direction too", async () => {
+    // Ground truth: the larger owned P2WPKH output IS the change.
+    // Amount heuristic guesses the smaller P2PKH output is change (wrong),
+    // and the script heuristic points at the owned P2WPKH output → disagree → speculative.
+    const ownedChange = "bc1qchspec00000000000000000000000000000cs1";
+    const extSmaller = "1SmallP2pkhExt0000000000000000000000se";
+
+    const byTxid = new Map([
+      [
+        "txMissedChange",
+        [
+          makePart("txMissedChange", "input", "bc1qin1000000000000000000000000000000000i1"),
+          makePart("txMissedChange", "input", "bc1qin2000000000000000000000000000000000i2"),
+          makePart("txMissedChange", "output", extSmaller, 30_000),
+          makePart("txMissedChange", "output", ownedChange, 180_000),
+        ],
+      ],
+    ]);
+
+    const ctx = makeCtx([ownedChange], byTxid);
+    mockGetRecords.mockResolvedValue([
+      makeRecord(ownedChange, { chainType: "change" }),
+    ]);
+
+    const result = await runAdversaryViewFromContext(ctx);
+
+    expect(result.confusionFindings).toHaveLength(1);
+    expect(result.confusionFindings[0].confidence).toBe("speculative");
+  });
+});
+
 // ── Context-merge warnings ────────────────────────────────────────────────────
 
 describe("Context-merge warnings", () => {
