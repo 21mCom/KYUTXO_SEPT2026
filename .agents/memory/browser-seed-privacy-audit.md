@@ -31,3 +31,6 @@ unmounted Radix tab until then), clicks `button-generate-privacy-report`, polls
 for `table-privacy-citations-*`, and measures. Collapsing everything into one
 page.evaluate keeps the runTest subagent from timing out (multi-step interactive
 plans here hit the 10-min wall).
+
+## Legacy-migration overlay races clicks
+After any unlock/reload in a real-browser check, the `legacy-migration-overlay` (z-9999, intercepts all pointer events) can appear — as transient progress or a "Complete" card with `button-dismiss-migration`. It is timing-dependent (passed locally, failed under validation load). Always wait it out / dismiss it right after unlock before clicking anything.

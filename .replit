@@ -101,6 +101,10 @@ args = "pof-empty-exclusion-live-browser-check"
 task = "workflow.run"
 args = "adversary-view-browser-check"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "dust-badge-audit-browser-check"
+
 [[workflows.workflow]]
 name = "Start application"
 author = "agent"
@@ -293,6 +297,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-adversary-view-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "dust-badge-audit-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-dust-badge-audit-browser.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true
