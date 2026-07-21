@@ -28,6 +28,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import { BlockchainToggle } from "@/components/BlockchainToggle";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -492,6 +493,9 @@ export default function UTXOs() {
   
   // Smart filtering: exclude blockchain-discovered addresses by default
   const [includeBlockchainDiscovered, setIncludeBlockchainDiscovered] = useState(false);
+
+  // Hide user-flagged dust UTXOs from the list and totals when enabled.
+  const [hideDust, setHideDust] = useState(false);
 
   // Save settings when they change
   useEffect(() => {
@@ -1152,10 +1156,29 @@ export default function UTXOs() {
   // Select which UTXO calculation to use. When the engine fast path is active we
   // use its owned-UTXO set (always exact); otherwise fall back to the in-browser
   // computation for the current mode.
-  const utxos = useMemo(() => {
+  const allUtxos = useMemo(() => {
     if (engineDecision === 'engine') return engineUtxos ?? [];
     return utxoMode === 'exact' ? utxosExact : utxosHeuristic;
   }, [engineDecision, engineUtxos, utxoMode, utxosExact, utxosHeuristic]);
+
+  // When "Hide dust" is on, drop user-flagged dust outpoints before grouping so
+  // both the list and every total exclude them. Off = identical to before.
+  const { utxos, hiddenDustCount, hiddenDustSats } = useMemo(() => {
+    if (!hideDust || !dustFlaggedOutpoints || dustFlaggedOutpoints.size === 0) {
+      return { utxos: allUtxos, hiddenDustCount: 0, hiddenDustSats: 0 };
+    }
+    let count = 0;
+    let sats = 0;
+    const kept = allUtxos.filter(u => {
+      if (dustFlaggedOutpoints.has(`${u.txid}:${u.vout}`)) {
+        count++;
+        sats += u.amountSats;
+        return false;
+      }
+      return true;
+    });
+    return { utxos: kept, hiddenDustCount: count, hiddenDustSats: sats };
+  }, [allUtxos, hideDust, dustFlaggedOutpoints]);
 
   const { value: addressGroups, isComputing: addressGroupsComputing } = useAsyncMemo(async (signal) => {
     const groups = new Map<string, AddressGroup>();
@@ -1349,9 +1372,10 @@ export default function UTXOs() {
     setCategoryFilter("all");
     setSelectedDate(undefined);
     setSearchFilters(defaultFilters);
+    setHideDust(false);
   };
 
-  const hasActiveFilters = search || ownerFilter !== "all" || walletFilter !== "all" || tagFilter !== "all" || categoryFilter !== "all" || selectedDate || hasActiveSearchFilters(searchFilters);
+  const hasActiveFilters = search || ownerFilter !== "all" || walletFilter !== "all" || tagFilter !== "all" || categoryFilter !== "all" || selectedDate || hasActiveSearchFilters(searchFilters) || hideDust;
 
   const isDataLoading = engineDecision === 'pending'
     ? true
@@ -1363,7 +1387,7 @@ export default function UTXOs() {
 
   useEffect(() => {
     utxoScrollRef.current?.scrollTo(0, 0);
-  }, [debouncedSearch, ownerFilter, walletFilter, tagFilter, categoryFilter, selectedDate, searchFilters, sortColumn, sortDirection, includeBlockchainDiscovered]);
+  }, [debouncedSearch, ownerFilter, walletFilter, tagFilter, categoryFilter, selectedDate, searchFilters, sortColumn, sortDirection, includeBlockchainDiscovered, hideDust]);
 
   const toggleExpanded = (address: string) => {
     setExpandedAddresses(prev => {
@@ -1728,6 +1752,18 @@ export default function UTXOs() {
               </Popover>
             </div>
 
+            <div className="flex items-center gap-2 min-h-9">
+              <Switch
+                id="switch-hide-dust"
+                checked={hideDust}
+                onCheckedChange={setHideDust}
+                data-testid="switch-hide-dust"
+              />
+              <Label htmlFor="switch-hide-dust" className="text-sm cursor-pointer whitespace-nowrap">
+                Hide dust
+              </Label>
+            </div>
+
             {hasActiveFilters && (
               <Button
                 variant="ghost"
@@ -1740,6 +1776,28 @@ export default function UTXOs() {
               </Button>
             )}
           </div>
+
+          {hideDust && (
+            <div className="flex items-center gap-2">
+              <Badge variant="secondary" className="gap-1" data-testid="badge-dust-hidden">
+                Hiding dust-flagged UTXOs
+                {hiddenDustCount > 0 && (
+                  <span>
+                    ({hiddenDustCount.toLocaleString()} hidden, {displayUnit === "btc" ? `${satsToBtc(hiddenDustSats)} BTC` : `${hiddenDustSats.toLocaleString()} sats`})
+                  </span>
+                )}
+              </Badge>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setHideDust(false)}
+                className="h-6 text-xs"
+                data-testid="button-show-dust"
+              >
+                Show dust
+              </Button>
+            </div>
+          )}
 
           {selectedDate && (
             <div className="flex items-center gap-2">
