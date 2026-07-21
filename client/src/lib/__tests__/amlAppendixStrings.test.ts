@@ -278,3 +278,38 @@ describe("buildNearestEntityLine", () => {
     ).toBe("Nearest flagged entity: 1 hop away — Bad?Co (Cat?)");
   });
 });
+
+describe("on-screen preview nearest-entity line uses the shared builder", () => {
+  // The Step 7 preview's "Nearest flagged entity: …" line used to be assembled
+  // inline in JSX (formatHopLabel + raw name/category), so a wording change to
+  // the template would silently change the live preview while the builder
+  // tests above kept passing. This test reads the page source and fails if the
+  // preview ever stops calling buildNearestEntityLine or reintroduces the
+  // inline "Nearest flagged entity:" template.
+  it("ProofOfFundsDeclaration.tsx renders the line via buildNearestEntityLine, never inline", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { resolve } = await import("node:path");
+    const source = readFileSync(
+      resolve(__dirname, "../../pages/ProofOfFundsDeclaration.tsx"),
+      "utf8",
+    );
+
+    // The preview block must call the shared builder.
+    expect(source).toContain("buildNearestEntityLine({");
+
+    // No JSX/inline reassembly of the template: the literal prefix must not
+    // appear anywhere in the page source (it lives only in the builder).
+    expect(source).not.toContain("Nearest flagged entity:");
+  });
+
+  it("default sanitize is the identity, so preview output matches raw values", () => {
+    const raw = buildNearestEntityLine({
+      nearestHopDistance: 3,
+      nearestHopEntityName: "Ünïcode — Entity",
+      nearestHopCategoryLabel: "Darknet Market",
+    });
+    expect(raw).toBe(
+      "Nearest flagged entity: 3 hops away — Ünïcode — Entity (Darknet Market)",
+    );
+  });
+});

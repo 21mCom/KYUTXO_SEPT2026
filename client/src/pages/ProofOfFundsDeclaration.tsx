@@ -57,7 +57,6 @@ import { buildAttestationLines } from "@/lib/attestationLines";
 import {
   AML_APPENDIX_STRINGS,
   AML_PREVIEW_STRINGS,
-  formatHopLabel,
   buildScreeningDateLine,
   buildAddressesScreenedLine,
   buildDirectMatchResultLine,
@@ -4432,7 +4431,11 @@ export default function ProofOfFundsDeclaration() {
                               </div>
                             ) : (
                               <div>
-                                Nearest flagged entity: {formatHopLabel(amlScreeningResult.nearestHopDistance)} away — {amlScreeningResult.nearestHopEntityName} ({amlScreeningResult.nearestHopCategoryLabel})
+                                {buildNearestEntityLine({
+                                  nearestHopDistance: amlScreeningResult.nearestHopDistance,
+                                  nearestHopEntityName: amlScreeningResult.nearestHopEntityName,
+                                  nearestHopCategoryLabel: amlScreeningResult.nearestHopCategoryLabel,
+                                })}
                               </div>
                             )
                           ) : (
