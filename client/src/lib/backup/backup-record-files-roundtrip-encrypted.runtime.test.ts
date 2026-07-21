@@ -72,6 +72,7 @@ let BackupCancelledError: typeof import("./sink").BackupCancelledError;
 let blobChunks: typeof import("./zip-stream").blobChunks;
 let recordCrud: typeof import("@/lib/data/record-crud");
 let attachmentsCrud: typeof import("@/lib/data/attachments-crud");
+let dustFlagsCrud: typeof import("@/lib/data/dust-flags-crud");
 
 // Clears used to fully wipe the DB side before restore (restoreV3Backup also
 // clears internally, but we assert a verified-empty starting point first).
@@ -119,6 +120,7 @@ beforeAll(async () => {
   blobChunks = (await import("./zip-stream")).blobChunks;
   recordCrud = await import("@/lib/data/record-crud");
   attachmentsCrud = await import("@/lib/data/attachments-crud");
+  dustFlagsCrud = await import("@/lib/data/dust-flags-crud");
 
   clearAllRecords = recordCrud.clearAllRecords;
   clearAttachments = attachmentsCrud.clearAttachments;
@@ -140,6 +142,7 @@ afterAll(async () => {
 beforeEach(async () => {
   await clearAttachments({ skipNotification: true });
   await clearAllRecords({ skipNotification: true });
+  await dustFlagsCrud.clearDustFlags({ skipNotification: true });
 });
 
 // Production-shaped attachment IO for export: list every file on disk and read
@@ -196,6 +199,7 @@ async function clearDbVault(): Promise<void> {
   await clearAddressSyncState({ skipNotification: true });
   await clearUtxoLineage({ skipNotification: true });
   await clearCustodySegments({ skipNotification: true });
+  await dustFlagsCrud.clearDustFlags({ skipNotification: true });
 }
 
 // Wipe ALL on-disk attachment files (simulating a fresh machine / cleared data
@@ -613,5 +617,88 @@ describe("v3 ENCRYPTED backup full pipeline: record/transaction attachment files
     for (const p of seededPaths) {
       await expect(fetchBytesViaPath(p, "text/plain")).rejects.toThrow();
     }
+  });
+
+  // Dust flags ride inline in the v3 manifest (inline-tables.ts) and their
+  // unencrypted round-trip is covered by inline-tables-roundtrip.runtime.test.ts.
+  // Encrypted backups serialize ALL inline tables through a single AES-GCM
+  // envelope (serializeInline/parseInline in format.ts), so a regression in that
+  // envelope path could silently drop dust flags for password-protected backups
+  // while the unencrypted test stays green. This proves every dust-flag field
+  // survives a real ENCRYPTED export -> wipe -> restore (with password).
+  it("preserves every field of dustFlags through an encrypted export -> wipe -> restore", async () => {
+    // 1. Seed dust flags through the real CRUD path (assigns outpoint +
+    //    markedAt), alongside a record so the backup is realistically shaped.
+    await recordCrud.createRecord(
+      {
+        type: "address",
+        inputString: "bc1qdustowneraddress",
+        label: "Dust owner",
+        tags: [],
+        categories: [],
+      } as any,
+      { skipNotification: true, skipVocabularySync: true },
+    );
+    const flags = [
+      {
+        txid: "c".repeat(64),
+        vout: 0,
+        address: "bc1qdustenc0000000000000000000000000000001",
+        amountSats: 546,
+      },
+      {
+        txid: "d".repeat(64),
+        vout: 7,
+        address: "bc1qdustenc0000000000000000000000000000002",
+        amountSats: 999,
+      },
+    ];
+    await dustFlagsCrud.markOutpointsAsDust(flags);
+    const stripId = (rows: any[]) => rows.map(({ id, ...rest }) => rest);
+    const sortByOutpoint = (rows: any[]) =>
+      [...rows].sort((a, b) => a.outpoint.localeCompare(b.outpoint));
+    const seeded = sortByOutpoint(stripId(await dustFlagsCrud.getAllDustFlags()));
+    expect(seeded).toHaveLength(flags.length);
+    // Sanity: the seeded rows carry every persisted field.
+    for (const row of seeded) {
+      expect(typeof row.outpoint).toBe("string");
+      expect(typeof row.txid).toBe("string");
+      expect(typeof row.vout).toBe("number");
+      expect(typeof row.address).toBe("string");
+      expect(typeof row.amountSats).toBe("number");
+      expect(typeof row.markedAt).toBe("number");
+    }
+
+    // 2. Export a real, full v3 ENCRYPTED backup (dust flags ride as inline
+    //    NDJSON inside the encrypted envelope).
+    const sink = new MemorySink();
+    await exportBackup({
+      sink: sink as any,
+      encrypted: true,
+      password: PASSWORD,
+      batchSize: 50,
+      attachmentIO,
+    });
+    const blob = sink.blob as Blob;
+    expect(blob.size).toBeGreaterThan(0);
+
+    // 3. WIPE the vault (including dust flags) and confirm the table is empty,
+    //    so a passing restore can only be sourcing rows from the encrypted zip.
+    await clearDbVault();
+    expect(await dustFlagsCrud.getAllDustFlags()).toHaveLength(0);
+
+    // 4. Restore with the SAME password through the real orchestrator.
+    const result = await restoreV3Backup({
+      source: blobChunks(blob),
+      password: PASSWORD,
+      attachmentWriter,
+    });
+    expect(result.manifest.encrypted).toBe(true);
+
+    // 5. Every dust-flag field must survive byte-for-byte (ids are reassigned).
+    const restored = sortByOutpoint(
+      stripId(await dustFlagsCrud.getAllDustFlags()),
+    );
+    expect(restored).toEqual(seeded);
   });
 });
