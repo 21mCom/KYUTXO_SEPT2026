@@ -44,6 +44,7 @@ const FINDING_FIELDS = ['description', 'correction'];
 const FINDING_FILES = new Set([
   'client/src/pages/PrivacyAudit.tsx',
   'client/src/pages/Reports.tsx',
+  'client/src/pages/privacy-audit/finding-card.tsx',
 ]);
 
 // Builds a regex matching a brace group whose entire content is a bare member
