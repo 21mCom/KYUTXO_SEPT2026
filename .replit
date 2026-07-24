@@ -109,6 +109,10 @@ args = "dust-badge-audit-browser-check"
 task = "workflow.run"
 args = "privacy-audit-flows-browser-check"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "pof-page-node-check"
+
 [[workflows.workflow]]
 name = "Start application"
 author = "agent"
@@ -323,6 +327,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node scripts/check-privacy-audit-flows-browser.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "pof-page-node-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/pages/ProofOfFundsDeclaration.documentIntegrity.test.tsx client/src/pages/ProofOfFundsDeclaration.freshnessAnchorValidation.test.tsx client/src/pages/ProofOfFundsDeclaration.nodeUnreachable.test.tsx"
 
 [workflows.workflow.metadata]
 isValidation = true
