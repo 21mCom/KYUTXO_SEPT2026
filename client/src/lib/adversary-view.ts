@@ -222,15 +222,52 @@ function fmtTxid(txid: string): string {
  * Script type derivable from an address prefix. Used by the adversary's
  * script-type-consistency change heuristic.
  */
-type ScriptType = "p2wpkh" | "p2tr" | "p2sh" | "p2pkh" | "unknown";
+export type ScriptType =
+  | "p2wpkh"
+  | "p2wsh"
+  | "p2tr"
+  | "p2sh"
+  | "p2pkh"
+  | "unknown";
 
-function getScriptType(address: string): ScriptType {
+/**
+ * Classify an address by prefix. Edge cases handled deliberately:
+ * - BIP-173 allows bech32 addresses in ALL-UPPERCASE, but forbids mixed
+ *   case — mixed-case bech32-looking strings return "unknown" rather than
+ *   feeding a wrong type into the heuristic.
+ * - P2WSH (witness v0, 32-byte program) is distinguished from P2WPKH
+ *   (20-byte program) by the length of the part after the "hrp1" prefix:
+ *   39 chars for P2WPKH, 59 for P2WSH.
+ * - Base58 prefixes (1/3 mainnet, m/n/2 testnet) are case-sensitive, so we
+ *   check the original string: an uppercase "M…"/"N…" is NOT a testnet
+ *   P2PKH address and must not be classified as one.
+ */
+export function getScriptType(address: string): ScriptType {
   if (!address) return "unknown";
-  const a = address.toLowerCase();
-  if (a.startsWith("bc1p") || a.startsWith("tb1p") || a.startsWith("bcrt1p"))
-    return "p2tr";
-  if (a.startsWith("bc1q") || a.startsWith("tb1q") || a.startsWith("bcrt1q"))
-    return "p2wpkh";
+
+  const lower = address.toLowerCase();
+  const upper = address.toUpperCase();
+  const isBech32Like =
+    lower.startsWith("bc1") || lower.startsWith("tb1") || lower.startsWith("bcrt1");
+
+  if (isBech32Like) {
+    // BIP-173: mixed case is invalid. Accept only all-lower or all-upper.
+    if (address !== lower && address !== upper) return "unknown";
+    const a = lower;
+    if (a.startsWith("bc1p") || a.startsWith("tb1p") || a.startsWith("bcrt1p"))
+      return "p2tr";
+    if (a.startsWith("bc1q") || a.startsWith("tb1q") || a.startsWith("bcrt1q")) {
+      // Length of everything after "<hrp>1": witness version char + data +
+      // checksum. 39 chars → 20-byte program (P2WPKH); 59 → 32-byte (P2WSH).
+      const hrpLen = a.startsWith("bcrt1") ? 5 : 3;
+      const rest = a.length - hrpLen;
+      if (rest === 39) return "p2wpkh";
+      if (rest === 59) return "p2wsh";
+      return "unknown";
+    }
+    return "unknown";
+  }
+
   if (address.startsWith("3") || address.startsWith("2")) return "p2sh";
   if (address.startsWith("1") || address.startsWith("m") || address.startsWith("n"))
     return "p2pkh";

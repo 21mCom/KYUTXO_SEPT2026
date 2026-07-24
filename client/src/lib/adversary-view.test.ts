@@ -676,6 +676,77 @@ describe("Empty context", () => {
   });
 });
 
+// ── getScriptType edge cases ──────────────────────────────────────────────────
+
+describe("getScriptType — address-format edge cases", () => {
+  // Realistic-length fixtures: mainnet P2WPKH = 42 chars, P2WSH = 62 chars.
+  const P2WPKH = "bc1q" + "q".repeat(38); // 42 chars
+  const P2WSH = "bc1q" + "q".repeat(58); // 62 chars
+  const P2TR = "bc1p" + "q".repeat(58); // 62 chars
+  const TB_P2WPKH = "tb1q" + "q".repeat(38); // 42 chars
+  const TB_P2WSH = "tb1q" + "q".repeat(58); // 62 chars
+  const BCRT_P2WPKH = "bcrt1q" + "q".repeat(38); // 44 chars
+  const BCRT_P2WSH = "bcrt1q" + "q".repeat(58); // 64 chars
+
+  let getScriptType: (a: string) => string;
+  beforeEach(async () => {
+    ({ getScriptType } = await import("./adversary-view"));
+  });
+
+  it("classifies lowercase mainnet segwit v0 by program length", () => {
+    expect(getScriptType(P2WPKH)).toBe("p2wpkh");
+    expect(getScriptType(P2WSH)).toBe("p2wsh");
+  });
+
+  it("classifies taproot addresses", () => {
+    expect(getScriptType(P2TR)).toBe("p2tr");
+    expect(getScriptType("tb1p" + "q".repeat(58))).toBe("p2tr");
+    expect(getScriptType("bcrt1p" + "q".repeat(58))).toBe("p2tr");
+  });
+
+  it("accepts all-uppercase bech32 (BIP-173) with the same classification", () => {
+    expect(getScriptType(P2WPKH.toUpperCase())).toBe("p2wpkh");
+    expect(getScriptType(P2WSH.toUpperCase())).toBe("p2wsh");
+    expect(getScriptType(P2TR.toUpperCase())).toBe("p2tr");
+    expect(getScriptType(TB_P2WPKH.toUpperCase())).toBe("p2wpkh");
+  });
+
+  it("rejects mixed-case bech32 as unknown (invalid per BIP-173)", () => {
+    expect(getScriptType("bc1Q" + "q".repeat(38))).toBe("unknown");
+    expect(getScriptType("Bc1q" + "q".repeat(38))).toBe("unknown");
+    expect(getScriptType("tb1q" + "Q".repeat(38))).toBe("unknown");
+  });
+
+  it("classifies testnet and regtest segwit v0 by program length", () => {
+    expect(getScriptType(TB_P2WPKH)).toBe("p2wpkh");
+    expect(getScriptType(TB_P2WSH)).toBe("p2wsh");
+    expect(getScriptType(BCRT_P2WPKH)).toBe("p2wpkh");
+    expect(getScriptType(BCRT_P2WSH)).toBe("p2wsh");
+  });
+
+  it("returns unknown for bech32-like addresses with unexpected lengths", () => {
+    expect(getScriptType("bc1q" + "q".repeat(10))).toBe("unknown");
+    expect(getScriptType("bc1q" + "q".repeat(70))).toBe("unknown");
+    expect(getScriptType("bc1z" + "q".repeat(38))).toBe("unknown");
+  });
+
+  it("classifies base58 prefixes case-sensitively", () => {
+    expect(getScriptType("1" + "A".repeat(30))).toBe("p2pkh");
+    expect(getScriptType("3" + "A".repeat(30))).toBe("p2sh");
+    expect(getScriptType("m" + "x".repeat(30))).toBe("p2pkh");
+    expect(getScriptType("n" + "x".repeat(30))).toBe("p2pkh");
+    expect(getScriptType("2" + "x".repeat(30))).toBe("p2sh");
+    // Uppercase M/N are valid base58 chars but NOT testnet P2PKH prefixes
+    expect(getScriptType("M" + "x".repeat(30))).toBe("unknown");
+    expect(getScriptType("N" + "x".repeat(30))).toBe("unknown");
+  });
+
+  it("returns unknown for empty and unrecognized strings", () => {
+    expect(getScriptType("")).toBe("unknown");
+    expect(getScriptType("hello")).toBe("unknown");
+  });
+});
+
 // ── Abort support ─────────────────────────────────────────────────────────────
 
 describe("runAdversaryView abort", () => {
