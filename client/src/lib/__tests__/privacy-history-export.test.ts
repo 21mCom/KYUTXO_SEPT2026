@@ -258,6 +258,18 @@ describe('buildPrivacyHistoryCsv', () => {
     expect(rows[2].slice(13, 18)).toEqual(['', '', '', '', '']);
   });
 
+  it('marks a cancelled adversary run as "Cancelled" in every adversary column', () => {
+    const cancelled = makeEntry({ id: 1, adversary: { status: 'cancelled' } });
+    const rows = parse(buildPrivacyHistoryCsv([cancelled]));
+    expect(rows[1].slice(13, 18)).toEqual([
+      'Cancelled',
+      'Cancelled',
+      'Cancelled',
+      'Cancelled',
+      'Cancelled',
+    ]);
+  });
+
   it('orders runs newest first', () => {
     const older = makeEntry({ id: 1, timestamp: Date.UTC(2026, 0, 1), score: 50 });
     const newer = makeEntry({ id: 2, timestamp: Date.UTC(2026, 0, 2), score: 90 });
@@ -570,6 +582,27 @@ describe('buildPrivacyHistoryPdf adversary table', () => {
     // Only the run with adversary data gets a row.
     expect(advTable!.body).toHaveLength(1);
     expect((advTable!.body[0] as string[]).slice(1)).toEqual(['3', '7', '2', '1', '4']);
+  });
+
+  it('renders a cancelled adversary run as an explicit "Cancelled" row', async () => {
+    await buildPrivacyHistoryPdf([
+      makeEntry({ id: 1, timestamp: Date.UTC(2026, 0, 2), adversary }),
+      makeEntry({ id: 2, timestamp: Date.UTC(2026, 0, 1), adversary: { status: 'cancelled' } }),
+    ]);
+    const advTable = autoTableCalls.find(
+      (c) => Array.isArray(c.head[0]) && (c.head[0] as string[]).includes('Exposure Clusters'),
+    );
+    expect(advTable).toBeDefined();
+    expect(advTable!.body).toHaveLength(2);
+    // Newest first: completed run, then the cancelled one.
+    expect((advTable!.body[0] as string[]).slice(1)).toEqual(['3', '7', '2', '1', '4']);
+    expect((advTable!.body[1] as string[]).slice(1)).toEqual([
+      'Cancelled',
+      'Cancelled',
+      'Cancelled',
+      'Cancelled',
+      'Cancelled',
+    ]);
   });
 
   it('omits the Adversary View table entirely when no run has adversary data', async () => {

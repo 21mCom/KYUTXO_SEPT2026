@@ -553,14 +553,20 @@ export interface PrivacyAuditHistoryEntry {
   walletName?: string;
   // Adversary View summary captured for this run (written after the async
   // adversary analysis completes). Absent on runs recorded before this field
-  // existed, or when the adversary analysis failed for that run.
-  adversary?: {
-    exposureCount: number;
-    addressesExposed: number;
-    separationCount: number;
-    confusionCount: number;
-    contextMergeCount: number;
-  };
+  // existed, or when the adversary analysis failed for that run. When the
+  // user cancels the adversary analysis mid-run, a `{ status: 'cancelled' }`
+  // marker is stored instead of the counts so history/exports can distinguish
+  // "run was cancelled" from "never ran" (blank) and from "zero exposure".
+  adversary?:
+    | {
+        status?: never;
+        exposureCount: number;
+        addressesExposed: number;
+        separationCount: number;
+        confusionCount: number;
+        contextMergeCount: number;
+      }
+    | { status: 'cancelled' };
 }
 
 // Script type classification for addresses/outputs

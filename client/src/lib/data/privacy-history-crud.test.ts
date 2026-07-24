@@ -343,6 +343,14 @@ describe("setPrivacyAuditHistoryAdversary", () => {
     expect(stored?.timestamp).toBe(1000);
   });
 
+  it("stores a cancelled marker so an aborted run is distinguishable from never-ran", async () => {
+    const id = await addPrivacyAuditHistoryEntry(mkEntry(1000));
+    expect(await setPrivacyAuditHistoryAdversary(id, { status: "cancelled" })).toBe(true);
+
+    const stored = await testDb.privacyAuditHistory.get(id);
+    expect(stored?.adversary).toEqual({ status: "cancelled" });
+  });
+
   it("returns false without writing when the entry no longer exists (trimmed away)", async () => {
     const id = await addPrivacyAuditHistoryEntry(mkEntry(1000));
     await clearPrivacyAuditHistory();

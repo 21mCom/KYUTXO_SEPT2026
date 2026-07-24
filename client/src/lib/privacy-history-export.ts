@@ -131,11 +131,17 @@ export function buildPrivacyHistoryCsv(entries: PrivacyAuditHistoryEntry[]): str
       walletCell,
       // Adversary View summary — blank (not 0) when a run has no recorded
       // adversary data, so "not measured" is distinguishable from "zero".
-      e.adversary ? e.adversary.exposureCount : "",
-      e.adversary ? e.adversary.addressesExposed : "",
-      e.adversary ? e.adversary.separationCount : "",
-      e.adversary ? e.adversary.confusionCount : "",
-      e.adversary ? e.adversary.contextMergeCount : "",
+      // A run the user cancelled mid-analysis is marked "Cancelled" in every
+      // adversary column so it can't be misread as never-measured or clean.
+      ...(e.adversary?.status === "cancelled"
+        ? (["Cancelled", "Cancelled", "Cancelled", "Cancelled", "Cancelled"] as (string | number)[])
+        : [
+            e.adversary ? e.adversary.exposureCount : "",
+            e.adversary ? e.adversary.addressesExposed : "",
+            e.adversary ? e.adversary.separationCount : "",
+            e.adversary ? e.adversary.confusionCount : "",
+            e.adversary ? e.adversary.contextMergeCount : "",
+          ]),
       ...sortedTypes.map((type) => e.findingTypeCounts?.[type] ?? 0),
     ];
   });
@@ -351,14 +357,27 @@ export async function buildPrivacyHistoryPdf(
         "Change Confusions",
         "Context Merges",
       ]],
-      body: adversaryRuns.map((e) => [
-        new Date(e.timestamp).toLocaleString(),
-        String(e.adversary!.exposureCount),
-        String(e.adversary!.addressesExposed),
-        String(e.adversary!.separationCount),
-        String(e.adversary!.confusionCount),
-        String(e.adversary!.contextMergeCount),
-      ]),
+      // Cancelled runs get an explicit "Cancelled" row so an aborted analysis
+      // is never misread as clean or as never having run.
+      body: adversaryRuns.map((e) =>
+        e.adversary!.status === "cancelled"
+          ? [
+              new Date(e.timestamp).toLocaleString(),
+              "Cancelled",
+              "Cancelled",
+              "Cancelled",
+              "Cancelled",
+              "Cancelled",
+            ]
+          : [
+              new Date(e.timestamp).toLocaleString(),
+              String(e.adversary!.exposureCount),
+              String(e.adversary!.addressesExposed),
+              String(e.adversary!.separationCount),
+              String(e.adversary!.confusionCount),
+              String(e.adversary!.contextMergeCount),
+            ],
+      ),
       styles: { fontSize: 7, cellPadding: 1.5 },
       headStyles: { fillColor: [41, 128, 185] },
     });

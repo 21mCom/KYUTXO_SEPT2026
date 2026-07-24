@@ -227,6 +227,9 @@ export default function PrivacyAudit() {
   const [adversaryStatusMessage, setAdversaryStatusMessage] = useState("");
   const [adversaryCancelled, setAdversaryCancelled] = useState(false);
   const adversaryAbortRef = useRef<AbortController | null>(null);
+  // History entry id for the audit whose adversary analysis is currently
+  // running; used to mark that entry "cancelled" if the user aborts the run.
+  const adversaryHistoryIdRef = useRef<number | null>(null);
 
   const cancelAdversaryView = useCallback(() => {
     const controller = adversaryAbortRef.current;
@@ -236,6 +239,21 @@ export default function PrivacyAudit() {
     setAdversaryRunning(false);
     setAdversaryStatusMessage("");
     setAdversaryCancelled(true);
+    // Record the cancellation on this run's history entry so the history card
+    // and CSV/PDF exports show "cancelled" instead of a blank that would be
+    // indistinguishable from "never ran".
+    const historyId = adversaryHistoryIdRef.current;
+    adversaryHistoryIdRef.current = null;
+    if (historyId != null) {
+      setPrivacyAuditHistoryAdversary(historyId, { status: "cancelled" }).catch(
+        (err) => {
+          console.error(
+            "Failed to record adversary cancellation in audit history:",
+            err,
+          );
+        },
+      );
+    }
   }, []);
   const [restoredNotice, setRestoredNotice] = useState<
     "restored" | "audit-interrupted" | "adversary-interrupted" | null
@@ -298,9 +316,25 @@ export default function PrivacyAudit() {
 
   const runAudit = useCallback(async () => {
     try {
-      // Abort a previous adversary view still running from an earlier audit
-      adversaryAbortRef.current?.abort();
-      adversaryAbortRef.current = null;
+      // Abort a previous adversary view still running from an earlier audit.
+      // That aborted run is a cancellation too — mark its history entry so it
+      // isn't left blank ("never ran") in history/exports.
+      if (adversaryAbortRef.current) {
+        adversaryAbortRef.current.abort();
+        adversaryAbortRef.current = null;
+        const staleHistoryId = adversaryHistoryIdRef.current;
+        if (staleHistoryId != null) {
+          setPrivacyAuditHistoryAdversary(staleHistoryId, { status: "cancelled" }).catch(
+            (err) => {
+              console.error(
+                "Failed to record adversary cancellation in audit history:",
+                err,
+              );
+            },
+          );
+        }
+      }
+      adversaryHistoryIdRef.current = null;
       setResult(null);
       setAdversaryResult(null);
       setAdversaryRunning(false);
@@ -395,6 +429,7 @@ export default function PrivacyAudit() {
       } catch (historyError) {
         console.error("Failed to save privacy audit history:", historyError);
       }
+      adversaryHistoryIdRef.current = historyEntryId;
 
       // Fire the adversary view asynchronously so the user sees main findings
       // immediately. It builds its own context from the same DB data. When it
@@ -414,6 +449,7 @@ export default function PrivacyAudit() {
         .then(async (advResult) => {
           if (advController.signal.aborted) return;
           if (adversaryAbortRef.current === advController) adversaryAbortRef.current = null;
+          if (adversaryHistoryIdRef.current === historyEntryId) adversaryHistoryIdRef.current = null;
           setAdversaryResult(advResult);
           setAdversaryRunning(false);
           setAdversaryStatusMessage("");
@@ -442,6 +478,7 @@ export default function PrivacyAudit() {
         .catch((advErr) => {
           if (adversaryAbortRef.current === advController) adversaryAbortRef.current = null;
           if (advController.signal.aborted) return;
+          if (adversaryHistoryIdRef.current === historyEntryId) adversaryHistoryIdRef.current = null;
           console.error("Adversary view failed:", advErr);
           setAdversaryRunning(false);
           setAdversaryStatusMessage("");

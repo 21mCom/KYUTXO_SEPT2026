@@ -132,14 +132,20 @@ export function PrivacyHistoryCard() {
   const adversaryChartData = useMemo(
     () =>
       (history ?? [])
-        .filter((h) => h.adversary)
-        .map((h) => ({
-          ts: h.timestamp,
-          date: formatHistoryDate(h.timestamp),
-          exposure: h.adversary!.exposureCount,
-          separation: h.adversary!.separationCount,
-          confusion: h.adversary!.confusionCount,
-        })),
+        .filter((h) => h.adversary && h.adversary.status !== "cancelled")
+        .map((h) => {
+          const adv = h.adversary as Extract<
+            NonNullable<PrivacyAuditHistoryEntry["adversary"]>,
+            { exposureCount: number }
+          >;
+          return {
+            ts: h.timestamp,
+            date: formatHistoryDate(h.timestamp),
+            exposure: adv.exposureCount,
+            separation: adv.separationCount,
+            confusion: adv.confusionCount,
+          };
+        }),
     [history],
   );
 
@@ -635,7 +641,22 @@ export function PrivacyHistoryCard() {
                 </span>
               </div>
 
-              {entry.adversary && (
+              {entry.adversary?.status === "cancelled" && (
+                <div
+                  className="flex flex-wrap gap-1"
+                  data-testid={`container-history-adversary-cancelled-${entry.id ?? entry.timestamp}`}
+                >
+                  <Badge
+                    variant="secondary"
+                    className="text-xs"
+                    data-testid="badge-history-adversary-cancelled"
+                  >
+                    Adversary analysis cancelled
+                  </Badge>
+                </div>
+              )}
+
+              {entry.adversary && entry.adversary.status !== "cancelled" && (
                 <div
                   className="flex flex-wrap gap-1"
                   data-testid={`container-history-adversary-${entry.id ?? entry.timestamp}`}
