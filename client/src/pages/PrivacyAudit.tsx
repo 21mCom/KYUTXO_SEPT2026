@@ -230,6 +230,12 @@ export default function PrivacyAudit() {
   // History entry id for the audit whose adversary analysis is currently
   // running; used to mark that entry "cancelled" if the user aborts the run.
   const adversaryHistoryIdRef = useRef<number | null>(null);
+  // Monotonic audit-run generation. Each runAudit invocation bumps this and the
+  // async adversary handler captures its own generation, so a superseded run
+  // can never attach its (stale, possibly differently-scoped) adversary summary
+  // to history after a newer audit has started — even if it slips past the
+  // abort-signal check while awaiting an intermediate persist step.
+  const auditGenerationRef = useRef(0);
 
   const cancelAdversaryView = useCallback(() => {
     const controller = adversaryAbortRef.current;
@@ -337,6 +343,7 @@ export default function PrivacyAudit() {
         }
       }
       adversaryHistoryIdRef.current = null;
+      const runGeneration = ++auditGenerationRef.current;
       setResult(null);
       setAdversaryResult(null);
       setAdversaryRunning(false);
@@ -460,6 +467,12 @@ export default function PrivacyAudit() {
             await saveAdversaryResult(advResult);
           } catch (persistError) {
             console.error("Failed to persist adversary view result:", persistError);
+          }
+          // Re-check right before the history write: a newer audit may have
+          // started while awaiting saveAdversaryResult above, and its history
+          // entry must not be confused with this (now superseded) run's data.
+          if (auditGenerationRef.current !== runGeneration || advController.signal.aborted) {
+            return;
           }
           if (historyEntryId != null) {
             try {
