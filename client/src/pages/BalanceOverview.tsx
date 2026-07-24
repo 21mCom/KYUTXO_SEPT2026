@@ -60,6 +60,8 @@ import {
 } from "lucide-react";
 import { SiBitcoin } from "react-icons/si";
 
+const HIDE_DUST_STORAGE_KEY = "kyutxo-balance-hide-dust";
+
 type SortBy = "balance-desc" | "balance-asc" | "name-asc" | "name-desc" | "addresses-desc";
 type DisplayUnit = "btc" | "sats";
 
@@ -520,8 +522,23 @@ export default function BalanceOverview() {
   useEffect(() => subscribeEngineReadiness(() => setEngineReadySignal((s) => s + 1)), []);
 
   // Hide user-flagged dust UTXOs from all balance totals when enabled
-  // (mirrors the UTXOs page toggle; off = identical to before).
-  const [hideDust, setHideDust] = useState(false);
+  // (mirrors the UTXOs page toggle; off = identical to before). Persisted in
+  // localStorage like the UTXOs page settings so the choice sticks across
+  // navigations and app restarts; default stays off for fresh vaults.
+  const [hideDust, setHideDust] = useState(() => {
+    try {
+      return localStorage.getItem(HIDE_DUST_STORAGE_KEY) === "true";
+    } catch {
+      return false;
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem(HIDE_DUST_STORAGE_KEY, hideDust ? "true" : "false");
+    } catch {
+      // Ignore storage errors (e.g. private mode); toggle still works in-session.
+    }
+  }, [hideDust]);
   // Precomputed dust adjustments while "Hide dust" is on: per-address and
   // per-group sats/count to subtract, plus deduped grand totals. Only dust on
   // addresses actually counted in the totals (cachedUtxoCount > 0) is included.
