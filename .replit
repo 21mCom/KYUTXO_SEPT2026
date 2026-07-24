@@ -121,6 +121,10 @@ args = "privacy-audit-interrupted-node-check"
 task = "workflow.run"
 args = "deep-dive-worker-error-check"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "pof-empty-exclusion-vault-browser-check"
+
 [[workflows.workflow]]
 name = "Start application"
 author = "agent"
@@ -368,6 +372,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "npx vitest run client/src/pages/privacy-audit/transaction-deep-dive.workerError.test.tsx"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "pof-empty-exclusion-vault-browser-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/check-pof-empty-exclusion-vault-browser.mjs"
 
 [workflows.workflow.metadata]
 isValidation = true
