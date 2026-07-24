@@ -217,7 +217,18 @@ export default function PrivacyAudit() {
   const [adversaryResult, setAdversaryResult] = useState<AdversaryViewResult | null>(null);
   const [adversaryRunning, setAdversaryRunning] = useState(false);
   const [adversaryStatusMessage, setAdversaryStatusMessage] = useState("");
+  const [adversaryCancelled, setAdversaryCancelled] = useState(false);
   const adversaryAbortRef = useRef<AbortController | null>(null);
+
+  const cancelAdversaryView = useCallback(() => {
+    const controller = adversaryAbortRef.current;
+    if (!controller) return;
+    controller.abort();
+    adversaryAbortRef.current = null;
+    setAdversaryRunning(false);
+    setAdversaryStatusMessage("");
+    setAdversaryCancelled(true);
+  }, []);
   const [taggingProgress, setTaggingProgress] = useState({ current: 0, total: 0 });
   const [selectedOwner, setSelectedOwner] = useState<string>("all");
   const [selectedWallet, setSelectedWallet] = useState<string>("all");
@@ -242,6 +253,7 @@ export default function PrivacyAudit() {
       setResult(null);
       setAdversaryResult(null);
       setAdversaryRunning(false);
+      setAdversaryCancelled(false);
       setStatusMessage("Loading address records...");
       setScanState("analyzing");
 
@@ -930,6 +942,8 @@ export default function PrivacyAudit() {
               running={adversaryRunning}
               statusMessage={adversaryStatusMessage}
               result={adversaryResult}
+              cancelled={adversaryCancelled}
+              onCancel={cancelAdversaryView}
             />
           </>
         )}

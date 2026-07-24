@@ -8,6 +8,7 @@ import {
   Merge,
   AlertTriangle,
   ScanSearch,
+  X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -170,10 +171,14 @@ export function AdversaryViewPanel({
   running,
   statusMessage,
   result,
+  cancelled = false,
+  onCancel,
 }: {
   running: boolean;
   statusMessage: string;
   result: AdversaryViewResult | null;
+  cancelled?: boolean;
+  onCancel?: () => void;
 }) {
   const [open, setOpen] = useState(true);
   const [openSections, setOpenSections] = useState<Record<string, boolean>>({
@@ -186,7 +191,7 @@ export function AdversaryViewPanel({
   const toggleSection = (key: string) =>
     setOpenSections((prev) => ({ ...prev, [key]: !prev[key] }));
 
-  if (!running && !result) return null;
+  if (!running && !result && !cancelled) return null;
 
   const { summary } = result ?? {
     summary: {
@@ -216,6 +221,28 @@ export function AdversaryViewPanel({
                 <span className="flex items-center gap-1 text-xs text-muted-foreground">
                   <Loader2 className="h-3 w-3 animate-spin" />
                   {statusMessage || "Running\u2026"}
+                </span>
+              )}
+              {running && onCancel && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onCancel();
+                  }}
+                  data-testid="button-cancel-adversary-view"
+                >
+                  <X className="h-3 w-3 mr-1" />
+                  Cancel
+                </Button>
+              )}
+              {cancelled && !running && !result && (
+                <span
+                  className="text-xs text-muted-foreground"
+                  data-testid="text-adversary-cancelled"
+                >
+                  Cancelled — adversary analysis was stopped before completing.
                 </span>
               )}
               {result && !running && (
