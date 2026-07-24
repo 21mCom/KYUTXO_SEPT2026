@@ -28,6 +28,11 @@
 //        - the header exposure badge ("1 exposure") matches the section
 //          badge count, and no separation/confusion/context badges render
 //        - the no-XPUB degradation banner is shown (no chainType seeded)
+//   5. RELOADS the page, unlocks the vault again, and asserts the persisted
+//      session (privacy-audit-session-store, its own IndexedDB DB) rehydrates
+//      both the main audit result and the adversary panel WITHOUT clicking
+//      "Run Audit": the score summary and adversary stats match the pre-reload
+//      values and the "restored from your last run" banner is shown.
 //
 // Everything runs offline against local IndexedDB — no network requests.
 //
@@ -321,6 +326,88 @@ async function main() {
           ? 'banner-adversary-degradation is visible'
           : 'banner-adversary-degradation was missing',
       });
+    }
+
+    // ── Reload: persisted results must survive a page refresh ───────────────
+    {
+      await page.reload({ waitUntil: 'load', timeout: 60_000 });
+
+      // Unlock the existing vault (setup already ran, so only the password
+      // field shows — no confirm input this time).
+      const unlockInput = page.getByTestId('input-password');
+      await unlockInput.waitFor({ state: 'visible', timeout: 30_000 });
+      await unlockInput.fill(SETUP_PASSWORD);
+      await page.getByTestId('button-submit').click();
+
+      // Best-effort: dismiss the legacy-migration overlay if it appears after
+      // unlock, otherwise it swallows clicks / covers the page.
+      await page
+        .getByTestId('button-dismiss-migration')
+        .click({ timeout: 5_000 })
+        .catch(() => {});
+
+      // The adversary panel must rehydrate WITHOUT clicking Run Audit.
+      const panelAfter = page.locator('[data-testid="container-adversary-view"]');
+      const panelRestored = await panelAfter
+        .waitFor({ state: 'visible', timeout: 30_000 })
+        .then(() => true)
+        .catch(() => false);
+      steps.push({
+        name: 'reload: adversary panel is restored without re-running the audit',
+        passed: panelRestored,
+        detail: panelRestored
+          ? 'container-adversary-view visible after reload with no Run Audit click'
+          : 'container-adversary-view did not reappear after reload',
+      });
+
+      const restoredBanner = await page
+        .getByTestId('banner-audit-restored')
+        .isVisible()
+        .catch(() => false);
+      steps.push({
+        name: 'reload: "restored from your last run" banner is shown',
+        passed: restoredBanner === true,
+        detail: restoredBanner
+          ? 'banner-audit-restored is visible'
+          : 'banner-audit-restored was missing after reload',
+      });
+
+      if (panelRestored) {
+        const statText = async (id) =>
+          (await page.getByTestId(id).textContent())?.trim() ?? '';
+        const rExposure = await statText('text-adversary-stat-exposure');
+        const rSeparated = await statText('text-adversary-stat-separated');
+        const rConfusion = await statText('text-adversary-stat-confusion');
+        const rContext = await statText('text-adversary-stat-context');
+        steps.push({
+          name: 'reload: adversary summary stats match the pre-reload values',
+          passed:
+            rExposure === '2' && rSeparated === '0' && rConfusion === '0' && rContext === '0',
+          detail: `exposed=${rExposure} separated=${rSeparated} confusion=${rConfusion} context=${rContext} (expected 2/0/0/0)`,
+        });
+
+        const badgeText = ((await page
+          .getByTestId('badge-adversary-exposure-count')
+          .textContent()
+          .catch(() => '')) ?? '').trim();
+        steps.push({
+          name: 'reload: header exposure badge still shows "1 exposure"',
+          passed: /1/.test(badgeText) && /exposure/.test(badgeText),
+          detail: `badge-adversary-exposure-count = ${JSON.stringify(badgeText)} after reload`,
+        });
+
+        const scoreVisible = await page
+          .getByTestId('container-score-summary')
+          .isVisible()
+          .catch(() => false);
+        steps.push({
+          name: 'reload: main audit score summary is restored too',
+          passed: scoreVisible === true,
+          detail: scoreVisible
+            ? 'container-score-summary visible after reload'
+            : 'container-score-summary missing after reload',
+        });
+      }
     }
   } finally {
     await browser.close();

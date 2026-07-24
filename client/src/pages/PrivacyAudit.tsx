@@ -111,6 +111,14 @@ import {
   type AdversaryFinding,
   type ContextMergeWarning,
 } from "@/lib/adversary-view";
+import {
+  loadAuditSession,
+  beginAuditSession,
+  saveAuditResult,
+  saveAdversaryResult,
+  clearAdversaryPending,
+  clearAuditSession,
+} from "@/lib/data/privacy-audit-session-store";
 import { formatEntropy, type BoltzmannInput, type BoltzmannOutput } from "@/lib/boltzmann";
 import type { BoltzmannResult } from "@/lib/boltzmann";
 import { ScoreGauge, WaterfallChart } from "./privacy-audit/score-visualizations";
@@ -229,6 +237,49 @@ export default function PrivacyAudit() {
     setAdversaryStatusMessage("");
     setAdversaryCancelled(true);
   }, []);
+  const [restoredNotice, setRestoredNotice] = useState<
+    "restored" | "audit-interrupted" | "adversary-interrupted" | null
+  >(null);
+  const rehydratedRef = useRef(false);
+
+  // Rehydrate the last audit + adversary results after a page refresh so a
+  // completed analysis isn't silently discarded.
+  useEffect(() => {
+    if (rehydratedRef.current) return;
+    rehydratedRef.current = true;
+    let cancelled = false;
+    loadAuditSession()
+      .then((session) => {
+        if (cancelled || !session) return;
+        if (session.phase === "auditing") {
+          // Refresh happened mid-analysis — nothing was saved for this run.
+          setRestoredNotice("audit-interrupted");
+          return;
+        }
+        if (session.result) {
+          // Note: the owner/wallet filter dropdowns are deliberately NOT
+          // restored — the user may already be changing them, and the saved
+          // result stands on its own.
+          setResult(session.result);
+          setScanState("complete");
+          if (session.adversaryResult) {
+            setAdversaryResult(session.adversaryResult);
+            setRestoredNotice("restored");
+          } else if (session.adversaryPending) {
+            // Main audit was saved but the adversary analysis never finished.
+            setRestoredNotice("adversary-interrupted");
+          } else {
+            setRestoredNotice("restored");
+          }
+        }
+      })
+      .catch((err) => {
+        console.error("Failed to restore privacy audit session:", err);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   const [taggingProgress, setTaggingProgress] = useState({ current: 0, total: 0 });
   const [selectedOwner, setSelectedOwner] = useState<string>("all");
   const [selectedWallet, setSelectedWallet] = useState<string>("all");
@@ -254,14 +305,24 @@ export default function PrivacyAudit() {
       setAdversaryResult(null);
       setAdversaryRunning(false);
       setAdversaryCancelled(false);
+      setRestoredNotice(null);
       setStatusMessage("Loading address records...");
       setScanState("analyzing");
+
+      // Mark the run as in progress so a mid-analysis refresh is detectable
+      // (the page shows an "interrupted — run again" notice on reload).
+      try {
+        await beginAuditSession(selectedOwner, selectedWallet);
+      } catch (persistError) {
+        console.error("Failed to persist audit session start:", persistError);
+      }
 
       const totalAddresses = await countRecordsByType("address");
 
       if (totalAddresses === 0) {
         toast({ title: "No Records", description: "No address records found to audit." });
         setScanState("idle");
+        await clearAuditSession().catch(() => {});
         return;
       }
 
@@ -291,12 +352,21 @@ export default function PrivacyAudit() {
       if (userAddresses.length === 0) {
         toast({ title: "No Matching Records", description: "No address records match the selected filters." });
         setScanState("idle");
+        await clearAuditSession().catch(() => {});
         return;
       }
 
       const auditResult = await runPrivacyAudit(userAddresses, (msg) => setStatusMessage(msg));
       setResult(auditResult);
       setScanState("complete");
+
+      // Persist the completed result so a page refresh restores it instead of
+      // discarding it. The adversary result is attached when it finishes.
+      try {
+        await saveAuditResult(selectedOwner, selectedWallet, auditResult);
+      } catch (persistError) {
+        console.error("Failed to persist audit result:", persistError);
+      }
 
       // Persist a snapshot so users can track their score over time. Saved
       // before the async adversary view launches so its summary can be
@@ -347,6 +417,11 @@ export default function PrivacyAudit() {
           setAdversaryResult(advResult);
           setAdversaryRunning(false);
           setAdversaryStatusMessage("");
+          try {
+            await saveAdversaryResult(advResult);
+          } catch (persistError) {
+            console.error("Failed to persist adversary view result:", persistError);
+          }
           if (historyEntryId != null) {
             try {
               await setPrivacyAuditHistoryAdversary(historyEntryId, {
@@ -370,6 +445,7 @@ export default function PrivacyAudit() {
           console.error("Adversary view failed:", advErr);
           setAdversaryRunning(false);
           setAdversaryStatusMessage("");
+          void clearAdversaryPending().catch(() => {});
         });
 
       toast({
@@ -719,6 +795,53 @@ export default function PrivacyAudit() {
             )}
           </CardContent>
         </Card>
+
+        {restoredNotice === "audit-interrupted" && (
+          <Card className="border-amber-500/40 bg-amber-500/5" data-testid="banner-audit-interrupted">
+            <CardContent className="p-3 flex items-start gap-3">
+              <AlertTriangle className="h-4 w-4 text-amber-500 shrink-0 mt-0.5" />
+              <div>
+                <p className="text-sm font-medium text-amber-700 dark:text-amber-400">
+                  The last audit was interrupted
+                </p>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  The page was refreshed while an audit was still running, so no results were
+                  saved. Run the audit again to get fresh results.
+                </p>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {restoredNotice === "adversary-interrupted" && (
+          <Card className="border-amber-500/40 bg-amber-500/5" data-testid="banner-adversary-interrupted">
+            <CardContent className="p-3 flex items-start gap-3">
+              <AlertTriangle className="h-4 w-4 text-amber-500 shrink-0 mt-0.5" />
+              <div>
+                <p className="text-sm font-medium text-amber-700 dark:text-amber-400">
+                  Adversary View analysis was interrupted
+                </p>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  The audit results below were restored from your last run, but the page was
+                  refreshed before the Adversary View analysis finished. Run the audit again to
+                  include it.
+                </p>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {restoredNotice === "restored" && result && (
+          <Card className="border-blue-500/30 bg-blue-500/5" data-testid="banner-audit-restored">
+            <CardContent className="p-3 flex items-start gap-3">
+              <Info className="h-4 w-4 text-blue-500 shrink-0 mt-0.5" />
+              <p className="text-xs text-muted-foreground">
+                Showing results restored from your last audit run. Run the audit again for
+                up-to-date results.
+              </p>
+            </CardContent>
+          </Card>
+        )}
 
         <PrivacyHistoryCard />
 
