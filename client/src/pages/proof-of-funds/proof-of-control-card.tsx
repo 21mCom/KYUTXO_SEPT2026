@@ -25,6 +25,12 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { useNodeSettings } from "@/hooks/use-node-settings";
 import { createProviderFromSettings } from "@/lib/blockchain-api";
 import {
+  isValidBlockHash,
+  isValidBlockHeight,
+  blockHashInputError,
+  blockHeightInputError,
+} from "@/lib/block-validation";
+import {
   buildChallengeMessage,
   verifyBitcoinSignature,
   signatureFormatLabel,
@@ -105,36 +111,27 @@ export function ProofOfControlCard({
   }, [nodeSettings, setFreshnessAnchor]);
 
   // Validate the manually-entered freshness anchor inputs
-  const freshnessManualHeightError = useMemo(() => {
-    const raw = freshnessManualHeight.trim();
-    if (!raw) return null;
-    if (!/^\d+$/.test(raw)) return "Height must be a whole number.";
-    if (parseInt(raw, 10) <= 0) return "Height must be greater than zero.";
-    return null;
-  }, [freshnessManualHeight]);
+  const freshnessManualHeightError = useMemo(
+    () => blockHeightInputError(freshnessManualHeight),
+    [freshnessManualHeight],
+  );
 
-  const freshnessManualHashError = useMemo(() => {
-    const raw = freshnessManualHash.trim();
-    if (!raw) return null;
-    if (!/^[0-9a-f]{64}$/.test(raw)) {
-      return "Block hash must be exactly 64 lowercase hex characters.";
-    }
-    return null;
-  }, [freshnessManualHash]);
+  const freshnessManualHashError = useMemo(
+    () => blockHashInputError(freshnessManualHash),
+    [freshnessManualHash],
+  );
 
   const canApplyManualFreshnessAnchor =
-    /^\d+$/.test(freshnessManualHeight.trim()) &&
-    parseInt(freshnessManualHeight.trim(), 10) > 0 &&
-    /^[0-9a-f]{64}$/.test(freshnessManualHash.trim());
+    isValidBlockHeight(freshnessManualHeight) &&
+    isValidBlockHash(freshnessManualHash);
 
   // Apply manually-entered height + hash as the freshness anchor
   const applyManualFreshnessAnchor = useCallback(() => {
     const raw = freshnessManualHeight.trim();
     const hash = freshnessManualHash.trim();
-    if (!/^\d+$/.test(raw)) return;
+    if (!isValidBlockHeight(raw)) return;
     const h = parseInt(raw, 10);
-    if (h <= 0) return;
-    if (!/^[0-9a-f]{64}$/.test(hash)) return;
+    if (!isValidBlockHash(hash)) return;
     const fetchedAt = new Date().toISOString().replace("T", " ").slice(0, 16) + " UTC";
     setFreshnessAnchor({ height: h, hash, fetchedAt });
     setFreshnessAnchorError(null);
