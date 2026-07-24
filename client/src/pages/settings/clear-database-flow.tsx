@@ -19,6 +19,7 @@ import { clearCustomFields } from "@/lib/data/custom-fields-crud";
 import { clearAddressSyncState } from "@/lib/data/address-sync-crud";
 import { clearPriceData } from "@/lib/data/price-data-crud";
 import { updateSettings } from "@/lib/data/settings-crud";
+import { clearAuditSession } from "@/lib/data/privacy-audit-session-store";
 import { db } from "@/lib/database";
 import { base64ToBuffer, verifyPassword } from "@/lib/crypto";
 import { getVaultSettings } from "@/lib/vault";
@@ -87,6 +88,15 @@ export function ClearDatabaseFlow() {
       
       // Clear price data
       await clearPriceData({ skipNotification: true });
+
+      // Drop any saved Privacy Audit / Adversary View session — it described
+      // the vault that was just wiped, so restoring it would show stale
+      // results. Best-effort: failure must not abort the clear.
+      try {
+        await clearAuditSession();
+      } catch (err) {
+        console.warn("Failed to clear saved privacy audit session:", err);
+      }
 
       // Reset settings to defaults (but keep them)
       await updateSettings('default', {

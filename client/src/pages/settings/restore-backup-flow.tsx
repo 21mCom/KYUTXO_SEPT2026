@@ -71,6 +71,7 @@ import { clearPriceData } from "@/lib/data/price-data-crud";
 import { clearNodeSettings, getNodeSettings } from "@/lib/data/node-settings-crud";
 import { clearDerivationTemplates } from "@/lib/data/derivation-templates-crud";
 import { clearDustFlags, restoreDustFlagRows } from "@/lib/data/dust-flags-crud";
+import { clearAuditSession } from "@/lib/data/privacy-audit-session-store";
 import { getSettings, updateSettings } from "@/lib/data/settings-crud";
 import { db } from "@/lib/database";
 import { base64ToBuffer, deriveKey, decrypt } from "@/lib/crypto";
@@ -772,6 +773,15 @@ export function RestoreBackupFlow() {
         // transactions above, so stale flags must never survive it. Cleared
         // even though most legacy backups predate the dustFlags table.
         await clearDustFlags({ skipNotification: true });
+        // Drop any saved Privacy Audit / Adversary View session — it was
+        // computed from the vault being replaced, so restoring it after this
+        // restore would show results about data that no longer exists.
+        // Best-effort: failure must not abort the restore.
+        try {
+          await clearAuditSession();
+        } catch (err) {
+          console.warn("Failed to clear saved privacy audit session:", err);
+        }
         // Mark the vault as wiped so the cancel/error handlers know to
         // reload rather than just close the dialog.
         restoreClearedRef.current = true;

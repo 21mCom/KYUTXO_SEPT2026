@@ -258,6 +258,7 @@ export default function PrivacyAudit() {
   const [restoredNotice, setRestoredNotice] = useState<
     "restored" | "audit-interrupted" | "adversary-interrupted" | null
   >(null);
+  const [restoredSavedAt, setRestoredSavedAt] = useState<number | null>(null);
   const rehydratedRef = useRef(false);
 
   // Rehydrate the last audit + adversary results after a page refresh so a
@@ -275,6 +276,7 @@ export default function PrivacyAudit() {
           return;
         }
         if (session.result) {
+          setRestoredSavedAt(session.savedAt ?? null);
           // Note: the owner/wallet filter dropdowns are deliberately NOT
           // restored — the user may already be changing them, and the saved
           // result stands on its own.
@@ -340,6 +342,7 @@ export default function PrivacyAudit() {
       setAdversaryRunning(false);
       setAdversaryCancelled(false);
       setRestoredNotice(null);
+      setRestoredSavedAt(null);
       setStatusMessage("Loading address records...");
       setScanState("analyzing");
 
@@ -873,8 +876,13 @@ export default function PrivacyAudit() {
             <CardContent className="p-3 flex items-start gap-3">
               <Info className="h-4 w-4 text-blue-500 shrink-0 mt-0.5" />
               <p className="text-xs text-muted-foreground">
-                Showing results restored from your last audit run. Run the audit again for
-                up-to-date results.
+                Showing results restored from your last audit run
+                {restoredSavedAt != null && (
+                  <span data-testid="text-restored-saved-at">
+                    {" "}(saved {new Date(restoredSavedAt).toLocaleString()})
+                  </span>
+                )}
+                . Run the audit again for up-to-date results.
               </p>
             </CardContent>
           </Card>

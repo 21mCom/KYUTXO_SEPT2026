@@ -33,6 +33,7 @@ import {
 } from "./zip-stream";
 import { BackupCancelledError } from "./sink";
 import { deriveKey, decrypt, base64ToBuffer } from "@/lib/crypto";
+import { clearAuditSession } from "@/lib/data/privacy-audit-session-store";
 import {
   bulkCreateRecords,
   clearAllRecords,
@@ -315,6 +316,16 @@ export async function restoreV3Backup(opts: RestoreOptions): Promise<RestoreResu
     await clearCustodySegments({ skipNotification: true });
     await clearLineageSnapshots({ skipNotification: true });
     await clearInlineFn();
+    // Drop any persisted Privacy Audit / Adversary View session — it was
+    // computed from the vault that was just wiped, so restoring it after this
+    // point would show results about data that no longer exists. Best-effort:
+    // this scratch store lives in a separate IndexedDB database and its
+    // failure must never turn a clean clear into a restore error.
+    try {
+      await clearAuditSession();
+    } catch (err) {
+      console.warn("Failed to clear saved privacy audit session:", err);
+    }
   }
 
   // Best-effort removal of attachment files this restore wrote to disk. Called
