@@ -51,13 +51,19 @@ type ScopeType = "all" | GroupBy;
  *
  * Returns null when cancelled.
  */
+interface DustScanOutcome {
+  results: DustingResult[];
+  /** Every address that was in scope for this scan (used for stale-flag detection). */
+  scannedAddresses: Set<string>;
+}
+
 async function computeDustings(
   scopeType: ScopeType,
   scopeValue: string,
   threshold: number,
   signal: AbortSignal,
   onProgress: (processed: number, phase: "addresses" | "participants") => void,
-): Promise<DustingResult[] | null> {
+): Promise<DustScanOutcome | null> {
   // ── Pass 1: collect in-scope address strings + their record ids ──────────
   const addressMap = new Map<string, { recordId: number }>();
   let beforeIdExclusive: number | undefined = undefined;
@@ -95,7 +101,8 @@ async function computeDustings(
   }
 
   if (signal.aborted) return null;
-  if (addressMap.size === 0) return [];
+  const scannedAddresses = new Set(addressMap.keys());
+  if (addressMap.size === 0) return { results: [], scannedAddresses };
 
   // ── Pass 2: gather ALL participant rows for in-scope addresses ───────────
   //
@@ -177,7 +184,7 @@ async function computeDustings(
   }
 
   results.sort((a, b) => b.totalCount - a.totalCount || a.address.localeCompare(b.address));
-  return results;
+  return { results, scannedAddresses };
 }
 
 export default function DustedPage() {
@@ -187,7 +194,8 @@ export default function DustedPage() {
   const [threshold, setThreshold] = useState<number>(DEFAULT_DUST_THRESHOLD);
 
   const [phase, setPhase] = useState<"idle" | "computing" | "done">("idle");
-  const [results, setResults] = useState<DustingResult[] | null>(null);
+  const [scanOutcome, setScanOutcome] = useState<DustScanOutcome | null>(null);
+  const results = scanOutcome?.results ?? null;
   const [progressMsg, setProgressMsg] = useState<string>("");
   const [cancelling, setCancelling] = useState(false);
 
@@ -202,6 +210,7 @@ export default function DustedPage() {
     [dustFlags],
   );
   const [flagBusyAddress, setFlagBusyAddress] = useState<string | null>(null);
+  const [cleaningStale, setCleaningStale] = useState(false);
   const [flagBusyOutpoint, setFlagBusyOutpoint] = useState<string | null>(null);
   const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
 
@@ -216,6 +225,46 @@ export default function DustedPage() {
       return next;
     });
   }, []);
+
+  // ── Stale-flag detection ───────────────────────────────────────────────────
+  //
+  // A dust flag is "stale" when its address was covered by the last scan but
+  // its outpoint is no longer an unspent dust output under the current
+  // threshold/scope (e.g. it got spent, or the threshold was lowered). Flags on
+  // addresses OUTSIDE the scanned scope are never considered stale — we simply
+  // don't know their status.
+  const staleFlags = useMemo(() => {
+    if (!scanOutcome || !dustFlags) return [];
+    const liveOutpoints = new Set<string>();
+    for (const row of scanOutcome.results) {
+      for (const o of row.unspentOutputs) {
+        liveOutpoints.add(toOutpoint(o.txid, o.vout));
+      }
+    }
+    return dustFlags.filter(
+      (f) => scanOutcome.scannedAddresses.has(f.address) && !liveOutpoints.has(f.outpoint),
+    );
+  }, [scanOutcome, dustFlags]);
+
+  const handleCleanStaleFlags = useCallback(async () => {
+    if (staleFlags.length === 0) return;
+    setCleaningStale(true);
+    try {
+      const removed = await unmarkDustOutpoints(staleFlags.map((f) => f.outpoint));
+      toast({
+        title: "Stale dust flags removed",
+        description: `${removed} flag${removed !== 1 ? "s" : ""} no longer matching an unspent dust output ${removed !== 1 ? "were" : "was"} removed.`,
+      });
+    } catch (err) {
+      toast({
+        title: "Failed to remove stale flags",
+        description: err instanceof Error ? err.message : String(err),
+        variant: "destructive",
+      });
+    } finally {
+      setCleaningStale(false);
+    }
+  }, [staleFlags, toast]);
 
   const handleMarkAsDust = useCallback(
     async (row: DustingResult) => {
@@ -401,7 +450,7 @@ export default function DustedPage() {
         return;
       }
 
-      setResults(result);
+      setScanOutcome(result);
       setPhase("done");
     },
     [],
@@ -558,10 +607,10 @@ export default function DustedPage() {
         )}
       </div>
 
-      <div className="flex-1 min-h-0 relative">
+      <div className="flex-1 min-h-0 flex flex-col">
         {phase === "idle" && (
           <div
-            className="flex flex-col items-center justify-center h-full gap-3 text-muted-foreground"
+            className="flex flex-col items-center justify-center flex-1 gap-3 text-muted-foreground"
             data-testid="state-idle"
           >
             <Droplets className="h-10 w-10 opacity-30" />
@@ -573,7 +622,7 @@ export default function DustedPage() {
 
         {phase === "computing" && results === null && (
           <div
-            className="flex flex-col items-center justify-center h-full gap-3 text-muted-foreground"
+            className="flex flex-col items-center justify-center flex-1 gap-3 text-muted-foreground"
             data-testid="state-computing"
           >
             <Loader2 className="h-8 w-8 animate-spin opacity-40" />
@@ -583,7 +632,7 @@ export default function DustedPage() {
 
         {phase === "done" && results !== null && results.length === 0 && (
           <div
-            className="flex flex-col items-center justify-center h-full gap-3 text-muted-foreground"
+            className="flex flex-col items-center justify-center flex-1 gap-3 text-muted-foreground"
             data-testid="state-empty"
           >
             <Droplets className="h-10 w-10 opacity-30" />
@@ -595,8 +644,36 @@ export default function DustedPage() {
           </div>
         )}
 
+        {phase === "done" && staleFlags.length > 0 && (
+          <div
+            className="flex-none mx-4 mt-3 px-3 py-2 rounded-md border flex items-center gap-3 flex-wrap"
+            data-testid="banner-stale-flags"
+          >
+            <FlagOff className="h-4 w-4 text-muted-foreground flex-none" />
+            <span className="text-sm flex-1 min-w-0" data-testid="text-stale-flags-summary">
+              <span className="font-medium">{staleFlags.length.toLocaleString()}</span> dust flag
+              {staleFlags.length !== 1 ? "s" : ""} no longer match{staleFlags.length === 1 ? "es" : ""} an
+              unspent dust output under the current threshold and scope.
+            </span>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={cleaningStale}
+              onClick={handleCleanStaleFlags}
+              data-testid="button-clean-stale-flags"
+            >
+              {cleaningStale ? (
+                <Loader2 className="h-3 w-3 animate-spin mr-1" />
+              ) : (
+                <FlagOff className="h-3 w-3 mr-1" />
+              )}
+              Remove stale flags
+            </Button>
+          </div>
+        )}
+
         {phase === "done" && results !== null && results.length > 0 && (
-          <div className="flex flex-col h-full">
+          <div className="flex flex-col flex-1 min-h-0">
             <div
               className="flex-none px-4 py-2 border-b text-xs text-muted-foreground flex items-center gap-2"
               data-testid="text-results-summary"

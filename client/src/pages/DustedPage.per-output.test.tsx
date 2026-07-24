@@ -127,4 +127,47 @@ describe("DustedPage per-output dust controls", () => {
     // With not-all-flagged, the row bulk button flips back to "Mark as dust".
     await screen.findByTestId(`button-mark-dust-${recordId}`);
   });
+
+  it("surfaces stale flags after a scan and removes them via the cleanup button", async () => {
+    const recordId = await seed();
+    const STALE_TXID = "c".repeat(64);
+    // Flag a live dust output AND an outpoint that is spent (input references it),
+    // so after the scan the spent one is stale.
+    await bulkAddParticipants([
+      { txid: STALE_TXID, role: "output", address: ADDR, amount: 400, vout: 0 },
+      {
+        txid: "d".repeat(64),
+        role: "input",
+        address: ADDR,
+        amount: 400,
+        prevTxid: STALE_TXID,
+        prevVout: 0,
+      },
+    ]);
+    await markOutpointsAsDust([
+      { txid: TXID_A, vout: 0, address: ADDR, amountSats: 546 },
+      { txid: STALE_TXID, vout: 0, address: ADDR, amountSats: 400 },
+    ]);
+    renderWithProviders(<DustedPage />);
+
+    // Wait for the scan to finish and the stale banner to appear.
+    const banner = await screen.findByTestId("banner-stale-flags", {}, { timeout: 10000 });
+    expect(banner.textContent).toContain("1");
+    expect(
+      screen.getByTestId("text-stale-flags-summary").textContent,
+    ).toContain("no longer match");
+
+    fireEvent.click(screen.getByTestId("button-clean-stale-flags"));
+
+    // Only the stale flag is removed; the live one survives.
+    await waitFor(async () => {
+      const flags = await getAllDustFlags();
+      expect(flags.map((f) => f.outpoint)).toEqual([toOutpoint(TXID_A, 0)]);
+    });
+    await waitFor(() => {
+      expect(screen.queryByTestId("banner-stale-flags")).toBeNull();
+    });
+    // The address row is still present.
+    expect(screen.getByTestId(`row-dusted-${recordId}`)).toBeTruthy();
+  });
 });
