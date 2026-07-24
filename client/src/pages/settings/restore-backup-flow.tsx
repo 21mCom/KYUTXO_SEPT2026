@@ -38,50 +38,14 @@ import { BackupCancelledError } from "@/lib/backup/sink";
 import { blobChunks } from "@/lib/backup/zip-stream";
 import { isV3Manifest, parseInline, ATTACHMENTS_DIR } from "@/lib/backup/format";
 import {
-  restoreNodeSettingsRows,
-  restoreSettingsPreferences,
   previewSettingsPreferences,
   type PortablePreferencePreview,
 } from "@/lib/backup/inline-tables";
-import {
-  restoreLegacyRecords,
-  restoreLegacyAttachments,
-  restoreLegacyTransactions,
-  restoreLegacyAddressSyncState,
-} from "@/lib/backup/legacy-restore";
-import type { LegacyAttachmentsResult } from "@/lib/backup/legacy-restore";
-import {
-  restoreLegacyVocabulary,
-  restoreLegacyCustomFields,
-  restoreLegacyDerivationTemplates,
-  restoreLegacyEvidence,
-  restoreLegacyPriceData,
-  restoreLegacyLineage,
-  restoreLegacySnapshots,
-} from "@/lib/backup/legacy-restore-misc";
-import { clearAllRecords } from "@/lib/data/record-crud";
-import { clearTransactions, clearParticipants } from "@/lib/data/transaction-crud";
-import { clearUtxoLineage, clearCustodySegments, clearLineageSnapshots } from "@/lib/data/lineage-crud";
-import { clearEvidence, clearEvidenceAttachments } from "@/lib/data/evidence-crud";
-import { clearAttachments } from "@/lib/data/attachments-crud";
-import { clearRecordOrigins } from "@/lib/data/record-origins-crud";
-import { clearCustomFields } from "@/lib/data/custom-fields-crud";
-import { clearAddressSyncState } from "@/lib/data/address-sync-crud";
-import { clearPriceData } from "@/lib/data/price-data-crud";
-import { clearNodeSettings, getNodeSettings } from "@/lib/data/node-settings-crud";
-import { clearDerivationTemplates } from "@/lib/data/derivation-templates-crud";
-import { clearDustFlags, restoreDustFlagRows } from "@/lib/data/dust-flags-crud";
-import { clearAuditSession } from "@/lib/data/privacy-audit-session-store";
+import { runLegacyJsonRestore } from "@/lib/backup/legacy-restore-pipeline";
+import { runPostRestoreTxidBackfill } from "@/lib/backup/post-restore-backfill";
 import { getSettings, updateSettings } from "@/lib/data/settings-crud";
-import { db } from "@/lib/database";
 import { base64ToBuffer, deriveKey, decrypt } from "@/lib/crypto";
-import {
-  detectOrphanedTxRecords,
-  runTxidBackfill,
-  formatSkippedReasons,
-} from "@/lib/txid-backfill";
 import { resetOrphanCheckGate } from "@/lib/orphan-check-session";
-import { createProviderFromSettings } from "@/lib/blockchain-api";
 import { loadEntitySnapshotFromStorage } from "@/lib/data/entity-list-store";
 import { deleteFile } from "@/lib/attachments";
 
@@ -553,111 +517,38 @@ export function RestoreBackupFlow() {
         setRestoreProgress(100);
         setRestoreMessage("Restore complete! Checking for missing transaction data...");
 
-        // --- Post-restore txid backfill ---
+        // --- Post-restore txid backfill (shared helper, never throws) ---
         // Detect orphaned transaction records and fetch their on-chain data.
-        // If the provider is unreachable, defer gracefully and tell the user.
-        try {
-          const { txids } = await detectOrphanedTxRecords();
-          if (txids.length > 0) {
-            setRestoreMessage(`Rebuilding on-chain data for ${txids.length} transaction${txids.length !== 1 ? "s" : ""}…`);
-            const nodeSettings = await getNodeSettings('default');
-            let backfillSummary = "";
-            if (!nodeSettings) {
-              backfillSummary = ` ${txids.length} transaction${txids.length !== 1 ? "s" : ""} need on-chain data — run "Rebuild Missing Transactions" in Settings when connected.`;
-            } else {
-              try {
-                const provider = createProviderFromSettings(nodeSettings);
-                await provider.getBlockHeight(); // connectivity probe
-                const bfResult = await runTxidBackfill(provider, txids, {
-                  onProgress: (p) => {
-                    const pct = p.orphansFound > 0
-                      ? Math.round(p.processed / p.orphansFound * 100)
-                      : 100;
-                    setRestoreMessage(
-                      `Rebuilding ${p.processed.toLocaleString()} of ${p.orphansFound.toLocaleString()} transactions…`
-                    );
-                    setRestoreProgress(pct);
-                  },
-                });
-                const parts: string[] = [];
-                if (bfResult.rebuilt > 0) parts.push(`${bfResult.rebuilt} rebuilt`);
-                if (bfResult.skipped > 0) {
-                  const skippedDetail = formatSkippedReasons(bfResult.skippedReasons);
-                  parts.push(skippedDetail || `${bfResult.skipped} skipped`);
-                }
-                if (bfResult.failed > 0) parts.push(`${bfResult.failed} failed`);
-                if (bfResult.prevoutsResolved > 0) parts.push(`${bfResult.prevoutsResolved} input addresses resolved`);
-                backfillSummary = parts.length > 0
-                  ? ` Transaction data: ${parts.join("; ")}.`
-                  : "";
-              } catch {
-                backfillSummary = ` ${txids.length} transaction${txids.length !== 1 ? "s" : ""} need on-chain data — run "Rebuild Missing Transactions" in Settings when connected.`;
-              }
-            }
-            const v3OrphanMsg = result.counts.orphanedAttachmentFiles > 0
-              ? ` ${result.counts.orphanedAttachmentFiles} attachment file${result.counts.orphanedAttachmentFiles !== 1 ? "s" : ""} could not be re-linked (owning record absent) — find them in the "Needs Review" section of Settings to re-attach or delete them.`
-              : "";
-            const v3LostMsg = result.counts.orphanedAttachmentFilesLost > 0
-              ? ` Warning: ${result.counts.orphanedAttachmentFilesLost} of those file${result.counts.orphanedAttachmentFilesLost !== 1 ? "s" : ""} could not be saved to Needs Review and ${result.counts.orphanedAttachmentFilesLost !== 1 ? "their" : "its"} contents were lost.`
-              : "";
-            toast({
-              title: "Restore Successful",
-              description: `Restored ${result.counts.records} records, ${result.counts.blockchainTransactions} transactions, ${result.counts.transactionParticipants} participants, ${result.counts.attachmentFiles} attachment files${result.counts.lineageSnapshots > 0 ? `, ${result.counts.lineageSnapshots} snapshot${result.counts.lineageSnapshots !== 1 ? "s" : ""}` : ""}.${backfillSummary}${v3OrphanMsg}${v3LostMsg}`,
-              ...(result.counts.orphanedAttachmentFiles > 0 && isElectron() ? {
-                action: (
-                  <button
-                    className="shrink-0 rounded border px-2 py-1 text-xs font-medium"
-                    onClick={() => getElectronAPI().openNeedsReviewFolder()}
-                  >
-                    Open folder
-                  </button>
-                ) as any,
-              } : {}),
-            });
-          } else {
-            const v3OrphanMsg = result.counts.orphanedAttachmentFiles > 0
-              ? ` ${result.counts.orphanedAttachmentFiles} attachment file${result.counts.orphanedAttachmentFiles !== 1 ? "s" : ""} could not be re-linked — find them in the "Needs Review" section of Settings to re-attach or delete them.`
-              : "";
-            const v3LostMsg = result.counts.orphanedAttachmentFilesLost > 0
-              ? ` Warning: ${result.counts.orphanedAttachmentFilesLost} of those file${result.counts.orphanedAttachmentFilesLost !== 1 ? "s" : ""} could not be saved to Needs Review and ${result.counts.orphanedAttachmentFilesLost !== 1 ? "their" : "its"} contents were lost.`
-              : "";
-            toast({
-              title: "Restore Successful",
-              description: `Restored ${result.counts.records} records, ${result.counts.blockchainTransactions} transactions, ${result.counts.transactionParticipants} participants, ${result.counts.attachmentFiles} attachment files${result.counts.lineageSnapshots > 0 ? `, ${result.counts.lineageSnapshots} snapshot${result.counts.lineageSnapshots !== 1 ? "s" : ""}` : ""}. Existing data was replaced.${v3OrphanMsg}${v3LostMsg}`,
-              ...(result.counts.orphanedAttachmentFiles > 0 && isElectron() ? {
-                action: (
-                  <button
-                    className="shrink-0 rounded border px-2 py-1 text-xs font-medium"
-                    onClick={() => getElectronAPI().openNeedsReviewFolder()}
-                  >
-                    Open folder
-                  </button>
-                ) as any,
-              } : {}),
-            });
-          }
-        } catch {
-          const v3OrphanMsgFallback = result.counts.orphanedAttachmentFiles > 0
-            ? ` ${result.counts.orphanedAttachmentFiles} attachment file${result.counts.orphanedAttachmentFiles !== 1 ? "s" : ""} could not be re-linked — find them in the "Needs Review" section of Settings to re-attach or delete them.`
-            : "";
-          const v3LostMsgFallback = result.counts.orphanedAttachmentFilesLost > 0
-            ? ` Warning: ${result.counts.orphanedAttachmentFilesLost} of those file${result.counts.orphanedAttachmentFilesLost !== 1 ? "s" : ""} could not be saved to Needs Review and ${result.counts.orphanedAttachmentFilesLost !== 1 ? "their" : "its"} contents were lost.`
-            : "";
-          toast({
-            title: "Restore Successful",
-            description: `Restored ${result.counts.records} records, ${result.counts.blockchainTransactions} transactions, ${result.counts.transactionParticipants} participants, ${result.counts.attachmentFiles} attachment files${result.counts.lineageSnapshots > 0 ? `, ${result.counts.lineageSnapshots} snapshot${result.counts.lineageSnapshots !== 1 ? "s" : ""}` : ""}. Existing data was replaced.${v3OrphanMsgFallback}${v3LostMsgFallback}`,
-            ...(result.counts.orphanedAttachmentFiles > 0 && isElectron() ? {
-              action: (
-                <button
-                  className="shrink-0 rounded border px-2 py-1 text-xs font-medium"
-                  onClick={() => getElectronAPI().openNeedsReviewFolder()}
-                >
-                  Open folder
-                </button>
-              ) as any,
-            } : {}),
-          });
-        }
+        // If the provider is unreachable, the helper defers gracefully and the
+        // suffix tells the user.
+        const backfill = await runPostRestoreTxidBackfill({
+          onMessage: setRestoreMessage,
+          onPercent: setRestoreProgress,
+        });
+        // When orphans were found, mention the "(owning record absent)" detail;
+        // otherwise note that existing data was replaced (mirrors the pre-split
+        // toast wording exactly).
+        const v3OrphanMsg = result.counts.orphanedAttachmentFiles > 0
+          ? ` ${result.counts.orphanedAttachmentFiles} attachment file${result.counts.orphanedAttachmentFiles !== 1 ? "s" : ""} could not be re-linked${backfill.orphansFound ? " (owning record absent)" : ""} — find them in the "Needs Review" section of Settings to re-attach or delete them.`
+          : "";
+        const v3LostMsg = result.counts.orphanedAttachmentFilesLost > 0
+          ? ` Warning: ${result.counts.orphanedAttachmentFilesLost} of those file${result.counts.orphanedAttachmentFilesLost !== 1 ? "s" : ""} could not be saved to Needs Review and ${result.counts.orphanedAttachmentFilesLost !== 1 ? "their" : "its"} contents were lost.`
+          : "";
+        const v3ReplacedMsg = backfill.orphansFound ? "" : " Existing data was replaced.";
+        toast({
+          title: "Restore Successful",
+          description: `Restored ${result.counts.records} records, ${result.counts.blockchainTransactions} transactions, ${result.counts.transactionParticipants} participants, ${result.counts.attachmentFiles} attachment files${result.counts.lineageSnapshots > 0 ? `, ${result.counts.lineageSnapshots} snapshot${result.counts.lineageSnapshots !== 1 ? "s" : ""}` : ""}.${v3ReplacedMsg}${backfill.suffix}${v3OrphanMsg}${v3LostMsg}`,
+          ...(result.counts.orphanedAttachmentFiles > 0 && isElectron() ? {
+            action: (
+              <button
+                className="shrink-0 rounded border px-2 py-1 text-xs font-medium"
+                onClick={() => getElectronAPI().openNeedsReviewFolder()}
+              >
+                Open folder
+              </button>
+            ) as any,
+          } : {}),
+        });
 
         // A restore can introduce transaction records missing on-chain data.
         // Reset the once-per-session orphan-check gate so the startup check in
@@ -681,451 +572,42 @@ export function RestoreBackupFlow() {
         return;
       }
 
-      const zip = await JSZip.loadAsync(restoreFile);
-      const backupFile = zip.file("backup.json");
-      
-      if (!backupFile) {
-        throw new Error("Invalid backup file");
-      }
-
-      setRestoreProgress(10);
-      const content = await backupFile.async("text");
-      const backup = JSON.parse(content);
-
-      let data = backup.data;
-
-      // If backup is encrypted, decrypt it
-      if (backup.encrypted) {
-        setRestoreMessage("Decrypting backup...");
-        setRestoreProgress(20);
-
-        if (!restorePassword) {
-          throw new Error("Password required for encrypted backup");
-        }
-
-        // Properly decode the salt from base64
-        const salt = base64ToBuffer(backup.salt);
-        const backupKey = await deriveKey(restorePassword, salt);
-
-        try {
-          const decrypted = await decrypt(backup.data, backupKey);
-          data = JSON.parse(decrypted);
-        } catch {
-          throw new Error("Invalid password or corrupted backup");
-        }
-      }
-
-      setRestoreProgress(30);
-      setRestoreMessage("Processing data...");
-
-      const { 
-        records, 
-        tags, 
-        categories, 
-        attachments, 
-        recordOrigins, 
-        customFields: backupCustomFields,
-        owners = [],
-        walletNames = [],
-        seedNames = [],
-        walletSoftware = [],
-        derivationTemplates = [],
-        evidence = [],
-        evidenceAttachments = [],
-        priceData = [],
-        settings: backupSettings = [],
-        nodeSettings: backupNodeSettings = [],
-        utxoLineage = [],
-        custodySegments = [],
-        lineageSnapshots = [],
-        blockchainTransactions = [],
-        transactionParticipants = [],
-        addressSyncState = [],
-        dustFlags = [],
-      } = data;
-
-      if (restoreMode === "replace") {
-        setRestoreMessage("Clearing existing data...");
-        setRestoreProgress(40);
-        
-        await clearAllRecords({ skipNotification: true });
-        await db.tags.clear();
-        await db.categories.clear();
-        await clearAttachments({ skipNotification: true });
-        await clearRecordOrigins({ skipNotification: true });
-        await clearCustomFields({ skipNotification: true });
-        await db.owners.clear();
-        await db.walletNames.clear();
-        await db.seedNames.clear();
-        await db.walletSoftware.clear();
-        await clearDerivationTemplates({ skipNotification: true });
-        await clearEvidence({ skipNotification: true });
-        await clearEvidenceAttachments({ skipNotification: true });
-        await clearPriceData({ skipNotification: true });
-        await clearNodeSettings({ skipNotification: true });
-        await clearUtxoLineage({ skipNotification: true });
-        await clearCustodySegments({ skipNotification: true });
-        await clearLineageSnapshots({ skipNotification: true });
-        await clearTransactions({ skipNotification: true });
-        await clearParticipants({ skipNotification: true });
-        await clearAddressSyncState({ skipNotification: true });
-        // Dust flags point at transaction outputs; a replace restore wipes the
-        // transactions above, so stale flags must never survive it. Cleared
-        // even though most legacy backups predate the dustFlags table.
-        await clearDustFlags({ skipNotification: true });
-        // Drop any saved Privacy Audit / Adversary View session — it was
-        // computed from the vault being replaced, so restoring it after this
-        // restore would show results about data that no longer exists.
-        // Best-effort: failure must not abort the restore.
-        try {
-          await clearAuditSession();
-        } catch (err) {
-          console.warn("Failed to clear saved privacy audit session:", err);
-        }
-        // Mark the vault as wiped so the cancel/error handlers know to
-        // reload rather than just close the dialog.
-        restoreClearedRef.current = true;
-      }
-
-      setRestoreProgress(50);
-      setRestoreMessage("Restoring records...");
-
-      // Track statistics
-      let recordsAdded = 0;
-      let recordsSkipped = 0;
-
-      // Backup record id -> live record id. bulkCreateRecords assigns fresh
-      // autoincrement ids (it does NOT preserve the backup's ids), and in merge
-      // mode an incoming record may map to an already-present record. Every
-      // dependent row (attachments, transaction participants, address sync
-      // state) must rewrite its recordId through this map, or it would link to
-      // the wrong record — or to none at all.
-      const recordIdMap = new Map<number, number>();
-
-      // Restore records (de-dup by inputString in merge mode; backup id -> live
-      // id recorded in recordIdMap for dependent rows). Shared with tests via
-      // the legacy-restore helpers.
-      const recordResult = await restoreLegacyRecords(records, restoreMode, recordIdMap);
-      recordsAdded = recordResult.recordsAdded;
-      recordsSkipped = recordResult.recordsSkipped;
-      if (records && records.length > 0) {
-        setRestoreProgress(70);
-      }
-
-      setRestoreMessage("Restoring tags and categories...");
-
-      // Restore vocabulary (tags, categories, owners, wallet names, seed names,
-      // wallet software). Merge mode skips entries whose name already exists;
-      // replace mode adds every entry (cleared above). Shared with tests via the
-      // legacy-restore-misc helpers.
-      const vocabResult = await restoreLegacyVocabulary(
-        { tags, categories, owners, walletNames, seedNames, walletSoftware },
+      // Legacy whole-file JSON restore — the full pipeline (decrypt, clear,
+      // per-table restore, attachment files, summary message) lives in
+      // @/lib/backup/legacy-restore-pipeline so it is testable outside React.
+      const legacySummary = await runLegacyJsonRestore(
+        restoreFile,
+        restorePassword,
         restoreMode,
-      );
-      const tagsAdded = vocabResult.tagsAdded;
-      const categoriesAdded = vocabResult.categoriesAdded;
-      const vocabularyAdded = vocabResult.vocabularyAdded;
-
-      setRestoreProgress(80);
-      setRestoreMessage("Restoring attachments...");
-
-      // Restore attachment metadata (de-dup by objectStoragePath in merge mode;
-      // recordId remapped through recordIdMap, orphans tracked). Shared with
-      // tests via the legacy-restore helpers.
-      const legacyAttResult: LegacyAttachmentsResult = await restoreLegacyAttachments(
-        attachments,
-        restoreMode,
-        recordIdMap,
-      );
-      const attachmentsAdded = legacyAttResult.attachmentsAdded;
-      const legacyOrphanedRelPaths = legacyAttResult.orphanedRelPaths;
-
-      // Restore attachment files from ZIP. Orphaned files (whose owning record
-      // was absent) are routed to the Needs Review folder rather than the normal
-      // attachment pool, so no hidden copy is left behind.
-      setRestoreProgress(85);
-      setRestoreMessage("Restoring attachment files...");
-      
-      let attachmentFilesRestored = 0;
-      let attachmentFilesErrors = 0;
-      let legacyOrphanedFilesRouted = 0;
-      let legacyOrphanedFilesLost = 0;
-      const attachmentsFolder = zip.folder("attachments");
-      if (attachmentsFolder) {
-        const filePromises: Promise<void>[] = [];
-        
-        attachmentsFolder.forEach((relativePath, file) => {
-          if (!file.dir) {
-            filePromises.push((async () => {
-              try {
-                const fileData = await file.async("arraybuffer");
-
-                // Check if this file belongs to an orphaned attachment (no
-                // owning record). If so, route to the Needs Review folder.
-                const orphanFilename = legacyOrphanedRelPaths.get(relativePath);
-                if (orphanFilename !== undefined) {
-                  // Best-effort: a single Needs Review write failure must not
-                  // abort the restore. Track lost bytes separately so the
-                  // post-restore toast can warn the user instead of silently
-                  // dropping recovered evidence.
-                  if (isElectron()) {
-                    try {
-                      const api = getElectronAPI();
-                      const result = await api.writeNeedsReview(orphanFilename, fileData);
-                      if (!result.success) {
-                        throw new Error(result.error ?? `Failed to write ${orphanFilename} to Needs Review folder`);
-                      }
-                      legacyOrphanedFilesRouted++;
-                    } catch (err) {
-                      console.error(`Failed to route orphaned attachment file ${relativePath} to Needs Review:`, err);
-                      legacyOrphanedFilesLost++;
-                    }
-                  } else {
-                    // Web mode has no Needs Review folder (the write is a no-op),
-                    // mirroring the v3 restore path which counts these as routed.
-                    legacyOrphanedFilesRouted++;
-                  }
-                  return;
-                }
-
-                if (isElectron()) {
-                  const api = getElectronAPI();
-                  const result = await api.writeAttachment(relativePath, fileData);
-                  if (!result.success) {
-                    console.error(`Failed to restore attachment file ${relativePath}:`, result.error);
-                    attachmentFilesErrors++;
-                    return;
-                  }
-                } else {
-                  // Web mode: use API endpoint
-                  const formData = new FormData();
-                  formData.append('file', new Blob([fileData]));
-                  formData.append('relativePath', relativePath);
-                  
-                  const response = await fetch('/api/attachments/write', {
-                    method: 'POST',
-                    body: formData,
-                  });
-                  
-                  if (!response.ok) {
-                    const errorData = await response.json().catch(() => ({}));
-                    console.error(`Failed to restore attachment file ${relativePath}:`, errorData.error || response.statusText);
-                    attachmentFilesErrors++;
-                    return;
-                  }
-                }
-                
-                attachmentFilesRestored++;
-              } catch (err) {
-                console.error(`Failed to restore attachment file ${relativePath}:`, err);
-                attachmentFilesErrors++;
-              }
-            })());
-          }
-        });
-        
-        await Promise.all(filePromises);
-      }
-
-      setRestoreProgress(90);
-      setRestoreMessage("Restoring custom fields...");
-
-      // Restore custom fields (merge mode de-dups by `slug`; replace mode adds
-      // every field). Shared with tests via the legacy-restore-misc helpers.
-      const customFieldsAdded = await restoreLegacyCustomFields(
-        backupCustomFields,
-        restoreMode,
+        {
+          onProgress: (percent, message) => {
+            setRestoreProgress(percent);
+            setRestoreMessage(message);
+          },
+          onCleared: () => {
+            // The destructive clear has run — the cancel/error handlers must
+            // now reload rather than just close the dialog.
+            restoreClearedRef.current = true;
+          },
+        },
       );
 
-      setRestoreProgress(96);
-      setRestoreMessage("Restoring derivation templates...");
-
-      // Restore derivation templates (merge mode de-dups by
-      // `fingerprint:scriptType`; replace mode adds every template). Shared with
-      // tests via the legacy-restore-misc helpers.
-      const templatesAdded = await restoreLegacyDerivationTemplates(
-        derivationTemplates,
-        restoreMode,
-      );
-
-      setRestoreProgress(97);
-      setRestoreMessage("Restoring evidence and additional data...");
-
-      // Restore evidence documents and their attachments. Evidence rows get
-      // fresh auto-increment ids on restore (clear() does NOT reset IndexedDB
-      // key generation), so the attachments' evidenceId must be remapped to the
-      // new ids — otherwise restore orphans/mislinks every evidence file. In
-      // merge mode the shared helper also skips evidence documents whose identity
-      // already exists (and their attachments) so merging the same/overlapping
-      // backup more than once doesn't accumulate duplicates; replace mode adds
-      // every row (the table was cleared above). The shared helper does this
-      // remapping/de-dup (mirroring the v3 path) and is covered by a regression
-      // test.
-      const evidenceResult = await restoreLegacyEvidence(
-        evidence,
-        evidenceAttachments,
-        restoreMode,
-      );
-      const evidenceAdded = evidenceResult.evidenceAdded;
-      const evidenceAttachmentsAdded = evidenceResult.evidenceAttachmentsAdded;
-
-      // Restore price data (v2.2.0+, not encrypted): no id remapping. In merge
-      // mode rows whose [date+currency+asset] already exists are skipped so an
-      // overlapping backup doesn't double up daily price rows; replace mode
-      // cleared the table above and adds every row. Shared with the v3 inline
-      // path via restorePriceDataRows so the two paths can never diverge.
-      const priceDataAdded = await restoreLegacyPriceData(priceData, restoreMode);
-
-      // Restore node settings (v2.2.0+, not encrypted). Uses the shared helper
-      // so the legacy path and the v3 streaming path can never diverge in how
-      // the nodeSettings singleton is restored (id preserved, `put` semantics).
-      await restoreNodeSettingsRows(backupNodeSettings);
-
-      // Restore the small allow-list of portable settings preferences (e.g.
-      // disableOrphanCheck). Shared helper keeps the legacy and v3 paths from
-      // diverging; fields absent from older backups are left at their defaults.
-      await restoreSettingsPreferences(backupSettings);
-
-      // Restore UTXO lineage data and custody segments (v2.2.0+, not encrypted):
-      // backup ids stripped, no id remapping. In replace mode the tables were
-      // cleared above and rows are appended as-is. In merge mode segments whose
-      // unique `segmentId` already exists (and lineage edges already present) are
-      // skipped, so a merge over an already-present segment no longer throws on
-      // the unique index and aborts the restore. Shared with tests via the
-      // legacy-restore-misc helpers; only lineage rows are surfaced to the user.
-      const lineageResult = await restoreLegacyLineage(utxoLineage, custodySegments, restoreMode);
-      const lineageDataAdded = lineageResult.lineageAdded;
-
-      // Restore lineage snapshots (selective-disclosure / Continuity Certificate
-      // proof artifacts). New backups stream these, but legacy/inline backups
-      // carry them here. backup ids stripped, no remapping. In replace mode the
-      // table was cleared above; in merge mode snapshots whose unique
-      // `snapshotId` already exists are skipped so the unique index is not
-      // violated mid-restore.
-      const snapshotsResult = await restoreLegacySnapshots(lineageSnapshots, restoreMode);
-      const snapshotsAdded = snapshotsResult.snapshotsAdded;
-
-      // Restore dust flags (user-flagged dust outputs, Dexie v35). Legacy JSON
-      // backups produced by KYUTXO never carried a `dustFlags` key (the v3 ZIP
-      // format predates the table), so this is defensive: a hand-edited or
-      // third-party legacy JSON that DOES include dustFlags must not lose them
-      // silently. Shared with the v3 inline path via restoreDustFlagRows so the
-      // two paths can never diverge (ids stripped, unique-outpoint de-dup).
-      const dustFlagsAdded = await restoreDustFlagRows(dustFlags, restoreMode, {
-        skipNotification: true,
+      // --- Post-restore txid backfill (shared helper, never throws) ---
+      const legacyBackfill = await runPostRestoreTxidBackfill({
+        onMessage: setRestoreMessage,
+        onPercent: setRestoreProgress,
       });
 
-      // Restore blockchain transaction data (v2.2.0+, not encrypted): confirmed
-      // transactions, their input/output participants, and per-address sync
-      // state. Without this a restored vault would have to re-sync everything
-      // from scratch. Transactions de-dup by txid; participants are only added
-      // for transactions actually inserted and their recordId is rewritten
-      // through the recordIdMap (or left undefined when the owning record is
-      // absent). Shared with tests via the legacy-restore helpers.
-      const txResult = await restoreLegacyTransactions(
-        blockchainTransactions,
-        transactionParticipants,
-        restoreMode,
-        recordIdMap,
-      );
-      const transactionsAdded = txResult.transactionsAdded;
-      const participantsAdded = txResult.participantsAdded;
-      const transactionsEnriched = txResult.transactionsEnriched;
-      const participantsEnriched = txResult.participantsEnriched;
-
-      // Address sync state: unique `address` index, de-duped against existing
-      // (merge) and the incoming set; recordId remapped. Shared with tests via
-      // the legacy-restore helpers.
-      const addressSyncAdded = await restoreLegacyAddressSyncState(
-        addressSyncState,
-        restoreMode,
-        recordIdMap,
-      );
-
-      console.log(`[Restore] transactions: ${transactionsAdded}, enriched: ${transactionsEnriched}, participants: ${participantsAdded}, participants enriched: ${participantsEnriched}, synced addresses: ${addressSyncAdded}, dust flags: ${dustFlagsAdded}`);
-
-      setRestoreProgress(100);
-      setRestoreMessage("Restore complete! Checking for missing transaction data...");
-
-      let attachmentFilesMsg = "";
-      if (attachmentFilesRestored > 0 && attachmentFilesErrors === 0) {
-        attachmentFilesMsg = `, ${attachmentFilesRestored} attachment files`;
-      } else if (attachmentFilesRestored > 0 && attachmentFilesErrors > 0) {
-        attachmentFilesMsg = `, ${attachmentFilesRestored} attachment files (${attachmentFilesErrors} failed)`;
-      } else if (attachmentFilesErrors > 0) {
-        attachmentFilesMsg = ` (${attachmentFilesErrors} attachment files failed)`;
-      }
-      let additionalDataMsg = "";
-      const legacyOrphanCount = legacyOrphanedFilesRouted;
-      if (evidenceAdded > 0 || priceDataAdded > 0 || lineageDataAdded > 0 || snapshotsAdded > 0 || transactionsAdded > 0 || addressSyncAdded > 0 || dustFlagsAdded > 0) {
-        const parts = [];
-        if (evidenceAdded > 0) parts.push(`${evidenceAdded} evidence`);
-        if (priceDataAdded > 0) parts.push(`${priceDataAdded} prices`);
-        if (lineageDataAdded > 0) parts.push(`${lineageDataAdded} lineage`);
-        if (snapshotsAdded > 0) parts.push(`${snapshotsAdded} snapshot${snapshotsAdded !== 1 ? "s" : ""}`);
-        if (transactionsAdded > 0) parts.push(`${transactionsAdded} transactions`);
-        if (addressSyncAdded > 0) parts.push(`${addressSyncAdded} synced addresses`);
-        if (dustFlagsAdded > 0) parts.push(`${dustFlagsAdded} dust flag${dustFlagsAdded !== 1 ? "s" : ""}`);
-        additionalDataMsg = `, ${parts.join(", ")}`;
-      }
-
-      const baseMessage = restoreMode === "merge"
-        ? `Added ${recordsAdded} records (${recordsSkipped} skipped), ${tagsAdded} tags, ${categoriesAdded} categories, ${vocabularyAdded} vocabulary items, ${templatesAdded} templates${attachmentFilesMsg}${additionalDataMsg}.`
-        : `Restored ${recordsAdded} records, ${tagsAdded} tags, ${categoriesAdded} categories, ${vocabularyAdded} vocabulary items, ${templatesAdded} templates${attachmentFilesMsg}${additionalDataMsg}.`;
-
-      // --- Post-restore txid backfill ---
-      let backfillSuffix = "";
-      try {
-        const { txids: orphanTxids } = await detectOrphanedTxRecords();
-        if (orphanTxids.length > 0) {
-          setRestoreMessage(`Rebuilding on-chain data for ${orphanTxids.length} transaction${orphanTxids.length !== 1 ? "s" : ""}…`);
-          const nodeSettingsForBf = await getNodeSettings('default');
-          if (!nodeSettingsForBf) {
-            backfillSuffix = ` ${orphanTxids.length} transaction${orphanTxids.length !== 1 ? "s" : ""} need on-chain data — run "Rebuild Missing Transactions" in Settings when connected.`;
-          } else {
-            try {
-              const bfProvider = createProviderFromSettings(nodeSettingsForBf);
-              await bfProvider.getBlockHeight(); // connectivity probe
-              const bfResult = await runTxidBackfill(bfProvider, orphanTxids, {
-                onProgress: (p) => {
-                  const pct = p.orphansFound > 0
-                    ? Math.round(p.processed / p.orphansFound * 100)
-                    : 100;
-                  setRestoreMessage(
-                    `Rebuilding ${p.processed.toLocaleString()} of ${p.orphansFound.toLocaleString()} transactions…`
-                  );
-                  setRestoreProgress(pct);
-                },
-              });
-              const bfParts: string[] = [];
-              if (bfResult.rebuilt > 0) bfParts.push(`${bfResult.rebuilt} rebuilt`);
-              if (bfResult.skipped > 0) {
-                const skippedDetail = formatSkippedReasons(bfResult.skippedReasons);
-                bfParts.push(skippedDetail || `${bfResult.skipped} skipped`);
-              }
-              if (bfResult.failed > 0) bfParts.push(`${bfResult.failed} failed`);
-              if (bfResult.prevoutsResolved > 0) bfParts.push(`${bfResult.prevoutsResolved} input addresses resolved`);
-              backfillSuffix = bfParts.length > 0
-                ? ` Transaction data: ${bfParts.join("; ")}.`
-                : "";
-            } catch {
-              backfillSuffix = ` ${orphanTxids.length} transaction${orphanTxids.length !== 1 ? "s" : ""} need on-chain data — run "Rebuild Missing Transactions" in Settings when connected.`;
-            }
-          }
-        }
-      } catch {
-        // backfill detection failure is non-fatal
-      }
-
+      const legacyOrphanCount = legacySummary.orphanedFilesRouted;
       const legacyOrphanSuffix = legacyOrphanCount > 0
         ? ` ${legacyOrphanCount} attachment file${legacyOrphanCount !== 1 ? "s" : ""} could not be re-linked (owning record absent) — find them in the "Needs Review" section of Settings to re-attach or delete them.`
         : "";
-      const legacyOrphanLostSuffix = legacyOrphanedFilesLost > 0
-        ? ` Warning: ${legacyOrphanedFilesLost} recovered attachment file${legacyOrphanedFilesLost !== 1 ? "s" : ""} could not be saved to Needs Review and ${legacyOrphanedFilesLost !== 1 ? "their" : "its"} contents were lost.`
+      const legacyOrphanLostSuffix = legacySummary.orphanedFilesLost > 0
+        ? ` Warning: ${legacySummary.orphanedFilesLost} recovered attachment file${legacySummary.orphanedFilesLost !== 1 ? "s" : ""} could not be saved to Needs Review and ${legacySummary.orphanedFilesLost !== 1 ? "their" : "its"} contents were lost.`
         : "";
       toast({
         title: "Restore Successful",
-        description: baseMessage + backfillSuffix + legacyOrphanSuffix + legacyOrphanLostSuffix,
+        description: legacySummary.baseMessage + legacyBackfill.suffix + legacyOrphanSuffix + legacyOrphanLostSuffix,
         ...(legacyOrphanCount > 0 && isElectron() ? {
           action: (
             <button
@@ -1156,6 +638,7 @@ export function RestoreBackupFlow() {
         // Reload to refresh all data
         window.location.reload();
       }, 1500);
+
 
     } catch (error) {
       // User-initiated cancel of the v3 streaming restore. The library tells us
