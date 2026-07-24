@@ -90,25 +90,13 @@ async function main() {
     // the page, which destroys the evaluate execution context mid-check.
     const context = await browser.newContext({ serviceWorkers: 'block' });
     const page = await context.newPage();
-    // The Nix-provided test Chromium (v125) predates `Promise.try` (Chrome 128+),
-    // which pdfjs-dist v5 relies on. Real KYUTXO users run a modern Electron
-    // Chromium that has it, so this is purely a stale-harness-browser gap, not a
-    // product issue. Shim it before any module loads so the REAL Vite-bundled
-    // pdf.js parsing/encoding path under test runs unchanged. Everything the
-    // check actually verifies (WinAnsi byte → glyph round-trip) is exercised
-    // exactly as in production.
-    await page.addInitScript(() => {
-      const P = Promise;
-      if (typeof P.try !== 'function') {
-        Object.defineProperty(P, 'try', {
-          value: function (fn, ...args) {
-            return new P((resolve) => resolve(fn(...args)));
-          },
-          writable: true,
-          configurable: true,
-        });
-      }
-    });
+    // NOTE: do NOT shim `Promise.try` here. `loadPdfjs()` in
+    // pdfGlyphBrowserCheck.ts feature-detects native `Promise.try` support:
+    // on a modern Chromium (v128+) it loads pdfjs-dist's default build with
+    // its real Web Worker (the exact production configuration); on an older
+    // engine it falls back to the legacy build. A page-level shim would fool
+    // that detection while never reaching the spawned Web Worker, crashing
+    // the default build's worker on an old Chromium.
     page.on('console', (msg) => {
       const t = msg.text();
       if (t.toLowerCase().includes('error')) {

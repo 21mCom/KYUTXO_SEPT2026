@@ -91,30 +91,46 @@ export interface PdfGlyphCheckReport {
 }
 
 /**
- * Dynamically load pdf.js. We use the *legacy* build in every environment,
- * including the real browser. pdf.js is only our verification oracle here (a
+ * Dynamically load pdf.js. pdf.js is only our verification oracle here (a
  * real, production-grade PDF engine — the same one Firefox ships), so the build
- * flavor is a harness detail, not part of what we are testing: both builds parse
- * the WinAnsi byte stream identically. We deliberately avoid the default build
- * because it (and the worker it spawns) relies on `Promise.try`, unsupported by
- * the older Chromium our test harness pins. The legacy build and its matching
- * worker are transpiled for older JS engines, so both the main thread and the
- * spawned Web Worker run reliably there while still exercising the real
- * Vite-bundled jsPDF generation path.
+ * flavor is a harness detail, not part of what we are testing: the default and
+ * legacy builds parse the WinAnsi byte stream identically.
  *
- * In Node (vitest) the legacy build ships an in-process fake worker, so no
+ * We feature-detect at runtime: pdfjs-dist's *default* build (and the Web
+ * Worker it spawns) relies on `Promise.try` (Chrome 128+ / Node 23+). Real
+ * KYUTXO users run a modern Electron Chromium that has it, so when the engine
+ * supports `Promise.try` natively we load the default build with its real
+ * worker — the exact production configuration. On an older engine (e.g. a
+ * Nix-pinned test Chromium predating v128, or Node under vitest) we fall back
+ * to the *legacy* build, which is transpiled for older engines. The detection
+ * must be native support — the check harness must not shim `Promise.try` on
+ * the page, because init-script shims never reach the spawned Web Worker and
+ * the default build's worker would crash there.
+ *
+ * In Node (vitest) we always use the legacy build: the default build requires
+ * browser globals (e.g. DOMMatrix) that Node lacks, regardless of Node's own
+ * `Promise.try` support. pdf.js ships an in-process fake worker there, so no
  * `workerSrc` is needed. In the browser pdf.js requires an explicit worker, so
- * we point it at the legacy worker asset (Vite resolves the `?url` import).
+ * we point it at the matching worker asset (Vite resolves the `?url` import).
  */
 async function loadPdfjs(): Promise<typeof import('pdfjs-dist')> {
-  const pdfjs = (await import(
-    'pdfjs-dist/legacy/build/pdf.mjs' as string
-  )) as typeof import('pdfjs-dist');
   const isBrowser =
     typeof window !== 'undefined' && typeof document !== 'undefined';
+  const hasPromiseTry =
+    typeof (Promise as { try?: unknown }).try === 'function';
+  // Default build is browser-only: it needs browser globals (e.g. DOMMatrix)
+  // that Node lacks, and pdf.js itself warns to use the legacy build in Node.
+  const useDefaultBuild = isBrowser && hasPromiseTry;
+
+  const pdfjs = (await (useDefaultBuild
+    ? import('pdfjs-dist' as string)
+    : import('pdfjs-dist/legacy/build/pdf.mjs' as string))) as typeof import('pdfjs-dist');
+
   if (isBrowser) {
     const workerUrl = (
-      await import('pdfjs-dist/legacy/build/pdf.worker.min.mjs?url' as string)
+      await (useDefaultBuild
+        ? import('pdfjs-dist/build/pdf.worker.min.mjs?url' as string)
+        : import('pdfjs-dist/legacy/build/pdf.worker.min.mjs?url' as string))
     ).default as string;
     pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
   }
