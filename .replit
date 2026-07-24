@@ -117,6 +117,10 @@ args = "pof-page-node-check"
 task = "workflow.run"
 args = "privacy-audit-interrupted-node-check"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "deep-dive-worker-error-check"
+
 [[workflows.workflow]]
 name = "Start application"
 author = "agent"
@@ -353,6 +357,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "npx vitest run client/src/pages/PrivacyAudit.interruptedNotice.test.tsx"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "deep-dive-worker-error-check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx vitest run client/src/pages/privacy-audit/transaction-deep-dive.workerError.test.tsx"
 
 [workflows.workflow.metadata]
 isValidation = true
