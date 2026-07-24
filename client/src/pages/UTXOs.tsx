@@ -84,6 +84,7 @@ interface UTXOSettings {
   tagFilter: string;
   categoryFilter: string;
   utxoMode: UTXOCalculationMode;
+  hideDust: boolean;
 }
 
 const DEFAULT_SETTINGS: UTXOSettings = {
@@ -94,7 +95,8 @@ const DEFAULT_SETTINGS: UTXOSettings = {
   walletFilter: "all",
   tagFilter: "all",
   categoryFilter: "all",
-  utxoMode: "heuristic"
+  utxoMode: "heuristic",
+  hideDust: false
 };
 
 function loadSettings(): UTXOSettings {
@@ -495,12 +497,12 @@ export default function UTXOs() {
   const [includeBlockchainDiscovered, setIncludeBlockchainDiscovered] = useState(false);
 
   // Hide user-flagged dust UTXOs from the list and totals when enabled.
-  const [hideDust, setHideDust] = useState(false);
+  const [hideDust, setHideDust] = useState(initialSettings.hideDust === true);
 
   // Save settings when they change
   useEffect(() => {
-    saveSettings({ displayUnit, sortColumn, sortDirection, ownerFilter, walletFilter, tagFilter, categoryFilter, utxoMode });
-  }, [displayUnit, sortColumn, sortDirection, ownerFilter, walletFilter, tagFilter, categoryFilter, utxoMode]);
+    saveSettings({ displayUnit, sortColumn, sortDirection, ownerFilter, walletFilter, tagFilter, categoryFilter, utxoMode, hideDust });
+  }, [displayUnit, sortColumn, sortDirection, ownerFilter, walletFilter, tagFilter, categoryFilter, utxoMode, hideDust]);
 
   const txDbSignal = useDbChangeSignal(['blockchainTransactions', 'transactionParticipants']);
 
